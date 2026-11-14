@@ -1,11 +1,11 @@
 use luck_ast::{
-    Block, Expression, FunctionArgs, FunctionCall, Transform, Var, ensure_sufficient_stack,
-    is_prefix_expr,
+    Block, Expression, FunctionArgs, Suffix, SuffixedExpression, Transform, is_prefix_expr,
 };
+use luck_token::{BinOp, OperandSide};
 
 use crate::expr::{
     binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, ends_in_if_expr,
-    parenthesize,
+    inner_operand_side, parenthesize,
 };
 
 pub(crate) fn simplify(block: Block) -> Block {
@@ -14,94 +14,69 @@ pub(crate) fn simplify(block: Block) -> Block {
 
 struct ParenSimplifier;
 
-impl ParenSimplifier {
-    /// Keeps a prefix's own parens, which a literal like `("str"):method()`
-    /// needs, but strips any nested inside them.
-    fn transform_prefix(&mut self, prefix: Expression) -> Expression {
-        match prefix {
-            Expression::Parenthesized(mut paren) => {
-                parenthesize(self.transform_expr(paren.expr.take()))
-            }
-            other @ (Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
-            | Expression::TableConstructor(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
-            | Expression::Error(_)) => self.transform_expr(other),
+// Out of line, so an expression nested below holds only the walk's frame,
+// not these temporaries.
+fn strip_parens(walked: Expression) -> Expression {
+    match walked {
+        Expression::Parenthesized(paren) => {
+            let inner = paren.expr;
+            if can_remove_parens(&inner) { inner } else { parenthesize(inner) }
         }
+        Expression::BinaryOp(mut binary_op) => {
+            let op = binary_op.links.first().op;
+            let inner_side = inner_operand_side(&binary_op);
+            strip_operand_parens(&mut binary_op.first, op, OperandSide::Left);
+            if let Some((last, inner)) = binary_op.links.split_last_mut() {
+                for link in inner {
+                    strip_operand_parens(&mut link.operand, op, inner_side);
+                }
+                strip_operand_parens(&mut last.operand, op, OperandSide::Right);
+            }
+            // A run the parens held at this level now prints as part of it.
+            binary_op.splice_operands();
+            Expression::BinaryOp(binary_op)
+        }
+        Expression::UnaryOp(mut unop) => {
+            if let Expression::Parenthesized(paren) = &mut unop.operand {
+                let inner = paren.expr.take();
+                unop.operand =
+                    if can_unwrap_in_unary(&inner) { inner } else { parenthesize(inner) };
+            }
+            Expression::UnaryOp(unop)
+        }
+        other @ (Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
+        | Expression::TableConstructor(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::Error(_)) => other,
+    }
+}
+
+fn strip_operand_parens(operand: &mut Expression, op: BinOp, side: OperandSide) {
+    if let Expression::Parenthesized(paren) = operand {
+        let inner = paren.expr.take();
+        let can_unwrap = match side {
+            OperandSide::Left => can_unwrap_in_binop_lhs(&inner, op),
+            OperandSide::Right => can_unwrap_in_binop_rhs(&inner, op),
+        };
+        *operand = if can_unwrap { inner } else { parenthesize(inner) };
     }
 }
 
 impl Transform for ParenSimplifier {
     fn transform_expr(&mut self, expr: Expression) -> Expression {
-        match self.walk_expr(expr) {
-            Expression::Parenthesized(mut paren) => {
-                let inner = paren.expr.take();
-                if can_remove_parens(&inner) { inner } else { parenthesize(inner) }
-            }
-            Expression::BinaryOp(mut binary_op) => {
-                if let Expression::Parenthesized(paren) = &mut binary_op.lhs {
-                    let inner = paren.expr.take();
-                    binary_op.lhs = if can_unwrap_in_binop_lhs(&inner, binary_op.op) {
-                        inner
-                    } else {
-                        parenthesize(inner)
-                    };
-                }
-                if let Expression::Parenthesized(paren) = &mut binary_op.rhs {
-                    let inner = paren.expr.take();
-                    binary_op.rhs = if can_unwrap_in_binop_rhs(&inner, binary_op.op) {
-                        inner
-                    } else {
-                        parenthesize(inner)
-                    };
-                }
-                Expression::BinaryOp(binary_op)
-            }
-            Expression::UnaryOp(mut unop) => {
-                if let Expression::Parenthesized(paren) = &mut unop.operand {
-                    let inner = paren.expr.take();
-                    unop.operand =
-                        if can_unwrap_in_unary(&inner) { inner } else { parenthesize(inner) };
-                }
-                Expression::UnaryOp(unop)
-            }
-            // Luau: the walk stripped these parens, but `{}<<T>>` doesn't
-            // parse, so anything that isn't a valid prefix gets them back.
-            Expression::TypeInstantiation(mut instantiation) => {
-                if !is_prefix_expr(&instantiation.expr) {
-                    instantiation.expr = parenthesize(instantiation.expr.take());
-                }
-                Expression::TypeInstantiation(instantiation)
-            }
-            other @ (Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
-            | Expression::TableConstructor(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_)) => other,
-        }
+        let walked = self.walk_expr(expr);
+        strip_parens(walked)
     }
 
     // f("str") becomes f"str", and f({...}) becomes f{...}.
@@ -126,15 +101,14 @@ impl Transform for ParenSimplifier {
                         | Expression::Integer(_)
                         | Expression::VarArg(_)
                         | Expression::FunctionDef(_)
-                        | Expression::Var(_)
-                        | Expression::FunctionCall(_)
+                        | Expression::Name(_)
+                        | Expression::Suffixed(_)
                         | Expression::Parenthesized(_)
                         | Expression::BinaryOp(_)
                         | Expression::UnaryOp(_)
                         | Expression::IfExpression(_)
                         | Expression::InterpolatedString(_)
                         | Expression::TypeCast(_)
-                        | Expression::TypeInstantiation(_)
                         | Expression::Error(_)) => call_args.items.push(other),
                     }
                 }
@@ -148,33 +122,34 @@ impl Transform for ParenSimplifier {
         }
     }
 
-    fn transform_var(&mut self, var: Var) -> Var {
-        match var {
-            Var::FieldAccess(mut field_access) => ensure_sufficient_stack(|| {
-                field_access.prefix = self.transform_prefix(field_access.prefix.take());
-                Var::FieldAccess(field_access)
-            }),
-            Var::Index(mut index_expr) => ensure_sufficient_stack(|| {
-                index_expr.prefix = self.transform_prefix(index_expr.prefix.take());
-                index_expr.index = self.transform_expr(index_expr.index.take());
-                Var::Index(index_expr)
-            }),
-            name @ Var::Name(_) => self.walk_var(name),
-        }
-    }
-
-    fn transform_function_call(&mut self, mut call: FunctionCall) -> FunctionCall {
-        call.callee = ensure_sufficient_stack(|| self.transform_prefix(call.callee.take()));
-        call.explicit_type_args = call.explicit_type_args.take().map(|mut type_args| {
-            *type_args = self.walk_type_args(*type_args);
-            type_args
-        });
-        call.args = self.transform_function_args(call.args.take());
-        call
+    /// A prefix keeps its own parens, which a literal like
+    /// `("str"):method()` needs, but sheds any nested inside them. In front
+    /// of a Luau instantiation they go too, unless they hold something
+    /// `{}<<T>>` or `f()<<T>>` couldn't stand without.
+    fn transform_suffixed(
+        &mut self,
+        mut chain: Box<SuffixedExpression>,
+    ) -> Box<SuffixedExpression> {
+        let is_instantiated = matches!(chain.suffixes.first(), Suffix::TypeInstantiation { .. });
+        // Out of the walk, which would strip the prefix's own parens.
+        let prefix = chain.prefix.take();
+        let mut walked = self.walk_suffixed(chain);
+        walked.prefix = if let Expression::Parenthesized(paren) = prefix {
+            let inner = self.transform_expr(paren.expr);
+            if is_instantiated && is_prefix_expr(&inner) && can_remove_parens(&inner) {
+                inner
+            } else {
+                parenthesize(inner)
+            }
+        } else {
+            self.transform_expr(prefix)
+        };
+        walked.splice_prefix();
+        walked
     }
 }
 
-const fn can_remove_parens(inner: &Expression) -> bool {
+fn can_remove_parens(inner: &Expression) -> bool {
     match inner {
         Expression::Number(_)
         | Expression::Integer(_)
@@ -182,20 +157,19 @@ const fn can_remove_parens(inner: &Expression) -> bool {
         | Expression::Nil(_)
         | Expression::True(_)
         | Expression::False(_)
-        | Expression::Var(_)
+        | Expression::Name(_)
         | Expression::TableConstructor(_)
         | Expression::Parenthesized(_)
         | Expression::FunctionDef(_) => true,
         // Calls and `...` aren't safe: dropping the parens restores multiple
         // values.
-        Expression::FunctionCall(_)
-        | Expression::BinaryOp(_)
+        Expression::Suffixed(chain) => !chain.is_call(),
+        Expression::BinaryOp(_)
         | Expression::UnaryOp(_)
         | Expression::IfExpression(_)
         | Expression::VarArg(_)
         | Expression::InterpolatedString(_)
         | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
         | Expression::Error(_) => false,
     }
 }
@@ -208,21 +182,20 @@ fn can_unwrap_in_unary(inner: &Expression) -> bool {
         | Expression::Nil(_)
         | Expression::True(_)
         | Expression::False(_)
-        | Expression::Var(_)
+        | Expression::Name(_)
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => true,
+        Expression::Suffixed(chain) => chain.is_var(),
         Expression::UnaryOp(_) => !ends_in_if_expr(inner),
         // Not safe: `-(a+b)` isn't `-a+b`.
         Expression::BinaryOp(binary_op) => {
-            !binds_looser_than_unary(binary_op.op) && !ends_in_if_expr(inner)
+            !binds_looser_than_unary(binary_op) && !ends_in_if_expr(inner)
         }
-        Expression::FunctionCall(_)
-        | Expression::VarArg(_)
+        Expression::VarArg(_)
         | Expression::Parenthesized(_)
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
         | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
         | Expression::Error(_) => false,
     }
 }

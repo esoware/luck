@@ -9,8 +9,8 @@
 use core::mem;
 
 use luck_ast::{
-    Attribute, AttributedName, Block, FunctionBody, FunctionDecl, GenericFor, NumericFor,
-    Punctuated, RepeatLoop, Statement, Type, TypeDeclarationValue, Var, Visitor,
+    Attribute, AttributedName, Block, Expression, FunctionBody, FunctionDecl, GenericFor,
+    NumericFor, Punctuated, RepeatLoop, Statement, Type, TypeDeclarationValue, Var, Visitor,
 };
 use luck_token::{LuaVersion, Span, Token};
 
@@ -185,8 +185,12 @@ impl<'ast> ScopeChecker<'ast> {
             Var::Name(token) => self.check_name(token, true),
             // `t.x = 1` and `t[k] = 1` mutate the table, not the binding, and
             // const doesn't freeze contents.
-            Var::FieldAccess(_) | Var::Index(_) => self.walk_var(target),
+            Var::Suffixed(chain) => self.visit_suffixed(chain),
         }
+    }
+
+    fn open_block(&mut self) -> BlockStart {
+        self.gotos.open_block(self.bindings.len())
     }
 
     fn close_block(&mut self, start: BlockStart) {
@@ -235,7 +239,7 @@ impl<'ast> ScopeChecker<'ast> {
     /// The `until` condition sits inside the body's scope, so the body's
     /// locals stay active for it.
     fn visit_repeat_loop(&mut self, repeat_loop: &'ast RepeatLoop) {
-        let start = self.gotos.open_block(self.bindings.len());
+        let start = self.open_block();
         self.walk_statements(&repeat_loop.block, true, start.active_vars());
         let skipped_count =
             if self.is_type_function_pass { 0 } else { skipped_local_count(&repeat_loop.block) };
@@ -260,7 +264,7 @@ impl<'ast> ScopeChecker<'ast> {
         if let Some(step) = &numeric_for.step {
             self.visit_expr(step);
         }
-        let start = self.gotos.open_block(self.bindings.len());
+        let start = self.open_block();
         // Lua 5.5 makes the control variable read-only.
         self.declare_local(&numeric_for.name, self.version.has_const_for_variables());
         self.walk_statements(&numeric_for.block, false, start.active_vars());
@@ -276,7 +280,7 @@ impl<'ast> ScopeChecker<'ast> {
         for expr in generic_for.exprs.iter() {
             self.visit_expr(expr);
         }
-        let start = self.gotos.open_block(self.bindings.len());
+        let start = self.open_block();
         for (i, binding) in generic_for.names.iter().enumerate() {
             // Lua 5.5: only the first variable is the control variable.
             self.declare_local(&binding.name, i == 0 && self.version.has_const_for_variables());
@@ -306,7 +310,7 @@ impl<'ast> ScopeChecker<'ast> {
 
 impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
     fn visit_block(&mut self, block: &'ast Block) {
-        let start = self.gotos.open_block(self.bindings.len());
+        let start = self.open_block();
         self.walk_statements(block, false, start.active_vars());
         self.close_block(start);
     }
@@ -331,7 +335,7 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
             Statement::GenericFor(generic_for) => self.visit_generic_for(generic_for),
             Statement::FunctionDecl(function_decl) => self.visit_function_decl(function_decl),
             Statement::LocalFunction(local_function) => {
-                self.declare_local(&local_function.name, local_function.is_const);
+                self.declare_local(&local_function.name, local_function.kind.is_const());
                 self.visit_function_body(&local_function.body);
             }
             Statement::LocalAssignment(local) => {
@@ -403,13 +407,13 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
         self.bindings.truncate(bindings_base);
     }
 
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(token) = var
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(token) = expr
             && self.checks_reads()
         {
             self.check_name(token, false);
         }
-        self.walk_var(var);
+        self.walk_expr(expr);
     }
 
     // Types generate no code, so outside the type-function pass a `typeof`

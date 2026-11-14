@@ -1,9 +1,9 @@
-use luck_ast::{FunctionArgs, FunctionCall};
+use luck_ast::{Call, FunctionArgs};
 use luck_token::{LuaVersion, Span, has_line_break};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AmbiguousNewlineCall;
@@ -20,19 +20,14 @@ impl NodeRule for AmbiguousNewlineCall {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_call(
-        &self,
-        call: &FunctionCall,
-        _position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let call = site.call;
         findings.extend(check_call(call, context.source, context.semantic.version));
     }
 }
 
-fn check_call(call: &FunctionCall, source: &str, version: LuaVersion) -> Option<Finding> {
-    let FunctionArgs::Parenthesized { span: args_span, .. } = &call.args else {
+fn check_call(call: Call<'_>, source: &str, version: LuaVersion) -> Option<Finding> {
+    let FunctionArgs::Parenthesized { span: args_span, .. } = call.args else {
         return None;
     };
     let prefix_end = call
@@ -70,31 +65,46 @@ mod tests {
     #[test]
     fn flags_paren_on_next_line() {
         // Parses as `local x = f(3)`, though it reads as two statements.
-        let diags = run("local f = print\nlocal x = f\n(3)");
+        let diags = run("\
+local f = print
+local x = f
+(3)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_stmt_level_split_call() {
-        let diags = run("local f = print\nf\n(3)");
+        let diags = run("\
+local f = print
+f
+(3)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_split_chained_call() {
-        let diags = run("local f = print\nlocal x = f(1)\n(2)");
+        let diags = run("\
+local f = print
+local x = f(1)
+(2)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_split_method_call() {
-        let diags = run("local t = {}\nlocal x = t:m\n(1)");
+        let diags = run("\
+local t = {}
+local x = t:m
+(1)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_with_comment_in_gap() {
-        let diags = run("local f = print\nlocal x = f -- note\n(3)");
+        let diags = run("\
+local f = print
+local x = f -- note
+(3)");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
@@ -106,13 +116,22 @@ mod tests {
 
     #[test]
     fn ignores_multiline_args() {
-        let diags = run("print(\n1,\n2\n)");
+        let diags = run("\
+print(
+1,
+2
+)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_string_and_table_calls() {
-        let diags = run("local f = print\nf\n\"s\"\nf\n{}");
+        let diags = run("\
+local f = print
+f
+\"s\"
+f
+{}");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

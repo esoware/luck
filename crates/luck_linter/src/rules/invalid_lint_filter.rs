@@ -95,7 +95,9 @@ mod tests {
     fn flags_unknown_name() {
         let diags = run_rule(
             &InvalidLintFilter,
-            "-- luck: allow(not_a_real_rule)\nlocal _x = 1",
+            "\
+-- luck: allow(not_a_real_rule)
+local _x = 1",
             LuaVersion::Lua54,
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
@@ -106,7 +108,9 @@ mod tests {
     fn flags_unknown_name_in_disabled_directive() {
         let diags = run_rule(
             &InvalidLintFilter,
-            "-- luck: allow(not_a_real_rule) strat\nlocal _x = 1",
+            "\
+-- luck: allow(not_a_real_rule) strat
+local _x = 1",
             LuaVersion::Lua54,
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
@@ -114,8 +118,13 @@ mod tests {
 
     #[test]
     fn ignores_wildcard() {
-        let diags =
-            run_rule(&InvalidLintFilter, "-- luck: allow(*)\nlocal _x = 1", LuaVersion::Lua54);
+        let diags = run_rule(
+            &InvalidLintFilter,
+            "\
+-- luck: allow(*)
+local _x = 1",
+            LuaVersion::Lua54,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -123,7 +132,9 @@ mod tests {
     fn ignores_known_name() {
         let diags = run_rule(
             &InvalidLintFilter,
-            "-- luck: allow(unused_variable)\nlocal _x = 1",
+            "\
+-- luck: allow(unused_variable)
+local _x = 1",
             LuaVersion::Lua54,
         );
         assert!(diags.is_empty(), "{diags:?}");

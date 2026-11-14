@@ -38,7 +38,7 @@ After publishing: annotated `git tag v<workspace-version>`, push the tag. The VS
 
 ## 4. VS Code extension
 
-`editors/vscode/` shares the workspace version. Before tagging a `vscode-v*` release, confirm the schema is current: `just test -p luck_core`.
+`editors/vscode/` shares the workspace version. Before tagging a `vscode-v*` release, confirm the schema is current: `just test -p luck_config`.
 
 ## 5. Hand-off format
 

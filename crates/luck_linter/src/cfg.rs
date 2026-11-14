@@ -10,6 +10,7 @@ use luck_ast::{
 };
 use luck_semantic::SemanticAnalysis;
 use luck_token::{BinOp, Span, Token};
+use rustc_hash::FxHashMap;
 
 use crate::call::is_global_call;
 
@@ -41,8 +42,12 @@ impl Exit {
 /// How many nodes the [`Exit`]s take, at the start of every graph.
 const EXIT_NODE_COUNT: usize = 5;
 
-/// A node is one piece of code that runs as a unit: a simple statement, a
-/// condition, or a loop header. No node has more than two successors.
+/// A node is one piece of code that runs as a unit: a run of simple
+/// statements, a condition, or a loop header. No node has more than two
+/// successors.
+///
+/// A run takes every simple statement one block holds in a row, so a walk
+/// over a long straight stretch costs one node, not one per statement.
 #[derive(Debug)]
 pub(crate) struct FlowGraph {
     successors: Vec<[Option<usize>; 2]>,
@@ -75,10 +80,12 @@ impl FlowGraph {
             },
             semantic,
             cursor: None,
+            run: None,
             scope_end: 0,
             break_target: Exit::Break.node(),
             continue_target: Exit::End.node(),
-            labels: Vec::new(),
+            labels: FxHashMap::default(),
+            label_names: Vec::new(),
         };
         let entry = builder.new_node();
         builder.cursor = Some(entry);
@@ -138,11 +145,16 @@ struct GraphBuilder<'ast, 'analysis> {
     semantic: &'analysis SemanticAnalysis,
     /// The node the next code runs after, or `None` right after a jump.
     cursor: Option<usize>,
+    /// The run of simple statements the cursor ends, which the next one
+    /// joins.
+    run: Option<usize>,
     scope_end: u32,
     break_target: usize,
     continue_target: usize,
-    /// Each label visible here, innermost last.
-    labels: Vec<(&'ast str, usize)>,
+    /// The node of each label visible here, by name, innermost last.
+    labels: FxHashMap<&'ast str, Vec<usize>>,
+    /// The name of each label in `labels`, in the order they became visible.
+    label_names: Vec<&'ast str>,
 }
 
 impl<'ast> GraphBuilder<'ast, '_> {
@@ -177,6 +189,20 @@ impl<'ast> GraphBuilder<'ast, '_> {
         node
     }
 
+    /// A simple statement, which runs straight on from the one before it in
+    /// its block.
+    fn simple(&mut self, span: Span) -> usize {
+        if let Some(run) = self.run
+            && self.cursor == Some(run)
+        {
+            self.graph.code.push((span, run));
+            return run;
+        }
+        let node = self.code(span);
+        self.run = Some(node);
+        node
+    }
+
     fn jump(&mut self, span: Span, target: usize) {
         let node = self.code(span);
         self.connect(node, target);
@@ -194,15 +220,17 @@ impl<'ast> GraphBuilder<'ast, '_> {
     }
 
     fn scoped_block(&mut self, block: &'ast Block, scope_end: u32) {
+        self.run = None;
         let outer_scope_end = mem::replace(&mut self.scope_end, scope_end);
-        let outer_label_count = self.labels.len();
+        let outer_label_count = self.label_names.len();
         // A label is visible in its whole block, `goto`s before it included.
         for stmt in &block.stmts {
             if let Statement::Label(label) = stmt
                 && let Some(name) = label.name.identifier()
             {
                 let node = self.new_node();
-                self.labels.push((name, node));
+                self.labels.entry(name).or_default().push(node);
+                self.label_names.push(name);
             }
         }
         for stmt in &block.stmts {
@@ -211,26 +239,33 @@ impl<'ast> GraphBuilder<'ast, '_> {
         if let Some(last) = &block.last_stmt {
             self.last_stmt(last);
         }
-        self.labels.truncate(outer_label_count);
+        for name in self.label_names.drain(outer_label_count..) {
+            if let Some(nodes) = self.labels.get_mut(name) {
+                nodes.pop();
+            }
+        }
         self.scope_end = outer_scope_end;
+        self.run = None;
     }
 
     fn label_node(&self, token: &Token) -> Option<usize> {
-        let name = token.identifier()?;
-        self.labels.iter().rfind(|(label, _)| *label == name).map(|&(_, node)| node)
+        self.labels.get(token.identifier()?)?.last().copied()
     }
 
     fn stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
-            Statement::FunctionCall(call) => {
-                let node = self.code(call.span);
-                if is_global_call(call, "error", self.semantic) {
+            Statement::FunctionCall(chain) => {
+                let node = self.simple(chain.span);
+                if chain
+                    .last_call()
+                    .is_some_and(|call| is_global_call(call, "error", self.semantic))
+                {
                     self.connect(node, Exit::Error.node());
                     self.cursor = None;
                 }
             }
             Statement::LocalAssignment(local) => {
-                let node = self.code(local.span);
+                let node = self.simple(local.span);
                 let scope_end = self.scope_end;
                 self.graph.locals.extend(local.names.iter().map(|attributed| LocalDeclaration {
                     name_span: attributed.name.span,
@@ -272,7 +307,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {
-                self.code(stmt.span());
+                self.simple(stmt.span());
             }
         }
     }
@@ -382,14 +417,13 @@ fn literal_truth(condition: &Expression) -> Option<bool> {
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => Some(true),
         Expression::VarArg(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
         | Expression::Parenthesized(_)
         | Expression::BinaryOp(_)
         | Expression::UnaryOp(_)
         | Expression::IfExpression(_)
         | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
         | Expression::Error(_) => None,
     }
 }
@@ -444,8 +478,8 @@ impl<'ast> Visitor<'ast> for DecisionPoints {
     fn visit_expr(&mut self, expr: &'ast Expression) {
         match expr {
             Expression::BinaryOp(node) => {
-                if matches!(node.op, BinOp::And | BinOp::Or) {
-                    self.count += 1;
+                if matches!(node.links.first().op, BinOp::And | BinOp::Or) {
+                    self.count += u32::try_from(node.links.len()).unwrap_or(u32::MAX);
                 }
             }
             // Luau
@@ -458,14 +492,13 @@ impl<'ast> Visitor<'ast> for DecisionPoints {
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::UnaryOp(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_) => {}
         }
         self.walk_expr(expr);
@@ -478,6 +511,8 @@ impl<'ast> Visitor<'ast> for DecisionPoints {
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use luck_token::LuaVersion;
 
     use super::*;
@@ -499,6 +534,27 @@ mod tests {
 
     fn points(source: &str) -> u32 {
         decision_points(&parse_block(source, LuaVersion::Lua54))
+    }
+
+    #[test]
+    fn a_straight_run_of_statements_is_one_node() {
+        let one = flow("local a").node_count();
+        let mut run = String::from("local a, b");
+        for i in 0..100u32 {
+            let _unused = write!(
+                run,
+                "
+a = {i}
+b = f(a)
+print(a, b)"
+            );
+        }
+        assert_eq!(flow(&run).node_count(), one);
+        let block_between = "\
+local a
+do b() end
+c()";
+        assert_eq!(flow(block_between).node_count(), one + 2);
     }
 
     #[test]
@@ -524,14 +580,22 @@ mod tests {
 
     #[test]
     fn if_without_else_falls_through() {
-        let graph = flow("local c = 1\nif c then return 1 end");
+        let graph = flow(
+            "\
+local c = 1
+if c then return 1 end",
+        );
         assert!(graph.reaches(Exit::End));
         assert!(graph.reaches(Exit::ReturnValue));
     }
 
     #[test]
     fn if_else_both_returning_never_fall_through() {
-        let graph = flow("local c = 1\nif c then return 1 else return 2 end");
+        let graph = flow(
+            "\
+local c = 1
+if c then return 1 else return 2 end",
+        );
         assert!(graph.reaches(Exit::ReturnValue));
         assert!(!graph.reaches(Exit::End));
     }
@@ -539,7 +603,10 @@ mod tests {
     #[test]
     fn if_elseif_else_all_returning_never_fall_through() {
         let graph = flow(
-            "local c = 1\nlocal d = 1\nif c then return 1 elseif d then return 2 else return 3 end",
+            "\
+local c = 1
+local d = 1
+if c then return 1 elseif d then return 2 else return 3 end",
         );
         assert!(!graph.reaches(Exit::End));
     }
@@ -560,7 +627,11 @@ mod tests {
 
     #[test]
     fn while_true_with_conditional_break_falls_through() {
-        let graph = flow("local c = 1\nwhile true do if c then break end end");
+        let graph = flow(
+            "\
+local c = 1
+while true do if c then break end end",
+        );
         assert!(graph.reaches(Exit::End));
         assert!(!graph.reaches(Exit::Break), "the `break` belongs to the loop");
     }
@@ -615,21 +686,34 @@ mod tests {
 
     #[test]
     fn shadowed_error_is_an_ordinary_call() {
-        let graph = flow("local function error() end\nerror(\"x\")");
+        let graph = flow(
+            "\
+local function error() end
+error(\"x\")",
+        );
         assert!(!graph.reaches(Exit::Error));
         assert!(graph.reaches(Exit::End));
     }
 
     #[test]
     fn break_in_inner_loop_is_consumed() {
-        let graph = flow("local c = 1\nwhile c do if c then break end end");
+        let graph = flow(
+            "\
+local c = 1
+while c do if c then break end end",
+        );
         assert!(graph.reaches(Exit::End));
         assert!(!graph.reaches(Exit::Break));
     }
 
     #[test]
     fn continue_runs_the_until_condition() {
-        let graph = flow_of("repeat continue until true\nreturn 2", LuaVersion::Luau);
+        let graph = flow_of(
+            "\
+repeat continue until true
+return 2",
+            LuaVersion::Luau,
+        );
         assert!(graph.reaches(Exit::ReturnValue));
         assert!(!graph.reaches(Exit::End));
     }
@@ -646,20 +730,36 @@ mod tests {
 
     #[test]
     fn goto_jumps_over_the_code_before_its_label() {
-        let graph = flow("goto skip\ndo return end\n::skip::\nprint(1)");
+        let graph = flow(
+            "\
+goto skip
+do return end
+::skip::
+print(1)",
+        );
         assert!(!graph.reaches(Exit::ReturnEmpty));
         assert!(graph.reaches(Exit::End));
     }
 
     #[test]
     fn backward_goto_loops() {
-        let graph = flow("::top::\nprint(1)\ngoto top");
+        let graph = flow(
+            "\
+::top::
+print(1)
+goto top",
+        );
         assert!(!graph.reaches(Exit::End));
     }
 
     #[test]
     fn goto_to_a_label_outside_the_block_leaves_it() {
-        let block = parse_block("while true do goto done end\n::done::", LuaVersion::Lua54);
+        let block = parse_block(
+            "\
+while true do goto done end
+::done::",
+            LuaVersion::Lua54,
+        );
         let Some(Statement::WhileLoop(while_loop)) = block.stmts.first() else {
             panic!("the statement must be a while loop");
         };
@@ -670,8 +770,56 @@ mod tests {
     }
 
     #[test]
+    fn goto_takes_the_innermost_label_of_its_name() {
+        // The outer `::a::` would loop forever.
+        let graph = flow(
+            "\
+::a::
+do
+  goto a
+  do return end
+  ::a::
+end",
+        );
+        assert!(graph.reaches(Exit::End));
+        assert!(!graph.reaches(Exit::ReturnEmpty));
+    }
+
+    #[test]
+    fn label_goes_out_of_sight_with_its_block() {
+        let graph = flow(
+            "\
+do ::a:: end
+goto a",
+        );
+        assert!(graph.reaches(Exit::Break));
+        assert!(!graph.reaches(Exit::End));
+    }
+
+    #[test]
+    fn gotos_find_their_labels_among_many() {
+        let mut source = String::new();
+        for i in 0..2_000u32 {
+            let _unused = writeln!(
+                source,
+                "\
+goto l{i}
+do return end
+::l{i}::"
+            );
+        }
+        let graph = flow(&source);
+        assert!(graph.reaches(Exit::End));
+        assert!(!graph.reaches(Exit::ReturnEmpty));
+    }
+
+    #[test]
     fn can_run_is_false_after_a_jump_until_a_reached_label() {
-        let source = "goto a\nprint(1)\n::a::\nprint(2)";
+        let source = "\
+goto a
+print(1)
+::a::
+print(2)";
         let graph = flow(source);
         let offset_of = |text: &str| u32::try_from(source.find(text).expect("in source")).unwrap();
         assert!(!graph.can_run(offset_of("print(1)")));
@@ -686,19 +834,42 @@ mod tests {
 
     #[test]
     fn decision_points_single_if() {
-        assert_eq!(points("local c = 1\nif c then end"), 1);
+        assert_eq!(
+            points(
+                "\
+local c = 1
+if c then end"
+            ),
+            1
+        );
     }
 
     #[test]
     fn decision_points_if_with_and() {
         // +1 for the if, +1 for the `and`.
-        assert_eq!(points("local a = 1\nlocal b = 1\nif a and b then end"), 2);
+        assert_eq!(
+            points(
+                "\
+local a = 1
+local b = 1
+if a and b then end"
+            ),
+            2
+        );
     }
 
     #[test]
     fn decision_points_if_elseif() {
         // +1 for the if, +1 for the elseif.
-        assert_eq!(points("local a = 1\nlocal b = 1\nif a then elseif b then end"), 2);
+        assert_eq!(
+            points(
+                "\
+local a = 1
+local b = 1
+if a then elseif b then end"
+            ),
+            2
+        );
     }
 
     #[test]
@@ -741,7 +912,11 @@ mod tests {
         // +1 for the if, +1 per elseif (two of them) = 3.
         assert_eq!(
             points(
-                "local a = 1\nlocal b = 1\nlocal c = 1\nif a then elseif b then elseif c then end"
+                "\
+local a = 1
+local b = 1
+local c = 1
+if a then elseif b then elseif c then end"
             ),
             3
         );

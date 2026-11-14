@@ -7,7 +7,7 @@ use luck_benchmark::{
     BenchmarkId, Criterion, ProjectFile, black_box, criterion_group, criterion_main, test_files,
     test_projects,
 };
-use luck_core::TransformConfig;
+use luck_minifier::TransformConfig;
 
 fn bench_minifier(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("minifier");

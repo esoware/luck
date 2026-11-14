@@ -12,7 +12,7 @@ pub(crate) fn run_pass(
     version: LuaVersion,
     pass: impl FnOnce(Block) -> Block,
 ) -> String {
-    luck_codegen::compact(&pass(parse(source, version)))
+    luck_codegen::compact(&pass(parse(source, version))).expect("a pass keeps the tree printable")
 }
 
 pub(crate) fn assert_reparses(output: &str, version: LuaVersion) {

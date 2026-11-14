@@ -6,7 +6,9 @@ use crate::common::with_level;
 #[test]
 fn allow_covers_next_stmt() {
     let diags = lint(
-        "-- luck: allow(unused_variable)\nlocal unused = 1",
+        "\
+-- luck: allow(unused_variable)
+local unused = 1",
         LuaVersion::Lua54,
         &LintConfig::default(),
     );
@@ -16,7 +18,9 @@ fn allow_covers_next_stmt() {
 #[test]
 fn trailing_allow_covers_the_stmt_it_trails() {
     let diags = lint(
-        "local first = 1 -- luck: allow(unused_variable)\nlocal second = 2",
+        "\
+local first = 1 -- luck: allow(unused_variable)
+local second = 2",
         LuaVersion::Lua54,
         &LintConfig::default(),
     );
@@ -32,7 +36,9 @@ fn trailing_allow_covers_the_stmt_it_trails() {
 #[test]
 fn block_comment_allow_covers_next_stmt() {
     let diags = lint(
-        "--[[ luck: allow(unused_variable) ]]\nlocal unused = 1",
+        "\
+--[[ luck: allow(unused_variable) ]]
+local unused = 1",
         LuaVersion::Lua54,
         &LintConfig::default(),
     );
@@ -42,7 +48,9 @@ fn block_comment_allow_covers_next_stmt() {
 #[test]
 fn misspelled_region_word_disables_directive() {
     let diags = lint(
-        "-- luck: allow(unused_variable) strat\nlocal unused = 1",
+        "\
+-- luck: allow(unused_variable) strat
+local unused = 1",
         LuaVersion::Lua54,
         &LintConfig::default(),
     );
@@ -52,7 +60,13 @@ fn misspelled_region_word_disables_directive() {
 #[test]
 fn deny_escalates_severity() {
     let config = with_level("undefined_variable", RuleLevel::Warn);
-    let diags = lint("-- luck: deny(undefined_variable)\nprint(undef)", LuaVersion::Lua54, &config);
+    let diags = lint(
+        "\
+-- luck: deny(undefined_variable)
+print(undef)",
+        LuaVersion::Lua54,
+        &config,
+    );
     let denied = diags
         .iter()
         .find(|diag| diag.rule == "undefined_variable")
@@ -63,7 +77,13 @@ fn deny_escalates_severity() {
 #[test]
 fn warn_downgrades_severity() {
     let config = with_level("undefined_variable", RuleLevel::Error);
-    let diags = lint("-- luck: warn(undefined_variable)\nprint(undef)", LuaVersion::Lua54, &config);
+    let diags = lint(
+        "\
+-- luck: warn(undefined_variable)
+print(undef)",
+        LuaVersion::Lua54,
+        &config,
+    );
     let downgraded = diags
         .iter()
         .find(|diag| diag.rule == "undefined_variable")
@@ -73,7 +93,10 @@ fn warn_downgrades_severity() {
 
 #[test]
 fn file_level_allow_covers_whole_file() {
-    let source = "-- #luck: allow(unused_variable)\nlocal a = 1\nlocal b = 2";
+    let source = "\
+-- #luck: allow(unused_variable)
+local a = 1
+local b = 2";
     let diags = lint(source, LuaVersion::Lua54, &LintConfig::default());
     assert!(diags.iter().all(|diag| diag.rule != "unused_variable"));
 }
@@ -81,7 +104,11 @@ fn file_level_allow_covers_whole_file() {
 #[test]
 fn deny_region_covers_block() {
     let config = with_level("unused_variable", RuleLevel::Warn);
-    let source = "-- luck: deny(unused_variable) start\nlocal a = 1\nlocal b = 2\n-- luck: deny(unused_variable) end";
+    let source = "\
+-- luck: deny(unused_variable) start
+local a = 1
+local b = 2
+-- luck: deny(unused_variable) end";
     let diags = lint(source, LuaVersion::Lua54, &config);
     let region_diags: Vec<_> = diags.iter().filter(|diag| diag.rule == "unused_variable").collect();
     assert_ne!(region_diags, Vec::<&LintDiagnostic>::new());
@@ -92,7 +119,12 @@ fn deny_region_covers_block() {
 
 #[test]
 fn stmt_allow_wins_over_enclosing_deny_region() {
-    let source = "-- luck: deny(unused_variable) start\n-- luck: allow(unused_variable)\nlocal a = 1\nlocal b = 2\n-- luck: deny(unused_variable) end";
+    let source = "\
+-- luck: deny(unused_variable) start
+-- luck: allow(unused_variable)
+local a = 1
+local b = 2
+-- luck: deny(unused_variable) end";
     let diags = lint(source, LuaVersion::Lua54, &LintConfig::default());
     let unused_diags: Vec<_> = diags.iter().filter(|diag| diag.rule == "unused_variable").collect();
     assert_eq!(unused_diags.len(), 1, "{diags:?}");
@@ -102,14 +134,22 @@ fn stmt_allow_wins_over_enclosing_deny_region() {
 
 #[test]
 fn unclosed_region_extends_to_end_of_file() {
-    let source = "-- luck: allow(unused_variable) start\nlocal a = 1\nlocal b = 2";
+    let source = "\
+-- luck: allow(unused_variable) start
+local a = 1
+local b = 2";
     let diags = lint(source, LuaVersion::Lua54, &LintConfig::default());
     assert!(diags.iter().all(|diag| diag.rule != "unused_variable"));
 }
 
 #[test]
 fn allow_region_ends_at_its_end_directive() {
-    let source = "-- luck: allow(unused_variable) start\nlocal a = 1\nlocal b = 2\n-- luck: allow(unused_variable) end\nlocal c = 3";
+    let source = "\
+-- luck: allow(unused_variable) start
+local a = 1
+local b = 2
+-- luck: allow(unused_variable) end
+local c = 3";
     let diags = lint(source, LuaVersion::Lua54, &LintConfig::default());
     assert!(
         diags.iter().all(|diag| !(diag.rule == "unused_variable" && diag.message.contains("`a`")))
@@ -121,7 +161,9 @@ fn allow_region_ends_at_its_end_directive() {
 
 #[test]
 fn invalid_lint_filter_fires_on_unknown_name() {
-    let source = "-- luck: allow(unsed_variable)\nlocal _x = 1";
+    let source = "\
+-- luck: allow(unsed_variable)
+local _x = 1";
     let diags = lint(source, LuaVersion::Lua54, &LintConfig::default());
     let invalid = diags
         .iter()
@@ -132,14 +174,19 @@ fn invalid_lint_filter_fires_on_unknown_name() {
 
 #[test]
 fn invalid_lint_filter_silent_on_known() {
-    let source = "-- luck: allow(unused_variable)\nlocal _x = 1";
+    let source = "\
+-- luck: allow(unused_variable)
+local _x = 1";
     let diags = lint(source, LuaVersion::Lua54, &LintConfig::default());
     assert!(diags.iter().all(|diag| diag.rule != "invalid_lint_filter"));
 }
 
 #[test]
 fn wildcard_allow_covers_only_next_stmt() {
-    let source = "-- luck: allow(*)\nlocal unused = 1\nmy_global = 1";
+    let source = "\
+-- luck: allow(*)
+local unused = 1
+my_global = 1";
     let diags = lint(source, LuaVersion::Lua54, &LintConfig::default());
     assert!(
         diags
@@ -152,7 +199,9 @@ fn wildcard_allow_covers_only_next_stmt() {
 #[test]
 fn allow_in_leveled_block_comment_covers_next_stmt() {
     let diags = lint(
-        "--[=[ luck: allow(unused_variable) ]=]\nlocal unused = 1",
+        "\
+--[=[ luck: allow(unused_variable) ]=]
+local unused = 1",
         LuaVersion::Lua54,
         &LintConfig::default(),
     );

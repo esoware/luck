@@ -165,25 +165,46 @@ mod tests {
 
     #[test]
     fn flags_function_decl_attribute() {
-        let source = "--!native\n@native function f() end";
+        let source = "\
+--!native
+@native function f() end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "--!native\nfunction f() end");
+        assert_eq!(
+            fixed,
+            "\
+--!native
+function f() end"
+        );
     }
 
     #[test]
     fn flags_local_function_attribute() {
-        let source = "--!native\n@native\nlocal function f() end\nf()";
+        let source = "\
+--!native
+@native
+local function f() end
+f()";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "--!native\nlocal function f() end\nf()");
+        assert_eq!(
+            fixed,
+            "\
+--!native
+local function f() end
+f()"
+        );
     }
 
     #[test]
     fn flags_nested_function_attribute() {
-        let source = "--!native\ndo\n@native function f() end\nend";
+        let source = "\
+--!native
+do
+@native function f() end
+end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         fix_and_reparse(source, &diags, LuaVersion::Luau);
@@ -191,11 +212,21 @@ mod tests {
 
     #[test]
     fn flags_function_expr_attribute() {
-        let source = "--!native\n@native\nlocal function a() end\nlocal f = @native function() end";
+        let source = "\
+--!native
+@native
+local function a() end
+local f = @native function() end";
         let diags = run(source);
         assert_eq!(diags.len(), 2, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "--!native\nlocal function a() end\nlocal f = function() end");
+        assert_eq!(
+            fixed,
+            "\
+--!native
+local function a() end
+local f = function() end"
+        );
     }
 
     #[test]
@@ -206,44 +237,63 @@ mod tests {
 
     #[test]
     fn ignores_misplaced_native_directive() {
-        let diags = run("local _x = 1\n--!native\n@native function f() end");
+        let diags = run("\
+local _x = 1
+--!native
+@native function f() end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_other_attributes() {
-        let diags = run("--!native\n@checked function f() end");
+        let diags = run("\
+--!native
+@checked function f() end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_non_luau() {
-        let diags =
-            run_rule(&RedundantNativeAttribute, "--!native\nlocal _x = 1", LuaVersion::Lua54);
+        let diags = run_rule(
+            &RedundantNativeAttribute,
+            "\
+--!native
+local _x = 1",
+            LuaVersion::Lua54,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_and_fixes_bracketed_attribute() {
-        let source = "--!native\n@[native] function f() end";
+        let source = "\
+--!native
+@[native] function f() end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
         assert_eq!(
-            fixed, "--!native\nfunction f() end",
+            fixed,
+            "\
+--!native
+function f() end",
             "the fix should remove the whole attribute"
         );
     }
 
     #[test]
     fn ignores_native_directive_with_trailing_text() {
-        let diags = run("--!native on\n@native function f() end");
+        let diags = run("\
+--!native on
+@native function f() end");
         assert!(diags.is_empty(), "the compiler ignores `--!native on`: {diags:?}");
     }
 
     #[test]
     fn flags_without_fix_when_attribute_shares_a_list() {
-        let diags = run("--!native\n@[native, deprecated] function f() end");
+        let diags = run("\
+--!native
+@[native, deprecated] function f() end");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_none(), "{diags:?}");
     }

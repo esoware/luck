@@ -63,8 +63,7 @@ fn param_fingerprint(param: &StdlibParam) -> String {
         StdlibArgKind::Vararg => "...".to_owned(),
         StdlibArgKind::Display(label) => format!("<{label}>"),
         StdlibArgKind::Constant(values) => {
-            let rendered: Vec<&str> =
-                values.iter().map(|constant| constant.value.as_str()).collect();
+            let rendered: Vec<&str> = values.iter().map(|constant| constant.value).collect();
             format!("constant{{{}}}", rendered.join(","))
         }
     };
@@ -128,7 +127,7 @@ fn deprecation_fingerprint(entry: &StdlibEntry) -> String {
             format!(
                 "deprecated({}|{})",
                 deprecation.message,
-                deprecation.replace_template.as_deref().unwrap_or("-")
+                deprecation.replace_template.unwrap_or("-")
             )
         },
     )
@@ -323,7 +322,7 @@ fn signature_shapes_are_internally_consistent() {
                 continue;
             }
             let mut arities = Vec::new();
-            for signature in &function.signatures {
+            for signature in function.signatures {
                 let has_vararg = signature
                     .params
                     .last()
@@ -370,14 +369,14 @@ fn signature_shapes_are_internally_consistent() {
                         signature.min_args
                     ));
                 }
-                for param in &signature.params {
-                    if let StdlibArgKind::Constant(values) = &param.kind {
+                for param in signature.params {
+                    if let StdlibArgKind::Constant(values) = param.kind {
                         if values.is_empty() {
                             violations.push(format!("{file} {path}: empty constant set"));
                         }
                         let mut seen_values = BTreeSet::new();
                         for v in values {
-                            if !seen_values.insert(v.value.as_str()) {
+                            if !seen_values.insert(v.value) {
                                 violations.push(format!(
                                     "{file} {path}: duplicate constant value '{}'",
                                     v.value
@@ -417,7 +416,7 @@ fn shape_references_resolve_and_templates_fit_arity() {
                 StdlibEntry::Namespace(namespace) => (namespace.shape.as_ref(), 0),
             };
             if let Some(shape) = shape_reference
-                && !library.shapes.contains_key(shape.as_str())
+                && !library.shapes.contains_key(shape)
             {
                 violations.push(format!("{file} {path}: dangling shape reference '{shape}'"));
             }
@@ -437,12 +436,12 @@ fn shape_references_resolve_and_templates_fit_arity() {
                 check_template("", deprecation, template_budget);
             }
             if let StdlibEntry::Function(function) = entry {
-                for signature in &function.signatures {
-                    for param in &signature.params {
+                for signature in function.signatures {
+                    for param in signature.params {
                         if let Some(deprecation) = &param.deprecated {
                             check_template(" (param)", deprecation, template_budget);
                         }
-                        if let StdlibArgKind::Constant(values) = &param.kind {
+                        if let StdlibArgKind::Constant(values) = param.kind {
                             for v in values {
                                 if let Some(deprecation) = &v.deprecated {
                                     check_template(" (constant)", deprecation, template_budget);
@@ -474,7 +473,7 @@ fn string_shape_mirrors_string_namespace() {
         };
         for (name, entry) in &namespace.members {
             let is_function = matches!(entry, StdlibEntry::Function(_));
-            let should_be_member = is_function && !NON_RECEIVER_MEMBERS.contains(&name.as_str());
+            let should_be_member = is_function && !NON_RECEIVER_MEMBERS.contains(&name);
             assert_eq!(
                 shape.members.contains_key(name),
                 should_be_member,

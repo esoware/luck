@@ -167,7 +167,13 @@ mod tests {
     #[test]
     fn rename_of_a_local_declared_in_a_method_edits_only_that_local() {
         let document = document(
-            "local t = {}\nfunction t:m()\n  local value = 1\n  return value + self.x\nend\n",
+            "\
+local t = {}
+function t:m()
+  local value = 1
+  return value + self.x
+end
+",
             LuaTarget::Lua54,
         );
         let edit = rename_at(&document, 2, 9, "total")
@@ -188,8 +194,15 @@ mod tests {
     fn rename_refuses_the_implicit_self() {
         // A method's `self` has no declaration to rewrite, so no new name
         // can work.
-        let document =
-            document("local t = {}\nfunction t:m()\n  return self.x\nend\n", LuaTarget::Lua54);
+        let document = document(
+            "\
+local t = {}
+function t:m()
+  return self.x
+end
+",
+            LuaTarget::Lua54,
+        );
         let result = rename_at(&document, 2, 10, "me");
         assert!(
             !matches!(result, Ok(Some(_))),
@@ -199,8 +212,15 @@ mod tests {
 
     #[test]
     fn prepare_rename_refuses_a_keyword_inside_a_method() {
-        let document =
-            document("local t = {}\nfunction t:m()\n  return 1\nend\n", LuaTarget::Lua54);
+        let document = document(
+            "\
+local t = {}
+function t:m()
+  return 1
+end
+",
+            LuaTarget::Lua54,
+        );
         let prepared = prepare(&document, Position::new(2, 3));
         assert!(
             prepared.is_none(),
@@ -222,7 +242,13 @@ mod tests {
         // In 5.2+ `_ENV` resolves every free name, so renaming the local
         // sends `x` to the real globals. `local _ENV = {x = 1}; return x`
         // returns 1 while the renamed form returns nil on lua5.4.
-        let document = document("local _ENV = {x = 1}\nreturn x\n", LuaTarget::Lua54);
+        let document = document(
+            "\
+local _ENV = {x = 1}
+return x
+",
+            LuaTarget::Lua54,
+        );
         let result = rename_at(&document, 0, 8, "scope");
         assert!(
             result.is_err(),
@@ -234,7 +260,13 @@ mod tests {
     fn rename_refuses_an_exported_binding() {
         // An exported name is the module's public field name, per the Luau
         // export RFC.
-        let document = document("export local version = 1\nprint(version)\n", LuaTarget::Luau);
+        let document = document(
+            "\
+export local version = 1
+print(version)
+",
+            LuaTarget::Luau,
+        );
         assert!(document.parsed.errors.is_empty(), "{:?}", document.parsed.errors);
         let result = rename_at(&document, 0, 15, "release");
         assert!(
@@ -247,7 +279,13 @@ mod tests {
     fn prepare_rename_refuses_what_rename_refuses() {
         let exported = document("export local version = 1\n", LuaTarget::Luau);
         assert!(prepare(&exported, Position::new(0, 15)).is_none());
-        let env = document("local _ENV = {x = 1}\nreturn x\n", LuaTarget::Lua54);
+        let env = document(
+            "\
+local _ENV = {x = 1}
+return x
+",
+            LuaTarget::Lua54,
+        );
         assert!(prepare(&env, Position::new(0, 8)).is_none());
     }
 }

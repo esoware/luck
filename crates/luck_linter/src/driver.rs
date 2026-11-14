@@ -1,10 +1,11 @@
 use std::sync::OnceLock;
 
-use luck_core::{LintConfig, LuaTarget, RuleLevel};
+use luck_core::LuaTarget;
 use luck_semantic::SemanticAnalysis;
 use luck_token::{LuaVersion, SourceError, StdlibEnvironment};
 use rayon::prelude::*;
 
+use crate::config::{LintConfig, RuleLevel};
 use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
 use crate::nodes::Nodes;
 use crate::rule::{LintContext, NodeRule, Rule, WholeRule};

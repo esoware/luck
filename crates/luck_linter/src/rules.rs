@@ -66,8 +66,7 @@ mod value_overwritten_before_read;
 
 use core::iter;
 
-use luck_core::LintConfig;
-
+use crate::config::LintConfig;
 use crate::rule::{NodeRule, Rule, WholeRule};
 
 #[derive(Clone, Copy)]

@@ -1,7 +1,7 @@
 use luck_ast::{
-    BinaryOp, Expression, Field, FieldAccess, FunctionArgs, FunctionCall, FunctionDef,
-    IfExpression, IndexExpression, InterpolatedString, ParenthesizedExpression, TableConstructor,
-    TypeCast, TypeInstantiation, UnaryOp, Var, ensure_sufficient_stack, expr_starts_with_brace,
+    BinaryOp, Expression, Field, FunctionArgs, FunctionDef, IfExpression, InterpolatedString,
+    ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
+    expr_starts_with_brace,
 };
 use luck_token::TokenKind;
 
@@ -26,8 +26,8 @@ impl CompactPrinter {
                 self.emit_piece(&literal.text, PieceClass::Other);
             }
             Expression::FunctionDef(function) => self.emit_function_definition(function),
-            Expression::Var(var) => self.emit_var(var),
-            Expression::FunctionCall(call) => self.emit_function_call(call),
+            Expression::Name(token) => self.emit_token(token),
+            Expression::Suffixed(chain) => self.emit_suffixed(chain),
             Expression::Parenthesized(parenthesized) => {
                 self.emit_parenthesized_expr(parenthesized);
             }
@@ -40,10 +40,6 @@ impl CompactPrinter {
             Expression::InterpolatedString(string) => self.emit_interpolated_string(string),
             // Luau
             Expression::TypeCast(cast) => self.emit_type_cast(cast),
-            // Luau
-            Expression::TypeInstantiation(instantiation) => {
-                self.emit_type_instantiation(instantiation);
-            }
             Expression::Error(_) => {}
         }
     }
@@ -51,8 +47,7 @@ impl CompactPrinter {
     pub(super) fn emit_var(&mut self, var: &Var) {
         match var {
             Var::Name(token) => self.emit_token(token),
-            Var::Index(index) => self.emit_index_expr(index),
-            Var::FieldAccess(field) => self.emit_field_access(field),
+            Var::Suffixed(chain) => self.emit_suffixed(chain),
         }
     }
 
@@ -62,18 +57,46 @@ impl CompactPrinter {
         self.emit_function_body(&function_definition.body);
     }
 
-    pub(super) fn emit_function_call(&mut self, call: &FunctionCall) {
-        ensure_sufficient_stack(|| self.emit_expr(&call.callee));
-        if let Some(method_name) = &call.method {
-            self.emit_fixed(":");
-            self.emit_token(method_name);
+    pub(super) fn emit_suffixed(&mut self, chain: &SuffixedExpression) {
+        if self.descend() {
+            self.emit_expr(&chain.prefix);
+            for suffix in &chain.suffixes {
+                self.emit_suffix(suffix);
+            }
         }
-        if let Some(type_args) = &call.explicit_type_args {
-            self.emit_fixed("<<");
-            self.emit_punctuated(&type_args.args, ",", Self::emit_type);
-            self.emit_fixed(">>");
+        self.ascend();
+    }
+
+    fn emit_suffix(&mut self, suffix: &Suffix) {
+        match suffix {
+            Suffix::Field(name) => {
+                self.emit_fixed(".");
+                self.emit_token(name);
+            }
+            Suffix::Index { index, .. } => {
+                self.emit_fixed("[");
+                self.emit_expr(index);
+                self.emit_fixed("]");
+            }
+            Suffix::Call(call) => {
+                if let Some(method_name) = &call.method {
+                    self.emit_fixed(":");
+                    self.emit_token(method_name);
+                }
+                if let Some(type_args) = &call.explicit_type_args {
+                    self.emit_fixed("<<");
+                    self.emit_punctuated(&type_args.args, ",", Self::emit_type);
+                    self.emit_fixed(">>");
+                }
+                self.emit_function_args(&call.args);
+            }
+            // Luau
+            Suffix::TypeInstantiation { type_args, .. } => {
+                self.emit_fixed("<<");
+                self.emit_punctuated(&type_args.args, ",", Self::emit_type);
+                self.emit_fixed(">>");
+            }
         }
-        self.emit_function_args(&call.args);
     }
 
     fn emit_function_args(&mut self, function_args: &FunctionArgs) {
@@ -91,17 +114,23 @@ impl CompactPrinter {
     }
 
     fn emit_parenthesized_expr(&mut self, parenthesized: &ParenthesizedExpression) {
-        self.emit_fixed("(");
-        ensure_sufficient_stack(|| self.emit_expr(&parenthesized.expr));
-        self.emit_fixed(")");
+        if self.descend() {
+            self.emit_fixed("(");
+            self.emit_expr(&parenthesized.expr);
+            self.emit_fixed(")");
+        }
+        self.ascend();
     }
 
     fn emit_table_constructor(&mut self, table: &TableConstructor) {
-        self.emit_fixed("{");
-        // A trailing separator the source carried is dropped; it costs bytes
-        // and changes nothing.
-        self.emit_joined(&table.fields.items, ",", Self::emit_field);
-        self.emit_fixed("}");
+        if self.descend() {
+            self.emit_fixed("{");
+            // A trailing separator the source carried is dropped; it costs bytes
+            // and changes nothing.
+            self.emit_joined(&table.fields.items, ",", Self::emit_field);
+            self.emit_fixed("}");
+        }
+        self.ascend();
     }
 
     fn emit_field(&mut self, field: &Field) {
@@ -124,88 +153,81 @@ impl CompactPrinter {
         }
     }
 
-    fn emit_index_expr(&mut self, index: &IndexExpression) {
-        ensure_sufficient_stack(|| {
-            self.emit_expr(&index.prefix);
-            self.emit_fixed("[");
-            self.emit_expr(&index.index);
-            self.emit_fixed("]");
-        });
-    }
-
-    fn emit_field_access(&mut self, field: &FieldAccess) {
-        ensure_sufficient_stack(|| self.emit_expr(&field.prefix));
-        self.emit_fixed(".");
-        self.emit_token(&field.name);
-    }
-
     fn emit_binary_op(&mut self, binary_op: &BinaryOp) {
-        ensure_sufficient_stack(|| {
-            self.emit_expr(&binary_op.lhs);
-            self.emit_fixed(binary_op.op.static_text());
-            self.emit_expr(&binary_op.rhs);
-        });
+        if self.descend() {
+            self.emit_expr(&binary_op.first);
+            for link in &binary_op.links {
+                self.emit_fixed(link.op.static_text());
+                self.emit_expr(&link.operand);
+            }
+        }
+        self.ascend();
     }
 
     fn emit_unary_op(&mut self, unary_op: &UnaryOp) {
-        self.emit_fixed(unary_op.op.static_text());
-        ensure_sufficient_stack(|| self.emit_expr(&unary_op.operand));
+        if self.descend() {
+            self.emit_fixed(unary_op.op.static_text());
+            self.emit_expr(&unary_op.operand);
+        }
+        self.ascend();
     }
 
     fn emit_if_expr(&mut self, if_expr: &IfExpression) {
-        self.emit_fixed("if");
-        self.emit_expr(&if_expr.condition);
-        self.emit_fixed("then");
-        self.emit_expr(&if_expr.then_expr);
-        for clause in &if_expr.elseif_clauses {
-            self.emit_fixed("elseif");
-            self.emit_expr(&clause.condition);
+        if self.descend() {
+            self.emit_fixed("if");
+            self.emit_expr(&if_expr.condition);
             self.emit_fixed("then");
-            self.emit_expr(&clause.expr);
+            self.emit_expr(&if_expr.then_expr);
+            for clause in &if_expr.elseif_clauses {
+                self.emit_fixed("elseif");
+                self.emit_expr(&clause.condition);
+                self.emit_fixed("then");
+                self.emit_expr(&clause.expr);
+            }
+            self.emit_fixed("else");
+            self.emit_expr(&if_expr.else_expr);
         }
-        self.emit_fixed("else");
-        self.emit_expr(&if_expr.else_expr);
+        self.ascend();
     }
 
     fn emit_interpolated_string(&mut self, interpolated: &InterpolatedString) {
-        // The braces follow expression presence, not token kind: a plain
-        // `` `text` `` lexes as a Begin("") + End(text) pair with no
-        // expression and must print without braces.
-        self.output.print_ascii_byte(b'`');
-        for segment in &interpolated.segments {
-            if let TokenKind::InterpolatedStringBegin(text)
-            | TokenKind::InterpolatedStringMiddle(text)
-            | TokenKind::InterpolatedStringEnd(text) = &segment.literal.kind
-            {
-                self.output.print_str(text);
-            }
-            if let Some(expr) = &segment.expr {
-                self.output.print_ascii_byte(b'{');
-                // `{{` is a parse error in Luau: an expression starting with a
-                // table constructor needs a space after the interpolation
-                // opener.
-                if expr_starts_with_brace(expr) {
-                    self.output.print_ascii_byte(b' ');
+        if self.descend() {
+            // The braces follow expression presence, not token kind: a plain
+            // `` `text` `` lexes as a Begin("") + End(text) pair with no
+            // expression and must print without braces.
+            self.output.print_ascii_byte(b'`');
+            for segment in &interpolated.segments {
+                if let TokenKind::InterpolatedStringBegin(text)
+                | TokenKind::InterpolatedStringMiddle(text)
+                | TokenKind::InterpolatedStringEnd(text) = &segment.literal.kind
+                {
+                    self.output.print_str(text);
                 }
-                self.previous = PieceClass::Other;
-                self.emit_expr(expr);
-                self.output.print_ascii_byte(b'}');
+                if let Some(expr) = &segment.expr {
+                    self.output.print_ascii_byte(b'{');
+                    // `{{` is a parse error in Luau: an expression starting with a
+                    // table constructor needs a space after the interpolation
+                    // opener.
+                    if expr_starts_with_brace(expr) {
+                        self.output.print_ascii_byte(b' ');
+                    }
+                    self.previous = PieceClass::Other;
+                    self.emit_expr(expr);
+                    self.output.print_ascii_byte(b'}');
+                }
             }
+            self.output.print_ascii_byte(b'`');
+            self.previous = PieceClass::Other;
         }
-        self.output.print_ascii_byte(b'`');
-        self.previous = PieceClass::Other;
+        self.ascend();
     }
 
     fn emit_type_cast(&mut self, cast: &TypeCast) {
-        ensure_sufficient_stack(|| self.emit_expr(&cast.expr));
-        self.emit_fixed("::");
-        self.emit_type(&cast.type_annotation);
-    }
-
-    fn emit_type_instantiation(&mut self, instantiation: &TypeInstantiation) {
-        ensure_sufficient_stack(|| self.emit_expr(&instantiation.expr));
-        self.emit_fixed("<<");
-        self.emit_punctuated(&instantiation.type_args.args, ",", Self::emit_type);
-        self.emit_fixed(">>");
+        if self.descend() {
+            self.emit_expr(&cast.expr);
+            self.emit_fixed("::");
+            self.emit_type(&cast.type_annotation);
+        }
+        self.ascend();
     }
 }

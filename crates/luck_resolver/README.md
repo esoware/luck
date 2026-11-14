@@ -17,11 +17,13 @@ let resolved = resolver.resolve(&ResolveRequest { /* ... */ })?;
 
 The cache lives on the resolver, not in global state, and is never invalidated. Create a fresh `Resolver` per build, as the bundler does once per `DependencyGraph::build`, and stale alias data drops with it.
 
-`luck_core::normalize_path` gives the form every resolved path takes: canonical when the file exists, with forward slashes and no Windows extended-length prefix. The bundler keys modules on it, and the requiring file passed in a `ResolveRequest` must use it too. `luck_core::native_path` turns such a path back into the platform's own separators for filesystem calls.
+`normalize_path` gives the form every resolved path takes: canonical when the file exists, with forward slashes and no Windows extended-length prefix. The bundler keys modules on it, and the requiring file passed in a `ResolveRequest` must use it too. `native_path` turns such a path back into the platform's own separators for filesystem calls.
+
+`read_source_file` reads a file with SIMD UTF-8 validation, matching `fs::read_to_string`'s error behavior. The CLI and the bundler load sources through it.
 
 ## Key features
 
-- **Lua 5.x template paths.** Substitutes the module name, with dots turned into slashes, into template strings (`./?.lua`, `./lib/?/init.lua`, ...) and returns the first hit. An empty list means `luck_core::DEFAULT_SEARCH_PATHS`, so builds and editor links read `"search_paths": []` the same way.
+- **Lua 5.x template paths.** Substitutes the module name, with dots turned into slashes, into template strings (`./?.lua`, `./lib/?/init.lua`, ...) and returns the first hit. An empty list means `DEFAULT_SEARCH_PATHS`, so builds and editor links read `"search_paths": []` the same way.
 - **Luau relative imports.** `./module`, `../module`, with init-file resolution and `.luau` / `.lua` extension probing. A require is walked one component at a time, as Luau's navigator does.
 - **Luau aliases.** `@utils` and similar prefixes resolve through `.luaurc` files discovered up the directory tree, with the closest definition winning. An alias may name another alias, as in `"outer": "@inner/sub"`.
 - **`@self`** is a built-in Luau alias for the current module, with no `.luaurc` entry needed: `@self/x` is `dir/x` from `dir/init.luau` and `main/x` from `main.luau`. A `.luaurc` alias named `self` can't override it and raises W004.

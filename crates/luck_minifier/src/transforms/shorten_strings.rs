@@ -11,9 +11,11 @@ struct StringShortener {
     version: LuaVersion,
 }
 
-impl Transform for StringShortener {
-    fn transform_expr(&mut self, expr: Expression) -> Expression {
-        match self.walk_expr(expr) {
+impl StringShortener {
+    // Out of line, so an expression nested below holds only the walk's frame,
+    // not these temporaries.
+    fn shorten_literal(&self, walked: Expression) -> Expression {
+        match walked {
             Expression::StringLiteral(literal) => {
                 if let Some(bytes) = decode_string(&literal.text, self.version) {
                     let candidate = encode_string(&bytes);
@@ -33,8 +35,8 @@ impl Transform for StringShortener {
             | Expression::Integer(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::BinaryOp(_)
@@ -42,9 +44,15 @@ impl Transform for StringShortener {
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_)) => other,
         }
+    }
+}
+
+impl Transform for StringShortener {
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        let walked = self.walk_expr(expr);
+        self.shorten_literal(walked)
     }
 }
 
@@ -66,7 +74,11 @@ mod tests {
     #[test]
     fn long_bracket_with_newline_becomes_escaped() {
         // The escaped form is both shorter and exact.
-        let result = apply("local x = [[hello\nworld]]");
+        let result = apply(
+            "\
+local x = [[hello
+world]]",
+        );
         assert_eq!(result, "local x=\"hello\\nworld\"");
         assert_reparses(&result, LuaVersion::Lua54);
     }

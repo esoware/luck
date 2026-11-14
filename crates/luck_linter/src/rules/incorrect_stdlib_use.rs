@@ -1,10 +1,10 @@
-use luck_ast::{Expression, FunctionCall};
-use luck_semantic::{ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction};
+use luck_ast::Expression;
+use luck_semantic::{ResolvedCallee, StdlibEntry, StdlibFunction};
 
 use crate::call::{has_multi_value_tail, positional_args, string_literal_value};
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 /// How many allowed values a message lists. Generated sets (Roblox service
 /// and class names) run to hundreds of values.
@@ -27,23 +27,22 @@ impl NodeRule for IncorrectStdlibUse {
     }
     fn on_call(
         &self,
-        call: &FunctionCall,
-        _position: CallPosition,
-        context: &LintContext<'_>,
+        site: &CallSite<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        check_call(call, context.semantic, findings);
+        check_call(site, findings);
     }
 }
 
-fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut Vec<Finding>) {
-    let Some(callee) = semantic.resolve_callee(call) else {
+fn check_call(site: &CallSite<'_>, findings: &mut Vec<Finding>) {
+    let CallSite { call, callee: Some(callee), .. } = *site else {
         return;
     };
     let StdlibEntry::Function(function) = callee.entry() else {
         return;
     };
-    let (args, arg_count) = positional_args(&call.args);
+    let (args, arg_count) = positional_args(call.args);
     // A trailing call or `...` can expand to any number of values, so the
     // minimum and overload checks skip it.
     let has_multi_value_tail = has_multi_value_tail(args);
@@ -66,7 +65,7 @@ fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis, findings: &mut V
         None
     };
     match arity_message {
-        Some(message) => findings.push(Finding::new(message, call.span)),
+        Some(message) => findings.push(Finding::new(message, call.span())),
         None => findings.extend(invalid_constant_args(&callee, function, args, arg_count)),
     }
 }
@@ -176,13 +175,14 @@ mod tests {
     fn ignores_every_valid_cframe_new_overload() {
         // Every `CFrame.new` overload: no arguments, one or two `Vector3`s,
         // and 3, 7, or 12 numbers.
-        let source = "local v = Vector3.new(1, 2, 3)\n\
-                      local a = CFrame.new()\n\
-                      local b = CFrame.new(v)\n\
-                      local c = CFrame.new(v, v)\n\
-                      local d = CFrame.new(1, 2, 3)\n\
-                      local e = CFrame.new(1, 2, 3, 4, 5, 6, 7)\n\
-                      local f = CFrame.new(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)";
+        let source = "\
+local v = Vector3.new(1, 2, 3)
+local a = CFrame.new()
+local b = CFrame.new(v)
+local c = CFrame.new(v, v)
+local d = CFrame.new(1, 2, 3)
+local e = CFrame.new(1, 2, 3, 4, 5, 6, 7)
+local f = CFrame.new(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)";
         let messages = run_roblox(source);
         assert!(messages.is_empty(), "{messages:?}");
     }
@@ -195,9 +195,10 @@ mod tests {
 
     #[test]
     fn ignores_valid_udim2_overloads() {
-        let source = "local u = UDim.new(0, 10)\n\
-                      local a = UDim2.new(0, 0, 1, 0)\n\
-                      local b = UDim2.new(u, u)";
+        let source = "\
+local u = UDim.new(0, 10)
+local a = UDim2.new(0, 0, 1, 0)
+local b = UDim2.new(u, u)";
         let messages = run_roblox(source);
         assert!(messages.is_empty(), "{messages:?}");
     }
@@ -218,13 +219,23 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_base() {
-        let messages = run("local type = f\ntype(1, 2, 3)", LuaVersion::Lua54);
+        let messages = run(
+            "\
+local type = f
+type(1, 2, 3)",
+            LuaVersion::Lua54,
+        );
         assert!(messages.is_empty(), "{messages:?}");
     }
 
     #[test]
     fn flags_file_method_missing_args() {
-        let messages = run("local f = io.open('x')\nf:setvbuf()", LuaVersion::Lua54);
+        let messages = run(
+            "\
+local f = io.open('x')
+f:setvbuf()",
+            LuaVersion::Lua54,
+        );
         assert!(
             messages.iter().any(|message| message.contains("requires at least 1")),
             "{messages:?}"
@@ -233,7 +244,12 @@ mod tests {
 
     #[test]
     fn flags_file_method_bad_constant() {
-        let messages = run("local f = io.open('x')\nf:seek('nope')", LuaVersion::Lua54);
+        let messages = run(
+            "\
+local f = io.open('x')
+f:seek('nope')",
+            LuaVersion::Lua54,
+        );
         assert!(
             messages.iter().any(|message| message.contains("argument 1 must be")),
             "{messages:?}"
@@ -251,7 +267,12 @@ mod tests {
 
     #[test]
     fn ignores_method_on_unshaped_local() {
-        let messages = run("local f = something()\nf:setvbuf()", LuaVersion::Lua54);
+        let messages = run(
+            "\
+local f = something()
+f:setvbuf()",
+            LuaVersion::Lua54,
+        );
         assert!(messages.is_empty(), "{messages:?}");
     }
 

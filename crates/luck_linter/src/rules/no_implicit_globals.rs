@@ -42,10 +42,10 @@ impl WholeRule for NoImplicitGlobals {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LintConfig;
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::config::LintConfig;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_with_config;
 
@@ -65,7 +65,12 @@ mod tests {
 
     #[test]
     fn ignores_local_shadowing_global() {
-        let diags = run("local print = function() end\nprint(\"x\")", &[]);
+        let diags = run(
+            "\
+local print = function() end
+print(\"x\")",
+            &[],
+        );
         assert!(diags.iter().all(|diag| !diag.message.contains("`print`")), "got: {diags:?}");
     }
 
@@ -89,7 +94,12 @@ mod tests {
 
     #[test]
     fn flags_stdlib_despite_configured_extra_global() {
-        let diags = run("print(\"x\")\nmyCustomGlobal()", &["myCustomGlobal"]);
+        let diags = run(
+            "\
+print(\"x\")
+myCustomGlobal()",
+            &["myCustomGlobal"],
+        );
         assert!(diags.iter().any(|diag| diag.message.contains("`print`")), "{diags:?}");
         assert!(diags.iter().all(|diag| !diag.message.contains("`myCustomGlobal`")));
     }

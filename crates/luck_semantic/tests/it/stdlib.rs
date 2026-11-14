@@ -1,6 +1,6 @@
 use core::ptr;
 
-use luck_ast::{Expression, LastStatement, Statement};
+use luck_ast::{Expression, LastStatement, Statement, Suffix};
 use luck_semantic::{
     StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary,
     expand_replace_template, library_for,
@@ -49,9 +49,8 @@ fn table_getn_deprecated_in_51_and_fixes_to_length_from_52() {
             function.deprecated.as_ref().expect("table.getn must be deprecated in 5.2+");
         let template = deprecation
             .replace_template
-            .as_ref()
             .expect("table.getn deprecation must carry a replace template");
-        assert_eq!(template.as_str(), "#%1");
+        assert_eq!(template, "#%1");
     }
 }
 
@@ -64,9 +63,8 @@ fn unpack_deprecated_from_52() {
     for newer in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let function = function_at(standalone_library(newer), &["unpack"]);
         let deprecation = function.deprecated.as_ref().expect("unpack deprecated in 5.2+");
-        let template =
-            deprecation.replace_template.as_ref().expect("unpack has a replace template");
-        assert_eq!(template.as_str(), "table.unpack(%1)");
+        let template = deprecation.replace_template.expect("unpack has a replace template");
+        assert_eq!(template, "table.unpack(%1)");
     }
 }
 
@@ -105,9 +103,8 @@ fn utf8_only_53_plus() {
 fn loadstring_deprecated_in_52_fixes_to_load() {
     let function = function_at(standalone_library(LuaVersion::Lua52), &["loadstring"]);
     let deprecation = function.deprecated.as_ref().expect("loadstring is deprecated");
-    let template =
-        deprecation.replace_template.as_ref().expect("loadstring has a replace template");
-    assert_eq!(template.as_str(), "load(%1)");
+    let template = deprecation.replace_template.expect("loadstring has a replace template");
+    assert_eq!(template, "load(%1)");
 }
 
 #[test]
@@ -383,7 +380,7 @@ fn legacy_roblox_globals_are_deprecated() {
     }
     let deprecation =
         function_at(roblox(), &["ypcall"]).deprecated.as_ref().expect("ypcall deprecated");
-    assert_eq!(deprecation.replace_template.as_deref(), Some("pcall(%1)"), "ypcall fixes to pcall");
+    assert_eq!(deprecation.replace_template, Some("pcall(%1)"), "ypcall fixes to pcall");
 }
 
 #[test]
@@ -571,7 +568,7 @@ fn io_popen_mode_is_r_or_w_only() {
         let StdlibArgKind::Constant(values) = &mode.kind else {
             panic!("io.popen mode should be a constant set");
         };
-        let mut names: Vec<&str> = values.iter().map(|constant| constant.value.as_str()).collect();
+        let mut names: Vec<&str> = values.iter().map(|constant| constant.value).collect();
         names.sort_unstable();
         assert_eq!(names, ["r", "w"], "io.popen mode set in {version:?}");
     }
@@ -610,7 +607,7 @@ fn lua54_collectgarbage_overloads_and_constant_deprecation() {
 fn lua55_collectgarbage_param_form_replaces_setpause() {
     let function = function_at(standalone_library(LuaVersion::Lua55), &["collectgarbage"]);
     assert!(function.accepts_arg_count(3), "collectgarbage('param', 'pause', n) is valid in 5.5");
-    for signature in &function.signatures {
+    for signature in function.signatures {
         let StdlibArgKind::Constant(values) = &signature.params[0].kind else {
             continue;
         };
@@ -854,7 +851,7 @@ fn file_shape_present_in_all_numbered_versions() {
             &["io", "output"][..],
         ] {
             assert_eq!(
-                function_at(library, opener).returns_shape.as_deref(),
+                function_at(library, opener).returns_shape,
                 Some("file"),
                 "{version:?}: {opener:?} returns a file"
             );
@@ -863,7 +860,7 @@ fn file_shape_present_in_all_numbered_versions() {
             let Some(StdlibEntry::Property(value)) = library.lookup(&["io", stream]) else {
                 panic!("{version:?}: io.{stream} missing");
             };
-            assert_eq!(value.shape.as_deref(), Some("file"));
+            assert_eq!(value.shape, Some("file"));
         }
     }
 }
@@ -880,7 +877,7 @@ fn file_method_version_deltas() {
         let lines = shape_function(standalone_library(version), "file", "lines");
         assert_eq!(lines.max_args(), None, "{version:?}: lines takes formats");
         let write = shape_function(standalone_library(version), "file", "write");
-        assert_eq!(write.returns_shape.as_deref(), Some("file"), "{version:?}");
+        assert_eq!(write.returns_shape, Some("file"), "{version:?}");
     }
 }
 
@@ -890,7 +887,7 @@ fn string_receiver_shape_derived_in_every_library() {
         let upper = shape_function(library, "string", "upper");
         assert!(upper.is_method);
         assert_eq!(upper.min_args(), 0, "subject param dropped");
-        assert_eq!(upper.returns_shape.as_deref(), Some("string"));
+        assert_eq!(upper.returns_shape, Some("string"));
         let find = shape_function(library, "string", "find");
         assert!(find.min_args() >= 1, "pattern still required");
         for excluded in ["char", "dump"] {
@@ -952,7 +949,7 @@ fn game_is_a_shaped_datamodel() {
     let get_service = function_at(roblox(), &["game", "GetService"]);
     assert!(get_service.is_method);
     assert!(get_service.is_must_use);
-    assert_eq!(get_service.returns_shape.as_deref(), Some("Instance"));
+    assert_eq!(get_service.returns_shape, Some("Instance"));
     assert!(roblox().lookup(&["game", "FindService"]).is_some());
     assert!(roblox().lookup(&["game", "BindToClose"]).is_some());
     assert!(roblox().lookup(&["game", "IsLoaded"]).is_some());
@@ -1049,16 +1046,76 @@ fn resolve_last_call(source: &str) -> Option<String> {
         StdlibEnvironment::Roblox,
     );
     let last_stmt = parsed.block.stmts.last()?;
-    let call = if let Statement::FunctionCall(call) = last_stmt {
-        call
+    let chain = if let Statement::FunctionCall(chain) = last_stmt {
+        chain
     } else if let Statement::LocalAssignment(local) = last_stmt
-        && let Some(Expression::FunctionCall(call)) = local.exprs.as_ref()?.iter().last()
+        && let Some(Expression::Suffixed(chain)) = local.exprs.as_ref()?.iter().last()
     {
-        call
+        chain
     } else {
         return None;
     };
-    Some(analysis.resolve_callee(call)?.name())
+    Some(analysis.resolve_callee(chain.last_call()?)?.name())
+}
+
+/// The callee of each call in the last statement's chain, from one
+/// `chain_callees`, asked for last to first when `is_reversed`. Each must
+/// match what `resolve_callee` gives the call alone.
+fn chain_callee_names(source: &str, is_reversed: bool) -> Vec<Option<String>> {
+    let parsed = luck_parser::parse(source, LuaVersion::Lua54);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let analysis = luck_semantic::analyze(&parsed.block, LuaVersion::Lua54);
+    let Some(Statement::FunctionCall(chain)) = parsed.block.stmts.last() else {
+        panic!("the last statement must be a call");
+    };
+    let call_indexes = chain
+        .suffixes
+        .iter()
+        .enumerate()
+        .filter(|(_, suffix)| matches!(suffix, Suffix::Call(_)))
+        .map(|(index, _)| index);
+    let mut calls: Vec<_> = call_indexes.zip(chain.calls()).collect();
+    if is_reversed {
+        calls.reverse();
+    }
+    let mut callees = analysis.chain_callees(chain);
+    let mut names = Vec::new();
+    for (index, call) in calls {
+        let name = callees.callee(index).map(|callee| callee.name());
+        assert_eq!(name, analysis.resolve_callee(call).map(|callee| callee.name()));
+        names.push(name);
+    }
+    if is_reversed {
+        names.reverse();
+    }
+    names
+}
+
+#[test]
+fn chain_callees_resolve_calls_in_either_order() {
+    // `string.rep` declares no return shape, unlike the derived `string:rep`.
+    for (source, expected) in [
+        ("string.rep('x', 2):upper():len()\n", &[Some("string.rep"), None, None][..]),
+        ("('x'):rep(2).x:upper()\n", &[Some("string:rep"), None]),
+        (
+            "('x'):rep(2):upper():len()\n",
+            &[Some("string:rep"), Some("string:upper"), Some("string:len")],
+        ),
+    ] {
+        let names: Vec<Option<String>> =
+            expected.iter().map(|name| name.map(str::to_owned)).collect();
+        assert_eq!(chain_callee_names(source, false), names, "{source}");
+        assert_eq!(chain_callee_names(source, true), names, "{source}");
+    }
+}
+
+#[test]
+fn chain_callees_resolve_a_long_method_chain() {
+    let source = format!("('x'){}:len()\n", ":upper()".repeat(2000));
+    let names = chain_callee_names(&source, false);
+    assert_eq!(names.len(), 2001);
+    assert!(names.iter().take(2000).all(|name| name.as_deref() == Some("string:upper")));
+    assert_eq!(names.last().cloned().flatten().as_deref(), Some("string:len"));
 }
 
 #[test]
@@ -1070,7 +1127,9 @@ fn get_service_call_resolves() {
 #[test]
 fn get_service_chain_resolves() {
     let name = resolve_last_call(
-        "local players = game:GetService('Players')\nlocal x = players:FindFirstChild('x')",
+        "\
+local players = game:GetService('Players')
+local x = players:FindFirstChild('x')",
     )
     .expect("chained FindFirstChild resolves");
     assert_eq!(name, "players:FindFirstChild");
@@ -1079,7 +1138,9 @@ fn get_service_chain_resolves() {
 #[test]
 fn script_parent_chain_resolves() {
     let name = resolve_last_call(
-        "local container = script.Parent\nlocal x = container:WaitForChild('Config')",
+        "\
+local container = script.Parent
+local x = container:WaitForChild('Config')",
     )
     .expect("script.Parent chain resolves");
     assert_eq!(name, "container:WaitForChild");
@@ -1140,7 +1201,7 @@ fn enum_tree_is_populated() {
         "expected the full generated tree, got {} types",
         enum_global.members.len()
     );
-    assert_eq!(enum_global.shape.as_deref(), Some("Enums"));
+    assert_eq!(enum_global.shape, Some("Enums"));
 }
 
 #[test]
@@ -1156,7 +1217,7 @@ fn representative_items_resolve() {
             panic!("{path:?} should be a constant");
         };
         assert!(value.is_read_only);
-        assert_eq!(value.shape.as_deref(), Some("EnumItem"));
+        assert_eq!(value.shape, Some("EnumItem"));
     }
 }
 
@@ -1167,7 +1228,7 @@ fn enum_types_are_enum_shaped() {
     else {
         panic!("Enum.Material should be a namespace");
     };
-    assert_eq!(material.shape.as_deref(), Some("Enum"));
+    assert_eq!(material.shape, Some("Enum"));
 }
 
 #[test]
@@ -1360,7 +1421,7 @@ fn table_maxn_has_no_length_operator_fix() {
 
 fn lua53_bit32_replacement(name: &str) -> Option<&'static str> {
     let function = function_at(standalone_library(LuaVersion::Lua53), &["bit32", name]);
-    function.deprecated.as_ref()?.replace_template.as_deref()
+    function.deprecated.as_ref()?.replace_template
 }
 
 #[test]
@@ -1416,7 +1477,7 @@ fn fix_template<'library>(
     library: &'library StdlibLibrary,
     path: &[&str],
 ) -> Option<&'library str> {
-    function_at(library, path).deprecated.as_ref()?.replace_template.as_deref()
+    function_at(library, path).deprecated.as_ref()?.replace_template
 }
 
 fn returned_expr(text: &str, version: LuaVersion) -> Expression {
@@ -1442,7 +1503,7 @@ fn math_pow_fix_groups_a_compound_base() {
     assert!(
         matches!(
             returned_expr(&replacement, version),
-            Expression::BinaryOp(binary_op) if binary_op.op == BinOp::Pow
+            Expression::BinaryOp(binary_op) if binary_op.links.first().op == BinOp::Pow
         ),
         "with a = 2, math.pow(a + 1, 2) is 9.0, so the fix must raise the whole base, but \
          `{replacement}` is 3.0"

@@ -1,9 +1,9 @@
 use luck_ast::{Block, LocalAssignment, LocalFunction, Statement};
 use luck_semantic::{ScopeId, ScopeKind, ScopeTree, Symbol, SymbolId};
-use luck_token::{LuaVersion, Span, line_breaks, offset_to_index};
+use luck_token::{CompactString, LuaVersion, Span, line_breaks, offset_to_index};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// The rewrites that lower one module's top-level `export` declarations.
+/// How one module's top-level `export` declarations lower.
 ///
 /// Luau rejects `export` below the top level, and every bundled body sits
 /// inside a loader function. Type exports become private aliases. A value
@@ -13,13 +13,101 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// later local hides from the module's end, lives in the export table itself,
 /// the RFC's desugared `_EXP`, so the write raises as a frozen table does.
 #[derive(Debug, Default)]
-pub(crate) struct ExportLowering {
-    pub edits: Vec<(Span, String)>,
-    /// Opens the wrapper when an export lives in the table.
-    pub table_declaration: Option<String>,
-    /// Ends the module with its frozen export table. `None` when it exports
-    /// no value.
-    pub closing: Option<String>,
+pub(crate) struct ExportPlan {
+    /// Exports that stay locals, in declaration order.
+    pub local_exports: Vec<CompactString>,
+    /// The span starts of the statements whose exports live in the table. A
+    /// declaration can't mix locals and fields, so one table export moves all
+    /// its names there.
+    pub table_statements: FxHashSet<u32>,
+    /// The span of each read and write of an export that lives in the table,
+    /// which becomes a field of the table.
+    pub field_references: FxHashSet<Span>,
+    /// Whether the module exports a value, so its wrapper returns the export
+    /// table.
+    pub has_values: bool,
+}
+
+impl ExportPlan {
+    /// The plan for `block`, which exports nothing on a target without value
+    /// exports.
+    pub(crate) fn new(block: &Block, version: LuaVersion) -> Self {
+        if !version.has_value_exports() || !has_value_exports(block) {
+            return Self::default();
+        }
+        let tree = luck_semantic::build_scope_tree(block, version);
+        let exported_symbols: FxHashMap<Span, &Symbol> = tree
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.is_exported)
+            .map(|symbol| (symbol.definition_span, symbol))
+            .collect();
+        let shadowed = module_level_shadows(&tree);
+        let needs_table = |symbol: &Symbol| {
+            shadowed.contains(&symbol.id) || is_written_from_a_closure(&tree, symbol)
+        };
+        let mut plan = Self { has_values: true, ..Self::default() };
+        let mut table_exports: Vec<&Symbol> = Vec::new();
+        for stmt in &block.stmts {
+            let (span, symbols): (Span, Vec<&Symbol>) = match stmt {
+                Statement::LocalAssignment(local) if local.is_exported => (
+                    local.span,
+                    local
+                        .names
+                        .iter()
+                        .filter_map(|binding| exported_symbols.get(&binding.name.span).copied())
+                        .collect(),
+                ),
+                Statement::LocalFunction(function) if function.kind.is_exported() => (
+                    function.span,
+                    exported_symbols.get(&function.name.span).copied().into_iter().collect(),
+                ),
+                Statement::Assignment(_)
+                | Statement::FunctionCall(_)
+                | Statement::DoBlock(_)
+                | Statement::WhileLoop(_)
+                | Statement::RepeatLoop(_)
+                | Statement::IfStatement(_)
+                | Statement::NumericFor(_)
+                | Statement::GenericFor(_)
+                | Statement::FunctionDecl(_)
+                | Statement::LocalFunction(_)
+                | Statement::LocalAssignment(_)
+                | Statement::EmptyStatement(_)
+                | Statement::Goto(_)
+                | Statement::Label(_)
+                | Statement::GlobalDeclaration(_)
+                | Statement::GlobalFunction(_)
+                | Statement::GlobalStar(_)
+                | Statement::Break(_)
+                | Statement::CompoundAssignment(_)
+                | Statement::TypeDeclaration(_)
+                | Statement::Error(_) => continue,
+            };
+            if symbols.iter().any(|symbol| needs_table(symbol)) {
+                plan.table_statements.insert(span.start);
+                table_exports.extend(symbols);
+            } else {
+                plan.local_exports.extend(symbols.iter().map(|symbol| symbol.name.clone()));
+            }
+        }
+        plan.field_references = table_exports
+            .iter()
+            .flat_map(|symbol| &symbol.reference_ids)
+            .map(|id| tree.reference(*id).span)
+            .collect();
+        plan
+    }
+
+    pub(crate) fn has_table(&self) -> bool {
+        !self.table_statements.is_empty()
+    }
+
+    /// Whether the exported statement at `span` moves its exports to the
+    /// table.
+    pub(crate) fn is_table_statement(&self, span: Span) -> bool {
+        self.table_statements.contains(&span.start)
+    }
 }
 
 /// Whether the module exports a value, so its bundled wrapper returns the
@@ -27,7 +115,7 @@ pub(crate) struct ExportLowering {
 pub(crate) fn has_value_exports(block: &Block) -> bool {
     block.stmts.iter().any(|stmt| match stmt {
         Statement::LocalAssignment(local) => local.is_exported,
-        Statement::LocalFunction(function) => function.is_exported,
+        Statement::LocalFunction(function) => function.kind.is_exported(),
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::DoBlock(_)
@@ -50,14 +138,26 @@ pub(crate) fn has_value_exports(block: &Block) -> bool {
     })
 }
 
-pub(crate) fn lower_exports(
+/// The splices that lower a module's exports in its source text, and the
+/// lines around its body.
+#[derive(Debug, Default)]
+pub(crate) struct TextLowering {
+    pub edits: Vec<(Span, String)>,
+    /// Opens the wrapper when an export lives in the table.
+    pub table_declaration: Option<String>,
+    /// Ends the module with its frozen export table. `None` when it exports
+    /// no value.
+    pub closing: Option<String>,
+}
+
+pub(crate) fn lower_exports_in_text(
+    plan: &ExportPlan,
     block: &Block,
     source: &str,
     version: LuaVersion,
     prefix: &str,
-) -> ExportLowering {
-    let tree = has_value_exports(block).then(|| luck_semantic::build_scope_tree(block, version));
-    let mut lowering = ValueLowering::new(tree.as_ref(), source, version, prefix);
+) -> TextLowering {
+    let lowering = TextLowerer { source, version, prefix };
     let mut edits = Vec::new();
     for stmt in &block.stmts {
         match stmt {
@@ -66,10 +166,11 @@ pub(crate) fn lower_exports(
                 edits.push((export_keyword_span(type_declaration.span), String::new()));
             }
             Statement::LocalAssignment(local) if local.is_exported => {
-                lowering.lower_local(local, &mut edits);
+                edits.push(lowering.local_edit(local, plan.is_table_statement(local.span)));
             }
-            Statement::LocalFunction(function) if function.is_exported => {
-                lowering.lower_function(function, &mut edits);
+            Statement::LocalFunction(function) if function.kind.is_exported() => {
+                edits
+                    .push(lowering.function_edit(function, plan.is_table_statement(function.span)));
             }
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
@@ -94,106 +195,74 @@ pub(crate) fn lower_exports(
             | Statement::Error(_) => {}
         }
     }
-    lowering.finish(edits)
+    edits.extend(
+        plan.field_references.iter().map(|span| (*span, lowering.table_field(span.text(source)))),
+    );
+    if !plan.has_values {
+        return TextLowering { edits, table_declaration: None, closing: None };
+    }
+    let (table_declaration, closing) = if plan.has_table() {
+        let copies = plan
+            .local_exports
+            .iter()
+            .map(|name| format!("{prefix}exports.{name}={name}\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        (
+            Some(format!("local {prefix}exports={{}}")),
+            format!("{copies}return {prefix}freeze({prefix}exports)\n"),
+        )
+    } else {
+        let fields =
+            plan.local_exports.iter().map(|name| format!("{name}={name}")).collect::<Vec<_>>();
+        (None, format!("return {prefix}freeze({{{}}})\n", fields.join(",")))
+    };
+    TextLowering { edits, table_declaration, closing: Some(closing) }
 }
 
-struct ValueLowering<'input> {
-    tree: Option<&'input ScopeTree>,
-    exported_symbols: FxHashMap<Span, &'input Symbol>,
-    /// Exports a later module-level local hides, by id.
-    shadowed: FxHashSet<SymbolId>,
-    /// Exports living in the export table, chosen statement by statement.
-    table_exports: Vec<SymbolId>,
-    /// Exports staying locals, in declaration order.
-    local_exports: Vec<&'input str>,
+struct TextLowerer<'input> {
     source: &'input str,
     version: LuaVersion,
     prefix: &'input str,
 }
 
-impl<'input> ValueLowering<'input> {
-    fn new(
-        tree: Option<&'input ScopeTree>,
-        source: &'input str,
-        version: LuaVersion,
-        prefix: &'input str,
-    ) -> Self {
-        let exported_symbols = tree
-            .into_iter()
-            .flat_map(|scope_tree| &scope_tree.symbols)
-            .filter(|symbol| symbol.is_exported)
-            .map(|symbol| (symbol.definition_span, symbol))
-            .collect();
-        Self {
-            tree,
-            exported_symbols,
-            shadowed: tree.map(module_level_shadows).unwrap_or_default(),
-            table_exports: Vec::new(),
-            local_exports: Vec::new(),
-            source,
-            version,
-            prefix,
-        }
-    }
-
-    fn needs_table(&self, symbol: &Symbol) -> bool {
-        self.shadowed.contains(&symbol.id)
-            || self.tree.is_some_and(|tree| is_written_from_a_closure(tree, symbol))
-    }
-
+impl TextLowerer<'_> {
     fn table_field(&self, name: &str) -> String {
         format!("{}exports.{name}", self.prefix)
     }
 
-    /// `export local` and `export const`. A declaration can't mix locals and
-    /// fields, so one table export moves all its names to the table.
-    fn lower_local(&mut self, local: &'input LocalAssignment, edits: &mut Vec<(Span, String)>) {
-        let symbols: Vec<&'input Symbol> = local
+    /// `export local` and `export const`.
+    fn local_edit(&self, local: &LocalAssignment, is_table: bool) -> (Span, String) {
+        let names_end = local.names.last().map_or(local.span, |last_name| {
+            last_name.type_annotation.as_ref().map_or(last_name.name.span, luck_ast::Type::span)
+        });
+        if !is_table {
+            return (export_keyword_span(local.span), String::new());
+        }
+        let declaration = Span::new(local.span.start, names_end.end);
+        let targets = local
             .names
             .iter()
-            .filter_map(|binding| self.exported_symbols.get(&binding.name.span).copied())
-            .collect();
-        if !symbols.iter().any(|symbol| self.needs_table(symbol)) {
-            self.local_exports
-                .extend(local.names.iter().filter_map(|binding| binding.name.identifier()));
-            edits.push((export_keyword_span(local.span), String::new()));
-            return;
-        }
-        self.table_exports.extend(symbols.iter().map(|symbol| symbol.id));
-
-        let Some(last_name) = local.names.last() else {
-            return;
-        };
-        let names_end =
-            last_name.type_annotation.as_ref().map_or(last_name.name.span, luck_ast::Type::span);
-        let declaration = Span::new(local.span.start, names_end.end);
-        let targets = symbols
-            .iter()
-            .map(|symbol| self.table_field(symbol.name.as_str()))
+            .filter_map(|binding| binding.name.identifier())
+            .map(|name| self.table_field(name))
             .collect::<Vec<_>>()
             .join(",");
         let initializer = if local.exprs.is_none() { " = nil" } else { "" };
         let newlines = self.newlines_in(declaration);
-        edits.push((declaration, format!("{targets}{initializer}{newlines}")));
+        (declaration, format!("{targets}{initializer}{newlines}"))
     }
 
     /// `export function`, whose name always binds a local, or a field when the
     /// export lives in the table.
-    fn lower_function(&mut self, function: &'input LocalFunction, edits: &mut Vec<(Span, String)>) {
+    fn function_edit(&self, function: &LocalFunction, is_table: bool) -> (Span, String) {
         let keyword = self.export_keyword_of_function(function);
-        let Some(symbol) = self.exported_symbols.get(&function.name.span).copied() else {
-            return;
-        };
-        if !self.needs_table(symbol) {
-            self.local_exports.extend(function.name.identifier());
-            edits.push((keyword, "local".to_owned()));
-            return;
+        if !is_table {
+            return (keyword, "local".to_owned());
         }
-        self.table_exports.push(symbol.id);
         let signature = Span::new(keyword.start, function.name.span.end);
         let newlines = self.newlines_in(signature);
-        let field = self.table_field(symbol.name.as_str());
-        edits.push((signature, format!("function {field}{newlines}")));
+        let field = self.table_field(function.name.identifier().unwrap_or_default());
+        (signature, format!("function {field}{newlines}"))
     }
 
     /// An attributed statement's span starts at its first attribute, so the
@@ -224,41 +293,6 @@ impl<'input> ValueLowering<'input> {
     /// `span`'s line breaks as plain newlines, so the line map stays 1:1.
     fn newlines_in(&self, span: Span) -> String {
         "\n".repeat(line_breaks(span.text(self.source), self.version).count())
-    }
-
-    fn finish(self, mut edits: Vec<(Span, String)>) -> ExportLowering {
-        let Some(tree) = self.tree else {
-            return ExportLowering { edits, table_declaration: None, closing: None };
-        };
-        for &id in &self.table_exports {
-            let symbol = tree.symbol(id);
-            let field = self.table_field(symbol.name.as_str());
-            edits.extend(
-                symbol
-                    .reference_ids
-                    .iter()
-                    .map(|reference_id| (tree.reference(*reference_id).span, field.clone())),
-            );
-        }
-
-        let prefix = self.prefix;
-        let (table_declaration, closing) = if self.table_exports.is_empty() {
-            let fields =
-                self.local_exports.iter().map(|name| format!("{name}={name}")).collect::<Vec<_>>();
-            (None, format!("return {prefix}freeze({{{}}})\n", fields.join(",")))
-        } else {
-            let copies = self
-                .local_exports
-                .iter()
-                .map(|name| format!("{prefix}exports.{name}={name}\n"))
-                .collect::<Vec<_>>()
-                .concat();
-            (
-                Some(format!("local {prefix}exports={{}}")),
-                format!("{copies}return {prefix}freeze({prefix}exports)\n"),
-            )
-        };
-        ExportLowering { edits, table_declaration, closing: Some(closing) }
     }
 }
 

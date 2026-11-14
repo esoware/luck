@@ -21,7 +21,7 @@ name = "luck"
 [features]
 default = []
 
-full = ["codegen", "bundler", "minifier", "formatter", "linter"]
+full = ["codegen", "bundler", "minifier", "formatter", "linter", "config"]
 
 codegen   = ["luck_codegen"]
 resolver  = ["luck_resolver"]
@@ -30,11 +30,13 @@ minifier  = ["luck_minifier"]
 formatter = ["luck_formatter"]
 semantic  = ["luck_semantic"]
 linter    = ["luck_linter", "semantic"]
+config    = ["luck_config", "bundler", "minifier", "formatter", "linter"]
 
 [dependencies]
 luck_ast       = { workspace = true }
 luck_bundler   = { workspace = true, optional = true }
 luck_codegen   = { workspace = true, optional = true }
+luck_config    = { workspace = true, optional = true }
 luck_core      = { workspace = true }
 luck_formatter = { workspace = true, optional = true }
 luck_lexer     = { workspace = true }

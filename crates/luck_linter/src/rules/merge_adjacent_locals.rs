@@ -179,7 +179,9 @@ mod tests {
 
     #[test]
     fn flags_and_fixes_two_simple_locals() {
-        let source = "local a = 1\nlocal b = 2";
+        let source = "\
+local a = 1
+local b = 2";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
@@ -188,7 +190,9 @@ mod tests {
 
     #[test]
     fn flags_and_fixes_repeating_shared_attribute() {
-        let source = "local a <const> = 1\nlocal b <const> = 2";
+        let source = "\
+local a <const> = 1
+local b <const> = 2";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
@@ -199,31 +203,42 @@ mod tests {
     fn flags_alternate_pairs_only() {
         // A merged pair's second local can't start another pair, so no two
         // fixes overlap.
-        let diags = run("local a = 1\nlocal b = 2\nlocal c = 3");
+        let diags = run("\
+local a = 1
+local b = 2
+local c = 3");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn ignores_close_attribute() {
-        let diags = run("local a <close> = nil\nlocal b <close> = nil");
+        let diags = run("\
+local a <close> = nil
+local b <close> = nil");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_second_value_reading_first_name() {
-        let diags = run("local a = 1\nlocal b = a + 1");
+        let diags = run("\
+local a = 1
+local b = a + 1");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_second_value_reading_first_name_in_a_closure() {
-        let diags = run("local a = 1\nlocal b = function() return a end");
+        let diags = run("\
+local a = 1
+local b = function() return a end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_and_fixes_field_named_like_first_name() {
-        let source = "local a = 1\nlocal b = t.a";
+        let source = "\
+local a = 1
+local b = t.a";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
@@ -232,7 +247,9 @@ mod tests {
 
     #[test]
     fn flags_and_fixes_string_spelling_first_name() {
-        let source = "local a = 1\nlocal b = \"a\"";
+        let source = "\
+local a = 1
+local b = \"a\"";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
@@ -241,7 +258,9 @@ mod tests {
 
     #[test]
     fn flags_and_fixes_parameter_named_like_first_name() {
-        let source = "local a = 1\nlocal b = function(a) return a end";
+        let source = "\
+local a = 1
+local b = function(a) return a end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
@@ -250,20 +269,27 @@ mod tests {
 
     #[test]
     fn ignores_when_comment_between() {
-        let source = "local a = 1\n-- keep apart\nlocal b = 2";
+        let source = "\
+local a = 1
+-- keep apart
+local b = 2";
         let diags = run(source);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_multi_binding_source() {
-        let diags = run("local a, b = 1, 2\nlocal c = 3");
+        let diags = run("\
+local a, b = 1, 2
+local c = 3");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_uninitialized() {
-        let diags = run("local a\nlocal b = 2");
+        let diags = run("\
+local a
+local b = 2");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -278,13 +304,17 @@ mod tests {
     #[test]
     fn ignores_annotation_mismatch() {
         // Lua 5.4 attribute on only one of the two.
-        let diags = run("local a <const> = 1\nlocal b = 2");
+        let diags = run("\
+local a <const> = 1
+local b = 2");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_and_fixes_keeping_type_annotations() {
-        let source = "local a: number = 1\nlocal b: string = \"x\"";
+        let source = "\
+local a: number = 1
+local b: string = \"x\"";
         let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
         let fixed = apply_one_pass(source, &diags);
         assert!(
@@ -295,7 +325,9 @@ mod tests {
 
     #[test]
     fn ignores_export() {
-        let source = "export local a = 1\nexport local b = 2";
+        let source = "\
+export local a = 1
+export local b = 2";
         let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
         let fixed = apply_one_pass(source, &diags);
         assert!(fixed.contains("export"), "the merge shouldn't drop `export`: {fixed}");
@@ -303,7 +335,9 @@ mod tests {
 
     #[test]
     fn ignores_const() {
-        let source = "const a = 1\nconst b = 2";
+        let source = "\
+const a = 1
+const b = 2";
         let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
         let fixed = apply_one_pass(source, &diags);
         assert!(fixed.contains("const"), "the merge shouldn't make the bindings mutable: {fixed}");
@@ -311,7 +345,9 @@ mod tests {
 
     #[test]
     fn ignores_comment_inside_first_local() {
-        let source = "local a --[[why]] = 1\nlocal b = 2";
+        let source = "\
+local a --[[why]] = 1
+local b = 2";
         let diags = run(source);
         let fixed = apply_one_pass(source, &diags);
         assert!(fixed.contains("--[[why]]"), "the merge shouldn't delete the comment: {fixed}");

@@ -1,285 +1,178 @@
-//! Works on the source lines of formatted text instead of the AST, so
-//! comments and trivia on a line move with it.
+//! A run of requires prints sorted by the name each binds.
 //!
-//! A run is two or more sortable statements on consecutive lines, outside any `-- luck: format off`
-//! region. A statement is sortable only if its lines hold nothing that can't move with it. A blank
-//! line, a comment between two statements, a statement under `luck: ignore`, a `<close>` binding,
-//! or any other statement ends a run, and a run whose members read each other's bindings stays as
-//! written.
+//! A run is two or more sortable statements a block prints one after another, outside any
+//! `-- luck: format off` region, with no blank line or comment line between them. A statement is
+//! sortable only if its lines hold nothing that can't move with it. A statement under
+//! `luck: ignore`, a `<close>` binding, a trailing comment that spans lines, or any other statement
+//! ends a run, and a run whose members read each other's bindings stays as written.
 //!
-//! [`crate::format()`] only ever runs this on formatted text, so every line
-//! ends in a line break and no `;` stands between two statements.
+//! The block emitter decides that as it prints, from the lines it writes, which are the lines a
+//! second format reads, so it keeps the order the first one chose. It then moves each member's
+//! printed lines, so comments and trivia on a line move with it.
 
 use core::mem;
 use core::ops::Range;
+use core::slice;
 
-use luck_ast::{
-    Block, Expression, FunctionArgs, FunctionCall, LocalAssignment, Punctuated, Statement, Var,
-    dotted_path,
-};
-use luck_token::{
-    Comment, CommentKind, CommentPosition, LuaVersion, Span, has_line_break, index_to_offset,
-    line_breaks, offset_to_index,
-};
+use luck_ast::{Block, ChainHead, Expression, FunctionArgs, LocalAssignment, Statement, Suffix};
+use luck_token::Span;
+use rustc_hash::FxHashSet;
 
-use crate::comments::{is_code_free, own_line_start};
-use crate::directive::{Directive, format_off_regions};
-use crate::format_block::has_blank_line;
+use crate::ir::Formatter;
 
-struct SortableLine<'source> {
-    /// Byte range of the statement's whole lines, from leading indentation
-    /// through the trailing newline, so ranges swap cleanly.
-    range: Range<usize>,
-    text: &'source str,
+/// The spans of the blocks whose runs sort.
+///
+/// That's the chunk, and each block a statement in one of them opens. A
+/// function's body counts only where a statement assigns the function itself,
+/// so not one passed as a call argument, returned, or held in a table.
+pub(crate) fn sorting_blocks(chunk: &Block) -> FxHashSet<Span> {
+    let mut blocks = FxHashSet::default();
+    let mut pending = vec![chunk];
+    while let Some(block) = pending.pop() {
+        blocks.insert(block.span);
+        for stmt in &block.stmts {
+            push_opened_blocks(stmt, &mut pending);
+        }
+    }
+    blocks
+}
+
+fn push_opened_blocks<'block>(stmt: &'block Statement, pending: &mut Vec<&'block Block>) {
+    let assigned_functions = |exprs: &'block [Expression]| {
+        exprs.iter().filter_map(|expr| {
+            if let Expression::FunctionDef(function) = expr {
+                Some(&function.body.block)
+            } else {
+                None
+            }
+        })
+    };
+    match stmt {
+        Statement::DoBlock(node) => pending.push(&node.block),
+        Statement::WhileLoop(node) => pending.push(&node.block),
+        Statement::RepeatLoop(node) => pending.push(&node.block),
+        Statement::NumericFor(node) => pending.push(&node.block),
+        Statement::GenericFor(node) => pending.push(&node.block),
+        Statement::IfStatement(node) => {
+            pending.push(&node.block);
+            pending.extend(node.elseif_clauses.iter().map(|clause| &clause.block));
+            pending.extend(node.else_clause.iter().map(|clause| &clause.block));
+        }
+        Statement::FunctionDecl(node) => pending.push(&node.body.block),
+        Statement::LocalFunction(node) => pending.push(&node.body.block),
+        // Lua 5.5
+        Statement::GlobalFunction(node) => pending.push(&node.body.block),
+        Statement::LocalAssignment(local) => {
+            if let Some(exprs) = &local.exprs {
+                pending.extend(assigned_functions(&exprs.items));
+            }
+        }
+        Statement::Assignment(node) => pending.extend(assigned_functions(&node.values.items)),
+        // Luau
+        Statement::CompoundAssignment(node) => {
+            pending.extend(assigned_functions(slice::from_ref(&node.expr)));
+        }
+        // Lua 5.5
+        Statement::GlobalDeclaration(global) => {
+            if let Some(exprs) = &global.exprs {
+                pending.extend(assigned_functions(&exprs.items));
+            }
+        }
+        Statement::FunctionCall(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Label(_)
+        | Statement::GlobalStar(_)
+        | Statement::Break(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::Error(_) => {}
+    }
+}
+
+/// What a sortable statement binds and reads.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Require<'block> {
     /// The binding name, used as the sort key.
-    key: &'source str,
+    key: &'block str,
     /// The name the value reads: `require`, or the `GetService` receiver.
-    callee: &'source str,
+    callee: &'block str,
     /// The name a required path starts at, which the value reads too:
     /// `script` in `require(script.Parent.Module)`.
-    path_root: Option<&'source str>,
-}
-
-pub(crate) fn sort_requires_in_source(
-    source: &str,
-    block: &Block,
-    comments: &[Comment],
-    version: LuaVersion,
-) -> Option<String> {
-    let source_end = index_to_offset(source.len());
-    let mut collector = RunCollector {
-        source,
-        version,
-        comments,
-        disabled_ranges: format_off_regions(comments, source)
-            .into_iter()
-            .map(|(off, on)| off.start..on.map_or(source_end, |close| close.end))
-            .collect(),
-        runs: Vec::new(),
-    };
-    collector.collect_block(block);
-    let runs = collector.runs;
-    if runs.is_empty() {
-        return None;
-    }
-
-    let mut output = String::with_capacity(source.len());
-    let mut cursor = 0usize;
-
-    for run in &runs {
-        let [first, .., last] = run.as_slice() else {
-            continue;
-        };
-        if let Some(gap) = source.get(cursor..first.range.start) {
-            output.push_str(gap);
-        }
-
-        let mut sorted_lines: Vec<&SortableLine<'_>> = run.iter().collect();
-        sorted_lines.sort_by_key(|line| line.key);
-
-        for line in sorted_lines {
-            output.push_str(line.text);
-        }
-
-        cursor = last.range.end;
-    }
-
-    if let Some(tail) = source.get(cursor..) {
-        output.push_str(tail);
-    }
-
-    Some(output)
-}
-
-struct RunCollector<'source> {
-    source: &'source str,
-    version: LuaVersion,
-    comments: &'source [Comment],
-    disabled_ranges: Vec<Range<u32>>,
-    runs: Vec<Vec<SortableLine<'source>>>,
-}
-
-impl<'source> RunCollector<'source> {
-    /// A function literal is searched only when it's assigned directly, so
-    /// one passed as a call argument or held in a table isn't.
-    fn collect_block(&mut self, block: &Block) {
-        let mut current_lines: Vec<SortableLine<'source>> = Vec::new();
-        let mut previous_end: Option<u32> = None;
-
-        for stmt in &block.stmts {
-            let Span { start: stmt_start, end: stmt_end } = stmt.span();
-
-            // Counts newlines, so a comment line breaks the run as well.
-            let is_blank_break = previous_end.is_some_and(|previous| {
-                has_blank_line(self.source, previous, stmt_start, self.version)
-            });
-
-            let is_disabled = self
-                .disabled_ranges
-                .iter()
-                .any(|range| stmt_start < range.end && stmt_end > range.start);
-
-            let comments_above = self.comments_above(stmt_start);
-            let has_comment_since_last_line = current_lines.last().is_some_and(|last_line| {
-                comments_above.iter().any(|c| offset_to_index(c.span.start) >= last_line.range.end)
-            });
-
-            if is_blank_break || is_disabled || has_comment_since_last_line {
-                self.flush_run(&mut current_lines);
-            }
-
-            let is_ignored = comments_above.iter().any(|comment| {
-                comment.position == CommentPosition::Leading
-                    && Directive::parse(comment.span.text(self.source)) == Some(Directive::Ignore)
-            });
-            if !is_ignored
-                && let Some(line) = sortable_line(self.source, self.comments, stmt, self.version)
-            {
-                if !is_disabled {
-                    current_lines.push(line);
-                }
-            } else {
-                self.flush_run(&mut current_lines);
-            }
-
-            self.collect_nested_blocks(stmt);
-
-            previous_end = Some(stmt_end);
-        }
-
-        self.flush_run(&mut current_lines);
-    }
-
-    /// Keeps `lines` as a run when it has two or more lines and sorting can't
-    /// change what they read, then empties it.
-    fn flush_run(&mut self, lines: &mut Vec<SortableLine<'source>>) {
-        let has_dependency = lines.iter().any(|line| {
-            lines.iter().any(|other| other.key == line.callee || Some(other.key) == line.path_root)
-        });
-        if lines.len() >= 2 && !has_dependency {
-            self.runs.push(mem::take(lines));
-        } else {
-            lines.clear();
-        }
-    }
-
-    /// The comments right above `stmt_start`, those only whitespace and `;`
-    /// separate from it, nearest last.
-    fn comments_above(&self, stmt_start: u32) -> &'source [Comment] {
-        let end = self.comments.partition_point(|c| c.span.start < stmt_start);
-        let mut first = end;
-        let mut next_start = stmt_start;
-        while let Some(comment) = first.checked_sub(1).and_then(|i| self.comments.get(i))
-            && is_code_free(Span::new(comment.span.end, next_start).text(self.source))
-        {
-            first = first.saturating_sub(1);
-            next_start = comment.span.start;
-        }
-        self.comments.get(first..end).unwrap_or_default()
-    }
-
-    fn collect_nested_blocks(&mut self, stmt: &Statement) {
-        match stmt {
-            Statement::DoBlock(node) => self.collect_block(&node.block),
-            Statement::WhileLoop(node) => self.collect_block(&node.block),
-            Statement::RepeatLoop(node) => self.collect_block(&node.block),
-            Statement::NumericFor(node) => self.collect_block(&node.block),
-            Statement::GenericFor(node) => self.collect_block(&node.block),
-            Statement::IfStatement(node) => {
-                self.collect_block(&node.block);
-                for clause in &node.elseif_clauses {
-                    self.collect_block(&clause.block);
-                }
-                if let Some(else_clause) = &node.else_clause {
-                    self.collect_block(&else_clause.block);
-                }
-            }
-            Statement::FunctionDecl(node) => self.collect_block(&node.body.block),
-            Statement::LocalFunction(node) => self.collect_block(&node.body.block),
-            // Lua 5.5
-            Statement::GlobalFunction(node) => self.collect_block(&node.body.block),
-            Statement::LocalAssignment(local) => {
-                if let Some(exprs) = &local.exprs {
-                    self.collect_function_values(exprs);
-                }
-            }
-            Statement::Assignment(node) => self.collect_function_values(&node.values),
-            // Luau
-            Statement::CompoundAssignment(node) => self.collect_function_value(&node.expr),
-            // Lua 5.5
-            Statement::GlobalDeclaration(global) => {
-                if let Some(exprs) = &global.exprs {
-                    self.collect_function_values(exprs);
-                }
-            }
-            Statement::FunctionCall(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-    }
-
-    fn collect_function_values(&mut self, exprs: &Punctuated<Expression>) {
-        for expr in exprs.iter() {
-            self.collect_function_value(expr);
-        }
-    }
-
-    fn collect_function_value(&mut self, expr: &Expression) {
-        if let Expression::FunctionDef(function_def) = expr {
-            self.collect_block(&function_def.body.block);
-        }
-    }
+    path_root: Option<&'block str>,
 }
 
 /// Matches a `local` with one name bound to one require or `GetService` call,
-/// in any dialect, whose whole lines can move as a unit.
-fn sortable_line<'source>(
-    source: &'source str,
-    comments: &[Comment],
-    stmt: &Statement,
-    version: LuaVersion,
-) -> Option<SortableLine<'source>> {
+/// in any dialect.
+pub(crate) fn sortable_require(stmt: &Statement) -> Option<Require<'_>> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
-
-    let key = single_binding_name(source, local)?;
+    let key = single_binding_name(local)?;
     let exprs = local.exprs.as_ref()?;
-    if exprs.len() != 1 {
+    let [value] = exprs.items.as_slice() else {
         return None;
-    }
-    let (callee, path_root) = pure_require_reads(source, exprs.first()?)?;
+    };
+    let (callee, path_root) = pure_require_reads(value)?;
+    Some(Require { key, callee, path_root })
+}
 
-    let start = offset_to_index(own_line_start(source, local.span.start)?);
-    let end = movable_line_end(source, comments, local.span.end, version)?;
-    let range = start..end;
-    let text = source.get(range.clone())?;
-    Some(SortableLine { range, text, key, callee, path_root })
+struct Member<'block> {
+    require: Require<'block>,
+    /// The elements the formatter wrote for it, trailing comments included.
+    elements: Range<usize>,
+}
+
+/// The sortable statements a block has printed since the last thing that
+/// ends a run.
+#[derive(Default)]
+pub(crate) struct RequireRun<'block> {
+    members: Vec<Member<'block>>,
+}
+
+impl<'block> RequireRun<'block> {
+    pub(crate) fn push(&mut self, require: Require<'block>, elements: Range<usize>) {
+        self.members.push(Member { require, elements });
+    }
+
+    /// Prints the run sorted when it has two or more members and sorting
+    /// can't change what they read, then empties it.
+    pub(crate) fn finish(&mut self, f: &mut Formatter) {
+        let members = mem::take(&mut self.members);
+        if members.len() < 2 {
+            return;
+        }
+        let keys: FxHashSet<&str> = members.iter().map(|member| member.require.key).collect();
+        let reads_a_member = members.iter().any(|member| {
+            keys.contains(member.require.callee)
+                || member.require.path_root.is_some_and(|root| keys.contains(root))
+        });
+        if reads_a_member {
+            return;
+        }
+        let mut order: Vec<usize> = (0..members.len()).collect();
+        order.sort_by_key(|&i| members.get(i).map(|member| member.require.key));
+        if order.iter().enumerate().all(|(position, &i)| position == i) {
+            return;
+        }
+        let slices: Vec<Range<usize>> = members.into_iter().map(|member| member.elements).collect();
+        f.reorder(&slices, &order);
+    }
 }
 
 /// The one name `local` binds, unless it's a `<close>` binding, whose
 /// declaration order sets the order things close in.
-fn single_binding_name<'source>(
-    source: &'source str,
-    local: &LocalAssignment,
-) -> Option<&'source str> {
-    if local.names.len() != 1 {
+fn single_binding_name(local: &LocalAssignment) -> Option<&str> {
+    let [binding] = local.names.items.as_slice() else {
         return None;
-    }
-    let binding = local.names.first()?;
+    };
     if binding
         .attribute
         .as_deref()
-        .is_some_and(|attribute| attribute.name.span.text(source) == "close")
+        .is_some_and(|attribute| attribute.name.identifier() == Some("close"))
     {
         return None;
     }
-    Some(binding.name.span.text(source))
+    binding.name.identifier()
 }
 
 /// The names a sortable value reads: its callee, then the name a required
@@ -289,22 +182,19 @@ fn single_binding_name<'source>(
 /// fields, or `NAME:GetService(STRING)`, and a string argument may drop its
 /// parentheses. Anything else, such as `require("a")()`, may have side
 /// effects that sorting would reorder.
-fn pure_require_reads<'source>(
-    source: &'source str,
-    expr: &Expression,
-) -> Option<(&'source str, Option<&'source str>)> {
-    let Expression::FunctionCall(call) = expr else {
+fn pure_require_reads(expr: &Expression) -> Option<(&str, Option<&str>)> {
+    let Expression::Suffixed(chain) = expr else {
         return None;
     };
-    let FunctionCall { callee: Expression::Var(Var::Name(callee)), method, args, .. } = &**call
-    else {
+    let (Expression::Name(callee), [Suffix::Call(call)]) = (&chain.prefix, &*chain.suffixes) else {
         return None;
     };
-    let callee_name = callee.span.text(source);
+    let (method, args) = (&call.method, &call.args);
+    let callee_name = callee.identifier()?;
 
     if let Some(method_name) = method {
         let is_get_service =
-            method_name.span.text(source) == "GetService" && is_single_string_arg(args);
+            method_name.identifier() == Some("GetService") && is_single_string_arg(args);
         return is_get_service.then_some((callee_name, None));
     }
     if callee_name != "require" {
@@ -316,11 +206,11 @@ fn pure_require_reads<'source>(
     let FunctionArgs::Parenthesized { args: path_args, .. } = args else {
         return None;
     };
-    let [Expression::Var(path)] = path_args.items.as_slice() else {
+    let [path] = path_args.items.as_slice() else {
         return None;
     };
-    let root_span = dotted_path(path)?.root_span;
-    Some((callee_name, Some(root_span.text(source))))
+    let root = ChainHead::from(path).dotted_path()?.segments.first().copied()?;
+    Some((callee_name, Some(root)))
 }
 
 fn is_single_string_arg(call_args: &FunctionArgs) -> bool {
@@ -330,124 +220,5 @@ fn is_single_string_arg(call_args: &FunctionArgs) -> bool {
         }
         FunctionArgs::StringLiteral(_) => true,
         FunctionArgs::TableConstructor(_) => false,
-    }
-}
-
-/// The end of the line `stmt_end` is on, through its line break, when all
-/// that follows the statement there can move with it: whitespace, `;`, and
-/// comments that stay on the line.
-fn movable_line_end(
-    source: &str,
-    comments: &[Comment],
-    stmt_end: u32,
-    version: LuaVersion,
-) -> Option<usize> {
-    let first_index = comments.partition_point(|c| c.span.start < stmt_end);
-    let mut cursor = stmt_end;
-    for comment in comments.get(first_index..)? {
-        let gap = Span::new(cursor, comment.span.start).text(source);
-        if has_line_break(gap, version) {
-            break;
-        }
-        if !is_code_free(gap) || comment.kind == CommentKind::MultiLineBlock {
-            return None;
-        }
-        cursor = comment.span.end;
-    }
-
-    let cursor_index = offset_to_index(cursor);
-    let rest = source.get(cursor_index..)?;
-    let line_length =
-        line_breaks(rest, version).next().map_or(rest.len(), |line_break| line_break.end);
-    is_code_free(rest.get(..line_length)?).then(|| cursor_index.saturating_add(line_length))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sort_source(input: &str) -> String {
-        let parsed = luck_parser::parse(input, LuaVersion::Lua54);
-        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
-        sort_requires_in_source(input, &parsed.block, &parsed.comments, LuaVersion::Lua54)
-            .unwrap_or_else(|| input.to_owned())
-    }
-
-    #[test]
-    fn sorts_simple_run() {
-        let input = "local zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\nlocal mid = require(\"mid\")\n";
-        let expected = "local alpha = require(\"alpha\")\nlocal mid = require(\"mid\")\nlocal zeta = require(\"zeta\")\n";
-        assert_eq!(sort_source(input), expected);
-    }
-
-    #[test]
-    fn blank_line_breaks_run() {
-        let input = "local zeta = require(\"zeta\")\n\nlocal alpha = require(\"alpha\")\n";
-        // The blank line leaves two one-statement runs, too short to sort.
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn non_require_breaks_run() {
-        let input =
-            "local zeta = require(\"zeta\")\nlocal x = 1\nlocal alpha = require(\"alpha\")\n";
-        // The `local x = 1` line splits the run; no reordering.
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn multi_binding_is_unsortable() {
-        let input =
-            "local zeta = require(\"zeta\")\nlocal a, b = 1, 2\nlocal alpha = require(\"alpha\")\n";
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn side_effect_require_is_unsortable() {
-        let input = "local zeta = require(\"zeta\")()\nlocal alpha = require(\"alpha\")()\n";
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn format_off_region_is_preserved() {
-        let input = "-- luck: format off\nlocal zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\n-- luck: format on\n";
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn mixed_require_and_get_service() {
-        let input = "local zeta = require(\"zeta\")\nlocal alpha = game:GetService(\"Players\")\n";
-        let expected =
-            "local alpha = game:GetService(\"Players\")\nlocal zeta = require(\"zeta\")\n";
-        assert_eq!(sort_source(input), expected);
-    }
-
-    #[test]
-    fn sorts_requires_of_field_paths() {
-        let input = "local Zebra = require(script.Parent.Zebra)\nlocal Apple = require(Packages.Apple)\nlocal Mango = require(module)\n";
-        let expected = "local Apple = require(Packages.Apple)\nlocal Mango = require(module)\nlocal Zebra = require(script.Parent.Zebra)\n";
-        assert_eq!(sort_source(input), expected);
-    }
-
-    #[test]
-    fn require_of_a_path_rooted_in_the_run_is_unsortable() {
-        let input =
-            "local Packages = require(script.Packages)\nlocal Apple = require(Packages.Apple)\n";
-        assert_eq!(sort_source(input), input);
-    }
-
-    #[test]
-    fn require_of_a_computed_path_is_unsortable() {
-        let called = "local Zebra = require(script:FindFirstChild(\"Zebra\"))\nlocal Apple = require(script.Apple)\n";
-        assert_eq!(sort_source(called), called);
-        let indexed = "local Zebra = require(script[name])\nlocal Apple = require(script.Apple)\n";
-        assert_eq!(sort_source(indexed), indexed);
-    }
-
-    #[test]
-    fn nested_function_body_run_sorts() {
-        let input = "local function f()\n\tlocal zeta = require(\"zeta\")\n\tlocal alpha = require(\"alpha\")\nend\n";
-        let expected = "local function f()\n\tlocal alpha = require(\"alpha\")\n\tlocal zeta = require(\"zeta\")\nend\n";
-        assert_eq!(sort_source(input), expected);
     }
 }

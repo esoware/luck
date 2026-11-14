@@ -6,7 +6,8 @@ use core::ops::Range;
 use std::io::{self, Write};
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
-use luck_core::{Diagnostic, DiagnosticSeverity, native_path, read_source_file};
+use luck_core::{Diagnostic, DiagnosticSeverity};
+use luck_resolver::{native_path, read_source_file};
 use luck_token::{LuaVersion, SourceError, chunk_start, line_breaks, offset_to_index};
 use rustc_hash::FxHashMap;
 
@@ -305,8 +306,10 @@ mod tests {
         let text = String::from_utf8(rendered).unwrap();
         assert_eq!(
             text,
-            "[E010] error: cannot read file `gone.lua`: no such file (gone.lua: byte 0)\n\
-             help: check that the file exists and is readable\n",
+            "\
+[E010] error: cannot read file `gone.lua`: no such file (gone.lua: byte 0)
+help: check that the file exists and is readable
+",
             "{text}"
         );
     }

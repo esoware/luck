@@ -1,6 +1,4 @@
-use luck_ast::{
-    DottedPath, Expression, FunctionArgs, FunctionCall, LastStatement, Var, dotted_path,
-};
+use luck_ast::{Call, Expression, FunctionArgs, LastStatement, Suffix, SuffixedExpression};
 use luck_semantic::{
     ResolvedCallee, SemanticAnalysis, StdlibDeprecation, StdlibEntry, StdlibFunction,
     expand_replace_template,
@@ -11,7 +9,7 @@ use crate::call::{positional_args, string_literal_value};
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit, comments_within};
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallPosition, CallSite, ChainPosition, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Deprecated;
@@ -29,50 +27,25 @@ impl NodeRule for Deprecated {
         NodeTypeSet::from_types(&[
             NodeType::FunctionCallStmt,
             NodeType::FunctionCallExpr,
-            NodeType::Var,
+            NodeType::Suffixed,
         ])
     }
-    fn on_call(
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        check_call(site, context, findings);
+    }
+    fn on_chain(
         &self,
-        call: &FunctionCall,
-        position: CallPosition,
+        chain: &SuffixedExpression,
+        position: ChainPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        check_call(call, position, context, findings);
-    }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        match expr {
-            Expression::Var(var) => findings.extend(check_field_access(var, context.semantic)),
-            Expression::FunctionCall(_)
-            | Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
-            | Expression::Error(_) => {}
-        }
+        check_field_accesses(chain, position, context.semantic, findings);
     }
 }
 
-fn check_call(
-    call: &FunctionCall,
-    position: CallPosition,
-    context: &LintContext<'_>,
-    findings: &mut Vec<Finding>,
-) {
-    let Some(callee) = context.semantic.resolve_callee(call) else {
+fn check_call(site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    let CallSite { call, position, callee: Some(callee) } = *site else {
         return;
     };
     let entry = callee.entry();
@@ -81,8 +54,8 @@ fn check_call(
         let name = callee.name();
         let fix = replacement_fix(call, entry, position, &name, deprecation, context);
         findings.push(
-            Finding::new(format!("`{name}` is deprecated"), call.span)
-                .with_help(deprecation.message.as_str())
+            Finding::new(format!("`{name}` is deprecated"), call.span())
+                .with_help(deprecation.message)
                 .with_optional_fix(fix),
         );
         return;
@@ -99,11 +72,11 @@ fn check_call(
 ///
 /// Any expression counts, since passing that argument at all is the problem.
 fn deprecated_params(
-    call: &FunctionCall,
+    call: Call<'_>,
     callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
 ) -> impl Iterator<Item = Finding> {
-    let (args, arg_count) = positional_args(&call.args);
+    let (args, arg_count) = positional_args(call.args);
     args.iter().enumerate().filter_map(move |(index, expr)| {
         let mut deprecations = function
             .matching_signatures(arg_count)
@@ -116,7 +89,7 @@ fn deprecated_params(
                 format!("argument {arg_number} of `{}` is deprecated", callee.name()),
                 expr.span(),
             )
-            .with_help(deprecation.message.as_str())
+            .with_help(deprecation.message)
         })
     })
 }
@@ -128,11 +101,11 @@ fn deprecated_params(
 /// Only positions that every signature matching the call's arity limits to
 /// constants are checked.
 fn deprecated_constants(
-    call: &FunctionCall,
+    call: Call<'_>,
     callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
 ) -> impl Iterator<Item = Finding> {
-    let (args, arg_count) = positional_args(&call.args);
+    let (args, arg_count) = positional_args(call.args);
     args.iter().enumerate().filter_map(move |(index, expr)| {
         let (value, span) = string_literal_value(expr)?;
         // Each signature's first constant spelled `value` counts, and the
@@ -147,7 +120,7 @@ fn deprecated_constants(
                 format!("`{value}` is a deprecated argument of `{}`", callee.name()),
                 span,
             )
-            .with_help(deprecation.message.as_str()),
+            .with_help(deprecation.message),
         )
     })
 }
@@ -156,7 +129,7 @@ fn deprecated_constants(
 /// text, or `None` when there's no template or the result can't stand where
 /// the call does.
 fn replacement_fix(
-    call: &FunctionCall,
+    call: Call<'_>,
     entry: &StdlibEntry,
     position: CallPosition,
     display_name: &str,
@@ -170,19 +143,19 @@ fn replacement_fix(
     // A template spells the positional arguments, which a method's receiver
     // isn't among, and the argument text can't carry a comment between them.
     if call.method.is_some()
-        || !function.accepts_arg_count(positional_args(&call.args).1)
-        || !comments_within(context.comments, call.span).is_empty()
+        || !function.accepts_arg_count(positional_args(call.args).1)
+        || !comments_within(context.comments, call.span()).is_empty()
     {
         return None;
     }
-    let expanded = expand_replace_template(template, &arg_texts(&call.args, context.source));
-    if starts_with_rebound_name(&expanded, call.span.start, context.semantic) {
+    let expanded = expand_replace_template(template, &arg_texts(call.args, context.source));
+    if starts_with_rebound_name(&expanded, call.span().start, context.semantic) {
         return None;
     }
-    let replacement = fit_to_position(expanded, call.span.end, position, context)?;
+    let replacement = fit_to_position(expanded, call.span().end, position, context)?;
     Some(Fix {
         description: format!("replace deprecated `{display_name}` with `{replacement}`"),
-        edits: vec![TextEdit { span: call.span, replacement }],
+        edits: vec![TextEdit { span: call.span(), replacement }],
     })
 }
 
@@ -268,29 +241,57 @@ fn arg_texts<'source>(function_args: &FunctionArgs, source: &'source str) -> Vec
     }
 }
 
-/// Flags a dotted read that resolves to a deprecated constant, property, or
-/// namespace, such as a deprecated Roblox enum item or type.
+/// Flags each dotted read in the field run `chain` starts with that resolves
+/// to a deprecated constant, property, or namespace.
 ///
-/// Functions are skipped because `check_call` reports them at the call.
-fn check_field_access(var: &Var, semantic: &SemanticAnalysis) -> Option<Finding> {
-    let Var::FieldAccess(_) = var else {
-        return None;
+/// That includes a deprecated Roblox enum item or type. Each read checks its
+/// own entry, so a chain whose prefix is deprecated warns once. Functions are
+/// skipped because `check_call` reports them at the call.
+fn check_field_accesses(
+    chain: &SuffixedExpression,
+    position: ChainPosition,
+    semantic: &SemanticAnalysis,
+    findings: &mut Vec<Finding>,
+) {
+    // A target's last field is stored to, not read.
+    let read_count = match position {
+        ChainPosition::Value => chain.suffixes.len(),
+        ChainPosition::AssignmentTarget => chain.suffixes.len().saturating_sub(1),
     };
-    let DottedPath { segments, root_span, leaf_span } = dotted_path(var)?;
-    let entry = semantic.stdlib().lookup(&segments)?;
-    if matches!(entry, StdlibEntry::Function(_)) {
-        return None;
+    let reads = chain.suffixes.get(..read_count).unwrap_or_default();
+    let (Expression::Name(root), Some(Suffix::Field(_))) = (&chain.prefix, reads.first()) else {
+        return;
+    };
+    let Some(root_name) = root.identifier() else {
+        return;
+    };
+    let stdlib = semantic.stdlib();
+    let Some(mut entry) = stdlib.globals.get(root_name) else {
+        return;
+    };
+    for (read_index, suffix) in (1usize..).zip(reads) {
+        let Suffix::Field(name) = suffix else {
+            return;
+        };
+        // Nothing past an unknown path resolves either.
+        let Some(member) = name.identifier().and_then(|segment| stdlib.child(entry, segment))
+        else {
+            return;
+        };
+        entry = member;
+        if matches!(entry, StdlibEntry::Function(_)) {
+            continue;
+        }
+        if let Some(deprecation) = entry.deprecation()
+            && !semantic.resolves_to_local(root_name, root.span)
+        {
+            let path = chain.head(read_index).dotted_path().map(|path| path.segments.join("."));
+            findings.push(
+                Finding::new(format!("`{}` is deprecated", path.unwrap_or_default()), name.span)
+                    .with_help(deprecation.message),
+            );
+        }
     }
-    // Check only this node's own entry. The inner access node reports a
-    // deprecated prefix, so a chain warns once.
-    let deprecation = entry.deprecation()?;
-    if semantic.resolves_to_local(segments.first()?, root_span) {
-        return None;
-    }
-    Some(
-        Finding::new(format!("`{}` is deprecated", segments.join(".")), leaf_span)
-            .with_help(deprecation.message.as_str()),
-    )
 }
 
 #[cfg(test)]
@@ -417,8 +418,12 @@ mod tests {
 
     #[test]
     fn ignores_deprecated_enum_item_on_shadowed_root() {
-        let diags =
-            run_rule_roblox(&Deprecated, "local Enum = {}\nlocal a = Enum.AlignType.Parallel");
+        let diags = run_rule_roblox(
+            &Deprecated,
+            "\
+local Enum = {}
+local a = Enum.AlignType.Parallel",
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -491,7 +496,13 @@ mod tests {
 
     #[test]
     fn flags_without_fix_for_length_template_as_statement() {
-        let diags = run_rule(&Deprecated, "local a = 1\ntable.getn(t)", LuaVersion::Lua54);
+        let diags = run_rule(
+            &Deprecated,
+            "\
+local a = 1
+table.getn(t)",
+            LuaVersion::Lua54,
+        );
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_none(), "`#t` can't stand as a statement: {diags:?}");
     }
@@ -517,8 +528,13 @@ mod tests {
 
     #[test]
     fn flags_without_fix_when_the_replacement_name_is_shadowed() {
-        let diags =
-            run_rule(&Deprecated, "local table = {}\nlocal a = unpack(t)", LuaVersion::Lua54);
+        let diags = run_rule(
+            &Deprecated,
+            "\
+local table = {}
+local a = unpack(t)",
+            LuaVersion::Lua54,
+        );
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_none(), "{diags:?}");
     }

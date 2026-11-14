@@ -6,9 +6,8 @@
 
 use std::path::Path;
 
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Var, Visitor};
-use luck_core::normalize_path;
-use luck_resolver::{ResolveRequest, Resolver};
+use luck_ast::{Call, Expression, FunctionArgs, Visitor};
+use luck_resolver::{ResolveRequest, Resolver, normalize_path};
 use luck_token::decode_string;
 use tower_lsp_server::ls_types::{DocumentLink, Position, Uri};
 
@@ -70,18 +69,18 @@ struct LinkCollector<'document> {
 }
 
 impl<'ast> Visitor<'ast> for LinkCollector<'_> {
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+    fn visit_call(&mut self, call: Call<'ast>) {
         self.try_record(call);
-        self.walk_function_call(call);
+        self.walk_call(call);
     }
 }
 
 impl LinkCollector<'_> {
-    fn try_record(&mut self, call: &FunctionCall) {
+    fn try_record(&mut self, call: Call<'_>) {
         if call.method.is_some() {
             return;
         }
-        let Expression::Var(Var::Name(token)) = &call.callee else {
+        let Some(token) = call.callee.as_name() else {
             return;
         };
         // A local `require`, a local `_ENV`, or a rebound global isn't the
@@ -91,7 +90,7 @@ impl LinkCollector<'_> {
         {
             return;
         }
-        let literal = match &call.args {
+        let literal = match call.args {
             FunctionArgs::Parenthesized { args, .. } => {
                 let [Expression::StringLiteral(literal)] = args.items.as_slice() else {
                     return;
@@ -191,7 +190,10 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
         let main_path = directory.path().join("main.lua");
-        let text = "local foo = require(\"foo\")\nlocal x = 1\n";
+        let text = "\
+local foo = require(\"foo\")
+local x = 1
+";
         fs::write(&main_path, text).expect("write main.lua");
         let uri = Uri::from_file_path(&main_path).expect("file path URI");
         let settings = ProjectSettings::default();
@@ -230,7 +232,12 @@ mod tests {
     fn a_shadowed_require_does_not_link() {
         // The bundler leaves a call through a local `require` alone (W005),
         // so a build doesn't resolve it to the module.
-        let links = links_beside_foo("local require = print\nlocal m = require(\"foo\")\n");
+        let links = links_beside_foo(
+            "\
+local require = print
+local m = require(\"foo\")
+",
+        );
         assert!(links.is_empty(), "a local `require` isn't the module loader: {links:?}");
     }
 

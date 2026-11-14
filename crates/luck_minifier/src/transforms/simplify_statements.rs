@@ -1,48 +1,34 @@
+use core::iter;
+
 use luck_ast::{
-    BinaryOp, Block, Expression, IfStatement, LastStatement, Punctuated, ReturnStatement,
-    Statement, Transform, is_multi_value,
+    BinaryLink, BinaryOp, Block, Expression, IfStatement, LastStatement, OneOrMore, Punctuated,
+    ReturnStatement, Statement, Transform, is_multi_value,
 };
 use luck_token::{BinOp, Span};
 
-use crate::expr::{ends_in_if_expr, is_always_truthy, parenthesize};
+use crate::expr::{ends_in_if_expr, fits_at_depth, is_always_truthy, parenthesize};
 
 pub(crate) fn simplify(block: Block) -> Block {
-    StatementSimplifier.transform_block(block)
+    StatementSimplifier { depth: 0 }.transform_block(block)
 }
 
-struct StatementSimplifier;
+struct StatementSimplifier {
+    /// Levels of nesting open where the walk is.
+    depth: usize,
+}
 
 impl Transform for StatementSimplifier {
+    fn descend(&mut self) {
+        self.depth = self.depth.saturating_add(1);
+    }
+
+    fn ascend(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
     fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
-            Statement::IfStatement(mut outer_if) => {
-                // `if a then if b then X end end` becomes `if a and b then X end`.
-                // The check guarantees the pop yields the inner `if`.
-                if has_no_else(&outer_if)
-                    && outer_if.block.last_stmt.is_none()
-                    && matches!(
-                        outer_if.block.stmts.as_slice(),
-                        [Statement::IfStatement(inner_if)] if has_no_else(inner_if)
-                    )
-                    && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
-                {
-                    let combined_condition = logical(
-                        self.transform_expr(outer_if.condition),
-                        BinOp::And,
-                        self.transform_expr(inner_if.condition),
-                    );
-                    let merged_block = self.transform_block(inner_if.block);
-                    let merged_if = IfStatement {
-                        span: Span::default(),
-                        condition: combined_condition,
-                        block: merged_block,
-                        elseif_clauses: Vec::new(),
-                        else_clause: None,
-                    };
-                    return self.transform_stmt(Statement::IfStatement(Box::new(merged_if)));
-                }
-                self.walk_stmt(Statement::IfStatement(outer_if))
-            }
+            Statement::IfStatement(outer_if) => self.merge_nested_ifs(outer_if),
             other @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::DoBlock(_)
@@ -67,14 +53,52 @@ impl Transform for StatementSimplifier {
     }
 
     fn transform_block(&mut self, block: Block) -> Block {
-        try_convert_if_return_chain(self.walk_block(block))
+        let walked = self.walk_block(block);
+        // The walk has stepped back out of the block, which is one level in.
+        try_convert_if_return_chain(walked, self.depth.saturating_add(1))
+    }
+}
+
+impl StatementSimplifier {
+    /// `if a then if b then X end end` becomes `if a and b then X end`, for
+    /// every level of the run at once. The run of `and`s is one level, so each
+    /// condition is measured once, for the `and` and a pair of parentheses it
+    /// can gain.
+    fn merge_nested_ifs(&mut self, mut outer_if: Box<IfStatement>) -> Statement {
+        let mut inner_conditions = Vec::new();
+        if has_no_else(&outer_if) {
+            // The check guarantees the pop yields the inner `if`. The outer
+            // condition is measured only once there's an `if` to merge.
+            while outer_if.block.last_stmt.is_none()
+                && matches!(
+                    outer_if.block.stmts.as_slice(),
+                    [Statement::IfStatement(inner_if)]
+                        if has_no_else(inner_if)
+                            && fits_at_depth(self.depth, 2, &inner_if.condition)
+                )
+                && (!inner_conditions.is_empty()
+                    || fits_at_depth(self.depth, 2, &outer_if.condition))
+                && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
+            {
+                let IfStatement { condition, block, .. } = *inner_if;
+                inner_conditions.push(condition);
+                outer_if.block = block;
+            }
+        }
+        if !inner_conditions.is_empty() {
+            outer_if.span = Span::default();
+            outer_if.condition = logical(BinOp::And, outer_if.condition.take(), inner_conditions);
+        }
+        // Left for the merged `if`'s own walk, so the body is walked once and
+        // a rewrite inside a condition sees the depth it ends up at.
+        self.walk_stmt(Statement::IfStatement(outer_if))
     }
 }
 
 /// Converts `if c1 then return X end; if c2 then return Y end; return Z`
 /// into `return c1 and X or c2 and Y or Z` when `X` and `Y` are always
-/// truthy.
-fn try_convert_if_return_chain(mut block: Block) -> Block {
+/// truthy. `level` is the block's own level of nesting.
+fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
     let Some(LastStatement::Return(return_stmt)) = block.last_stmt.as_deref_mut() else {
         return block;
     };
@@ -87,39 +111,46 @@ fn try_convert_if_return_chain(mut block: Block) -> Block {
         return block;
     }
 
-    let link_count = block.stmts.iter().rev().take_while(|stmt| is_chain_link(stmt)).count();
+    // The guards and the fallback make one run of `or`s whatever its length,
+    // and each guard's condition and value sit in a run of `and`s under it,
+    // each maybe in parentheses.
+    let link_count = block
+        .stmts
+        .iter()
+        .rev()
+        .take_while(|stmt| match extract_if_return_guard(stmt) {
+            Some((condition, return_expr)) => {
+                is_always_truthy(return_expr)
+                    && fits_at_depth(level, 3, condition)
+                    && fits_at_depth(level, 3, return_expr)
+            }
+            None => matches!(stmt, Statement::EmptyStatement(_)),
+        })
+        .count();
     let chain_start = block.stmts.len().saturating_sub(link_count);
     let has_guard = block
         .stmts
         .get(chain_start..)
         .is_some_and(|chain| chain.iter().any(|stmt| extract_if_return_guard(stmt).is_some()));
-    if !has_guard {
+    if !has_guard || !fits_at_depth(level, 1, fallback_expr) {
         return block;
     }
 
     let fallback = fallback_expr.take();
-    // Left-nested, the shape the parser builds for the printed chain.
-    let guards = block
-        .stmts
-        .drain(chain_start..)
-        .filter_map(into_guard_parts)
-        .map(|(condition, return_expr)| logical(condition, BinOp::And, return_expr))
-        .reduce(|earlier, guard| logical(earlier, BinOp::Or, guard));
-    let result_expr = match guards {
-        Some(chain) => logical(chain, BinOp::Or, fallback),
-        None => fallback,
+    let result_expr = {
+        let mut guards = block.stmts.drain(chain_start..).filter_map(into_guard_parts).map(
+            |(condition, return_expr)| logical(BinOp::And, condition, iter::once(return_expr)),
+        );
+        match guards.next() {
+            Some(first_guard) => {
+                logical(BinOp::Or, first_guard, guards.chain(iter::once(fallback)))
+            }
+            None => fallback,
+        }
     };
     **return_stmt =
         ReturnStatement { span: Span::default(), exprs: Punctuated::from_item(result_expr) };
     block
-}
-
-/// Whether a statement can sit in a trailing if-return chain: a truthy guard,
-/// or an empty statement between guards.
-fn is_chain_link(stmt: &Statement) -> bool {
-    matches!(stmt, Statement::EmptyStatement(_))
-        || extract_if_return_guard(stmt)
-            .is_some_and(|(_, return_expr)| is_always_truthy(return_expr))
 }
 
 fn extract_if_return_guard(stmt: &Statement) -> Option<(&Expression, &Expression)> {
@@ -155,22 +186,39 @@ const fn has_no_else(if_stmt: &IfStatement) -> bool {
     if_stmt.elseif_clauses.is_empty() && if_stmt.else_clause.is_none()
 }
 
-/// A nested operand of the same operator stays bare on either side, because
-/// `and` and `or` are associative. An if-expression as `rhs` prints last, so
-/// only one in `lhs` can swallow an operator.
-fn logical(left_operand: Expression, op: BinOp, right_operand: Expression) -> Expression {
-    let left = if binds_looser(&left_operand, op) || ends_in_if_expr(&left_operand) {
-        parenthesize(left_operand)
-    } else {
-        left_operand
+/// `first` and each of `rest` joined by `op`, which is `and` or `or`.
+///
+/// Both are associative, so an operand that is a bare run of `op` joins the
+/// run. Only an if-expression printed last can't swallow an operator, so one
+/// anywhere else gets parentheses.
+fn logical<Rest>(op: BinOp, first: Expression, rest: Rest) -> Expression
+where
+    Rest: IntoIterator<Item = Expression>,
+{
+    let wrap = |operand: Expression, is_last: bool| {
+        if binds_looser(&operand, op) || (!is_last && ends_in_if_expr(&operand)) {
+            parenthesize(operand)
+        } else {
+            operand
+        }
     };
-    let right =
-        if binds_looser(&right_operand, op) { parenthesize(right_operand) } else { right_operand };
-    Expression::BinaryOp(Box::new(BinaryOp { span: Span::default(), lhs: left, op, rhs: right }))
+    let mut others = rest.into_iter().peekable();
+    let first_operand = wrap(first, others.peek().is_none());
+    let mut wrapped = Vec::new();
+    while let Some(operand) = others.next() {
+        let is_last = others.peek().is_none();
+        wrapped.push(BinaryLink { op, operand: wrap(operand, is_last) });
+    }
+    let Some(links) = OneOrMore::from_vec(wrapped) else {
+        return first_operand;
+    };
+    let mut run = BinaryOp { span: Span::default(), first: first_operand, links };
+    run.splice_operands();
+    Expression::BinaryOp(Box::new(run))
 }
 
 fn binds_looser(operand: &Expression, op: BinOp) -> bool {
-    matches!(operand, Expression::BinaryOp(inner) if inner.op.precedence().0 < op.precedence().0)
+    matches!(operand, Expression::BinaryOp(inner) if inner.precedence().0 < op.precedence().0)
 }
 
 #[cfg(test)]
@@ -186,15 +234,36 @@ mod tests {
 
     #[test]
     fn flattens_nested_if() {
-        let result = apply("if a then\n  if b then\n    print(1)\n  end\nend\n");
+        let result = apply(
+            "\
+if a then
+  if b then
+    print(1)
+  end
+end
+",
+        );
         assert!(result.contains("and"), "Expected flattened if with and, got: {result}");
         let if_count = result.matches("if").count();
         assert_eq!(if_count, 1, "Expected single if, got: {result}");
     }
 
     #[test]
+    fn flattens_a_run_of_nested_ifs_into_one_run_of_ands() {
+        let source = format!("{}x(){}", "if a or b then ".repeat(200), " end".repeat(200));
+        let result = apply(&source);
+        assert_reparses(&result, LuaVersion::Lua54);
+        assert_eq!(result, format!("if(a or b){}then x()end", "and(a or b)".repeat(199)));
+    }
+
+    #[test]
     fn if_return_to_ternary() {
-        let result = apply("if x then return 1 end\nreturn 0\n");
+        let result = apply(
+            "\
+if x then return 1 end
+return 0
+",
+        );
         assert!(
             result.contains("and") && result.contains("or"),
             "Expected ternary conversion, got: {result}"
@@ -203,7 +272,12 @@ mod tests {
 
     #[test]
     fn no_ternary_when_falsy_return() {
-        let result = apply("if x then return false end\nreturn true\n");
+        let result = apply(
+            "\
+if x then return false end
+return true
+",
+        );
         assert!(
             result.contains("if"),
             "Should not convert when return value could be falsy, got: {result}"
@@ -214,7 +288,13 @@ mod tests {
     fn if_return_chain_spans_semicolons() {
         // Lua 5.2+ parses semicolons as EmptyStatement, which must not break
         // the chain.
-        let result = apply("if x then return 1 end;\nif y then return 2 end;\nreturn 0\n");
+        let result = apply(
+            "\
+if x then return 1 end;
+if y then return 2 end;
+return 0
+",
+        );
         assert!(
             result.contains("and") && result.contains("or"),
             "Semicolons between if-return guards should not prevent ternary conversion, got: {result}"
@@ -225,7 +305,12 @@ mod tests {
     fn no_ternary_when_variable_return() {
         // The return value is a variable, so is_always_truthy says no and the
         // chain stays an if.
-        let result = apply("if x then return y end\nreturn 0\n");
+        let result = apply(
+            "\
+if x then return y end
+return 0
+",
+        );
         assert!(
             result.contains("if"),
             "Variable return values are not always truthy, got: {result}"
@@ -234,7 +319,12 @@ mod tests {
 
     #[test]
     fn if_return_to_ternary_with_string_returns() {
-        let result = apply("if cond then return \"hello\" end\nreturn \"world\"\n");
+        let result = apply(
+            "\
+if cond then return \"hello\" end
+return \"world\"
+",
+        );
         assert!(
             result.contains("and") && result.contains("or"),
             "String literal returns should convert to ternary, got: {result}"
@@ -281,6 +371,10 @@ mod tests {
                 "if a and if b then c else d then x()end",
             ),
             (
+                "if a then if if b then c else d then if e then x() end end end",
+                "if a and(if b then c else d)and e then x()end",
+            ),
+            (
                 "if a then if if b then c else d then return 1 end end return 0",
                 "return(a and if b then c else d)and 1 or 0",
             ),
@@ -302,11 +396,23 @@ mod tests {
     #[test]
     fn chained_if_returns_to_one_ternary() {
         let result = apply(
-            "if a then return 1 end\nif b then return 2 end\nif c then return 3 end\nreturn 0\n",
+            "\
+if a then return 1 end
+if b then return 2 end
+if c then return 3 end
+return 0
+",
         );
         assert!(
             !result.contains("if"),
             "All chained if-return guards with truthy values should be converted, got: {result}"
         );
+    }
+
+    #[test]
+    fn converts_a_long_if_return_run_into_one_run_of_ors() {
+        let result = apply(&format!("{}return 0\n", "if a then return 1 end\n".repeat(300)));
+        assert_reparses(&result, LuaVersion::Lua54);
+        assert_eq!(result, format!("return {}0", "a and 1 or ".repeat(300)));
     }
 }

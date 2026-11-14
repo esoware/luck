@@ -200,6 +200,22 @@ impl Diagnostic {
         .with_help(format!("files must be at most {limit} bytes"))
     }
 
+    /// A construct in a module that parses alone but that the module's bundle
+    /// wrapper, `wrapper_levels` deep, would nest past `limit`.
+    #[must_use]
+    pub fn e013(file_path: &str, span: Span, wrapper_levels: usize, limit: usize) -> Self {
+        Self::error_at(
+            "E013",
+            format!("maximum nesting depth exceeded once bundled (luck resource limit: {limit})"),
+            file_path,
+            span,
+        )
+        .with_help(format!(
+            "the bundle nests a module's code {wrapper_levels} levels deeper inside its loader \
+             function, so nest this less deeply, such as by moving part of it into a local"
+        ))
+    }
+
     #[must_use]
     pub fn w001(file_path: &str, span: Span, module_name: &str) -> Self {
         Self::warning_at(
@@ -327,7 +343,14 @@ mod tests {
 
         let e4 =
             Diagnostic::e004("f.lua", Span::new(0, 10), "mymod", &["src/mymod.lua".to_owned()]);
-        assert_eq!(e4.help.as_deref(), Some("searched paths:\n  - `src/mymod.lua`"));
+        assert_eq!(
+            e4.help.as_deref(),
+            Some(
+                "\
+searched paths:
+  - `src/mymod.lua`"
+            )
+        );
 
         let w1 = Diagnostic::w001("f.lua", Span::new(0, 5), "utils");
         assert_eq!(w1.code, "W001");

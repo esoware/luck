@@ -1,8 +1,10 @@
-use luck_ast::{Expression, Field, FunctionArgs, LastStatement, Statement, Var};
+use luck_ast::{Expression, Field, FunctionArgs, LastStatement, Statement, Suffix};
 use luck_parser::ParseResult;
-use luck_token::LuaVersion;
+use luck_token::{BinOp, LuaVersion, UnOp};
 
-use crate::common::{assert_no_errors, local_value};
+use crate::common::{
+    assert_no_errors, chain, chain_shape, local_value, run_operands, run_ops, target_chain,
+};
 
 fn parse_lua51(source: &str) -> ParseResult {
     luck_parser::parse(source, LuaVersion::Lua51)
@@ -199,47 +201,33 @@ fn multi_assignment() {
 fn assign_nested_field_access() {
     let result = parse_lua51("a.b.c = 1");
     assert_no_errors(&result);
-    if let Statement::Assignment(assignment) = &result.block.stmts[0] {
-        let target = assignment.targets.last().expect("assignment has target");
-        if let Var::FieldAccess(outer) = target {
-            if let Expression::Var(inner_var) = &outer.prefix {
-                assert!(
-                    matches!(inner_var, Var::FieldAccess(_)),
-                    "expected nested FieldAccess, got {inner_var:?}"
-                );
-            } else {
-                panic!("expected Var prefix, got {:?}", outer.prefix);
-            }
-        } else {
-            panic!("expected FieldAccess target, got {target:?}");
-        }
-    } else {
+    let Statement::Assignment(assignment) = &result.block.stmts[0] else {
         panic!("expected Assignment");
-    }
+    };
+    let target = assignment.targets.last().expect("assignment has target");
+    assert_eq!(chain_shape(target_chain(target)), "a.b.c");
 }
 
 #[test]
 fn assign_index_target() {
     let result = parse_lua51("a[i] = 1");
     assert_no_errors(&result);
-    if let Statement::Assignment(assignment) = &result.block.stmts[0] {
-        let target = assignment.targets.last().expect("assignment has target");
-        assert!(matches!(target, Var::Index(_)), "expected Index target, got {target:?}");
-    } else {
+    let Statement::Assignment(assignment) = &result.block.stmts[0] else {
         panic!("expected Assignment");
-    }
+    };
+    let target = assignment.targets.last().expect("assignment has target");
+    assert_eq!(chain_shape(target_chain(target)), "a[]");
 }
 
 #[test]
 fn assign_mixed_chain_target() {
     let result = parse_lua51("a.b[1]:c(2).d[3] = 5");
     assert_no_errors(&result);
-    if let Statement::Assignment(assignment) = &result.block.stmts[0] {
-        let target = assignment.targets.last().expect("assignment has target");
-        assert!(matches!(target, Var::Index(_)), "expected Index target for [3], got {target:?}");
-    } else {
+    let Statement::Assignment(assignment) = &result.block.stmts[0] else {
         panic!("expected Assignment");
-    }
+    };
+    let target = assignment.targets.last().expect("assignment has target");
+    assert_eq!(chain_shape(target_chain(target)), "a.b[]:c().d[]");
 }
 
 #[test]
@@ -253,33 +241,34 @@ fn function_call_stmt() {
 fn method_call_stmt() {
     let result = parse_lua51("obj:method(1, 2)");
     assert_no_errors(&result);
-    if let Statement::FunctionCall(call) = &result.block.stmts[0] {
-        assert!(call.method.is_some());
-    } else {
+    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
         panic!("expected FunctionCall");
-    }
+    };
+    assert_eq!(chain_shape(call), "obj:method()");
 }
 
 #[test]
 fn call_with_string_arg() {
     let result = parse_lua51("require \"foo\"");
     assert_no_errors(&result);
-    if let Statement::FunctionCall(call) = &result.block.stmts[0] {
-        assert!(matches!(&call.args, FunctionArgs::StringLiteral(_)));
-    } else {
+    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
         panic!("expected FunctionCall");
-    }
+    };
+    assert!(
+        matches!(call.suffixes.last(), Suffix::Call(suffix) if matches!(suffix.args, FunctionArgs::StringLiteral(_)))
+    );
 }
 
 #[test]
 fn call_with_table_arg() {
     let result = parse_lua51("f{1, 2, 3}");
     assert_no_errors(&result);
-    if let Statement::FunctionCall(call) = &result.block.stmts[0] {
-        assert!(matches!(&call.args, FunctionArgs::TableConstructor(_)));
-    } else {
+    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
         panic!("expected FunctionCall");
-    }
+    };
+    assert!(
+        matches!(call.suffixes.last(), Suffix::Call(suffix) if matches!(suffix.args, FunctionArgs::TableConstructor(_)))
+    );
 }
 
 #[test]
@@ -327,43 +316,26 @@ fn precedence_add_mul() {
     let result = parse_lua51("local x = 1 + 2 * 3");
     assert_no_errors(&result);
     let expr = local_value(&result);
-    if let Expression::BinaryOp(outer) = expr {
-        assert!(matches!(outer.op, luck_token::BinOp::Add));
-        assert!(
-            matches!(&outer.rhs, Expression::BinaryOp(inner) if matches!(inner.op, luck_token::BinOp::Mul))
-        );
-    } else {
-        panic!("expected BinaryOp, got {expr:?}");
-    }
+    assert_eq!(run_ops(expr), [BinOp::Add]);
+    assert_eq!(run_ops(run_operands(expr)[1]), [BinOp::Mul]);
 }
 
 #[test]
 fn right_assoc_power() {
-    // `2 ^ 3 ^ 4` should parse as `2 ^ (3 ^ 4)`.
+    // `2 ^ 3 ^ 4` is one run, which groups from the right: `2 ^ (3 ^ 4)`.
     let result = parse_lua51("local x = 2 ^ 3 ^ 4");
     assert_no_errors(&result);
     let expr = local_value(&result);
-    if let Expression::BinaryOp(outer) = expr {
-        assert!(matches!(outer.op, luck_token::BinOp::Pow));
-        assert!(matches!(&outer.lhs, Expression::Number(_)));
-        assert!(matches!(&outer.rhs, Expression::BinaryOp(_)));
-    } else {
-        panic!("expected BinaryOp");
-    }
+    assert_eq!(run_ops(expr), [BinOp::Pow, BinOp::Pow]);
+    assert!(run_operands(expr).iter().all(|operand| matches!(operand, Expression::Number(_))));
 }
 
 #[test]
 fn right_assoc_concat() {
-    // `a .. b .. c` should parse as `a .. (b .. c)`.
+    // `a .. b .. c` is one run, which groups from the right: `a .. (b .. c)`.
     let result = parse_lua51("local x = a .. b .. c");
     assert_no_errors(&result);
-    let expr = local_value(&result);
-    if let Expression::BinaryOp(outer) = expr {
-        assert!(matches!(outer.op, luck_token::BinOp::Concat));
-        assert!(matches!(&outer.rhs, Expression::BinaryOp(_)));
-    } else {
-        panic!("expected BinaryOp");
-    }
+    assert_eq!(run_ops(local_value(&result)), [BinOp::Concat, BinOp::Concat]);
 }
 
 #[test]
@@ -372,16 +344,11 @@ fn unary_minus_vs_exponent_precedence() {
     let result = parse_lua51("local x = -a ^ b");
     assert_no_errors(&result);
     let expr = local_value(&result);
-    if let Expression::UnaryOp(unary) = expr {
-        assert!(matches!(unary.op, luck_token::UnOp::Neg), "outer should be unary minus");
-        assert!(
-            matches!(&unary.operand, Expression::BinaryOp(binary_op) if matches!(binary_op.op, luck_token::BinOp::Pow)),
-            "operand should be exponentiation, got {:?}",
-            unary.operand
-        );
-    } else {
+    let Expression::UnaryOp(unary) = expr else {
         panic!("expected UnaryOp at top level, got {expr:?}");
-    }
+    };
+    assert_eq!(unary.op, UnOp::Neg, "outer should be unary minus");
+    assert_eq!(run_ops(&unary.operand), [BinOp::Pow]);
 }
 
 #[test]
@@ -390,17 +357,10 @@ fn precedence_comparison_vs_logical() {
     let result = parse_lua51("local x = a < b and c > d");
     assert_no_errors(&result);
     let expr = local_value(&result);
-    if let Expression::BinaryOp(outer) = expr {
-        assert!(matches!(outer.op, luck_token::BinOp::And));
-        assert!(
-            matches!(&outer.lhs, Expression::BinaryOp(left) if matches!(left.op, luck_token::BinOp::Lt))
-        );
-        assert!(
-            matches!(&outer.rhs, Expression::BinaryOp(right) if matches!(right.op, luck_token::BinOp::Gt))
-        );
-    } else {
-        panic!("expected BinaryOp, got {expr:?}");
-    }
+    assert_eq!(run_ops(expr), [BinOp::And]);
+    let operands = run_operands(expr);
+    assert_eq!(run_ops(operands[0]), [BinOp::Lt]);
+    assert_eq!(run_ops(operands[1]), [BinOp::Gt]);
 }
 
 #[test]
@@ -409,21 +369,10 @@ fn precedence_concat_vs_comparison() {
     let result = parse_lua51("local x = a .. b == c .. d");
     assert_no_errors(&result);
     let expr = local_value(&result);
-    if let Expression::BinaryOp(outer) = expr {
-        assert!(
-            matches!(outer.op, luck_token::BinOp::Eq),
-            "outer should be ==, got {:?}",
-            outer.op
-        );
-        assert!(
-            matches!(&outer.lhs, Expression::BinaryOp(left) if matches!(left.op, luck_token::BinOp::Concat))
-        );
-        assert!(
-            matches!(&outer.rhs, Expression::BinaryOp(right) if matches!(right.op, luck_token::BinOp::Concat))
-        );
-    } else {
-        panic!("expected BinaryOp, got {expr:?}");
-    }
+    assert_eq!(run_ops(expr), [BinOp::Eq]);
+    let operands = run_operands(expr);
+    assert_eq!(run_ops(operands[0]), [BinOp::Concat]);
+    assert_eq!(run_ops(operands[1]), [BinOp::Concat]);
 }
 
 #[test]
@@ -448,7 +397,7 @@ fn unary_length() {
     assert_no_errors(&result);
     let expr = local_value(&result);
     if let Expression::UnaryOp(unary) = expr {
-        assert!(matches!(unary.op, luck_token::UnOp::Len));
+        assert!(matches!(unary.op, UnOp::Len));
     } else {
         panic!("expected UnaryOp, got {expr:?}");
     }
@@ -505,46 +454,34 @@ fn table_trailing_separator() {
 fn chained_field_access() {
     let result = parse_lua51("local x = a.b.c");
     assert_no_errors(&result);
-    let expr = local_value(&result);
-    if let Expression::Var(var) = expr {
-        assert!(matches!(var, Var::FieldAccess(_)));
-    } else {
-        panic!("expected Var, got {expr:?}");
-    }
+    assert_eq!(chain_shape(chain(local_value(&result))), "a.b.c");
 }
 
 #[test]
 fn chained_index() {
     let result = parse_lua51("local x = a[1][2]");
     assert_no_errors(&result);
-    let expr = local_value(&result);
-    if let Expression::Var(var) = expr {
-        assert!(matches!(var, Var::Index(_)));
-    } else {
-        panic!("expected Var, got {expr:?}");
-    }
+    assert_eq!(chain_shape(chain(local_value(&result))), "a[][]");
 }
 
 #[test]
 fn chained_method_calls() {
     let result = parse_lua51("a:b(1):c(2)");
     assert_no_errors(&result);
-    if let Statement::FunctionCall(call) = &result.block.stmts[0] {
-        assert!(call.method.is_some());
-    } else {
+    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
         panic!("expected FunctionCall");
-    }
+    };
+    assert_eq!(chain_shape(call), "a:b():c()");
 }
 
 #[test]
 fn chained_function_calls() {
     let result = parse_lua51("f(1)(2)");
     assert_no_errors(&result);
-    if let Statement::FunctionCall(call) = &result.block.stmts[0] {
-        assert!(matches!(&call.callee, Expression::FunctionCall(_)));
-    } else {
+    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
         panic!("expected FunctionCall");
-    }
+    };
+    assert_eq!(chain_shape(call), "f()()");
 }
 
 #[test]
@@ -552,12 +489,8 @@ fn parenthesized() {
     let result = parse_lua51("local x = (1 + 2) * 3");
     assert_no_errors(&result);
     let expr = local_value(&result);
-    if let Expression::BinaryOp(binary_op) = expr {
-        assert!(matches!(binary_op.op, luck_token::BinOp::Mul));
-        assert!(matches!(&binary_op.lhs, Expression::Parenthesized(_)));
-    } else {
-        panic!("expected BinaryOp, got {expr:?}");
-    }
+    assert_eq!(run_ops(expr), [BinOp::Mul]);
+    assert!(matches!(run_operands(expr)[0], Expression::Parenthesized(_)));
 }
 
 #[test]
@@ -655,31 +588,21 @@ fn logical_operators() {
     assert_no_errors(&result);
     // `and` binds tighter than `or`, so this is `(a and b) or c`.
     let expr = local_value(&result);
-    if let Expression::BinaryOp(outer) = expr {
-        assert!(matches!(outer.op, luck_token::BinOp::Or));
-        assert!(
-            matches!(&outer.lhs, Expression::BinaryOp(inner) if matches!(inner.op, luck_token::BinOp::And))
-        );
-    } else {
-        panic!("expected BinaryOp");
-    }
+    assert_eq!(run_ops(expr), [BinOp::Or]);
+    assert_eq!(run_ops(run_operands(expr)[0]), [BinOp::And]);
 }
 
 #[test]
 fn comparison_operators() {
     for (source, expected_op) in [
-        ("local x = a < b", luck_token::BinOp::Lt),
-        ("local x = a >= b", luck_token::BinOp::Ge),
-        ("local x = a ~= b", luck_token::BinOp::Ne),
-        ("local x = a == b", luck_token::BinOp::Eq),
+        ("local x = a < b", BinOp::Lt),
+        ("local x = a >= b", BinOp::Ge),
+        ("local x = a ~= b", BinOp::Ne),
+        ("local x = a == b", BinOp::Eq),
     ] {
         let result = parse_lua51(source);
         assert_no_errors(&result);
-        if let Expression::BinaryOp(binary_op) = local_value(&result) {
-            assert_eq!(binary_op.op, expected_op, "failed for: {source}");
-        } else {
-            panic!("expected BinaryOp for: {source}");
-        }
+        assert_eq!(run_ops(local_value(&result)), [expected_op], "failed for: {source}");
     }
 }
 
@@ -748,25 +671,18 @@ fn deeply_nested_table() {
 fn consecutive_method_calls_four_deep() {
     let result = parse_lua51("a:b():c():d()");
     assert_no_errors(&result);
-    if let Statement::FunctionCall(call) = &result.block.stmts[0] {
-        assert!(call.method.is_some());
-        assert!(matches!(&call.callee, Expression::FunctionCall(_)));
-    } else {
+    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
         panic!("expected FunctionCall");
-    }
+    };
+    assert_eq!(chain_shape(call), "a:b():c():d()");
 }
 
 #[test]
 fn call_on_parenthesized_expr() {
     let result = parse_lua51("(f)(x)");
     assert_no_errors(&result);
-    if let Statement::FunctionCall(call) = &result.block.stmts[0] {
-        assert!(
-            matches!(&call.callee, Expression::Parenthesized(_)),
-            "expected Parenthesized callee, got {:?}",
-            call.callee
-        );
-    } else {
+    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
         panic!("expected FunctionCall");
-    }
+    };
+    assert_eq!(chain_shape(call), "()()");
 }

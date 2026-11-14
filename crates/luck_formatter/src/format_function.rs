@@ -1,8 +1,7 @@
 use luck_ast::{
-    Expression, FunctionArgs, FunctionAttribute, FunctionBody, FunctionCall, Literal, Parameter,
-    Punctuated, TypeArgs, VarArgParam, ensure_sufficient_stack,
+    CallSuffix, Expression, FunctionArgs, FunctionAttribute, FunctionBody, Literal, Parameter,
+    Punctuated, VarArgParam,
 };
-use luck_token::Token;
 
 use crate::comments::{ListKind, write_commented_list};
 use crate::format_block::has_printable_content;
@@ -105,16 +104,10 @@ impl Format for FunctionAttribute {
     }
 }
 
-struct ChainSegment<'chain> {
-    accessor: Option<&'chain Token>,
-    explicit_type_args: Option<&'chain TypeArgs>,
-    args: &'chain FunctionArgs,
-}
-
-impl Format for ChainSegment<'_> {
+impl Format for CallSuffix {
     fn fmt(&self, f: &mut Formatter) {
-        let type_args = self.explicit_type_args.map(ExplicitTypeArgs);
-        if let Some(name) = self.accessor {
+        let type_args = self.explicit_type_args.as_deref().map(ExplicitTypeArgs);
+        if let Some(name) = &self.method {
             (token(":"), name).fmt(f);
             // Luau rejects a method call whose `(` is on a later line than
             // its name.
@@ -123,58 +116,6 @@ impl Format for ChainSegment<'_> {
             type_args.fmt(f);
         }
         self.args.fmt(f);
-    }
-}
-
-fn collect_call_chain(call: &FunctionCall) -> (&Expression, Vec<ChainSegment<'_>>) {
-    let mut segments = Vec::new();
-    let mut current = call;
-    loop {
-        segments.push(ChainSegment {
-            accessor: current.method.as_ref(),
-            explicit_type_args: current.explicit_type_args.as_deref(),
-            args: &current.args,
-        });
-        let Expression::FunctionCall(inner) = &current.callee else {
-            break;
-        };
-        current = inner;
-    }
-    segments.reverse();
-    (&current.callee, segments)
-}
-
-/// A chain worth breaking has at least two method-style (`:`) accessors.
-fn is_method_chain(segments: &[ChainSegment<'_>]) -> bool {
-    segments.iter().filter(|segment| segment.accessor.is_some()).count() >= 2
-}
-
-impl Format for FunctionCall {
-    fn fmt(&self, f: &mut Formatter) {
-        let (root, segments) = collect_call_chain(self);
-
-        ensure_sufficient_stack(|| {
-            if is_method_chain(&segments) {
-                // Wrap the whole chain so it can break before each accessor.
-                group((
-                    root,
-                    indent(format_with(|indented| {
-                        for segment in &segments {
-                            if segment.accessor.is_some() {
-                                soft_line().fmt(indented);
-                            }
-                            segment.fmt(indented);
-                        }
-                    })),
-                ))
-                .fmt(f);
-            } else {
-                root.fmt(f);
-                for segment in &segments {
-                    segment.fmt(f);
-                }
-            }
-        });
     }
 }
 

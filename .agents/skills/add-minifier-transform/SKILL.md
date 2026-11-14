@@ -11,9 +11,11 @@ A transform is a `Block -> Block` pass implementing `Transform` (`luck_ast/src/t
 
 Always recurse through `self.walk_*`, because hand-rolled recursion misses nested cases. Exhaustive matches only, no `_ =>` arms. If the pass needs scope or binding information, do **not** build a flat name-to-value map, which miscompiles shadowed names. Use a scope-aware analysis (see `rename_locals`'s Analyzer for the reference implementation), or don't write the pass yet. Purity questions go through `is_pure_expr` in `src/expr.rs`.
 
+Build every node in the shape the parser gives its printed text: splice a run or chain you extend with `BinaryOp::splice_operands` or `SuffixedExpression::splice_prefix`, parenthesize what would regroup, and decide nothing by span, since synthesized nodes don't carry source spans. The pipeline never reparses its output, so its fixpoint is only idempotent when each round's tree is the one its printed output parses to.
+
 ## 2. Config flag
 
-Every pass gets a bool on `TransformConfig` (`luck_core/src/config/transform_config.rs`), then `just schema` (the drift test fails if skipped).
+Every pass gets a bool on `TransformConfig` (`luck_minifier/src/transform_config.rs`), with its default there, and the same field on its `luck.json` shape and both conversions in `luck_config/src/transform_config.rs`, then `just schema` (the drift test fails if skipped).
 
 ## 3. Wire into the pipeline
 
@@ -36,6 +38,7 @@ Other recurring miscompile classes:
 - **Integer/float subtype (5.3+).** `1` and `1.0` differ observably (`math.type`, `tostring`, `//`), so no version-blind numeric rewrites.
 - **String escapes.** Token payloads are raw source text, not decoded values, so never compare or concatenate string literals textually.
 - **Attributes.** `<close>` locals have scope-exit side effects and `<const>` affects validity, so never remove, merge, or move an attributed local.
+- **Nesting depth.** The parser refuses a tree nested past `luck_ast::MAX_NESTING_DEPTH`, so a rewrite that puts an expression under more levels than it had (an operator, a call, parentheses, or a deeper position) can emit output that won't reparse. Track the walk's depth with the `descend`/`ascend` hooks, ask `fits_at_depth` in `src/expr.rs` before the rewrite, and test it on input nested to the cap.
 
 ## 5. Tests (all four)
 
@@ -46,4 +49,4 @@ Other recurring miscompile classes:
 
 ## 6. Gate and bump
 
-`just lint && just test -p luck_minifier -p luck_core`. New transform = minor bump of `luck_minifier` AND `luck_core` (new config field): follow `.agents/skills/bump-versions/SKILL.md`.
+`just lint && just test -p luck_minifier -p luck_config`. New transform = minor bump of `luck_minifier` AND `luck_config` (new config field): follow `.agents/skills/bump-versions/SKILL.md`.

@@ -28,7 +28,7 @@ fn is_fillable(table: &TableConstructor) -> bool {
                 | Expression::Integer(_)
                 | Expression::StringLiteral(_)
                 | Expression::VarArg(_)
-                | Expression::Var(_)
+                | Expression::Name(_)
         ),
         Field::Named { .. } | Field::Bracketed { .. } => false,
     })

@@ -17,7 +17,7 @@ fn bench_formatter(criterion: &mut Criterion) {
             // setup each iteration; the measured section is formatting only.
             bencher.iter_with_setup_wrapper(|runner| {
                 let comments = Comments::from_source(&parse_result.comments, source_text, version);
-                runner.run(|| format_block(&parse_result.block, comments, &options));
+                let _unused = runner.run(|| format_block(&parse_result.block, comments, &options));
             });
         });
     }
@@ -37,7 +37,8 @@ fn bench_formatter(criterion: &mut Criterion) {
                     .collect();
                 runner.run(|| {
                     for (parse_result, comments) in parse_results.iter().zip(per_file_comments) {
-                        black_box(format_block(&parse_result.block, comments, &options));
+                        let _unused =
+                            black_box(format_block(&parse_result.block, comments, &options));
                     }
                 });
             });

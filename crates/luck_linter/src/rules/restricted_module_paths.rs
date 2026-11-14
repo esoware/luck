@@ -1,10 +1,10 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall};
+use luck_ast::{Call, Expression, FunctionArgs};
 use luck_token::short_string_body;
 
 use crate::call::is_global_call;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RestrictedModulePaths;
@@ -21,18 +21,13 @@ impl NodeRule for RestrictedModulePaths {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_call(
-        &self,
-        call: &FunctionCall,
-        _position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let call = site.call;
         findings.extend(check_call(call, context));
     }
 }
 
-fn check_call(call: &FunctionCall, context: &LintContext<'_>) -> Option<Finding> {
+fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
     let restricted_paths = &context.config.rules.restricted_module_paths.as_ref()?.options()?.paths;
     if restricted_paths.is_empty() {
         return None;
@@ -42,7 +37,7 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>) -> Option<Finding>
     if !is_global_call(call, "require", context.semantic) {
         return None;
     }
-    let literal = match &call.args {
+    let literal = match call.args {
         // A computed path like `require(x .. y)` can't be checked.
         FunctionArgs::Parenthesized { args, .. } => {
             let Some(Expression::StringLiteral(literal)) = args.first() else {
@@ -74,10 +69,10 @@ fn path_matches(path: &str, pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::{LintConfig, RestrictedModulePathsOptions, RuleLevel, RuleSetting};
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::config::{LintConfig, RestrictedModulePathsOptions, RuleLevel, RuleSetting};
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_with_config;
 
@@ -118,16 +113,24 @@ mod tests {
 
     #[test]
     fn ignores_method_form() {
-        let diags =
-            run("local x = {}\nx:require(\"forbidden.lib\")", vec!["forbidden.lib".to_owned()]);
+        let diags = run(
+            "\
+local x = {}
+x:require(\"forbidden.lib\")",
+            vec!["forbidden.lib".to_owned()],
+        );
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_nonliteral_argument() {
         // Can't statically resolve a variable's value; skip.
-        let diags =
-            run("local p = \"forbidden.lib\"\nrequire(p)", vec!["forbidden.lib".to_owned()]);
+        let diags = run(
+            "\
+local p = \"forbidden.lib\"
+require(p)",
+            vec!["forbidden.lib".to_owned()],
+        );
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 

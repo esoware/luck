@@ -14,9 +14,11 @@ struct NumberShortener {
     subtypes: NumberSubtypes,
 }
 
-impl Transform for NumberShortener {
-    fn transform_expr(&mut self, expr: Expression) -> Expression {
-        match self.walk_expr(expr) {
+impl NumberShortener {
+    // Out of line, so an expression nested below holds only the walk's frame,
+    // not these temporaries.
+    fn shorten_literal(&self, walked: Expression) -> Expression {
+        match walked {
             Expression::Number(literal) => {
                 if let Some(shortened) = shorten_number(&literal.text, self.subtypes) {
                     return Expression::Number(Literal {
@@ -42,8 +44,8 @@ impl Transform for NumberShortener {
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::BinaryOp(_)
@@ -51,9 +53,15 @@ impl Transform for NumberShortener {
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_)) => other,
         }
+    }
+}
+
+impl Transform for NumberShortener {
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        let walked = self.walk_expr(expr);
+        self.shorten_literal(walked)
     }
 }
 
@@ -61,15 +69,16 @@ impl Transform for NumberShortener {
 /// every pattern; decimal only up to `i64::MAX`, since larger values would
 /// need a unary minus, which is a different AST shape.
 fn shorten_integer(text: &str) -> Option<String> {
-    let body = text.strip_suffix('i').unwrap_or(text);
+    // Luau drops every `_`, even after the suffix, as in `1i_`.
+    let spelled: String = text.chars().filter(|c| *c != '_').collect();
+    let body = spelled.strip_suffix('i').unwrap_or(&spelled);
     let binary_digits = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B"));
-    let (digit_text, radix) = match (hex_digits(body), binary_digits) {
+    let (digits, radix) = match (hex_digits(body), binary_digits) {
         (Some(hex), _) => (hex, 16),
         (None, Some(binary)) => (binary, 2),
         (None, None) => (body, 10),
     };
-    let digits: String = digit_text.chars().filter(|c| *c != '_').collect();
-    let value = u64::from_str_radix(&digits, radix).ok()?;
+    let value = u64::from_str_radix(digits, radix).ok()?;
 
     let mut best = format!("0x{value:x}i");
     if i64::try_from(value).is_ok() {
@@ -151,21 +160,18 @@ fn shorten_number(text: &str, subtypes: NumberSubtypes) -> Option<String> {
         let decimal = format_shortest_decimal(value, has_int_subtype && is_float_formed);
         candidates.push(decimal);
 
-        if value != 0.0f64 {
+        // Scientific spelling is tried for exponents <= -2 or >= 3, which are
+        // exactly the magnitudes outside this range.
+        if !(0.1f64..1000.0f64).contains(&value.abs())
+            && let Some(exponent) = decimal_exponent(value)
+            && let Ok(power_of_ten) = format!("1e{exponent}").parse::<f64>()
+        {
             #[expect(
-                clippy::as_conversions,
-                clippy::cast_possible_truncation,
-                reason = "bounded to -324..308 for a finite non-zero value, and the log10 rounding picks the output spelling"
+                clippy::float_arithmetic,
+                reason = "computes the mantissa of a candidate literal"
             )]
-            let exponent = value.abs().log10().floor() as i32;
-            if exponent >= 3i32 || exponent <= -2i32 {
-                #[expect(
-                    clippy::float_arithmetic,
-                    reason = "computes the mantissa of a candidate literal"
-                )]
-                let mantissa = value / 10f64.powi(exponent);
-                candidates.push(format!("{}e{exponent}", format_shortest_decimal(mantissa, false)));
-            }
+            let mantissa = value / power_of_ten;
+            candidates.push(format!("{}e{exponent}", format_shortest_decimal(mantissa, false)));
         }
         // `0.5` -> `.5`, but never `0.` -> `.` (not a number literal).
         if let Some(stripped) = text.strip_prefix("0.")
@@ -180,6 +186,20 @@ fn shorten_number(text: &str, subtypes: NumberSubtypes) -> Option<String> {
         .filter(|candidate| roundtrips(candidate, value))
         .min_by_key(String::len)
         .filter(|candidate| candidate.len() < text.len())
+}
+
+/// The power of ten `value`'s first digit stands at, or `None` for zero.
+///
+/// Read off the shortest digits that round-trip, which Rust formats the same
+/// on every host. A platform's `log10` may land a hair under a whole number
+/// at an exact power of ten, and the spelling would follow it.
+fn decimal_exponent(value: f64) -> Option<i32> {
+    if value == 0.0f64 {
+        return None;
+    }
+    let scientific = format!("{value:e}");
+    let (_, exponent) = scientific.split_once('e')?;
+    exponent.parse().ok()
 }
 
 fn format_shortest_decimal(value: f64, should_stay_float_formed: bool) -> String {
@@ -246,6 +266,26 @@ mod tests {
     }
 
     #[test]
+    fn a_power_of_ten_reads_its_exponent_off_its_digits() {
+        // `log10` isn't exact on every host, and one that lands just under a
+        // whole number would spell `1000` as `10e2`.
+        for exponent in -307i32..=308i32 {
+            let value: f64 = format!("1e{exponent}").parse().unwrap();
+            assert_eq!(decimal_exponent(value), Some(exponent));
+        }
+        assert_eq!(decimal_exponent(999.999_999_999_999_9), Some(2i32));
+        assert_eq!(decimal_exponent(0.000_15), Some(-4i32));
+        assert_eq!(decimal_exponent(0.0), None);
+        for zeros in 3usize..=15 {
+            let literal = format!("1{}", "0".repeat(zeros));
+            let shortened = shorten_number(&literal, NumberSubtypes::Unified);
+            assert_eq!(shortened, Some(format!("1e{zeros}")), "{literal}");
+        }
+        assert_eq!(shorten_number("0.0001", NumberSubtypes::IntFloat).as_deref(), Some("1e-4"));
+        assert_eq!(shorten_number("1500000.0", NumberSubtypes::IntFloat).as_deref(), Some("1.5e6"));
+    }
+
+    #[test]
     fn no_subtype_goes_scientific() {
         assert_eq!(shorten_number("100000", NumberSubtypes::Unified).as_deref(), Some("1e5"));
         assert_eq!(shorten_number("1000000", NumberSubtypes::Unified).as_deref(), Some("1e6"));
@@ -286,6 +326,8 @@ mod tests {
         assert_eq!(shorten_integer("0xffi").as_deref(), Some("255i"));
         assert_eq!(shorten_integer("0b1111i").as_deref(), Some("15i"));
         assert_eq!(shorten_integer("0XFF_FFi").as_deref(), Some("65535i"));
+        assert_eq!(shorten_integer("1i_").as_deref(), Some("1i"));
+        assert_eq!(shorten_integer("0_x1_0i__").as_deref(), Some("16i"));
         // Bit patterns above i64::MAX have no decimal spelling; hex is
         // still shorter than binary.
         assert_eq!(

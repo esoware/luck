@@ -1,13 +1,32 @@
-//! `span()` accessors for the node enums, kept in one place instead of beside
-//! each node type.
+//! `span()` accessors, and `take()` where a node has an empty placeholder,
+//! kept in one place instead of beside each node type.
+
+use core::mem;
 
 use luck_token::Span;
 
-use crate::expr::{Expression, Field, FunctionArgs, Var};
-use crate::stmt::{LastStatement, Statement};
+use crate::expr::{Expression, Field, FunctionArgs, Suffix, Var};
+use crate::punctuated::Punctuated;
+use crate::stmt::{Block, LastStatement, Statement};
 use crate::types::{Type, TypeField};
 
+impl Block {
+    /// Moves the value out of a `&mut` and leaves an empty block behind, as
+    /// [`Expression::take`] does.
+    #[must_use]
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, Self { span: Span::default(), stmts: Vec::new(), last_stmt: None })
+    }
+}
+
 impl Statement {
+    /// Moves the value out of a `&mut` and leaves an error placeholder
+    /// behind, as [`Expression::take`] does.
+    #[must_use]
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::default()))
+    }
+
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
@@ -49,6 +68,13 @@ impl LastStatement {
             Self::Break(span) | Self::Continue(span) | Self::Error(span) => *span,
         }
     }
+
+    /// Moves the value out of a `&mut` and leaves an error placeholder
+    /// behind, as [`Expression::take`] does.
+    #[must_use]
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::default()))
+    }
 }
 
 impl Expression {
@@ -64,8 +90,8 @@ impl Expression {
                 literal.span
             }
             Self::FunctionDef(expr) => expr.span,
-            Self::Var(expr) => expr.span(),
-            Self::FunctionCall(expr) => expr.span,
+            Self::Name(token) => token.span,
+            Self::Suffixed(expr) => expr.span,
             Self::Parenthesized(expr) => expr.span,
             Self::TableConstructor(expr) => expr.span,
             Self::BinaryOp(expr) => expr.span,
@@ -76,9 +102,14 @@ impl Expression {
             Self::InterpolatedString(expr) => expr.span,
             // Luau
             Self::TypeCast(expr) => expr.span,
-            // Luau
-            Self::TypeInstantiation(expr) => expr.span,
         }
+    }
+
+    /// Moves the value out of a `&mut` and leaves an error placeholder
+    /// behind. Assign the replacement back.
+    #[must_use]
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::default()))
     }
 }
 
@@ -87,8 +118,23 @@ impl Var {
     pub fn span(&self) -> Span {
         match self {
             Self::Name(token) => token.span,
-            Self::Index(expr) => expr.span,
-            Self::FieldAccess(expr) => expr.span,
+            Self::Suffixed(chain) => chain.span,
+        }
+    }
+}
+
+impl Suffix {
+    /// A field's span is its name's, and a method call's starts at the
+    /// method's name.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Field(name) => name.span,
+            Self::Index { span, .. } | Self::TypeInstantiation { span, .. } => *span,
+            Self::Call(call) => {
+                let args_span = call.args.span();
+                call.method.as_ref().map_or(args_span, |method| method.span.merge(args_span))
+            }
         }
     }
 }
@@ -101,6 +147,13 @@ impl FunctionArgs {
             Self::TableConstructor(table) => table.span,
             Self::StringLiteral(literal) => literal.span,
         }
+    }
+
+    /// Moves the value out of a `&mut` and leaves an empty list behind, as
+    /// [`Expression::take`] does.
+    #[must_use]
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, Self::Parenthesized { span: Span::default(), args: Punctuated::empty() })
     }
 }
 
@@ -133,6 +186,13 @@ impl Type {
             Self::Variadic(node) => node.span,
             Self::GenericPack(node) => node.span,
         }
+    }
+
+    /// Moves the value out of a `&mut` and leaves an error placeholder
+    /// behind, as [`Expression::take`] does.
+    #[must_use]
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::default()))
     }
 }
 

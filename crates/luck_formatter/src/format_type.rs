@@ -4,14 +4,12 @@
 use luck_ast::{
     FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, IntersectionType,
     NamedType, TableType, Type, TypeArgs, TypeField, TypeofType, UnionType,
-    ensure_sufficient_stack,
 };
-
 use luck_token::TokenKind;
 
 use crate::ir::{
-    Format, Formatter, group, group_with_id, if_group_breaks, indent, separated, soft_line,
-    soft_line_or_space, space, token,
+    Format, Formatter, format_with, group, group_with_id, if_group_breaks, indent, separated,
+    soft_line, soft_line_or_space, space, token,
 };
 use crate::quotes::normalize_quote;
 
@@ -24,7 +22,7 @@ impl Format for Type {
             Self::Table(table) => table.fmt(f),
             Self::Function(function) => function.fmt(f),
             Self::Optional(optional) => {
-                ensure_sufficient_stack(|| (&optional.type_value, token("?")).fmt(f));
+                (&optional.type_value, token("?")).fmt(f);
             }
             Self::Union(union) => union.fmt(f),
             Self::Intersection(intersection) => intersection.fmt(f),
@@ -106,13 +104,13 @@ impl Format for FunctionType {
 
 impl Format for UnionType {
     fn fmt(&self, f: &mut Formatter) {
-        write_alternation(f, &self.types.items, "|");
+        write_alternation(f, &self.types.items, "|", false);
     }
 }
 
 impl Format for IntersectionType {
     fn fmt(&self, f: &mut Formatter) {
-        write_alternation(f, &self.types.items, "&");
+        write_alternation(f, &self.types.items, "&", false);
     }
 }
 
@@ -121,15 +119,43 @@ impl Format for IntersectionType {
 /// Broken, each member gets its own line and a leading
 /// `| ` (or `& `), as Prettier does for TypeScript unions. The break decision
 /// alone places the leading operator, so the AST's `has_leading_pipe` and
-/// `has_leading_ampersand` are ignored.
-fn write_alternation(f: &mut Formatter, items: &[Type], op: &'static str) {
+/// `has_leading_ampersand` are ignored, except that `should_lead` keeps it
+/// when flat too.
+fn write_alternation(f: &mut Formatter, items: &[Type], op: &'static str, should_lead: bool) {
     let group_id = f.group_id();
     let separator = (soft_line_or_space(), token(op), space());
-    group_with_id(
-        group_id,
-        indent((if_group_breaks(group_id, &separator), separated(items, &separator))),
-    )
-    .fmt(f);
+    let lead = format_with(|lead_f| {
+        if should_lead {
+            (if_group_breaks(group_id, soft_line_or_space()), token(op), space()).fmt(lead_f);
+        } else {
+            if_group_breaks(group_id, &separator).fmt(lead_f);
+        }
+    });
+    group_with_id(group_id, indent((lead, separated(items, &separator)))).fmt(f);
+}
+
+/// The name `ty` prints first when flat, where an alternation drops its
+/// leading `|` or `&`.
+fn flat_leading_name(ty: &Type) -> Option<&str> {
+    let mut current = ty;
+    loop {
+        current = match current {
+            Type::Name { name, .. } => return Some(name),
+            Type::Named(named) => return named.prefix.as_ref().unwrap_or(&named.name).identifier(),
+            Type::GenericPack(pack) => return pack.name.identifier(),
+            Type::Optional(optional) => &optional.type_value,
+            Type::Union(union) => union.types.first()?,
+            Type::Intersection(intersection) => intersection.types.first()?,
+            Type::Typeof(_)
+            | Type::Table(_)
+            | Type::Function(_)
+            | Type::Parenthesized(_)
+            | Type::Pack(_)
+            | Type::Singleton(_)
+            | Type::Variadic(_)
+            | Type::Error(_) => return None,
+        };
+    }
 }
 
 impl Format for TypeField {
@@ -152,7 +178,19 @@ impl Format for TypeField {
                 if let Some(modifier) = access {
                     (modifier, space()).fmt(f);
                 }
-                value.fmt(f);
+                // A `read` or `write` that opens the field would read back
+                // as its access modifier, so the leading operator that keeps
+                // it from opening the field stays.
+                let should_lead = access.is_none()
+                    && flat_leading_name(value)
+                        .is_some_and(|name| matches!(name, "read" | "write"));
+                if should_lead && let Type::Union(union) = value {
+                    write_alternation(f, &union.types.items, "|", true);
+                } else if should_lead && let Type::Intersection(intersection) = value {
+                    write_alternation(f, &intersection.types.items, "&", true);
+                } else {
+                    value.fmt(f);
+                }
             }
         }
     }

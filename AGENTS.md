@@ -80,9 +80,9 @@ Copy is any text a user reads. That means every string the extension shows, plus
 ### Crates and modules
 
 - `luck_token` depends on nothing in the workspace. `luck_lexer`, `luck_ast`, `luck_core`, and `luck_testgen` depend on `luck_token` only, `luck_parser` on `luck_token`, `luck_lexer`, and `luck_ast`, `luck_codegen` and `luck_semantic` on `luck_token` and `luck_ast`, and `luck_resolver` on `luck_token` and `luck_core`.
-- `luck_codegen`, `luck_formatter`, and `luck_minifier` never depend on `luck_semantic`, `luck_resolver`, `luck_linter`, or `luck_bundler`.
-- `luck_cli` is the only crate that depends on `luck_lsp`, and nothing depends on `luck_cli` or on the `luck` facade.
-- Only `luck_token`'s `code_buffer.rs`, `luck_core`'s `source_io.rs`, and `luck_benchmark` may use `unsafe`, so the workspace denies `unsafe_code` rather than forbidding it.
+- `luck_codegen`, `luck_formatter`, and `luck_minifier` never depend on `luck_semantic`, `luck_resolver`, `luck_linter`, `luck_bundler`, or `luck_config`.
+- `luck_cli` is the only crate that depends on `luck_lsp`, only `luck_cli`, `luck_lsp`, and the `luck` facade's opt-in `config` feature depend on `luck_config`, and nothing depends on `luck_cli` or on the `luck` facade.
+- Only `luck_token`'s `code_buffer.rs`, `luck_resolver`'s `source_io.rs`, and `luck_benchmark` may use `unsafe`, so the workspace denies `unsafe_code` rather than forbidding it.
 - A dialect's facts live in `LuaVersion` and `StdlibEnvironment` in `luck_token`. `LuaTarget` in `luck_core` is the dialect a user names, and it projects onto those two once, at each entry boundary. Codegen-side crates, the minifier included, read only `LuaVersion`, so `-t roblox` and `-t luau` minify identically.
 - A version's syntax reaches its consumers as a `LuaVersion::has_<feature>` predicate, never as a comparison of `LuaVersion` variants. The only `is_` forms are `is_luau` and `is_roblox`.
 - Adding a Lua version is a `LuaVersion` variant, a `LuaTarget` variant, and an arm in every `has_<feature>` predicate. Each of those predicates is exhaustive so a new version has to answer it.
@@ -112,8 +112,9 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - Lua fixtures that several crates' tests read live at the repo root in `tests/fixtures/`, a directory per dialect plus `idiomatic/`, which must stay lint-clean.
 - Lint rule tests name positive cases `flags_*` and negative ones `ignores_*`, and run through `crate::fixtures::run_rule`. A count assertion carries a `"{diags:?}"` message. Suppression has its own tests in `luck_linter`, so a rule's tests leave it out.
 - A fix test applies the edit and asserts that the result reparses.
-- Formatter tests go through `assert_format` or `assert_format_with`, which check idempotency and reparsing on every call.
+- Formatter tests go through `assert_format`, `assert_format_with`, `assert_format_range`, or, for a tree built in code, `assert_format_block`, which check exact output, idempotency, and reparsing on every call.
 - An error path asserts on the returned errors, never with `#[should_panic]`.
+- Test source or output that spans lines, or reads better across lines, is a multi-line string literal, never one with `\n` escapes. Text that reads fine on one line stays on one line.
 - Tests need the exact directive syntax. `-- luck: allow(rule_a, rule_b)`, `deny(...)`, or `warn(...)` applies to the next statement, `start` or `end` after it marks a region, and `-- #luck: allow(foo)` applies to the whole file. `-- luck: format off` and `-- luck: format on` turn the formatter off for a region, and `-- luck: ignore`, or its alias `-- luck: format ignore`, skips one statement.
 
 ## Extension

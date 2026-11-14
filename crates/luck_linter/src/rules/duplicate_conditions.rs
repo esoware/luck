@@ -1,7 +1,7 @@
 use core::iter;
 
 use luck_ast::Statement;
-use luck_token::Span;
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -31,20 +31,19 @@ impl NodeRule for DuplicateConditions {
             return;
         }
         // Conditions compare by their source text.
-        let conditions: Vec<(&str, Span)> = iter::once(&if_stmt.condition)
+        let mut conditions = iter::once(&if_stmt.condition)
             .chain(if_stmt.elseif_clauses.iter().map(|clause| &clause.condition))
             .map(|condition| {
                 let span = condition.span();
                 (span.text(context.source).trim(), span)
-            })
-            .collect();
-        if conditions.first().is_none_or(|(if_text, _)| if_text.is_empty()) {
+            });
+        let Some((if_text, _)) = conditions.next().filter(|(if_text, _)| !if_text.is_empty())
+        else {
             return;
-        }
-        for (i, &(text, span)) in conditions.iter().enumerate().skip(1) {
-            if !text.is_empty()
-                && conditions.iter().take(i).any(|&(earlier_text, _)| earlier_text == text)
-            {
+        };
+        let mut earlier_texts = FxHashSet::from_iter([if_text]);
+        for (text, span) in conditions {
+            if !text.is_empty() && !earlier_texts.insert(text) {
                 findings.push(
                     Finding::new(
                         format!("duplicate condition `{text}` in `if`/`elseif` chain"),
@@ -61,6 +60,8 @@ impl NodeRule for DuplicateConditions {
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use luck_token::LuaVersion;
 
     use super::*;
@@ -93,5 +94,15 @@ mod tests {
     fn ignores_if_without_elseif() {
         let diags = run("if a then x() end");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_each_repeat_in_a_long_chain() {
+        let mut arms = String::new();
+        for i in 0..2_000u32 {
+            let _unused = write!(arms, " elseif c{i} then x()");
+        }
+        let diags = run(&format!("if c then x(){arms}{arms} end"));
+        assert_eq!(diags.len(), 2_000, "{diags:?}");
     }
 }

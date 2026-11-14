@@ -58,10 +58,18 @@ mod tests {
     #[test]
     fn ignores_names_declared_with_global() {
         for source in [
-            "global x = 1\nprint(x)",
-            "global function f() end\nf()",
-            "global y\nprint(y)",
-            "global z <const> = 2\nprint(z)",
+            "\
+global x = 1
+print(x)",
+            "\
+global function f() end
+f()",
+            "\
+global y
+print(y)",
+            "\
+global z <const> = 2
+print(z)",
         ] {
             let diags = run_rule(&UndefinedVariable, source, LuaVersion::Lua55);
             assert!(diags.is_empty(), "{source}: {diags:?}");
@@ -70,13 +78,19 @@ mod tests {
 
     #[test]
     fn ignores_global_the_file_assigns() {
-        let diags = run("print(counter)\ncounter = 0\nfunction helper() end\nhelper()");
+        let diags = run("\
+print(counter)
+counter = 0
+function helper() end
+helper()");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_plain_write_and_discard() {
-        let diags = run("fresh = 1\nprint(_)");
+        let diags = run("\
+fresh = 1
+print(_)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -88,19 +102,30 @@ mod tests {
 
     #[test]
     fn ignores_read_through_local_env() {
-        let diags = run("local _ENV = { y = 1 }\nreturn y");
+        let diags = run("\
+local _ENV = { y = 1 }
+return y");
         assert!(diags.is_empty(), "`y` is a field of the local `_ENV`: {diags:?}");
     }
 
     #[test]
     fn ignores_read_after_global_star() {
-        let diags = run_rule(&UndefinedVariable, "global *\nreturn y", LuaVersion::Lua55);
+        let diags = run_rule(
+            &UndefinedVariable,
+            "\
+global *
+return y",
+            LuaVersion::Lua55,
+        );
         assert!(diags.is_empty(), "`global *` declares every free name: {diags:?}");
     }
 
     #[test]
     fn ignores_types_library_in_type_function() {
-        let source = "type function t1(a)\n return types.string\nend";
+        let source = "\
+type function t1(a)
+ return types.string
+end";
         let diags = run_rule(&UndefinedVariable, source, LuaVersion::Luau);
         assert!(diags.is_empty(), "type functions have the `types` library: {diags:?}");
     }

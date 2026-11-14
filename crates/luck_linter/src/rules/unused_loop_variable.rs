@@ -113,12 +113,16 @@ mod tests {
 
     #[test]
     fn flags_without_fix_that_captures_existing_underscore_name() {
-        let source = "local _k = 1\nfor k, v in pairs({}) do print(_k, v) end";
+        let source = "\
+local _k = 1
+for k, v in pairs({}) do print(_k, v) end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_ne!(
             apply_one_pass(source, &diags),
-            "local _k = 1\nfor _k, v in pairs({}) do print(_k, v) end",
+            "\
+local _k = 1
+for _k, v in pairs({}) do print(_k, v) end",
             "the rename shouldn't make `print(_k)` read the loop variable"
         );
     }

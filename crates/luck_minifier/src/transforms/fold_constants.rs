@@ -1,15 +1,15 @@
 use alloc::borrow::Cow;
 
 use luck_ast::{
-    Block, Expression, Literal, Transform, UnaryOp, ensure_sufficient_stack, is_multi_value,
+    BinaryLink, BinaryOp, Block, Expression, Literal, OneOrMore, Transform, UnaryOp,
     unwrap_parentheses,
 };
 use luck_token::{
-    BinOp, CompactString, LuaNumber, LuaVersion, NumberSubtypes, Span, UnOp, decode_string,
-    encode_string, parse_lua_number,
+    Associativity, BinOp, CompactString, LuaNumber, LuaVersion, NumberSubtypes, Span, UnOp,
+    decode_string, encode_string, parse_lua_number,
 };
 
-use crate::expr::{extract_boolean, int_to_float, is_nil, parenthesize};
+use crate::expr::{extract_boolean, int_to_float, is_nil, truncate_multi_value};
 
 pub(crate) fn fold(block: Block, version: LuaVersion) -> Block {
     ConstantFolder { version }.transform_block(block)
@@ -19,17 +19,15 @@ struct ConstantFolder {
     version: LuaVersion,
 }
 
-impl Transform for ConstantFolder {
-    fn transform_expr(&mut self, expr: Expression) -> Expression {
-        match self.walk_expr(expr) {
-            Expression::BinaryOp(mut binary_op) => {
-                match fold_binary(&binary_op.lhs, binary_op.op, &binary_op.rhs, self.version) {
-                    Some(BinaryFold::Literal(literal)) => literal,
-                    Some(BinaryFold::Left) => binary_op.lhs.take(),
-                    Some(BinaryFold::Right) => truncate_multi_value(binary_op.rhs.take()),
-                    None => Expression::BinaryOp(binary_op),
-                }
-            }
+impl ConstantFolder {
+    // Out of line, so an expression nested below holds only the walk's frame,
+    // not these temporaries.
+    fn fold_expr(&self, walked: Expression) -> Expression {
+        match walked {
+            Expression::BinaryOp(run) => match run.precedence().1 {
+                Associativity::Left => fold_left_run(run, self.version),
+                Associativity::Right => fold_right_run(run, self.version),
+            },
             Expression::UnaryOp(unop) => {
                 fold_unary(unop.op, &unop.operand, NumberSubtypes::from(self.version))
                     .unwrap_or(Expression::UnaryOp(unop))
@@ -42,16 +40,22 @@ impl Transform for ConstantFolder {
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_)) => other,
         }
+    }
+}
+
+impl Transform for ConstantFolder {
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        let walked = self.walk_expr(expr);
+        self.fold_expr(walked)
     }
 }
 
@@ -61,6 +65,71 @@ enum BinaryFold {
     Left,
     /// The right operand, truncated to one value.
     Right,
+}
+
+/// Folds the run's operators from the left while they fold, as the pairs it
+/// groups into would.
+///
+/// An operator that doesn't fold leaves a run on its left, which no later one
+/// folds with either.
+fn fold_left_run(run: Box<BinaryOp>, version: LuaVersion) -> Expression {
+    let first_link = run.links.first();
+    if fold_binary(&run.first, first_link.op, &first_link.operand, version).is_none() {
+        return Expression::BinaryOp(run);
+    }
+    let BinaryOp { span, first, links } = *run;
+    let mut remaining = links.into_vec();
+    let mut folded = first;
+    let mut folded_links = 0usize;
+    for link in &mut remaining {
+        match fold_binary(&folded, link.op, &link.operand, version) {
+            Some(BinaryFold::Literal(literal)) => folded = literal,
+            Some(BinaryFold::Left) => {}
+            Some(BinaryFold::Right) => folded = truncate_multi_value(link.operand.take()),
+            None => break,
+        }
+        folded_links = folded_links.saturating_add(1);
+    }
+    remaining.drain(..folded_links);
+    match OneOrMore::from_vec(remaining) {
+        Some(rest) => Expression::BinaryOp(Box::new(BinaryOp { span, first: folded, links: rest })),
+        None => folded,
+    }
+}
+
+/// Folds the run's `..` or `^` from the right for as long as they fold, as
+/// the nested pairs it groups into would.
+fn fold_right_run(run: Box<BinaryOp>, version: LuaVersion) -> Expression {
+    let is_foldable = run.links.split_last().is_some_and(|(last, before_last)| {
+        let last_left = before_last.last().map_or(&run.first, |link| &link.operand);
+        let last_fold = fold_binary(last_left, last.op, &last.operand, version);
+        matches!(last_fold, Some(BinaryFold::Literal(_)))
+    });
+    if !is_foldable {
+        return Expression::BinaryOp(run);
+    }
+    let BinaryOp { span, first, links } = *run;
+    let mut remaining = links.into_vec();
+    let Some(BinaryLink { op: mut pending_op, operand: mut folded }) = remaining.pop() else {
+        return first;
+    };
+    loop {
+        let left = remaining.last().map_or(&first, |link| &link.operand);
+        let Some(BinaryFold::Literal(literal)) = fold_binary(left, pending_op, &folded, version)
+        else {
+            break;
+        };
+        folded = literal;
+        let Some(left_link) = remaining.pop() else {
+            return folded;
+        };
+        pending_op = left_link.op;
+    }
+    remaining.push(BinaryLink { op: pending_op, operand: folded });
+    match OneOrMore::from_vec(remaining) {
+        Some(rest) => Expression::BinaryOp(Box::new(BinaryOp { span, first, links: rest })),
+        None => first,
+    }
 }
 
 /// Integers wrap, so `i64::MIN` negates to itself.
@@ -79,8 +148,7 @@ fn extract_lua_number(expr: &Expression, subtypes: NumberSubtypes) -> Option<Lua
     match expr {
         Expression::Number(literal) => parse_lua_number(&literal.text, subtypes),
         Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Neg) => {
-            ensure_sufficient_stack(|| extract_lua_number(&unop.operand, subtypes))
-                .map(negate_number)
+            extract_lua_number(&unop.operand, subtypes).map(negate_number)
         }
         Expression::Parenthesized(paren) => {
             extract_lua_number(unwrap_parentheses(&paren.expr), subtypes)
@@ -92,15 +160,14 @@ fn extract_lua_number(expr: &Expression, subtypes: NumberSubtypes) -> Option<Lua
         | Expression::StringLiteral(_)
         | Expression::VarArg(_)
         | Expression::FunctionDef(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
         | Expression::TableConstructor(_)
         | Expression::BinaryOp(_)
         | Expression::UnaryOp(_)
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
         | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
         | Expression::Error(_) => None,
     }
 }
@@ -335,12 +402,6 @@ fn compare_numbers(lhs: LuaNumber, op: BinOp, rhs: LuaNumber) -> Option<bool> {
     })
 }
 
-/// Parenthesizes a call or `...` that replaces an `and`/`or`, which always
-/// yields one value.
-fn truncate_multi_value(expr: Expression) -> Expression {
-    if is_multi_value(&expr) { parenthesize(expr) } else { expr }
-}
-
 fn extract_string_bytes(expr: &Expression, version: LuaVersion) -> Option<Cow<'_, [u8]>> {
     match expr {
         Expression::StringLiteral(literal) => decode_string(&literal.text, version),
@@ -354,15 +415,14 @@ fn extract_string_bytes(expr: &Expression, version: LuaVersion) -> Option<Cow<'_
         | Expression::Integer(_)
         | Expression::VarArg(_)
         | Expression::FunctionDef(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
         | Expression::TableConstructor(_)
         | Expression::BinaryOp(_)
         | Expression::UnaryOp(_)
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
         | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
         | Expression::Error(_) => None,
     }
 }
@@ -663,7 +723,9 @@ mod tests {
 
     #[test]
     fn keeps_negative_zero() {
-        let source = "local x = 0.0 * -1\nreturn 1/x";
+        let source = "\
+local x = 0.0 * -1
+return 1/x";
         let result = apply(source);
         assert_reparses(&result, LuaVersion::Lua54);
         // Must not turn -0 into 0.

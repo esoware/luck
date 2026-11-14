@@ -1,5 +1,6 @@
 use luck_ast::{FunctionName, Statement};
 use luck_token::Span;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Finding, line_column};
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -18,9 +19,8 @@ impl_rule!(
 impl WholeRule for DuplicateFunction {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut findings = Vec::new();
-        let mut definitions: Vec<(String, Span)> = Vec::new();
         for block in context.blocks {
-            definitions.clear();
+            let mut definitions: FxHashMap<String, Span> = FxHashMap::default();
             for stmt in &block.stmts {
                 // `redefining_local` covers local functions.
                 let (declared_name, name_span) = if let Statement::FunctionDecl(decl) = stmt {
@@ -34,9 +34,7 @@ impl WholeRule for DuplicateFunction {
                 let Some(name) = declared_name else {
                     continue;
                 };
-                if let Some((_, first_span)) =
-                    definitions.iter().find(|(defined_name, _)| *defined_name == name)
-                {
+                if let Some(first_span) = definitions.get(&name) {
                     let (line, _) =
                         line_column(context.source, first_span.start, context.semantic.version);
                     findings.push(Finding::new(
@@ -46,7 +44,7 @@ impl WholeRule for DuplicateFunction {
                         name_span,
                     ));
                 } else {
-                    definitions.push((name, name_span));
+                    definitions.insert(name, name_span);
                 }
             }
         }
@@ -72,6 +70,8 @@ fn full_name(function_name: &FunctionName) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use luck_token::LuaVersion;
 
     use super::*;
@@ -84,7 +84,9 @@ mod tests {
 
     #[test]
     fn flags_duplicate_plain_function() {
-        let diags = run("function f() end\nfunction f() end");
+        let diags = run("\
+function f() end
+function f() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`f`"));
         assert!(diags[0].message.contains("line 1"));
@@ -92,7 +94,10 @@ mod tests {
 
     #[test]
     fn flags_duplicate_dotted_function() {
-        let diags = run("local t = {}\nfunction t.m() end\nfunction t.m() end");
+        let diags = run("\
+local t = {}
+function t.m() end
+function t.m() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`t.m`"));
         assert!(diags[0].message.contains("line 2"));
@@ -100,52 +105,83 @@ mod tests {
 
     #[test]
     fn flags_duplicate_method() {
-        let diags = run("local t = {}\nfunction t:m() end\nfunction t:m() end");
+        let diags = run("\
+local t = {}
+function t:m() end
+function t:m() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`t:m`"));
     }
 
     #[test]
     fn flags_duplicates_in_nested_block() {
-        let diags = run("do\nfunction f() end\nfunction f() end\nend");
+        let diags = run("\
+do
+function f() end
+function f() end
+end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("line 2"));
     }
 
     #[test]
     fn flags_each_later_duplicate() {
-        let diags = run("function f() end\nfunction f() end\nfunction f() end");
+        let diags = run("\
+function f() end
+function f() end
+function f() end");
         assert_eq!(diags.len(), 2, "got: {diags:?}");
     }
 
     #[test]
     fn ignores_same_name_with_dot_and_colon() {
-        let diags = run("local t = {}\nfunction t.m() end\nfunction t:m() end");
+        let diags = run("\
+local t = {}
+function t.m() end
+function t:m() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_different_names() {
-        let diags = run("function f() end\nfunction g() end");
+        let diags = run("\
+function f() end
+function g() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_local_functions() {
-        let diags = run("local function f() end\nlocal function f() end");
+        let diags = run("\
+local function f() end
+local function f() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_sibling_blocks() {
-        let diags = run("do function f() end end\ndo function f() end end");
+        let diags = run("\
+do function f() end end
+do function f() end end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_duplicate_global_function() {
-        let source = "global function f() end\nglobal function f() end";
+        let source = "\
+global function f() end
+global function f() end";
         let diags = run_rule(&DuplicateFunction, source, LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "both statements define `f` in one block: {diags:?}");
+    }
+
+    #[test]
+    fn flags_each_repeat_in_a_long_block() {
+        let mut functions = String::new();
+        for i in 0..2_000u32 {
+            let _unused = writeln!(functions, "function m.f{i}() end");
+        }
+        let diags = run(&format!("{functions}{functions}"));
+        assert_eq!(diags.len(), 2_000, "{diags:?}");
     }
 }

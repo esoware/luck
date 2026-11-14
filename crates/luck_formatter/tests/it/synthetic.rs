@@ -1,46 +1,45 @@
-//! Most tests format a tree built in code with no source text, then require
-//! the output to re-parse cleanly into a tree equivalent to the one they
-//! started from.
-//!
-//! Source-based tests can't show this, since they always have
-//! the original text to lean on.
+//! Each tree is built in code, so the formatter has no source text to lean
+//! on, as it always has in the source-based tests.
 
 use luck_ast::{
-    Block, FieldSpec, FunctionSignature, InterpolatedStringPart, Synth, SyntheticComment,
-    TypeFieldAccess, TypeFieldSpec,
+    Block, Expression, FieldSpec, FunctionSignature, InterpolatedStringPart, LastStatement,
+    MAX_NESTING_DEPTH, Synth, SyntheticComment, TypeFieldAccess, TypeFieldSpec,
+    block_nesting_depth,
 };
-use luck_formatter::{
-    CollapseSimpleStatement, Comments, FormatOptions, blocks_equivalent, format_block,
-};
+use luck_formatter::{CollapseSimpleStatement, Comments, FormatOptions, format_block};
 use luck_token::{BinOp, LuaVersion, TokenKind, UnOp, decode_string};
 
-/// Format a synthetic block and assert the output re-parses cleanly under
-/// `version` into an equivalent tree. Returns the output.
-fn assert_roundtrips_in(block: &Block, version: LuaVersion) -> String {
-    let output = format_block(block, Comments::none(), &FormatOptions::default());
-    let reparsed = luck_parser::parse(&output, version);
-    assert!(
-        reparsed.errors.is_empty(),
-        "synthetic output failed to re-parse:\n{output}\nerrors: {:?}",
-        reparsed.errors,
-    );
-    let equivalence = blocks_equivalent(block, &reparsed.block, version);
-    assert!(
-        equivalence.is_ok(),
-        "synthetic block not equivalent after round-trip:\n{output}\ndiff: {equivalence:?}"
-    );
-    output
+use crate::common::assert_format_with;
+
+/// The output also has to format as itself and re-parse clean under
+/// `version`.
+fn assert_format_block_with(
+    block: &Block,
+    comments: Comments,
+    version: LuaVersion,
+    options: &FormatOptions,
+    expected: &str,
+) {
+    let output = format_block(block, comments, options).expect("the block nests within the cap");
+    assert_eq!(output, expected, "format mismatch");
+    assert_format_with(expected, expected, version, options);
 }
 
-fn assert_roundtrips(block: &Block) -> String {
-    assert_roundtrips_in(block, LuaVersion::Luau)
+fn assert_format_block(block: &Block, version: LuaVersion, expected: &str) {
+    assert_format_block_with(block, Comments::none(), version, &FormatOptions::default(), expected);
 }
 
 #[test]
 fn long_string_delimiters_and_bytes_roundtrip() {
     let synth = Synth::new();
-    let mut contents =
-        vec![String::new(), "]]=".to_owned(), "a\0b".to_owned(), "\n\0\r".to_owned()];
+    let mut cases = vec![
+        (String::new(), "return [[]]\n".to_owned()),
+        ("]]=".to_owned(), "return [==[]]=]==]\n".to_owned()),
+        ("a\0b".to_owned(), "return \"a\\0b\"\n".to_owned()),
+        ("\n\0\r".to_owned(), "return \"\\n\\0\\r\"\n".to_owned()),
+    ];
+    // This content would close every level up to `level`, so it needs the
+    // one after.
     for level in 0..8 {
         let mut content = String::new();
         for preceding in 0..level {
@@ -50,13 +49,15 @@ fn long_string_delimiters_and_bytes_roundtrip() {
         }
         content.push(']');
         content.push_str(&"=".repeat(level));
-        contents.push(content);
+        let equals = "=".repeat(level.saturating_add(1));
+        let expected = format!("return [{equals}[{content}]{equals}]\n");
+        cases.push((content, expected));
     }
-    for content in contents {
+    for (content, expected) in cases {
         let block = synth.block(vec![], Some(synth.return_(vec![synth.long_string(&content)])));
         for version in LuaVersion::ALL {
-            let output = assert_roundtrips_in(&block, version);
-            let lexed = luck_lexer::lex(&output, version);
+            assert_format_block(&block, version, &expected);
+            let lexed = luck_lexer::lex(&expected, version);
             let literal = lexed
                 .tokens
                 .iter()
@@ -67,12 +68,187 @@ fn long_string_delimiters_and_bytes_roundtrip() {
             assert_eq!(
                 decode_string(literal, version).as_deref(),
                 Some(content.as_bytes()),
-                "{version:?}: {output}"
+                "{version:?}: {expected}"
             );
-            assert!(!output.contains('\0'));
         }
     }
 }
+
+/// For each child of `composite_types_preserve_grouping`, its layouts at width
+/// 1 and at widths 60, 80, and 120 as an optional's operand and as either
+/// operand of a union and of an intersection.
+const COMPOSITE_TYPE_LAYOUTS: [[(&str, &str); 5]; 4] = [
+    [
+        (
+            "\
+type Result = (
+\t| A
+\t| B)?
+",
+            "type Result = (A | B)?\n",
+        ),
+        (
+            "\
+type Result =
+\t| (
+\t\t| A
+\t\t| B)
+\t| C
+",
+            "type Result = (A | B) | C\n",
+        ),
+        (
+            "\
+type Result =
+\t| C
+\t| (
+\t\t| A
+\t\t| B)
+",
+            "type Result = C | (A | B)\n",
+        ),
+        (
+            "\
+type Result =
+\t& (
+\t\t| A
+\t\t| B)
+\t& C
+",
+            "type Result = (A | B) & C\n",
+        ),
+        (
+            "\
+type Result =
+\t& C
+\t& (
+\t\t| A
+\t\t| B)
+",
+            "type Result = C & (A | B)\n",
+        ),
+    ],
+    [
+        (
+            "\
+type Result = (
+\t& A
+\t& B)?
+",
+            "type Result = (A & B)?\n",
+        ),
+        (
+            "\
+type Result =
+\t| (
+\t\t& A
+\t\t& B)
+\t| C
+",
+            "type Result = (A & B) | C\n",
+        ),
+        (
+            "\
+type Result =
+\t| C
+\t| (
+\t\t& A
+\t\t& B)
+",
+            "type Result = C | (A & B)\n",
+        ),
+        (
+            "\
+type Result =
+\t& (
+\t\t& A
+\t\t& B)
+\t& C
+",
+            "type Result = (A & B) & C\n",
+        ),
+        (
+            "\
+type Result =
+\t& C
+\t& (
+\t\t& A
+\t\t& B)
+",
+            "type Result = C & (A & B)\n",
+        ),
+    ],
+    [
+        ("type Result = (() -> A)?\n", "type Result = (() -> A)?\n"),
+        (
+            "\
+type Result =
+\t| (() -> A)
+\t| C
+",
+            "type Result = (() -> A) | C\n",
+        ),
+        (
+            "\
+type Result =
+\t| C
+\t| (() -> A)
+",
+            "type Result = C | (() -> A)\n",
+        ),
+        (
+            "\
+type Result =
+\t& (() -> A)
+\t& C
+",
+            "type Result = (() -> A) & C\n",
+        ),
+        (
+            "\
+type Result =
+\t& C
+\t& (() -> A)
+",
+            "type Result = C & (() -> A)\n",
+        ),
+    ],
+    [
+        ("type Result = A??\n", "type Result = A??\n"),
+        (
+            "\
+type Result =
+\t| A?
+\t| C
+",
+            "type Result = A? | C\n",
+        ),
+        (
+            "\
+type Result =
+\t| C
+\t| A?
+",
+            "type Result = C | A?\n",
+        ),
+        (
+            "\
+type Result =
+\t& (A?)
+\t& C
+",
+            "type Result = (A?) & C\n",
+        ),
+        (
+            "\
+type Result =
+\t& C
+\t& (A?)
+",
+            "type Result = C & (A?)\n",
+        ),
+    ],
+];
 
 #[test]
 fn composite_types_preserve_grouping() {
@@ -83,7 +259,7 @@ fn composite_types_preserve_grouping() {
         synth.ty_function(vec![], synth.ty_named("A")),
         synth.ty_optional(synth.ty_named("A")),
     ];
-    for child in children {
+    for (child, layouts) in children.into_iter().zip(COMPOSITE_TYPE_LAYOUTS) {
         let types = [
             synth.ty_optional(child.clone()),
             synth.ty_union(vec![child.clone(), synth.ty_named("C")]),
@@ -91,27 +267,20 @@ fn composite_types_preserve_grouping() {
             synth.ty_intersection(vec![child.clone(), synth.ty_named("C")]),
             synth.ty_intersection(vec![synth.ty_named("C"), child]),
         ];
-        for type_value in types {
+        for (type_value, (narrowest, wider)) in types.into_iter().zip(layouts) {
             let block =
                 synth.block(vec![synth.type_declaration(false, "Result", None, type_value)], None);
-            for width in [1, 60, 80, 120] {
-                let options = FormatOptions { line_width: width, ..FormatOptions::default() };
-                let output = format_block(&block, Comments::none(), &options);
-                let parsed = luck_parser::parse(&output, LuaVersion::Luau);
-                assert!(parsed.errors.is_empty(), "{output}: {:?}", parsed.errors);
-                blocks_equivalent(&block, &parsed.block, LuaVersion::Luau)
-                    .expect("type meaning preserved");
-                let verified =
-                    luck_formatter::format_and_verify(&output, LuaVersion::Luau, &options)
-                        .expect("type formatting verifies");
-                assert_eq!(verified.output, output);
+            for (line_width, expected) in [(1, narrowest), (60, wider), (80, wider), (120, wider)] {
+                let options = FormatOptions { line_width, ..FormatOptions::default() };
+                let comments = Comments::none();
+                assert_format_block_with(&block, comments, LuaVersion::Luau, &options, expected);
             }
         }
     }
     let optional_function = synth.ty_optional(synth.ty_function(vec![], synth.ty_named("A")));
     let block =
         synth.block(vec![synth.type_declaration(false, "Callback", None, optional_function)], None);
-    assert_eq!(assert_roundtrips(&block), "type Callback = (() -> A)?\n");
+    assert_format_block(&block, LuaVersion::Luau, "type Callback = (() -> A)?\n");
 }
 
 #[test]
@@ -121,9 +290,7 @@ fn typed_local_roundtrips() {
     let stmt = synth
         .local_full(vec![synth.attributed_name("value", Some(optional), None)], vec![synth.nil()]);
     let block = synth.block(vec![stmt], None);
-
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("value: number?"), "type annotation dropped: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "local value: number? = nil\n");
 }
 
 #[test]
@@ -139,10 +306,15 @@ fn typed_function_roundtrips() {
         synth.function_def_full(Vec::new(), signature, synth.block(vec![], Some(return_stmt)));
     let local = synth.local(&["identity"], vec![function_def]);
     let block = synth.block(vec![local], None);
-
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("n: number"), "parameter annotation dropped: {output}");
-    assert!(output.contains("): number"), "return annotation dropped: {output}");
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+local identity = function(n: number): number
+\treturn n
+end
+",
+    );
 }
 
 #[test]
@@ -175,7 +347,20 @@ fn mixed_stmts_roundtrip() {
     );
 
     let block = synth.block(vec![local_data, generic_for, if_stmt], None);
-    assert_roundtrips(&block);
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+local data = { 1, name = 2, [\"k\"] = true }
+for key, value in pairs(data) do
+end
+if data then
+\tdata:insert(3)
+elseif false then
+else
+end
+",
+    );
 }
 
 #[test]
@@ -207,12 +392,11 @@ fn precedence_parens_roundtrip() {
     );
     let return_stmt = synth.return_(vec![grouped_sum, right_sub, unary_power, left_concat]);
     let block = synth.block(vec![], Some(return_stmt));
-
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("(a + b) * c"), "grouping lost: {output}");
-    assert!(output.contains("a - (b - c)"), "grouping lost: {output}");
-    assert!(output.contains("(-a) ^ b"), "grouping lost: {output}");
-    assert!(output.contains("(a .. b) .. c"), "grouping lost: {output}");
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "return (a + b) * c, a - (b - c), (-a) ^ b, (a .. b) .. c\n",
+    );
 }
 
 #[test]
@@ -223,11 +407,7 @@ fn if_expr_operand_roundtrips() {
     let if_expr = synth.if_expr(synth.name_expr("c"), synth.number("1"), vec![], synth.number("2"));
     let guarded = synth.binary_op(synth.name_expr("a"), BinOp::Or, if_expr);
     let block = synth.block(vec![], Some(synth.return_(vec![guarded])));
-    let output = assert_roundtrips(&block);
-    assert!(
-        output.contains("(if c then 1 else 2)"),
-        "if-expression operand not parenthesized: {output}"
-    );
+    assert_format_block(&block, LuaVersion::Luau, "return a or (if c then 1 else 2)\n");
 }
 
 #[test]
@@ -237,9 +417,7 @@ fn prefix_wrapping_roundtrips() {
     let string_method = synth.method_call(synth.string("s"), "rep", vec![synth.number("2")]);
     let table_field = synth.field(synth.table(vec![]), "field");
     let block = synth.block(vec![], Some(synth.return_(vec![string_method, table_field])));
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("(\"s\"):rep(2)"), "got: {output}");
-    assert!(output.contains("({}).field"), "got: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "return (\"s\"):rep(2), ({}).field\n");
 }
 
 #[test]
@@ -249,10 +427,7 @@ fn field_or_index_roundtrips() {
     let bad = synth.field_or_index(synth.name_expr("t"), "not ok");
     let keyword = synth.field_or_index(synth.name_expr("t"), "end");
     let block = synth.block(vec![], Some(synth.return_(vec![good, bad, keyword])));
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("t.ok"), "got: {output}");
-    assert!(output.contains("t[\"not ok\"]"), "got: {output}");
-    assert!(output.contains("t[\"end\"]"), "got: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "return t.ok, t[\"not ok\"], t[\"end\"]\n");
 }
 
 #[test]
@@ -260,17 +435,26 @@ fn string_bytes_roundtrips() {
     let synth = Synth::new();
     let bytes = synth.string_bytes(&[0xff, 0x00, b'a', b'1']);
     let block = synth.block(vec![synth.local(&["blob"], vec![bytes])], None);
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("\\255") && output.contains("\\0a"), "byte escapes missing: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "local blob = \"\\255\\0a1\"\n");
 }
 
 #[test]
 fn long_string_roundtrips() {
     let synth = Synth::new();
-    let text = synth.long_string("line one\nline ]] two");
+    let text = synth.long_string(
+        "\
+line one
+line ]] two",
+    );
     let block = synth.block(vec![synth.local(&["doc"], vec![text])], None);
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("[=[line one"), "got: {output}");
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+local doc = [=[line one
+line ]] two]=]
+",
+    );
 }
 
 #[test]
@@ -285,10 +469,11 @@ fn numeric_specials_roundtrip() {
         synth.number_i64(i64::MIN),
     ];
     let block = synth.block(vec![], Some(synth.return_(vec![synth.array(values)])));
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("3.0"), "float subtype lost: {output}");
-    assert!(output.contains("1 / 0"), "infinity form lost: {output}");
-    assert!(output.contains("0x8000000000000000"), "got: {output}");
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "return { 3.0, -2.5, 1 / 0, 0 / 0, -42, 0x8000000000000000 }\n",
+    );
 }
 
 #[test]
@@ -300,7 +485,14 @@ fn call_sugar_roundtrips() {
         vec![FieldSpec::Named("debug", synth.boolean(true))],
     );
     let block = synth.block(vec![synth.call_stmt(require), synth.call_stmt(configure)], None);
-    assert_roundtrips(&block);
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+require(\"module\")
+configure({ debug = true })
+",
+    );
 }
 
 #[test]
@@ -311,8 +503,7 @@ fn attributed_local_roundtrips_in_lua54() {
         vec![synth.number("1")],
     );
     let block = synth.block(vec![stmt], None);
-    let output = assert_roundtrips_in(&block, LuaVersion::Lua54);
-    assert!(output.contains("frozen <const>"), "got: {output}");
+    assert_format_block(&block, LuaVersion::Lua54, "local frozen <const> = 1\n");
 }
 
 #[test]
@@ -324,10 +515,17 @@ fn globals_roundtrip_in_lua55() {
         synth.global_function("main", FunctionSignature::default(), synth.block(vec![], None));
     let global_star = synth.global_star(None);
     let block = synth.block(vec![global_declaration, global_function, global_star], None);
-    let output = assert_roundtrips_in(&block, LuaVersion::Lua55);
-    assert!(output.contains("global shared"), "got: {output}");
-    assert!(output.contains("global function main"), "got: {output}");
-    assert!(output.contains("global *"), "got: {output}");
+    assert_format_block(
+        &block,
+        LuaVersion::Lua55,
+        "\
+global shared
+
+global function main() end
+
+global *
+",
+    );
 }
 
 #[test]
@@ -343,14 +541,32 @@ fn mid_block_break_roundtrips_in_lua54() {
     let loop_stmt =
         synth.while_(synth.boolean(true), synth.block(vec![conditional_break, step], None));
     let block = synth.block(vec![loop_stmt], None);
-    assert_roundtrips_in(&block, LuaVersion::Lua54);
+    assert_format_block(
+        &block,
+        LuaVersion::Lua54,
+        "\
+while true do
+\tif done then
+\t\tbreak
+\tend
+\tstep()
+end
+",
+    );
 }
 
 #[test]
 fn goto_roundtrips_in_lua54() {
     let synth = Synth::new();
     let block = synth.block(vec![synth.goto_("done"), synth.label("done")], None);
-    assert_roundtrips_in(&block, LuaVersion::Lua54);
+    assert_format_block(
+        &block,
+        LuaVersion::Lua54,
+        "\
+goto done
+::done::
+",
+    );
 }
 
 #[test]
@@ -400,10 +616,19 @@ fn luau_type_forms_roundtrip() {
     let narrowed = synth.local(&["narrowed"], vec![cast]);
 
     let block = synth.block(vec![alias, entry, mode, narrowed], None);
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("export type Handler"), "got: {output}");
-    assert!(output.contains("read id: number"), "got: {output}");
-    assert!(output.contains("typeof(template)"), "got: {output}");
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+export type Handler<T...> = <U>(name: string, T...) -> (U, boolean)
+
+type Entry = { read id: number, [string]: boolean }
+
+type Mode = \"fast\" | true | nil
+
+local narrowed = value :: typeof(template)
+",
+    );
 }
 
 #[test]
@@ -416,8 +641,14 @@ fn function_attributes_roundtrip() {
         synth.block(vec![], None),
     );
     let block = synth.block(vec![stmt], None);
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("@native"), "attribute dropped: {output}");
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+@native
+local function hot() end
+",
+    );
 }
 
 #[test]
@@ -432,10 +663,13 @@ fn attribute_args_roundtrip() {
         synth.block(vec![], None),
     );
     let block = synth.block(vec![stmt], None);
-    let output = assert_roundtrips(&block);
-    assert!(
-        output.contains("@[deprecated({ use = \"y\" })]"),
-        "bracketed attribute lost: {output}"
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+@[deprecated({ use = \"y\" })]
+local function old() end
+",
     );
 }
 
@@ -447,11 +681,7 @@ fn cast_before_comparison_roundtrips() {
     let cast = synth.type_cast(synth.name_expr("value"), synth.ty_named("number"));
     let compared = synth.binary_op(cast, BinOp::Lt, synth.name_expr("limit"));
     let block = synth.block(vec![], Some(synth.return_(vec![compared])));
-    let output = assert_roundtrips(&block);
-    assert!(
-        output.contains("(value :: number) < limit"),
-        "cast not parenthesized before <: {output}"
-    );
+    assert_format_block(&block, LuaVersion::Luau, "return (value :: number) < limit\n");
 }
 
 #[test]
@@ -460,8 +690,7 @@ fn chained_cast_roundtrips() {
     let inner = synth.type_cast(synth.name_expr("x"), synth.ty_named("any"));
     let outer = synth.type_cast(inner, synth.ty_named("number"));
     let block = synth.block(vec![synth.local(&["narrowed"], vec![outer])], None);
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("(x :: any) :: number"), "chained cast not parenthesized: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "local narrowed = (x :: any) :: number\n");
 }
 
 #[test]
@@ -476,9 +705,15 @@ fn const_declarations_roundtrip() {
         synth.block(vec![], None),
     );
     let block = synth.block(vec![const_local, const_function], None);
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("const frozen = 1"), "got: {output}");
-    assert!(output.contains("const function pinned"), "got: {output}");
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+const frozen = 1
+
+const function pinned() end
+",
+    );
 }
 
 #[test]
@@ -491,17 +726,14 @@ fn interpolated_parts_roundtrip() {
     ]);
     let plain = synth.interpolated_string(vec![InterpolatedStringPart::Text("no exprs")]);
     let block = synth.block(vec![synth.local(&["s", "t"], vec![greeting, plain])], None);
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("`hi {name}!`"), "got: {output}");
-    assert!(output.contains("`no exprs`"), "got: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "local s, t = `hi {name}!`, `no exprs`\n");
 }
 
 #[test]
 fn exponent_number_roundtrips() {
     let synth = Synth::new();
     let block = synth.block(vec![synth.local(&["huge"], vec![synth.number_f64(1e300)])], None);
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("1e300"), "exponent form lost: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "local huge = 1e300\n");
 }
 
 #[test]
@@ -511,13 +743,7 @@ fn luau_pinned_numbers_roundtrip() {
     let synth = Synth::new().with_version(LuaVersion::Luau);
     let values = vec![synth.number_f64(100.0), synth.number_f64(1.5), synth.number_i64(i64::MIN)];
     let block = synth.block(vec![], Some(synth.return_(vec![synth.array(values)])));
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("100,"), "plain integer form lost: {output}");
-    assert!(
-        !output.contains("1e2") && !output.contains("100.0"),
-        "float-subtype marker leaked: {output}"
-    );
-    assert!(output.contains("-9223372036854775808"), "i64::MIN decimal form lost: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "return { 100, 1.5, -9223372036854775808 }\n");
 }
 
 #[test]
@@ -525,8 +751,7 @@ fn single_value_truncation_roundtrips() {
     let synth = Synth::new();
     let truncated = synth.single_value(synth.call(synth.name_expr("f"), vec![]));
     let block = synth.block(vec![], Some(synth.return_(vec![truncated])));
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("return (f())"), "got: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "return (f())\n");
 }
 
 #[test]
@@ -534,8 +759,7 @@ fn long_string_carriage_return_roundtrips() {
     let synth = Synth::new();
     let text = synth.long_string("a\r\nb");
     let block = synth.block(vec![synth.local(&["doc"], vec![text])], None);
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("\"a\\r\\nb\""), "got: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "local doc = \"a\\r\\nb\"\n");
 }
 
 #[test]
@@ -545,8 +769,7 @@ fn version_pinned_keyword_field_roundtrips() {
     // must survive a Luau re-parse.
     let access = synth.field_or_index(synth.name_expr("t"), "goto");
     let block = synth.block(vec![], Some(synth.return_(vec![access])));
-    let output = assert_roundtrips(&block);
-    assert!(output.contains("t.goto"), "got: {output}");
+    assert_format_block(&block, LuaVersion::Luau, "return t.goto\n");
 }
 
 #[test]
@@ -556,29 +779,15 @@ fn synthetic_comments_placed_around_stmt() {
     let leading = SyntheticComment::leading(&stmt, "leading note");
     let trailing = SyntheticComment::trailing(&stmt, "trailing note");
     let block = synth.block(vec![stmt], None);
-
-    let output = format_block(
+    assert_format_block_with(
         &block,
         Comments::synthetic(vec![leading, trailing]),
+        LuaVersion::Luau,
         &FormatOptions::default(),
-    );
-
-    assert!(output.contains("-- leading note"), "leading comment missing: {output}");
-    assert!(output.contains("-- trailing note"), "trailing comment missing: {output}");
-
-    let lines: Vec<&str> = output.lines().collect();
-    let leading_line =
-        lines.iter().position(|line| line.contains("leading note")).expect("leading comment line");
-    let stmt_line =
-        lines.iter().position(|line| line.contains("local x = 1")).expect("statement line");
-    assert!(leading_line < stmt_line, "leading comment not before statement: {output}");
-    assert!(
-        !lines[leading_line].contains("local x = 1"),
-        "leading comment must be on its own line: {output}"
-    );
-    assert!(
-        lines[stmt_line].contains("-- trailing note"),
-        "trailing comment not on statement line: {output}"
+        "\
+-- leading note
+local x = 1 -- trailing note
+",
     );
 }
 
@@ -589,15 +798,17 @@ fn dangling_comment_prints_inside_empty_function() {
     let dangling = SyntheticComment::dangling(&body, "unreachable");
     let stmt = synth.local_function("stub", &[], body);
     let block = synth.block(vec![stmt], None);
-
-    let output =
-        format_block(&block, Comments::synthetic(vec![dangling]), &FormatOptions::default());
-    let comment_line = output
-        .lines()
-        .position(|line| line.contains("-- unreachable"))
-        .expect("dangling comment printed");
-    let end_line = output.lines().position(|line| line.trim() == "end").expect("end line");
-    assert!(comment_line < end_line, "comment must sit inside the body: {output}");
+    assert_format_block_with(
+        &block,
+        Comments::synthetic(vec![dangling]),
+        LuaVersion::Luau,
+        &FormatOptions::default(),
+        "\
+local function stub()
+\t-- unreachable
+end
+",
+    );
 }
 
 #[test]
@@ -608,17 +819,24 @@ fn requested_blank_lines_separate_stmts() {
     let blank_anchor = second.span().start;
     let block = synth.block(vec![first, second], None);
 
-    let plain_output = format_block(&block, Comments::none(), &FormatOptions::default());
-    assert!(!plain_output.contains("\n\n"), "no blank expected by default: {plain_output:?}");
-
-    let spaced_output = format_block(
+    assert_format_block(
+        &block,
+        LuaVersion::Luau,
+        "\
+local a = 1
+local b = 2
+",
+    );
+    assert_format_block_with(
         &block,
         Comments::synthetic(vec![]).with_blank_before([blank_anchor]),
+        LuaVersion::Luau,
         &FormatOptions::default(),
-    );
-    assert!(
-        spaced_output.contains("local a = 1\n\nlocal b = 2"),
-        "requested blank missing: {spaced_output:?}"
+        "\
+local a = 1
+
+local b = 2
+",
     );
 }
 
@@ -626,9 +844,7 @@ fn requested_blank_lines_separate_stmts() {
 fn empty_block_formats_to_parseable_output() {
     let synth = Synth::new();
     let block = synth.block(vec![], None);
-    let output = format_block(&block, Comments::none(), &FormatOptions::default());
-    let reparsed = luck_parser::parse(&output, LuaVersion::Luau);
-    assert!(reparsed.errors.is_empty(), "empty block produced unparseable output: {output:?}");
+    assert_format_block(&block, LuaVersion::Luau, "\n");
 }
 
 #[test]
@@ -636,7 +852,7 @@ fn last_stmt_only_roundtrips() {
     let synth = Synth::new();
     let return_stmt = synth.return_(vec![synth.number("42")]);
     let block = synth.block(vec![], Some(return_stmt));
-    assert_roundtrips(&block);
+    assert_format_block(&block, LuaVersion::Luau, "return 42\n");
 }
 
 #[test]
@@ -651,26 +867,112 @@ fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
         collapse_simple_statement: CollapseSimpleStatement::ConditionalOnly,
         ..FormatOptions::default()
     };
-
-    let output = format_block(&block, Comments::synthetic(vec![trailing]), &options);
-
-    assert_eq!(output, "if a then\n\tlocal x = 1 -- why\nend\n");
+    assert_format_block_with(
+        &block,
+        Comments::synthetic(vec![trailing]),
+        LuaVersion::Luau,
+        &options,
+        "\
+if a then
+\tlocal x = 1 -- why
+end
+",
+    );
 }
 
 #[test]
 fn multi_line_synthetic_comment_stays_a_comment() {
     let synth = Synth::new();
     let stmt = synth.local(&["x"], vec![synth.number("1")]);
-    let comment = SyntheticComment::leading(&stmt, "first line\ny = 2");
-    let block = synth.block(vec![stmt], None);
-
-    let output =
-        format_block(&block, Comments::synthetic(vec![comment]), &FormatOptions::default());
-
-    let reparsed = luck_parser::parse(&output, LuaVersion::Lua54);
-    assert_eq!(
-        reparsed.block.stmts.len(),
-        1,
-        "every line of a comment must stay commented out: {output:?}"
+    let comment = SyntheticComment::leading(
+        &stmt,
+        "\
+first line
+y = 2",
     );
+    let block = synth.block(vec![stmt], None);
+    assert_format_block_with(
+        &block,
+        Comments::synthetic(vec![comment]),
+        LuaVersion::Lua54,
+        &FormatOptions::default(),
+        "\
+-- first line
+-- y = 2
+local x = 1
+",
+    );
+}
+
+/// `return x`, with `x` under `wraps` unary operators.
+fn nested_negations(wraps: usize) -> Block {
+    let synth = Synth::new();
+    let mut expr = synth.name_expr("x");
+    for _ in 0..wraps {
+        expr = synth.unary_op(UnOp::Not, expr);
+    }
+    synth.block(vec![], Some(synth.return_(vec![expr])))
+}
+
+#[test]
+fn a_tree_at_the_nesting_cap_formats_and_reparses() {
+    let wraps = MAX_NESTING_DEPTH - 1;
+    let block = nested_negations(wraps);
+    assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
+    assert_format_block(&block, LuaVersion::Lua54, &format!("return {}x\n", "not ".repeat(wraps)));
+}
+
+#[test]
+fn a_tree_past_the_nesting_cap_is_an_error_instead_of_output_that_cannot_reparse() {
+    let block = nested_negations(MAX_NESTING_DEPTH);
+    let error = format_block(&block, Comments::none(), &FormatOptions::default())
+        .expect_err("the tree nests one level too deep");
+    assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
+}
+
+#[test]
+fn a_tree_far_past_the_nesting_cap_is_refused_without_walking_down_it() {
+    let synth = Synth::new();
+    let mut nested = synth.name_expr("x");
+    for _ in 0..200_000u32 {
+        nested = synth.parenthesized(nested);
+    }
+    let block = synth.block(vec![], Some(synth.return_(vec![nested])));
+    assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH + 1, "measuring stops there");
+    assert_eq!(format_block(&block, Comments::none(), &FormatOptions::default()).ok(), None);
+
+    // Dropped whole, a tree this deep recurses once per level.
+    let Some(LastStatement::Return(mut return_stmt)) = block.last_stmt.map(|last| *last) else {
+        panic!("the block ends in its return");
+    };
+    let mut expr = return_stmt.exprs.items.pop().expect("the return has its value");
+    while let Expression::Parenthesized(mut parenthesized) = expr {
+        expr = parenthesized.expr.take();
+    }
+}
+
+#[test]
+fn a_run_of_any_length_formats_as_one_level() {
+    let synth = Synth::new();
+    let (links, calls) = (50_000usize, 2_000usize);
+    let mut sum = synth.name_expr("x");
+    let mut methods = synth.name_expr("object");
+    for _ in 0..links {
+        sum = synth.binary_op(sum, BinOp::Add, synth.number("1"));
+    }
+    for _ in 0..calls {
+        methods = synth.method_call(methods, "next", Vec::new());
+    }
+    let block = synth.block(vec![], Some(synth.return_(vec![sum, methods])));
+    assert_eq!(block_nesting_depth(&block), 2);
+    let expected = format!(
+        "\
+return x
+{}\t\t+ 1,
+\tobject
+{}",
+        "\t\t+ 1\n".repeat(links.saturating_sub(1)),
+        "\t\t:next()\n".repeat(calls)
+    );
+    assert_format_block(&block, LuaVersion::Lua54, &expected);
 }

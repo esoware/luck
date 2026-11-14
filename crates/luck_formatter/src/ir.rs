@@ -7,7 +7,12 @@
 //! module, and `Formatter`'s `write_*` methods. Only this module pushes raw
 //! elements, which is what keeps every tag paired.
 
-use luck_token::CompactString;
+use core::ops::Range;
+
+use luck_ast::Block;
+use luck_token::{CompactString, Span};
+use rustc_hash::FxHashSet;
+use unicode_width::UnicodeWidthStr as _;
 
 use crate::comments::{Comments, CommentsCheckpoint};
 use crate::{FormatOptions, printer};
@@ -45,6 +50,10 @@ pub(crate) enum Tag {
     /// a call's function or table argument does. Closed by `EndGroup`.
     StartHuggedGroup(GroupId),
     EndGroup,
+    /// A group that doesn't fit flat where it starts tries the next line, one
+    /// indent deeper, before it breaks in place.
+    StartNextLineGroup(GroupId),
+    EndNextLineGroup,
     StartIndent,
     EndIndent,
     /// Content indented only when the referenced group expanded.
@@ -70,10 +79,11 @@ pub(crate) enum Tag {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FormatElement {
+    /// ASCII, so as many columns wide as it is long.
     Token(&'static str),
     /// May contain newlines (long strings); the printer measures from the last line.
-    Text(CompactString),
-    Verbatim(CompactString),
+    Text(CompactString, TextWidth),
+    Verbatim(CompactString, TextWidth),
     Space,
     Line(LineMode),
     /// Force every enclosing group to expand without printing anything.
@@ -82,6 +92,32 @@ pub(crate) enum FormatElement {
     /// can't swallow what follows.
     LineSuffixBoundary,
     Tag(Tag),
+}
+
+/// Taken once, as the text enters the stream, because the printer measures a
+/// text again for every layout it tries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TextWidth(u32);
+
+impl TextWidth {
+    const MULTILINE: Self = Self(u32::MAX);
+
+    fn of(text: &str) -> Self {
+        if text.contains('\n') {
+            return Self::MULTILINE;
+        }
+        // Without a line break, `width` counts every ASCII character as one
+        // column.
+        let columns = if text.is_ascii() { text.len() } else { text.width() };
+        // Any width past the line's compares the same, and `MULTILINE` takes
+        // `u32::MAX`.
+        Self(u32::try_from(columns).unwrap_or(u32::MAX).min(u32::MAX - 1))
+    }
+
+    /// `None` for text that spans lines.
+    pub(crate) fn columns(self) -> Option<usize> {
+        (self != Self::MULTILINE).then(|| usize::try_from(self.0).unwrap_or(usize::MAX))
+    }
 }
 
 pub(crate) trait Format {
@@ -140,6 +176,9 @@ pub(crate) struct Formatter {
     next_group_id: usize,
     options: FormatOptions,
     comments: Comments,
+    /// The spans of the blocks whose runs of requires print sorted, which
+    /// only [`crate::format()`] asks for.
+    sorting_blocks: FxHashSet<Span>,
 }
 
 impl Formatter {
@@ -148,7 +187,56 @@ impl Formatter {
         // still removes most realloc copies. Synthetic ASTs have no source
         // and start empty.
         let capacity = comments.source_text().map_or(0, |source| source.len().div_ceil(8));
-        Self { elements: Vec::with_capacity(capacity), next_group_id: 0, options, comments }
+        Self {
+            elements: Vec::with_capacity(capacity),
+            next_group_id: 0,
+            options,
+            comments,
+            sorting_blocks: FxHashSet::default(),
+        }
+    }
+
+    pub(crate) fn sorting_requires_in(mut self, blocks: FxHashSet<Span>) -> Self {
+        self.sorting_blocks = blocks;
+        self
+    }
+
+    pub(crate) fn sorts_requires_in(&self, block: &Block) -> bool {
+        self.sorting_blocks.contains(&block.span)
+    }
+
+    /// Where the next element goes, which an emitter notes to find what it
+    /// wrote.
+    pub(crate) const fn element_count(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// Prints the statements written to `slices`, element ranges in stream
+    /// order, in `order`, which indexes `slices`. What lies between two of
+    /// them stays in place.
+    pub(crate) fn reorder(&mut self, slices: &[Range<usize>], order: &[usize]) {
+        let (Some(first), Some(last)) = (slices.first(), slices.last()) else {
+            return;
+        };
+        let tail = self.elements.split_off(last.end);
+        let mut written = self.elements.split_off(first.start).into_iter();
+        let mut gaps = Vec::with_capacity(slices.len());
+        let mut pieces = Vec::with_capacity(slices.len());
+        let mut position = first.start;
+        for slice in slices {
+            gaps.push(
+                written.by_ref().take(slice.start.saturating_sub(position)).collect::<Vec<_>>(),
+            );
+            pieces.push(written.by_ref().take(slice.len()).collect::<Vec<_>>());
+            position = slice.end;
+        }
+        for (gap, &i) in gaps.into_iter().zip(order) {
+            self.elements.extend(gap);
+            if let Some(piece) = pieces.get_mut(i) {
+                self.elements.append(piece);
+            }
+        }
+        self.elements.extend(tail);
     }
 
     pub(crate) const fn options(&self) -> &FormatOptions {
@@ -177,13 +265,17 @@ impl Formatter {
     /// Moves `content` into the stream, where a reusable [`Format`] value
     /// would have to copy it.
     pub(crate) fn write_text(&mut self, content: impl Into<CompactString>) {
-        self.elements.push(FormatElement::Text(content.into()));
+        let text = content.into();
+        let width = TextWidth::of(&text);
+        self.elements.push(FormatElement::Text(text, width));
     }
 
     /// Text ending in a line break leaves the next line to the printer's
     /// indent. Any other starts at its own column.
     pub(crate) fn write_verbatim(&mut self, content: impl Into<CompactString>) {
-        self.elements.push(FormatElement::Verbatim(content.into()));
+        let text = content.into();
+        let width = TextWidth::of(&text);
+        self.elements.push(FormatElement::Verbatim(text, width));
     }
 
     /// Writes a space and `text` as a line suffix, printed just before the
@@ -195,7 +287,7 @@ impl Formatter {
     pub(crate) fn write_line_suffix(&mut self, text: CompactString) {
         self.push(FormatElement::Tag(Tag::StartLineSuffix));
         self.push(FormatElement::Space);
-        self.push(FormatElement::Text(text));
+        self.write_text(text);
         self.push(FormatElement::Tag(Tag::EndLineSuffix));
     }
 
@@ -244,6 +336,7 @@ impl Format for StaticToken {
 }
 
 pub(crate) const fn token(content: &'static str) -> StaticToken {
+    debug_assert!(content.is_ascii(), "a token is measured by its length");
     StaticToken(content)
 }
 
@@ -285,6 +378,46 @@ where
     })
 }
 
+/// `count` groups, each inside the one before, all opened before `content`.
+/// It ends them innermost first through the [`OpenGroups`] it gets, and any it
+/// leaves open end after it.
+///
+/// Laid out this way, the groups wrap what they share at the front, as a
+/// method chain does its receiver, without nesting a call per group.
+pub(crate) fn nested_groups<Content>(count: usize, content: Content) -> impl Format
+where
+    Content: Fn(&mut Formatter, &mut OpenGroups),
+{
+    format_with(move |f| {
+        for _ in 0..count {
+            let id = f.group_id();
+            f.push(FormatElement::Tag(Tag::StartGroup(id)));
+        }
+        let mut groups = OpenGroups { open: count };
+        content(f, &mut groups);
+        for _ in 0..groups.open {
+            f.push(FormatElement::Tag(Tag::EndGroup));
+        }
+    })
+}
+
+/// The groups of a [`nested_groups`] still open.
+#[derive(Debug)]
+pub(crate) struct OpenGroups {
+    open: usize,
+}
+
+impl OpenGroups {
+    /// Ends the innermost group still open. Content between ends has to
+    /// close every group of its own first.
+    pub(crate) fn end_innermost(&mut self, f: &mut Formatter) {
+        if let Some(remaining) = self.open.checked_sub(1) {
+            self.open = remaining;
+            f.push(FormatElement::Tag(Tag::EndGroup));
+        }
+    }
+}
+
 /// Group with a caller-allocated id, so other elements can reference its
 /// break decision via `if_group_breaks`.
 pub(crate) fn group_with_id<T>(id: GroupId, content: T) -> impl Format
@@ -295,6 +428,19 @@ where
         f.push(FormatElement::Tag(Tag::StartGroup(id)));
         content.fmt(f);
         f.push(FormatElement::Tag(Tag::EndGroup));
+    })
+}
+
+/// See [`Tag::StartNextLineGroup`].
+pub(crate) fn next_line_group<T>(content: T) -> impl Format
+where
+    T: Format,
+{
+    format_with(move |f| {
+        let id = f.group_id();
+        f.push(FormatElement::Tag(Tag::StartNextLineGroup(id)));
+        content.fmt(f);
+        f.push(FormatElement::Tag(Tag::EndNextLineGroup));
     })
 }
 

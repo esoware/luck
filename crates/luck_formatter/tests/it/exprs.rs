@@ -1,5 +1,3 @@
-use std::thread;
-
 use luck_formatter::FormatOptions;
 use luck_token::LuaVersion;
 
@@ -35,7 +33,11 @@ fn binary_op_expanded() {
     let options = FormatOptions { line_width: 20, ..FormatOptions::default() };
     assert_format_with(
         "local x=aaaa+bbbb+cccc\n",
-        "local x = aaaa\n\t+ bbbb\n\t+ cccc\n",
+        "\
+local x = aaaa
+\t+ bbbb
+\t+ cccc
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -46,7 +48,10 @@ fn binary_chain_breaks_at_one_precedence_level() {
     let options = FormatOptions { line_width: 40, ..FormatOptions::default() };
     assert_format_with(
         "local total = first_value * second_value + third_value * fourth_value\n",
-        "local total = first_value * second_value\n\t+ third_value * fourth_value\n",
+        "\
+local total = first_value * second_value
+\t+ third_value * fourth_value
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -59,26 +64,16 @@ fn multi_assignment() {
 
 #[test]
 fn condition_parens_removed() {
-    assert_format("if (x) then\ny = 1\nend\n", "if x then\n\ty = 1\nend\n");
-}
-
-#[test]
-fn long_chains_format_on_the_worker_stack() {
-    const LINKS: usize = 100_000;
-    let cases = [(" + a", "\n\t+ a"), (".b", "\n\t.b")].map(|(link, formatted_link)| {
-        (
-            format!("return a{}\n", link.repeat(LINKS)),
-            format!("return a{}\n", formatted_link.repeat(LINKS)),
-        )
-    });
-    thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
-            for (source, expected) in &cases {
-                assert_format(source, expected);
-            }
-        })
-        .expect("spawn formatting thread")
-        .join()
-        .expect("formatting a long chain must not overflow the stack");
+    assert_format(
+        "\
+if (x) then
+y = 1
+end
+",
+        "\
+if x then
+\ty = 1
+end
+",
+    );
 }

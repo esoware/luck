@@ -17,7 +17,7 @@ pub struct Dependency {
 
 #[derive(Debug, Clone)]
 pub struct ModuleInfo {
-    /// The canonical path, in the [`normalize_path`](luck_core::normalize_path)
+    /// The canonical path, in the [`normalize_path`](luck_resolver::normalize_path)
     /// form, which keys the graph.
     pub path: String,
     pub source: String,

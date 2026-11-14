@@ -6,7 +6,7 @@ Foundation types for the luck toolchain: spans, tokens, version flags, and the u
 
 Every other luck crate depends on `luck_token`. It defines the building blocks that flow through the compiler pipeline: positions in source, language variant flags, the token shape produced by the lexer, the operators the AST stores, the comment shape attached separately from the AST, and the single error type all stages emit. Every item is exported from the crate root.
 
-The crate has zero internal dependencies. Its only external dependency is `compact_str` for inline string storage.
+The crate has zero internal dependencies. Its external dependencies are `compact_str` for inline string storage and `memchr` for byte searches.
 
 ## Key features
 

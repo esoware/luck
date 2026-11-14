@@ -1,9 +1,9 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Literal};
+use luck_ast::{Expression, FunctionArgs, Literal};
 use luck_token::{LuaVersion, Span, Token, TokenKind, index_to_offset, short_string_body};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 /// Flags backslash escapes in short strings that the dialect doesn't define,
 /// which Lua 5.1 and Luau read as the bare character.
@@ -43,14 +43,9 @@ impl NodeRule for BadStringEscape {
         }
     }
 
-    fn on_call(
-        &self,
-        call: &FunctionCall,
-        _position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let FunctionArgs::StringLiteral(literal) = &call.args {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let call = site.call;
+        if let FunctionArgs::StringLiteral(literal) = call.args {
             check_literal(literal, context.semantic.version, findings);
         }
     }
@@ -217,13 +212,22 @@ mod tests {
 
     #[test]
     fn ignores_escape_inside_line_comment() {
-        let diags = run("-- a \\q comment\nlocal x = 1\n", LuaVersion::Lua51);
+        let diags = run(
+            "\
+-- a \\q comment
+local x = 1
+",
+            LuaVersion::Lua51,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_escapes_between_comments() {
-        let source = "-- \"\\q\nlocal x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e\n";
+        let source = "\
+-- \"\\q
+local x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e
+";
         let diags = run(source, LuaVersion::Lua51);
         let flagged: Vec<&str> = diags.iter().map(|diag| diag.span.text(source)).collect();
         assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");

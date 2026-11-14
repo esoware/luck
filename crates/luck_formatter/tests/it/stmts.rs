@@ -1,51 +1,139 @@
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_token::LuaVersion;
 
-use crate::common::{assert_format, assert_format_with, format_once, formatted};
+use crate::common::{assert_format, assert_format_with};
 
 #[test]
 fn if_stmt() {
     assert_format(
-        "if x then\ny=1\nelseif z then\ny=2\nelse\ny=3\nend\n",
-        "if x then\n\ty = 1\nelseif z then\n\ty = 2\nelse\n\ty = 3\nend\n",
+        "\
+if x then
+y=1
+elseif z then
+y=2
+else
+y=3
+end
+",
+        "\
+if x then
+\ty = 1
+elseif z then
+\ty = 2
+else
+\ty = 3
+end
+",
     );
 }
 
 #[test]
 fn while_loop() {
-    assert_format("while x do\ny=1\nend\n", "while x do\n\ty = 1\nend\n");
+    assert_format(
+        "\
+while x do
+y=1
+end
+",
+        "\
+while x do
+\ty = 1
+end
+",
+    );
 }
 
 #[test]
 fn repeat_until() {
-    assert_format("repeat\nx=1\nuntil done\n", "repeat\n\tx = 1\nuntil done\n");
+    assert_format(
+        "\
+repeat
+x=1
+until done
+",
+        "\
+repeat
+\tx = 1
+until done
+",
+    );
 }
 
 #[test]
 fn numeric_for() {
-    assert_format("for i=1,10 do\nx=i\nend\n", "for i = 1, 10 do\n\tx = i\nend\n");
+    assert_format(
+        "\
+for i=1,10 do
+x=i
+end
+",
+        "\
+for i = 1, 10 do
+\tx = i
+end
+",
+    );
 }
 
 #[test]
 fn numeric_for_with_step() {
-    assert_format("for i=1,10,2 do\nx=i\nend\n", "for i = 1, 10, 2 do\n\tx = i\nend\n");
+    assert_format(
+        "\
+for i=1,10,2 do
+x=i
+end
+",
+        "\
+for i = 1, 10, 2 do
+\tx = i
+end
+",
+    );
 }
 
 #[test]
 fn generic_for() {
-    assert_format("for k,v in pairs(t) do\nx=v\nend\n", "for k, v in pairs(t) do\n\tx = v\nend\n");
+    assert_format(
+        "\
+for k,v in pairs(t) do
+x=v
+end
+",
+        "\
+for k, v in pairs(t) do
+\tx = v
+end
+",
+    );
 }
 
 #[test]
 fn do_block() {
-    assert_format("do\nx=1\nend\n", "do\n\tx = 1\nend\n");
+    assert_format(
+        "\
+do
+x=1
+end
+",
+        "\
+do
+\tx = 1
+end
+",
+    );
 }
 
 #[test]
 fn goto_and_label() {
     assert_format_with(
-        "goto done\n::done::\n",
-        "goto done\n::done::\n",
+        "\
+goto done
+::done::
+",
+        "\
+goto done
+::done::
+",
         LuaVersion::Lua52,
         &FormatOptions::default(),
     );
@@ -58,7 +146,15 @@ fn semicolons_stripped() {
 
 #[test]
 fn single_newline_between_stmts_stays_single() {
-    assert_format("local a = 1\nlocal b = 2", "local a = 1\nlocal b = 2\n");
+    assert_format(
+        "\
+local a = 1
+local b = 2",
+        "\
+local a = 1
+local b = 2
+",
+    );
 }
 
 #[test]
@@ -71,14 +167,22 @@ fn paren_stmt_after_a_call_keeps_its_semicolon_guard() {
     // A `(`-starting statement must not glue onto the previous call.
     // The `;` in the input is what makes these parse as two statements;
     // without it the parser reads one chained call.
-    let output = formatted("f();(g)()");
-    assert!(output.contains(";("));
+    assert_format(
+        "f();(g)()",
+        "\
+f()
+;(g)()
+",
+    );
 }
 
 #[test]
 fn empty_stmt_stripped() {
     assert_format_with(
-        "local x = 1\n;\n",
+        "\
+local x = 1
+;
+",
         "local x = 1\n",
         LuaVersion::Lua52,
         &FormatOptions::default(),
@@ -103,8 +207,16 @@ fn spaces_indent() {
         ..FormatOptions::default()
     };
     assert_format_with(
-        "if x then\ny=1\nend\n",
-        "if x then\n  y = 1\nend\n",
+        "\
+if x then
+y=1
+end
+",
+        "\
+if x then
+  y = 1
+end
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -140,7 +252,10 @@ fn long_assignment_values_break() {
     let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
     assert_format_with(
         "local a, b = very_long_value_1, very_long_value_2\n",
-        "local a, b = very_long_value_1,\n\tvery_long_value_2\n",
+        "\
+local a, b = very_long_value_1,
+\tvery_long_value_2
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -150,8 +265,18 @@ fn long_assignment_values_break() {
 fn long_if_condition_breaks() {
     let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
     assert_format_with(
-        "if very_long_condition_name then\nx = 1\nend\n",
-        "if\n\tvery_long_condition_name\nthen\n\tx = 1\nend\n",
+        "\
+if very_long_condition_name then
+x = 1
+end
+",
+        "\
+if
+\tvery_long_condition_name
+then
+\tx = 1
+end
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -161,14 +286,44 @@ fn long_if_condition_breaks() {
 fn long_condition_chain_breaks_level_with_its_first_operand() {
     let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
     assert_format_with(
-        "if first_condition and second_condition and third then\nx = 1\nelseif (other_condition or another_condition) then\nx = 2\nend\n",
-        "if\n\tfirst_condition\n\tand second_condition\n\tand third\nthen\n\tx = 1\nelseif\n\tother_condition\n\tor another_condition\nthen\n\tx = 2\nend\n",
+        "\
+if first_condition and second_condition and third then
+x = 1
+elseif (other_condition or another_condition) then
+x = 2
+end
+",
+        "\
+if
+\tfirst_condition
+\tand second_condition
+\tand third
+then
+\tx = 1
+elseif
+\tother_condition
+\tor another_condition
+then
+\tx = 2
+end
+",
         LuaVersion::Lua54,
         &options,
     );
     assert_format_with(
-        "while first_condition and second_condition do\nstep()\nend\n",
-        "while\n\tfirst_condition\n\tand second_condition\ndo\n\tstep()\nend\n",
+        "\
+while first_condition and second_condition do
+step()
+end
+",
+        "\
+while
+\tfirst_condition
+\tand second_condition
+do
+\tstep()
+end
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -178,8 +333,20 @@ fn long_condition_chain_breaks_level_with_its_first_operand() {
 fn condition_breaks_between_comparisons_not_inside_them() {
     let options = FormatOptions { line_width: 40, ..FormatOptions::default() };
     assert_format_with(
-        "if phase == Phase.ShouldUpdate or phase == Phase.WillUpdate or phase == Phase.Render then\nx = 1\nend\n",
-        "if\n\tphase == Phase.ShouldUpdate\n\tor phase == Phase.WillUpdate\n\tor phase == Phase.Render\nthen\n\tx = 1\nend\n",
+        "\
+if phase == Phase.ShouldUpdate or phase == Phase.WillUpdate or phase == Phase.Render then
+x = 1
+end
+",
+        "\
+if
+\tphase == Phase.ShouldUpdate
+\tor phase == Phase.WillUpdate
+\tor phase == Phase.Render
+then
+\tx = 1
+end
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -189,8 +356,21 @@ fn condition_breaks_between_comparisons_not_inside_them() {
 fn chain_nested_in_a_condition_indents_under_its_operator() {
     let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
     assert_format_with(
-        "if alpha_condition or beta_condition and gamma_condition and delta_condition then\nx = 1\nend\n",
-        "if\n\talpha_condition\n\tor beta_condition\n\t\tand gamma_condition\n\t\tand delta_condition\nthen\n\tx = 1\nend\n",
+        "\
+if alpha_condition or beta_condition and gamma_condition and delta_condition then
+x = 1
+end
+",
+        "\
+if
+\talpha_condition
+\tor beta_condition
+\t\tand gamma_condition
+\t\tand delta_condition
+then
+\tx = 1
+end
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -200,8 +380,17 @@ fn chain_nested_in_a_condition_indents_under_its_operator() {
 fn long_until_condition_chain_stays_indented() {
     let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
     assert_format_with(
-        "repeat\nstep()\nuntil first_condition and second_condition\n",
-        "repeat\n\tstep()\nuntil first_condition\n\tand second_condition\n",
+        "\
+repeat
+step()
+until first_condition and second_condition
+",
+        "\
+repeat
+\tstep()
+until first_condition
+\tand second_condition
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -238,18 +427,107 @@ fn leading_attribute_formats_as_distributed_trailing() {
 
 #[test]
 fn function_body_of_only_semicolons_formats_like_an_empty_body() {
-    assert_eq!(
-        format_once("function f() ; end\n", LuaVersion::Lua54, &FormatOptions::default()),
-        "function f() end\n",
-        "a dropped `;` must leave the same output as an empty body"
-    );
+    assert_format("function f() ; end\n", "function f() end\n");
 }
 
 #[test]
 fn empty_do_block_has_no_blank_line() {
-    assert_eq!(
-        format_once("do end\n", LuaVersion::Lua54, &FormatOptions::default()),
-        "do\nend\n",
-        "`block_newline_gaps = never` strips blank lines at the start and end of every block body"
+    assert_format(
+        "do end\n",
+        "\
+do
+end
+",
     );
+}
+
+fn narrow() -> FormatOptions {
+    FormatOptions { line_width: 30, ..FormatOptions::default() }
+}
+
+#[test]
+fn assigned_values_move_to_the_next_line_when_only_it_fits_them() {
+    for (source, expected, version) in [
+        (
+            "local alpha, beta = gamma + delta, 1\n",
+            "\
+local alpha, beta =
+\tgamma + delta, 1
+",
+            LuaVersion::Lua54,
+        ),
+        (
+            "alpha.beta.gamma = (x - 1) / 99\n",
+            "\
+alpha.beta.gamma =
+\t(x - 1) / 99
+",
+            LuaVersion::Lua54,
+        ),
+        (
+            "global alpha_value = (x - 1) / 99\n",
+            "\
+global alpha_value =
+\t(x - 1) / 99
+",
+            LuaVersion::Lua55,
+        ),
+        (
+            "counter_value_x += (x - 1) / 99\n",
+            "\
+counter_value_x +=
+\t(x - 1) / 99
+",
+            LuaVersion::Luau,
+        ),
+    ] {
+        assert_format_with(source, expected, version, &narrow());
+    }
+}
+
+#[test]
+fn assigned_values_that_fit_neither_line_hang_from_the_equals() {
+    assert_format_with(
+        "local alpha = first_operand_name + second_operand_name\n",
+        "\
+local alpha = first_operand_name
+\t+ second_operand_name
+",
+        LuaVersion::Lua54,
+        &narrow(),
+    );
+}
+
+#[test]
+fn a_lone_table_function_or_call_stays_on_the_equals_line() {
+    for (source, expected) in [
+        (
+            "local value = { first = 1, second = 2 }\n",
+            "\
+local value = {
+\tfirst = 1,
+\tsecond = 2,
+}
+",
+        ),
+        (
+            "local value = function() return 1 end\n",
+            "\
+local value = function()
+\treturn 1
+end
+",
+        ),
+        (
+            "local value = call_something(first, second)\n",
+            "\
+local value = call_something(
+\tfirst,
+\tsecond
+)
+",
+        ),
+    ] {
+        assert_format_with(source, expected, LuaVersion::Lua54, &narrow());
+    }
 }

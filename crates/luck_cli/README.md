@@ -4,7 +4,7 @@ Command-line interface for the luck bundler, minifier, formatter, linter, and la
 
 ## Overview
 
-`luck_cli` is the binary crate that wires the individual `luck_*` crates (bundler, minifier, formatter, linter, LSP) into a `clap`-based CLI. It runs each command on a worker thread with a 16 MB stack, since deeply nested ASTs can overflow a default one.
+`luck_cli` is the binary crate that wires the individual `luck_*` crates (bundler, minifier, formatter, linter, LSP) into a `clap`-based CLI.
 
 ## Key features
 
@@ -43,21 +43,21 @@ luck lsp [--socket <port>]                   # Run the language server over stdi
 | `minify` | `-c/--config`, `--fold-constants`/`--no-fold-constants`, `--rename-locals`/`--no-rename-locals`, ... (per-transform), `--rename-globals`/`--no-rename-globals`, `--stats` |
 | `graph` | `--format` (json / dot), `-s/--search-path`, `--dynamic-require` |
 | `check` | `-c/--config`, `--no-error-on-unmatched-pattern` |
-| `fmt` | `--write`, `--check`, `--list-different`, `--no-editorconfig`, `--stdin-filepath`, `--range-start`/`--range-end`, `--verify`, `-c/--config`, `--no-error-on-unmatched-pattern` (layout options live in `luck.json`/`.editorconfig`, not flags) |
+| `fmt` | `--write`, `--check`, `--list-different`, `--no-editorconfig`, `--stdin-filepath`, `--range-start`/`--range-end`, `-c/--config`, `--no-error-on-unmatched-pattern` (layout options live in `luck.json`/`.editorconfig`, not flags) |
 | `lint` | `--fix`, `-f/--format` (default / json / github), `-A/--allow`, `-W/--warn`, `-D/--deny` per rule or category, `--global`, `--max-warnings`, `--deny-warnings`, `--silent`, `--rules`, `--print-config`, `--stdin-filepath`, `-c/--config`, `--no-error-on-unmatched-pattern` |
 | `build` | `--release`, `--dev`, `-P/--profile <name>`, `-w/--watch`, `--dry-run`, `-c/--config` |
 
 ## Architecture
 
-### Worker thread
+### Stack
 
-`main.rs` runs the command on a thread with a 16 MB stack and joins it. The OS sizes the main thread's stack (usually 8 MB on Linux and macOS, 1 MB on Windows), and Rust gives other threads 2 MB by default, which isn't always enough for deeply nested ASTs. `luck lsp` gives its tokio worker threads the same 16 MB, but the rayon threads that `check`, `lint`, and `fmt` spread files across keep the 2 MB default.
+Every command runs on the stack its thread starts with: the main thread's, which the OS sizes (1 MB on Windows, usually 8 MB on Linux and macOS), and the 2 MB Rust gives the rayon threads that `check`, `lint`, and `fmt` spread files across and the tokio threads `luck lsp` serves on. Every stage fits in 1 MB, however deep the source nests, which `luck_testgen`'s small-stack sources check for each stage crate, unoptimized, and this crate's own tests check through the binary.
 
 ### Module layout
 
 | File | Purpose |
 |------|---------|
-| `main.rs` | Crate root: module wiring, the global allocator, and the entry point that spawns the 16 MB-stack worker thread |
+| `main.rs` | Crate root: module wiring, the global allocator, and the entry point |
 | `exit.rs` | Exit codes (`Exit`) and the error reports that end a run with one |
 | `verbosity.rs` | `Verbosity`, set by `--quiet` |
 | `cli.rs` | Top-level `clap` model (`Cli`/`Command`) and dispatch |

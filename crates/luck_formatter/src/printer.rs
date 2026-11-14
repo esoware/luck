@@ -12,6 +12,10 @@
 //! fit flat. It stays flat while hugged groups expand in its place: first
 //! only those a forced break expands anyway, then all of them. That is how
 //! `f(a, function()` keeps its head on one line.
+//!
+//! A next-line group that doesn't fit flat where it starts is measured again
+//! from the start of the next line, one indent deeper. If it fits there, the
+//! printer breaks the line before it and prints it flat.
 
 use core::mem::take;
 
@@ -58,6 +62,7 @@ pub(crate) fn print(
         modes: Vec::new(),
         group_modes: vec![None; group_count],
         hugs: vec![Vec::new(); group_count],
+        next_line_moves: Vec::new(),
         suffixes: Vec::new(),
         is_pending_space: false,
         is_pending_indent: !base_indent.is_empty(),
@@ -77,16 +82,21 @@ enum Region {
 impl Region {
     const fn opens(self, element: &FormatElement) -> bool {
         match self {
-            Self::Group => {
-                matches!(element, FormatElement::Tag(Tag::StartGroup(_) | Tag::StartHuggedGroup(_)))
-            }
+            Self::Group => matches!(
+                element,
+                FormatElement::Tag(
+                    Tag::StartGroup(_) | Tag::StartHuggedGroup(_) | Tag::StartNextLineGroup(_)
+                )
+            ),
             Self::Entry => matches!(element, FormatElement::Tag(Tag::StartEntry)),
         }
     }
 
     const fn closes(self, element: &FormatElement) -> bool {
         match self {
-            Self::Group => matches!(element, FormatElement::Tag(Tag::EndGroup)),
+            Self::Group => {
+                matches!(element, FormatElement::Tag(Tag::EndGroup | Tag::EndNextLineGroup))
+            }
             Self::Entry => matches!(element, FormatElement::Tag(Tag::EndEntry)),
         }
     }
@@ -133,6 +143,9 @@ struct Printer {
     group_modes: Vec<Option<PrintMode>>,
     /// The hugged groups each group holds, in order, by the holder's id.
     hugs: Vec<Vec<Hug>>,
+    /// Per open next-line group, whether it moved to the next line, so its
+    /// end takes back the indent it added.
+    next_line_moves: Vec<bool>,
     suffixes: Vec<FormatElement>,
     is_pending_space: bool,
     is_pending_indent: bool,
@@ -154,13 +167,13 @@ fn propagate_expand(
     for (index, element) in elements.iter().enumerate() {
         let content_start = index.saturating_add(1);
         match element {
-            FormatElement::Tag(Tag::StartGroup(id)) => {
+            FormatElement::Tag(Tag::StartGroup(id) | Tag::StartNextLineGroup(id)) => {
                 open_groups.push(OpenGroup { id: *id, content_start, is_hugged: false });
             }
             FormatElement::Tag(Tag::StartHuggedGroup(id)) => {
                 open_groups.push(OpenGroup { id: *id, content_start, is_hugged: true });
             }
-            FormatElement::Tag(Tag::EndGroup) => {
+            FormatElement::Tag(Tag::EndGroup | Tag::EndNextLineGroup) => {
                 open_groups.pop();
             }
             FormatElement::Tag(Tag::StartLineSuffix) => is_in_suffix = true,
@@ -191,8 +204,8 @@ fn propagate_expand(
                     mark_expanded(&open_groups, group_modes);
                 }
             }
-            FormatElement::Text(content) | FormatElement::Verbatim(content) => {
-                if !is_in_suffix && content.contains('\n') {
+            FormatElement::Text(_, width) | FormatElement::Verbatim(_, width) => {
+                if !is_in_suffix && width.columns().is_none() {
                     mark_expanded(&open_groups, group_modes);
                 }
             }
@@ -238,9 +251,9 @@ impl Printer {
         rest: &'elements [FormatElement],
     ) -> &'elements [FormatElement] {
         match element {
-            FormatElement::Token(content) => self.emit_text(content),
-            FormatElement::Text(content) => self.emit_text(content),
-            FormatElement::Verbatim(content) => self.emit_verbatim(content),
+            FormatElement::Token(content) => self.emit_text(content, Some(content.len())),
+            FormatElement::Text(content, width) => self.emit_text(content, width.columns()),
+            FormatElement::Verbatim(content, width) => self.emit_verbatim(content, width.columns()),
             FormatElement::Space => self.is_pending_space = true,
             FormatElement::Line(mode) => self.print_line(*mode),
             FormatElement::ExpandParent => {}
@@ -268,6 +281,40 @@ impl Printer {
                     *group_mode = Some(mode);
                 }
                 self.modes.push(mode);
+            }
+            Tag::StartNextLineGroup(id) => {
+                let next_line_indent =
+                    self.indent_columns().saturating_add(self.columns_per_indent);
+                let (mode, is_moved) = match self.group_mode(id) {
+                    Some(forced) => (forced, false),
+                    None if self.current_mode() == PrintMode::Flat
+                        || self.fits(rest, Region::Group, 0) =>
+                    {
+                        (PrintMode::Flat, false)
+                    }
+                    None if self.fits_from(rest, Region::Group, next_line_indent, 1) => {
+                        (PrintMode::Flat, true)
+                    }
+                    None => (PrintMode::Expanded, false),
+                };
+                if let Some(group_mode) = self.group_modes.get_mut(id.index()) {
+                    *group_mode = Some(mode);
+                }
+                if is_moved {
+                    self.emit_newline(false);
+                    self.indent_level = self.indent_level.saturating_add(1);
+                    // Written now, so an indent inside the flat content
+                    // can't deepen this line.
+                    self.flush_indent();
+                }
+                self.next_line_moves.push(is_moved);
+                self.modes.push(mode);
+            }
+            Tag::EndNextLineGroup => {
+                self.modes.pop();
+                if self.next_line_moves.pop() == Some(true) {
+                    self.indent_level = self.indent_level.saturating_sub(1);
+                }
             }
             Tag::StartFlat => self.modes.push(PrintMode::Flat),
             Tag::EndGroup | Tag::EndFlat => {
@@ -412,8 +459,8 @@ impl Printer {
                     remaining = entry_remaining.get(1..).unwrap_or_default();
                 }
                 FormatElement::Token(_)
-                | FormatElement::Text(_)
-                | FormatElement::Verbatim(_)
+                | FormatElement::Text(..)
+                | FormatElement::Verbatim(..)
                 | FormatElement::Space
                 | FormatElement::ExpandParent
                 | FormatElement::LineSuffixBoundary
@@ -506,13 +553,13 @@ impl Printer {
             }
             match element {
                 FormatElement::Token(content) => {
-                    used_width = used_width.saturating_add(content.width());
+                    used_width = used_width.saturating_add(content.len());
                 }
-                FormatElement::Text(content) | FormatElement::Verbatim(content) => {
-                    if content.contains('\n') {
+                FormatElement::Text(_, width) | FormatElement::Verbatim(_, width) => {
+                    let Some(columns) = width.columns() else {
                         return false;
-                    }
-                    used_width = used_width.saturating_add(content.width());
+                    };
+                    used_width = used_width.saturating_add(columns);
                 }
                 FormatElement::Space | FormatElement::Line(LineMode::SoftOrSpace) => {
                     used_width = used_width.saturating_add(1);
@@ -542,7 +589,8 @@ impl Printer {
         true
     }
 
-    fn emit_text(&mut self, content: &str) {
+    /// `columns` is `None` for text that spans lines.
+    fn emit_text(&mut self, content: &str, columns: Option<usize>) {
         if self.is_pending_indent {
             self.flush_indent();
         }
@@ -552,22 +600,22 @@ impl Printer {
             self.display_column = self.display_column.saturating_add(1);
         }
         self.output.print_str(content);
-        match content.rsplit_once('\n') {
-            Some((_, last_line)) => {
-                // Multi-line text: the column restarts from its last line.
-                self.line_start = self.output.len().saturating_sub(last_line.len());
-                self.display_column = last_line.width();
-            }
-            None => self.display_column = self.display_column.saturating_add(content.width()),
+        if let Some(width) = columns {
+            self.display_column = self.display_column.saturating_add(width);
+        } else {
+            // The column restarts from the last line.
+            let last_line = content.rsplit_once('\n').map_or(content, |(_, last_line)| last_line);
+            self.line_start = self.output.len().saturating_sub(last_line.len());
+            self.display_column = last_line.width();
         }
     }
 
     /// Copy source text, which brings its own indentation and keeps any
     /// trailing whitespace. Text ending in a line break leaves the next line to
     /// the printer's indent.
-    fn emit_verbatim(&mut self, content: &str) {
+    fn emit_verbatim(&mut self, content: &str, columns: Option<usize>) {
         self.is_pending_indent = false;
-        self.emit_text(content);
+        self.emit_text(content, columns);
         self.line_start = self.output.len();
         self.is_pending_indent = content.ends_with(['\n', '\r']);
     }
@@ -595,12 +643,12 @@ impl Printer {
         let mut suffixes = take(&mut self.suffixes);
         for element in &suffixes {
             match element {
-                FormatElement::Token(content) => self.emit_text(content),
-                FormatElement::Text(content) => self.emit_text(content),
+                FormatElement::Token(content) => self.emit_text(content, Some(content.len())),
+                FormatElement::Text(content, width) => self.emit_text(content, width.columns()),
                 FormatElement::Space => self.is_pending_space = true,
                 // `Formatter::write_line_suffix` writes only a space and
                 // text, so nothing structural can reach a suffix body.
-                FormatElement::Verbatim(_)
+                FormatElement::Verbatim(..)
                 | FormatElement::Line(_)
                 | FormatElement::ExpandParent
                 | FormatElement::LineSuffixBoundary
@@ -724,7 +772,11 @@ mod tests {
             },
             80,
         );
-        assert!(output.starts_with("{\n    x"));
+        assert!(output.starts_with(
+            "\
+{
+    x"
+        ));
         assert!(output.ends_with("\n}"));
     }
 
@@ -743,7 +795,14 @@ mod tests {
             80,
         );
         // Both the inner and outer group must expand.
-        assert_eq!(output, "a(\n\n)\nb");
+        assert_eq!(
+            output,
+            "\
+a(
+
+)
+b"
+        );
     }
 
     #[test]
@@ -800,7 +859,12 @@ mod tests {
             },
             80,
         );
-        assert_eq!(output, "a\nb");
+        assert_eq!(
+            output,
+            "\
+a
+b"
+        );
     }
 
     #[test]
@@ -811,7 +875,13 @@ mod tests {
             },
             80,
         );
-        assert_eq!(output, "a\n\nb");
+        assert_eq!(
+            output,
+            "\
+a
+
+b"
+        );
     }
 
     #[test]
@@ -824,7 +894,12 @@ mod tests {
             },
             80,
         );
-        assert_eq!(output, "local x = 1 -- trailing\nlocal y = 2");
+        assert_eq!(
+            output,
+            "\
+local x = 1 -- trailing
+local y = 2"
+        );
     }
 
     fn tab_formatter(indent_width: u8) -> Formatter {
@@ -850,8 +925,20 @@ mod tests {
             (token("a"), indent((hard_line(), format_with(write_bracketed)))).fmt(&mut f);
             f.print("")
         };
-        assert_eq!(print(1), "a\n\t[yyyyyyy]");
-        assert_eq!(print(4), "a\n\t[\n\tyyyyyyy\n\t]");
+        assert_eq!(
+            print(1),
+            "\
+a
+\t[yyyyyyy]"
+        );
+        assert_eq!(
+            print(4),
+            "\
+a
+\t[
+\tyyyyyyy
+\t]"
+        );
     }
 
     #[test]
@@ -862,7 +949,13 @@ mod tests {
             f.print(base_indent)
         };
         assert_eq!(print(1, "\t"), "\t[yyyyyyy]");
-        assert_eq!(print(4, "\t"), "\t[\n\tyyyyyyy\n\t]");
+        assert_eq!(
+            print(4, "\t"),
+            "\
+\t[
+\tyyyyyyy
+\t]"
+        );
         assert_eq!(print(4, " "), " [yyyyyyy]");
     }
 
@@ -911,16 +1004,35 @@ mod tests {
     #[test]
     fn hugged_group_breaks_in_its_parents_place() {
         assert_eq!(print_document(write_hugged_braces, 19), "(a, { xxxx }, bbbb)");
-        assert_eq!(print_document(write_hugged_braces, 18), "(a, {\n    xxxx\n}, bbbb)");
+        assert_eq!(
+            print_document(write_hugged_braces, 18),
+            "\
+(a, {
+    xxxx
+}, bbbb)"
+        );
     }
 
     #[test]
     fn hugging_needs_its_closing_line_to_fit() {
         // `}, bbbb)` is eight columns.
-        assert_eq!(print_document(write_hugged_braces, 8), "(a, {\n    xxxx\n}, bbbb)");
+        assert_eq!(
+            print_document(write_hugged_braces, 8),
+            "\
+(a, {
+    xxxx
+}, bbbb)"
+        );
         assert_eq!(
             print_document(write_hugged_braces, 7),
-            "(\n    a,\n    {\n        xxxx\n    },\n    bbbb\n)"
+            "\
+(
+    a,
+    {
+        xxxx
+    },
+    bbbb
+)"
         );
     }
 
@@ -955,15 +1067,37 @@ mod tests {
             write_hugged_braces_and(f, block);
         };
         // `({ xxxx }, do` is thirteen columns.
-        assert_eq!(print_document(write, 13), "({ xxxx }, do\n    x\nend)");
-        assert_eq!(print_document(write, 12), "({\n    xxxx\n}, do\n    x\nend)");
+        assert_eq!(
+            print_document(write, 13),
+            "\
+({ xxxx }, do
+    x
+end)"
+        );
+        assert_eq!(
+            print_document(write, 12),
+            "\
+({
+    xxxx
+}, do
+    x
+end)"
+        );
     }
 
     #[test]
     fn hugged_groups_all_expand_when_none_is_forced_to() {
         let write = |f: &mut Formatter| write_hugged_braces_and(f, braces("yyyy"));
         assert_eq!(print_document(write, 20), "({ xxxx }, { yyyy })");
-        assert_eq!(print_document(write, 19), "({\n    xxxx\n}, {\n    yyyy\n})");
+        assert_eq!(
+            print_document(write, 19),
+            "\
+({
+    xxxx
+}, {
+    yyyy
+})"
+        );
     }
 
     #[test]
@@ -976,11 +1110,24 @@ mod tests {
             );
             write_hugging_list(f, hugged);
         };
-        assert_eq!(print_document(write_hugged_block, 80), "(a, do\n    x\nend, bbbb)");
+        assert_eq!(
+            print_document(write_hugged_block, 80),
+            "\
+(a, do
+    x
+end, bbbb)"
+        );
         // `(a, do` is six columns.
         assert_eq!(
             print_document(write_hugged_block, 5),
-            "(\n    a,\n    do\n        x\n    end,\n    bbbb\n)"
+            "\
+(
+    a,
+    do
+        x
+    end,
+    bbbb
+)"
         );
     }
 }

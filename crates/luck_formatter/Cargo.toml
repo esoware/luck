@@ -16,7 +16,6 @@ workspace = true
 
 [dependencies]
 luck_ast    = { workspace = true }
-luck_core   = { workspace = true }
 luck_lexer  = { workspace = true }
 luck_parser = { workspace = true }
 luck_token  = { workspace = true }
@@ -26,3 +25,5 @@ unicode-width = { workspace = true }
 
 [dev-dependencies]
 luck_testgen = { workspace = true }
+
+insta = { workspace = true }

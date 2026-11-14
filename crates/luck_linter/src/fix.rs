@@ -4,9 +4,9 @@ use core::error::Error;
 use core::fmt;
 use core::ops::Range;
 
-use luck_core::LintConfig;
 use luck_token::{Comment, LuaVersion, Span};
 
+use crate::config::LintConfig;
 use crate::diagnostic::LintDiagnostic;
 use crate::driver::lint;
 
@@ -185,9 +185,8 @@ fn fixpoint_within(
 
 #[cfg(test)]
 mod tests {
-    use luck_core::RuleLevel;
-
     use super::*;
+    use crate::config::RuleLevel;
     use crate::fixtures::diagnostic;
 
     fn diag_with_edit(start: u32, end: u32, replacement: &str) -> LintDiagnostic {
@@ -217,10 +216,17 @@ mod tests {
 
     #[test]
     fn applies_every_non_overlapping_fix() {
-        let source = "local foo = 1\nlocal bar = 2";
+        let source = "\
+local foo = 1
+local bar = 2";
         let diags = vec![diag_with_edit(6, 9, "_foo"), diag_with_edit(20, 23, "_bar")];
         let fixed = apply_fixes(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local _foo = 1\nlocal _bar = 2");
+        assert_eq!(
+            fixed,
+            "\
+local _foo = 1
+local _bar = 2"
+        );
     }
 
     #[test]
@@ -299,7 +305,9 @@ mod tests {
     #[test]
     fn fixpoint_returns_source_when_no_rule_fires() {
         let config = LintConfig::default();
-        let source = "local x = 1\nreturn x";
+        let source = "\
+local x = 1
+return x";
         let result = apply_fixes_fixpoint(source, LuaVersion::Lua54, &config);
         assert_eq!(result.expect("fixpoint"), source);
     }

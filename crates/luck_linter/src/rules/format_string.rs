@@ -1,6 +1,4 @@
-use luck_ast::{
-    Expression, FunctionArgs, FunctionCall, Literal, is_multi_value, unwrap_parentheses,
-};
+use luck_ast::{Call, Expression, FunctionArgs, Literal, is_multi_value, unwrap_parentheses};
 use luck_token::{LuaVersion, Span, short_string_body};
 
 use crate::call::dotted_callee;
@@ -10,7 +8,7 @@ use crate::format_pattern::{
     validate_os_date, validate_pack_format,
 };
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 /// Both `string.format("...", ...)` and `("..."):format(...)` are checked.
 /// So are literal `string.gsub` replacements and `os.date` formats.
@@ -29,21 +27,14 @@ impl NodeRule for FormatString {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_call(
-        &self,
-        call: &FunctionCall,
-        _position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let CallSite { call, callee: Some(_), .. } = *site else {
+            return;
+        };
         let semantic = context.semantic;
-        // A name filter first, since `resolve_callee` runs a lookup.
         let Some(dsl) = DslKind::of_call(call) else {
             return;
         };
-        if semantic.resolve_callee(call).is_none() {
-            return;
-        }
         findings.extend(check_dsl_literal(call, dsl, semantic.version));
         if dsl == DslKind::Gsub {
             findings.extend(check_gsub_replacement(call, semantic.version));
@@ -69,8 +60,8 @@ enum DslKind {
 }
 
 impl DslKind {
-    fn of_call(call: &FunctionCall) -> Option<Self> {
-        if let Some(method) = &call.method {
+    fn of_call(call: Call<'_>) -> Option<Self> {
+        if let Some(method) = call.method {
             return Self::of_string_function(method.identifier()?);
         }
         let (root, field) = dotted_callee(call)?;
@@ -109,20 +100,22 @@ impl DslKind {
 /// `None` when string or table call syntax leaves no list to count.
 ///
 /// In a method call the receiver is the format, but the subject of a pattern.
-fn dsl_literal(call: &FunctionCall, dsl: DslKind) -> Option<(&Literal, Option<&[Expression]>)> {
+fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal, Option<&[Expression]>)> {
     let is_method = call.method.is_some();
     if is_method && !dsl.is_pattern() {
-        let Expression::StringLiteral(receiver) = unwrap_parentheses(&call.callee) else {
+        let Some(Expression::StringLiteral(receiver)) =
+            call.callee.as_expr().map(unwrap_parentheses)
+        else {
             return None;
         };
-        let all_args = match &call.args {
+        let all_args = match call.args {
             FunctionArgs::Parenthesized { args, .. } => Some(args.items.as_slice()),
             FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => None,
         };
         return Some((receiver, all_args));
     }
     let literal_index = usize::from(dsl.is_pattern() && !is_method);
-    match &call.args {
+    match call.args {
         FunctionArgs::Parenthesized { args, .. } => {
             let Some(Expression::StringLiteral(literal)) = args.get(literal_index) else {
                 return None;
@@ -134,7 +127,7 @@ fn dsl_literal(call: &FunctionCall, dsl: DslKind) -> Option<(&Literal, Option<&[
     }
 }
 
-fn check_dsl_literal(call: &FunctionCall, dsl: DslKind, version: LuaVersion) -> Option<Finding> {
+fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Option<Finding> {
     let (literal, trailing_args) = dsl_literal(call, dsl)?;
     let body = checkable_body(literal)?;
     if dsl == DslKind::Find && is_plain_find(body, trailing_args.unwrap_or_default()) {
@@ -206,9 +199,9 @@ fn check_arg_count(args: &[Expression], literal_span: Span, expected: usize) -> 
 }
 
 /// Capture indices are only checked when the pattern is a valid literal too.
-fn check_gsub_replacement(call: &FunctionCall, version: LuaVersion) -> Option<Finding> {
+fn check_gsub_replacement(call: Call<'_>, version: LuaVersion) -> Option<Finding> {
     let pattern_index = usize::from(call.method.is_none());
-    let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+    let FunctionArgs::Parenthesized { args, .. } = call.args else {
         return None;
     };
     let Some(Expression::StringLiteral(replacement)) = args.get(pattern_index.saturating_add(1))
@@ -304,7 +297,9 @@ mod tests {
 
     #[test]
     fn ignores_nonliteral_format() {
-        let diags = run("local fmt = \"%d\"\nstring.format(fmt, 1)");
+        let diags = run("\
+local fmt = \"%d\"
+string.format(fmt, 1)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -317,7 +312,9 @@ mod tests {
     #[test]
     fn ignores_function_call_args() {
         // `f()` can return any number of values.
-        let diags = run("local function f() end\nstring.format(\"%d %d\", f())");
+        let diags = run("\
+local function f() end
+string.format(\"%d %d\", f())");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -368,7 +365,9 @@ mod tests {
     #[test]
     fn ignores_gsub_nonliteral_pattern_index() {
         // An unknown capture count disables the index check.
-        let diags = run("local p = \"(a)\"\nstring.gsub(\"x\", p, \"%9\")");
+        let diags = run("\
+local p = \"(a)\"
+string.gsub(\"x\", p, \"%9\")");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -395,7 +394,9 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_os() {
-        let diags = run("local os = {}\nos.date(\"%Q\")");
+        let diags = run("\
+local os = {}
+os.date(\"%Q\")");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -544,7 +545,9 @@ mod tests {
 
     #[test]
     fn flags_pattern_method_on_string_local() {
-        let diags = run("local s = \"abc\"\nlocal i = s:match(\"[\")");
+        let diags = run("\
+local s = \"abc\"
+local i = s:match(\"[\")");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
@@ -565,7 +568,9 @@ mod tests {
 
     #[test]
     fn ignores_rebound_string_global() {
-        let diags = run("string = {}\nlocal i = string.match(\"x\", \"[\")");
+        let diags = run("\
+string = {}
+local i = string.match(\"x\", \"[\")");
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

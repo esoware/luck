@@ -80,7 +80,8 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 /// - **Loud failure on invalid names.** [`Synth::identifier`] asserts, in release
 ///   builds too, that its argument is an identifier, so hostile input such
 ///   as bytecode debug info or obfuscated names fails fast instead of
-///   producing output that won't re-parse.
+///   producing output that won't re-parse. Every constructor that takes a
+///   name goes through it and says so under `# Panics`.
 ///
 /// # What the caller still owes
 ///
@@ -102,10 +103,31 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   [`is_valid_identifier`] / [`is_valid_identifier_in`] and rename them
 ///   yourself. Sanitized names are deterministic but can collide, so
 ///   deduplication is up to the caller.
+/// - **Raw text.** [`Synth::token`] takes a token of any kind, and
+///   [`Synth::number`] and [`Synth::integer_literal`] take numeral text as
+///   written. The printers print each leaf as the tree holds it, so a token
+///   that doesn't belong where it's placed, such as `end` as a name, or text
+///   that isn't one numeral, prints output that doesn't read back as the tree.
+/// - **Type names.** A type reads a bare `typeof` as the start of
+///   `typeof(expr)`, so [`Synth::ty_named`] or [`Synth::ty_generic`] given
+///   `typeof` prints a type that doesn't read back. Don't build one: a type
+///   named `typeof` can be referred to only through its module, with
+///   [`Synth::ty_qualified`], or as a pack, with [`Synth::ty_generic_pack`].
+/// - **Nesting depth.** No constructor counts it. Every traversal, drop and
+///   clone included, recurses once per level of nesting, so keep the tree
+///   within [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH), the deepest
+///   `luck_parser` builds. A run of suffixes, or of binary operators at one
+///   level, is one level however long it gets, and the constructors join a
+///   run they extend rather than nest it.
+///   [`block_nesting_depth`](crate::block_nesting_depth) and
+///   [`expr_nesting_depth`](crate::expr_nesting_depth) measure a tree of any
+///   depth without recursing past the cap. Both printers return an error for
+///   a deeper tree, but dropping or cloning one can still overflow the stack.
 ///
 /// To format the result, pass it to `luck_formatter::format_block`, with any
 /// [`SyntheticComment`]s wrapped in `Comments::synthetic`. For compact
-/// output, call `luck_codegen::compact`.
+/// output, call `luck_codegen::compact`. Both print each leaf as the tree
+/// holds it and return an error only for a tree nested past the cap.
 ///
 /// # Usage
 ///
@@ -205,6 +227,11 @@ impl Synth {
     /// not be identifiers belong in [`Synth::field_or_index`],
     /// [`Synth::record`], or [`Synth::string`], or need
     /// [`sanitize_identifier`] / [`sanitize_identifier_in`] first.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` isn't an identifier under the pinned version, or in
+    /// any dialect when none is pinned.
     #[must_use]
     pub fn identifier(&self, name: &str) -> Token {
         self.token(TokenKind::Identifier(self.identifier_name(name)))
@@ -241,7 +268,7 @@ mod tests {
     use rustc_hash::FxHashSet;
 
     use super::*;
-    use crate::expr::{Expression, Var};
+    use crate::expr::{Expression, Suffix};
 
     #[test]
     fn spans_are_monotonic() {
@@ -341,10 +368,11 @@ mod tests {
         let shared = Synth::new().with_version(LuaVersion::Luau).share();
         // `goto` is an identifier only under the pinned Luau dialect, so the
         // dot form proves the pin carried over.
-        assert!(matches!(
-            shared.field_or_index(shared.name_expr("t"), "goto"),
-            Expression::Var(Var::FieldAccess(_))
-        ));
+        let Expression::Suffixed(chain) = shared.field_or_index(shared.name_expr("t"), "goto")
+        else {
+            panic!("expected a field");
+        };
+        assert!(matches!(chain.suffixes.last(), Suffix::Field(_)));
     }
 
     #[test]

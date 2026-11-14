@@ -12,10 +12,14 @@ pub struct CodeBuffer {
 }
 
 impl CodeBuffer {
+    /// The capacity is a hint: one the allocator can't meet is dropped, and
+    /// the buffer grows as it's written.
     #[inline]
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
-        Self { bytes: Vec::with_capacity(capacity) }
+        let mut bytes = Vec::new();
+        let _unused = bytes.try_reserve_exact(capacity);
+        Self { bytes }
     }
 
     #[inline]

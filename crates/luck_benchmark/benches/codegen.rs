@@ -22,7 +22,7 @@ fn bench_codegen(criterion: &mut Criterion) {
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
                 for parse_result in &parse_results {
-                    black_box(luck_codegen::compact_with_capacity(
+                    let _unused = black_box(luck_codegen::compact_with_capacity(
                         black_box(&parse_result.block),
                         parse_result.source.len(),
                     ));

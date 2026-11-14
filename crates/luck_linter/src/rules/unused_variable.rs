@@ -82,15 +82,20 @@ mod tests {
 
     #[test]
     fn ignores_exported_bindings() {
-        let diags = run(
-            "export local answer = 42\nexport const LIMIT = 1i\nexport function helper()\nreturn 1\nend",
-        );
+        let diags = run("\
+export local answer = 42
+export const LIMIT = 1i
+export function helper()
+return 1
+end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_plain_local_next_to_exports() {
-        let diags = run("export local answer = 42\nlocal dead = 1");
+        let diags = run("\
+export local answer = 42
+local dead = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`dead`"));
     }
@@ -99,37 +104,54 @@ mod tests {
     fn ignores_variable_read_by_typeof() {
         // typeof(expr) inside a type position references the runtime
         // binding; it must count as a use.
-        let diags = run("local n = 1\ntype T = typeof(n)\nexport type U = T");
+        let diags = run("\
+local n = 1
+type T = typeof(n)
+export type U = T");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_variable_read_by_typeof_in_cast() {
-        let diags = run("local n = 1\nlocal m = (nil :: typeof(n))\nprint(m)");
+        let diags = run("\
+local n = 1
+local m = (nil :: typeof(n))
+print(m)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_variable_unused_despite_type_alias() {
-        let diags = run("local n = 1\ntype T = number\nexport type U = T");
+        let diags = run("\
+local n = 1
+type T = number
+export type U = T");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_without_fix_that_captures_existing_underscore_name() {
-        let source = "local _x = 1\nlocal x = 2\nprint(_x)";
+        let source = "\
+local _x = 1
+local x = 2
+print(_x)";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_ne!(
             apply_one_pass(source, &diags),
-            "local _x = 1\nlocal _x = 2\nprint(_x)",
+            "\
+local _x = 1
+local _x = 2
+print(_x)",
             "the rename shouldn't make `print(_x)` read the second local"
         );
     }
 
     #[test]
     fn ignores_close_variable() {
-        let source = "local lock <close> = acquire()\nprint(1)";
+        let source = "\
+local lock <close> = acquire()
+print(1)";
         let diags = run_rule(&UnusedVariable, source, LuaVersion::Lua54);
         assert!(diags.is_empty(), "a `<close>` local is used by its scope exit: {diags:?}");
     }
@@ -143,7 +165,9 @@ mod tests {
 
     #[test]
     fn flags_with_fix_when_prefixed_name_is_free() {
-        let diags = run("local x = 2\nprint(_y)");
+        let diags = run("\
+local x = 2
+print(_y)");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_some(), "{diags:?}");
     }

@@ -1,11 +1,11 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall, Var};
+use luck_ast::{Call, ChainHead, Expression, FunctionArgs, Suffix};
 use luck_token::{BinOp, LuaVersion, Token, UnOp};
 
 use crate::call::dotted_callee;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::is_number_literal;
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TableOperations;
@@ -22,26 +22,21 @@ impl NodeRule for TableOperations {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_call(
-        &self,
-        call: &FunctionCall,
-        _position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let call = site.call;
         check_call(call, context, findings);
     }
 }
 
-fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+fn check_call(call: Call<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
     let Some(function_name) = table_stdlib_function(call, context) else {
         return;
     };
-    let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+    let FunctionArgs::Parenthesized { args, .. } = call.args else {
         return;
     };
     let version = context.semantic.version;
-    let finding = |message: &str| Finding::new(message, call.span);
+    let finding = |message: &str| Finding::new(message, call.span());
     match (function_name, args.items.as_slice()) {
         ("insert", [table, index, _]) => {
             if is_number_literal(index, 0.0, version) {
@@ -113,7 +108,7 @@ fn check_call(call: &FunctionCall, context: &LintContext<'_>, findings: &mut Vec
 /// The `field` of a `table.field(...)` call, if `table` is the stdlib global
 /// and this version's stdlib has that function.
 fn table_stdlib_function<'call>(
-    call: &'call FunctionCall,
+    call: Call<'call>,
     context: &LintContext<'_>,
 ) -> Option<&'call str> {
     let (root, field) = dotted_callee(call)?;
@@ -133,37 +128,33 @@ fn length_operand(expr: &Expression) -> Option<&Expression> {
 }
 
 fn length_offset_operand(expr: &Expression, op: BinOp, version: LuaVersion) -> Option<&Expression> {
-    let Expression::BinaryOp(binary_op) = expr else {
+    let Expression::BinaryOp(run) = expr else {
         return None;
     };
-    if binary_op.op != op || !is_number_literal(&binary_op.rhs, 1.0, version) {
+    let [link] = &*run.links else {
+        return None;
+    };
+    if link.op != op || !is_number_literal(&link.operand, 1.0, version) {
         return None;
     }
-    length_operand(&binary_op.lhs)
+    length_operand(&run.first)
 }
 
-/// Anything else, such as an index or a call, never matches.
+/// The same name, or the same name with the same fields after it. Anything
+/// else, such as an index or a call, never matches.
 fn same_target(left: &Expression, right: &Expression) -> bool {
-    let (mut left_expr, mut right_expr) = (left, right);
-    loop {
-        let (Expression::Var(left_var), Expression::Var(right_var)) = (left_expr, right_expr)
-        else {
-            return false;
-        };
-        match (left_var, right_var) {
-            (Var::Name(left_token), Var::Name(right_token)) => {
-                return same_identifier(left_token, right_token);
-            }
-            (Var::FieldAccess(left_field), Var::FieldAccess(right_field)) => {
-                if !same_identifier(&left_field.name, &right_field.name) {
-                    return false;
-                }
-                left_expr = &left_field.prefix;
-                right_expr = &right_field.prefix;
-            }
-            _ => return false,
-        }
-    }
+    let (left_head, right_head) = (ChainHead::from(left), ChainHead::from(right));
+    let (Expression::Name(left_root), Expression::Name(right_root)) =
+        (&left_head.prefix, &right_head.prefix)
+    else {
+        return false;
+    };
+    same_identifier(left_root, right_root)
+        && left_head.suffixes.len() == right_head.suffixes.len()
+        && left_head.suffixes.iter().zip(right_head.suffixes).all(|suffixes| {
+            matches!(suffixes, (Suffix::Field(left_name), Suffix::Field(right_name))
+                if same_identifier(left_name, right_name))
+        })
 }
 
 fn same_identifier(left: &Token, right: &Token) -> bool {
@@ -291,7 +282,12 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_table_local() {
-        let diags = run("local table = {}\ntable.insert(t, 0, v)", LuaVersion::Lua54);
+        let diags = run(
+            "\
+local table = {}
+table.insert(t, 0, v)",
+            LuaVersion::Lua54,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 

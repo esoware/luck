@@ -21,7 +21,8 @@ use std::io::Write as _;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use luck_benchmark::{test_files, test_projects};
-use luck_core::{LuaTarget, TransformConfig};
+use luck_core::LuaTarget;
+use luck_minifier::TransformConfig;
 
 const SNAPSHOT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/minsize.snap");
 const REGENERATE_COMMAND: &str =
@@ -47,8 +48,7 @@ fn gzipped_byte_count(text: &str) -> Result<usize, Box<dyn Error>> {
 ///
 /// Fails when `source` doesn't minify or the result can't be compressed.
 fn measure(name: &str, source: &str, target: LuaTarget) -> Result<Row, Box<dyn Error>> {
-    // Windows checkouts may carry CRLF in include_str! fixtures; normalize
-    // so byte counts match CI.
+    // Fetched corpus files keep whatever line endings upstream committed.
     let normalized = source.replace("\r\n", "\n");
     let config = TransformConfig::default();
     let minified = luck_minifier::minify(&normalized, target.lua_version(), &config)
@@ -97,9 +97,11 @@ fn minsize_snapshot() -> Result<String, Box<dyn Error>> {
     let mut snapshot = String::new();
     writeln!(
         snapshot,
-        "Minified-size tracking over the bench corpus. Sizes are exact bytes;\n\
-         gzip is the minified output at the default flate2 level. Regenerate:\n\
-         {REGENERATE_COMMAND}\n"
+        "\
+Minified-size tracking over the bench corpus. Sizes are exact bytes;
+gzip is the minified output at the default flate2 level. Regenerate:
+{REGENERATE_COMMAND}
+"
     )?;
     writeln!(
         snapshot,
@@ -132,7 +134,7 @@ fn regenerate_minsize() {
 fn minsize_is_up_to_date() {
     let committed = fs::read_to_string(SNAPSHOT_PATH).expect("read minsize.snap");
     assert_eq!(
-        committed.replace("\r\n", "\n"),
+        committed,
         minsize_snapshot().expect("build minsize snapshot"),
         "minsize.snap is stale; regenerate it with `{REGENERATE_COMMAND}`"
     );

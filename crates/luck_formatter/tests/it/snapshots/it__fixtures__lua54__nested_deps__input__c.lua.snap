@@ -1,0 +1,13 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua54/nested_deps/input/c.lua
+---
+-- line_width = 1, 40, 80, 100, 120
+local c = {}
+
+function c.base_value()
+	return 21
+end
+
+return c

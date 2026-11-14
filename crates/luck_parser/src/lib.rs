@@ -3,8 +3,12 @@
 //! Pratt expression parser with recursive descent statement parsing for Lua
 //! 5.1-5.5 and Luau.
 //!
-//! Nesting is depth-limited so pathological input can't overflow the stack,
-//! and error recovery reports multiple parse errors in a single pass.
+//! Every tree it returns, with errors or without, is at most
+//! [`luck_ast::MAX_NESTING_DEPTH`] levels deep, measured as
+//! [`luck_ast::block_nesting_depth`] measures it, so no consumer of the tree
+//! needs more than a bounded stack. A construct nested past the cap is one
+//! error, and parsing goes on after it. Error recovery reports multiple parse
+//! errors in a single pass.
 //!
 //! # Usage
 //!
@@ -21,6 +25,8 @@
     test,
     expect(clippy::missing_panics_doc, reason = "a Panics section says nothing about a test")
 )]
+
+extern crate alloc;
 
 mod parse_result;
 mod parser;

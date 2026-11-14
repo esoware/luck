@@ -57,7 +57,9 @@ mod tests {
 
     #[test]
     fn flags_read_before_assign() {
-        let diags = run("local x\nprint(x)");
+        let diags = run("\
+local x
+print(x)");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));
     }
@@ -65,96 +67,136 @@ mod tests {
     #[test]
     fn ignores_explicit_nil_init() {
         // `redundant_nil_init` may flag this, but it counts as initialized.
-        let diags = run("local x = nil\nprint(x)");
+        let diags = run("\
+local x = nil
+print(x)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_write_then_read() {
-        let diags = run("local x\nx = 1\nprint(x)");
+        let diags = run("\
+local x
+x = 1
+print(x)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_write_in_branch_before_read() {
-        let diags = run("local x\nif c then x = 1 end\nprint(x)");
+        let diags = run("\
+local x
+if c then x = 1 end
+print(x)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_field_write_as_the_first_reference() {
-        let diags = run("local x\nx.foo = 1");
+        let diags = run("\
+local x
+x.foo = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_index_write_as_the_first_reference() {
-        let diags = run("local y\ny[1] = 2");
+        let diags = run("\
+local y
+y[1] = 2");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_field_read_through_a_nested_write_target() {
         // `x.y.z = 1` reads `x.y` first, which isn't a write through `x`.
-        let diags = run("local x\nx.y.z = 1");
+        let diags = run("\
+local x
+x.y.z = 1");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]
     fn ignores_underscore_prefixed() {
-        let diags = run("local _x\nprint(_x)");
+        let diags = run("\
+local _x
+print(_x)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_forward_declaration_read_in_closure() {
-        let diags = run(
-            "local helper\nlocal function main() return helper() end\nhelper = function() return 1 end\nreturn main()",
-        );
+        let diags = run("\
+local helper
+local function main() return helper() end
+helper = function() return 1 end
+return main()");
         assert!(diags.is_empty(), "the closure runs after the assignment: {diags:?}");
     }
 
     #[test]
     fn ignores_read_of_value_written_in_previous_iteration() {
-        let diags =
-            run("local last\nfor _, v in ipairs({1}) do if last then print(last) end last = v end");
+        let diags = run("\
+local last
+for _, v in ipairs({1}) do if last then print(last) end last = v end");
         assert!(diags.is_empty(), "later iterations read the written value: {diags:?}");
     }
 
     #[test]
     fn ignores_read_after_backward_goto() {
-        let diags =
-            run("local x\ngoto set\n::use::\nprint(x)\ndo return end\n::set::\nx = 1\ngoto use");
+        let diags = run("\
+local x
+goto set
+::use::
+print(x)
+do return end
+::set::
+x = 1
+goto use");
         assert!(diags.is_empty(), "the assignment runs before the read: {diags:?}");
     }
 
     #[test]
     fn flags_read_in_own_first_assignment() {
-        let diags = run("local x\nx = x + 1\nreturn x");
+        let diags = run("\
+local x
+x = x + 1
+return x");
         assert_eq!(diags.len(), 1, "the right-hand side reads `nil`: {diags:?}");
     }
 
     #[test]
     fn flags_read_in_the_branch_that_skips_the_write() {
-        let diags = run("local x\nif c then x = 1 else print(x) end");
+        let diags = run("\
+local x
+if c then x = 1 else print(x) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]
     fn flags_read_before_the_closure_that_writes_it() {
-        let diags = run("local x\nprint(x)\nlocal function set() x = 1 end\nset()");
+        let diags = run("\
+local x
+print(x)
+local function set() x = 1 end
+set()");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]
     fn ignores_read_after_a_closure_that_writes_it() {
-        let diags = run("local x\nlocal function set() x = 1 end\nset()\nprint(x)");
+        let diags = run("\
+local x
+local function set() x = 1 end
+set()
+print(x)");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_read_of_a_name_the_initializer_list_leaves_without_a_value() {
-        let diags = run("local a, b = 1
+        let diags = run("\
+local a, b = 1
 print(a, b)");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`b`"), "got: {diags:?}");
@@ -162,20 +204,26 @@ print(a, b)");
 
     #[test]
     fn ignores_name_a_trailing_call_can_fill() {
-        let diags = run("local a, b = f()
+        let diags = run("\
+local a, b = f()
 print(a, b)");
         assert!(diags.is_empty(), "the call can fill `b`: {diags:?}");
     }
 
     #[test]
     fn ignores_read_in_until_after_a_write_in_the_body() {
-        let diags = run("repeat local x\nif c then x = 1 end until x");
+        let diags = run("\
+repeat local x
+if c then x = 1 end until x");
         assert!(diags.is_empty(), "the `until` sees the body's locals: {diags:?}");
     }
 
     #[test]
     fn flags_read_after_the_loop_redeclares_the_local() {
-        let diags = run("for _ = 1, 3 do local x\nprint(x)\nx = 1 end");
+        let diags = run("\
+for _ = 1, 3 do local x
+print(x)
+x = 1 end");
         assert_eq!(diags.len(), 1, "a fresh `x` starts each iteration: {diags:?}");
     }
 }

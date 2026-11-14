@@ -63,10 +63,10 @@ fn var_name(var: &Var) -> Option<&str> {
 }
 
 fn expr_var_name(expr: &Expression) -> Option<&str> {
-    let Expression::Var(var) = expr else {
+    let Expression::Name(token) = expr else {
         return None;
     };
-    var_name(var)
+    token.identifier()
 }
 
 #[cfg(test)]
@@ -83,31 +83,44 @@ mod tests {
 
     #[test]
     fn flags_failed_swap() {
-        let diags = run("local a, b = 1, 2\na = b\nb = a");
+        let diags = run("\
+local a, b = 1, 2
+a = b
+b = a");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_failed_swap_in_nested_function() {
-        let diags = run("local f = function() local a, b = 1, 2\na = b\nb = a end");
+        let diags = run("\
+local f = function() local a, b = 1, 2
+a = b
+b = a end");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn ignores_correct_swap() {
-        let diags = run("local a, b = 1, 2\na, b = b, a");
+        let diags = run("\
+local a, b = 1, 2
+a, b = b, a");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_unrelated_assignments() {
-        let diags = run("local a, b = 1, 2\na = b\nb = 3");
+        let diags = run("\
+local a, b = 1, 2
+a = b
+b = 3");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_failed_swap_separated_by_semicolon() {
-        let diags = run("local a, b = 1, 2\na = b; b = a");
+        let diags = run("\
+local a, b = 1, 2
+a = b; b = a");
         assert_eq!(diags.len(), 1, "a `;` doesn't change the failed swap: {diags:?}");
     }
 }

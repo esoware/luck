@@ -181,14 +181,15 @@ impl Comments {
             return None;
         };
         let reached = self.last_printed_end().map_or(position, |end| end.max(position));
-        disabled_ranges.iter().find(|region| region.end > reached).cloned()
+        region_ending_after(disabled_ranges, reached).cloned()
     }
 
     pub(crate) fn overlaps_disabled_region(&self, span: Span) -> bool {
         match &self.store {
-            Store::Sourced { disabled_ranges, .. } => disabled_ranges
-                .iter()
-                .any(|region| region.start < span.end && span.start < region.end),
+            Store::Sourced { disabled_ranges, .. } => {
+                region_ending_after(disabled_ranges, span.start)
+                    .is_some_and(|region| region.start < span.end)
+            }
             Store::Synthetic { .. } | Store::Empty => false,
         }
     }
@@ -342,7 +343,10 @@ impl Comments {
             }
             Store::Synthetic { .. } | Store::Empty => &[],
         };
-        pending.iter().find(|c| c.span.start >= start).is_some_and(|c| c.span.start < end)
+        // Sorted by position, so the first one at or past `start` is found
+        // without walking the comments before it.
+        let first_index = pending.partition_point(|c| c.span.start < start);
+        pending.get(first_index).is_some_and(|c| c.span.start < end)
     }
 
     pub(crate) const fn checkpoint(&self) -> CommentsCheckpoint {
@@ -450,11 +454,13 @@ pub(crate) fn write_stalled_comments(f: &mut Formatter, anchor: u32) -> bool {
     write_comment_lines(f, lines)
 }
 
-pub(crate) fn write_trailing_comments(f: &mut Formatter, anchor: u32, stmt_end: u32) {
-    let texts = match &mut f.comments_mut().store {
+/// Returns true when one of them is a block comment spanning lines, which
+/// ends its line somewhere other than where the statement's does.
+pub(crate) fn write_trailing_comments(f: &mut Formatter, anchor: u32, stmt_end: u32) -> bool {
+    let (texts, spans_lines) = match &mut f.comments_mut().store {
         Store::Sourced { comments, printed_count, source, version, .. } => {
             let mut gap_start = stmt_end;
-            comment_texts(take_pending_while(comments, printed_count, |comment| {
+            let taken = take_pending_while(comments, printed_count, |comment| {
                 if comment.position != CommentPosition::Trailing || gap_start > comment.span.start {
                     return false;
                 }
@@ -463,16 +469,23 @@ pub(crate) fn write_trailing_comments(f: &mut Formatter, anchor: u32, stmt_end: 
                 let gap = Span::new(gap_start, comment.span.start).text(source);
                 gap_start = comment.span.end;
                 !has_line_break(gap, *version) && is_code_free(gap)
-            }))
+            });
+            let spans_lines =
+                taken.iter().any(|comment| comment.kind == CommentKind::MultiLineBlock);
+            (comment_texts(taken), spans_lines)
         }
-        Store::Synthetic { comments, .. } => take_synthetic(comments, anchor, |comment| {
-            comment.position == CommentPosition::Trailing
-        }),
-        Store::Empty => Vec::new(),
+        Store::Synthetic { comments, .. } => (
+            take_synthetic(comments, anchor, |comment| {
+                comment.position == CommentPosition::Trailing
+            }),
+            false,
+        ),
+        Store::Empty => (Vec::new(), false),
     };
     for text in texts {
         f.write_line_suffix(text);
     }
+    spans_lines
 }
 
 /// `start` is the list's own start.
@@ -770,10 +783,13 @@ fn disabled_region_limit(
     printed_count: usize,
 ) -> u32 {
     let position = printed_end(comments, printed_count).unwrap_or(0);
-    disabled_ranges
-        .iter()
-        .find(|region| region.end > position)
-        .map_or(u32::MAX, |region| region.start)
+    region_ending_after(disabled_ranges, position).map_or(u32::MAX, |region| region.start)
+}
+
+/// The first of `regions` that ends past `position`. `format off` regions are
+/// sorted and apart, so their ends are in order too.
+pub(crate) fn region_ending_after(regions: &[Range<u32>], position: u32) -> Option<&Range<u32>> {
+    regions.get(regions.partition_point(|region| region.end <= position))
 }
 
 fn take_pending_while<'comments, F>(
@@ -873,7 +889,7 @@ fn after_line_break(source: &str, offset: u32, version: LuaVersion) -> u32 {
     index_to_offset(source.len().saturating_sub(remaining))
 }
 
-pub(crate) fn unix_line_breaks(text: &str, version: LuaVersion) -> Cow<'_, str> {
+fn unix_line_breaks(text: &str, version: LuaVersion) -> Cow<'_, str> {
     if !text.contains('\r') {
         return Cow::Borrowed(text);
     }
@@ -965,7 +981,9 @@ mod tests {
 
     #[test]
     fn sourced_leading_taken_once() {
-        let source = "-- leading\nlocal x = 1";
+        let source = "\
+-- leading
+local x = 1";
         let comments = vec![make_comment(0, 10, 11, CommentKind::Line, CommentPosition::Leading)];
         let mut f = formatter_over(Comments::from_source(&comments, source, LuaVersion::Lua54));
 
@@ -978,7 +996,9 @@ mod tests {
 
     #[test]
     fn ignore_directive_detected() {
-        let source = "-- luck: ignore\nlocal x = 1";
+        let source = "\
+-- luck: ignore
+local x = 1";
         let comments = vec![make_comment(0, 15, 16, CommentKind::Line, CommentPosition::Leading)];
         let mut f = formatter_over(Comments::from_source(&comments, source, LuaVersion::Lua54));
         assert!(write_leading_comments(&mut f, 16));
@@ -1001,13 +1021,12 @@ mod tests {
         let mut f = formatter_over(Comments::synthetic(synthetic));
 
         assert!(!write_leading_comments(&mut f, 5));
-        let has_prefixed = f
-            .elements()
-            .iter()
-            .any(|element| matches!(element, FormatElement::Text(text) if text == "-- upvalue u0"));
+        let has_prefixed = f.elements().iter().any(
+            |element| matches!(element, FormatElement::Text(text, _) if text == "-- upvalue u0"),
+        );
         assert!(has_prefixed, "marker prefix added to bare text");
 
-        write_trailing_comments(&mut f, 5, 0);
+        assert!(!write_trailing_comments(&mut f, 5, 0));
         let has_suffix = f
             .elements()
             .iter()
@@ -1029,7 +1048,7 @@ mod tests {
         let mut f = formatter_over(comments);
         write_dangling_comments(&mut f, 9);
         let is_emitted = f.elements().iter().any(
-            |element| matches!(element, FormatElement::Text(text) if text == "-- unreachable"),
+            |element| matches!(element, FormatElement::Text(text, _) if text == "-- unreachable"),
         );
         assert!(is_emitted);
         assert!(!f.comments().has_dangling_comments(9));
@@ -1067,7 +1086,7 @@ mod tests {
             .elements()
             .iter()
             .filter_map(|element| {
-                if let FormatElement::Text(text) = element { Some(text.as_str()) } else { None }
+                if let FormatElement::Text(text, _) = element { Some(text.as_str()) } else { None }
             })
             .collect();
         assert_eq!(texts, vec!["-- first", "-- second"]);
@@ -1075,7 +1094,11 @@ mod tests {
 
     #[test]
     fn format_off_disables_formatting_until_format_on() {
-        let source = "-- luck: format off\nlocal x=1\n-- luck: format on\nlocal y = 2";
+        let source = "\
+-- luck: format off
+local x=1
+-- luck: format on
+local y = 2";
         let source_comments = vec![
             make_comment(0, 19, 20, CommentKind::Line, CommentPosition::Leading),
             make_comment(30, 49, 50, CommentKind::Line, CommentPosition::Leading),

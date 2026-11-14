@@ -74,6 +74,12 @@ mod tests {
             fix: None,
         });
         assert_eq!(diag.severity, Some(DiagnosticSeverity::WARNING));
-        assert_eq!(diag.message, "stylistic issue\n\nhelp: rename it");
+        assert_eq!(
+            diag.message,
+            "\
+stylistic issue
+
+help: rename it"
+        );
     }
 }

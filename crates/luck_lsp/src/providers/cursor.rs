@@ -1,6 +1,9 @@
 use core::slice;
 
-use luck_ast::{Block, Expression, FieldAccess, FunctionArgs, FunctionCall, Literal, Var, Visitor};
+use luck_ast::{
+    Block, Call, ChainHead, Expression, FunctionArgs, Literal, Suffix, SuffixedExpression, Var,
+    Visitor,
+};
 use luck_semantic::{ScopeTree, SymbolId, SymbolKind};
 use luck_token::{CommentKind, Span, Token, TokenKind, offset_to_index};
 
@@ -19,99 +22,81 @@ pub(crate) enum TextKind {
     String,
 }
 
+/// Text that a closing delimiter ends counts up to it, and text a line break
+/// or the end of the file cut off counts through its end, where typing goes
+/// on inside it.
 pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
     let comments = &document.parsed.comments;
     let at_offset = comments.get(comments.partition_point(|comment| comment.span.end < offset));
     let is_in_comment = at_offset.is_some_and(|comment| {
-        // A line comment runs through the end of its line, so typing there
-        // stays inside it. A block comment closes at its `]]`.
         let has_room = match comment.kind {
             CommentKind::Line | CommentKind::Shebang => offset <= comment.span.end,
             CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => offset < comment.span.end,
         };
         comment.span.start < offset && has_room
     });
-    if is_in_comment {
+    // An unterminated block comment is a lex error over its text rather than
+    // a comment, and no other error's text opens with `--`.
+    let is_in_unterminated_comment = document.parsed.errors.iter().any(|e| {
+        e.span.start < offset
+            && offset <= e.span.end
+            && e.span.text(document.text()).starts_with("--")
+    });
+    if is_in_comment || is_in_unterminated_comment {
         return TextKind::Comment;
     }
     let tokens = document.tokens();
-    let enclosing = tokens.get(tokens.partition_point(|token| token.span.end <= offset));
+    let enclosing = tokens.get(tokens.partition_point(|token| token.span.end < offset));
     let is_in_string = enclosing.is_some_and(|token| {
-        token.span.start < offset
-            && matches!(
-                token.kind,
-                TokenKind::StringLiteral(_)
-                    | TokenKind::InterpolatedStringBegin(_)
-                    | TokenKind::InterpolatedStringMiddle(_)
-                    | TokenKind::InterpolatedStringEnd(_)
-            )
+        matches!(
+            token.kind,
+            TokenKind::StringLiteral(_)
+                | TokenKind::InterpolatedStringBegin(_)
+                | TokenKind::InterpolatedStringMiddle(_)
+                | TokenKind::InterpolatedStringEnd(_)
+        ) && is_inside(document, token.span, offset)
     });
-    if is_in_string {
-        return TextKind::String;
-    }
-    // An unterminated string or block comment is a lex error over its text
-    // rather than a token, so its opener is what tells the two apart.
-    document
-        .parsed
-        .errors
-        .iter()
-        .find_map(|e| {
-            (e.span.start < offset && offset <= e.span.end)
-                .then(|| unterminated_text_kind(e.span.text(document.text())))
-        })
-        .unwrap_or(TextKind::Code)
+    if is_in_string { TextKind::String } else { TextKind::Code }
 }
 
-fn unterminated_text_kind(text: &str) -> TextKind {
-    if text.starts_with("--") {
-        TextKind::Comment
-    } else if text.starts_with(['"', '\'', '`']) || text.starts_with("[[") || text.starts_with("[=")
-    {
-        TextKind::String
-    } else {
-        TextKind::Code
-    }
+/// Whether `offset` is inside the string token at `span`: past its first
+/// byte, and before its end unless a line break or the end of the text cut it
+/// off there.
+fn is_inside(document: &DocumentState, span: Span, offset: u32) -> bool {
+    span.start < offset
+        && (offset < span.end
+            || (offset == span.end && document.unterminated_strings().contains(&span)))
 }
 
-/// The plain-name chain ending at `access` (`a.b.c`), root first, and the
-/// root's span.
+/// The plain-name path `head` ends with (`a.b.c`), root first, and the
+/// root's span: a name, or the fields it ends in and the name before them.
 ///
 /// A chain broken by an index expression, a call, or a non-name prefix
-/// yields only the trailing segments that are plain names. `None` when
-/// `access` itself isn't named by an identifier.
-fn field_access_chain(access: &FieldAccess) -> Option<(Vec<&str>, Span)> {
-    let mut path = vec![access.name.identifier()?];
-    let mut root_span = access.name.span;
-    let mut prefix: &Expression = &access.prefix;
-    while let Expression::Var(Var::FieldAccess(inner)) = prefix {
-        let Some(name) = inner.name.identifier() else {
+/// yields only the trailing fields that are plain names. `None` when `head`
+/// ends in nothing named by an identifier.
+fn name_path(head: ChainHead<'_>) -> Option<(Vec<&str>, Span)> {
+    let Some((mut before, Suffix::Field(name))) = head.split_last() else {
+        let token = head.as_name()?;
+        return Some((vec![token.identifier()?], token.span));
+    };
+    let mut path = vec![name.identifier()?];
+    let mut root_span = name.span;
+    while let Some((earlier, Suffix::Field(inner))) = before.split_last() {
+        let Some(segment) = inner.identifier() else {
             break;
         };
-        path.push(name);
-        root_span = inner.name.span;
-        prefix = &inner.prefix;
+        path.push(segment);
+        root_span = inner.span;
+        before = earlier;
     }
-    if let Expression::Var(Var::Name(token)) = prefix
-        && let Some(name) = token.identifier()
+    if let Some(token) = before.as_name()
+        && let Some(segment) = token.identifier()
     {
-        path.push(name);
+        path.push(segment);
         root_span = token.span;
     }
     path.reverse();
     Some((path, root_span))
-}
-
-/// The name chain of a call's callee expression, not counting any `:method`
-/// name, and the root's span.
-fn callee_chain(callee: &Expression) -> Option<(Vec<&str>, Span)> {
-    let Expression::Var(var) = callee else {
-        return None;
-    };
-    match var {
-        Var::Name(token) => Some((vec![token.identifier()?], token.span)),
-        Var::FieldAccess(access) => field_access_chain(access),
-        Var::Index(_) => None,
-    }
 }
 
 /// The `Name(.Name)*` chain `tokens` ends with, root first, and the root's
@@ -197,12 +182,40 @@ impl<'ast> NodeFinder<'ast> {
         }
     }
 
-    fn record_call(&mut self, call: &'ast FunctionCall) {
-        let (mut path, mut root_span) = callee_chain(&call.callee)
+    fn record_name(&mut self, token: &'ast Token) {
+        if let Some(name) = token.identifier() {
+            self.try_set(CursorNode::Identifier { name, span: token.span });
+        }
+    }
+
+    /// Of the field accesses and calls in `chain`, only the shortest one
+    /// that reaches the cursor can be the smallest node there.
+    fn record_chain(&mut self, chain: &'ast SuffixedExpression) {
+        for (index, suffix) in chain.suffixes.iter().enumerate() {
+            let head = chain.head(index.saturating_add(1));
+            let full_span = head.span();
+            if !touches(full_span, self.offset) {
+                continue;
+            }
+            match suffix {
+                Suffix::Field(_) => {
+                    if let Some((path, root_span)) = name_path(head) {
+                        self.try_set(CursorNode::DottedPath { path, root_span, full_span });
+                    }
+                }
+                Suffix::Call(call) => self.record_call(Call::new(chain.head(index), call)),
+                Suffix::Index { .. } | Suffix::TypeInstantiation { .. } => continue,
+            }
+            return;
+        }
+    }
+
+    fn record_call(&mut self, call: Call<'ast>) {
+        let (mut path, mut root_span) = name_path(call.callee)
             .map_or_else(|| (Vec::new(), None), |(path, span)| (path, Some(span)));
         // The method name is a path segment too: `game:GetService(...)`
         // resolves as `["game", "GetService"]` through shaped lookup.
-        if let Some(method_token) = &call.method {
+        if let Some(method_token) = call.method {
             if let Some(name) = method_token.identifier()
                 && !path.is_empty()
             {
@@ -212,43 +225,36 @@ impl<'ast> NodeFinder<'ast> {
                 root_span = None;
             }
         }
-        self.try_set(CursorNode::Call { path, root_span, full_span: call.span });
+        self.try_set(CursorNode::Call { path, root_span, full_span: call.span() });
     }
 }
 
 impl<'ast> Visitor<'ast> for NodeFinder<'ast> {
-    fn visit_var(&mut self, var: &'ast Var) {
-        match var {
-            Var::Name(token) => {
-                if let Some(name) = token.identifier() {
-                    self.try_set(CursorNode::Identifier { name, span: token.span });
-                }
-            }
-            Var::FieldAccess(access) => {
-                if let Some((path, root_span)) = field_access_chain(access) {
-                    self.try_set(CursorNode::DottedPath {
-                        path,
-                        root_span,
-                        full_span: access.span,
-                    });
-                }
-                self.walk_var(var);
-            }
-            Var::Index(_) => self.walk_var(var),
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(token) = expr {
+            self.record_name(token);
         }
+        self.walk_expr(expr);
     }
 
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
-        self.record_call(call);
-        self.walk_function_call(call);
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Name(token) = target {
+            self.record_name(token);
+        }
+        self.walk_assignment_target(target);
+    }
+
+    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression) {
+        self.record_chain(chain);
+        self.walk_suffixed(chain);
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CallSite<'ast> {
-    /// The call node, so consumers can resolve the callee semantically
-    /// (shaped locals, shadow checks).
-    pub call: &'ast FunctionCall,
+    /// The call, so consumers can resolve the callee semantically (shaped
+    /// locals, shadow checks).
+    pub call: Call<'ast>,
     pub active_param: usize,
 }
 
@@ -267,16 +273,16 @@ struct CallSiteFinder<'document> {
 }
 
 impl<'document> Visitor<'document> for CallSiteFinder<'document> {
-    fn visit_function_call(&mut self, call: &'document FunctionCall) {
+    fn visit_call(&mut self, call: Call<'document>) {
         self.try_record(call);
-        self.walk_function_call(call);
+        self.walk_call(call);
     }
 }
 
 impl<'document> CallSiteFinder<'document> {
-    fn try_record(&mut self, call: &'document FunctionCall) {
+    fn try_record(&mut self, call: Call<'document>) {
         // `f"..."` and `f{...}` have no parens for the cursor to be inside.
-        let FunctionArgs::Parenthesized { span: parens, args } = &call.args else {
+        let FunctionArgs::Parenthesized { span: parens, args } = call.args else {
             return;
         };
         // An unclosed list ends where the parser stopped, so the end still
@@ -307,40 +313,44 @@ impl<'document> CallSiteFinder<'document> {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StringArgSite<'ast> {
-    pub call: &'ast FunctionCall,
+    pub call: Call<'ast>,
     pub arg_index: usize,
     pub literal: &'ast Literal,
 }
 
 /// Find the innermost call whose argument list contains a string
 /// literal enclosing `offset` (cursor strictly inside the quotes).
-pub(crate) fn find_string_arg_at(block: &Block, offset: u32) -> Option<StringArgSite<'_>> {
-    let mut finder = StringArgFinder { offset, result: None };
-    finder.visit_block(block);
+pub(crate) fn find_string_arg_at(
+    document: &DocumentState,
+    offset: u32,
+) -> Option<StringArgSite<'_>> {
+    let mut finder = StringArgFinder { document, offset, result: None };
+    finder.visit_block(&document.parsed.block);
     finder.result
 }
 
 struct StringArgFinder<'ast> {
+    document: &'ast DocumentState,
     offset: u32,
     result: Option<StringArgSite<'ast>>,
 }
 
 impl<'ast> Visitor<'ast> for StringArgFinder<'ast> {
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
+    fn visit_call(&mut self, call: Call<'ast>) {
         self.try_record(call);
-        self.walk_function_call(call);
+        self.walk_call(call);
     }
 }
 
 impl<'ast> StringArgFinder<'ast> {
-    /// Strictly inside the quotes, so a cursor next to the literal doesn't
-    /// trigger value completion.
-    const fn contains(&self, span: Span) -> bool {
-        self.offset > span.start && self.offset < span.end
+    /// Inside the quotes, so a cursor next to the literal doesn't trigger
+    /// value completion.
+    fn contains(&self, span: Span) -> bool {
+        is_inside(self.document, span, self.offset)
     }
 
-    fn try_record(&mut self, call: &'ast FunctionCall) {
-        let site = match &call.args {
+    fn try_record(&mut self, call: Call<'ast>) {
+        let site = match call.args {
             FunctionArgs::Parenthesized { args, .. } => {
                 args.iter().enumerate().find_map(|(index, arg)| {
                     if let Expression::StringLiteral(literal) = arg
@@ -388,4 +398,50 @@ pub(crate) fn local_at(tree: &ScopeTree, offset: u32) -> Option<(SymbolId, Span)
                 && touches(symbol.definition_span, offset)
         })
         .map(|symbol| (symbol.id, symbol.definition_span))
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_core::LuaTarget;
+    use rustc_hash::FxHashSet;
+
+    use super::*;
+
+    /// The kind of text at each `|` in `marked`, which the text holds without
+    /// them.
+    fn kinds_at_marks(marked: &str, target: LuaTarget) -> Vec<TextKind> {
+        let text = marked.replace('|', "");
+        let document = DocumentState::new(text, 1, target, FxHashSet::default());
+        let mut offsets = Vec::new();
+        for (index, (position, _)) in marked.match_indices('|').enumerate() {
+            offsets.push(u32::try_from(position.saturating_sub(index)).expect("a small offset"));
+        }
+        offsets.into_iter().map(|offset| text_kind_at(&document, offset)).collect()
+    }
+
+    #[test]
+    fn a_string_cut_off_by_its_line_holds_its_end() {
+        use TextKind::{Code, Comment, String};
+        for (marked, target, expected) in [
+            ("x = `{|y}tail|", LuaTarget::Luau, vec![Code, String]),
+            ("x = `{y}ta|il`|", LuaTarget::Luau, vec![String, Code]),
+            ("x = `|tail|", LuaTarget::Luau, vec![String, String]),
+            ("x = `|", LuaTarget::Luau, vec![String]),
+            ("x = `a|`|", LuaTarget::Luau, vec![String, Code]),
+            ("x = \"a|bc|", LuaTarget::Lua54, vec![String, String]),
+            ("x = \"abc\"|", LuaTarget::Lua54, vec![Code]),
+            (
+                r#"x = "a\"|
+y = 1|"#,
+                LuaTarget::Lua54,
+                vec![String, Code],
+            ),
+            ("x = [[a|", LuaTarget::Lua54, vec![String]),
+            ("x = [[a]]|", LuaTarget::Lua54, vec![Code]),
+            ("--[[ a|", LuaTarget::Lua54, vec![Comment]),
+            ("--[[ a ]]|", LuaTarget::Lua54, vec![Code]),
+        ] {
+            assert_eq!(kinds_at_marks(marked, target), expected, "{marked:?}");
+        }
+    }
 }

@@ -1,0 +1,16 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua54/diamond_deps/input/d.lua
+---
+-- line_width = 1
+local d = {
+	base = 10,
+}
+
+return d
+
+-- line_width = 40, 80, 100, 120
+local d = { base = 10 }
+
+return d

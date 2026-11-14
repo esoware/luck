@@ -4,8 +4,8 @@
 )]
 
 use luck_ast::{
-    Assignment, Block, Expression, FunctionBody, FunctionName, Statement, TypeDeclarationValue,
-    Var, Visitor,
+    Assignment, Block, Expression, FunctionBody, FunctionName, Statement, Suffix,
+    TypeDeclarationValue, Var, Visitor,
 };
 use luck_token::{Span, Token};
 use tower_lsp_server::ls_types::{DocumentSymbol, SymbolKind};
@@ -121,11 +121,12 @@ impl SymbolEmitter<'_> {
             };
             let (label, selection_span) = match var {
                 Var::Name(token) => (token.identifier(), token.span),
-                Var::FieldAccess(access) => (
-                    access.name.identifier().map(|_| access.span.text(self.document.text())),
-                    access.span,
-                ),
-                Var::Index(_) => continue,
+                Var::Suffixed(chain) => {
+                    let Suffix::Field(name) = chain.suffixes.last() else {
+                        continue;
+                    };
+                    (name.identifier().map(|_| chain.span.text(self.document.text())), chain.span)
+                }
             };
             if let Some(name) = label {
                 self.push_function(
@@ -213,7 +214,14 @@ mod tests {
 
     #[test]
     fn assigned_function_symbol_range_covers_its_body() {
-        let symbols = symbols_of("M.foo = function()\n  local x = 1\nend\n", LuaTarget::Lua54);
+        let symbols = symbols_of(
+            "\
+M.foo = function()
+  local x = 1
+end
+",
+            LuaTarget::Lua54,
+        );
         let foo = symbols.first().expect("the assigned function is outlined");
         assert_eq!(
             foo.range.end.line, 2,
@@ -233,7 +241,13 @@ mod tests {
 
     #[test]
     fn lua55_global_function_is_outlined() {
-        let symbols = symbols_of("global function setup()\nend\n", LuaTarget::Lua55);
+        let symbols = symbols_of(
+            "\
+global function setup()
+end
+",
+            LuaTarget::Lua55,
+        );
         assert!(
             symbols.iter().any(|symbol| symbol.name == "setup"),
             "a `global function` is a function in the outline: {symbols:?}"

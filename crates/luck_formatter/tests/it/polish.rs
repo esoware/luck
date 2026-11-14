@@ -1,10 +1,12 @@
+use core::fmt::Write as _;
+
 use luck_formatter::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
-    SpaceAfterFunction, format, format_and_verify,
+    SpaceAfterFunction,
 };
 use luck_token::LuaVersion;
 
-use crate::common::{assert_format, assert_format_with, format_once};
+use crate::common::{assert_format, assert_format_with};
 
 #[test]
 fn hex_prefix_lowered_by_default() {
@@ -40,18 +42,30 @@ fn decimal_exponent_lowered() {
 }
 
 #[test]
-fn number_normalization_verifies() {
-    // The AST-equivalence oracle must accept the case rewrite.
+fn hex_prefix_lowered_while_digits_uppered() {
     let options = FormatOptions { hexadecimal_case: HexCase::Upper, ..FormatOptions::default() };
-    let result = format_and_verify("local x = 0Xb0 + 1e5\n", LuaVersion::Luau, &options);
-    assert!(result.is_ok(), "number normalization broke verification");
+    assert_format_with(
+        "local x = 0Xb0 + 1e5\n",
+        "local x = 0xB0 + 1e5\n",
+        LuaVersion::Luau,
+        &options,
+    );
 }
 
 #[test]
 fn block_gaps_never_strips_leading_blank() {
     // The default, `Never`, strips blank lines at the top of a `do` body.
-    let input = "do\n\n\tlocal x = 1\nend\n";
-    let expected = "do\n\tlocal x = 1\nend\n";
+    let input = "\
+do
+
+\tlocal x = 1
+end
+";
+    let expected = "\
+do
+\tlocal x = 1
+end
+";
     assert_format(input, expected);
 }
 
@@ -61,8 +75,18 @@ fn block_gaps_preserve_keeps_leading_blank() {
         block_newline_gaps: BlockNewlineGaps::Preserve,
         ..FormatOptions::default()
     };
-    let input = "do\n\n\tlocal x = 1\nend\n";
-    let expected = "do\n\n\tlocal x = 1\nend\n";
+    let input = "\
+do
+
+\tlocal x = 1
+end
+";
+    let expected = "\
+do
+
+\tlocal x = 1
+end
+";
     assert_format_with(input, expected, LuaVersion::Lua54, &options);
 }
 
@@ -72,8 +96,18 @@ fn block_gaps_preserve_keeps_trailing_blank() {
         block_newline_gaps: BlockNewlineGaps::Preserve,
         ..FormatOptions::default()
     };
-    let input = "do\n\tlocal x = 1\n\nend\n";
-    let expected = "do\n\tlocal x = 1\n\nend\n";
+    let input = "\
+do
+\tlocal x = 1
+
+end
+";
+    let expected = "\
+do
+\tlocal x = 1
+
+end
+";
     assert_format_with(input, expected, LuaVersion::Lua54, &options);
 }
 
@@ -83,8 +117,20 @@ fn block_gaps_preserve_function_body() {
         block_newline_gaps: BlockNewlineGaps::Preserve,
         ..FormatOptions::default()
     };
-    let input = "local function f()\n\n\tlocal x = 1\n\nend\n";
-    let expected = "local function f()\n\n\tlocal x = 1\n\nend\n";
+    let input = "\
+local function f()
+
+\tlocal x = 1
+
+end
+";
+    let expected = "\
+local function f()
+
+\tlocal x = 1
+
+end
+";
     assert_format_with(input, expected, LuaVersion::Lua54, &options);
 }
 
@@ -94,31 +140,56 @@ fn block_gaps_preserve_then_branch() {
         block_newline_gaps: BlockNewlineGaps::Preserve,
         ..FormatOptions::default()
     };
-    let input = "if x then\n\n\tlocal y = 1\nend\n";
-    let expected = "if x then\n\n\tlocal y = 1\nend\n";
+    let input = "\
+if x then
+
+\tlocal y = 1
+end
+";
+    let expected = "\
+if x then
+
+\tlocal y = 1
+end
+";
     assert_format_with(input, expected, LuaVersion::Lua54, &options);
 }
 
 #[test]
 fn sort_requires_on_by_default() {
     assert_format(
-        "local zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\n",
-        "local alpha = require(\"alpha\")\nlocal zeta = require(\"zeta\")\n",
+        "\
+local zeta = require(\"zeta\")
+local alpha = require(\"alpha\")
+",
+        "\
+local alpha = require(\"alpha\")
+local zeta = require(\"zeta\")
+",
     );
 }
 
 #[test]
 fn sort_requires_off_keeps_the_source_order() {
     let options = FormatOptions { sort_requires: false, ..FormatOptions::default() };
-    let input = "local zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\n";
+    let input = "\
+local zeta = require(\"zeta\")
+local alpha = require(\"alpha\")
+";
     assert_format_with(input, input, LuaVersion::Lua54, &options);
 }
 
 #[test]
 fn sort_requires_orders_instance_path_requires() {
     assert_format_with(
-        "local Zebra = require(script.Parent.Zebra)\nlocal Apple = require(Packages.Apple)\n",
-        "local Apple = require(Packages.Apple)\nlocal Zebra = require(script.Parent.Zebra)\n",
+        "\
+local Zebra = require(script.Parent.Zebra)
+local Apple = require(Packages.Apple)
+",
+        "\
+local Apple = require(Packages.Apple)
+local Zebra = require(script.Parent.Zebra)
+",
         LuaVersion::Luau,
         &FormatOptions::default(),
     );
@@ -127,8 +198,16 @@ fn sort_requires_orders_instance_path_requires() {
 #[test]
 fn sort_requires_alphabetizes_consecutive() {
     let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
-    let input = "local zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\nlocal mid = require(\"mid\")\n";
-    let expected = "local alpha = require(\"alpha\")\nlocal mid = require(\"mid\")\nlocal zeta = require(\"zeta\")\n";
+    let input = "\
+local zeta = require(\"zeta\")
+local alpha = require(\"alpha\")
+local mid = require(\"mid\")
+";
+    let expected = "\
+local alpha = require(\"alpha\")
+local mid = require(\"mid\")
+local zeta = require(\"zeta\")
+";
     assert_format_with(input, expected, LuaVersion::Lua54, &options);
 }
 
@@ -137,42 +216,187 @@ fn sort_requires_respects_blank_line_break() {
     let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
     // A blank line splits the run into two single requires, so nothing is
     // reordered.
-    let input = "local zeta = require(\"zeta\")\n\nlocal alpha = require(\"alpha\")\n";
-    let expected = "local zeta = require(\"zeta\")\n\nlocal alpha = require(\"alpha\")\n";
+    let input = "\
+local zeta = require(\"zeta\")
+
+local alpha = require(\"alpha\")
+";
+    let expected = "\
+local zeta = require(\"zeta\")
+
+local alpha = require(\"alpha\")
+";
     assert_format_with(input, expected, LuaVersion::Lua54, &options);
 }
 
 #[test]
-fn sort_requires_verifies_against_the_sorted_buffer() {
-    // Verification compares the output to the text the formatter read, which
-    // `sort_requires` rewrote. Comparing against the original would report
-    // every reordering as a structural change.
-    let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
-    let input = "-- a header\nlocal zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\nreturn alpha, zeta\n";
-    let result = format_and_verify(input, LuaVersion::Lua54, &options)
-        .unwrap_or_else(|(_, diff)| panic!("{diff:?}"));
-    assert_eq!(
-        result.output,
-        "-- a header\nlocal alpha = require(\"alpha\")\nlocal zeta = require(\"zeta\")\nreturn alpha, zeta\n"
+fn sort_requires_keeps_a_header_comment_in_place() {
+    assert_format(
+        "\
+-- a header
+local zeta = require(\"zeta\")
+local alpha = require(\"alpha\")
+return alpha, zeta
+",
+        "\
+-- a header
+local alpha = require(\"alpha\")
+local zeta = require(\"zeta\")
+return alpha, zeta
+",
     );
 }
 
 #[test]
 fn sort_requires_format_off_excluded() {
-    let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
-    let input = "-- luck: format off\nlocal zeta = require(\"zeta\")\nlocal alpha = require(\"alpha\")\n-- luck: format on\n";
-    let result = format(input, LuaVersion::Lua54, &options);
-    assert_eq!(result.errors, Vec::<luck_token::SourceError>::new());
-    // `sort_requires` must not reorder inside a format-off region, which goes
-    // out as written.
-    assert!(result.output.contains("local zeta"));
-    assert!(result.output.contains("local alpha"));
-    let zeta_offset = result.output.find("local zeta").unwrap();
-    let alpha_offset = result.output.find("local alpha").unwrap();
-    assert!(
-        zeta_offset < alpha_offset,
-        "format-off region must preserve source order: got\n{}",
-        result.output
+    let input = "\
+-- luck: format off
+local zeta = require(\"zeta\")
+local alpha = require(\"alpha\")
+-- luck: format on
+";
+    assert_format(input, input);
+}
+
+#[test]
+fn sort_requires_run_ends_at_another_stmt() {
+    for input in [
+        "\
+local zeta = require(\"zeta\")
+local x = 1
+local alpha = require(\"alpha\")
+",
+        "\
+local zeta = require(\"zeta\")
+local a, b = 1, 2
+local alpha = require(\"alpha\")
+",
+    ] {
+        assert_format(input, input);
+    }
+}
+
+#[test]
+fn sort_requires_keeps_requires_that_may_have_side_effects() {
+    let input = "\
+local zeta = require(\"zeta\")()
+local alpha = require(\"alpha\")()
+";
+    assert_format(input, input);
+}
+
+#[test]
+fn sort_requires_orders_get_service_with_requires() {
+    assert_format(
+        "\
+local zeta = require(\"zeta\")
+local alpha = game:GetService(\"Players\")
+",
+        "\
+local alpha = game:GetService(\"Players\")
+local zeta = require(\"zeta\")
+",
+    );
+}
+
+#[test]
+fn sort_requires_orders_requires_of_field_paths() {
+    assert_format(
+        "\
+local Zebra = require(script.Parent.Zebra)
+local Apple = require(Packages.Apple)
+local Mango = require(module)
+",
+        "\
+local Apple = require(Packages.Apple)
+local Mango = require(module)
+local Zebra = require(script.Parent.Zebra)
+",
+    );
+}
+
+#[test]
+fn sort_requires_keeps_a_require_of_a_path_rooted_in_the_run() {
+    let input = "\
+local Packages = require(script.Packages)
+local Apple = require(Packages.Apple)
+";
+    assert_format(input, input);
+}
+
+#[test]
+fn sort_requires_keeps_a_require_of_a_computed_path() {
+    for input in [
+        "\
+local Zebra = require(script:FindFirstChild(\"Zebra\"))
+local Apple = require(script.Apple)
+",
+        "\
+local Zebra = require(script[name])
+local Apple = require(script.Apple)
+",
+    ] {
+        assert_format(input, input);
+    }
+}
+
+#[test]
+fn sort_requires_orders_a_run_in_a_function_body() {
+    let input = "\
+local function f()
+\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"alpha\")
+end
+";
+    let expected = "\
+local function f()
+\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"zeta\")
+end
+";
+    assert_format(input, expected);
+}
+
+#[test]
+fn sort_requires_moves_trailing_comments_with_their_stmts() {
+    assert_format(
+        "\
+local zeta = require(\"zeta\") -- last
+local alpha = require(\"alpha\") --[[ first ]]
+",
+        "\
+local alpha = require(\"alpha\") --[[ first ]]
+local zeta = require(\"zeta\") -- last
+",
+    );
+}
+
+#[test]
+fn sort_requires_orders_stmts_sharing_a_source_line_as_the_lines_they_print() {
+    assert_format(
+        "local zeta = require(\"zeta\") local alpha = require(\"alpha\")\n",
+        "\
+local alpha = require(\"alpha\")
+local zeta = require(\"zeta\")
+",
+    );
+    assert_format(
+        "\
+local zeta = require(\"zeta\") -- z
+local beta = require(\"beta\") local alpha = require(\"alpha\") --[[ a ]]
+do
+\tlocal y = require(\"y\");local x = require(\"x\")
+end
+",
+        "\
+local alpha = require(\"alpha\") --[[ a ]]
+local beta = require(\"beta\")
+local zeta = require(\"zeta\") -- z
+do
+\tlocal x = require(\"x\")
+\tlocal y = require(\"y\")
+end
+",
     );
 }
 
@@ -180,7 +404,11 @@ fn sort_requires_format_off_excluded() {
 fn space_after_function_never_default() {
     assert_format_with(
         "local function f() return 1 end\n",
-        "local function f()\n\treturn 1\nend\n",
+        "\
+local function f()
+\treturn 1
+end
+",
         LuaVersion::Lua54,
         &FormatOptions::default(),
     );
@@ -193,8 +421,16 @@ fn space_after_function_definitions_only() {
         ..FormatOptions::default()
     };
     assert_format_with(
-        "local function f() return 1 end\nf()\n",
-        "local function f ()\n\treturn 1\nend\nf()\n",
+        "\
+local function f() return 1 end
+f()
+",
+        "\
+local function f ()
+\treturn 1
+end
+f()
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -207,8 +443,16 @@ fn space_after_function_calls_only() {
         ..FormatOptions::default()
     };
     assert_format_with(
-        "local function f() return 1 end\nf()\n",
-        "local function f()\n\treturn 1\nend\nf ()\n",
+        "\
+local function f() return 1 end
+f()
+",
+        "\
+local function f()
+\treturn 1
+end
+f ()
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -221,8 +465,16 @@ fn space_after_function_always() {
         ..FormatOptions::default()
     };
     assert_format_with(
-        "local function f() return 1 end\nf()\n",
-        "local function f ()\n\treturn 1\nend\nf ()\n",
+        "\
+local function f() return 1 end
+f()
+",
+        "\
+local function f ()
+\treturn 1
+end
+f ()
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -252,18 +504,17 @@ fn call_parens_input_preserves_bare_table() {
 #[test]
 fn format_ignore_alias_keeps_next_stmt_verbatim() {
     // `luck: format ignore` is an alias of `luck: ignore`.
-    let input = "-- luck: format ignore\nlocal   x   =   1\nlocal y = 2\n";
-    let result = format(input, LuaVersion::Lua54, &FormatOptions::default());
-    assert!(result.errors.is_empty(), "parse: {:?}", result.errors);
-    assert!(
-        result.output.contains("local   x   =   1"),
-        "ignored statement must be verbatim, got:\n{}",
-        result.output
-    );
-    assert!(
-        result.output.contains("local y = 2"),
-        "subsequent statements must be formatted, got:\n{}",
-        result.output
+    assert_format(
+        "\
+-- luck: format ignore
+local   x   =   1
+local   y   =   2
+",
+        "\
+-- luck: format ignore
+local   x   =   1
+local y = 2
+",
     );
 }
 
@@ -280,13 +531,23 @@ fn magic_trailing_comma_on_expands_table() {
     // finds the second pass multi-line too.
     let options = FormatOptions { magic_trailing_comma: true, ..FormatOptions::default() };
     let input = "local t = { 1, 2, 3, }\n";
-    let expected = "local t = {\n\t1,\n\t2,\n\t3,\n}\n";
+    let expected = "\
+local t = {
+\t1,
+\t2,
+\t3,
+}
+";
     assert_format_with(input, expected, LuaVersion::Lua54, &options);
 }
 
 #[test]
 fn magic_trailing_comma_keeps_a_broken_table_broken_by_default() {
-    let input = "local t = {\n\ttype = \"baz\",\n}\n";
+    let input = "\
+local t = {
+\ttype = \"baz\",
+}
+";
     assert_format(input, input);
 }
 
@@ -295,8 +556,17 @@ fn magic_trailing_comma_keeps_a_packed_list_packed() {
     // The values stay several to a line, repacked to the width, and the
     // table stays broken.
     assert_format(
-        "local libs = {\n\t\"roact\", \"rodux\",\n\t\"cryo\",\n}\n",
-        "local libs = {\n\t\"roact\", \"rodux\", \"cryo\",\n}\n",
+        "\
+local libs = {
+\t\"roact\", \"rodux\",
+\t\"cryo\",
+}
+",
+        "\
+local libs = {
+\t\"roact\", \"rodux\", \"cryo\",
+}
+",
     );
 }
 
@@ -305,7 +575,12 @@ fn magic_trailing_comma_gives_a_wrapped_fill_its_comma() {
     let options = FormatOptions { line_width: 12, ..FormatOptions::default() };
     assert_format_with(
         "local t = {1,2,3,4,5,6}\n",
-        "local t = {\n\t1, 2, 3,\n\t4, 5, 6,\n}\n",
+        "\
+local t = {
+\t1, 2, 3,
+\t4, 5, 6,
+}
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -316,30 +591,18 @@ fn magic_trailing_comma_on_expands_call_args_via_table() {
     // No dialect allows a trailing comma after the last argument, so the
     // option can only reach a call through a table argument.
     let options = FormatOptions { magic_trailing_comma: true, ..FormatOptions::default() };
-    let input = "f({ 1, 2, 3, })\n";
-    let result = format(input, LuaVersion::Lua54, &options);
-    assert!(result.errors.is_empty(), "parse: {:?}", result.errors);
-    assert!(
-        result.output.contains("\n\t1,"),
-        "table inside call must expand, got:\n{}",
-        result.output
+    assert_format_with(
+        "f({ 1, 2, 3, })\n",
+        "\
+f({
+\t1,
+\t2,
+\t3,
+})
+",
+        LuaVersion::Lua54,
+        &options,
     );
-}
-
-#[test]
-fn verify_passes_on_clean_format() {
-    let input = "local x = 1\nlocal y = 2\n";
-    let result = format_and_verify(input, LuaVersion::Lua54, &FormatOptions::default())
-        .expect("structurally equivalent format");
-    assert_eq!(result.errors, Vec::<luck_token::SourceError>::new());
-}
-
-fn sorting_options() -> FormatOptions {
-    FormatOptions { sort_requires: true, ..FormatOptions::default() }
-}
-
-fn sort_once(input: &str) -> String {
-    format_once(input, LuaVersion::Lua54, &sorting_options())
 }
 
 fn preserving_gaps_options() -> FormatOptions {
@@ -348,106 +611,171 @@ fn preserving_gaps_options() -> FormatOptions {
 
 #[test]
 fn sort_requires_keeps_a_stmt_before_a_comment_at_eof() {
-    let output = sort_once("local z = require(\"z\")\nlocal a = require(\"a\") -- note");
-    let reparsed = luck_parser::parse(&output, LuaVersion::Lua54);
-    assert_eq!(
-        reparsed.block.stmts.len(),
-        2,
-        "a last line with no newline must not swallow the next sorted line into its comment: {output:?}"
+    // A last line with no newline must not swallow the next sorted line into
+    // its comment.
+    assert_format(
+        "\
+local z = require(\"z\")
+local a = require(\"a\") -- note",
+        "\
+local a = require(\"a\") -- note
+local z = require(\"z\")
+",
     );
 }
 
 #[test]
 fn sort_requires_keeps_a_comment_between_requires() {
-    let output = sort_once("local b = require(\"b\")\n; -- important\nlocal a = require(\"a\")\n");
-    assert!(output.contains("-- important"), "the comment must not be deleted: {output:?}");
+    assert_format(
+        "\
+local b = require(\"b\")
+; -- important
+local a = require(\"a\")
+",
+        "\
+local b = require(\"b\")
+-- important
+local a = require(\"a\")
+",
+    );
 }
 
 #[test]
 fn sort_requires_keeps_a_multi_line_comment_between_requires() {
-    let output = sort_once("local z = require(\"z\") --[[\n]] local a = require(\"a\")\n");
-    assert!(output.contains("--[[\n]]"), "the comment must not be split or lost: {output:?}");
+    assert_format(
+        "\
+local z = require(\"z\") --[[
+]] local a = require(\"a\")
+",
+        "\
+local z = require(\"z\") --[[
+]]
+local a = require(\"a\")
+",
+    );
 }
 
 #[test]
 fn sort_requires_keeps_a_require_inside_the_block_opened_on_its_line() {
-    let output = sort_once("do local z = require(\"z\")\nlocal a = require(\"a\")\nend\n");
-    assert!(
-        output.starts_with("do\n"),
-        "`local a` must not move out of the `do` block: {output:?}"
+    assert_format(
+        "\
+do local z = require(\"z\")
+local a = require(\"a\")
+end
+",
+        "\
+do
+\tlocal a = require(\"a\")
+\tlocal z = require(\"z\")
+end
+",
     );
 }
 
 #[test]
 fn sort_requires_keeps_the_end_closing_on_a_require_line() {
-    let output = sort_once("if x then\nlocal z = require(\"z\")\nlocal a = require(\"a\") end\n");
-    assert!(output.ends_with("end\n"), "`local z` must not move past the `end`: {output:?}");
+    assert_format(
+        "\
+if x then
+local z = require(\"z\")
+local a = require(\"a\") end
+",
+        "\
+if x then
+\tlocal a = require(\"a\")
+\tlocal z = require(\"z\")
+end
+",
+    );
 }
 
 #[test]
 fn sort_requires_keeps_a_binding_before_the_get_service_that_uses_it() {
-    let input = "local zeta = require(\"z\")\nlocal alpha = zeta:GetService(\"x\")\n";
-    assert_eq!(sort_once(input), input, "`alpha` reads `zeta`, so `zeta` must stay first");
+    let input = "\
+local zeta = require(\"z\")
+local alpha = zeta:GetService(\"x\")
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn sort_requires_keeps_a_shadowing_require_before_its_callers() {
-    let input = "local require = require(\"custom\")\nlocal a = require(\"a\")\n";
-    assert_eq!(
-        sort_once(input),
-        input,
-        "`local a` calls the local `require`, so it must stay after it"
-    );
+    let input = "\
+local require = require(\"custom\")
+local a = require(\"a\")
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn sort_requires_keeps_an_ignored_stmt_under_its_directive() {
-    let output =
-        sort_once("-- luck: ignore\nlocal   z  = require(\"z\")\nlocal a = require(\"a\")\n");
-    assert!(
-        output.starts_with("-- luck: ignore\nlocal   z  = require(\"z\")\n"),
-        "`luck: ignore` must keep applying to the statement it was written above: {output:?}"
-    );
+    let input = "\
+-- luck: ignore
+local   z  = require(\"z\")
+local a = require(\"a\")
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn sort_requires_keeps_the_close_order_of_to_be_closed_variables() {
-    let input = "local z <close> = require(\"z\")\nlocal a <close> = require(\"a\")\n";
-    assert_eq!(
-        sort_once(input),
-        input,
-        "to-be-closed variables close in reverse declaration order"
-    );
+    // To-be-closed variables close in reverse declaration order.
+    let input = "\
+local z <close> = require(\"z\")
+local a <close> = require(\"a\")
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn magic_trailing_comma_formats_a_wrapped_fill_idempotently() {
+    // The comma a width-wrapped fill adds must not read as a magic trailing
+    // comma on the next pass.
     let options =
         FormatOptions { magic_trailing_comma: true, line_width: 12, ..FormatOptions::default() };
-    let first_pass = format_once("local t = {1,2,3,4,5,6,7,8,9,10}\n", LuaVersion::Lua54, &options);
-    assert_eq!(
-        format_once(&first_pass, LuaVersion::Lua54, &options),
-        first_pass,
-        "the comma a width-wrapped fill adds must not read as a magic trailing comma on the next pass"
+    assert_format_with(
+        "local t = {1,2,3,4,5,6,7,8,9,10}\n",
+        "\
+local t = {
+\t1, 2, 3,
+\t4, 5, 6,
+\t7, 8, 9,
+\t10,
+}
+",
+        LuaVersion::Lua54,
+        &options,
     );
 }
 
 #[test]
 fn block_gaps_preserve_keeps_a_blank_after_a_trailing_comment() {
-    let input = "do\n\tx() -- c\n\nend\n";
-    assert_eq!(
-        format_once(input, LuaVersion::Lua54, &preserving_gaps_options()),
-        input,
-        "the blank line before `end` must survive a trailing comment on the last statement"
-    );
+    let input = "\
+do
+\tx() -- c
+
+end
+";
+    assert_format_with(input, input, LuaVersion::Lua54, &preserving_gaps_options());
 }
 
 #[test]
 fn block_gaps_preserve_keeps_a_blank_after_a_semicolon() {
-    assert_eq!(
-        format_once("do\n\tx();\n\nend\n", LuaVersion::Lua54, &preserving_gaps_options()),
-        "do\n\tx()\n\nend\n",
-        "the blank line before `end` must survive a dropped `;` on the last statement"
+    assert_format_with(
+        "\
+do
+\tx();
+
+end
+",
+        "\
+do
+\tx()
+
+end
+",
+        LuaVersion::Lua54,
+        &preserving_gaps_options(),
     );
 }
 
@@ -457,9 +785,66 @@ fn collapse_with_preserved_gaps_keeps_a_valid_layout() {
         collapse_simple_statement: CollapseSimpleStatement::ConditionalOnly,
         ..preserving_gaps_options()
     };
-    let output = format_once("if a then\n\n\tx = 1\n\nend\n", LuaVersion::Lua54, &options);
-    assert!(
-        output == "if a then\n\n\tx = 1\n\nend\n" || output == "if a then x = 1 end\n",
-        "the body must be indented or collapsed, not left at column 0 with a ` end` line: {output:?}"
+    let input = "\
+if a then
+
+\tx = 1
+
+end
+";
+    assert_format_with(input, input, LuaVersion::Lua54, &options);
+}
+
+#[test]
+fn a_long_run_of_requires_sorts_without_comparing_every_pair() {
+    // Whether one line of a run reads another's binding is a lookup per line.
+    // Checked pair by pair, this takes minutes.
+    let count = 180_000usize;
+    let require_line = |index: usize| {
+        let module = index.wrapping_mul(7919).rem_euclid(count);
+        format!("local m{index} = require(\"mod{module}\")\n")
+    };
+    let mut by_name: Vec<usize> = (0..count).collect();
+    by_name.sort_by_key(usize::to_string);
+    assert_format(
+        &(0..count).map(require_line).collect::<String>(),
+        &by_name.into_iter().map(require_line).collect::<String>(),
     );
+}
+
+#[test]
+fn a_long_string_heading_a_long_chain_formats_without_remeasuring_it() {
+    // Each `:` run opens a group at the string. Measured again by every group,
+    // the string takes minutes.
+    let head = format!("local x = (\"{}\")", "a".repeat(4_000_000));
+    assert_format(
+        &format!("{head}{}\n", ":b():c().d".repeat(8_000)),
+        &format!(
+            "{head}{}\n",
+            "
+\t:b()
+\t:c().d"
+                .repeat(8_000)
+        ),
+    );
+}
+
+#[test]
+fn many_format_off_regions_format_without_rescanning_the_regions() {
+    // Each statement asks which region comes next. Answered by walking the
+    // regions from the first, this takes minutes.
+    let mut source = String::new();
+    let mut expected = String::new();
+    for index in 0..140_000u32 {
+        let region = format!(
+            "\
+-- luck: format off
+x{index}  =  {index}
+-- luck: format on
+"
+        );
+        writeln!(source, "{region}y{index}   =   {index}").unwrap();
+        writeln!(expected, "{region}y{index} = {index}").unwrap();
+    }
+    assert_format(&source, &expected);
 }

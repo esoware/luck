@@ -7,14 +7,31 @@ use crate::common::assert_compacts_to;
 #[test]
 fn space_separates_adjacent_words() {
     for (source, expected) in [
-        ("do end\nif true then end", "do end if true then end"),
-        ("do end\nf()", "do end f()"),
+        (
+            "\
+do end
+if true then end",
+            "do end if true then end",
+        ),
+        (
+            "\
+do end
+f()",
+            "do end f()",
+        ),
         ("do end do end", "do end do end"),
         (
-            "while true do break end\nwhile true do break end",
+            "\
+while true do break end
+while true do break end",
             "while true do break end while true do break end",
         ),
-        ("for i=1,1 do end\nfor i=1,1 do end", "for i=1,1 do end for i=1,1 do end"),
+        (
+            "\
+for i=1,1 do end
+for i=1,1 do end",
+            "for i=1,1 do end for i=1,1 do end",
+        ),
         ("if true then return 1 end", "if true then return 1 end"),
         ("if true then return 1 else return 2 end", "if true then return 1 else return 2 end"),
         ("do return function() end end", "do return function()end end"),
@@ -148,14 +165,38 @@ fn semicolon_separates_a_stmt_that_starts_with_a_paren() {
     for (source, expected, version) in [
         // Lua 5.2+: a bare `;` is an EmptyStatement, which survives the round
         // trip.
-        ("do end\n;(f)()", "do end;(f)()", LuaVersion::Lua52),
+        (
+            "\
+do end
+;(f)()",
+            "do end;(f)()",
+            LuaVersion::Lua52,
+        ),
         // Lua 5.1 has no empty statement, so its `;` is only an optional
         // separator, but the printer adds one before any statement that
         // starts with `(`.
-        ("do end\n;(f)()", "do end;(f)()", LuaVersion::Lua51),
-        ("do end\n(f)()", "do end;(f)()", LuaVersion::Lua51),
+        (
+            "\
+do end
+;(f)()",
+            "do end;(f)()",
+            LuaVersion::Lua51,
+        ),
+        (
+            "\
+do end
+(f)()",
+            "do end;(f)()",
+            LuaVersion::Lua51,
+        ),
         // Two statements. Without the `;`, `1(f)` reads as a call.
-        ("x = 1\n(f)()", "x=1;(f)()", LuaVersion::Lua51),
+        (
+            "\
+x = 1
+(f)()",
+            "x=1;(f)()",
+            LuaVersion::Lua51,
+        ),
         // The `;` separates two call statements. Dropping it would leave the
         // chained call `f(x)(g)(y)`.
         ("f(x);(g)(y)", "f(x);(g)(y)", LuaVersion::Lua52),
@@ -177,7 +218,7 @@ fn space_keeps_a_type_instantiation_close_from_forming_greater_equal() {
     let source = "local x = f<<T>> == 1";
     let parsed = luck_parser::parse(source, LuaVersion::Luau);
     assert!(parsed.errors.is_empty(), "parse errors for {source:?}: {:?}", parsed.errors);
-    let output = luck_codegen::compact(&parsed.block);
+    let output = luck_codegen::compact(&parsed.block).unwrap();
     let reparsed = luck_parser::parse(output.as_str(), LuaVersion::Luau);
     assert!(
         reparsed.errors.is_empty(),

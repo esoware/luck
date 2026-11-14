@@ -1,0 +1,36 @@
+[package]
+name                   = "luck_config"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "luck.json and .editorconfig loading for the luck toolchain"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+luck_bundler   = { workspace = true }
+luck_core      = { workspace = true }
+luck_formatter = { workspace = true }
+luck_linter    = { workspace = true }
+luck_minifier  = { workspace = true }
+luck_resolver  = { workspace = true }
+
+globset    = { workspace = true }
+json5      = { workspace = true }
+rustc-hash = { workspace = true }
+serde      = { workspace = true }
+
+# Only the tests that generate and check the VS Code schema derive JsonSchema.
+[dev-dependencies]
+luck_linter = { workspace = true, features = ["schemars"] }
+
+schemars   = { workspace = true }
+serde_json = { workspace = true }
+tempfile   = { workspace = true }

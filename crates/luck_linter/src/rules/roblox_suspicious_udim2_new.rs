@@ -1,10 +1,8 @@
-use luck_ast::FunctionCall;
-
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::signed_number_value;
 use crate::roblox::global_new_call;
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxSuspiciousUdim2New;
@@ -21,13 +19,8 @@ impl NodeRule for RobloxSuspiciousUdim2New {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallExpr])
     }
-    fn on_call(
-        &self,
-        call: &FunctionCall,
-        position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let CallSite { call, position, .. } = *site;
         if position == CallPosition::Statement {
             return;
         }
@@ -49,7 +42,7 @@ impl NodeRule for RobloxSuspiciousUdim2New {
         findings.push(
             Finding::new(
                 "`UDim2.new` takes 4 components (`xScale`, `xOffset`, `yScale`, `yOffset`)",
-                call.span,
+                call.span(),
             )
             .with_help(format!("did you mean to use `{suggestion}`?")),
         );

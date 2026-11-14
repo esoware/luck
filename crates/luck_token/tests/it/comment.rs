@@ -19,10 +19,25 @@ fn hot_comment_texts<'source>(comments: &[Comment], source: &'source str) -> Vec
 
 #[test]
 fn collects_hot_comments_across_other_comments() {
-    let source = "#!/usr/bin/env luau\n--[[\nblock\n]]\n-- note\n--!strict\nprint(1)\n";
+    let source = "\
+#!/usr/bin/env luau
+--[[
+block
+]]
+-- note
+--!strict
+print(1)
+";
     let comments = [
         comment_at(source, "#!/usr/bin/env luau", CommentKind::Shebang),
-        comment_at(source, "--[[\nblock\n]]", CommentKind::MultiLineBlock),
+        comment_at(
+            source,
+            "\
+--[[
+block
+]]",
+            CommentKind::MultiLineBlock,
+        ),
         comment_at(source, "-- note", CommentKind::Line),
         comment_at(source, "--!strict", CommentKind::Line),
     ];
@@ -31,7 +46,10 @@ fn collects_hot_comments_across_other_comments() {
 
 #[test]
 fn a_hot_comment_after_code_is_not_leading() {
-    let source = "--[[x]] local y = 1\n--!strict\n";
+    let source = "\
+--[[x]] local y = 1
+--!strict
+";
     let comments = [
         comment_at(source, "--[[x]]", CommentKind::SingleLineBlock),
         comment_at(source, "--!strict", CommentKind::Line),
@@ -41,8 +59,20 @@ fn a_hot_comment_after_code_is_not_leading() {
 
 #[test]
 fn a_hot_comment_line_inside_a_block_comment_is_not_a_comment() {
-    let source = "--[[\n--!strict\n]]\nprint(1)\n";
-    let comments = [comment_at(source, "--[[\n--!strict\n]]", CommentKind::MultiLineBlock)];
+    let source = "\
+--[[
+--!strict
+]]
+print(1)
+";
+    let comments = [comment_at(
+        source,
+        "\
+--[[
+--!strict
+]]",
+        CommentKind::MultiLineBlock,
+    )];
     assert_eq!(hot_comment_texts(&comments, source), Vec::<&str>::new());
 }
 
@@ -58,7 +88,10 @@ fn every_hot_comment_of_the_run_counts() {
 
 #[test]
 fn a_hot_comment_after_non_ascii_whitespace_is_not_leading() {
-    let source = "\u{A0}--!strict\nlocal x\n";
+    let source = "\
+\u{A0}--!strict
+local x
+";
     let comments = [comment_at(source, "--!strict", CommentKind::Line)];
     assert_eq!(
         hot_comment_texts(&comments, source),

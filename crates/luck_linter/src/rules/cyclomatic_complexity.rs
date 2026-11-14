@@ -56,10 +56,10 @@ fn check_function(function: FunctionNode<'_>, context: &LintContext<'_>) -> Opti
 
 #[cfg(test)]
 mod tests {
-    use luck_core::{CyclomaticComplexityOptions, LintConfig, RuleLevel, RuleSetting};
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::config::{CyclomaticComplexityOptions, LintConfig, RuleLevel, RuleSetting};
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule_with_config;
 
@@ -112,7 +112,9 @@ mod tests {
 
     #[test]
     fn flags_method_by_its_full_name() {
-        let source = "local m = {}\nfunction m.sub:run() if a then end end";
+        let source = "\
+local m = {}
+function m.sub:run() if a then end end";
         let diags = run(source, Some(1));
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`m.sub:run`"), "{diags:?}");

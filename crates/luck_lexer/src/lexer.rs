@@ -24,7 +24,12 @@ const MAX_RESERVED_TOKENS: usize = 1 << 20;
 pub fn lex(source: &str, version: LuaVersion) -> LexResult {
     match Lexer::new(source, version) {
         Ok(lexer) => lexer.tokenize(),
-        Err(error) => LexResult { tokens: Vec::new(), comments: Vec::new(), errors: vec![error] },
+        Err(error) => LexResult {
+            tokens: Vec::new(),
+            comments: Vec::new(),
+            errors: vec![error],
+            unterminated: Vec::new(),
+        },
     }
 }
 
@@ -43,10 +48,21 @@ pub struct Lexer<'source> {
     /// The file start counts as a newline.
     has_newline_since_last_token: bool,
     pending_leading_comments: Vec<PendingComment>,
-    /// Unmatched `{` count for each open interpolation expression, innermost
-    /// last (Luau). A `}` at depth 0 closes the expression and resumes the
-    /// string.
-    interpolation_brace_depths: Vec<u32>,
+    /// Each open interpolation expression, innermost last (Luau).
+    holes: Vec<Hole>,
+    unterminated: Vec<Span>,
+}
+
+/// An interpolated string's `{expr}` the lexer is inside.
+#[derive(Debug)]
+struct Hole {
+    /// Unmatched `{` inside the expression. A `}` at depth 0 closes it and
+    /// resumes the string.
+    brace_depth: u32,
+    open_brace: usize,
+    /// Where the token that opened the hole starts, which is still the last
+    /// token's start when the hole holds none.
+    opener_start: u32,
 }
 
 #[derive(Debug)]
@@ -104,7 +120,8 @@ impl<'source> Lexer<'source> {
             last_token_start: None,
             has_newline_since_last_token: true,
             pending_leading_comments: Vec::new(),
-            interpolation_brace_depths: Vec::new(),
+            holes: Vec::new(),
+            unterminated: Vec::new(),
         };
 
         lexer.cursor.advance_by(chunk_start(source, version));
@@ -141,6 +158,14 @@ impl<'source> Lexer<'source> {
         (self.comments, self.errors)
     }
 
+    /// The spans of the string tokens lexed so far that a line break or the
+    /// end of the source cut off before their closing delimiter, in source
+    /// order. A string with no expressions lists both of its tokens.
+    #[must_use]
+    pub fn unterminated(&self) -> &[Span] {
+        &self.unterminated
+    }
+
     /// Its own loop rather than `next_token` until EOF, so no per-token EOF test.
     fn tokenize(mut self) -> LexResult {
         let capacity = self.cursor.rest().len().div_ceil(BYTES_PER_TOKEN);
@@ -161,7 +186,12 @@ impl<'source> Lexer<'source> {
         let eof_start = self.cursor.position();
         tokens.push(self.make_token(TokenKind::Eof, eof_start));
 
-        LexResult { tokens, comments: self.comments, errors: self.errors }
+        LexResult {
+            tokens,
+            comments: self.comments,
+            errors: self.errors,
+            unterminated: self.unterminated,
+        }
     }
 
     /// A match compiles to the same jump table as a fn-pointer array but keeps the small handlers
@@ -173,13 +203,13 @@ impl<'source> Lexer<'source> {
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => Some(self.lex_identifier()),
             b'0'..=b'9' => self.lex_number(),
             b'.' if matches!(self.cursor.peek_next(), Some(b'0'..=b'9')) => self.lex_number(),
-            b'"' | b'\'' => self.lex_short_string(byte),
+            b'"' | b'\'' => Some(self.lex_short_string(byte)),
             b'[' => self.lex_long_string_or_bracket(),
             // Luau
-            b'`' if self.version.has_interpolated_strings() => self.lex_interpolated_string(),
+            b'`' if self.version.has_interpolated_strings() => Some(self.lex_interpolated_string()),
             // Luau: a `}` at depth 0 closes the expression and resumes the string.
-            b'}' if self.interpolation_brace_depths.last() == Some(&0) => {
-                self.lex_interpolated_string_continuation()
+            b'}' if self.holes.last().is_some_and(|hole| hole.brace_depth == 0) => {
+                Some(self.lex_interpolated_string_continuation())
             }
             b'-' if self.cursor.peek_next() == Some(b'-') => {
                 self.lex_comment();
@@ -261,15 +291,15 @@ impl<'source> Lexer<'source> {
         self.cursor.advance_by(2); // `--`
 
         let kind = if let Some(level) = eat_long_bracket_open(&mut self.cursor) {
-            let result = advance_past_long_bracket_close(
+            let is_terminated = advance_past_long_bracket_close(
                 &mut self.cursor,
                 self.version,
                 start,
                 level,
                 "unterminated block comment",
+                &mut self.errors,
             );
-            if let Err(error) = result {
-                self.errors.push(error);
+            if !is_terminated {
                 return;
             }
             // The delimiters (`--[=*[` and `]=*]`) never hold a line break,
@@ -322,11 +352,13 @@ impl<'source> Lexer<'source> {
         Some(self.make_token(kind, start))
     }
 
-    fn lex_short_string(&mut self, quote: u8) -> Option<Token> {
+    /// A string cut off before its closing quote still lexes, to its line
+    /// break, so what follows on later lines lexes as it would have.
+    fn lex_short_string(&mut self, quote: u8) -> Token {
         let start = self.cursor.position();
-        let result = scan_short_string(&mut self.cursor, self.version, quote);
-        let kind = self.ok_or_record(result)?;
-        Some(self.make_token(kind, start))
+        let (kind, is_terminated) =
+            scan_short_string(&mut self.cursor, self.version, quote, &mut self.errors);
+        self.make_string_token(kind, start, is_terminated)
     }
 
     fn lex_long_string_or_bracket(&mut self) -> Option<Token> {
@@ -334,55 +366,88 @@ impl<'source> Lexer<'source> {
         let Some(level) = eat_long_bracket_open(&mut self.cursor) else {
             return self.lex_symbol();
         };
-        let result = scan_long_string(&mut self.cursor, self.version, start, level);
-        let kind = self.ok_or_record(result)?;
-        Some(self.make_token(kind, start))
+        let (kind, is_terminated) =
+            scan_long_string(&mut self.cursor, self.version, start, level, &mut self.errors);
+        Some(self.make_string_token(kind, start, is_terminated))
+    }
+
+    fn make_string_token(&mut self, kind: TokenKind, start: usize, is_terminated: bool) -> Token {
+        let token = self.make_token(kind, start);
+        if !is_terminated {
+            self.unterminated.push(token.span);
+        }
+        token
     }
 
     /// A string with no expressions becomes an empty `InterpolatedStringBegin`
-    /// plus a queued `InterpolatedStringEnd` holding its text, so the parser
-    /// always sees a pair.
-    fn lex_interpolated_string(&mut self) -> Option<Token> {
+    /// over all of it plus a queued `InterpolatedStringEnd` holding its text,
+    /// at the closing backtick, so the parser always sees a pair.
+    fn lex_interpolated_string(&mut self) -> Token {
         let start = self.cursor.position();
         self.cursor.advance();
-        let result = scan_interpolated_segment(&mut self.cursor, self.version, start);
-        let token = match self.ok_or_record(result)? {
-            (text, InterpolatedSegmentEnd::OpenBrace) => {
-                self.interpolation_brace_depths.push(0);
-                self.make_token(TokenKind::InterpolatedStringBegin(text), start)
+        let (text, end) =
+            scan_interpolated_segment(&mut self.cursor, self.version, start, &mut self.errors);
+        let closing_backtick = match end {
+            InterpolatedSegmentEnd::OpenBrace => {
+                let begin = self.make_token(TokenKind::InterpolatedStringBegin(text), start);
+                self.open_hole(begin.span.start);
+                return begin;
             }
-            (text, InterpolatedSegmentEnd::Backtick) => {
-                let closing_backtick = self.cursor.position().saturating_sub(1);
-                let begin = self.make_token(
-                    TokenKind::InterpolatedStringBegin(CompactString::default()),
-                    start,
-                );
-                self.queued =
-                    Some(self.make_token(TokenKind::InterpolatedStringEnd(text), closing_backtick));
-                begin
-            }
+            InterpolatedSegmentEnd::Backtick => self.cursor.position().saturating_sub(1),
+            InterpolatedSegmentEnd::Unterminated => self.cursor.position(),
         };
-        Some(token)
+        let begin =
+            self.make_token(TokenKind::InterpolatedStringBegin(CompactString::default()), start);
+        let end_token = self.make_token(TokenKind::InterpolatedStringEnd(text), closing_backtick);
+        if end == InterpolatedSegmentEnd::Unterminated {
+            self.unterminated.extend([begin.span, end_token.span]);
+        }
+        self.queued = Some(end_token);
+        begin
     }
 
     /// Resume an interpolated string at the `}` that closes an expression,
     /// producing `InterpolatedStringMiddle` at the next `{` or
     /// `InterpolatedStringEnd` at the closing backtick.
-    fn lex_interpolated_string_continuation(&mut self) -> Option<Token> {
-        self.interpolation_brace_depths.pop();
+    ///
+    /// An unterminated string ends at its line break, so the `}` always
+    /// yields one, and the lexer never closes a string the parser doesn't see
+    /// close.
+    fn lex_interpolated_string_continuation(&mut self) -> Token {
         let start = self.cursor.position();
+        if let Some(hole) = self.holes.pop()
+            && self.last_token_start == Some(hole.opener_start)
+        {
+            self.errors.push(lex_error(
+                Span::from_indices(hole.open_brace, start.saturating_add(1)),
+                "malformed interpolated string: expected expression inside `{}`",
+            ));
+        }
         self.cursor.advance();
-        let result = scan_interpolated_segment(&mut self.cursor, self.version, start);
-        let token = match self.ok_or_record(result)? {
-            (text, InterpolatedSegmentEnd::OpenBrace) => {
-                self.interpolation_brace_depths.push(0);
-                self.make_token(TokenKind::InterpolatedStringMiddle(text), start)
+        let (text, end) =
+            scan_interpolated_segment(&mut self.cursor, self.version, start, &mut self.errors);
+        match end {
+            InterpolatedSegmentEnd::OpenBrace => {
+                let middle = self.make_token(TokenKind::InterpolatedStringMiddle(text), start);
+                self.open_hole(middle.span.start);
+                middle
             }
-            (text, InterpolatedSegmentEnd::Backtick) => {
+            InterpolatedSegmentEnd::Backtick => {
                 self.make_token(TokenKind::InterpolatedStringEnd(text), start)
             }
-        };
-        Some(token)
+            InterpolatedSegmentEnd::Unterminated => {
+                let end_token = self.make_token(TokenKind::InterpolatedStringEnd(text), start);
+                self.unterminated.push(end_token.span);
+                end_token
+            }
+        }
+    }
+
+    /// The `{` just scanned opens an expression in the string whose token
+    /// starts at `opener_start`.
+    fn open_hole(&mut self, opener_start: u32) {
+        let open_brace = self.cursor.position().saturating_sub(1);
+        self.holes.push(Hole { brace_depth: 0, open_brace, opener_start });
     }
 
     fn lex_symbol(&mut self) -> Option<Token> {
@@ -397,14 +462,14 @@ impl<'source> Lexer<'source> {
             b'(' => TokenKind::LeftParen,
             b')' => TokenKind::RightParen,
             b'{' => {
-                if let Some(depth) = self.interpolation_brace_depths.last_mut() {
-                    *depth = depth.saturating_add(1);
+                if let Some(hole) = self.holes.last_mut() {
+                    hole.brace_depth = hole.brace_depth.saturating_add(1);
                 }
                 TokenKind::LeftBrace
             }
             b'}' => {
-                if let Some(depth) = self.interpolation_brace_depths.last_mut() {
-                    *depth = depth.saturating_sub(1);
+                if let Some(hole) = self.holes.last_mut() {
+                    hole.brace_depth = hole.brace_depth.saturating_sub(1);
                 }
                 TokenKind::RightBrace
             }

@@ -13,23 +13,26 @@ use crate::separator::PieceClass;
 )]
 impl CompactPrinter {
     pub(super) fn emit_block(&mut self, block: &Block) {
-        for (i, stmt) in block.stmts.iter().enumerate() {
-            // Without a `;`, a leading `(` would re-parse as a call on whatever
-            // expression ends the previous statement.
-            if i > 0 && stmt_starts_with_paren(stmt) && self.previous != PieceClass::Semicolon {
-                self.emit_fixed(";");
+        if self.descend() {
+            for (i, stmt) in block.stmts.iter().enumerate() {
+                // Without a `;`, a leading `(` would re-parse as a call on whatever
+                // expression ends the previous statement.
+                if i > 0 && stmt_starts_with_paren(stmt) && self.previous != PieceClass::Semicolon {
+                    self.emit_fixed(";");
+                }
+                self.emit_stmt(stmt);
             }
-            self.emit_stmt(stmt);
+            if let Some(last) = &block.last_stmt {
+                self.emit_last_stmt(last);
+            }
         }
-        if let Some(last) = &block.last_stmt {
-            self.emit_last_stmt(last);
-        }
+        self.ascend();
     }
 
     fn emit_stmt(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Assignment(assignment) => self.emit_assignment(assignment),
-            Statement::FunctionCall(call) => self.emit_function_call(call),
+            Statement::FunctionCall(call) => self.emit_suffixed(call),
             Statement::DoBlock(block) => self.emit_do_block(block),
             Statement::WhileLoop(while_loop) => self.emit_while_loop(while_loop),
             Statement::RepeatLoop(repeat_loop) => self.emit_repeat_loop(repeat_loop),

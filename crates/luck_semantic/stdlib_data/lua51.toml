@@ -3,12 +3,14 @@
 # Entries that 5.1 already replaces, such as gcinfo and table.getn, are
 # marked deprecated.
 #
-# Schema: see crates/luck_semantic/src/stdlib_load.rs. Each entry has
+# Schema: see crates/luck_semantic/tests/it/stdlib_catalog.rs, which
+# generates the catalog from these files. Each entry has
 # kind = "function" | "namespace" | "constant" | "property". A function
 # has either a flat signature (min_args, max_args, params; max_args = -1
 # means unbounded) or an overloads array. [shapes.<name>.members.*]
 # declare value shapes such as file handles; the string receiver shape is
-# derived at load. tests/it/drift.rs keeps the files consistent.
+# derived from the string namespace. tests/it/drift.rs keeps the files
+# consistent.
 
 [globals._G]
 kind = "property"

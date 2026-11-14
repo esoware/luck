@@ -1,11 +1,12 @@
 use luck_token::{BinOp, OperandSide, UnOp, encode_string};
 
 use crate::expr::{
-    BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
-    FunctionDef, IfExpression, IndexExpression, Literal, ParenthesizedExpression, TableConstructor,
-    TypeCast, TypeInstantiation, UnaryOp, Var,
+    BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
+    FunctionDef, IfExpression, Literal, ParenthesizedExpression, Suffix, SuffixedExpression,
+    TableConstructor, TypeCast, UnaryOp, Var,
 };
 use crate::function::FunctionAttribute;
+use crate::one_or_more::OneOrMore;
 use crate::punctuated::Punctuated;
 use crate::query::{is_multi_value, is_prefix_expr};
 use crate::stmt::Block;
@@ -56,7 +57,7 @@ fn ends_with_type_cast(expr: &Expression) -> bool {
         current = match current {
             // Luau
             Expression::TypeCast(_) => return true,
-            Expression::BinaryOp(inner) => &inner.rhs,
+            Expression::BinaryOp(inner) => &inner.links.last().operand,
             Expression::UnaryOp(inner) => &inner.operand,
             Expression::Nil(_)
             | Expression::False(_)
@@ -66,19 +67,21 @@ fn ends_with_type_cast(expr: &Expression) -> bool {
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_) => return false,
         };
     }
 }
 
 impl Synth {
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn name_var(&self, name: &str) -> Var {
         Var::Name(self.identifier(name))
@@ -86,35 +89,57 @@ impl Synth {
 
     #[must_use]
     pub fn index_var(&self, prefix: Expression, index: Expression) -> Var {
-        Var::Index(Box::new(IndexExpression {
-            span: self.next_span(),
-            prefix: self.wrap_prefix(prefix),
-            index,
-        }))
+        Var::Suffixed(self.index_chain(prefix, index))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn field_var(&self, prefix: Expression, name: &str) -> Var {
-        Var::FieldAccess(Box::new(FieldAccess {
-            span: self.next_span(),
-            prefix: self.wrap_prefix(prefix),
-            name: self.identifier(name),
-        }))
+        Var::Suffixed(self.suffixed(prefix, Suffix::Field(self.identifier(name))))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn name_expr(&self, name: &str) -> Expression {
-        Expression::Var(self.name_var(name))
+        Expression::Name(self.identifier(name))
     }
 
     #[must_use]
     pub fn index(&self, prefix: Expression, index: Expression) -> Expression {
-        Expression::Var(self.index_var(prefix, index))
+        Expression::Suffixed(self.index_chain(prefix, index))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn field(&self, prefix: Expression, name: &str) -> Expression {
-        Expression::Var(self.field_var(prefix, name))
+        Expression::Suffixed(self.suffixed(prefix, Suffix::Field(self.identifier(name))))
+    }
+
+    fn index_chain(&self, prefix: Expression, index: Expression) -> Box<SuffixedExpression> {
+        let span = self.next_span();
+        self.suffixed(prefix, Suffix::Index { span, index })
+    }
+
+    /// `prefix` and then `suffix`, which joins `prefix`'s own run when it has
+    /// one, so the run stays one node. Joining copies the suffixes before it.
+    fn suffixed(&self, prefix: Expression, suffix: Suffix) -> Box<SuffixedExpression> {
+        let wrapped = self.wrap_prefix(prefix);
+        if let Expression::Suffixed(mut chain) = wrapped {
+            chain.span = self.next_span();
+            chain.suffixes.push(suffix);
+            return chain;
+        }
+        Box::new(SuffixedExpression {
+            span: self.next_span(),
+            prefix: wrapped,
+            suffixes: OneOrMore::new(suffix),
+        })
     }
 
     /// `prefix.name` when `name` is a safe identifier (in the pinned dialect,
@@ -132,16 +157,36 @@ impl Synth {
     /// `lhs op rhs`, parenthesizing either operand where precedence,
     /// associativity, a greedy if-expression, or a type cast printed before
     /// `<`, `&`, or `|` would otherwise change the parse.
+    ///
+    /// An operand left bare at `op`'s level joins the run, as it would read
+    /// back. Joining copies the links of the operand's run.
     #[must_use]
     pub fn binary_op(&self, lhs: Expression, op: BinOp, rhs: Expression) -> Expression {
-        let left = self.wrap_binary_operand(lhs, op, OperandSide::Left);
-        let right = self.wrap_binary_operand(rhs, op, OperandSide::Right);
-        Expression::BinaryOp(Box::new(BinaryOp {
-            span: self.next_span(),
-            lhs: left,
-            op,
-            rhs: right,
-        }))
+        let operands = (
+            self.wrap_binary_operand(lhs, op, OperandSide::Left),
+            self.wrap_binary_operand(rhs, op, OperandSide::Right),
+        );
+        let span = self.next_span();
+        let level = op.precedence().0;
+        let run = match operands {
+            (Expression::BinaryOp(mut run), operand) if run.precedence().0 == level => {
+                run.span = span;
+                run.links.push(BinaryLink { op, operand });
+                run
+            }
+            (first, Expression::BinaryOp(run)) if run.precedence().0 == level => {
+                let BinaryOp { first: second, links, .. } = *run;
+                let joined_links =
+                    OneOrMore::from_first(BinaryLink { op, operand: second }, links.into_vec());
+                Box::new(BinaryOp { span, first, links: joined_links })
+            }
+            (first, operand) => Box::new(BinaryOp {
+                span,
+                first,
+                links: OneOrMore::new(BinaryLink { op, operand }),
+            }),
+        };
+        Expression::BinaryOp(run)
     }
 
     /// `op operand`, parenthesizing a binary or if-expression operand.
@@ -157,14 +202,13 @@ impl Synth {
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::UnaryOp(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_) => operand,
         };
         Expression::UnaryOp(Box::new(UnaryOp { span: self.next_span(), op, operand: wrapped }))
@@ -206,12 +250,11 @@ impl Synth {
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::InterpolatedString(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_) => expr,
         };
         Expression::TypeCast(Box::new(TypeCast {
@@ -223,11 +266,11 @@ impl Synth {
 
     #[must_use]
     pub fn type_instantiation(&self, expr: Expression, type_args: Vec<Type>) -> Expression {
-        Expression::TypeInstantiation(Box::new(TypeInstantiation {
+        let suffix = Suffix::TypeInstantiation {
             span: self.next_span(),
-            expr: self.wrap_prefix(expr),
             type_args: TypeArgs { span: self.next_span(), args: Punctuated::from_items(type_args) },
-        }))
+        };
+        Expression::Suffixed(self.suffixed(expr, suffix))
     }
 
     fn wrap_binary_operand(
@@ -237,7 +280,7 @@ impl Synth {
         side: OperandSide,
     ) -> Expression {
         let should_parenthesize = match &operand {
-            Expression::BinaryOp(inner) => !inner.op.can_nest_bare(parent_op, side),
+            Expression::BinaryOp(inner) => !inner.can_nest_bare(parent_op, side),
             // Only `^` binds tighter than unary; `a ^ -b` needs no parens
             // because a unary operator is always accepted after a binop.
             Expression::UnaryOp(_) => {
@@ -256,13 +299,12 @@ impl Synth {
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
-            | Expression::Var(_)
-            | Expression::FunctionCall(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
             | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
-            | Expression::TypeInstantiation(_)
             | Expression::Error(_) => false,
         } || (side == OperandSide::Left
             && op_token_extends_types(parent_op)
@@ -279,6 +321,9 @@ impl Synth {
         self.call_node(callee, None, None, self.parenthesized_args(args))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn method_call(
         &self,
@@ -289,6 +334,9 @@ impl Synth {
         self.call_node(receiver, Some(name), None, self.parenthesized_args(args))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn method_call_with_types(
         &self,
@@ -300,6 +348,9 @@ impl Synth {
         self.call_node(receiver, Some(name), Some(type_args), self.parenthesized_args(args))
     }
 
+    /// # Panics
+    ///
+    /// Panics if a [`FieldSpec::Named`] key isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn call_table(&self, callee: Expression, fields: Vec<FieldSpec<'_>>) -> Expression {
         let args = FunctionArgs::TableConstructor(Box::new(self.table_constructor(fields)));
@@ -316,6 +367,9 @@ impl Synth {
         self.call_node(callee, None, None, args)
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` or a [`FieldSpec::Named`] key isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn method_call_table(
         &self,
@@ -327,6 +381,9 @@ impl Synth {
         self.call_node(receiver, Some(name), None, args)
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn method_call_string(
         &self,
@@ -348,21 +405,23 @@ impl Synth {
         type_args: Option<Vec<Type>>,
         args: FunctionArgs,
     ) -> Expression {
-        Expression::FunctionCall(Box::new(FunctionCall {
-            span: self.next_span(),
-            callee: self.wrap_prefix(callee),
-            args,
+        let call = CallSuffix {
             method: method.map(|name| self.identifier(name)),
             explicit_type_args: type_args.map(|types| {
                 Box::new(TypeArgs { span: self.next_span(), args: Punctuated::from_items(types) })
             }),
-        }))
+            args,
+        };
+        Expression::Suffixed(self.suffixed(callee, Suffix::Call(call)))
     }
 
     fn parenthesized_args(&self, args: Vec<Expression>) -> FunctionArgs {
         FunctionArgs::Parenthesized { span: self.next_span(), args: Punctuated::from_items(args) }
     }
 
+    /// # Panics
+    ///
+    /// Panics if a [`FieldSpec::Named`] key isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn table(&self, fields: Vec<FieldSpec<'_>>) -> Expression {
         Expression::TableConstructor(Box::new(self.table_constructor(fields)))
@@ -409,6 +468,10 @@ impl Synth {
 
     /// For attributes, generics, typed parameters, varargs, or a return type, use
     /// [`Synth::function_def_full`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if a name in `params` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn function_def(&self, params: &[&str], body: Block) -> Expression {
         self.function_def_full(
@@ -466,6 +529,20 @@ mod tests {
 
     use super::*;
 
+    fn chain(expr: &Expression) -> &SuffixedExpression {
+        let Expression::Suffixed(chain) = expr else {
+            panic!("expected a suffixed expression, got {expr:?}");
+        };
+        chain
+    }
+
+    fn last_call(expr: &Expression) -> &CallSuffix {
+        let Suffix::Call(call) = chain(expr).suffixes.last() else {
+            panic!("expected a call, got {expr:?}");
+        };
+        call
+    }
+
     #[test]
     fn binary_op_parenthesizes_lower_precedence_operands() {
         let synth = Synth::new();
@@ -477,7 +554,7 @@ mod tests {
             panic!("expected binop");
         };
         assert!(
-            matches!(binary_op.lhs, Expression::Parenthesized(_)),
+            matches!(binary_op.first, Expression::Parenthesized(_)),
             "lower-precedence LHS not parenthesized"
         );
     }
@@ -492,7 +569,7 @@ mod tests {
         let Expression::BinaryOp(binary_op) = &sum else {
             panic!("expected binop");
         };
-        assert!(matches!(binary_op.lhs, Expression::BinaryOp(_)));
+        assert!(matches!(binary_op.first, Expression::BinaryOp(_)));
     }
 
     #[test]
@@ -505,7 +582,7 @@ mod tests {
         let Expression::BinaryOp(concat_node) = &concat else {
             panic!("expected binop");
         };
-        assert!(matches!(concat_node.lhs, Expression::Parenthesized(_)));
+        assert!(matches!(concat_node.first, Expression::Parenthesized(_)));
 
         // Right-nested subtraction needs parens: a - (b - c).
         let inner_difference =
@@ -514,7 +591,7 @@ mod tests {
         let Expression::BinaryOp(difference_node) = &difference else {
             panic!("expected binop");
         };
-        assert!(matches!(difference_node.rhs, Expression::Parenthesized(_)));
+        assert!(matches!(difference_node.links.last().operand, Expression::Parenthesized(_)));
     }
 
     #[test]
@@ -526,7 +603,7 @@ mod tests {
         let Expression::BinaryOp(power_node) = &power else {
             panic!("expected binop");
         };
-        assert!(matches!(power_node.lhs, Expression::Parenthesized(_)));
+        assert!(matches!(power_node.first, Expression::Parenthesized(_)));
 
         // a * -b stays bare: unary is always accepted after a binary_op.
         let negated_factor = synth.unary_op(UnOp::Neg, synth.name_expr("b"));
@@ -534,7 +611,7 @@ mod tests {
         let Expression::BinaryOp(product_node) = &product else {
             panic!("expected binop");
         };
-        assert!(matches!(product_node.rhs, Expression::UnaryOp(_)));
+        assert!(matches!(product_node.links.last().operand, Expression::UnaryOp(_)));
     }
 
     #[test]
@@ -547,7 +624,7 @@ mod tests {
             panic!("expected binop");
         };
         assert!(
-            matches!(binary_op.rhs, Expression::Parenthesized(_)),
+            matches!(binary_op.links.last().operand, Expression::Parenthesized(_)),
             "greedy if-expression must be parenthesized as an operand"
         );
     }
@@ -563,7 +640,7 @@ mod tests {
                 panic!("expected binop");
             };
             assert!(
-                matches!(binary_op.lhs, Expression::Parenthesized(_)),
+                matches!(binary_op.first, Expression::Parenthesized(_)),
                 "cast before {op:?} must be parenthesized"
             );
         }
@@ -574,7 +651,7 @@ mod tests {
         let Expression::BinaryOp(bare_node) = &bare_sum else {
             panic!("expected binop");
         };
-        assert!(matches!(bare_node.rhs, Expression::TypeCast(_)));
+        assert!(matches!(bare_node.links.last().operand, Expression::TypeCast(_)));
 
         // The cast may sit at the end of a larger left operand: the whole
         // operand gains parens, `(a + b :: T) < c`.
@@ -584,7 +661,7 @@ mod tests {
         let Expression::BinaryOp(sum_node) = &sum_compared else {
             panic!("expected binop");
         };
-        assert!(matches!(sum_node.lhs, Expression::Parenthesized(_)));
+        assert!(matches!(sum_node.first, Expression::Parenthesized(_)));
 
         // A cast on the right of `<` ends the expression; no parens needed.
         let rhs_cast = synth.type_cast(synth.name_expr("b"), synth.ty_named("T"));
@@ -592,7 +669,7 @@ mod tests {
         let Expression::BinaryOp(compared_node) = &cast_compared else {
             panic!("expected binop");
         };
-        assert!(matches!(compared_node.rhs, Expression::TypeCast(_)));
+        assert!(matches!(compared_node.links.last().operand, Expression::TypeCast(_)));
     }
 
     #[test]
@@ -637,7 +714,7 @@ mod tests {
         assert!(matches!(synth.single_value(call), Expression::Parenthesized(_)));
         assert!(matches!(synth.single_value(synth.vararg()), Expression::Parenthesized(_)));
         // Single-value expressions pass through unchanged.
-        assert!(matches!(synth.single_value(synth.name_expr("x")), Expression::Var(_)));
+        assert!(matches!(synth.single_value(synth.name_expr("x")), Expression::Name(_)));
         assert!(matches!(synth.single_value(synth.number_i64(1)), Expression::Number(_)));
     }
 
@@ -646,39 +723,57 @@ mod tests {
         let synth = Synth::new();
         // A string receiver must be parenthesized: ("s"):rep(2).
         let called = synth.method_call(synth.string("s"), "rep", vec![synth.number("2")]);
-        let Expression::FunctionCall(call) = &called else {
-            panic!("expected call");
-        };
-        assert!(matches!(call.callee, Expression::Parenthesized(_)));
+        assert!(matches!(chain(&called).prefix, Expression::Parenthesized(_)));
 
         // A table prefix must be parenthesized: ({}).x.
         let accessed = synth.field(synth.table(vec![]), "x");
-        let Expression::Var(Var::FieldAccess(table_access)) = &accessed else {
-            panic!("expected field access");
-        };
-        assert!(matches!(table_access.prefix, Expression::Parenthesized(_)));
+        assert!(matches!(chain(&accessed).prefix, Expression::Parenthesized(_)));
+    }
 
-        // A call prefix stays bare: f().x.
-        let chained = synth.field(synth.call(synth.name_expr("f"), vec![]), "x");
-        let Expression::Var(Var::FieldAccess(call_access)) = &chained else {
-            panic!("expected field access");
+    #[test]
+    fn a_suffix_joins_the_run_it_follows() {
+        // f().x[1]:m(), one run after `f`.
+        let synth = Synth::new();
+        let called = synth.call(synth.name_expr("f"), vec![]);
+        let indexed = synth.index(synth.field(called, "x"), synth.number("1"));
+        let run = synth.method_call(indexed, "m", vec![]);
+        let suffixes = &chain(&run).suffixes;
+        assert!(matches!(chain(&run).prefix, Expression::Name(_)));
+        assert!(matches!(
+            **suffixes,
+            [Suffix::Call(_), Suffix::Field(_), Suffix::Index { .. }, Suffix::Call(_)]
+        ));
+    }
+
+    #[test]
+    fn an_operand_bare_at_the_same_level_joins_the_run() {
+        let synth = Synth::new();
+        let run_len = |expr: &Expression| {
+            let Expression::BinaryOp(run) = expr else {
+                panic!("expected binop");
+            };
+            run.links.len()
         };
-        assert!(matches!(call_access.prefix, Expression::FunctionCall(_)));
+        // (a + b) - c reads back as one run.
+        let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.name_expr("b"));
+        assert_eq!(run_len(&synth.binary_op(sum, BinOp::Sub, synth.name_expr("c"))), 2);
+        // So does a .. (b .. c).
+        let concat = synth.binary_op(synth.name_expr("b"), BinOp::Concat, synth.name_expr("c"));
+        assert_eq!(run_len(&synth.binary_op(synth.name_expr("a"), BinOp::Concat, concat)), 2);
+        // a - (b - c) keeps its parentheses, and with them a run of its own.
+        let difference = synth.binary_op(synth.name_expr("b"), BinOp::Sub, synth.name_expr("c"));
+        assert_eq!(run_len(&synth.binary_op(synth.name_expr("a"), BinOp::Sub, difference)), 1);
     }
 
     #[test]
     fn field_or_index_picks_form_by_name() {
         let synth = Synth::new();
-        assert!(matches!(
-            synth.field_or_index(synth.name_expr("t"), "valid_name"),
-            Expression::Var(Var::FieldAccess(_))
-        ));
+        let valid = synth.field_or_index(synth.name_expr("t"), "valid_name");
+        assert!(matches!(chain(&valid).suffixes.last(), Suffix::Field(_)));
         for bad in ["not an ident", "1st", "", "end", "goto"] {
+            let bracketed = synth.field_or_index(synth.name_expr("t"), bad);
             assert!(
-                matches!(
-                    synth.field_or_index(synth.name_expr("t"), bad),
-                    Expression::Var(Var::Index(_))
-                ),
+                matches!(chain(&bracketed).suffixes.last(), Suffix::Index { .. }),
                 "{bad:?} should use the bracketed form"
             );
         }
@@ -688,51 +783,35 @@ mod tests {
     fn field_or_index_follows_the_pinned_version() {
         // Unpinned: `goto` is a keyword somewhere, so it gets bracketed.
         let unpinned = Synth::new();
-        assert!(matches!(
-            unpinned.field_or_index(unpinned.name_expr("t"), "goto"),
-            Expression::Var(Var::Index(_))
-        ));
+        let unpinned_goto = unpinned.field_or_index(unpinned.name_expr("t"), "goto");
+        assert!(matches!(chain(&unpinned_goto).suffixes.last(), Suffix::Index { .. }));
 
         // Pinned to Luau: `goto` is a plain identifier there.
         let luau = Synth::new().with_version(LuaVersion::Luau);
-        assert!(matches!(
-            luau.field_or_index(luau.name_expr("t"), "goto"),
-            Expression::Var(Var::FieldAccess(_))
-        ));
+        let luau_goto = luau.field_or_index(luau.name_expr("t"), "goto");
+        assert!(matches!(chain(&luau_goto).suffixes.last(), Suffix::Field(_)));
 
         // Pinned to 5.4: still a keyword, still bracketed.
         let lua54 = Synth::new().with_version(LuaVersion::Lua54);
-        assert!(matches!(
-            lua54.field_or_index(lua54.name_expr("t"), "goto"),
-            Expression::Var(Var::Index(_))
-        ));
+        let lua54_goto = lua54.field_or_index(lua54.name_expr("t"), "goto");
+        assert!(matches!(chain(&lua54_goto).suffixes.last(), Suffix::Index { .. }));
     }
 
     #[test]
     fn builds_sugar_call_forms() {
         let synth = Synth::new();
-        let Expression::FunctionCall(string_call) =
-            synth.call_string(synth.name_expr("require"), "module")
-        else {
-            panic!("expected call");
-        };
-        assert!(matches!(string_call.args, FunctionArgs::StringLiteral(_)));
+        let string_call = synth.call_string(synth.name_expr("require"), "module");
+        assert!(matches!(last_call(&string_call).args, FunctionArgs::StringLiteral(_)));
 
-        let Expression::FunctionCall(table_call) = synth.call_table(
+        let table_call = synth.call_table(
             synth.name_expr("configure"),
             vec![FieldSpec::Named("debug", synth.boolean(true))],
-        ) else {
-            panic!("expected call");
-        };
-        assert!(matches!(table_call.args, FunctionArgs::TableConstructor(_)));
+        );
+        assert!(matches!(last_call(&table_call).args, FunctionArgs::TableConstructor(_)));
 
-        let Expression::FunctionCall(method_call) =
-            synth.method_call_string(synth.name_expr("s"), "gsub", "pattern")
-        else {
-            panic!("expected call");
-        };
-        assert!(method_call.method.is_some());
-        assert!(matches!(method_call.args, FunctionArgs::StringLiteral(_)));
+        let method_call = synth.method_call_string(synth.name_expr("s"), "gsub", "pattern");
+        assert!(last_call(&method_call).method.is_some());
+        assert!(matches!(last_call(&method_call).args, FunctionArgs::StringLiteral(_)));
     }
 
     #[test]
@@ -791,21 +870,22 @@ mod tests {
     #[test]
     fn builds_type_instantiations_and_typed_method_calls() {
         let synth = Synth::new().with_version(LuaVersion::Luau);
-        let Expression::TypeInstantiation(instantiated) =
-            synth.type_instantiation(synth.name_expr("f"), vec![synth.ty_named("integer")])
+        let instantiated =
+            synth.type_instantiation(synth.name_expr("f"), vec![synth.ty_named("integer")]);
+        let Suffix::TypeInstantiation { type_args, .. } = chain(&instantiated).suffixes.last()
         else {
             panic!("expected type instantiation");
         };
-        assert_eq!(instantiated.type_args.args.len(), 1);
+        assert_eq!(type_args.args.len(), 1);
 
-        let Expression::FunctionCall(method) = synth.method_call_with_types(
+        let method = synth.method_call_with_types(
             synth.name_expr("receiver"),
             "map",
             vec![synth.ty_named("string")],
             vec![synth.string("value")],
-        ) else {
-            panic!("expected method call");
-        };
-        assert_eq!(method.explicit_type_args.as_ref().expect("type arguments").args.len(), 1);
+        );
+        let method_type_args =
+            last_call(&method).explicit_type_args.as_ref().expect("type arguments");
+        assert_eq!(method_type_args.args.len(), 1);
     }
 }

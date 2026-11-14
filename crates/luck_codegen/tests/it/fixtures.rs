@@ -31,7 +31,7 @@ fn compact_output_of_every_fixture_reparses() {
             continue;
         }
 
-        let compacted = luck_codegen::compact(&parsed.block);
+        let compacted = luck_codegen::compact(&parsed.block).expect("a parsed tree prints");
         let reparsed = parse(&compacted, version);
         if reparsed.errors.is_empty() {
             success_count += 1;

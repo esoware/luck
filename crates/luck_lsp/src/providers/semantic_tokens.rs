@@ -5,8 +5,8 @@
 use alloc::collections::BTreeMap;
 
 use luck_ast::{
-    Expression, Field, FunctionCall, GenericTypeList, Statement, TableConstructor, Type,
-    TypeDeclarationValue, TypeField, Var, Visitor, ensure_sufficient_stack,
+    Call, ChainHead, Expression, Field, GenericTypeList, Statement, Suffix, TableConstructor, Type,
+    TypeDeclarationValue, TypeField, Visitor,
 };
 use luck_semantic::{StdlibEntry, SymbolKind};
 use luck_token::{Span, Token, TokenKind, index_to_offset, offset_to_index};
@@ -17,7 +17,6 @@ use tower_lsp_server::ls_types::{
 };
 
 use crate::document::DocumentState;
-use crate::providers::cursor::dotted_chain_ending_tokens;
 
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
@@ -126,6 +125,14 @@ fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> Semantic
     classifier.delta_encode(byte_range)
 }
 
+/// Where a name stands in the `Name(.Name)*` chain it ends.
+#[derive(Clone, Copy)]
+enum ChainLink {
+    Root,
+    /// What the chain resolves to in the stdlib, if anything.
+    Member(Option<&'static StdlibEntry>),
+}
+
 /// The classification passes, run in order over one token map.
 struct Classifier<'document> {
     document: &'document DocumentState,
@@ -196,31 +203,44 @@ impl Classifier<'_> {
         }
     }
 
-    /// Classifies names after a `.` or `:`. Each one walks its whole chain back
-    /// to the root so nested paths classify too: `Enum.Material.Grass`,
-    /// `game:GetService`, and `f:read` on a shaped local, not only `math.floor`.
+    /// Classifies names after a `.` or `:`, resolving each one's whole chain
+    /// back to its root, so nested paths classify too: `Enum.Material.Grass`,
+    /// `game:GetService`, and `f:read` on a shaped local, not only
+    /// `math.floor`. A path resolves one member at a time, so each name
+    /// resolves from the one before it rather than walking its chain again.
     fn classify_members(&mut self) {
         let Self { document, tokens, raw_tokens } = self;
+        let library = document.semantic.stdlib();
+        let mut links: Vec<Option<ChainLink>> = Vec::with_capacity(tokens.len());
         for (index, token) in tokens.iter().enumerate() {
             let TokenKind::Identifier(name) = &token.kind else {
+                links.push(None);
                 continue;
             };
-            let Some((separator, before_separator)) =
-                tokens.get(..index).and_then(<[Token]>::split_last)
-            else {
-                continue;
-            };
-            if !matches!(separator.kind, TokenKind::Dot | TokenKind::Colon) {
+            let separator = index.checked_sub(1).and_then(|before| tokens.get(before));
+            let is_after_dot = separator.is_some_and(|before| before.kind == TokenKind::Dot);
+            let is_member =
+                is_after_dot || separator.is_some_and(|before| before.kind == TokenKind::Colon);
+            let chain_before = index
+                .checked_sub(2)
+                .and_then(|before| Some((tokens.get(before)?, (*links.get(before)?)?)));
+            let entry = chain_before.and_then(|(before, link)| match link {
+                ChainLink::Root => {
+                    let root = before.identifier()?;
+                    document.semantic.resolve_stdlib_path(&[root, name.as_str()], before.span)
+                }
+                ChainLink::Member(entry) => library.child(entry?, name),
+            });
+            links.push(if is_after_dot {
+                chain_before.map(|_| ChainLink::Member(entry))
+            } else {
+                Some(ChainLink::Root)
+            });
+            if !is_member {
                 continue;
             }
-            let stdlib_member = dotted_chain_ending_tokens(before_separator).and_then(
-                |(mut segments, root_span)| {
-                    segments.push(name.as_str());
-                    document.semantic.resolve_stdlib_path(&segments, root_span).map(member_classify)
-                },
-            );
-            let classification =
-                stdlib_member.unwrap_or_else(|| match value_shape(tokens, index) {
+            let classification = entry.map_or_else(
+                || match value_shape(tokens, index) {
                     ValueShape::Called | ValueShape::AssignedFunction => {
                         Classification::plain(TYPE_METHOD)
                     }
@@ -228,7 +248,9 @@ impl Classifier<'_> {
                         token_type: TYPE_PROPERTY,
                         modifiers: if is_screaming_case(name) { MODIFIER_READONLY } else { 0 },
                     },
-                });
+                },
+                member_classify,
+            );
             raw_tokens.insert(token.span.start, (token.span, classification));
         }
     }
@@ -294,37 +316,43 @@ impl Classifier<'_> {
         }
     }
 
-    fn callee(&mut self, expr: &Expression) {
-        let mut current = expr;
+    /// The name a call calls, through parentheses, casts, and Luau type
+    /// instantiations.
+    fn callee(&mut self, callee: ChainHead<'_>) {
+        let mut current = callee;
         loop {
-            current = match current {
-                Expression::Var(Var::Name(name)) => {
-                    self.retype(name.span, TYPE_FUNCTION);
+            current = match current.split_last() {
+                Some((_, Suffix::Field(name))) => {
+                    self.retype(name.span, TYPE_METHOD);
                     return;
                 }
-                Expression::Var(Var::FieldAccess(access)) => {
-                    self.retype(access.name.span, TYPE_METHOD);
-                    return;
-                }
-                Expression::Parenthesized(parenthesized) => &parenthesized.expr,
-                Expression::TypeInstantiation(instantiation) => &instantiation.expr, // Luau
-                Expression::TypeCast(cast) => &cast.expr,                            // Luau
-                Expression::Nil(_)
-                | Expression::False(_)
-                | Expression::True(_)
-                | Expression::Number(_)
-                | Expression::Integer(_)
-                | Expression::StringLiteral(_)
-                | Expression::VarArg(_)
-                | Expression::FunctionDef(_)
-                | Expression::Var(Var::Index(_))
-                | Expression::FunctionCall(_)
-                | Expression::TableConstructor(_)
-                | Expression::BinaryOp(_)
-                | Expression::UnaryOp(_)
-                | Expression::IfExpression(_)
-                | Expression::InterpolatedString(_)
-                | Expression::Error(_) => return,
+                Some((before, Suffix::TypeInstantiation { .. })) => before, // Luau
+                Some((_, Suffix::Index { .. } | Suffix::Call(_))) => return,
+                None => match current.prefix {
+                    Expression::Name(name) => {
+                        self.retype(name.span, TYPE_FUNCTION);
+                        return;
+                    }
+                    Expression::Parenthesized(parenthesized) => {
+                        ChainHead::from(&parenthesized.expr)
+                    }
+                    Expression::TypeCast(cast) => ChainHead::from(&cast.expr), // Luau
+                    Expression::Nil(_)
+                    | Expression::False(_)
+                    | Expression::True(_)
+                    | Expression::Number(_)
+                    | Expression::Integer(_)
+                    | Expression::StringLiteral(_)
+                    | Expression::VarArg(_)
+                    | Expression::FunctionDef(_)
+                    | Expression::Suffixed(_)
+                    | Expression::TableConstructor(_)
+                    | Expression::BinaryOp(_)
+                    | Expression::UnaryOp(_)
+                    | Expression::IfExpression(_)
+                    | Expression::InterpolatedString(_)
+                    | Expression::Error(_) => return,
+                },
             };
         }
     }
@@ -405,19 +433,12 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
         self.walk_stmt(stmt);
     }
 
-    fn visit_function_call(&mut self, call: &'ast FunctionCall) {
-        ensure_sufficient_stack(|| self.visit_expr(&call.callee));
-        if let Some(method) = &call.method {
-            self.retype(method.span, TYPE_METHOD);
-        } else {
-            self.callee(&call.callee);
+    fn visit_call(&mut self, call: Call<'ast>) {
+        match call.method {
+            Some(method) => self.retype(method.span, TYPE_METHOD),
+            None => self.callee(call.callee),
         }
-        if let Some(arguments) = &call.explicit_type_args {
-            for argument in arguments.args.iter() {
-                self.visit_type(argument);
-            }
-        }
-        self.walk_function_args(&call.args);
+        self.walk_call(call);
     }
 
     fn visit_table_constructor(&mut self, table: &'ast TableConstructor) {
@@ -522,7 +543,7 @@ const fn symbol_classify(kind: SymbolKind) -> Classification {
     }
 }
 
-fn stdlib_classify(entry: &StdlibEntry) -> Classification {
+const fn stdlib_classify(entry: &StdlibEntry) -> Classification {
     let token_type = match entry {
         StdlibEntry::Function(_) => TYPE_FUNCTION,
         StdlibEntry::Namespace(_) => TYPE_NAMESPACE,
@@ -540,7 +561,7 @@ fn stdlib_classify(entry: &StdlibEntry) -> Classification {
 
 /// Stdlib namespace members: same modifiers as bare globals, but member
 /// functions read as methods so call sites match the accessor grammar.
-fn member_classify(entry: &StdlibEntry) -> Classification {
+const fn member_classify(entry: &StdlibEntry) -> Classification {
     let mut classification = stdlib_classify(entry);
     if classification.token_type == TYPE_FUNCTION {
         classification.token_type = TYPE_METHOD;
@@ -639,7 +660,12 @@ mod tests {
             LuaTarget::LuauRoblox,
         ] {
             let document = parse_document(
-                "Players = Services.Players\nlocal object = {field = Players}\nif not object:IsA('Tool') and not object:IsA('HopperBin') then\n  if 0 < #getPlayer(arg1[1], arg2) then print(object.field) end\nend",
+                "\
+Players = Services.Players
+local object = {field = Players}
+if not object:IsA('Tool') and not object:IsA('HopperBin') then
+  if 0 < #getPlayer(arg1[1], arg2) then print(object.field) end
+end",
                 target,
             );
             let tokens = highlights(&document);
@@ -676,7 +702,12 @@ mod tests {
     #[test]
     fn type_names_and_table_keys_are_not_value_properties_or_globals() {
         let document = parse_document(
-            "type Alias<T> = {field: module.Member<T>, callback: (arg: T) -> T}\nlocal value: Alias<number> = {}\nlocal item = {field = value}\nlocal chosen = value :: module.Member<number>\n",
+            "\
+type Alias<T> = {field: module.Member<T>, callback: (arg: T) -> T}
+local value: Alias<number> = {}
+local item = {field = value}
+local chosen = value :: module.Member<number>
+",
             LuaTarget::Luau,
         );
         let tokens = highlights(&document);
@@ -702,7 +733,11 @@ mod tests {
     #[test]
     fn primitive_annotations_and_type_queries_keep_their_grammar_scopes() {
         let document = parse_document(
-            "local value: number = 1\nlocal text: string = ''\nlocal shape: typeof(value) = value\nfunction handler(arg: boolean): number return value end",
+            "\
+local value: number = 1
+local text: string = ''
+local shape: typeof(value) = value
+function handler(arg: boolean): number return value end",
             LuaTarget::Luau,
         );
         let tokens = highlights(&document);
@@ -722,7 +757,12 @@ mod tests {
     #[test]
     fn functions_keep_their_color_in_annotations_references_and_instantiations() {
         let document = parse_document(
-            "local callback: (number) -> number = function(value) return value end\nlocal saved = callback\nfunction object:method<T>(value: T): T return value end\nobject:method<<number>>(callback<<number>>(1))\n",
+            "\
+local callback: (number) -> number = function(value) return value end
+local saved = callback
+function object:method<T>(value: T): T return value end
+object:method<<number>>(callback<<number>>(1))
+",
             LuaTarget::Luau,
         );
         let tokens = highlights(&document);
@@ -737,7 +777,12 @@ mod tests {
     #[test]
     fn shadowed_stdlib_aliases_do_not_inherit_default_library() {
         let document = parse_document(
-            "local print = 1\nlocal alias = print\nlocal math = {floor = function(value) return value end}\nmath.floor(alias)\n",
+            "\
+local print = 1
+local alias = print
+local math = {floor = function(value) return value end}
+math.floor(alias)
+",
             LuaTarget::Lua54,
         );
         let tokens = highlights(&document);
@@ -752,8 +797,18 @@ mod tests {
     #[test]
     fn real_readonly_bindings_propagate_to_references() {
         for (source, target) in [
-            ("local limit <const> = 1\nprint(limit)", LuaTarget::Lua54),
-            ("const limit = 1\nprint(limit)", LuaTarget::Luau),
+            (
+                "\
+local limit <const> = 1
+print(limit)",
+                LuaTarget::Lua54,
+            ),
+            (
+                "\
+const limit = 1
+print(limit)",
+                LuaTarget::Luau,
+            ),
         ] {
             let tokens = highlights(&parse_document(source, target));
             for token in tokens.iter().filter(|token| token.text == "limit") {
@@ -823,8 +878,12 @@ mod tests {
 
     #[test]
     fn semantic_tokens_classify_shaped_method_calls() {
-        let document =
-            parse_document("local f = io.open('x')\nlocal n = f:read('n')", LuaTarget::Lua54);
+        let document = parse_document(
+            "\
+local f = io.open('x')
+local n = f:read('n')",
+            LuaTarget::Lua54,
+        );
         let tokens = full_tokens(&document);
         // `read` must be METHOD (5) with defaultLibrary (1 << 2).
         let read = tokens
@@ -868,8 +927,13 @@ mod tests {
 
     #[test]
     fn a_global_function_name_is_a_function_token() {
-        let tokens =
-            highlights(&parse_document("global function setup()\nend\n", LuaTarget::Lua55));
+        let tokens = highlights(&parse_document(
+            "\
+global function setup()
+end
+",
+            LuaTarget::Lua55,
+        ));
         let name = tokens.iter().find(|token| token.text == "setup").expect("setup");
         assert_eq!(name.kind, "function", "{tokens:?}");
     }

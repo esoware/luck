@@ -27,8 +27,7 @@ pub(crate) fn signature_help(
         return None;
     };
     let name = callee.name();
-    let deprecated_message =
-        function.deprecated.as_ref().map(|deprecation| deprecation.message.as_str());
+    let deprecated_message = function.deprecated.as_ref().map(|deprecation| deprecation.message);
     let signatures: Vec<SignatureInformation> = function
         .signatures
         .iter()
@@ -126,7 +125,9 @@ mod tests {
 
     #[test]
     fn signature_help_resolves_shaped_local_method() {
-        let text = "local f = io.open('x')\nf:setvbuf('full', 512)";
+        let text = "\
+local f = io.open('x')
+f:setvbuf('full', 512)";
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         // Cursor inside the second argument.
@@ -155,7 +156,9 @@ mod tests {
 
     #[test]
     fn signature_help_refuses_shadowed_base() {
-        let text = "local string = 1\nstring.format('x')";
+        let text = "\
+local string = 1
+string.format('x')";
         let document =
             DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         assert!(

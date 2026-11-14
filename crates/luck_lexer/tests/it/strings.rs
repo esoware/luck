@@ -83,6 +83,88 @@ fn short_string_scan_boundaries_preserve_spelling_and_errors() {
     }
 }
 
+/// A string cut off at its line break, or holding a malformed escape, keeps
+/// its token, so the rest of its line stays in it and the next line lexes as
+/// it would have.
+#[test]
+fn a_malformed_string_keeps_its_token() {
+    let name = |text: &str| TokenKind::Identifier(text.into());
+    let string = |text: &str| TokenKind::StringLiteral(text.into());
+    let cases = [
+        (
+            LuaVersion::Lua54,
+            "\
+\"abc
+y",
+            vec![string("\"abc"), name("y")],
+            "unterminated string",
+            "\"abc",
+            true,
+        ),
+        (
+            LuaVersion::Lua54,
+            "'a\\qb' .. y",
+            vec![string("'a\\qb'"), TokenKind::DotDot, name("y")],
+            "invalid escape sequence `\\q`",
+            "\\q",
+            false,
+        ),
+        (
+            LuaVersion::Lua54,
+            "\"a\\x\" y",
+            vec![string("\"a\\x\""), name("y")],
+            "`\\x` escape requires exactly 2 hex digits, got 0",
+            "\\x",
+            false,
+        ),
+        (LuaVersion::Lua54, "\"a\\", vec![string("\"a\\")], "unterminated string", "\"a\\", true),
+        (
+            LuaVersion::Lua51,
+            "\
+[[a
+y",
+            vec![string(
+                "\
+[[a
+y",
+            )],
+            "unterminated long bracket string",
+            "\
+[[a
+y",
+            true,
+        ),
+        (
+            LuaVersion::Lua51,
+            "[[a [[b]] y",
+            vec![string("[[a [[b]]"), name("y")],
+            "nesting of `[[...]]` is deprecated",
+            "[[a [[b]]",
+            false,
+        ),
+    ];
+    for (version, source, expected, message, text, is_unterminated) in cases {
+        let result = lex(source, version);
+        let kinds: Vec<TokenKind> = result
+            .tokens
+            .iter()
+            .filter(|token| token.kind != TokenKind::Eof)
+            .map(|token| token.kind.clone())
+            .collect();
+        assert_eq!(kinds, expected, "{source:?}");
+        let [error] = result.errors.as_slice() else {
+            panic!("{source:?}: {:?}", result.errors);
+        };
+        assert_eq!(
+            (error.message.as_str(), error.span.text(source)),
+            (message, text),
+            "{source:?}"
+        );
+        let unterminated = if is_unterminated { vec![result.tokens[0].span] } else { Vec::new() };
+        assert_eq!(result.unterminated, unterminated, "{source:?}");
+    }
+}
+
 #[test]
 fn unterminated_string_is_error() {
     let result = lex_lua51("\"hello");
@@ -204,7 +286,9 @@ fn long_strings_keep_their_spelling_at_every_level() {
 
 #[test]
 fn long_string_keeps_its_line_breaks() {
-    let source = "[[line1\nline2]]";
+    let source = "\
+[[line1
+line2]]";
     assert_eq!(first_kind(source), TokenKind::StringLiteral(source.into()));
 }
 
@@ -240,7 +324,12 @@ fn unicode_escape_above_10ffff_is_error_on_lua53_and_luau() {
 
 #[test]
 fn lua51_level_zero_long_bracket_rejects_a_nested_opener() {
-    for source in ["return [[ a [[ b ]]", "--[[ a [[ b ]]\nreturn 1"] {
+    for source in [
+        "return [[ a [[ b ]]",
+        "\
+--[[ a [[ b ]]
+return 1",
+    ] {
         let result = lex(source, LuaVersion::Lua51);
         assert!(
             !result.errors.is_empty(),

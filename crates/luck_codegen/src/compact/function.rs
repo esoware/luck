@@ -18,7 +18,10 @@ impl CompactPrinter {
                 self.emit_fixed("[");
                 self.emit_token(&attribute.name);
                 self.emit_fixed("(");
-                self.emit_punctuated(args, ",", Self::emit_expr);
+                if self.descend() {
+                    self.emit_punctuated(args, ",", Self::emit_expr);
+                }
+                self.ascend();
                 self.emit_fixed(")");
                 self.emit_fixed("]");
             } else {
@@ -28,33 +31,36 @@ impl CompactPrinter {
     }
 
     pub(super) fn emit_function_body(&mut self, body: &FunctionBody) {
-        // Luau: `<T, U...>` generics sit between the function name and `(`.
-        if let Some(generics) = &body.generics {
-            self.emit_generic_type_list(generics);
-        }
-        self.emit_fixed("(");
-        self.emit_joined(&body.params.items, ",", Self::emit_param);
-        if let Some(vararg) = &body.vararg {
-            // The AST doesn't store the comma between the last param and `...`.
-            if !body.params.is_empty() {
-                self.emit_fixed(",");
+        if self.descend() {
+            // Luau: `<T, U...>` generics sit between the function name and `(`.
+            if let Some(generics) = &body.generics {
+                self.emit_generic_type_list(generics);
             }
-            self.emit_fixed("...");
-            if let Some(name) = &vararg.name {
-                self.emit_token(name);
+            self.emit_fixed("(");
+            self.emit_joined(&body.params.items, ",", Self::emit_param);
+            if let Some(vararg) = &body.vararg {
+                // The AST doesn't store the comma between the last param and `...`.
+                if !body.params.is_empty() {
+                    self.emit_fixed(",");
+                }
+                self.emit_fixed("...");
+                if let Some(name) = &vararg.name {
+                    self.emit_token(name);
+                }
+                if let Some(ty) = &vararg.type_annotation {
+                    self.emit_fixed(":");
+                    self.emit_type(ty);
+                }
             }
-            if let Some(ty) = &vararg.type_annotation {
+            self.emit_fixed(")");
+            if let Some(return_type) = &body.return_type {
                 self.emit_fixed(":");
-                self.emit_type(ty);
+                self.emit_type(return_type);
             }
+            self.emit_block(&body.block);
+            self.emit_fixed("end");
         }
-        self.emit_fixed(")");
-        if let Some(return_type) = &body.return_type {
-            self.emit_fixed(":");
-            self.emit_type(return_type);
-        }
-        self.emit_block(&body.block);
-        self.emit_fixed("end");
+        self.ascend();
     }
 
     pub(super) fn emit_param(&mut self, param: &Parameter) {

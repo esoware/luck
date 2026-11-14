@@ -1,7 +1,12 @@
 use luck_ast::{Expression, LastStatement, Statement};
 
-/// One variant per `Statement`, `LastStatement`, and `Expression` variant.
-/// `TableConstructor` also covers a `f{...}` argument.
+/// One variant per `Statement`, `LastStatement`, and `Expression` variant,
+/// and `FunctionCallExpr` for a call in a chain.
+///
+/// `FunctionCallExpr` leaves out the call a call statement makes, which is
+/// that statement's `FunctionCallStmt`. `TableConstructor` also covers a
+/// `f{...}` argument, and `Suffixed` a chain in a call statement or an
+/// assignment target.
 ///
 /// `of_stmt`, `of_last_stmt`, and `of_expr` match exhaustively, so a new AST
 /// variant doesn't compile until it has a `NodeType`.
@@ -37,7 +42,8 @@ pub(crate) enum NodeType {
     StringLiteral,
     VarArg,
     FunctionDef,
-    Var,
+    Name,
+    Suffixed,
     FunctionCallExpr,
     Parenthesized,
     TableConstructor,
@@ -46,7 +52,6 @@ pub(crate) enum NodeType {
     IfExpression,
     InterpolatedString,
     TypeCast,
-    TypeInstantiation,
     ErrorExpr,
     Return,
     LastBreak,
@@ -121,8 +126,8 @@ impl NodeType {
             Expression::StringLiteral(_) => Self::StringLiteral,
             Expression::VarArg(_) => Self::VarArg,
             Expression::FunctionDef(_) => Self::FunctionDef,
-            Expression::Var(_) => Self::Var,
-            Expression::FunctionCall(_) => Self::FunctionCallExpr,
+            Expression::Name(_) => Self::Name,
+            Expression::Suffixed(_) => Self::Suffixed,
             Expression::Parenthesized(_) => Self::Parenthesized,
             Expression::TableConstructor(_) => Self::TableConstructor,
             Expression::BinaryOp(_) => Self::BinaryOp,
@@ -133,8 +138,6 @@ impl NodeType {
             Expression::InterpolatedString(_) => Self::InterpolatedString,
             // Luau
             Expression::TypeCast(_) => Self::TypeCast,
-            // Luau
-            Expression::TypeInstantiation(_) => Self::TypeInstantiation,
             Expression::Error(_) => Self::ErrorExpr,
         }
     }

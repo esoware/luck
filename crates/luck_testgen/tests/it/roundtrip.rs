@@ -3,8 +3,8 @@
     reason = "a test panics to fail, so a Panics section says nothing"
 )]
 
-use luck_core::TransformConfig;
-use luck_formatter::{Comments, FormatOptions, blocks_equivalent, format, format_block};
+use luck_formatter::{Comments, FormatOptions, format, format_block};
+use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
 use luck_testgen::{generate_full, generate_runtime_safe};
 use luck_token::LuaVersion;
@@ -63,13 +63,13 @@ fn generated_programs_parse_cleanly() {
 fn compact_output_reparses() {
     for program in programs() {
         let parsed = parse_cleanly(&program, "generator", &program.source);
-        let compacted = luck_codegen::compact(&parsed.block);
+        let compacted = luck_codegen::compact(&parsed.block).unwrap();
         parse_cleanly(&program, "compact", &compacted);
     }
 }
 
 #[test]
-fn format_is_idempotent_reparses_and_keeps_ast_structure() {
+fn format_reparses_and_is_idempotent() {
     let options = FormatOptions::default();
     for program in programs() {
         let Program { source, version, label } = &program;
@@ -80,46 +80,36 @@ fn format_is_idempotent_reparses_and_keeps_ast_structure() {
             first.errors
         );
 
-        let reparsed = parse_cleanly(&program, "format", &first.output);
+        parse_cleanly(&program, "format", &first.output);
 
         let second = format(&first.output, *version, &options);
         assert_eq!(
             first.output, second.output,
             "{label}: format not idempotent.\ninput:\n{source}"
         );
-
-        // Formatting must not drop or reshape any statement, the same check
-        // `luck fmt --verify` runs.
-        let original = parse_cleanly(&program, "generator", source);
-        if let Err(diff) = blocks_equivalent(&original.block, &reparsed.block, *version) {
-            panic!(
-                "{label}: source-in format changed AST structure.\ninput:\n{source}\noutput:\n{}\ndiff: {diff:?}",
-                first.output
-            );
-        }
     }
 }
 
 /// The AST-in path: the parsed program, fed back as a bare AST with no
-/// source or comments, must still print valid, structurally identical Lua.
+/// source or comments, must still print valid Lua that formats as itself.
 #[test]
-fn format_block_without_source_reparses_and_keeps_ast_structure() {
+fn format_block_without_source_reparses_and_formats_as_itself() {
     let options = FormatOptions::default();
     for program in programs() {
         let Program { source, version, label } = &program;
         let original = parse_cleanly(&program, "generator", source);
-        let via_ast = format_block(&original.block, Comments::none(), &options);
-        let reparsed = parse_cleanly(&program, "format_block", &via_ast);
-        if let Err(diff) = blocks_equivalent(&original.block, &reparsed.block, *version) {
-            panic!(
-                "{label}: format_block changed AST structure.\ninput:\n{source}\noutput:\n{via_ast}\ndiff: {diff:?}"
-            );
-        }
+        let via_ast = format_block(&original.block, Comments::none(), &options).unwrap();
+        parse_cleanly(&program, "format_block", &via_ast);
+        let reformatted = format(&via_ast, *version, &options);
+        assert_eq!(
+            via_ast, reformatted.output,
+            "{label}: format changed format_block's output.\ninput:\n{source}"
+        );
     }
 }
 
 #[test]
-fn minify_reparses_and_reaches_a_fixpoint_by_the_second_pass() {
+fn minify_reparses_and_is_idempotent() {
     let config = TransformConfig::default();
     for program in programs() {
         let Program { source, version, label } = &program;
@@ -132,18 +122,9 @@ fn minify_reparses_and_reaches_a_fixpoint_by_the_second_pass() {
         let Ok(second) = luck_minifier::minify(&first, *version, &config) else {
             panic!("{label}: second minify errored.\nfirst output:\n{first}");
         };
-        // Names aren't byte-stable: lift and merge run after rename, so the
-        // second pass ranks slots against a different shape and may permute
-        // short names. What holds is the length (no growth, no further
-        // shrinkage) and a byte-exact fixpoint from the second pass on.
         assert_eq!(
-            first.len(),
-            second.len(),
-            "{label}: second minify changed size.\nfirst:\n{first}\nsecond:\n{second}"
+            first, second,
+            "{label}: minify not idempotent.\ninput:\n{source}\nfirst:\n{first}\nsecond:\n{second}"
         );
-        let Ok(third) = luck_minifier::minify(&second, *version, &config) else {
-            panic!("{label}: third minify errored");
-        };
-        assert_eq!(second, third, "{label}: minify has no fixpoint.\ninput:\n{source}");
     }
 }

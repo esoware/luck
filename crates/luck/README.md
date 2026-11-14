@@ -24,6 +24,7 @@ The parse core (`token`, `lexer`, `ast`, `parser`, and `core`) is always present
 | `luck::formatter` | [`luck_formatter`](../luck_formatter) | `formatter` |
 | `luck::semantic` | [`luck_semantic`](../luck_semantic) | `semantic` |
 | `luck::linter` | [`luck_linter`](../luck_linter) | `linter` (pulls in `semantic`) |
+| `luck::config` | [`luck_config`](../luck_config) | `config` (pulls in `bundler`, `minifier`, `formatter`, and `linter`) |
 | `luck::VERSION` | Crate version string | always on |
 
 ## Usage
@@ -32,7 +33,7 @@ The package publishes as `luck_lua` (the `luck` name on crates.io belongs to an 
 
 ```toml
 [dependencies]
-luck = { package = "luck_lua", version = "0.4", features = ["bundler", "minifier"] }
+luck = { package = "luck_lua", version = "0.5", features = ["bundler", "minifier"] }
 ```
 
 ```rust

@@ -5,11 +5,13 @@ use std::sync::mpsc;
 
 use globset::GlobSet;
 use ignore::WalkBuilder;
-use luck_core::{
-    CONFIG_FILE_NAME, DynamicRequire, LuaTarget, LuckConfig, ProjectConfig, ProjectFilter,
-    discover_config, glob_set, load_or_discover_config, load_with_extends, native_path,
-    normalize_path,
+use luck_bundler::DynamicRequire;
+use luck_config::{
+    CONFIG_FILE_NAME, LuckConfig, ProjectConfig, ProjectFilter, discover_config, glob_set,
+    load_or_discover_config, load_with_extends,
 };
+use luck_core::LuaTarget;
+use luck_resolver::{native_path, normalize_path};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -67,7 +69,7 @@ pub(crate) fn resolve_dynamic_require(
     config: &LuckConfig,
     flag: Option<DynamicRequire>,
 ) -> DynamicRequire {
-    flag.or(config.dynamic_require).unwrap_or_default()
+    flag.or_else(|| config.dynamic_require.map(Into::into)).unwrap_or_default()
 }
 
 /// That's `-c` resolved through `extends` when given.
@@ -490,7 +492,7 @@ where
 mod tests {
     use std::fs;
 
-    use luck_core::parse_luck_config;
+    use luck_config::parse_luck_config;
 
     use super::*;
 

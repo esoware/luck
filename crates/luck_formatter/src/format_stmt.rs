@@ -2,12 +2,14 @@
 //! `indent((hard_line, block))`, `hard_line`, `end`. Comment and verbatim
 //! handling around each statement lives in `format_block`.
 
+use core::slice;
+
 use luck_ast::{
     Assignment, AttributedName, Block, CompoundAssignment, DoBlock, Expression, FunctionAttribute,
     FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar,
     GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment, LocalFunction,
-    NumericFor, Punctuated, RepeatLoop, Statement, TypeDeclaration, TypeDeclarationValue,
-    WhileLoop, unwrap_parentheses,
+    LocalFunctionKind, NumericFor, Punctuated, RepeatLoop, Statement, TypeDeclaration,
+    TypeDeclarationValue, WhileLoop, unwrap_parentheses,
 };
 
 use crate::CollapseSimpleStatement;
@@ -15,8 +17,8 @@ use crate::comments::write_inline_comments_after;
 use crate::format_block::{IndentedBlock, first_item_span};
 use crate::format_expr::LevelChain;
 use crate::ir::{
-    Format, Formatter, format_with, group, hard_line, indent, line_suffix_boundary, separated,
-    soft_line_or_space, space, token,
+    Format, Formatter, format_with, group, hard_line, indent, line_suffix_boundary,
+    next_line_group, separated, soft_line_or_space, space, token,
 };
 
 /// A statement condition with redundant parens stripped. Conditions are
@@ -59,6 +61,27 @@ impl Format for ExprList<'_> {
             list.fmt(f);
         }
     }
+}
+
+/// What follows `=`.
+///
+/// A lone table, function, or call breaks inside its own brackets, so it stays
+/// on the `=` line. Anything else that doesn't fit there goes on its own
+/// indented line when it fits that, and hangs from `=` otherwise.
+fn assigned<Values>(values: Values, items: &[Expression]) -> impl Format
+where
+    Values: Format,
+{
+    let is_bracketed =
+        matches!(items, [Expression::TableConstructor(_) | Expression::FunctionDef(_)])
+            || matches!(items, [Expression::Suffixed(chain)] if chain.is_call());
+    format_with(move |f| {
+        if is_bracketed {
+            values.fmt(f);
+        } else {
+            next_line_group(&values).fmt(f);
+        }
+    })
 }
 
 /// No other emitter owns that gap, and a comment left unprinted there would
@@ -154,7 +177,7 @@ impl Format for LocalAssignment {
             .fmt(f);
 
         if let Some(exprs) = &self.exprs {
-            (space(), token("="), space(), ExprList(exprs)).fmt(f);
+            (space(), token("="), space(), assigned(ExprList(exprs), &exprs.items)).fmt(f);
         }
     }
 }
@@ -179,7 +202,7 @@ impl Format for Assignment {
             space(),
             token("="),
             space(),
-            ExprList(&self.values),
+            assigned(ExprList(&self.values), &self.values.items),
         ))
         .fmt(f);
     }
@@ -187,7 +210,8 @@ impl Format for Assignment {
 
 impl Format for CompoundAssignment {
     fn fmt(&self, f: &mut Formatter) {
-        group((&self.var, space(), token(self.op.static_text()), space(), &self.expr)).fmt(f);
+        let value = assigned(&self.expr, slice::from_ref(&self.expr));
+        group((&self.var, space(), token(self.op.static_text()), space(), value)).fmt(f);
     }
 }
 
@@ -360,7 +384,7 @@ impl Format for GlobalDeclaration {
     fn fmt(&self, f: &mut Formatter) {
         (token("global"), space(), punctuated(&self.names, (token(","), space()))).fmt(f);
         if let Some(exprs) = &self.exprs {
-            (space(), token("="), space(), ExprList(exprs)).fmt(f);
+            (space(), token("="), space(), assigned(ExprList(exprs), &exprs.items)).fmt(f);
         }
     }
 }
@@ -385,12 +409,10 @@ impl Format for FunctionDecl {
 impl Format for LocalFunction {
     fn fmt(&self, f: &mut Formatter) {
         write_function_attributes(f, &self.attributes);
-        let keyword = if self.is_exported {
-            "export"
-        } else if self.is_const {
-            "const"
-        } else {
-            "local"
+        let keyword = match self.kind {
+            LocalFunctionKind::Local => "local",
+            LocalFunctionKind::Const => "const",
+            LocalFunctionKind::Export => "export",
         };
         (token(keyword), space(), token("function"), space(), &self.name, &self.body).fmt(f);
     }

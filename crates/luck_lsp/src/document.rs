@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use luck_core::LuaTarget;
+use luck_lexer::LexResult;
 use luck_linter::{LintConfig, LintDiagnostic};
 use luck_parser::ParseResult;
 use luck_semantic::SemanticAnalysis;
@@ -23,7 +24,7 @@ pub(crate) struct DocumentState {
     pub parsed: ParseResult,
     pub semantic: SemanticAnalysis,
     pub line_index: LineIndex,
-    pub tokens: OnceLock<Vec<Token>>,
+    pub lexed: OnceLock<LexResult>,
 }
 
 impl DocumentState {
@@ -44,7 +45,7 @@ impl DocumentState {
             target.stdlib_environment(),
         );
         semantic.extra_globals = extra_globals;
-        Self { version, target, lua_version, parsed, semantic, line_index, tokens: OnceLock::new() }
+        Self { version, target, lua_version, parsed, semantic, line_index, lexed: OnceLock::new() }
     }
 
     pub(crate) fn with_text(&self, text: String, version: i32) -> Self {
@@ -58,7 +59,17 @@ impl DocumentState {
     /// This state's tokens, lexed on first use: most keystrokes serve no
     /// request that needs them.
     pub(crate) fn tokens(&self) -> &[Token] {
-        self.tokens.get_or_init(|| luck_lexer::lex(self.text(), self.lua_version).tokens)
+        &self.lexed().tokens
+    }
+
+    /// The spans of the string tokens the line or the text ended before they
+    /// closed.
+    pub(crate) fn unterminated_strings(&self) -> &[Span] {
+        &self.lexed().unterminated
+    }
+
+    fn lexed(&self) -> &LexResult {
+        self.lexed.get_or_init(|| luck_lexer::lex(self.text(), self.lua_version))
     }
 
     pub(crate) fn position(&self, offset: u32) -> Position {
@@ -125,7 +136,6 @@ pub(crate) fn file_path(uri: &Uri) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use core::str::FromStr as _;
-    use std::thread;
 
     use super::*;
 
@@ -148,7 +158,11 @@ mod tests {
     #[test]
     fn changed_text_applies_each_range_to_the_previous_result() {
         let document = DocumentState::new(
-            "local a = 1\nlocal b = 2\nlocal c = 3".to_owned(),
+            "\
+local a = 1
+local b = 2
+local c = 3"
+                .to_owned(),
             1,
             LuaTarget::Lua54,
             FxHashSet::default(),
@@ -159,13 +173,21 @@ mod tests {
         let text = document.changed_text(vec![
             replace(
                 Range::new(Position::new(0, 0), Position::new(0, 11)),
-                "local a = 10\nlocal aa = 11",
+                "\
+local a = 10
+local aa = 11",
             ),
             replace(Range::new(Position::new(3, 10), Position::new(3, 11)), "30"),
         ]);
         assert_eq!(
             text.as_deref(),
-            Some("local a = 10\nlocal aa = 11\nlocal b = 2\nlocal c = 30"),
+            Some(
+                "\
+local a = 10
+local aa = 11
+local b = 2
+local c = 30"
+            ),
             "second edit must land on the line shifted by the first"
         );
     }
@@ -177,21 +199,5 @@ mod tests {
         let text = document
             .changed_text(vec![replace(Range::new(Position::new(0, 5), Position::new(0, 2)), "x")]);
         assert_eq!(text, None);
-    }
-
-    #[test]
-    fn a_long_left_associative_chain_does_not_overflow_the_worker_stack() {
-        // `luck lsp` runs requests on 16 MiB workers.
-        const WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
-        let chain = vec!["1"; 200_000].join("+");
-        let text = format!("local x = {chain}\n");
-        let worker = thread::Builder::new()
-            .stack_size(WORKER_STACK_BYTES)
-            .spawn(move || {
-                let document = DocumentState::new(text, 1, LuaTarget::Lua54, FxHashSet::default());
-                drop(document);
-            })
-            .expect("spawn worker");
-        worker.join().expect("a long expression must not take the server down");
     }
 }

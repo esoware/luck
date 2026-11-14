@@ -3,8 +3,8 @@
 //! minified output re-parses clean.
 
 use libfuzzer_sys::fuzz_target;
-use luck_core::TransformConfig;
 use luck_fuzz::decode_input;
+use luck_minifier::TransformConfig;
 
 fuzz_target!(|data: &[u8]| {
     let Some((source, version)) = decode_input(data) else {

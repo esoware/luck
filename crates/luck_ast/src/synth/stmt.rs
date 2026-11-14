@@ -7,8 +7,8 @@ use crate::stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
     ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
     GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
-    LocalFunction, NumericFor, RepeatLoop, ReturnStatement, Statement, TypeDeclaration,
-    TypeDeclarationValue, WhileLoop,
+    LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement, Statement,
+    TypeDeclaration, TypeDeclarationValue, WhileLoop,
 };
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{GenericTypeList, Type};
@@ -20,6 +20,10 @@ use crate::types::{GenericTypeList, Type};
 impl Synth {
     /// For attributes, generics, typed parameters, varargs, or a return
     /// type, use [`Synth::function_decl_full`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `method` or a name in `name_path` or `params` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn function_decl(
         &self,
@@ -38,6 +42,10 @@ impl Synth {
     }
 
     /// Build `attributes` with [`Synth::function_attribute`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `method` or a name in `name_path` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn function_decl_full(
         &self,
@@ -56,6 +64,10 @@ impl Synth {
     }
 
     /// For attributes or a full signature, use [`Synth::local_function_full`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` or a name in `params` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn local_function(&self, name: &str, params: &[&str], body: Block) -> Statement {
         self.local_function_full(
@@ -67,6 +79,10 @@ impl Synth {
     }
 
     /// Build `attributes` with [`Synth::function_attribute`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn local_function_full(
         &self,
@@ -75,11 +91,18 @@ impl Synth {
         signature: FunctionSignature,
         body: Block,
     ) -> Statement {
-        Statement::LocalFunction(Box::new(
-            self.local_function_node(name, attributes, signature, body),
-        ))
+        Statement::LocalFunction(Box::new(self.local_function_node(
+            LocalFunctionKind::Local,
+            name,
+            attributes,
+            signature,
+            body,
+        )))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn const_function(
         &self,
@@ -88,12 +111,18 @@ impl Synth {
         signature: FunctionSignature,
         body: Block,
     ) -> Statement {
-        Statement::LocalFunction(Box::new(LocalFunction {
-            is_const: true,
-            ..self.local_function_node(name, attributes, signature, body)
-        }))
+        Statement::LocalFunction(Box::new(self.local_function_node(
+            LocalFunctionKind::Const,
+            name,
+            attributes,
+            signature,
+            body,
+        )))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn export_function(
         &self,
@@ -102,15 +131,18 @@ impl Synth {
         signature: FunctionSignature,
         body: Block,
     ) -> Statement {
-        Statement::LocalFunction(Box::new(LocalFunction {
-            is_const: true,
-            is_exported: true,
-            ..self.local_function_node(name, attributes, signature, body)
-        }))
+        Statement::LocalFunction(Box::new(self.local_function_node(
+            LocalFunctionKind::Export,
+            name,
+            attributes,
+            signature,
+            body,
+        )))
     }
 
     fn local_function_node(
         &self,
+        kind: LocalFunctionKind,
         name: &str,
         attributes: Vec<FunctionAttribute>,
         signature: FunctionSignature,
@@ -121,11 +153,13 @@ impl Synth {
             attributes,
             name: self.identifier(name),
             body: self.function_body(signature, body),
-            is_const: false,
-            is_exported: false,
+            kind,
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn global_function(
         &self,
@@ -150,6 +184,10 @@ impl Synth {
     }
 
     /// For type annotations or Lua 5.4 attributes, use [`Synth::local_full`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if a name in `names` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn local(&self, names: &[&str], exprs: Vec<Expression>) -> Statement {
         self.local_full(
@@ -213,6 +251,10 @@ impl Synth {
     /// One declared name for [`Synth::local_full`] / [`Synth::global_declaration`],
     /// with an optional Luau type annotation or Lua 5.4+ attribute (`"const"`
     /// or `"close"`). No dialect has both.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` or `attribute` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn attributed_name(
         &self,
@@ -245,6 +287,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `attribute` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn global_star(&self, attribute: Option<&str>) -> Statement {
         Statement::GlobalStar(Box::new(GlobalStar {
@@ -280,9 +325,13 @@ impl Synth {
     #[must_use]
     #[expect(clippy::panic, reason = "documented panic")]
     pub fn call_stmt(&self, call_expr: Expression) -> Statement {
-        let Expression::FunctionCall(mut call) = call_expr else {
+        let Expression::Suffixed(mut call) = call_expr else {
             panic!("synth: call_stmt requires a function-call expression, got {call_expr:?}");
         };
+        assert!(
+            call.is_call(),
+            "synth: call_stmt requires a function-call expression, got {call:?}"
+        );
         // The statement takes the call's span, so give it a fresh one: two
         // statements wrapping clones of one call need distinct comment anchors.
         call.span = self.next_span();
@@ -368,6 +417,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `label` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn goto_(&self, label: &str) -> Statement {
         Statement::Goto(Box::new(GotoStatement {
@@ -376,6 +428,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn label(&self, name: &str) -> Statement {
         Statement::Label(Box::new(LabelStatement {
@@ -419,6 +474,9 @@ impl Synth {
         Block { span: self.next_span(), stmts, last_stmt: last.map(Box::new) }
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn type_declaration(
         &self,
@@ -436,6 +494,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn type_function(
         &self,
@@ -518,7 +579,7 @@ mod tests {
         let Statement::LocalFunction(local_function) = &function_stmt else {
             panic!("expected local function");
         };
-        assert!(local_function.is_const);
+        assert_eq!(local_function.kind, LocalFunctionKind::Const);
     }
 
     #[test]

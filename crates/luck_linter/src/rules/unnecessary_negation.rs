@@ -1,5 +1,5 @@
 use luck_ast::Expression;
-use luck_token::{BinOp, UnOp};
+use luck_token::{BinOp, Span, UnOp};
 
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
@@ -34,16 +34,22 @@ impl NodeRule for UnnecessaryNegation {
         let Expression::BinaryOp(comparison) = &parenthesized.expr else {
             return;
         };
-        let Some(opposite_op) = opposite_comparison(comparison.op) else {
+        // A run of comparisons groups from the left, so its last one applies
+        // to the rest.
+        let Some((last, before_last)) = comparison.links.split_last() else {
             return;
         };
-        let lhs = comparison.lhs.span().text(context.source);
-        let rhs = comparison.rhs.span().text(context.source);
+        let Some(opposite_op) = opposite_comparison(last.op) else {
+            return;
+        };
+        let lhs_end = before_last.last().map_or(&comparison.first, |link| &link.operand).span().end;
+        let lhs = Span::new(comparison.first.span().start, lhs_end).text(context.source);
+        let rhs = last.operand.span().text(context.source);
         let op_text = opposite_op.static_text();
         // Only `==` and `~=` get a fix, since `a ~= b` is defined as
         // `not (a == b)`. Flipping `<` or `<=` changes the result for NaN
         // and can call a different metamethod.
-        let is_equality = matches!(comparison.op, BinOp::Eq | BinOp::Ne);
+        let is_equality = matches!(last.op, BinOp::Eq | BinOp::Ne);
         let fix = is_equality.then(|| Fix {
             description: "invert the comparison operator".to_owned(),
             // Keep the parens. This node can't see its parent, and a bare

@@ -4,7 +4,9 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_core::{LuaTarget, LuckConfig, read_source_file, resolved_format_config};
+use luck_config::{LuckConfig, resolved_format_config};
+use luck_core::LuaTarget;
+use luck_resolver::read_source_file;
 
 use crate::exit::{Exit, usage_error};
 use crate::output::read_stdin_source;
@@ -60,25 +62,19 @@ pub(crate) struct FmtArgs {
     /// [default: end of file].
     #[arg(long, value_name = "BYTE")]
     range_end: Option<usize>,
-
-    /// Re-parse the output and fail if it isn't structurally equivalent to
-    /// the input. Costs an extra parse; incompatible with range formatting.
-    #[arg(long, conflicts_with_all = ["range_start", "range_end"])]
-    verify: bool,
 }
 
 enum FormatOutcome {
     Unchanged,
     Changed(String),
-    /// The source didn't parse, or `--verify` found the output structurally
-    /// different from the input. Holds the errors ready for stderr, buffered
+    /// The source didn't parse. Holds the errors ready for stderr, buffered
     /// so parallel workers never interleave them.
     Failed(Vec<u8>),
 }
 
 enum FileOutcome {
-    /// The file couldn't be read, parsed, or verified. Holds the errors ready
-    /// for stderr.
+    /// The file couldn't be read or parsed. Holds the errors ready for
+    /// stderr.
     Failed(Vec<u8>),
     RangeError(String),
     Unchanged,
@@ -167,8 +163,7 @@ impl FmtArgs {
             }
         }
 
-        // A file that couldn't be read, parsed, or verified fails the run in
-        // every mode.
+        // A file that couldn't be read or parsed fails the run in every mode.
         if has_failed_file {
             return Err(Exit::Failure);
         }
@@ -279,29 +274,10 @@ impl FmtArgs {
             editorconfig_path,
         ));
         let version = target.lua_version();
-        // Clap rejects `--verify` with a range, so a verified run formats the
-        // whole document.
-        let result = if self.verify {
-            match luck_formatter::format_and_verify(source, version, &options) {
-                Ok(result) => result,
-                Err((_result, diff)) => {
-                    return FormatOutcome::Failed(
-                        format!(
-                            "error: `{}`: formatting verification failed at `{}`: {}\n",
-                            file_path.to_string_lossy(),
-                            diff.path,
-                            diff.reason
-                        )
-                        .into_bytes(),
-                    );
-                }
-            }
-        } else {
-            range.map_or_else(
-                || luck_formatter::format(source, version, &options),
-                |byte_range| luck_formatter::format_range(source, version, &options, byte_range),
-            )
-        };
+        let result = range.map_or_else(
+            || luck_formatter::format(source, version, &options),
+            |byte_range| luck_formatter::format_range(source, version, &options, byte_range),
+        );
         if !result.errors.is_empty() {
             return FormatOutcome::Failed(render_source_errors(
                 file_path.to_string_lossy().into_owned(),
@@ -379,41 +355,6 @@ mod tests {
     }
 
     #[test]
-    fn fmt_verify_flag_parses() {
-        assert!(fmt_args(&["--verify"]).verify);
-        // --verify formats whole documents, so it can't combine with a range.
-        assert!(Cli::try_parse_from(["luck", "fmt", "--verify", "--range-start", "0"]).is_err());
-        assert!(Cli::try_parse_from(["luck", "fmt", "--verify", "--range-end", "4"]).is_err());
-    }
-
-    #[test]
-    fn fmt_verify_appears_in_help() {
-        use clap::CommandFactory as _;
-        let mut cli = Cli::command();
-        let fmt = cli.find_subcommand_mut("fmt").expect("fmt subcommand exists");
-        let help = fmt.render_long_help().to_string();
-        assert!(help.contains("--verify"), "help missing --verify:\n{help}");
-    }
-
-    #[test]
-    fn format_document_verify_passes_on_valid_source() {
-        // The formatter is structure-preserving, so verified formatting of any
-        // parseable input succeeds and reports the ordinary Changed/Unchanged
-        // outcomes rather than a verification failure.
-        let outcome = fmt_args(&["--no-editorconfig", "--verify"]).format_document(
-            &LuckConfig::default(),
-            "local  x=1\n",
-            Path::new("stdin.lua"),
-            LuaTarget::Lua54,
-            None,
-        );
-        assert!(
-            matches!(outcome, FormatOutcome::Changed(_)),
-            "verified formatting of messy-but-valid source should reformat"
-        );
-    }
-
-    #[test]
     fn fmt_stdin_filepath_parses() {
         assert_eq!(
             fmt_args(&["--stdin-filepath", "buf.lua"]).stdin_filepath.as_deref(),
@@ -430,11 +371,24 @@ mod tests {
         fs::write(&config_path, r#"{"lua":"lua54"}"#).expect("write luck.json");
         fs::write(
             directory.path().join(".editorconfig"),
-            "root = true\n[*.lua]\nindent_style = space\nindent_size = 2\n",
+            "\
+root = true
+[*.lua]
+indent_style = space
+indent_size = 2
+",
         )
         .expect("write .editorconfig");
         let source_path = directory.path().join("main.lua");
-        fs::write(&source_path, "local function f()\nreturn 1\nend\n").expect("write source");
+        fs::write(
+            &source_path,
+            "\
+local function f()
+return 1
+end
+",
+        )
+        .expect("write source");
 
         fmt_args(&[path_arg(&source_path), "-c", path_arg(&config_path)])
             .run(Verbosity::Quiet)
@@ -460,11 +414,24 @@ mod tests {
         .expect("write luck.json");
         fs::write(
             directory.path().join(".editorconfig"),
-            "root = true\n[*.lua]\nindent_style = space\nindent_size = 2\n",
+            "\
+root = true
+[*.lua]
+indent_style = space
+indent_size = 2
+",
         )
         .expect("write .editorconfig");
         let source_path = directory.path().join("main.lua");
-        fs::write(&source_path, "local function f()\nreturn 1\nend\n").expect("write source");
+        fs::write(
+            &source_path,
+            "\
+local function f()
+return 1
+end
+",
+        )
+        .expect("write source");
 
         fmt_args(&[path_arg(&source_path), "-c", path_arg(&config_path)])
             .run(Verbosity::Quiet)
@@ -482,13 +449,22 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "root = true\n[*.lua]\nindent_style = space\nindent_size = 2\n",
+            "\
+root = true
+[*.lua]
+indent_style = space
+indent_size = 2
+",
         )
         .expect("write .editorconfig");
         let source_path = directory.path().join("main.lua");
         let outcome = fmt_args(&["--no-editorconfig"]).format_document(
             &LuckConfig::default(),
-            "local function f()\nreturn 1\nend\n",
+            "\
+local function f()
+return 1
+end
+",
             &source_path,
             LuaTarget::Lua54,
             None,

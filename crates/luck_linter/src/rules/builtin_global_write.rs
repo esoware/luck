@@ -1,4 +1,4 @@
-use luck_ast::{DottedPath, Expression, FunctionName, Statement, Var, Visitor, dotted_path};
+use luck_ast::{DottedPath, FunctionName, Statement, Suffix, Var, Visitor};
 use luck_semantic::{SemanticAnalysis, StdlibEntry};
 use luck_token::{Span, Token};
 
@@ -83,18 +83,20 @@ impl FieldWriteChecker<'_> {
     }
 
     fn check_var_target(&mut self, var: &Var) {
-        let (prefix, leaf, span) = match var {
-            // Whole-name writes surface as unresolved Write references.
-            Var::Name(_) => return,
-            Var::Index(index) => (&index.prefix, None, index.span),
-            Var::FieldAccess(field_access) => {
-                (&field_access.prefix, field_access.name.identifier(), field_access.span)
-            }
-        };
-        let Expression::Var(container) = prefix else {
+        // Whole-name writes surface as unresolved Write references.
+        let Var::Suffixed(chain) = var else {
             return;
         };
-        let Some(DottedPath { segments, root_span, .. }) = dotted_path(container) else {
+        let Some((container, last)) = chain.head(chain.suffixes.len()).split_last() else {
+            return;
+        };
+        let leaf = match last {
+            Suffix::Field(name) => name.identifier(),
+            Suffix::Index { .. } => None,
+            Suffix::Call(_) | Suffix::TypeInstantiation { .. } => return,
+        };
+        let span = chain.span;
+        let Some(DottedPath { segments, root_span, .. }) = container.dotted_path() else {
             return;
         };
         if !self.writes_namespace_member(&segments, root_span, leaf) {
@@ -170,10 +172,10 @@ impl<'ast> Visitor<'ast> for FieldWriteChecker<'_> {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LintConfig;
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::config::LintConfig;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{run_rule, run_rule_roblox, run_rule_with_config};
 
@@ -232,19 +234,25 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_builtin() {
-        let diags = run("local print = 1\nprint = 5");
+        let diags = run("\
+local print = 1
+print = 5");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_field_write_on_shadowed_builtin() {
-        let diags = run("local table = {}\ntable.insert = 1");
+        let diags = run("\
+local table = {}
+table.insert = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_function_decl_on_shadowed_builtin() {
-        let diags = run("local table = {}\nfunction table.foo() end");
+        let diags = run("\
+local table = {}
+function table.foo() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -300,7 +308,9 @@ mod tests {
         let config = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
         let diags = run_rule_with_config(
             &BuiltinGlobalWrite,
-            "vim = 5\nvim.api = 1",
+            "\
+vim = 5
+vim.api = 1",
             LuaVersion::Lua54,
             &config,
         );
@@ -315,7 +325,10 @@ mod tests {
             LintConfig { extra_globals: vec!["table".to_owned()], ..LintConfig::default() };
         let diags = run_rule_with_config(
             &BuiltinGlobalWrite,
-            "table = 5\ntable.insert = 1\nfunction table.foo() end",
+            "\
+table = 5
+table.insert = 1
+function table.foo() end",
             LuaVersion::Lua54,
             &config,
         );
@@ -342,14 +355,18 @@ mod tests {
 
     #[test]
     fn flags_only_the_whole_name_write_of_a_rebound_builtin() {
-        let diags = run("table = {}\ntable.insert = 1");
+        let diags = run("\
+table = {}
+table.insert = 1");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`table`"), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_field_write_under_a_local_env() {
-        let diags = run("local _ENV = {}\ntable.insert = 1");
+        let diags = run("\
+local _ENV = {}
+table.insert = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 

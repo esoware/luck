@@ -6,15 +6,16 @@
 //! of a variable unless its label ends the block: only labels and `;` follow
 //! it, and the block isn't a repeat body, whose `until` still sees the locals.
 
+use alloc::collections::{BTreeMap, BTreeSet};
 use core::mem;
 
 use luck_ast::{GotoStatement, LabelStatement};
 use luck_token::{LuaVersion, Span};
+use rustc_hash::FxHashMap;
 
 use crate::ParseError;
 
-struct PendingGoto<'ast> {
-    name: &'ast str,
+struct PendingGoto {
     span: Span,
     /// Active variables at the goto, lowered to the enclosing block's count
     /// each time the goto leaves a block.
@@ -24,8 +25,6 @@ struct PendingGoto<'ast> {
 #[derive(Clone, Copy)]
 pub(super) struct BlockStart {
     active_vars: usize,
-    enclosing_labels_start: usize,
-    enclosing_gotos_start: usize,
 }
 
 impl BlockStart {
@@ -34,16 +33,29 @@ impl BlockStart {
     }
 }
 
+/// Labels and gotos are looked up by name, so a block's cost follows the
+/// number of them and not the square of it.
+#[derive(Default)]
+struct BlockGotos<'ast> {
+    labels: BTreeSet<&'ast str>,
+    /// Gotos no label has taken yet, each name's in source order.
+    pending_gotos: BTreeMap<&'ast str, Vec<PendingGoto>>,
+}
+
 /// One function body's labels and gotos, as `dyd->label` and `dyd->gt` hold
 /// them between `firstlabel` and `firstgoto`.
-#[derive(Default)]
 pub(super) struct FunctionGotos<'ast> {
-    /// Labels of the enclosing blocks and of the current block so far.
-    labels: Vec<&'ast str>,
-    /// Gotos no label has taken yet, in block order.
-    pending_gotos: Vec<PendingGoto<'ast>>,
-    block_labels_start: usize,
-    block_gotos_start: usize,
+    /// The open blocks, innermost last, over one for the function itself,
+    /// where a goto that left every block waits to be reported.
+    blocks: Vec<BlockGotos<'ast>>,
+    /// How many open blocks hold a label of each name.
+    visible_labels: FxHashMap<&'ast str, usize>,
+}
+
+impl Default for FunctionGotos<'_> {
+    fn default() -> Self {
+        Self { blocks: vec![BlockGotos::default()], visible_labels: FxHashMap::default() }
+    }
 }
 
 pub(super) struct GotoTracker<'ast> {
@@ -57,16 +69,9 @@ impl<'ast> GotoTracker<'ast> {
         Self { version, function: FunctionGotos::default(), errors: Vec::new() }
     }
 
-    pub(super) const fn open_block(&mut self, active_vars: usize) -> BlockStart {
-        let function = &mut self.function;
-        let start = BlockStart {
-            active_vars,
-            enclosing_labels_start: function.block_labels_start,
-            enclosing_gotos_start: function.block_gotos_start,
-        };
-        function.block_labels_start = function.labels.len();
-        function.block_gotos_start = function.pending_gotos.len();
-        start
+    pub(super) fn open_block(&mut self, active_vars: usize) -> BlockStart {
+        self.function.blocks.push(BlockGotos::default());
+        BlockStart { active_vars }
     }
 
     /// Close the current block. A goto still pending leaves it: a label of the
@@ -74,20 +79,33 @@ impl<'ast> GotoTracker<'ast> {
     /// it waits there with the enclosing block's variable count.
     pub(super) fn close_block(&mut self, start: BlockStart) {
         let function = &mut self.function;
-        function.labels.truncate(function.block_labels_start);
-        let leaving = function.pending_gotos.split_off(function.block_gotos_start);
-        function.block_labels_start = start.enclosing_labels_start;
-        function.block_gotos_start = start.enclosing_gotos_start;
-        for mut goto in leaving {
-            let is_backward_jump = function
-                .labels
-                .iter()
-                .skip(function.block_labels_start)
-                .any(|name| *name == goto.name);
-            if !is_backward_jump {
-                goto.active_vars = start.active_vars;
-                function.pending_gotos.push(goto);
+        if function.blocks.len() < 2 {
+            return;
+        }
+        let Some(closed) = function.blocks.pop() else {
+            return;
+        };
+        for label in closed.labels {
+            if let Some(count) = function.visible_labels.get_mut(label) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    function.visible_labels.remove(label);
+                }
             }
+        }
+        let Some(enclosing) = function.blocks.last_mut() else {
+            return;
+        };
+        for (name, gotos) in closed.pending_gotos {
+            if enclosing.labels.contains(name) {
+                continue;
+            }
+            // The enclosing block's own gotos of this name came first.
+            enclosing.pending_gotos.entry(name).or_default().extend(
+                gotos
+                    .into_iter()
+                    .map(|goto| PendingGoto { span: goto.span, active_vars: start.active_vars }),
+            );
         }
     }
 
@@ -98,19 +116,21 @@ impl<'ast> GotoTracker<'ast> {
             return;
         };
         let function = &mut self.function;
-        let first_visible =
-            if self.version.has_label_shadowing() { function.block_labels_start } else { 0 };
-        if function.labels.iter().skip(first_visible).any(|existing| *existing == name) {
+        let Some(block) = function.blocks.last_mut() else {
+            return;
+        };
+        let is_defined = if self.version.has_label_shadowing() {
+            block.labels.contains(name)
+        } else {
+            function.visible_labels.contains_key(name)
+        };
+        if is_defined {
             self.errors.push(ParseError {
                 span: label.span,
                 message: format!("label `{name}` already defined"),
             });
         }
-        for goto in function.pending_gotos.split_off(function.block_gotos_start) {
-            if goto.name != name {
-                function.pending_gotos.push(goto);
-                continue;
-            }
+        for goto in block.pending_gotos.remove(name).unwrap_or_default() {
             if goto.active_vars < active_vars {
                 self.errors.push(ParseError {
                     span: goto.span,
@@ -118,7 +138,10 @@ impl<'ast> GotoTracker<'ast> {
                 });
             }
         }
-        function.labels.push(name);
+        if block.labels.insert(name) {
+            let count = function.visible_labels.entry(name).or_default();
+            *count = count.saturating_add(1);
+        }
     }
 
     /// Record a goto at `active_vars` active variables, a backward jump if
@@ -127,9 +150,15 @@ impl<'ast> GotoTracker<'ast> {
         let Some(name) = goto.name.identifier() else {
             return;
         };
-        let function = &mut self.function;
-        if !function.labels.iter().skip(function.block_labels_start).any(|label| *label == name) {
-            function.pending_gotos.push(PendingGoto { name, span: goto.span, active_vars });
+        let Some(block) = self.function.blocks.last_mut() else {
+            return;
+        };
+        if !block.labels.contains(name) {
+            block
+                .pending_gotos
+                .entry(name)
+                .or_default()
+                .push(PendingGoto { span: goto.span, active_vars });
         }
     }
 
@@ -141,13 +170,21 @@ impl<'ast> GotoTracker<'ast> {
         self.errors
     }
 
-    /// Report the gotos no label in this function took, then return to the
-    /// enclosing function's state.
+    /// Report the gotos no label in this function took, in source order, then
+    /// return to the enclosing function's state.
     pub(super) fn leave_function(&mut self, enclosing: FunctionGotos<'ast>) {
-        for goto in mem::replace(&mut self.function, enclosing).pending_gotos {
+        let function = mem::replace(&mut self.function, enclosing);
+        let mut unresolved: Vec<(Span, &str)> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.pending_gotos)
+            .flat_map(|(name, gotos)| gotos.iter().map(|goto| (goto.span, *name)))
+            .collect();
+        unresolved.sort_unstable_by_key(|(span, _)| span.start);
+        for (span, name) in unresolved {
             self.errors.push(ParseError {
-                span: goto.span,
-                message: format!("no visible label `{}` for `goto`", goto.name),
+                span,
+                message: format!("no visible label `{name}` for `goto`"),
             });
         }
     }

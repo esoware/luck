@@ -1,10 +1,10 @@
 use std::sync::OnceLock;
 
-use luck_ast::{Block, Expression, FunctionCall, Statement, TableConstructor};
-use luck_core::LintConfig;
-use luck_semantic::SemanticAnalysis;
+use luck_ast::{Block, Call, Expression, Statement, SuffixedExpression, TableConstructor};
+use luck_semantic::{ResolvedCallee, SemanticAnalysis};
 use luck_token::Comment;
 
+use crate::config::LintConfig;
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::local_flow::LocalFlow;
 use crate::node_type::NodeTypeSet;
@@ -73,11 +73,29 @@ pub(crate) trait WholeRule: Rule {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding>;
 }
 
+/// An assignment target's chain reads everything but what its last suffix
+/// stores to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChainPosition {
+    Value,
+    AssignmentTarget,
+}
+
 /// A fix's replacement must parse as a statement in statement position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CallPosition {
     Statement,
     Expression,
+}
+
+/// A call the bus dispatches, where it stands, and what it calls.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CallSite<'ast> {
+    pub call: Call<'ast>,
+    pub position: CallPosition,
+    /// As [`SemanticAnalysis::resolve_callee`] gives it. The bus resolves a
+    /// chain's calls in one pass, once for every rule.
+    pub callee: Option<ResolvedCallee<'ast>>,
 }
 
 /// A rule that gets one callback per node from the bus's shared walk
@@ -91,8 +109,8 @@ pub(crate) trait NodeRule: Rule {
     fn on_stmt(&self, _stmt: &Statement, _context: &LintContext<'_>, _findings: &mut Vec<Finding>) {
     }
 
-    /// Never gets an `Expression::FunctionCall`, which goes to
-    /// [`Self::on_call`], or an `Expression::TableConstructor`, which goes
+    /// Never gets an `Expression::Suffixed`, which goes to
+    /// [`Self::on_chain`], or an `Expression::TableConstructor`, which goes
     /// to [`Self::on_table`].
     fn on_expr(
         &self,
@@ -112,14 +130,24 @@ pub(crate) trait NodeRule: Rule {
     ) {
     }
 
-    /// Runs for every call the bus reaches, in either position. A rule that
-    /// subscribes to only one of `FunctionCallStmt` and `FunctionCallExpr`
-    /// must check `position`, because the driver's debug check calls this
-    /// for both.
+    /// Runs for every chain, in an expression, a call statement, or an
+    /// assignment target.
+    fn on_chain(
+        &self,
+        _chain: &SuffixedExpression,
+        _position: ChainPosition,
+        _context: &LintContext<'_>,
+        _findings: &mut Vec<Finding>,
+    ) {
+    }
+
+    /// Runs for every call in every chain, the one a call statement makes
+    /// included. A rule that subscribes to only one of `FunctionCallStmt`
+    /// and `FunctionCallExpr` must check the site's `position`, because the
+    /// driver's debug check calls this for both.
     fn on_call(
         &self,
-        _call: &FunctionCall,
-        _position: CallPosition,
+        _site: &CallSite<'_>,
         _context: &LintContext<'_>,
         _findings: &mut Vec<Finding>,
     ) {

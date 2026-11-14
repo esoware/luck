@@ -1,14 +1,17 @@
 use alloc::collections::VecDeque;
 use std::path::Path;
 
-use luck_core::{Diagnostic, DynamicRequire, native_path, normalize_path, read_source_file};
-use luck_resolver::{ResolveRequest, ResolvedModule, Resolver};
+use luck_core::Diagnostic;
+use luck_resolver::{
+    ResolveRequest, ResolvedModule, Resolver, native_path, normalize_path, read_source_file,
+};
 use luck_token::{CommentKind, LuaVersion, Span, leading_hot_comments};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
 use rustc_hash::FxHashMap;
 
+use crate::dynamic_require::DynamicRequire;
 use crate::module::{Dependency, ModuleId, ModuleInfo};
 use crate::relative_path::{absolute_project_root, make_relative};
 use crate::require_extraction::{ExtractedRequires, extract_requires};

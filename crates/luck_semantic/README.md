@@ -42,7 +42,9 @@ Each environment has its own TOML file under `stdlib_data/`, selected by `(LuaVe
 
 - `lua51.toml` through `lua55.toml`, one per numbered Lua version, verified against that version's reference manual.
 - `luau.toml`, standalone (open-source) Luau.
-- `luau_roblox.toml`, the Roblox runtime, plus two **generated** files spliced in at load: `roblox_api.toml` (service and class-name constant sets from the Roblox API dump) and `roblox_enums.toml` (the full `Enum` tree). Regenerate both with `cargo test -p luck_semantic regenerate_roblox_api -- --ignored`. Never hand-edit them.
+- `luau_roblox.toml`, the Roblox runtime, plus two **generated** files spliced in with it: `roblox_api.toml` (service and class-name constant sets from the Roblox API dump) and `roblox_enums.toml` (the full `Enum` tree). Regenerate both, and the catalog after them, with `just roblox-api`. Never hand-edit them.
+
+The TOML is never read at runtime. `tests/it/stdlib_catalog.rs` checks it and generates each environment's `static` `StdlibLibrary` under `src/stdlib_catalog/`, splicing in the enum tree, copying each extending shape's base members, and deriving the `string` receiver shape. Every `StdlibMap` lists its names in order, for binary search. Regenerate the catalog with `just stdlib` after editing a TOML file, and a test fails if it's stale. Never hand-edit it.
 
 Both Luau catalogs include the library for Luau's `integer` type, `buffer.readinteger` and `buffer.writeinteger`, and the newer math functions and constants (`isnan`, `isinf`, `isfinite`, `nan`, `e`, `phi`, `sqrt2`, `tau`).
 
@@ -63,8 +65,9 @@ Entries model:
 | `lib.rs` | Crate docs and the flat public surface |
 | `analysis.rs` | `SemanticAnalysis`, the `analyze()` entry points, and its scope and stdlib queries |
 | `scope.rs` | Scope tree data structures |
-| `builder.rs` | AST visitor that constructs the scope tree, exported as `build_scope_tree` for callers that need no stdlib |
-| `resolve.rs` | Conservative shape and callee resolution, and the local-shape pass |
-| `stdlib_model.rs` | Stdlib data model and its queries |
-| `stdlib_load.rs` | TOML deserialization, composition into the `StdlibLibrary` model, and the per-environment library instances |
+| `builder.rs` | AST visitor that constructs the scope tree, exported as `build_scope_tree` for callers that need no stdlib, and lists each local's initializer for the shape step |
+| `resolve.rs` | Conservative shape and callee resolution, each read forward from a chain's prefix, `ChainCallees` for a chain's calls in one pass, and the shapes of initialized locals |
+| `stdlib_model.rs` | Stdlib data model, all `'static`, and its queries |
+| `stdlib_catalog.rs` | `library_for`, and the defaults and constructors the generated libraries are written in |
+| `stdlib_catalog/` | One generated `static` library per environment |
 | `stdlib_data/` | Per-environment library data (+ generated Roblox data) |

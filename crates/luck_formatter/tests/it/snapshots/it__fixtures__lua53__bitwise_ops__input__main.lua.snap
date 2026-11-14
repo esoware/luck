@@ -1,0 +1,18 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua53/bitwise_ops/input/main.lua
+---
+-- line_width = 1
+local bits = require(
+	"bits"
+)
+print(
+	bits.x,
+	bits.y,
+	bits.z
+)
+
+-- line_width = 40, 80, 100, 120
+local bits = require("bits")
+print(bits.x, bits.y, bits.z)

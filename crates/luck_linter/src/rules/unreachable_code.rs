@@ -76,7 +76,9 @@ mod tests {
 
     #[test]
     fn ignores_straight_line_code() {
-        let diags = run("local x = 1\nprint(x)");
+        let diags = run("\
+local x = 1
+print(x)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

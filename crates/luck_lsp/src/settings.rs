@@ -4,10 +4,10 @@
 use alloc::sync::Arc;
 use std::path::{Path, PathBuf};
 
-use luck_core::{
-    DialectKey, FormatConfig, LuaTarget, LuckConfig, ProjectFilter, discover_config,
-    resolved_format_config,
+use luck_config::{
+    DialectKey, FormatConfig, LuckConfig, ProjectFilter, discover_config, resolved_format_config,
 };
+use luck_core::LuaTarget;
 use luck_formatter::FormatOptions;
 use luck_linter::{Category, LintConfig, RuleLevel};
 use rustc_hash::FxHashMap;
@@ -164,7 +164,7 @@ impl SettingsCache {
 mod tests {
     use std::fs;
 
-    use luck_core::parse_luck_config;
+    use luck_config::parse_luck_config;
     use luck_formatter::{
         BlockNewlineGaps, CallParentheses, IndentStyle, QuoteStyle, SpaceAfterFunction,
     };
@@ -281,7 +281,11 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "[*.lua]\nindent_style = space\nindent_size = 2\n",
+            "\
+[*.lua]
+indent_style = space
+indent_size = 2
+",
         )
         .expect("write editorconfig");
         let file_path = directory.path().join("main.lua");
@@ -297,7 +301,11 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join(".editorconfig"),
-            "[*.lua]\nindent_style = space\nindent_size = 2\n",
+            "\
+[*.lua]
+indent_style = space
+indent_size = 2
+",
         )
         .expect("write editorconfig");
         let file_path = directory.path().join("main.lua");

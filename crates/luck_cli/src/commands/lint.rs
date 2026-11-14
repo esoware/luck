@@ -4,8 +4,10 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::{self, Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
-use luck_core::{Diagnostic, LuaTarget, LuckConfig, normalize_path, read_source_file};
+use luck_config::LuckConfig;
+use luck_core::{Diagnostic, LuaTarget};
 use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
+use luck_resolver::{normalize_path, read_source_file};
 use luck_token::LuaVersion;
 
 use crate::exit::{Exit, operation_error, usage_error};
@@ -735,7 +737,9 @@ mod tests {
 
     #[test]
     fn quiet_hides_warnings_but_not_errors() {
-        let source = "local unused = 1\nprint(undefined_var)";
+        let source = "\
+local unused = 1
+print(undefined_var)";
         let diags = luck_linter::lint_target(source, LuaTarget::Lua54, &LintConfig::default());
         let args = lint_args(&["--format", "json"]);
         let lines_when = |is_quiet: bool| match args.rendered(
@@ -758,7 +762,14 @@ mod tests {
 
     #[test]
     fn json_format_gives_the_line_and_column_of_a_finding() {
-        let lines = rendered_lines("json", "src/a.lua", "local a = 1\nlocal unused = 2\nprint(a)");
+        let lines = rendered_lines(
+            "json",
+            "src/a.lua",
+            "\
+local a = 1
+local unused = 2
+print(a)",
+        );
         let finding: serde_json::Value = serde_json::from_str(lines.trim()).expect("one finding");
         assert_eq!(finding["rule"], "unused_variable");
         let number = |key: &str| finding[key].as_u64().expect("a number");
@@ -771,8 +782,14 @@ mod tests {
     /// from the workspace root even when lint runs in a subdirectory.
     #[test]
     fn github_format_writes_one_annotation_per_finding() {
-        let lines =
-            rendered_lines("github", r"src\a.lua", "local a = 1\nlocal unused = 2\nprint(a)");
+        let lines = rendered_lines(
+            "github",
+            r"src\a.lua",
+            "\
+local a = 1
+local unused = 2
+print(a)",
+        );
         let (file, rest) = lines
             .strip_prefix("::warning file=")
             .and_then(|annotation| annotation.split_once(','))

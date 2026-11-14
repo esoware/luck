@@ -16,7 +16,7 @@ pub(crate) fn param_label(param: &StdlibParam) -> String {
         StdlibArgKind::String => "string",
         StdlibArgKind::Function => "function",
         StdlibArgKind::Table => "table",
-        StdlibArgKind::Display(display) => display.as_str(),
+        StdlibArgKind::Display(display) => display,
         StdlibArgKind::Constant(_) => "constant",
         StdlibArgKind::Vararg => return "...".to_owned(),
     };

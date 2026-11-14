@@ -1,6 +1,11 @@
-use luck_ast::{ElseIfExprClause, Expression, LastStatement, Statement, TypeDeclarationValue, Var};
+use luck_ast::{
+    ElseIfExprClause, Expression, LastStatement, LocalFunctionKind, Statement, Suffix,
+    TypeDeclarationValue, Var,
+};
 
-use crate::common::{assert_no_errors, local_value, parse_luau};
+use crate::common::{
+    assert_no_errors, chain, chain_shape, local_value, parse_luau, run_operands, target_chain,
+};
 
 #[test]
 fn compound_assign_plus() {
@@ -22,12 +27,11 @@ fn compound_assign_index() {
     let result = parse_luau("t[i] *= 2");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] {
-        assert!(matches!(&compound_assignment.var, Var::Index(_)));
-        assert_eq!(compound_assignment.op, luck_token::CompoundOp::Mul);
-    } else {
+    let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] else {
         panic!("expected CompoundAssignment");
-    }
+    };
+    assert_eq!(chain_shape(target_chain(&compound_assignment.var)), "t[]");
+    assert_eq!(compound_assignment.op, luck_token::CompoundOp::Mul);
 }
 
 #[test]
@@ -35,12 +39,11 @@ fn compound_assign_field_concat() {
     let result = parse_luau(r#"a.b ..= "c""#);
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] {
-        assert!(matches!(&compound_assignment.var, Var::FieldAccess(_)));
-        assert_eq!(compound_assignment.op, luck_token::CompoundOp::Concat);
-    } else {
+    let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] else {
         panic!("expected CompoundAssignment");
-    }
+    };
+    assert_eq!(chain_shape(target_chain(&compound_assignment.var)), "a.b");
+    assert_eq!(compound_assignment.op, luck_token::CompoundOp::Concat);
 }
 
 #[test]
@@ -192,12 +195,9 @@ fn type_cast_on_literals_and_tables() {
 fn type_cast_binds_tighter_than_binary_op() {
     let result = parse_luau("local x = a + b :: number");
     assert_no_errors(&result);
-    let expr = local_value(&result);
-    let Expression::BinaryOp(binary_op) = expr else {
-        panic!("expected top-level BinaryOp, got {expr:?}");
-    };
+    let operands = run_operands(local_value(&result));
     assert!(
-        matches!(binary_op.rhs, Expression::TypeCast(_)),
+        matches!(operands[1], Expression::TypeCast(_)),
         "cast must bind to the right operand: a + (b :: number)"
     );
 }
@@ -246,7 +246,9 @@ fn export_type_declaration() {
 
 #[test]
 fn consecutive_type_declarations() {
-    let source = "type A = number\ntype B = string";
+    let source = "\
+type A = number
+type B = string";
     let result = parse_luau(source);
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 2);
@@ -254,7 +256,12 @@ fn consecutive_type_declarations() {
 
 #[test]
 fn type_function_declaration_keeps_its_body() {
-    let result = parse_luau("type function Id(t)\n\treturn t\nend");
+    let result = parse_luau(
+        "\
+type function Id(t)
+\treturn t
+end",
+    );
     assert_no_errors(&result);
     let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
         panic!("expected TypeDeclaration");
@@ -409,7 +416,11 @@ fn bitwise_operators_rejected() {
         assert!(!result.errors.is_empty(), "Luau must reject bitwise binop: {source}");
     }
     // The same tokens still work in type positions.
-    let result = parse_luau("type U = number | string\ntype I = A & B");
+    let result = parse_luau(
+        "\
+type U = number | string
+type I = A & B",
+    );
     assert!(result.errors.is_empty(), "{:?}", result.errors);
 }
 
@@ -432,7 +443,7 @@ fn const_bindings() {
     let function = parse_luau("const function cf() end");
     assert_no_errors(&function);
     if let Statement::LocalFunction(local_function) = &function.block.stmts[0] {
-        assert!(local_function.is_const);
+        assert_eq!(local_function.kind, LocalFunctionKind::Const);
     } else {
         panic!("expected LocalFunction, got {:?}", function.block.stmts[0]);
     }
@@ -450,7 +461,11 @@ fn const_stays_contextual() {
     assert_no_errors(&parse_luau("const = 1"));
     assert_no_errors(&parse_luau("const.x = 1"));
     assert_no_errors(&parse_luau("const()"));
-    assert_no_errors(&parse_luau("local const = 2\nprint(const)"));
+    assert_no_errors(&parse_luau(
+        "\
+local const = 2
+print(const)",
+    ));
     // And non-Luau versions never treat it specially.
     let result = luck_parser::parse("const x = 1", luck_token::LuaVersion::Lua54);
     assert!(!result.errors.is_empty(), "const decl is Luau-only");
@@ -495,9 +510,28 @@ fn empty_interpolation_rejected() {
 }
 
 #[test]
+fn an_unterminated_interpolated_string_is_one_error() {
+    let result = parse_luau(
+        "\
+local s = `{x}a
+local after = 1",
+    );
+    let [error] = result.errors.as_slice() else {
+        panic!("{:?}", result.errors);
+    };
+    assert_eq!(error.message, "unterminated interpolated string");
+    let [Statement::LocalAssignment(_), Statement::LocalAssignment(after)] =
+        result.block.stmts.as_slice()
+    else {
+        panic!("{:?}", result.block.stmts);
+    };
+    assert_eq!(after.names.first().and_then(|name| name.name.identifier()), Some("after"));
+}
+
+#[test]
 fn integer_literals_have_a_distinct_ast_node() {
     let result = parse_luau(
-        "return 1i, 1_000_000i, 0xffffffffffffffffi, \
+        "return 1i, 1_000_000i, 1i_, 0xffffffffffffffffi, \
          0b1000000000000000000000000000000000000000000000000000000000000000i",
     );
     assert_no_errors(&result);
@@ -537,13 +571,12 @@ fn explicit_type_instantiation_is_a_suffix() {
     let Some(LastStatement::Return(return_stmt)) = result.block.last_stmt.as_deref() else {
         panic!("expected return");
     };
-    let Some(Expression::FunctionCall(call)) = return_stmt.exprs.first() else {
-        panic!("expected call");
-    };
-    let Expression::TypeInstantiation(instantiation) = &call.callee else {
+    let call = chain(return_stmt.exprs.first().expect("a returned value"));
+    assert_eq!(chain_shape(call), "module.f<<>>()");
+    let Some(Suffix::TypeInstantiation { type_args, .. }) = call.suffixes.get(1) else {
         panic!("expected explicit type instantiation");
     };
-    assert_eq!(instantiation.type_args.args.len(), 2);
+    assert_eq!(type_args.args.len(), 2);
 
     for source in [
         "return f<<number>>",
@@ -558,7 +591,8 @@ fn explicit_type_instantiation_is_a_suffix() {
     let Some(LastStatement::Return(method_return)) = method.block.last_stmt.as_deref() else {
         panic!("expected return");
     };
-    let Some(Expression::FunctionCall(method_call)) = method_return.exprs.first() else {
+    let method_chain = chain(method_return.exprs.first().expect("a returned value"));
+    let Suffix::Call(method_call) = method_chain.suffixes.last() else {
         panic!("expected method call");
     };
     assert_eq!(
@@ -570,9 +604,11 @@ fn explicit_type_instantiation_is_a_suffix() {
 #[test]
 fn value_exports_parse_and_enforce_module_rules() {
     let result = parse_luau(
-        "export local mutable: number = 1\n\
-         export const FIXED = 2\n\
-         @native\nexport function run() return mutable end",
+        "\
+export local mutable: number = 1
+export const FIXED = 2
+@native
+export function run() return mutable end",
     );
     assert_no_errors(&result);
     let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
@@ -588,25 +624,40 @@ fn value_exports_parse_and_enforce_module_rules() {
     let Statement::LocalFunction(function) = &result.block.stmts[2] else {
         panic!("expected exported function");
     };
-    assert!(function.is_exported);
-    assert!(function.is_const);
+    assert_eq!(function.kind, LocalFunctionKind::Export);
     assert_eq!(function.attributes.len(), 1);
 
     for source in [
-        "export local x = 1\nexport local x = 2",
+        "\
+export local x = 1
+export local x = 2",
         "if true then export local x = 1 end",
-        "export local x = 1\nreturn x",
-        "if true then return end\nexport local x = 1",
+        "\
+export local x = 1
+return x",
+        "\
+if true then return end
+export local x = 1",
         "export local function f() end",
     ] {
         assert!(!parse_luau(source).errors.is_empty(), "{source} must be rejected");
     }
 
     // A type-only export still coexists with a module return.
-    assert_no_errors(&parse_luau("export type T = number\nreturn 1"));
+    assert_no_errors(&parse_luau(
+        "\
+export type T = number
+return 1",
+    ));
 
     // `export` remains contextual when it does not introduce a declaration.
-    assert_no_errors(&parse_luau("export = 5\nexport += 1\nexport()\nreturn export"));
+    assert_no_errors(&parse_luau(
+        "\
+export = 5
+export += 1
+export()
+return export",
+    ));
 }
 
 #[test]
@@ -639,9 +690,13 @@ fn deprecated_arguments_are_validated() {
 
 #[test]
 fn attribute_name_must_directly_follow_the_at_sign() {
-    for source in
-        ["@ native function f() end", "@ [native] function f() end", "@\nnative function f() end"]
-    {
+    for source in [
+        "@ native function f() end",
+        "@ [native] function f() end",
+        "\
+@
+native function f() end",
+    ] {
         let result = parse_luau(source);
         assert!(!result.errors.is_empty(), "luau reports a missing attribute name in {source:?}");
     }
@@ -660,9 +715,15 @@ fn const_needs_one_value_per_name_unless_the_last_is_multi_valued() {
 #[test]
 fn type_function_cannot_reference_an_outer_local() {
     for source in [
-        "local x = 1\ntype function f() return x end",
-        "local x = 1\ntype function f() local function g() return x end return g end",
-        "local function g() end\ntype function f() return g() end",
+        "\
+local x = 1
+type function f() return x end",
+        "\
+local x = 1
+type function f() local function g() return x end return g end",
+        "\
+local function g() end
+type function f() return g() end",
     ] {
         let result = parse_luau(source);
         assert!(!result.errors.is_empty(), "luau rejects the outer local in {source}");

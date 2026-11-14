@@ -1,9 +1,9 @@
 use std::sync::OnceLock;
 
-use luck_core::LintConfig;
 use luck_parser::ParseResult;
 use luck_token::{LuaVersion, Span, StdlibEnvironment};
 
+use crate::config::LintConfig;
 use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
 use crate::nodes::Nodes;
 use crate::rule::{LintContext, Rule};

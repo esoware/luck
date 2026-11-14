@@ -3,8 +3,8 @@ gzip is the minified output at the default flate2 level. Regenerate:
 cargo test -p luck_benchmark --test it regenerate_minsize -- --ignored
 
   Original |   Minified |       Gzip |   Ratio | File
-    376750 |     237823 |      58383 |  63.12% | gen_full_lua54.lua
-    441060 |     292076 |      72757 |  66.22% | gen_full_luau.luau
+    376750 |     236448 |      58087 |  62.76% | gen_full_lua54.lua
+    441060 |     289809 |      72229 |  65.71% | gen_full_luau.luau
       2124 |        959 |        477 |  45.15% | idiomatic.lua
     482971 |     379252 |      76027 |  78.52% | infinite_yield.luau
    2290215 |    2284895 |    1763306 |  99.77% | obfuscated_vm.luau

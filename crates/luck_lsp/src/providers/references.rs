@@ -50,7 +50,13 @@ mod tests {
     #[test]
     fn the_implicit_self_declaration_is_no_location() {
         let document = DocumentState::new(
-            "local t = {}\nfunction t:m()\n  return self\nend\n".to_owned(),
+            "\
+local t = {}
+function t:m()
+  return self
+end
+"
+            .to_owned(),
             1,
             LuaTarget::Lua54,
             FxHashSet::default(),

@@ -58,13 +58,12 @@ impl UninitializedLocals {
         }
     }
 
+    /// Only a name the field or index is written on directly, as in
+    /// `x.foo = 1`, counts.
     fn record_target(&mut self, var: &Var) {
-        let prefix = match var {
-            Var::Name(_) => return,
-            Var::FieldAccess(field_access) => &field_access.prefix,
-            Var::Index(index) => &index.prefix,
-        };
-        if let Expression::Var(Var::Name(token)) = prefix
+        if let Var::Suffixed(chain) = var
+            && let [_] = &*chain.suffixes
+            && let Expression::Name(token) = &chain.prefix
             && token.identifier().is_some()
         {
             self.field_write_prefix_starts.push(token.span.start);

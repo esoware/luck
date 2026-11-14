@@ -1,11 +1,11 @@
-use luck_ast::{Block, Expression, FunctionCall, Var};
-use luck_token::{CompactString, LuaVersion, Span, StdlibEnvironment};
+use luck_ast::{Block, Call, SuffixedExpression};
+use luck_token::{LuaVersion, Span, StdlibEnvironment};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::builder;
-use crate::resolve::{ShapeResolver, symbol_shapes};
+use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
 use crate::scope::{Reference, ScopeTree, Symbol, SymbolId};
-use crate::stdlib_load::library_for;
+use crate::stdlib_catalog::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub struct SemanticAnalysis {
     pub environment: StdlibEnvironment,
     /// Shapes of never-reassigned locals initialized from a value of known
     /// shape, such as `local f = io.open(...)`.
-    pub symbol_shapes: FxHashMap<SymbolId, CompactString>,
+    pub symbol_shapes: FxHashMap<SymbolId, &'static str>,
 }
 
 /// Uses the [`StdlibEnvironment::Standalone`] stdlib, which is right for
@@ -40,42 +40,15 @@ pub fn analyze_with_environment(
     version: LuaVersion,
     environment: StdlibEnvironment,
 ) -> SemanticAnalysis {
-    let scope_tree = builder::build(block, version);
-    let symbol_shapes = symbol_shapes(&scope_tree, library_for(version, environment), block);
+    let (scope_tree, initialized_locals) = builder::build_with_initializers(block, version);
+    let symbol_shapes =
+        symbol_shapes(&scope_tree, library_for(version, environment), &initialized_locals);
     SemanticAnalysis {
         scope_tree,
         extra_globals: FxHashSet::default(),
         version,
         environment,
         symbol_shapes,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolvedCallee<'call> {
-    path: CalleePath<'call>,
-    entry: &'call StdlibEntry,
-}
-
-#[derive(Debug, Clone)]
-enum CalleePath<'call> {
-    Method { base: &'call str, method: &'call str },
-    Dotted(Vec<&'call str>),
-}
-
-impl<'call> ResolvedCallee<'call> {
-    /// Display path, such as `table.insert` or `game:GetService`.
-    #[must_use]
-    pub fn name(&self) -> String {
-        match &self.path {
-            CalleePath::Method { base, method } => format!("{base}:{method}"),
-            CalleePath::Dotted(segments) => segments.join("."),
-        }
-    }
-
-    #[must_use]
-    pub const fn entry(&self) -> &'call StdlibEntry {
-        self.entry
     }
 }
 
@@ -127,35 +100,25 @@ impl SemanticAnalysis {
     /// Returns `None` for shadowed bases, unknown names, values of unknown
     /// shape, and calls whose `.` or `:` doesn't match the function's
     /// `is_method`.
+    ///
+    /// This reads the callee from its prefix, so for each call of a chain,
+    /// [`Self::chain_callees`] costs less.
     #[must_use]
-    pub fn resolve_callee<'call>(
-        &'call self,
-        call: &'call FunctionCall,
-    ) -> Option<ResolvedCallee<'call>> {
-        let resolver = ShapeResolver::new(&self.scope_tree, self.stdlib(), &self.symbol_shapes);
-        if let Some(method_token) = &call.method {
-            let method_name = method_token.identifier()?;
-            let (shape, entry) = resolver.method_callee(&call.callee, method_name)?;
-            let base = if let Expression::Var(Var::Name(token)) = &call.callee {
-                token.identifier().unwrap_or(shape)
-            } else {
-                shape.as_str()
-            };
-            return Some(ResolvedCallee {
-                path: CalleePath::Method { base, method: method_name },
-                entry,
-            });
-        }
-        let segments = resolver.global_path(&call.callee)?;
-        let entry = self.stdlib().lookup(&segments)?;
-        // A method called with `.` passes self explicitly, which its declared
-        // arity doesn't count.
-        if let StdlibEntry::Function(function) = entry
-            && function.is_method
-        {
-            return None;
-        }
-        Some(ResolvedCallee { path: CalleePath::Dotted(segments), entry })
+    pub fn resolve_callee<'call>(&'call self, call: Call<'call>) -> Option<ResolvedCallee<'call>> {
+        self.shape_resolver().head_callee(call.callee, call.method)
+    }
+
+    /// Resolves the calls of `chain` in one pass over it.
+    #[must_use]
+    pub fn chain_callees<'chain>(
+        &'chain self,
+        chain: &'chain SuffixedExpression,
+    ) -> ChainCallees<'chain> {
+        ChainCallees::new(self.shape_resolver(), chain)
+    }
+
+    fn shape_resolver(&self) -> ShapeResolver<'_> {
+        ShapeResolver::new(&self.scope_tree, self.stdlib(), &self.symbol_shapes)
     }
 
     /// With `local f = io.open(...)`, `["f", "read"]` resolves through the
@@ -202,8 +165,8 @@ impl SemanticAnalysis {
     }
 
     #[must_use]
-    pub fn shape_of_nearest_local(&self, name: &str, offset: u32) -> Option<&CompactString> {
-        self.symbol_shapes.get(&self.nearest_local(name, offset)?.id)
+    pub fn shape_of_nearest_local(&self, name: &str, offset: u32) -> Option<&'static str> {
+        self.symbol_shapes.get(&self.nearest_local(name, offset)?.id).copied()
     }
 }
 
@@ -243,31 +206,76 @@ mod tests {
     #[test]
     fn reaches_host_global_requires_a_global_the_chunk_leaves_alone() {
         assert!(reaches_host_print("print(1)", LuaVersion::Lua54));
-        assert!(!reaches_host_print("function print() end\nprint(1)", LuaVersion::Lua54));
+        assert!(!reaches_host_print(
+            "\
+function print() end
+print(1)",
+            LuaVersion::Lua54
+        ));
     }
 
     #[test]
     fn reaches_host_global_is_false_for_a_local_or_a_field_of_env() {
-        assert!(!reaches_host_print("local print = 1\nprint(1)", LuaVersion::Lua54));
-        assert!(!reaches_host_print("local _ENV = {}\nprint(1)", LuaVersion::Lua54));
-        assert!(reaches_host_print("local _ENV = {}\nprint(1)", LuaVersion::Lua51));
+        assert!(!reaches_host_print(
+            "\
+local print = 1
+print(1)",
+            LuaVersion::Lua54
+        ));
+        assert!(!reaches_host_print(
+            "\
+local _ENV = {}
+print(1)",
+            LuaVersion::Lua54
+        ));
+        assert!(reaches_host_print(
+            "\
+local _ENV = {}
+print(1)",
+            LuaVersion::Lua51
+        ));
     }
 
     #[test]
     fn reaches_host_global_is_false_when_the_chunk_assigns_its_env() {
-        assert!(!reaches_host_print("_ENV = {}\nprint(1)", LuaVersion::Lua54));
-        assert!(reaches_host_print("_ENV = {}\nprint(1)", LuaVersion::Lua51));
+        assert!(!reaches_host_print(
+            "\
+_ENV = {}
+print(1)",
+            LuaVersion::Lua54
+        ));
+        assert!(reaches_host_print(
+            "\
+_ENV = {}
+print(1)",
+            LuaVersion::Lua51
+        ));
     }
 
     #[test]
     fn reaches_host_global_is_true_for_a_declared_global_without_a_value() {
-        assert!(reaches_host_print("global print\nprint(1)", LuaVersion::Lua55));
-        assert!(!reaches_host_print("global print = 1\nprint(1)", LuaVersion::Lua55));
+        assert!(reaches_host_print(
+            "\
+global print
+print(1)",
+            LuaVersion::Lua55
+        ));
+        assert!(!reaches_host_print(
+            "\
+global print = 1
+print(1)",
+            LuaVersion::Lua55
+        ));
     }
 
     #[test]
     fn is_defined_global_counts_a_global_star_in_scope() {
-        let parsed = luck_parser::parse("global *\nreturn y", LuaVersion::Lua55);
+        let parsed = luck_parser::parse(
+            "\
+global *
+return y",
+            LuaVersion::Lua55,
+        );
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let analysis = analyze(&parsed.block, LuaVersion::Lua55);
         let y = &analysis.scope_tree.references[0];
@@ -312,10 +320,10 @@ mod tests {
         let parsed = luck_parser::parse(source, version);
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let analysis = analyze(&parsed.block, version);
-        let Some(Statement::FunctionCall(call)) = parsed.block.stmts.last() else {
+        let Some(Statement::FunctionCall(chain)) = parsed.block.stmts.last() else {
             panic!("the last statement must be a call");
         };
-        analysis.resolve_callee(call).map(|callee| callee.name())
+        analysis.resolve_callee(chain.last_call()?).map(|callee| callee.name())
     }
 
     fn unknown_globals(source: &str) -> Vec<String> {
@@ -332,8 +340,12 @@ mod tests {
 
     #[test]
     fn free_name_in_nested_function_captures_local_env() {
-        let analysis =
-            analyze_lua54("local _ENV = {}\nlocal function f() return missing end\nreturn f");
+        let analysis = analyze_lua54(
+            "\
+local _ENV = {}
+local function f() return missing end
+return f",
+        );
         assert!(
             env_symbol(&analysis).is_upvalue,
             "a free name inside a nested function reads _ENV as an upvalue of that function"
@@ -342,7 +354,9 @@ mod tests {
 
     #[test]
     fn resolve_callee_bails_under_a_local_env() {
-        let source = "local _ENV = { print = function() end }\nprint(1, 2)";
+        let source = "\
+local _ENV = { print = function() end }
+print(1, 2)";
         assert_eq!(
             resolve_last_statement_call(source, LuaVersion::Lua54),
             None,
@@ -352,7 +366,9 @@ mod tests {
 
     #[test]
     fn resolve_callee_bails_on_a_global_the_file_rebinds() {
-        let source = "function tostring(a, b) return a end\ntostring(1, 2)";
+        let source = "\
+function tostring(a, b) return a end
+tostring(1, 2)";
         assert_eq!(
             resolve_last_statement_call(source, LuaVersion::Lua54),
             None,
@@ -362,7 +378,12 @@ mod tests {
 
     #[test]
     fn type_function_body_knows_the_types_library() {
-        let unknown = unknown_globals("type function f(t)\n  return types.number\nend");
+        let unknown = unknown_globals(
+            "\
+type function f(t)
+  return types.number
+end",
+        );
         assert!(
             unknown.is_empty(),
             "type functions run with the `types` library, so the body has no unknown global: \
@@ -373,7 +394,13 @@ mod tests {
     #[test]
     fn type_function_body_knows_sibling_type_functions() {
         let unknown = unknown_globals(
-            "type function f(t)\n  return t\nend\ntype function g(t)\n  return f(t)\nend",
+            "\
+type function f(t)
+  return t
+end
+type function g(t)
+  return f(t)
+end",
         );
         assert!(
             unknown.is_empty(),

@@ -5,7 +5,8 @@ use luck_token::{CompactString, LuaVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::candidate_pool::CandidatePool;
-use super::scope_set::ScopeSet;
+use super::renamer::RenamedBinding;
+use super::scope_claims::ScopeClaims;
 use crate::binding::{
     IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, has_implicit_arg, identifier_name,
     is_env_binding,
@@ -31,14 +32,13 @@ enum BindingKind {
 
 struct BindingInfo {
     original_name: CompactString,
-    scope_id: usize,
     reference_count: usize,
     // `None` until `assign_slots` runs, and always `None` unless renamable.
     slot: Option<usize>,
     kind: BindingKind,
     // The declaring scope, the reference scopes, and every scope on the path
-    // between them.
-    live_scopes: ScopeSet,
+    // between them, in ascending order.
+    live_scopes: Vec<usize>,
 }
 
 /// The walk is `Visitor`'s, which reaches nodes in the same order as the
@@ -83,17 +83,18 @@ impl Analyzer {
         }
     }
 
-    pub(super) fn binding_names(mut self) -> Vec<CompactString> {
+    pub(super) fn renamed_bindings(mut self) -> Vec<RenamedBinding> {
         self.propagate_globals();
         let live_scopes_by_slot = self.assign_slots();
         let slot_names = self.generate_names(&live_scopes_by_slot);
         self.bindings
             .into_iter()
             .map(|binding| {
-                binding
+                let new_name = binding
                     .slot
                     .and_then(|slot| slot_names.get(slot).cloned())
-                    .unwrap_or(binding.original_name)
+                    .unwrap_or_else(|| binding.original_name.clone());
+                RenamedBinding::new(binding.original_name, new_name)
             })
             .collect()
     }
@@ -136,16 +137,13 @@ impl Analyzer {
     fn declare_binding(&mut self, name: &str, kind: BindingKind) {
         let scope_id = self.current_scope_id;
         let binding_id = self.bindings.len();
-        let mut live_scopes = ScopeSet::default();
-        live_scopes.insert(scope_id);
         let original_name = CompactString::from(name);
         self.bindings.push(BindingInfo {
             original_name: original_name.clone(),
-            scope_id,
             reference_count: 0,
             slot: None,
             kind,
-            live_scopes,
+            live_scopes: vec![scope_id],
         });
         if let Some(scope) = self.scopes.get_mut(scope_id) {
             scope.binding_ids.push(binding_id);
@@ -171,13 +169,25 @@ impl Analyzer {
             .and_then(|&binding_id| bindings.get_mut(binding_id));
         if let Some(binding) = innermost_binding {
             binding.reference_count = binding.reference_count.saturating_add(1);
+            // A scope that's live already brought its ancestors in with it,
+            // and the declaring scope is live from the start. A scope not yet
+            // live was entered after every one that is, so the new ones go on
+            // the end, outermost first.
+            let live_count = binding.live_scopes.len();
             let mut next_scope = Some(current_scope);
             while let Some(scope_id) = next_scope {
-                binding.live_scopes.insert(scope_id);
-                if scope_id == binding.scope_id {
+                let is_live = binding
+                    .live_scopes
+                    .get(..live_count)
+                    .is_some_and(|live_scopes| live_scopes.binary_search(&scope_id).is_ok());
+                if is_live {
                     break;
                 }
+                binding.live_scopes.push(scope_id);
                 next_scope = scopes.get(scope_id).and_then(|scope| scope.parent);
+            }
+            if let Some(new_scopes) = binding.live_scopes.get_mut(live_count..) {
+                new_scopes.reverse();
             }
             if binding.kind == BindingKind::Renamable {
                 return;
@@ -248,8 +258,10 @@ impl Analyzer {
         self.exit_scope();
     }
 
-    fn assign_slots(&mut self) -> Vec<ScopeSet> {
-        let mut live_scopes_by_slot: Vec<ScopeSet> = Vec::new();
+    /// Returns each slot's live scopes.
+    fn assign_slots(&mut self) -> Vec<Vec<usize>> {
+        let mut live_scopes_by_slot: Vec<Vec<usize>> = Vec::new();
+        let mut live_slots = ScopeClaims::default();
         let Self { scopes, bindings, .. } = self;
         // Scope ids come from one depth-first walk, so they're in preorder:
         // parents before their children.
@@ -263,15 +275,13 @@ impl Analyzer {
                 }
 
                 // Reuse the first slot that isn't live in this scope.
-                let slot = live_scopes_by_slot
-                    .iter()
-                    .position(|live_scopes| !live_scopes.contains(scope_id))
-                    .unwrap_or(live_scopes_by_slot.len());
+                let slot = live_slots.first_free(scope_id);
                 if slot == live_scopes_by_slot.len() {
-                    live_scopes_by_slot.push(ScopeSet::default());
+                    live_scopes_by_slot.push(Vec::new());
                 }
+                live_slots.claim(&binding.live_scopes, slot);
                 if let Some(live_scopes) = live_scopes_by_slot.get_mut(slot) {
-                    live_scopes.union_with(&binding.live_scopes);
+                    live_scopes.extend_from_slice(&binding.live_scopes);
                 }
                 binding.slot = Some(slot);
             }
@@ -291,18 +301,7 @@ impl Analyzer {
         }
     }
 
-    /// Names a slot may not wear: every global read in or below a scope it's
-    /// live in.
-    fn forbidden_names(&self, live_scopes: &ScopeSet) -> FxHashSet<&str> {
-        live_scopes
-            .iter()
-            .filter_map(|scope_id| self.scopes.get(scope_id))
-            .flat_map(|scope| &scope.referenced_globals)
-            .map(CompactString::as_str)
-            .collect()
-    }
-
-    fn generate_names(&self, live_scopes_by_slot: &[ScopeSet]) -> Vec<CompactString> {
+    fn generate_names(&self, live_scopes_by_slot: &[Vec<usize>]) -> Vec<CompactString> {
         if live_scopes_by_slot.is_empty() {
             return Vec::new();
         }
@@ -318,7 +317,7 @@ impl Analyzer {
         // Unreferenced slots sort last but still appear in the output, so they
         // go through the same conflict check. Otherwise an unused param could
         // take the name of an upvalue read in the same function body.
-        let mut slots_by_frequency: Vec<(usize, usize, &ScopeSet)> = slot_frequencies
+        let mut slots_by_frequency: Vec<(usize, usize, &Vec<usize>)> = slot_frequencies
             .iter()
             .zip(live_scopes_by_slot)
             .enumerate()
@@ -326,11 +325,16 @@ impl Analyzer {
             .collect();
         slots_by_frequency.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
+        // A slot may not wear the name of a global read in or below a scope
+        // it's live in.
+        let reads_global = |scope_id: usize, name: &str| {
+            self.scopes.get(scope_id).is_some_and(|scope| scope.referenced_globals.contains(name))
+        };
         let mut pool = CandidatePool::new(self.version);
         let mut slot_names = vec![CompactString::default(); live_scopes_by_slot.len()];
         for (slot, _, live_scopes) in slots_by_frequency {
             if let Some(name) = slot_names.get_mut(slot) {
-                *name = pool.pick(live_scopes, &self.forbidden_names(live_scopes));
+                *name = pool.pick(live_scopes, reads_global);
             }
         }
 
@@ -358,7 +362,7 @@ impl<'ast> Visitor<'ast> for Analyzer {
                 self.visit_signature_annotations(&local_function.body);
                 self.declare_local(
                     identifier_name(&local_function.name),
-                    local_function.is_exported,
+                    local_function.kind.is_exported(),
                 );
                 self.visit_function_scope(&local_function.body, false);
             }
@@ -452,15 +456,53 @@ impl<'ast> Visitor<'ast> for Analyzer {
         }
     }
 
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(name) = var {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(name) = expr {
             self.reference_name(identifier_name(name));
         }
-        self.walk_var(var);
+        self.walk_expr(expr);
+    }
+
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Name(name) = target {
+            self.reference_name(identifier_name(name));
+        }
+        self.walk_assignment_target(target);
     }
 
     fn visit_function_body(&mut self, body: &'ast FunctionBody) {
         self.visit_signature_annotations(body);
         self.visit_function_scope(body, false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::fmt::Write as _;
+
+    use super::*;
+    use crate::fixtures::parse;
+
+    #[test]
+    fn a_binding_holds_only_the_scopes_it_is_live_in() {
+        // A set sized by scope id, one per binding, takes memory quadratic in
+        // the number of sibling scopes.
+        let mut source = String::new();
+        for scope in 0..2_000u32 {
+            let _unused = writeln!(source, "do local x{scope} = f() g(x{scope}) end");
+        }
+        let mut analyzer = Analyzer::new(LuaVersion::Lua54);
+        analyzer.visit_block(&parse(&source, LuaVersion::Lua54));
+        assert_eq!(analyzer.bindings.len(), 2_000);
+        assert!(analyzer.bindings.iter().all(|binding| binding.live_scopes.len() == 1));
+    }
+
+    #[test]
+    fn live_scopes_stay_sorted_whatever_order_references_come_in() {
+        let source = "local x do do f(x) end end do g(x) do do h(x) end end end do end f(x)";
+        let mut analyzer = Analyzer::new(LuaVersion::Lua54);
+        analyzer.visit_block(&parse(source, LuaVersion::Lua54));
+        let live_scopes = &analyzer.bindings.first().expect("x is declared").live_scopes;
+        assert_eq!(live_scopes, &[0, 1, 2, 3, 4, 5]);
     }
 }

@@ -89,7 +89,9 @@ mod tests {
 
     #[test]
     fn ignores_non_literal_bounds() {
-        let diags = run("local n = 0\nfor i = 10, n do print(i) end");
+        let diags = run("\
+local n = 0
+for i = 10, n do print(i) end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

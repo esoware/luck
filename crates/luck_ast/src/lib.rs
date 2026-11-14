@@ -7,9 +7,17 @@
 //! Two traversals share one shape: [`Visitor`] borrows the tree, and
 //! [`Transform`] takes each node by value and returns its replacement, as the
 //! minifier's passes do. Override the `visit_*` or `transform_*` method you
-//! care about and call `self.walk_*` to recurse. A manual walk that follows a
-//! chain link, such as a call's callee or a field access's prefix, recurses
-//! through [`ensure_sufficient_stack`] the way `walk_*` does.
+//! care about and call `self.walk_*` to recurse.
+//!
+//! A run of suffixes (`a.b[c]:d()`) is one [`SuffixedExpression`], and a
+//! run of binary operators at one precedence level (`a + b - c`) is one
+//! [`BinaryOp`], so however long a run gets, it nests one level.
+//!
+//! Every traversal recurses on the plain stack, once per level of nesting.
+//! `luck_parser` builds no tree deeper than [`MAX_NESTING_DEPTH`]. Nothing
+//! checks a tree built with [`Synth`] as it grows, so measure one with
+//! [`block_nesting_depth`] or [`expr_nesting_depth`], which are safe at any
+//! depth.
 //!
 //! # Usage
 //!
@@ -31,38 +39,45 @@
 
 extern crate alloc;
 
+mod chain;
+mod depth;
 mod expr;
 mod function;
 #[cfg(test)]
 mod layout;
+mod one_or_more;
 mod punctuated;
 mod query;
 mod span;
-mod stack;
 mod stmt;
 mod synth;
 mod transform;
 mod types;
 mod visitor;
 
+pub use chain::{Call, ChainHead};
+pub use depth::{
+    MAX_NESTING_DEPTH, block_nesting_depth, expr_nesting_depth, spans_past_nesting_cap,
+    type_nesting_depth,
+};
 pub use expr::{
-    BinaryOp, ElseIfExprClause, Expression, Field, FieldAccess, FunctionArgs, FunctionCall,
-    FunctionDef, IfExpression, IndexExpression, InterpolatedString, InterpolatedStringSegment,
-    Literal, ParenthesizedExpression, TableConstructor, TypeCast, TypeInstantiation, UnaryOp, Var,
+    BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
+    FunctionDef, IfExpression, InterpolatedString, InterpolatedStringSegment, Literal,
+    ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
+pub use one_or_more::OneOrMore;
 pub use punctuated::Punctuated;
 pub use query::{
-    DottedPath, dotted_path, expr_starts_with_brace, is_multi_value, is_prefix_expr,
-    stmt_starts_with_paren, unwrap_parentheses,
+    DottedPath, expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,
+    unwrap_parentheses,
 };
-pub use stack::ensure_sufficient_stack;
 pub use stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
     ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
     GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
-    LocalFunction, NumericFor, RepeatLoop, ReturnStatement, Statement, TypeDeclaration,
-    TypeDeclarationValue, WhileLoop,
+    LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement, Statement,
+    TypeDeclaration, TypeDeclarationValue, WhileLoop,
 };
 pub use synth::{
     FieldSpec, FunctionSignature, InterpolatedStringPart, Synth, SyntheticComment, TypeFieldAccess,

@@ -14,6 +14,10 @@
 //! A [`Resolver`] caches `.luaurc` aliases and Luau's file probes and never
 //! invalidates them, so create one per build to see edits.
 //!
+//! This is the lowest crate that touches the filesystem, so it also holds what
+//! every file-reading consumer shares: [`read_source_file`], and the path form
+//! modules are keyed on, [`normalize_path`] and [`native_path`].
+//!
 //! # Usage
 //!
 //! ```no_run
@@ -49,6 +53,10 @@ mod fixtures;
 mod lua;
 mod luau;
 mod luaurc;
+mod path;
 mod resolver;
+mod source_io;
 
-pub use resolver::{ResolveRequest, ResolvedModule, Resolver};
+pub use path::{native_path, normalize_path};
+pub use resolver::{DEFAULT_SEARCH_PATHS, ResolveRequest, ResolvedModule, Resolver};
+pub use source_io::read_source_file;

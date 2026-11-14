@@ -1,10 +1,11 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use luck_core::{Diagnostic, native_path, normalize_path};
+use luck_core::Diagnostic;
 use rustc_hash::FxHashMap;
 
 use crate::luaurc::{AliasCache, AliasTarget};
+use crate::path::{native_path, normalize_path};
 use crate::{ResolveRequest, ResolvedModule};
 
 /// What's on disk at each module path a build has walked through, since many
