@@ -6,8 +6,10 @@
 //! [`CompoundOp`]), [`Comment`] (extracted comments with position metadata),
 //! [`SourceError`], the literal semantics every crate shares
 //! ([`parse_lua_number`], [`decode_string`], [`encode_string`],
-//! [`short_string_body`]), the definition of a line break ([`line_breaks`],
-//! [`has_line_break`]), and the [`CodeBuffer`] output builder.
+//! [`short_string_body`]), whether a text is one whole literal token
+//! ([`is_numeral`], [`is_string_literal`], [`is_interpolated_text`]), the
+//! definition of a line break ([`line_breaks`], [`has_line_break`]), and the
+//! [`CodeBuffer`] output builder.
 //!
 //! This crate has zero internal dependencies, and every other luck crate
 //! depends on it.
@@ -25,6 +27,7 @@ extern crate alloc;
 
 mod code_buffer;
 mod comment;
+mod lexeme;
 mod number;
 mod op;
 mod source_error;
@@ -37,6 +40,9 @@ mod whitespace;
 pub use code_buffer::CodeBuffer;
 pub use comment::{Comment, CommentKind, CommentPosition, leading_hot_comments};
 pub use compact_str::CompactString;
+pub use lexeme::{
+    is_interpolated_text, is_numeral, is_numeral_in, is_string_literal, is_string_literal_in,
+};
 pub use number::{LuaNumber, NumberSubtypes, parse_lua_number};
 pub use op::{Associativity, BinOp, CompoundOp, OperandSide, UnOp};
 pub use source_error::SourceError;

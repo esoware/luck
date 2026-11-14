@@ -4,7 +4,9 @@
 //!
 //! [`format_block()`] formats an AST directly, including one built in code
 //! with no source text, and returns an error for one nested past
-//! `luck_ast::MAX_NESTING_DEPTH`. [`format()`] and [`format_range`] parse
+//! `luck_ast::MAX_NESTING_DEPTH` or holding a leaf with no text that reads
+//! back as itself, such as a keyword token where a name belongs.
+//! [`format()`] and [`format_range`] parse
 //! source text first, which also gets them blank-line preservation,
 //! `-- luck: format off` regions, and comments placed by byte position.
 //!

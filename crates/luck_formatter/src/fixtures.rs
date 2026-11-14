@@ -8,7 +8,7 @@ use crate::ir::{Format, Formatter};
 pub(crate) fn render(node: &dyn Format, options: FormatOptions) -> String {
     let mut f = Formatter::new(options, Comments::none());
     node.fmt(&mut f);
-    f.print("")
+    f.print("").expect("a fixture prints")
 }
 
 pub(crate) fn parse_expr(source: &str) -> Expression {

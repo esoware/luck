@@ -23,7 +23,7 @@ use crate::comments::{
     write_stalled_comments, write_tail_comments, write_trailing_comments,
 };
 use crate::ir::{Format, Formatter, empty_line, hard_line, indent, token};
-use crate::{BlockNewlineGaps, Comments, FormatOptions};
+use crate::{BlockNewlineGaps, Comments, FormatError, FormatOptions};
 
 #[derive(Debug, Clone, Copy)]
 enum BlockItem<'block> {
@@ -78,19 +78,15 @@ impl Format for BlockItem<'_> {
     }
 }
 
-/// A bare `;` and a parse-error placeholder print nothing, so they get no separator either.
+/// A bare `;` prints nothing, so it gets no separator either. An error node
+/// stays, for its statement to refuse.
 fn printed_items(block: &Block) -> impl Iterator<Item = BlockItem<'_>> + Clone {
     let stmts = block
         .stmts
         .iter()
-        .filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_) | Statement::Error(_)))
+        .filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_)))
         .map(BlockItem::Stmt);
-    let last_stmt = block
-        .last_stmt
-        .as_deref()
-        .filter(|last_stmt| !matches!(last_stmt, LastStatement::Error(_)))
-        .map(BlockItem::Last);
-    stmts.chain(last_stmt)
+    stmts.chain(block.last_stmt.as_deref().map(BlockItem::Last))
 }
 
 pub(crate) fn first_item_start(block: &Block) -> Option<u32> {
@@ -284,12 +280,16 @@ impl<'ast> Visitor<'ast> for InnermostBlock<'ast, '_> {
 /// Returns the source span they replace, from the start of the first one's
 /// line to the end of the last one's trailing comment, and the text to put
 /// there. `None` when no statement overlaps `range`.
+///
+/// # Errors
+///
+/// Returns the refusal of a leaf with no spelling.
 pub(crate) fn format_selection(
     block: &Block,
     mut comments: Comments,
     options: &FormatOptions,
     range: &Range<u32>,
-) -> Option<(Span, String)> {
+) -> Result<Option<(Span, String)>, FormatError> {
     let mut finder = InnermostBlock { range, found: block };
     finder.visit_block(block);
 
@@ -300,10 +300,13 @@ pub(crate) fn format_selection(
     let items = printed_items(finder.found)
         .skip_while(|item| !is_selected(item))
         .take_while(|item| is_selected(item));
-    let first_start = items.clone().next()?.span().start;
-    let last_end = items.clone().last()?.span().end;
-
-    let source = comments.source_text()?;
+    let (Some(first), Some(last)) = (items.clone().next(), items.clone().last()) else {
+        return Ok(None);
+    };
+    let (first_start, last_end) = (first.span().start, last.span().end);
+    let Some(source) = comments.source_text() else {
+        return Ok(None);
+    };
     let line_start = own_line_start(source, first_start).unwrap_or(first_start);
     let base_indent = Span::new(line_start, first_start).text(source).to_owned();
     comments.restrict_to(Span::new(line_start, last_end));
@@ -311,7 +314,7 @@ pub(crate) fn format_selection(
     let mut f = Formatter::new(*options, comments);
     write_items(&mut f, items);
     let end = f.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
-    Some((Span::new(line_start, end), f.print(&base_indent)))
+    Ok(Some((Span::new(line_start, end), f.print(&base_indent)?)))
 }
 
 /// Whether the source has a blank line right above `offset`. Synthetic input

@@ -37,6 +37,10 @@ Determinism matters most. A single xorshift64\* `Rng` (`rng.rs`) drives every ch
 
 These sweeps back the formatter and minifier guarantees. Strengthen them instead of working around them.
 
+## Unprintable trees
+
+`tests/it/unprintable.rs` builds trees in code that hold a leaf no source spells where it sits, in every position a tree holds a name and every kind of literal, singleton, access modifier, interpolated string, and error node, and checks that `compact` and `format_block` refuse each with the same error at that leaf. Each position also prints with a valid leaf in place, back into an equivalent tree, so a refusal comes from the leaf alone. A new leaf position belongs in it.
+
 ## Stack tests
 
 `tests/it/stack.rs` runs every stage (parse, validate, clone, compact, format, verified format, and minify) over one source per construct nested to the parser's cap, and over one per kind of run of operators or suffixes far longer than it, each on a thread with 1 MiB of stack, which is what a Windows main thread and a wasm module get. Test builds are unoptimized, where frames are largest, and a stage that outgrows the budget takes the test process down. A new recursive stage or a new nesting construct belongs in it.

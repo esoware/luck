@@ -733,7 +733,7 @@ mod tests {
         };
         let mut f = Formatter::new(options, Comments::none());
         build(&mut f);
-        f.print("")
+        f.print("").expect("a document of tokens prints")
     }
 
     #[test]
@@ -896,7 +896,7 @@ mod tests {
         let print = |indent_width: u8| {
             let mut f = tab_formatter(indent_width);
             (token("a"), indent((hard_line(), format_with(write_bracketed)))).fmt(&mut f);
-            f.print("")
+            f.print("").expect("a document of tokens prints")
         };
         assert_eq!(print(1), "a\n\t[yyyyyyy]");
         assert_eq!(print(4), "a\n\t[\n\tyyyyyyy\n\t]");
@@ -907,7 +907,7 @@ mod tests {
         let print = |indent_width: u8, base_indent: &str| {
             let mut f = tab_formatter(indent_width);
             write_bracketed(&mut f);
-            f.print(base_indent)
+            f.print(base_indent).expect("a document of tokens prints")
         };
         assert_eq!(print(1, "\t"), "\t[yyyyyyy]");
         assert_eq!(print(4, "\t"), "\t[\n\tyyyyyyy\n\t]");

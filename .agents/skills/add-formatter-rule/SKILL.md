@@ -7,7 +7,7 @@ description: Changes how luck_formatter formats a Lua/Luau construct, covering l
 
 The formatter is a Wadler/Prettier-style engine: emitters are `impl Format for Node` blocks composing combinators into a flat tag-stream IR (`src/ir.rs`, the authority on the real element set). The printer (`src/printer.rs`) decides which groups fit flat and which expand. Emitters live in `src/format_*.rs`, one module per construct family. Comment placement lives only in `comments.rs` and `format_block.rs`.
 
-Leaf text comes from token-carried values (`src/tokens.rs`), never from source slices. That is what lets `format_block` format synthetic ASTs. Never push raw whitespace strings, because the printer owns layout.
+Leaf text comes from token-carried values, never from source slices, through `luck_ast`'s `*_spelling` functions and `Formatter::spelled`, which keeps the error for a leaf with no spelling so `format_block` refuses the tree as `luck_codegen` does. That is what lets `format_block` format synthetic ASTs. Never push raw whitespace strings, because the printer owns layout.
 
 ## Gotchas that produce real bugs
 

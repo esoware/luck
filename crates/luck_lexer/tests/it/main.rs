@@ -7,6 +7,7 @@ mod common;
 
 mod comments;
 mod interpolation;
+mod lexeme;
 mod numbers;
 mod streaming;
 mod strings;

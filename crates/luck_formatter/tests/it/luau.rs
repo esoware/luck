@@ -239,3 +239,21 @@ fn verify_accepts_dropping_a_lone_leading_separator() {
         );
     }
 }
+
+#[test]
+fn an_array_field_keeps_the_leading_operator_that_keeps_read_from_opening_it() {
+    // A bare `read` or `write` opening a table type field is its access
+    // modifier, so `{ write }` reads back as a field with no type.
+    for (input, expected) in [
+        ("type A = { | write }\n", "type A = { | write }\n"),
+        ("type A = { | read | Other }\n", "type A = { | read | Other }\n"),
+        ("type A = { & write & Other }\n", "type A = { & write & Other }\n"),
+        ("type A = { read | read }\n", "type A = { read read }\n"),
+        ("type A = { | Other | read }\n", "type A = { Other | read }\n"),
+    ] {
+        assert_luau(input, expected);
+        let verified =
+            luck_formatter::format_and_verify(input, LuaVersion::Luau, &FormatOptions::default());
+        assert!(verified.is_ok(), "{input:?}: {:?}", verified.err().map(|(_, diff)| diff));
+    }
+}

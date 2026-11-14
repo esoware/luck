@@ -2,6 +2,7 @@ use luck_token::{Token, TokenKind, encode_string};
 
 use crate::expr::Expression;
 use crate::punctuated::Punctuated;
+use crate::spelling::leading_access_word;
 use crate::synth::Synth;
 use crate::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
@@ -31,10 +32,11 @@ pub enum TypeFieldAccess {
 impl Synth {
     /// # Panics
     ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does,
+    /// or is `typeof`.
     #[must_use]
     pub fn ty_named(&self, name: &str) -> Type {
-        Type::Name { name: self.identifier_name(name), span: self.next_span() }
+        Type::Name { name: self.type_name(name), span: self.next_span() }
     }
 
     /// # Panics
@@ -52,13 +54,14 @@ impl Synth {
 
     /// # Panics
     ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does,
+    /// or is `typeof`.
     #[must_use]
     pub fn ty_generic(&self, name: &str, args: Vec<Type>) -> Type {
         Type::Named(Box::new(NamedType {
             span: self.next_span(),
             prefix: None,
-            name: self.identifier(name),
+            name: self.token(TokenKind::Identifier(self.type_name(name))),
             generics: Some(TypeArgs { span: self.next_span(), args: Punctuated::from_items(args) }),
         }))
     }
@@ -158,7 +161,9 @@ impl Synth {
 
     /// Named fields and indexers can take a `read`/`write` access modifier.
     /// Luau allows the `{ T }` shorthand only alone, so an array element
-    /// beside other fields becomes its `[number]: T` long form.
+    /// beside other fields becomes its `[number]: T` long form, as does one
+    /// that opens with the name `read` or `write`, which the shorthand would
+    /// read back as an access modifier.
     ///
     /// # Panics
     ///
@@ -182,7 +187,9 @@ impl Synth {
                     key,
                     value,
                 },
-                TypeFieldSpec::Array(value) if can_use_array_shorthand => {
+                TypeFieldSpec::Array(value)
+                    if can_use_array_shorthand && leading_access_word(&value).is_none() =>
+                {
                     TypeField::Array { span: self.next_span(), access: None, value }
                 }
                 TypeFieldSpec::Array(value) => TypeField::Indexer {
@@ -267,12 +274,13 @@ impl Synth {
 
     /// # Panics
     ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does,
+    /// or is `typeof`.
     #[must_use]
     pub fn ty_generic_pack(&self, name: &str) -> Type {
         Type::GenericPack(Box::new(GenericPackType {
             span: self.next_span(),
-            name: self.identifier(name),
+            name: self.token(TokenKind::Identifier(self.type_name(name))),
         }))
     }
 
@@ -353,6 +361,35 @@ mod tests {
         assert!(function.generics.is_some());
         assert!(function.params.first().unwrap().name.is_some());
         assert!(matches!(function.return_type, Type::Pack(_)));
+    }
+
+    #[test]
+    fn typeof_cannot_start_a_type_name() {
+        assert!(catch_unwind(|| Synth::new().ty_named("typeof")).is_err(), "named");
+        assert!(catch_unwind(|| Synth::new().ty_generic("typeof", Vec::new())).is_err(), "generic");
+        assert!(catch_unwind(|| Synth::new().ty_generic_pack("typeof")).is_err(), "pack");
+        // After a module, `typeof.Name` is a qualified type.
+        assert!(matches!(Synth::new().ty_qualified("typeof", "Name"), Type::Named(_)));
+    }
+
+    #[test]
+    fn ty_table_spells_out_an_element_the_shorthand_would_read_as_an_access_modifier() {
+        let synth = Synth::new();
+        let element_field = |element: Type| {
+            let Type::Table(table) = synth.ty_table_array(element) else {
+                panic!("expected a table type");
+            };
+            table.fields.items.into_iter().next().expect("one field")
+        };
+        for element in [
+            synth.ty_named("read"),
+            synth.ty_optional(synth.ty_named("write")),
+            synth.ty_union(vec![synth.ty_named("read"), synth.ty_named("T")]),
+            synth.ty_qualified("write", "T"),
+        ] {
+            assert!(matches!(element_field(element), TypeField::Indexer { .. }));
+        }
+        assert!(matches!(element_field(synth.ty_named("reader")), TypeField::Array { .. }));
     }
 
     #[test]

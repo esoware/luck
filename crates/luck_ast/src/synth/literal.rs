@@ -1,4 +1,6 @@
-use luck_token::{BinOp, CompactString, LuaVersion, TokenKind, UnOp, encode_string};
+use luck_token::{
+    BinOp, CompactString, LuaVersion, TokenKind, UnOp, encode_string, is_numeral, is_numeral_in,
+};
 
 use crate::expr::{Expression, InterpolatedString, InterpolatedStringSegment, Literal};
 use crate::synth::Synth;
@@ -17,8 +19,16 @@ pub enum InterpolatedStringPart<'text> {
 )]
 impl Synth {
     /// Prefer [`Synth::number_f64`] / [`Synth::number_i64`] for runtime values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `text` isn't one numeral without a Luau `i` suffix under the
+    /// pinned version, or in any dialect when none is pinned.
     #[must_use]
     pub fn number(&self, text: &str) -> Expression {
+        let is_numeral_here =
+            self.version.map_or_else(|| is_numeral(text), |version| is_numeral_in(text, version));
+        assert!(is_numeral_here && !text.ends_with('i'), "synth: {text:?} is not a number literal");
         Expression::Number(Literal { text: CompactString::from(text), span: self.next_span() })
     }
 
@@ -26,10 +36,14 @@ impl Synth {
     ///
     /// # Panics
     ///
-    /// Panics if `text` doesn't end with `i`.
+    /// Panics if `text` isn't a numeral with an `i` suffix that fits in 64
+    /// bits.
     #[must_use]
     pub fn integer_literal(&self, text: &str) -> Expression {
-        assert!(text.ends_with('i'), "synth: Luau integer literal must end with 'i'");
+        assert!(
+            text.ends_with('i') && is_numeral(text),
+            "synth: {text:?} is not a Luau integer literal"
+        );
         Expression::Integer(Literal { text: CompactString::from(text), span: self.next_span() })
     }
 
@@ -254,6 +268,7 @@ fn decimal_escape(byte_value: u32) -> String {
 mod tests {
     use core::iter;
     use core::time::Duration;
+    use std::panic::catch_unwind;
     use std::time::Instant;
 
     use super::*;
@@ -537,6 +552,22 @@ mod tests {
             TokenKind::InterpolatedStringMiddle(_)
         ));
         assert!(multi_node.segments[2].expr.is_none());
+    }
+
+    #[test]
+    fn number_and_integer_text_must_be_one_numeral() {
+        for text in ["", "x", "-1", "1..2", "1 ", "1i"] {
+            assert!(catch_unwind(|| Synth::new().number(text)).is_err(), "{text:?}");
+        }
+        assert!(matches!(Synth::new().number("0x1p4"), Expression::Number(_)));
+        // Hex floats are a Lua 5.2+ numeral, so a synthesizer pinned to Luau
+        // refuses one.
+        let luau_hex_float =
+            catch_unwind(|| Synth::new().with_version(LuaVersion::Luau).number("0x1p4"));
+        assert!(luau_hex_float.is_err(), "a hex float under Luau");
+        for text in ["1", "1.5i", "i", "9223372036854775808i"] {
+            assert!(catch_unwind(|| Synth::new().integer_literal(text)).is_err(), "{text:?}");
+        }
     }
 
     #[test]

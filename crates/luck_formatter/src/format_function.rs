@@ -1,6 +1,6 @@
 use luck_ast::{
     CallSuffix, Expression, FunctionArgs, FunctionAttribute, FunctionBody, Literal, Parameter,
-    Punctuated, VarArgParam,
+    Punctuated, VarArgParam, string_spelling,
 };
 
 use crate::comments::{ListKind, write_commented_list};
@@ -303,8 +303,9 @@ fn space_before_definition_paren(f: &mut Formatter) {
 /// Re-quotes a string argument written without parentheses, which the AST
 /// holds as a bare [`Literal`] instead of an expression.
 fn write_normalized_string(f: &mut Formatter, literal: &Literal) {
-    let normalized = normalize_quote(&literal.text, f.options().quote_style);
-    f.write_text(normalized);
+    if let Some(text) = f.spelled(string_spelling(literal)) {
+        f.write_text(normalize_quote(text, f.options().quote_style));
+    }
 }
 
 #[cfg(test)]

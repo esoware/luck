@@ -6,7 +6,8 @@
 //! and a space only where two adjacent pieces would otherwise merge into one
 //! token. It never reads source text, so synthetic ASTs print too. A tree
 //! nested past `luck_ast::MAX_NESTING_DEPTH` is an error, because the parser
-//! would refuse the output.
+//! would refuse the output, and so is one holding a leaf with no text that
+//! reads back as itself, such as a keyword token where a name belongs.
 //!
 //! # Usage
 //!

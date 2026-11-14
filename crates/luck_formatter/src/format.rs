@@ -15,19 +15,27 @@ pub struct FormatResult {
     pub errors: Vec<FormatError>,
 }
 
-/// A parse error, or the refusal of a tree nested past the cap. Formatting
+/// A parse error, or the refusal of a tree that can't print as itself: one
+/// nested past the cap, or one holding a leaf with no spelling. Formatting
 /// itself reports no others.
 pub type FormatError = luck_token::SourceError;
 
-fn print_block(block: &Block, comments: Comments, options: &FormatOptions) -> String {
+/// # Errors
+///
+/// Returns the refusal of a leaf with no spelling.
+fn print_block(
+    block: &Block,
+    comments: Comments,
+    options: &FormatOptions,
+) -> Result<String, FormatError> {
     let mut f = Formatter::new(*options, comments);
     write_shebang(&mut f);
     block.fmt(&mut f);
-    // Empty and error statements print nothing, so a block holding only
-    // those must not open a line before the trailing comment flush.
+    // Empty statements print nothing, so a block holding only those must not
+    // open a line before the trailing comment flush.
     let has_stmts = first_item_start(block).is_some();
     write_remaining_comments(&mut f, has_stmts);
-    let mut output = f.print("");
+    let mut output = f.print("")?;
 
     let trimmed = output.trim_end();
     output.truncate(trimmed.len());
@@ -35,7 +43,7 @@ fn print_block(block: &Block, comments: Comments, options: &FormatOptions) -> St
     if options.line_endings == LineEndings::Windows {
         output = with_windows_line_endings(&output);
     }
-    output
+    Ok(output)
 }
 
 /// Verbatim text can already hold CRLF or LFCR, from CRLF input or an earlier
@@ -66,8 +74,10 @@ fn with_windows_line_endings(text: &str) -> String {
 ///
 /// # Errors
 ///
-/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
-/// which `luck_parser` never builds and would refuse to read back.
+/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`], and
+/// for one holding a leaf with no text that reads back as itself, such as a
+/// keyword token where a name belongs or an error node. `luck_parser` builds
+/// neither, and its output would read back as some other tree.
 pub fn format_block(
     block: &Block,
     comments: Comments,
@@ -81,7 +91,7 @@ pub fn format_block(
             ),
         });
     }
-    Ok(print_block(block, comments, options))
+    print_block(block, comments, options)
 }
 
 /// Input that fails to parse returns empty output with its parse errors in
@@ -111,7 +121,11 @@ pub fn format_range(
 
     let offsets = index_to_offset(range.start)..index_to_offset(range.end);
     let comments = Comments::from_source(&parsed.comments, source, version);
-    let output = format_selection(&parsed.block, comments, options, &offsets).map_or_else(
+    let selection = match format_selection(&parsed.block, comments, options, &offsets) {
+        Ok(selection) => selection,
+        Err(error) => return FormatResult { output: String::new(), errors: vec![error] },
+    };
+    let output = selection.map_or_else(
         || source.to_owned(),
         |(span, selected)| {
             let text = if options.line_endings == LineEndings::Windows {
@@ -148,7 +162,10 @@ pub(crate) fn format_source(
     }
 
     let comments = Comments::from_source(&source_parse.comments, &source_parse.source, version);
-    let mut output = print_block(&source_parse.block, comments, options);
+    let mut output = match print_block(&source_parse.block, comments, options) {
+        Ok(output) => output,
+        Err(error) => return (FormatResult { output: String::new(), errors: vec![error] }, None),
+    };
     let mut parsed = source_parse;
     // `sort_requires` reorders source lines rather than AST nodes, so each
     // statement's comments and trivia move with it. It reads formatted text
@@ -161,7 +178,12 @@ pub(crate) fn format_source(
         {
             parsed = luck_parser::parse(sorted, version);
             let sorted_comments = Comments::from_source(&parsed.comments, &parsed.source, version);
-            output = print_block(&parsed.block, sorted_comments, options);
+            output = match print_block(&parsed.block, sorted_comments, options) {
+                Ok(sorted_output) => sorted_output,
+                Err(error) => {
+                    return (FormatResult { output: String::new(), errors: vec![error] }, None);
+                }
+            };
         }
     }
     let result = FormatResult { output, errors: Vec::new() };

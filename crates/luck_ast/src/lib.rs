@@ -19,6 +19,12 @@
 //! [`block_nesting_depth`] or [`expr_nesting_depth`], which are safe at any
 //! depth.
 //!
+//! The node fields are public, so a tree can hold a leaf no source spells,
+//! such as a keyword token where a name belongs. [`name_spelling`] and the
+//! other `*_spelling` and `check_*` functions give each leaf's text or the
+//! error for one that wouldn't read back as itself, and both printers take
+//! every leaf through them.
+//!
 //! # Usage
 //!
 //! ```
@@ -49,6 +55,7 @@ mod one_or_more;
 mod punctuated;
 mod query;
 mod span;
+mod spelling;
 mod stmt;
 mod synth;
 mod transform;
@@ -68,6 +75,10 @@ pub use punctuated::Punctuated;
 pub use query::{
     DottedPath, expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,
     unwrap_parentheses,
+};
+pub use spelling::{
+    access_spelling, check_interpolated_string, check_type_field, error_node, integer_spelling,
+    name_spelling, number_spelling, singleton_spelling, string_spelling, type_name_spelling,
 };
 pub use stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,

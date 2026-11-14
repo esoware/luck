@@ -18,10 +18,10 @@ impl CompactPrinter {
     }
 
     fn emit_function_name(&mut self, name: &FunctionName) {
-        self.emit_joined(&name.names, ".", Self::emit_token);
+        self.emit_joined(&name.names, ".", Self::emit_name);
         if let Some(method_name) = &name.method {
             self.emit_fixed(":");
-            self.emit_token(method_name);
+            self.emit_name(method_name);
         }
     }
 
@@ -33,7 +33,7 @@ impl CompactPrinter {
             self.emit_fixed(if local_function.is_const { "const" } else { "local" });
         }
         self.emit_fixed("function");
-        self.emit_token(&local_function.name);
+        self.emit_name(&local_function.name);
         self.emit_function_body(&local_function.body);
     }
 
@@ -50,14 +50,14 @@ impl CompactPrinter {
     }
 
     fn emit_attributed_name(&mut self, attributed: &AttributedName) {
-        self.emit_token(&attributed.name);
+        self.emit_name(&attributed.name);
         if let Some(ty) = &attributed.type_annotation {
             self.emit_fixed(":");
             self.emit_type(ty);
         }
         if let Some(attribute) = &attributed.attribute {
             self.emit_fixed("<");
-            self.emit_token(&attribute.name);
+            self.emit_name(&attribute.name);
             self.emit_fixed(">");
         }
     }
@@ -71,7 +71,7 @@ impl CompactPrinter {
         if matches!(type_declaration.type_value, TypeDeclarationValue::TypeFunction(_)) {
             self.emit_fixed("function");
         }
-        self.emit_token(&type_declaration.name);
+        self.emit_name(&type_declaration.name);
         if let Some(generics) = &type_declaration.generics {
             self.emit_generic_type_list(generics);
         }
@@ -96,7 +96,7 @@ impl CompactPrinter {
     pub(super) fn emit_global_function(&mut self, global_function: &GlobalFunction) {
         self.emit_fixed("global");
         self.emit_fixed("function");
-        self.emit_token(&global_function.name);
+        self.emit_name(&global_function.name);
         self.emit_function_body(&global_function.body);
     }
 
@@ -104,7 +104,7 @@ impl CompactPrinter {
         self.emit_fixed("global");
         if let Some(attribute) = &global_star.attribute {
             self.emit_fixed("<");
-            self.emit_token(&attribute.name);
+            self.emit_name(&attribute.name);
             self.emit_fixed(">");
         }
         self.emit_fixed("*");
