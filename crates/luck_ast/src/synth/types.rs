@@ -2,7 +2,6 @@ use luck_token::{Token, TokenKind, encode_string};
 
 use crate::expr::Expression;
 use crate::punctuated::Punctuated;
-use crate::spelling::leading_access_word;
 use crate::synth::Synth;
 use crate::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
@@ -32,11 +31,10 @@ pub enum TypeFieldAccess {
 impl Synth {
     /// # Panics
     ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does,
-    /// or is `typeof`.
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_named(&self, name: &str) -> Type {
-        Type::Name { name: self.type_name(name), span: self.next_span() }
+        Type::Name { name: self.identifier_name(name), span: self.next_span() }
     }
 
     /// # Panics
@@ -54,14 +52,13 @@ impl Synth {
 
     /// # Panics
     ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does,
-    /// or is `typeof`.
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_generic(&self, name: &str, args: Vec<Type>) -> Type {
         Type::Named(Box::new(NamedType {
             span: self.next_span(),
             prefix: None,
-            name: self.token(TokenKind::Identifier(self.type_name(name))),
+            name: self.identifier(name),
             generics: Some(TypeArgs { span: self.next_span(), args: Punctuated::from_items(args) }),
         }))
     }
@@ -188,7 +185,8 @@ impl Synth {
                     value,
                 },
                 TypeFieldSpec::Array(value)
-                    if can_use_array_shorthand && leading_access_word(&value).is_none() =>
+                    if can_use_array_shorthand
+                        && !matches!(leading_name(&value), Some("read" | "write")) =>
                 {
                     TypeField::Array { span: self.next_span(), access: None, value }
                 }
@@ -274,13 +272,12 @@ impl Synth {
 
     /// # Panics
     ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does,
-    /// or is `typeof`.
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_generic_pack(&self, name: &str) -> Type {
         Type::GenericPack(Box::new(GenericPackType {
             span: self.next_span(),
-            name: self.token(TokenKind::Identifier(self.type_name(name))),
+            name: self.identifier(name),
         }))
     }
 
@@ -302,6 +299,33 @@ impl Synth {
             })
             .collect();
         GenericTypeList { span, params: Punctuated::from_items(generic_params) }
+    }
+}
+
+/// The name `ty` prints first, if it opens with one.
+fn leading_name(ty: &Type) -> Option<&str> {
+    let mut current = ty;
+    loop {
+        current = match current {
+            Type::Name { name, .. } => return Some(name),
+            Type::Named(named) => return named.prefix.as_ref().unwrap_or(&named.name).identifier(),
+            Type::GenericPack(pack) => return pack.name.identifier(),
+            Type::Optional(optional) => &optional.type_value,
+            Type::Union(union) if !union.has_leading_pipe => union.types.first()?,
+            Type::Intersection(intersection) if !intersection.has_leading_ampersand => {
+                intersection.types.first()?
+            }
+            Type::Union(_)
+            | Type::Intersection(_)
+            | Type::Typeof(_)
+            | Type::Table(_)
+            | Type::Function(_)
+            | Type::Parenthesized(_)
+            | Type::Pack(_)
+            | Type::Singleton(_)
+            | Type::Variadic(_)
+            | Type::Error(_) => return None,
+        };
     }
 }
 
@@ -361,15 +385,6 @@ mod tests {
         assert!(function.generics.is_some());
         assert!(function.params.first().unwrap().name.is_some());
         assert!(matches!(function.return_type, Type::Pack(_)));
-    }
-
-    #[test]
-    fn typeof_cannot_start_a_type_name() {
-        assert!(catch_unwind(|| Synth::new().ty_named("typeof")).is_err(), "named");
-        assert!(catch_unwind(|| Synth::new().ty_generic("typeof", Vec::new())).is_err(), "generic");
-        assert!(catch_unwind(|| Synth::new().ty_generic_pack("typeof")).is_err(), "pack");
-        // After a module, `typeof.Name` is a qualified type.
-        assert!(matches!(Synth::new().ty_qualified("typeof", "Name"), Type::Named(_)));
     }
 
     #[test]

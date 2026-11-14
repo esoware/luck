@@ -16,7 +16,7 @@ impl CompactPrinter {
             self.emit_fixed("@");
             if let Some(args) = &attribute.args {
                 self.emit_fixed("[");
-                self.emit_name(&attribute.name);
+                self.emit_token(&attribute.name);
                 self.emit_fixed("(");
                 if self.descend() {
                     self.emit_punctuated(args, ",", Self::emit_expr);
@@ -25,7 +25,7 @@ impl CompactPrinter {
                 self.emit_fixed(")");
                 self.emit_fixed("]");
             } else {
-                self.emit_name(&attribute.name);
+                self.emit_token(&attribute.name);
             }
         }
     }
@@ -45,7 +45,7 @@ impl CompactPrinter {
                 }
                 self.emit_fixed("...");
                 if let Some(name) = &vararg.name {
-                    self.emit_name(name);
+                    self.emit_token(name);
                 }
                 if let Some(ty) = &vararg.type_annotation {
                     self.emit_fixed(":");
@@ -64,7 +64,7 @@ impl CompactPrinter {
     }
 
     pub(super) fn emit_param(&mut self, param: &Parameter) {
-        self.emit_name(&param.name);
+        self.emit_token(&param.name);
         if let Some(ty) = &param.type_annotation {
             self.emit_fixed(":");
             self.emit_type(ty);

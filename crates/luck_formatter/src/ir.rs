@@ -11,7 +11,7 @@ use luck_token::CompactString;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::comments::{Comments, CommentsCheckpoint};
-use crate::{FormatError, FormatOptions, printer};
+use crate::{FormatOptions, printer};
 
 /// Lets conditional content follow the break decision of a group other than
 /// the innermost one around it. Doubles as the group's index into the
@@ -158,14 +158,12 @@ tuple_format!(First Second Third Fourth Fifth Sixth Seventh Eighth);
 tuple_format!(First Second Third Fourth Fifth Sixth Seventh Eighth Ninth);
 tuple_format!(First Second Third Fourth Fifth Sixth Seventh Eighth Ninth Tenth);
 
-/// Restoring rewinds the element stream, the comment cursor, and a refusal
-/// made since, but not the group id counter, so no id is ever handed out
-/// twice.
+/// Restoring rewinds the element stream and the comment cursor but not the
+/// group id counter, so no id is ever handed out twice.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Checkpoint {
     element_count: usize,
     comments: CommentsCheckpoint,
-    was_refused: bool,
 }
 
 #[derive(Debug)]
@@ -174,8 +172,6 @@ pub(crate) struct Formatter {
     next_group_id: usize,
     options: FormatOptions,
     comments: Comments,
-    /// The first leaf found with no text that reads back as itself.
-    unprintable: Option<FormatError>,
 }
 
 impl Formatter {
@@ -184,13 +180,7 @@ impl Formatter {
         // still removes most realloc copies. Synthetic ASTs have no source
         // and start empty.
         let capacity = comments.source_text().map_or(0, |source| source.len().div_ceil(8));
-        Self {
-            elements: Vec::with_capacity(capacity),
-            next_group_id: 0,
-            options,
-            comments,
-            unprintable: None,
-        }
+        Self { elements: Vec::with_capacity(capacity), next_group_id: 0, options, comments }
     }
 
     pub(crate) const fn options(&self) -> &FormatOptions {
@@ -214,21 +204,6 @@ impl Formatter {
     #[inline]
     fn push(&mut self, element: FormatElement) {
         self.elements.push(element);
-    }
-
-    /// Keeps the first error, which [`Formatter::print`] returns in place of
-    /// the output.
-    pub(crate) fn refuse(&mut self, error: FormatError) {
-        self.unprintable.get_or_insert(error);
-    }
-
-    /// A leaf's text, or `None` after keeping the error for one that has
-    /// none.
-    pub(crate) fn spelled<'text>(
-        &mut self,
-        spelling: Result<&'text str, FormatError>,
-    ) -> Option<&'text str> {
-        spelling.map_err(|error| self.refuse(error)).ok()
     }
 
     /// Moves `content` into the stream, where a reusable [`Format`] value
@@ -266,30 +241,16 @@ impl Formatter {
     }
 
     pub(crate) const fn checkpoint(&self) -> Checkpoint {
-        Checkpoint {
-            element_count: self.elements.len(),
-            comments: self.comments.checkpoint(),
-            was_refused: self.unprintable.is_some(),
-        }
+        Checkpoint { element_count: self.elements.len(), comments: self.comments.checkpoint() }
     }
 
     pub(crate) fn restore(&mut self, checkpoint: Checkpoint) {
         self.elements.truncate(checkpoint.element_count);
         self.comments.restore(checkpoint.comments);
-        if !checkpoint.was_refused {
-            self.unprintable = None;
-        }
     }
 
-    /// # Errors
-    ///
-    /// Returns the first refusal, for a tree holding a leaf with no text that
-    /// reads back as itself.
-    pub(crate) fn print(self, base_indent: &str) -> Result<String, FormatError> {
-        if let Some(error) = self.unprintable {
-            return Err(error);
-        }
-        Ok(printer::print(&self.elements, self.next_group_id, &self.options, base_indent))
+    pub(crate) fn print(self, base_indent: &str) -> String {
+        printer::print(&self.elements, self.next_group_id, &self.options, base_indent)
     }
 }
 

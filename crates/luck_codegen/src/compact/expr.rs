@@ -1,8 +1,7 @@
 use luck_ast::{
     BinaryOp, Expression, Field, FunctionArgs, FunctionDef, IfExpression, InterpolatedString,
     ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
-    check_interpolated_string, error_node, expr_starts_with_brace, integer_spelling,
-    number_spelling, string_spelling,
+    expr_starts_with_brace,
 };
 use luck_token::TokenKind;
 
@@ -20,18 +19,14 @@ impl CompactPrinter {
             Expression::False(_) => self.emit_fixed("false"),
             Expression::True(_) => self.emit_fixed("true"),
             Expression::VarArg(_) => self.emit_fixed("..."),
-            Expression::Number(literal) => {
-                self.emit_leaf(number_spelling(literal), PieceClass::Number);
-            }
-            // Luau
-            Expression::Integer(literal) => {
-                self.emit_leaf(integer_spelling(literal), PieceClass::Number);
+            Expression::Number(literal) | Expression::Integer(literal) => {
+                self.emit_piece(&literal.text, PieceClass::Number);
             }
             Expression::StringLiteral(literal) => {
-                self.emit_leaf(string_spelling(literal), PieceClass::Other);
+                self.emit_piece(&literal.text, PieceClass::Other);
             }
             Expression::FunctionDef(function) => self.emit_function_definition(function),
-            Expression::Name(token) => self.emit_name(token),
+            Expression::Name(token) => self.emit_token(token),
             Expression::Suffixed(chain) => self.emit_suffixed(chain),
             Expression::Parenthesized(parenthesized) => {
                 self.emit_parenthesized_expr(parenthesized);
@@ -45,13 +40,13 @@ impl CompactPrinter {
             Expression::InterpolatedString(string) => self.emit_interpolated_string(string),
             // Luau
             Expression::TypeCast(cast) => self.emit_type_cast(cast),
-            Expression::Error(span) => self.refuse(error_node(*span)),
+            Expression::Error(_) => {}
         }
     }
 
     pub(super) fn emit_var(&mut self, var: &Var) {
         match var {
-            Var::Name(token) => self.emit_name(token),
+            Var::Name(token) => self.emit_token(token),
             Var::Suffixed(chain) => self.emit_suffixed(chain),
         }
     }
@@ -76,7 +71,7 @@ impl CompactPrinter {
         match suffix {
             Suffix::Field(name) => {
                 self.emit_fixed(".");
-                self.emit_name(name);
+                self.emit_token(name);
             }
             Suffix::Index { index, .. } => {
                 self.emit_fixed("[");
@@ -86,7 +81,7 @@ impl CompactPrinter {
             Suffix::Call(call) => {
                 if let Some(method_name) = &call.method {
                     self.emit_fixed(":");
-                    self.emit_name(method_name);
+                    self.emit_token(method_name);
                 }
                 if let Some(type_args) = &call.explicit_type_args {
                     self.emit_fixed("<<");
@@ -113,7 +108,7 @@ impl CompactPrinter {
             }
             FunctionArgs::TableConstructor(table) => self.emit_table_constructor(table),
             FunctionArgs::StringLiteral(literal) => {
-                self.emit_leaf(string_spelling(literal), PieceClass::Other);
+                self.emit_piece(&literal.text, PieceClass::Other);
             }
         }
     }
@@ -148,7 +143,7 @@ impl CompactPrinter {
                 self.emit_expr(value);
             }
             Field::Named { name, value, .. } => {
-                self.emit_name(name);
+                self.emit_token(name);
                 self.emit_fixed("=");
                 self.emit_expr(value);
             }
@@ -196,9 +191,6 @@ impl CompactPrinter {
     }
 
     fn emit_interpolated_string(&mut self, interpolated: &InterpolatedString) {
-        if let Err(error) = check_interpolated_string(interpolated) {
-            self.refuse(error);
-        }
         if self.descend() {
             // The braces follow expression presence, not token kind: a plain
             // `` `text` `` lexes as a Begin("") + End(text) pair with no

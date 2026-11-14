@@ -3,10 +3,10 @@
 
 use luck_ast::{
     FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, IntersectionType,
-    NamedType, TableType, Type, TypeArgs, TypeField, TypeofType, UnionType, access_spelling,
-    check_type_field, error_node, name_spelling, singleton_spelling, type_name_spelling,
+    NamedType, TableType, Type, TypeArgs, TypeField, TypeofType, UnionType,
 };
-use luck_token::{Token, TokenKind};
+
+use luck_token::TokenKind;
 
 use crate::ir::{
     Format, Formatter, format_with, group, group_with_id, if_group_breaks, indent, separated,
@@ -17,11 +17,7 @@ use crate::quotes::normalize_quote;
 impl Format for Type {
     fn fmt(&self, f: &mut Formatter) {
         match self {
-            Self::Name { name, span } => {
-                if let Some(text) = f.spelled(type_name_spelling(name, *span)) {
-                    f.write_text(text);
-                }
-            }
+            Self::Name { name, .. } => f.write_text(name.clone()),
             Self::Named(named) => named.fmt(f),
             Self::Typeof(typeof_type) => typeof_type.fmt(f),
             Self::Table(table) => table.fmt(f),
@@ -36,21 +32,19 @@ impl Format for Type {
             }
             Self::Pack(pack) => write_delimited(f, "(", ")", &pack.types.items),
             Self::Singleton(literal) => {
-                if let Some(text) = f.spelled(singleton_spelling(literal)) {
-                    if matches!(literal.kind, TokenKind::StringLiteral(_)) {
-                        f.write_text(normalize_quote(text, f.options().quote_style));
-                    } else {
-                        f.write_text(text);
-                    }
+                if let TokenKind::StringLiteral(text) = &literal.kind {
+                    let quote_style = f.options().quote_style;
+                    f.write_text(normalize_quote(text, quote_style));
+                } else {
+                    literal.fmt(f);
                 }
             }
             // Luau: `...T`.
             Self::Variadic(variadic) => (token("..."), &variadic.type_value).fmt(f),
             // Luau: `T...`.
-            Self::GenericPack(generic_pack) => {
-                (TypeName(&generic_pack.name), token("...")).fmt(f);
-            }
-            Self::Error(span) => f.refuse(error_node(*span)),
+            Self::GenericPack(generic_pack) => (&generic_pack.name, token("...")).fmt(f),
+            // A parse-recovery placeholder has no text to print.
+            Self::Error(_) => {}
         }
     }
 }
@@ -59,35 +53,9 @@ impl Format for Type {
 impl Format for NamedType {
     fn fmt(&self, f: &mut Formatter) {
         if let Some(module) = &self.prefix {
-            (module, token("."), &self.name).fmt(f);
-        } else {
-            TypeName(&self.name).fmt(f);
+            (module, token(".")).fmt(f);
         }
-        self.generics.fmt(f);
-    }
-}
-
-/// A name that starts a type, where `typeof` opens a `typeof(...)` type.
-struct TypeName<'token>(&'token Token);
-
-impl Format for TypeName<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        let spelling = name_spelling(self.0).and_then(|name| type_name_spelling(name, self.0.span));
-        if let Some(name) = f.spelled(spelling) {
-            f.write_text(name);
-        }
-    }
-}
-
-/// A Luau `read` or `write` access modifier.
-struct Access<'token>(&'token Token);
-
-impl Format for Access<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        if let Some(modifier) = f.spelled(access_spelling(self.0)) {
-            f.write_text(modifier);
-            space().fmt(f);
-        }
+        (&self.name, &self.generics).fmt(f);
     }
 }
 
@@ -193,21 +161,24 @@ fn flat_leading_name(ty: &Type) -> Option<&str> {
 
 impl Format for TypeField {
     fn fmt(&self, f: &mut Formatter) {
-        if let Err(error) = check_type_field(self) {
-            f.refuse(error);
-        }
         match self {
             Self::Named { access, name, value, .. } => {
                 // Luau `read`/`write` access modifier sits before the name.
-                access.as_ref().map(Access).fmt(f);
+                if let Some(modifier) = access {
+                    (modifier, space()).fmt(f);
+                }
                 (name, token(":"), space(), value).fmt(f);
             }
             Self::Indexer { access, key, value, .. } => {
-                access.as_ref().map(Access).fmt(f);
+                if let Some(modifier) = access {
+                    (modifier, space()).fmt(f);
+                }
                 (token("["), key, token("]"), token(":"), space(), value).fmt(f);
             }
             Self::Array { access, value, .. } => {
-                access.as_ref().map(Access).fmt(f);
+                if let Some(modifier) = access {
+                    (modifier, space()).fmt(f);
+                }
                 // A `read` or `write` that opens the field would read back
                 // as its access modifier, so the leading operator that keeps
                 // it from opening the field stays.

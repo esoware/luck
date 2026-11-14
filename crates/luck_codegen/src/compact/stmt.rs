@@ -1,7 +1,7 @@
 use luck_ast::{
     Assignment, Block, CompoundAssignment, DoBlock, GenericFor, GotoStatement, IfStatement,
     LabelStatement, LastStatement, NumericFor, RepeatLoop, ReturnStatement, Statement, WhileLoop,
-    error_node, stmt_starts_with_paren,
+    stmt_starts_with_paren,
 };
 
 use super::CompactPrinter;
@@ -59,7 +59,7 @@ impl CompactPrinter {
             Statement::CompoundAssignment(compound) => self.emit_compound_assignment(compound),
             // Luau
             Statement::TypeDeclaration(declaration) => self.emit_type_declaration(declaration),
-            Statement::Error(span) => self.refuse(error_node(*span)),
+            Statement::Error(_) => {}
         }
     }
 
@@ -69,7 +69,7 @@ impl CompactPrinter {
             LastStatement::Break(_) => self.emit_fixed("break"),
             // Luau
             LastStatement::Continue(_) => self.emit_fixed("continue"),
-            LastStatement::Error(span) => self.refuse(error_node(*span)),
+            LastStatement::Error(_) => {}
         }
     }
 
@@ -120,7 +120,7 @@ impl CompactPrinter {
 
     fn emit_numeric_for(&mut self, numeric_for: &NumericFor) {
         self.emit_fixed("for");
-        self.emit_name(&numeric_for.name);
+        self.emit_token(&numeric_for.name);
         if let Some(ty) = &numeric_for.type_annotation {
             self.emit_fixed(":");
             self.emit_type(ty);
@@ -150,12 +150,12 @@ impl CompactPrinter {
 
     fn emit_goto(&mut self, goto_stmt: &GotoStatement) {
         self.emit_fixed("goto");
-        self.emit_name(&goto_stmt.name);
+        self.emit_token(&goto_stmt.name);
     }
 
     fn emit_label(&mut self, label: &LabelStatement) {
         self.emit_fixed("::");
-        self.emit_name(&label.name);
+        self.emit_token(&label.name);
         self.emit_fixed("::");
     }
 

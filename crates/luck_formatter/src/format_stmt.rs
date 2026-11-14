@@ -9,7 +9,7 @@ use luck_ast::{
     FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar,
     GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment, LocalFunction,
     NumericFor, Punctuated, RepeatLoop, Statement, TypeDeclaration, TypeDeclarationValue,
-    WhileLoop, error_node, unwrap_parentheses,
+    WhileLoop, unwrap_parentheses,
 };
 
 use crate::CollapseSimpleStatement;
@@ -135,9 +135,9 @@ impl Format for Statement {
             Self::TypeDeclaration(declaration) => declaration.fmt(f),
             // Lua 5.2+: `break` as a mid-block statement.
             Self::Break(_) => token("break").fmt(f),
-            // The block loop drops `;`.
-            Self::EmptyStatement(_) => {}
-            Self::Error(span) => f.refuse(error_node(*span)),
+            // The block loop drops `;`, and a parse-recovery placeholder has
+            // no text to print.
+            Self::EmptyStatement(_) | Self::Error(_) => {}
         }
     }
 }
@@ -155,7 +155,8 @@ impl Format for LastStatement {
             Self::Break(_) => token("break").fmt(f),
             // Luau: `continue`.
             Self::Continue(_) => token("continue").fmt(f),
-            Self::Error(span) => f.refuse(error_node(*span)),
+            // Parse-recovery placeholder: nothing to print.
+            Self::Error(_) => {}
         }
     }
 }

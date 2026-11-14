@@ -3,8 +3,7 @@
 
 use luck_ast::{
     BinaryOp, CallSuffix, Expression, IfExpression, InterpolatedString, ParenthesizedExpression,
-    Suffix, SuffixedExpression, UnaryOp, Var, check_interpolated_string, error_node,
-    expr_starts_with_brace, integer_spelling, number_spelling, string_spelling,
+    Suffix, SuffixedExpression, UnaryOp, Var, expr_starts_with_brace,
 };
 use luck_token::{CompactString, TokenKind, UnOp};
 
@@ -24,21 +23,13 @@ impl Format for Expression {
             Self::True(_) => token("true").fmt(f),
             Self::VarArg(_) => token("...").fmt(f),
 
-            Self::Number(literal) => {
-                if let Some(text) = f.spelled(number_spelling(literal)) {
-                    f.write_text(normalize_number(text, f.options().hexadecimal_case));
-                }
-            }
-            // Luau
-            Self::Integer(literal) => {
-                if let Some(text) = f.spelled(integer_spelling(literal)) {
-                    f.write_text(normalize_number(text, f.options().hexadecimal_case));
-                }
+            Self::Number(literal) | Self::Integer(literal) => {
+                let normalized = normalize_number(&literal.text, f.options().hexadecimal_case);
+                f.write_text(normalized);
             }
             Self::StringLiteral(literal) => {
-                if let Some(text) = f.spelled(string_spelling(literal)) {
-                    f.write_text(normalize_quote(text, f.options().quote_style));
-                }
+                let normalized = normalize_quote(&literal.text, f.options().quote_style);
+                f.write_text(normalized);
             }
 
             Self::Name(name) => name.fmt(f),
@@ -63,7 +54,8 @@ impl Format for Expression {
                 (&cast.expr, space(), token("::"), space(), &cast.type_annotation).fmt(f);
             }
 
-            Self::Error(span) => f.refuse(error_node(*span)),
+            // A parse-recovery placeholder has no text to print.
+            Self::Error(_) => {}
         }
     }
 }
@@ -287,9 +279,6 @@ impl Format for InterpolatedString {
         // plain `` `text` `` parses as `InterpolatedStringBegin("")` plus
         // `InterpolatedStringEnd(text)` with no expression, and must print
         // without braces.
-        if let Err(error) = check_interpolated_string(self) {
-            f.refuse(error);
-        }
         let mut opener = Some('`');
         for segment in &self.segments {
             let part = if let TokenKind::InterpolatedStringBegin(text)

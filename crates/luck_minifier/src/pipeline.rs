@@ -62,12 +62,9 @@ pub fn minify(
     for _ in 0..MAX_PIPELINE_ROUNDS {
         block = apply_core_transforms(block, config, version);
         block = apply_tail_transforms(block, config, version, previous_output.len());
-        let output = match luck_codegen::compact_with_capacity(&block, previous_output.len()) {
-            Ok(output) => output,
-            Err(error) => {
-                debug_assert!(false, "a minified round left a tree that doesn't print: {error:?}");
-                break;
-            }
+        let Ok(output) = luck_codegen::compact_with_capacity(&block, previous_output.len()) else {
+            debug_assert!(false, "a minified round nested past the parser's cap");
+            break;
         };
         if output == previous_output {
             break;
@@ -161,8 +158,8 @@ fn apply_tail_transforms(
     // rarely runs. Outputs move between the two slots instead of being
     // copied, since each one is the size of the whole chunk.
     //
-    // No tail pass nests the tree deeper or writes a leaf with no text, so one
-    // that doesn't print came in that way, and the caller drops the round.
+    // No tail pass nests the tree deeper, so one that doesn't print came in
+    // that way, and the caller drops the round.
     let Ok(mut last_output) = luck_codegen::compact_with_capacity(&block, output_capacity) else {
         return block;
     };

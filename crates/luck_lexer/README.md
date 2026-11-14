@@ -43,4 +43,4 @@ On a malformed token the lexer pushes a `SourceError`, advances past the offendi
 
 ## Testing
 
-Public-API tests live in `tests/it/` as a single binary, split by concern (`tokens.rs`, `numbers.rs`, `strings.rs`, `interpolation.rs`, `comments.rs`), with each file covering its tokens' version gating too. `streaming.rs` checks that `next_token` streams exactly what `lex` materializes, over the shared `tests/fixtures/` corpus. `lexeme.rs` checks that `luck_token`'s literal predicates agree with the lexer on every short text built from the bytes that steer its scanners. The batched `find_match` scan has white-box tests in `search.rs`.
+Public-API tests live in `tests/it/` as a single binary, split by concern (`tokens.rs`, `numbers.rs`, `strings.rs`, `interpolation.rs`, `comments.rs`), with each file covering its tokens' version gating too. `streaming.rs` checks that `next_token` streams exactly what `lex` materializes, over the shared `tests/fixtures/` corpus. The batched `find_match` scan has white-box tests in `search.rs`.

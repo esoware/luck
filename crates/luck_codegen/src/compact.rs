@@ -4,8 +4,8 @@ mod function;
 mod stmt;
 mod types;
 
-use luck_ast::{Block, MAX_NESTING_DEPTH, Punctuated, name_spelling};
-use luck_token::{CodeBuffer, SourceError, Token};
+use luck_ast::{Block, MAX_NESTING_DEPTH, Punctuated};
+use luck_token::{CodeBuffer, SourceError, Token, TokenKind};
 
 use crate::separator::{PieceClass, needs_space};
 
@@ -14,10 +14,8 @@ use crate::separator::{PieceClass, needs_space};
 ///
 /// # Errors
 ///
-/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`], and
-/// for one holding a leaf with no text that reads back as itself, such as a
-/// keyword token where a name belongs or an error node. `luck_parser` builds
-/// neither, and its output would read back as some other tree.
+/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
+/// which `luck_parser` never builds and would refuse to read back.
 pub fn compact(block: &Block) -> Result<String, SourceError> {
     compact_with_capacity(block, 0)
 }
@@ -30,14 +28,14 @@ pub fn compact(block: &Block) -> Result<String, SourceError> {
 ///
 /// # Errors
 ///
-/// As [`compact`] does.
+/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
+/// which `luck_parser` never builds and would refuse to read back.
 pub fn compact_with_capacity(block: &Block, capacity: usize) -> Result<String, SourceError> {
     let mut printer = CompactPrinter {
         output: CodeBuffer::with_capacity(capacity),
         previous: PieceClass::Other,
         depth: 0,
         is_too_deep: false,
-        unprintable: None,
     };
     printer.emit_block(block);
     if printer.is_too_deep {
@@ -48,9 +46,6 @@ pub fn compact_with_capacity(block: &Block, capacity: usize) -> Result<String, S
             ),
         });
     }
-    if let Some(error) = printer.unprintable {
-        return Err(error);
-    }
     Ok(printer.output.into_string())
 }
 
@@ -60,8 +55,6 @@ struct CompactPrinter {
     /// Levels open where the printer is, as [`MAX_NESTING_DEPTH`] counts them.
     depth: usize,
     is_too_deep: bool,
-    /// The first leaf found with no text that reads back as itself.
-    unprintable: Option<SourceError>,
 }
 
 impl CompactPrinter {
@@ -103,20 +96,23 @@ impl CompactPrinter {
         self.emit_piece(text, PieceClass::of_fixed(text));
     }
 
-    /// Print a leaf's text, or keep the error for one that has none.
-    fn emit_leaf(&mut self, spelling: Result<&str, SourceError>, class: PieceClass) {
-        match spelling {
-            Ok(text) => self.emit_piece(text, class),
-            Err(error) => self.refuse(error),
+    /// Every kind prints what the formatter prints for it: the text it
+    /// carries, or its fixed spelling.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "every other kind has a fixed spelling, which static_text matches exhaustively"
+    )]
+    fn emit_token(&mut self, token: &Token) {
+        match &token.kind {
+            TokenKind::Identifier(text) => self.emit_piece(text, PieceClass::Word),
+            TokenKind::Number(text) => self.emit_piece(text, PieceClass::Number),
+            TokenKind::StringLiteral(text)
+            | TokenKind::InterpolatedStringBegin(text)
+            | TokenKind::InterpolatedStringMiddle(text)
+            | TokenKind::InterpolatedStringEnd(text) => self.emit_piece(text, PieceClass::Other),
+            // `Eof` has no spelling, so it prints nothing.
+            fixed => self.emit_fixed(fixed.static_text().unwrap_or_default()),
         }
-    }
-
-    fn refuse(&mut self, error: SourceError) {
-        self.unprintable.get_or_insert(error);
-    }
-
-    fn emit_name(&mut self, token: &Token) {
-        self.emit_leaf(name_spelling(token), PieceClass::Word);
     }
 
     fn emit_joined<T>(

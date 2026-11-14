@@ -77,15 +77,11 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   drop the `.0`, `i64::MIN` becomes an exact negated decimal literal, and
 ///   other integers may round to the nearest double. NaN sign and payload
 ///   aren't preserved.
-/// - **Loud failure on invalid text.** [`Synth::identifier`] asserts, in
-///   release builds too, that its argument is an identifier, so hostile input
-///   such as bytecode debug info or obfuscated names fails fast instead of
+/// - **Loud failure on invalid names.** [`Synth::identifier`] asserts, in release
+///   builds too, that its argument is an identifier, so hostile input such
+///   as bytecode debug info or obfuscated names fails fast instead of
 ///   producing output that won't re-parse. Every constructor that takes a
-///   name goes through it and says so under `# Panics`, and so do
-///   [`Synth::number`] and [`Synth::integer_literal`] for their text. The
-///   type-name constructors also refuse `typeof`, which opens a `typeof(...)`
-///   type where a type starts, and [`Synth::ty_table`] spells out an array
-///   element that the `{ T }` shorthand would misread.
+///   name goes through it and says so under `# Panics`.
 ///
 /// # What the caller still owes
 ///
@@ -107,6 +103,11 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   [`is_valid_identifier`] / [`is_valid_identifier_in`] and rename them
 ///   yourself. Sanitized names are deterministic but can collide, so
 ///   deduplication is up to the caller.
+/// - **Raw text.** [`Synth::token`] takes a token of any kind, and
+///   [`Synth::number`] and [`Synth::integer_literal`] take numeral text as
+///   written. The printers print each leaf as the tree holds it, so a token
+///   that doesn't belong where it's placed, such as `end` as a name, or text
+///   that isn't one numeral, prints output that doesn't read back as the tree.
 /// - **Nesting depth.** No constructor counts it. Every traversal, drop and
 ///   clone included, recurses once per level of nesting, so keep the tree
 ///   within [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH), the deepest
@@ -120,10 +121,8 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///
 /// To format the result, pass it to `luck_formatter::format_block`, with any
 /// [`SyntheticComment`]s wrapped in `Comments::synthetic`. For compact
-/// output, call `luck_codegen::compact`. Both print text that reads back as
-/// the tree, or return an error for a tree nested past the cap or holding a
-/// leaf with no such text, such as a keyword token where a name belongs or an
-/// error node. A tree built only with these constructors never holds one.
+/// output, call `luck_codegen::compact`. Both print each leaf as the tree
+/// holds it and return an error only for a tree nested past the cap.
 ///
 /// # Usage
 ///
@@ -213,9 +212,8 @@ impl Synth {
         Span::new(offset, offset)
     }
 
-    /// Unchecked, so it stays private: a token of the wrong kind for its
-    /// place, such as `end` where a name belongs, can't print.
-    fn token(&self, kind: TokenKind) -> Token {
+    #[must_use]
+    pub fn token(&self, kind: TokenKind) -> Token {
         Token::new(kind, self.next_span())
     }
 
@@ -245,15 +243,6 @@ impl Synth {
         );
         assert!(is_valid, "synth: {name:?} is not a valid identifier");
         CompactString::from(name)
-    }
-
-    /// # Panics
-    ///
-    /// Panics if `name` isn't an identifier, as [`Synth::identifier`] does,
-    /// or is `typeof`, which opens a `typeof(...)` type where a type starts.
-    fn type_name(&self, name: &str) -> CompactString {
-        assert!(name != "typeof", "synth: `typeof` can't start a type name");
-        self.identifier_name(name)
     }
 
     /// Whether `name` works as a `.name` field or `name =` key: an identifier

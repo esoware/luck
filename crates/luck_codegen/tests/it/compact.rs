@@ -1,7 +1,5 @@
-use luck_ast::{
-    Block, Expression, LastStatement, MAX_NESTING_DEPTH, Statement, Synth, block_nesting_depth,
-};
-use luck_token::{BinOp, LuaVersion, Span, Token, TokenKind, UnOp};
+use luck_ast::{Block, Expression, LastStatement, MAX_NESTING_DEPTH, Synth, block_nesting_depth};
+use luck_token::{BinOp, LuaVersion, UnOp};
 
 use crate::common::assert_compacts_to;
 
@@ -121,47 +119,6 @@ fn a_run_of_any_length_prints_as_one_level() {
     assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors.first());
     assert_eq!(block_nesting_depth(&reparsed.block), 2);
     assert_eq!(luck_codegen::compact(&reparsed.block).ok(), Some(output));
-}
-
-#[test]
-fn a_token_with_no_name_spelling_where_a_name_belongs_is_an_error() {
-    let synth = Synth::starting_at(100);
-    let span = Span::new(7, 7);
-    for (kind, found) in [
-        (TokenKind::End, "`end`"),
-        (TokenKind::Plus, "`+`"),
-        (TokenKind::DotDotDot, "`...`"),
-        (TokenKind::Return, "`return`"),
-        (TokenKind::Eof, "end of file"),
-        (TokenKind::Number("1".into()), "number `1`"),
-        (TokenKind::Identifier("".into()), "nothing"),
-        (TokenKind::Identifier("end".into()), "`end`"),
-        (TokenKind::Identifier("a b".into()), "`a b`"),
-    ] {
-        let name = Expression::Name(Token::new(kind, span));
-        let block = synth.block(vec![synth.local(&["x"], vec![name])], None);
-        let error = luck_codegen::compact(&block).expect_err(found);
-        assert_eq!(error.span, span, "{found}");
-        assert_eq!(error.message, format!("expected identifier, found {found}"));
-    }
-}
-
-#[test]
-fn an_error_node_is_an_error() {
-    let synth = Synth::starting_at(100);
-    let span = Span::new(3, 3);
-    let blocks = [
-        synth.block(vec![synth.local(&["x"], vec![Expression::Error(span)])], None),
-        synth.block(vec![Statement::Error(span)], None),
-        synth.block(
-            vec![synth.do_block(synth.block(vec![], Some(LastStatement::Error(span))))],
-            None,
-        ),
-    ];
-    for block in blocks {
-        let error = luck_codegen::compact(&block).expect_err("an error node has no text");
-        assert_eq!((error.span, error.message.as_str()), (span, "an error node has no text"));
-    }
 }
 
 #[test]

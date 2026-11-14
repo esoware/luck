@@ -7,7 +7,6 @@ extern crate alloc;
 
 mod code_buffer;
 mod comment;
-mod lexeme;
 mod number;
 mod op;
 mod span;
