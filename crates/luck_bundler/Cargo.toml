@@ -27,7 +27,9 @@ petgraph   = { workspace = true }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]
-luck_codegen = { workspace = true }
+luck_codegen  = { workspace = true }
+luck_minifier = { workspace = true }
+luck_testgen  = { workspace = true }
 
 insta    = { workspace = true }
 tempfile = { workspace = true }

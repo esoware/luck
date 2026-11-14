@@ -23,13 +23,8 @@ impl Synth {
     }
 
     /// A Luau integer literal from source-form text including the `i` suffix.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `text` doesn't end with `i`.
     #[must_use]
     pub fn integer_literal(&self, text: &str) -> Expression {
-        assert!(text.ends_with('i'), "synth: Luau integer literal must end with 'i'");
         Expression::Integer(Literal { text: CompactString::from(text), span: self.next_span() })
     }
 

@@ -76,8 +76,8 @@ pub use stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
     ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
     GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
-    LocalFunction, NumericFor, RepeatLoop, ReturnStatement, Statement, TypeDeclaration,
-    TypeDeclarationValue, WhileLoop,
+    LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement, Statement,
+    TypeDeclaration, TypeDeclarationValue, WhileLoop,
 };
 pub use synth::{
     FieldSpec, FunctionSignature, InterpolatedStringPart, Synth, SyntheticComment, TypeFieldAccess,

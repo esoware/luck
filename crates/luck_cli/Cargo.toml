@@ -52,6 +52,8 @@ mimalloc-safe = { workspace = true, features = ["skip_collect_on_exit", "local_d
 mimalloc-safe = { workspace = true, features = ["skip_collect_on_exit", "local_dynamic_tls", "no_opt_arch"] }
 
 [dev-dependencies]
+luck_testgen = { workspace = true }
+
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile   = { workspace = true }

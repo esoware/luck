@@ -129,7 +129,7 @@ fn constant_value_completions(
     document: &DocumentState,
     offset: u32,
 ) -> Option<Vec<CompletionItem>> {
-    let site = find_string_arg_at(&document.parsed.block, offset)?;
+    let site = find_string_arg_at(document, offset)?;
     let callee = document.semantic.resolve_callee(site.call)?;
     let StdlibEntry::Function(function) = callee.entry() else {
         return None;
@@ -137,7 +137,8 @@ fn constant_value_completions(
     let allowed_sets = function.allowed_constants(site.arg_index, call_arg_count(site.call))?;
     // Replace the literal's interior, so the client filters on whatever is
     // typed inside the delimiters.
-    let interior = document.range(string_interior(site.literal));
+    let is_unterminated = document.unterminated_strings().contains(&site.literal.span);
+    let interior = document.range(string_interior(site.literal, is_unterminated));
     let mut seen_values: FxHashSet<&str> = FxHashSet::default();
     let mut items: Vec<CompletionItem> = Vec::new();
     for constant in allowed_sets.into_iter().flatten() {
@@ -184,15 +185,17 @@ const fn call_arg_count(call: Call<'_>) -> usize {
 }
 
 /// The part of a string literal between its delimiters. A long bracket's
-/// opener is `[`, any number of `=`, then `[`, and its closer mirrors it.
-fn string_interior(literal: &Literal) -> Span {
+/// opener is `[`, any number of `=`, then `[`, and its closer mirrors it. An
+/// unterminated literal has no closer.
+fn string_interior(literal: &Literal, is_unterminated: bool) -> Span {
     let delimiter_width =
         index_to_offset(literal.text.strip_prefix('[').map_or(1, |after_bracket| {
             after_bracket.bytes().take_while(|&b| b == b'=').count().saturating_add(2)
         }));
+    let closer_width = if is_unterminated { 0 } else { delimiter_width };
     Span::new(
         literal.span.start.saturating_add(delimiter_width),
-        literal.span.end.saturating_sub(delimiter_width),
+        literal.span.end.saturating_sub(closer_width),
     )
 }
 
@@ -381,6 +384,25 @@ mod tests {
         let document = document_for(text, LuaTarget::Lua55);
         let items = items_at(&document, 1, 0);
         assert!(variables_of(&items).contains(&"args"), "{items:?}");
+    }
+
+    /// A string the line cut off is still being typed at its end, so its
+    /// values complete there and replace all of it after the quote.
+    #[test]
+    fn an_unterminated_string_completes_its_values_at_its_end() {
+        let text = "local p = game:GetService('Pla";
+        let document = roblox_document(text);
+        let utf16_column = index_to_offset(text.len());
+        let items = items_at(&document, 0, utf16_column);
+        let players = items.iter().find(|item| item.label == "Players").expect("Players offered");
+        let Some(CompletionTextEdit::Edit(edit)) = &players.text_edit else {
+            panic!("{players:?}");
+        };
+        let quote = index_to_offset(text.find('\'').expect("the quote") + 1);
+        assert_eq!(
+            edit.range,
+            LspRange::new(Position::new(0, quote), Position::new(0, utf16_column))
+        );
     }
 
     #[test]

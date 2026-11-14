@@ -2,13 +2,14 @@ use core::mem;
 
 use luck_ast::{
     Assignment, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause, Expression,
-    GenericFor, GotoStatement, IfStatement, LabelStatement, LastStatement, NumericFor, Parameter,
-    Punctuated, RepeatLoop, ReturnStatement, Statement, Var, WhileLoop,
+    GenericFor, GotoStatement, IfStatement, LabelStatement, LastStatement, MAX_NESTING_DEPTH,
+    NumericFor, Parameter, Punctuated, RepeatLoop, ReturnStatement, Statement, Var, WhileLoop,
+    block_nesting_depth,
 };
 use luck_token::{CompoundOp, Span, TokenKind};
 
-use super::Parser;
 use super::skip::ExprTail;
+use super::{Closer, Parser};
 
 /// A compound statement, as its missing-keyword errors name it.
 #[derive(Clone, Copy)]
@@ -51,6 +52,7 @@ pub(super) const fn is_stmt_start(kind: &TokenKind) -> bool {
         | TokenKind::LeftParen
         | TokenKind::At => true,
         TokenKind::Number(_)
+        | TokenKind::Integer(_)
         | TokenKind::StringLiteral(_)
         | TokenKind::And
         | TokenKind::Else
@@ -125,12 +127,41 @@ const fn can_follow_last_stmt(kind: &TokenKind) -> bool {
     )
 }
 
+/// Whether `kind` after `continue` makes it a name: a call, a field, an
+/// index, or an assignment target, as Luau reads it.
+const fn continues_a_name(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::LeftParen
+            | TokenKind::LeftBrace
+            | TokenKind::StringLiteral(_)
+            | TokenKind::Dot
+            | TokenKind::Colon
+            | TokenKind::LeftBracket
+            | TokenKind::Less
+            | TokenKind::Equal
+            | TokenKind::Comma
+            | TokenKind::PlusEqual
+            | TokenKind::MinusEqual
+            | TokenKind::StarEqual
+            | TokenKind::SlashEqual
+            | TokenKind::FloorDivEqual
+            | TokenKind::PercentEqual
+            | TokenKind::CaretEqual
+            | TokenKind::DotDotEqual
+    )
+}
+
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
     /// The caller has checked that the block fits.
+    ///
+    /// The block runs to a closer something open expects, or to the end of
+    /// the source, so a stray closer is an error inside it rather than the
+    /// end of it.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_block(&mut self) -> Block {
         let start_span = self.current_span();
@@ -159,45 +190,53 @@ impl Parser<'_> {
                 }
             }
 
-            match self.peek() {
-                TokenKind::Return => {
-                    last_stmt = Some(Box::new(self.parse_return_stmt()));
-                    break;
+            if self.is_at_block_end() {
+                break;
+            }
+            if self.is_recovering {
+                if !self.is_at_reliable_stmt_start() {
+                    self.skip_to_statement();
+                    continue;
                 }
+                self.is_recovering = false;
+            }
+
+            let last = match self.peek() {
+                TokenKind::Return => self.parse_return_stmt(),
                 TokenKind::Break if self.version.has_last_stmt_break() => {
                     let span = self.advance_loop_exit("`break` outside a loop");
-                    last_stmt = Some(Box::new(LastStatement::Break(span)));
                     self.eat(&TokenKind::Semicolon);
-                    break;
+                    LastStatement::Break(span)
                 }
-                // Block-ending tokens, left for the caller to consume.
-                TokenKind::End
-                | TokenKind::Else
-                | TokenKind::ElseIf
-                | TokenKind::Until
-                | TokenKind::Eof => break,
                 // Luau: `continue` is a contextual keyword, only ever a last
-                // statement. Before anything else, as in `continue()` or
-                // `continue = 5`, it's an ordinary name.
+                // statement. Before what makes a name a call or a target, as
+                // in `continue()` or `continue = 5`, it's an ordinary name.
                 TokenKind::Identifier(name)
                     if self.version.has_continue()
                         && name == "continue"
-                        && can_follow_last_stmt(self.peek_next()) =>
+                        && !continues_a_name(self.peek_next()) =>
                 {
                     let span = self.advance_loop_exit("`continue` outside a loop");
-                    last_stmt = Some(Box::new(LastStatement::Continue(span)));
                     self.eat(&TokenKind::Semicolon);
-                    break;
+                    LastStatement::Continue(span)
                 }
                 kind if is_stmt_start(kind) => {
                     stmts.push(self.parse_stmt());
                     can_take_separator = true;
+                    continue;
                 }
                 _ => {
                     stmts.push(self.report_unexpected_in_block());
                     can_take_separator = true;
+                    continue;
                 }
+            };
+            if self.is_at_block_end() {
+                last_stmt = Some(Box::new(last));
+                break;
             }
+            stmts.push(self.misplaced_last_stmt(last));
+            can_take_separator = true;
         }
 
         self.exit_depth();
@@ -209,13 +248,54 @@ impl Parser<'_> {
         Block { span: start_span.merge(end_span), stmts, last_stmt }
     }
 
+    /// A token that begins no statement. The block goes on at the next place
+    /// one reliably begins.
     #[cold]
     #[inline(never)]
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn report_unexpected_in_block(&mut self) -> Statement {
         let span = self.current_span();
-        self.error(span, format!("unexpected token {}", self.peek()));
-        self.synchronize();
+        let kind = self.peek();
+        let hint = match kind {
+            TokenKind::End => " (extra `end` without matching block)",
+            TokenKind::Else | TokenKind::ElseIf => " (`else`/`elseif` without matching `if`)",
+            TokenKind::Until => " (`until` without matching `repeat`)",
+            TokenKind::RightParen => " (unmatched `)`)",
+            TokenKind::RightBracket => " (unmatched `]`)",
+            TokenKind::RightBrace => " (unmatched `}`)",
+            _ => "",
+        };
+        let message = format!("unexpected token {kind}{hint}");
+        self.syntax_error(span, message);
+        self.advance();
         Statement::Error(span)
+    }
+
+    /// A `return`, or in 5.1 and Luau a `break` or `continue`, that a
+    /// statement follows. It ends its block in every Lua, so the statements
+    /// after it are an error, and it stands as the `do ... end` around it
+    /// that would make them valid, so they and it stay in the tree. One whose
+    /// content already reaches the depth cap, which the wrapper would pass,
+    /// is an error node instead.
+    #[cold]
+    #[inline(never)]
+    fn misplaced_last_stmt(&mut self, last: LastStatement) -> Statement {
+        if is_stmt_start(self.peek()) {
+            let keyword = match &last {
+                LastStatement::Return(_) => "return",
+                LastStatement::Break(_) => "break",
+                LastStatement::Continue(_) => "continue",
+                LastStatement::Error(_) => "",
+            };
+            let span = self.current_span();
+            self.syntax_error(span, format!("`{keyword}` must be the last statement in its block"));
+        }
+        let span = last.span();
+        let block = Block { span, stmts: Vec::new(), last_stmt: Some(Box::new(last)) };
+        if self.nesting_depth.saturating_add(block_nesting_depth(&block)) > MAX_NESTING_DEPTH {
+            return Statement::Error(span);
+        }
+        Statement::DoBlock(Box::new(DoBlock { span, block }))
     }
 
     fn parse_loop_block(&mut self) -> Block {
@@ -316,7 +396,7 @@ impl Parser<'_> {
                 self.parse_global_stmt()
             }
             TokenKind::Identifier(_) | TokenKind::LeftParen => self.parse_assignment_or_call(),
-            _ => self.report_unexpected_stmt_start(),
+            _ => self.report_unexpected_in_block(),
         }
     }
 
@@ -335,25 +415,6 @@ impl Parser<'_> {
         Statement::Error(start.merge(self.previous_span))
     }
 
-    #[cold]
-    #[inline(never)]
-    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    fn report_unexpected_stmt_start(&mut self) -> Statement {
-        let span = self.current_span();
-        let kind = self.peek();
-        let hint = match kind {
-            TokenKind::End => " (extra `end` without matching block)",
-            TokenKind::Else | TokenKind::ElseIf => " (`else`/`elseif` without matching `if`)",
-            TokenKind::Until => " (`until` without matching `repeat`)",
-            TokenKind::RightParen => " (unmatched `)`)",
-            TokenKind::RightBrace => " (unmatched `}`)",
-            _ => "",
-        };
-        self.error(span, format!("unexpected token {kind}{hint}"));
-        self.synchronize();
-        Statement::Error(span)
-    }
-
     fn parse_return_stmt(&mut self) -> LastStatement {
         let return_span = self.advance_span();
 
@@ -367,7 +428,7 @@ impl Parser<'_> {
             }
         }
 
-        let exprs = if can_follow_last_stmt(self.peek()) {
+        let exprs = if can_follow_last_stmt(self.peek()) || self.is_at_expected_closer() {
             Punctuated::empty()
         } else {
             self.parse_expr_list()
@@ -386,6 +447,8 @@ impl Parser<'_> {
 
     fn parse_if_stmt(&mut self) -> Statement {
         let if_span = self.advance_span();
+        self.open(Closer::End);
+        self.open(Closer::Else);
         let condition = self.parse_expr(0);
         self.expect_keyword(&TokenKind::Then, Construct::IfStatement);
         let block = self.parse_block();
@@ -397,6 +460,8 @@ impl Parser<'_> {
 
         let else_clause = matches!(self.peek(), TokenKind::Else).then(|| self.parse_else_clause());
 
+        self.close(Closer::Else);
+        self.close(Closer::End);
         let end_span = self.expect_keyword(&TokenKind::End, Construct::IfStatement);
         let span = if_span.merge(end_span);
 
@@ -425,9 +490,11 @@ impl Parser<'_> {
 
     fn parse_while_loop(&mut self) -> Statement {
         let while_span = self.advance_span();
+        self.open(Closer::End);
         let condition = self.parse_expr(0);
         self.expect_keyword(&TokenKind::Do, Construct::WhileLoop);
         let block = self.parse_loop_block();
+        self.close(Closer::End);
         let end_span = self.expect_keyword(&TokenKind::End, Construct::WhileLoop);
         let span = while_span.merge(end_span);
 
@@ -436,7 +503,9 @@ impl Parser<'_> {
 
     fn parse_do_block(&mut self) -> Statement {
         let do_span = self.advance_span();
+        self.open(Closer::End);
         let block = self.parse_block();
+        self.close(Closer::End);
         let end_span = self.expect_keyword(&TokenKind::End, Construct::DoBlock);
         let span = do_span.merge(end_span);
 
@@ -445,6 +514,7 @@ impl Parser<'_> {
 
     fn parse_for_stmt(&mut self) -> Statement {
         let for_span = self.advance_span();
+        self.open(Closer::End);
         let first_name = self.expect_identifier_recover();
         let first = self.parse_parameter(first_name);
 
@@ -467,6 +537,7 @@ impl Parser<'_> {
 
         self.expect_keyword(&TokenKind::Do, Construct::ForLoop);
         let block = self.parse_loop_block();
+        self.close(Closer::End);
         let end_span = self.expect_keyword(&TokenKind::End, Construct::ForLoop);
         let span = for_span.merge(end_span);
 
@@ -495,6 +566,7 @@ impl Parser<'_> {
         let exprs = self.parse_expr_list();
         self.expect_keyword(&TokenKind::Do, Construct::ForLoop);
         let block = self.parse_loop_block();
+        self.close(Closer::End);
         let end_span = self.expect_keyword(&TokenKind::End, Construct::ForLoop);
         let span = for_span.merge(end_span);
 
@@ -503,7 +575,9 @@ impl Parser<'_> {
 
     fn parse_repeat_loop(&mut self) -> Statement {
         let repeat_span = self.advance_span();
+        self.open(Closer::Until);
         let block = self.parse_loop_block();
+        self.close(Closer::Until);
         self.expect_keyword(&TokenKind::Until, Construct::RepeatLoop);
         let condition = self.parse_expr(0);
         let span = repeat_span.merge(condition.span());
@@ -588,7 +662,7 @@ impl Parser<'_> {
     #[inline(never)]
     fn report_expression_stmt(&mut self, expr: &Expression) -> Statement {
         let span = expr.span();
-        self.error(
+        self.syntax_error(
             span,
             "expected function call or assignment (expressions are not valid statements)",
         );
@@ -633,7 +707,7 @@ impl Parser<'_> {
             return self.advance_span();
         }
         let span = self.current_span();
-        self.error(span, format!("missing {kind} in {}", construct.display_name()));
+        self.syntax_error(span, format!("missing {kind} in {}", construct.display_name()));
         span
     }
 }

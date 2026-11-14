@@ -105,7 +105,9 @@ impl CompactPrinter {
     fn emit_token(&mut self, token: &Token) {
         match &token.kind {
             TokenKind::Identifier(text) => self.emit_piece(text, PieceClass::Word),
-            TokenKind::Number(text) => self.emit_piece(text, PieceClass::Number),
+            TokenKind::Number(text) | TokenKind::Integer(text) => {
+                self.emit_piece(text, PieceClass::Number);
+            }
             TokenKind::StringLiteral(text)
             | TokenKind::InterpolatedStringBegin(text)
             | TokenKind::InterpolatedStringMiddle(text)

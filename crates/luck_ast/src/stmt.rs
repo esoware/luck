@@ -142,10 +142,36 @@ pub struct LocalFunction {
     pub attributes: Vec<FunctionAttribute>,
     pub name: Token,
     pub body: FunctionBody,
-    /// Luau `const function NAME funcbody`. The emitter prints `const`
-    /// in place of `local`.
-    pub is_const: bool,
-    pub is_exported: bool,
+    pub kind: LocalFunctionKind,
+}
+
+/// The keyword a [`LocalFunction`] is declared with, which fixes whether its
+/// binding is read-only and whether the module exports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalFunctionKind {
+    Local,
+    /// Luau: `const function`.
+    Const,
+    /// Luau: `export function`, whose binding is read-only too.
+    Export,
+}
+
+impl LocalFunctionKind {
+    #[must_use]
+    pub const fn is_const(self) -> bool {
+        match self {
+            Self::Local => false,
+            Self::Const | Self::Export => true,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_exported(self) -> bool {
+        match self {
+            Self::Local | Self::Const => false,
+            Self::Export => true,
+        }
+    }
 }
 
 /// The name stays a token because the parser keeps whatever identifier it

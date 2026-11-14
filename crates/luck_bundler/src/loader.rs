@@ -27,8 +27,13 @@ pub(crate) fn loader_text(prefix: &str, version: LuaVersion, is_loader_global: b
     [cache_tables, paths_table, lua_require_text(prefix, version, is_loader_global)].concat()
 }
 
-const fn entry_point_keyword(is_loader_global: bool) -> &'static str {
-    if is_loader_global { "function" } else { "local function" }
+/// What a loader function's declaration opens and closes with.
+///
+/// A global one is declared inside `do ... end`, off the bundle's top level,
+/// where the minifier's `rename_globals` finds the globals a file defines, so
+/// it keeps its prefixed name, which no host global shares.
+const fn entry_point(is_loader_global: bool) -> (&'static str, &'static str) {
+    if is_loader_global { ("do function", " end") } else { ("local function", "") }
 }
 
 /// The cache holds only a non-nil result, so a raising or nil-returning
@@ -88,10 +93,10 @@ fn lua_require_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -
         // a module whose load previously raised) reproduces 5.1's "loop or
         // previous error" failure. It's a function because `module()` adopts
         // a table it finds in `package.loaded`.
-        let keyword = entry_point_keyword(is_loader_global);
+        let (opening, closing) = entry_point(is_loader_global);
         return format!(
             "local {prefix}loading=function()end\n\
-             {keyword} {prefix}require(name)\n\
+             {opening} {prefix}require(name)\n\
              local value={prefix}loaded[name]\n\
              if value then\n\
              if value=={prefix}loading then error(\"loop or previous error loading module '\"..name..\"'\",2)end\n\
@@ -107,7 +112,7 @@ fn lua_require_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -
              {prefix}loaded[name]=value\n\
              end\n\
              return value\n\
-             end\n"
+             end{closing}\n"
         );
     }
     if !version.has_require_loaderdata() {
@@ -167,12 +172,12 @@ fn lua_require_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -
 /// Anything else goes to the host's own `require`, looked up at call time so
 /// one the host installs later still counts.
 pub(crate) fn dynamic_entry_text(prefix: &str, is_loader_global: bool) -> String {
-    let keyword = entry_point_keyword(is_loader_global);
+    let (opening, closing) = entry_point(is_loader_global);
     format!(
-        "{keyword} {prefix}dynamic(name)\n\
+        "{opening} {prefix}dynamic(name)\n\
          if {prefix}modules[name]~=nil or {prefix}preload[name]~=nil then return {prefix}require(name)end\n\
          if type(require)==\"function\" then return require(name)end\n\
          error(\"luck bundle: dynamic require of '\"..tostring(name)..\"' is not in the bundle and this runtime has no require\",2)\n\
-         end\n"
+         end{closing}\n"
     )
 }

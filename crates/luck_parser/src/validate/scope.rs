@@ -335,7 +335,7 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
             Statement::GenericFor(generic_for) => self.visit_generic_for(generic_for),
             Statement::FunctionDecl(function_decl) => self.visit_function_decl(function_decl),
             Statement::LocalFunction(local_function) => {
-                self.declare_local(&local_function.name, local_function.is_const);
+                self.declare_local(&local_function.name, local_function.kind.is_const());
                 self.visit_function_body(&local_function.body);
             }
             Statement::LocalAssignment(local) => {

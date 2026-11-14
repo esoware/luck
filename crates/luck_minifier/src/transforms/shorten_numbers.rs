@@ -69,15 +69,16 @@ impl Transform for NumberShortener {
 /// every pattern; decimal only up to `i64::MAX`, since larger values would
 /// need a unary minus, which is a different AST shape.
 fn shorten_integer(text: &str) -> Option<String> {
-    let body = text.strip_suffix('i').unwrap_or(text);
+    // Luau drops every `_`, even after the suffix, as in `1i_`.
+    let spelled: String = text.chars().filter(|c| *c != '_').collect();
+    let body = spelled.strip_suffix('i').unwrap_or(&spelled);
     let binary_digits = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B"));
-    let (digit_text, radix) = match (hex_digits(body), binary_digits) {
+    let (digits, radix) = match (hex_digits(body), binary_digits) {
         (Some(hex), _) => (hex, 16),
         (None, Some(binary)) => (binary, 2),
         (None, None) => (body, 10),
     };
-    let digits: String = digit_text.chars().filter(|c| *c != '_').collect();
-    let value = u64::from_str_radix(&digits, radix).ok()?;
+    let value = u64::from_str_radix(digits, radix).ok()?;
 
     let mut best = format!("0x{value:x}i");
     if i64::try_from(value).is_ok() {
@@ -325,6 +326,8 @@ mod tests {
         assert_eq!(shorten_integer("0xffi").as_deref(), Some("255i"));
         assert_eq!(shorten_integer("0b1111i").as_deref(), Some("15i"));
         assert_eq!(shorten_integer("0XFF_FFi").as_deref(), Some("65535i"));
+        assert_eq!(shorten_integer("1i_").as_deref(), Some("1i"));
+        assert_eq!(shorten_integer("0_x1_0i__").as_deref(), Some("16i"));
         // Bit patterns above i64::MAX have no decimal spelling; hex is
         // still shorter than binary.
         assert_eq!(

@@ -65,11 +65,12 @@ fn interpolated_string_double_brace_is_error() {
 /// `InterpolatedStringEnd`, so one still comes when the string's text is
 /// malformed.
 #[test]
-fn a_string_with_a_hole_still_ends_when_its_text_is_malformed() {
+fn a_string_still_ends_when_its_text_is_malformed() {
     let name = |text: &str| TokenKind::Identifier(text.into());
     let cases = [
         (
-            "`{x}abc\ny",
+            "`{x}abc
+y",
             vec![
                 TokenKind::InterpolatedStringBegin(CompactString::default()),
                 name("x"),
@@ -107,8 +108,34 @@ fn a_string_with_a_hole_still_ends_when_its_text_is_malformed() {
             ],
             ("`\\u{}` requires at least one hex digit", "\\u{"),
         ),
-        // Nothing opened, so it drops out like an unterminated short string.
-        ("`abc\ny", vec![name("y")], ("unterminated interpolated string", "`abc")),
+        (
+            "`abc
+y",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                TokenKind::InterpolatedStringEnd("abc".into()),
+                name("y"),
+            ],
+            ("unterminated interpolated string", "`abc"),
+        ),
+        (
+            "`a{}b`",
+            vec![
+                TokenKind::InterpolatedStringBegin("a".into()),
+                TokenKind::InterpolatedStringEnd("b".into()),
+            ],
+            ("malformed interpolated string: expected expression inside `{}`", "{}"),
+        ),
+        (
+            "`{x}a{ --[[c]] }b`",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                name("x"),
+                TokenKind::InterpolatedStringMiddle("a".into()),
+                TokenKind::InterpolatedStringEnd("b".into()),
+            ],
+            ("malformed interpolated string: expected expression inside `{}`", "{ --[[c]] }"),
+        ),
     ];
     for (source, expected, (message, text)) in cases {
         let result = lex(source, LuaVersion::Luau);
@@ -127,6 +154,27 @@ fn a_string_with_a_hole_still_ends_when_its_text_is_malformed() {
             (message, text),
             "{source:?}"
         );
+    }
+}
+
+#[test]
+fn an_unterminated_string_lists_the_tokens_it_cut_off() {
+    for (source, cut_off) in [
+        (
+            "`{x}abc
+y",
+            vec!["}abc"],
+        ),
+        (
+            "`abc
+y",
+            vec!["`abc", ""],
+        ),
+        ("`{x}a{y}b`", vec![]),
+    ] {
+        let result = lex(source, LuaVersion::Luau);
+        let texts: Vec<&str> = result.unterminated.iter().map(|span| span.text(source)).collect();
+        assert_eq!(texts, cut_off, "{source:?}");
     }
 }
 

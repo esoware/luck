@@ -1,22 +1,21 @@
 use luck_ast::{
     Attribute, AttributedName, Expression, FunctionAttribute, FunctionDecl, FunctionName,
-    GlobalDeclaration, GlobalFunction, GlobalStar, LocalAssignment, LocalFunction, Punctuated,
-    Statement, TypeDeclaration, TypeDeclarationValue, is_multi_value,
+    GlobalDeclaration, GlobalFunction, GlobalStar, LocalAssignment, LocalFunction,
+    LocalFunctionKind, Punctuated, Statement, TypeDeclaration, TypeDeclarationValue,
+    is_multi_value,
 };
 use luck_token::{Span, Token, TokenKind};
 
 use super::Parser;
 use super::types::GenericsOwner;
 
-/// The declaration that introduced a local binding, which fixes its
+/// The declaration that introduced a `local` binding list, which fixes its
 /// `is_const` and `is_exported` flags.
 #[derive(Clone, Copy)]
 enum LocalKind {
     Local,
     Const,
     ExportedLocal,
-    /// Luau `export const`, and `export function`, whose binding is read-only
-    /// too.
     ExportedConst,
 }
 
@@ -81,7 +80,7 @@ impl Parser<'_> {
             TokenKind::Identifier(name) if name == "const" => self.parse_const_stmt(attributes),
             _ => {
                 let span = self.current_span();
-                self.error(
+                self.syntax_error(
                     span,
                     "expected `function`, `local`, `const`, or `export` after attribute",
                 );
@@ -149,7 +148,7 @@ impl Parser<'_> {
         let local_span = self.advance_span();
 
         if matches!(self.peek(), TokenKind::Function) {
-            return self.parse_local_function(local_span, attributes, LocalKind::Local);
+            return self.parse_local_function(local_span, attributes, LocalFunctionKind::Local);
         }
 
         if let Some(attribute) = attributes.first() {
@@ -161,7 +160,7 @@ impl Parser<'_> {
     pub(super) fn parse_const_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
         let const_span = self.advance_span(); // contextual `const`
         if matches!(self.peek(), TokenKind::Function) {
-            return self.parse_local_function(const_span, attributes, LocalKind::Const);
+            return self.parse_local_function(const_span, attributes, LocalFunctionKind::Const);
         }
         if let Some(attribute) = attributes.first() {
             self.error(attribute.span, "attributes are only allowed on function declarations");
@@ -173,7 +172,7 @@ impl Parser<'_> {
         &mut self,
         local_span: Span,
         attributes: Vec<FunctionAttribute>,
-        kind: LocalKind,
+        kind: LocalFunctionKind,
     ) -> Statement {
         let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
         if !self.can_nest_function() {
@@ -184,14 +183,7 @@ impl Parser<'_> {
         let body = self.parse_function_body();
         let span = start_span.merge(body.span);
 
-        Statement::LocalFunction(Box::new(LocalFunction {
-            span,
-            attributes,
-            name,
-            body,
-            is_const: kind.is_const(),
-            is_exported: kind.is_exported(),
-        }))
+        Statement::LocalFunction(Box::new(LocalFunction { span, attributes, name, body, kind }))
     }
 
     fn parse_local_assignment(&mut self, local_span: Span, kind: LocalKind) -> Statement {
@@ -435,7 +427,7 @@ impl Parser<'_> {
                         export_span,
                         "`export local function` is not supported, use `export function`",
                     );
-                    self.parse_local_function(local_span, attributes, LocalKind::Local)
+                    self.parse_local_function(local_span, attributes, LocalFunctionKind::Local)
                 } else {
                     if !attributes.is_empty() {
                         self.error(
@@ -447,7 +439,7 @@ impl Parser<'_> {
                 }
             }
             TokenKind::Function => {
-                self.parse_local_function(export_span, attributes, LocalKind::ExportedConst)
+                self.parse_local_function(export_span, attributes, LocalFunctionKind::Export)
             }
             TokenKind::Identifier(name) if name == "const" => {
                 self.advance_span();
@@ -459,14 +451,14 @@ impl Parser<'_> {
                         export_span,
                         "`export const function` is not supported, use `export function`",
                     );
-                    self.parse_local_function(export_span, Vec::new(), LocalKind::Const)
+                    self.parse_local_function(export_span, Vec::new(), LocalFunctionKind::Const)
                 } else {
                     self.parse_local_assignment(export_span, LocalKind::ExportedConst)
                 }
             }
             _ => {
                 let span = self.current_span();
-                self.error(
+                self.syntax_error(
                     span,
                     "`export` must be followed by `type`, `local`, `const`, or `function`",
                 );
@@ -487,7 +479,7 @@ impl Parser<'_> {
             }
         }
         if let Statement::LocalFunction(function) = stmt
-            && function.is_exported
+            && function.kind.is_exported()
         {
             self.register_exported_name(&function.name);
         }

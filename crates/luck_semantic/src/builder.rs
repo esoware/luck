@@ -393,7 +393,7 @@ impl<'ast> Visitor<'ast> for ScopeTreeBuilder<'ast> {
                 // Declared before the body so the function can call itself.
                 if let TokenKind::Identifier(name) = &function.name.kind {
                     let id = self.declare_local(name, function.name.span, SymbolKind::FunctionName);
-                    if function.is_exported {
+                    if function.kind.is_exported() {
                         self.mark_exported(id); // Luau
                     }
                 }

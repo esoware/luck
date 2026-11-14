@@ -1,7 +1,6 @@
 use clap::Args;
 use tokio::runtime::Builder;
 
-use crate::WORKER_STACK_BYTES;
 use crate::exit::Exit;
 
 #[derive(Args)]
@@ -17,14 +16,10 @@ impl LspArgs {
     /// Reports the failure and returns [`Exit::Failure`] when the async
     /// runtime can't start or the socket transport fails.
     pub(crate) fn run(self) -> Result<(), Exit> {
-        let runtime = Builder::new_multi_thread()
-            .enable_all()
-            .thread_stack_size(WORKER_STACK_BYTES)
-            .build()
-            .map_err(|e| {
-                eprintln!("luck lsp: failed to start async runtime: {e}");
-                Exit::Failure
-            })?;
+        let runtime = Builder::new_multi_thread().enable_all().build().map_err(|e| {
+            eprintln!("luck lsp: failed to start async runtime: {e}");
+            Exit::Failure
+        })?;
         runtime.block_on(async {
             if let Some(port) = self.socket {
                 luck_lsp::serve_socket(port).await.map_err(|e| {

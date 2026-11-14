@@ -7,8 +7,8 @@ use crate::stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
     ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
     GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
-    LocalFunction, NumericFor, RepeatLoop, ReturnStatement, Statement, TypeDeclaration,
-    TypeDeclarationValue, WhileLoop,
+    LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement, Statement,
+    TypeDeclaration, TypeDeclarationValue, WhileLoop,
 };
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{GenericTypeList, Type};
@@ -91,9 +91,13 @@ impl Synth {
         signature: FunctionSignature,
         body: Block,
     ) -> Statement {
-        Statement::LocalFunction(Box::new(
-            self.local_function_node(name, attributes, signature, body),
-        ))
+        Statement::LocalFunction(Box::new(self.local_function_node(
+            LocalFunctionKind::Local,
+            name,
+            attributes,
+            signature,
+            body,
+        )))
     }
 
     /// # Panics
@@ -107,10 +111,13 @@ impl Synth {
         signature: FunctionSignature,
         body: Block,
     ) -> Statement {
-        Statement::LocalFunction(Box::new(LocalFunction {
-            is_const: true,
-            ..self.local_function_node(name, attributes, signature, body)
-        }))
+        Statement::LocalFunction(Box::new(self.local_function_node(
+            LocalFunctionKind::Const,
+            name,
+            attributes,
+            signature,
+            body,
+        )))
     }
 
     /// # Panics
@@ -124,15 +131,18 @@ impl Synth {
         signature: FunctionSignature,
         body: Block,
     ) -> Statement {
-        Statement::LocalFunction(Box::new(LocalFunction {
-            is_const: true,
-            is_exported: true,
-            ..self.local_function_node(name, attributes, signature, body)
-        }))
+        Statement::LocalFunction(Box::new(self.local_function_node(
+            LocalFunctionKind::Export,
+            name,
+            attributes,
+            signature,
+            body,
+        )))
     }
 
     fn local_function_node(
         &self,
+        kind: LocalFunctionKind,
         name: &str,
         attributes: Vec<FunctionAttribute>,
         signature: FunctionSignature,
@@ -143,8 +153,7 @@ impl Synth {
             attributes,
             name: self.identifier(name),
             body: self.function_body(signature, body),
-            is_const: false,
-            is_exported: false,
+            kind,
         }
     }
 
@@ -570,7 +579,7 @@ mod tests {
         let Statement::LocalFunction(local_function) = &function_stmt else {
             panic!("expected local function");
         };
-        assert!(local_function.is_const);
+        assert_eq!(local_function.kind, LocalFunctionKind::Const);
     }
 
     #[test]

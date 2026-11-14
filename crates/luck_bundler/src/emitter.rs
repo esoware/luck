@@ -977,8 +977,9 @@ mod tests {
         assert!(with_room.contains("local function __luck_require(name)"), "{with_room}");
 
         let without_room = lua51_bundle_capturing(59);
-        assert!(without_room.contains("\nfunction __luck_require(name)"), "{without_room}");
+        assert!(without_room.contains("\ndo function __luck_require(name)"), "{without_room}");
         assert!(!without_room.contains("local function __luck_require"), "{without_room}");
+        assert_reparses(&without_room, LuaVersion::Lua51);
     }
 
     #[test]

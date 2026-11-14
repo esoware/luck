@@ -41,6 +41,7 @@ fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
 
 /// Lua needs only one token of lookahead, so `current` and `next` stand in
 /// for a materialized token stream.
+#[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the parse")]
 struct Parser<'source> {
     lexer: Lexer<'source>,
     source: &'source str,
@@ -71,7 +72,88 @@ struct Parser<'source> {
     /// Whether a `type function` appeared, so its body needs the scope check
     /// the parser can't do without tracking locals.
     has_type_function: bool,
+    open: OpenConstructs,
+    /// Whether a syntax error has been reported since the last statement
+    /// began where one reliably does. What follows it in the same statement
+    /// is in doubt, so its errors would only echo the first.
+    is_recovering: bool,
+    /// How many of the lexer's unterminated strings the parser has consumed.
+    consumed_unterminated: usize,
     errors: Vec<ParseError>,
+}
+
+/// A token that closes a construct, or continues it, as `else` does an `if`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Closer {
+    Paren,
+    Bracket,
+    Brace,
+    /// An interpolated string's next segment, after an expression.
+    StringSegment,
+    End,
+    /// `else` or `elseif`.
+    Else,
+    Until,
+}
+
+impl Closer {
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token closes nothing")]
+    const fn of(kind: &TokenKind) -> Option<Self> {
+        Some(match kind {
+            TokenKind::RightParen => Self::Paren,
+            TokenKind::RightBracket => Self::Bracket,
+            TokenKind::RightBrace => Self::Brace,
+            TokenKind::InterpolatedStringMiddle(_) | TokenKind::InterpolatedStringEnd(_) => {
+                Self::StringSegment
+            }
+            TokenKind::End => Self::End,
+            TokenKind::Else | TokenKind::ElseIf => Self::Else,
+            TokenKind::Until => Self::Until,
+            _ => return None,
+        })
+    }
+}
+
+/// How many constructs the parser is inside that each closer closes, so
+/// recovery can tell a closer something open expects from a stray one.
+#[derive(Clone, Copy, Default)]
+struct OpenConstructs {
+    parens: u32,
+    brackets: u32,
+    braces: u32,
+    string_segments: u32,
+    ends: u32,
+    elses: u32,
+    untils: u32,
+}
+
+impl OpenConstructs {
+    const fn count_mut(&mut self, closer: Closer) -> &mut u32 {
+        match closer {
+            Closer::Paren => &mut self.parens,
+            Closer::Bracket => &mut self.brackets,
+            Closer::Brace => &mut self.braces,
+            Closer::StringSegment => &mut self.string_segments,
+            Closer::End => &mut self.ends,
+            Closer::Else => &mut self.elses,
+            Closer::Until => &mut self.untils,
+        }
+    }
+
+    /// `end` and `until` each end any block, as in every Lua's parser, so a
+    /// mistaken one ends the block it's in, and the construct around that
+    /// block reports what it was missing.
+    const fn expects(self, closer: Closer) -> bool {
+        let count = match closer {
+            Closer::Paren => self.parens,
+            Closer::Bracket => self.brackets,
+            Closer::Brace => self.braces,
+            Closer::StringSegment => self.string_segments,
+            Closer::End | Closer::Until => self.ends.saturating_add(self.untils),
+            Closer::Else => self.elses,
+        };
+        count > 0
+    }
 }
 
 /// What [`Parser::begin_operand`] saves of the operand around the one it
@@ -122,23 +204,17 @@ impl<'source> Parser<'source> {
             has_value_exports: false,
             exported_names: FxHashSet::default(),
             has_type_function: false,
+            open: OpenConstructs::default(),
+            is_recovering: false,
+            consumed_unterminated: 0,
             errors: Vec::new(),
         })
     }
 
+    /// Nothing is open around the chunk's block, so it reads to the end of
+    /// the source, and the lexer is drained by then.
     fn parse_chunk(mut self) -> (Block, Vec<Comment>, Vec<ParseError>) {
         let block = self.parse_block();
-        // `parse_block` stops at a block boundary such as `return` or a stray
-        // `end`, and anything after it would silently drop out of the AST. After
-        // an earlier error, recovery may already have abandoned the tail.
-        if !self.is_at_eof() && self.errors.is_empty() {
-            let span = self.current_span();
-            let message = format!("expected end of file, found {}", self.peek());
-            self.error(span, message);
-        }
-        // Drain the lexer so comments and lex errors past the last parsed
-        // statement are kept.
-        while !matches!(self.lexer.next_token().kind, TokenKind::Eof) {}
         let (comments, mut errors) = self.lexer.finish();
         errors.append(&mut self.errors);
         if self.has_type_function && errors.is_empty() {
@@ -201,7 +277,20 @@ impl<'source> Parser<'source> {
     #[inline]
     fn advance(&mut self) -> Token {
         self.previous_span = self.current.span;
+        if self.lexer.unterminated().get(self.consumed_unterminated) == Some(&self.current.span) {
+            self.consume_unterminated();
+        }
         mem::replace(&mut self.current, mem::replace(&mut self.next, self.lexer.next_token()))
+    }
+
+    /// A string cut off at its line break took what followed it on the line,
+    /// often the closer of what holds it, and its lex error stands for what
+    /// that leaves broken.
+    #[cold]
+    #[inline(never)]
+    const fn consume_unterminated(&mut self) {
+        self.consumed_unterminated = self.consumed_unterminated.saturating_add(1);
+        self.is_recovering = true;
     }
 
     #[inline]
@@ -214,7 +303,9 @@ impl<'source> Parser<'source> {
     fn advance_literal(&mut self) -> Literal {
         let token = self.advance();
         #[expect(clippy::unreachable, reason = "the caller has already matched this token kind")]
-        let (TokenKind::Number(text) | TokenKind::StringLiteral(text)) = token.kind else {
+        let (TokenKind::Number(text) | TokenKind::Integer(text) | TokenKind::StringLiteral(text)) =
+            token.kind
+        else {
             unreachable!("caller matched a literal token kind");
         };
         Literal { text, span: token.span }
@@ -226,6 +317,49 @@ impl<'source> Parser<'source> {
     #[inline]
     fn expect(&mut self, kind: &TokenKind) -> Span {
         if self.is_at(kind) { self.advance_span() } else { self.report_expected(kind) }
+    }
+
+    /// Count a construct `closer` closes as open from here.
+    const fn open(&mut self, closer: Closer) {
+        let count = self.open.count_mut(closer);
+        *count = count.saturating_add(1);
+    }
+
+    /// Count the construct `closer` closes as closed from here.
+    const fn close(&mut self, closer: Closer) {
+        let count = self.open.count_mut(closer);
+        *count = count.saturating_sub(1);
+    }
+
+    /// Close the bracket `opened` and consume its `kind` closer, as
+    /// [`Self::expect`] does.
+    ///
+    /// A closing bracket of another kind that nothing open expects is a typo
+    /// for this one, so it closes this bracket too.
+    fn expect_closer(&mut self, kind: &TokenKind, opened: Closer) -> Span {
+        self.close(opened);
+        if self.is_at(kind) {
+            return self.advance_span();
+        }
+        let span = self.report_expected(kind);
+        if matches!(
+            self.peek(),
+            TokenKind::RightParen | TokenKind::RightBracket | TokenKind::RightBrace
+        ) && !self.is_at_expected_closer()
+        {
+            self.advance();
+        }
+        span
+    }
+
+    /// Whether the current token closes or continues something open.
+    fn is_at_expected_closer(&self) -> bool {
+        Closer::of(self.peek()).is_some_and(|closer| self.open.expects(closer))
+    }
+
+    /// Whether the block being parsed ends at the current token.
+    fn is_at_block_end(&self) -> bool {
+        self.is_at_eof() || self.is_at_expected_closer()
     }
 
     /// Consume the current token if it's an identifier. Otherwise record an
@@ -257,22 +391,36 @@ impl<'source> Parser<'source> {
     #[inline(never)]
     fn report_expected(&mut self, kind: &TokenKind) -> Span {
         let span = self.current_span();
-        let message = format!("expected {kind}, found {}", self.peek());
-        self.error(span, message);
+        if !self.is_recovering {
+            let message = format!("expected {kind}, found {}", self.peek());
+            self.syntax_error(span, message);
+        }
         span
     }
 
     #[cold]
     #[inline(never)]
     fn report_expected_identifier(&mut self) {
-        let span = self.current_span();
-        let message = format!("expected identifier, found {}", self.peek());
-        self.error(span, message);
+        if !self.is_recovering {
+            let span = self.current_span();
+            let message = format!("expected identifier, found {}", self.peek());
+            self.syntax_error(span, message);
+        }
     }
 
     #[cold]
     fn error(&mut self, span: Span, message: impl Into<String>) {
         self.errors.push(ParseError { span, message: message.into() });
+    }
+
+    /// Record a syntax error unless one is already being recovered from,
+    /// since what follows an error in the same statement is in doubt.
+    #[cold]
+    fn syntax_error(&mut self, span: Span, message: impl Into<String>) {
+        if !self.is_recovering {
+            self.is_recovering = true;
+            self.error(span, message);
+        }
     }
 
     /// Whether `levels` more levels of nesting fit where the parser is.
@@ -374,27 +522,21 @@ impl<'source> Parser<'source> {
         self.previous_span
     }
 
-    /// Skip to the next statement start, block end, or closing bracket.
-    /// Always consumes at least one token, so recovery can't loop forever.
-    fn synchronize(&mut self) {
-        self.advance();
-        while !self.is_at_eof() {
-            if stmt::is_stmt_start(self.peek())
-                || matches!(
-                    self.peek(),
-                    TokenKind::End
-                        | TokenKind::Else
-                        | TokenKind::ElseIf
-                        | TokenKind::Until
-                        | TokenKind::RightParen
-                        | TokenKind::RightBrace
-                        | TokenKind::RightBracket
-                )
-            {
-                return;
-            }
+    /// Skip to where a statement reliably begins, or to a closer something
+    /// open expects. A name or a `(` on the line of an error may be what's
+    /// left of the statement it broke, so one begins a statement only at the
+    /// start of a line.
+    fn skip_to_statement(&mut self) {
+        while !self.is_at_block_end() && !self.is_at_reliable_stmt_start() {
             self.advance();
         }
+    }
+
+    fn is_at_reliable_stmt_start(&self) -> bool {
+        let kind = self.peek();
+        stmt::is_stmt_start(kind)
+            && (!matches!(kind, TokenKind::Identifier(_) | TokenKind::LeftParen)
+                || self.has_newline_before_current())
     }
 }
 

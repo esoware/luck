@@ -2,8 +2,8 @@ use core::mem;
 
 use luck_ast::{
     Assignment, Block, Expression, FunctionArgs, FunctionDecl, FunctionName, FunctionSignature,
-    Literal, LocalAssignment, LocalFunction, OneOrMore, Punctuated, Statement, Suffix,
-    SuffixedExpression, Synth, Transform, Var,
+    Literal, LocalAssignment, LocalFunction, LocalFunctionKind, OneOrMore, Punctuated, Statement,
+    Suffix, SuffixedExpression, Synth, Transform, Var,
 };
 use luck_core::Diagnostic;
 use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
@@ -328,12 +328,11 @@ impl ModuleRewriter<'_> {
                     values,
                 }))
             }
-            Statement::LocalFunction(mut function) if function.is_exported => {
+            Statement::LocalFunction(mut function) if function.kind.is_exported() => {
                 if !exports.is_table_statement(function.span) {
                     // An exported function binds a constant, and the
                     // lowered one is a plain `local function`.
-                    function.is_exported = false;
-                    function.is_const = false;
+                    function.kind = LocalFunctionKind::Local;
                     return Statement::LocalFunction(function);
                 }
                 let LocalFunction { span, attributes, name, body, .. } = *function;

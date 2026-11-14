@@ -808,7 +808,8 @@ fn unused_local_action(local: &LocalAssignment, version: LuaVersion) -> DeadLoca
 }
 
 fn is_droppable_function(local_function: &LocalFunction, version: LuaVersion) -> bool {
-    !local_function.is_exported && !is_env_binding(identifier_name(&local_function.name), version)
+    !local_function.kind.is_exported()
+        && !is_env_binding(identifier_name(&local_function.name), version)
 }
 
 fn is_call(expr: &Expression) -> bool {

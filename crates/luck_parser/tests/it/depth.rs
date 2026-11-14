@@ -2,6 +2,7 @@ use core::ops::Range;
 
 use luck_ast::{MAX_NESTING_DEPTH, Statement, Visitor, block_nesting_depth};
 use luck_parser::parse;
+use luck_testgen::generate_full_embeddable;
 use luck_token::LuaVersion;
 
 #[test]
@@ -421,12 +422,37 @@ fn over_a_type_at_the_cap(construct: &str) -> (String, String) {
     (prefix.clone(), format!("{prefix}{construct}{AFTER}"))
 }
 
+type Build = fn(&str) -> (String, String);
+
+/// Each construct `build` puts at the cap is one error at its `opener`, and
+/// the statement after it parses.
+fn assert_one_error_at_the_opener(cases: &[(Build, LuaVersion, &str, &str)]) {
+    for &(build, version, construct, opener) in cases {
+        let (prefix, source) = build(construct);
+        let result = parse(source.as_str(), version);
+        let [error] = result.errors.as_slice() else {
+            panic!("{construct}: {:?}", result.errors);
+        };
+        assert!(error.message.contains("luck parser resource limit"), "{construct}: {error:?}");
+        let offset = construct.find(opener).expect("the opener is in the construct");
+        assert_eq!(error.span.text(&source), opener, "{construct}");
+        assert_eq!(
+            Range::<usize>::from(error.span).start,
+            prefix.len().saturating_add(offset),
+            "{construct}"
+        );
+        let [_, Statement::LocalAssignment(after)] = result.block.stmts.as_slice() else {
+            panic!("{construct}: {:?}", result.block.stmts);
+        };
+        assert_eq!(after.names.first().and_then(|name| name.name.identifier()), Some("after"));
+    }
+}
+
 /// A refused construct is one error at the token that would open the level
 /// past the cap, and is skipped whole, so the statement holding it ends where
 /// it would have and the next one parses.
 #[test]
 fn a_construct_past_the_cap_is_one_error_at_its_opener() {
-    type Build = fn(&str) -> (String, String);
     let lua = LuaVersion::Lua54;
     let luau = LuaVersion::Luau;
     let cases: &[(Build, LuaVersion, &str, &str)] = &[
@@ -505,20 +531,125 @@ fn a_construct_past_the_cap_is_one_error_at_its_opener() {
         (over_a_type_at_the_cap, luau, "? | U", "?"),
         (over_a_type_at_the_cap, luau, " & U | V", "&"),
     ];
-    for &(build, version, construct, opener) in cases {
-        let (prefix, source) = build(construct);
-        let result = parse(source.as_str(), version);
-        let [error] = result.errors.as_slice() else {
-            panic!("{construct}: {:?}", result.errors);
-        };
-        assert!(error.message.contains("luck parser resource limit"), "{construct}: {error:?}");
-        let offset = construct.find(opener).expect("the opener is in the construct");
-        assert_eq!(error.span.text(&source), opener, "{construct}");
-        assert_eq!(Range::<usize>::from(error.span).start, prefix.len() + offset, "{construct}");
-        let [_, Statement::LocalAssignment(after)] = result.block.stmts.as_slice() else {
-            panic!("{construct}: {:?}", result.block.stmts);
-        };
-        assert_eq!(after.names.first().and_then(|name| name.name.identifier()), Some("after"));
+    assert_one_error_at_the_opener(cases);
+}
+
+/// A skipped construct ends where parsing it would have, broken or not.
+#[test]
+fn a_construct_past_the_cap_ends_where_parsing_it_would_have() {
+    let lua = LuaVersion::Lua54;
+    let luau = LuaVersion::Luau;
+    let cases: &[(Build, LuaVersion, &str, &str)] = &[
+        // A `>` that ends a type ends an operand, and one that compares
+        // leaves an operand to come, so only the second makes `if` an
+        // expression.
+        (at_the_cap_in_a_block, luau, "do local y = a > if b then c else d end", "do"),
+        (at_the_cap_in_a_block, luau, "while a > if b then c else d do end", "while"),
+        (at_the_cap_in_a_block, luau, "do x = y :: A<B> > if c then d else e end", "do"),
+        (at_the_cap_in_a_block, luau, "do local x: Array<T> if c then end end", "do"),
+        (at_the_cap_in_a_block, luau, "do local a: A<B>, b: C<D> if c then end end", "do"),
+        (at_the_cap_in_a_block, luau, "do for i: A<B> = 1, 2 do if c then end end end", "do"),
+        (at_the_cap_in_a_block, luau, "do type X<T> = A<T> if c then end end", "do"),
+        (at_the_cap_in_a_block, luau, "do type X = <T>(T) -> A<T> if c then end end", "do"),
+        (at_the_cap_in_a_block, luau, "do f<<A<B>>>(c) if d then end end", "do"),
+        (
+            at_the_cap_in_a_block,
+            luau,
+            "local function f<T>(x: T): A<T> if x then end return x end",
+            "function",
+        ),
+        (
+            at_the_cap_in_a_block,
+            luau,
+            "do local f = function(): (A<B>) -> C<D> if c then end end end",
+            "do",
+        ),
+        // A closer closes the innermost construct it can, and everything
+        // still open inside it, and a stray closing bracket closes the
+        // innermost bracket.
+        (at_the_cap_in_a_block, lua, "do f(x end", "do"),
+        (at_the_cap_in_a_block, lua, "do t[f(x] end", "do"),
+        (at_the_cap_in_a_block, lua, "do x = f(function() y ) end", "do"),
+        (at_the_cap_in_a_block, lua, "do x = 1 ) y = 2 end", "do"),
+        (at_the_cap_in_a_block, lua, "if a then f(x else g() end", "if"),
+        (at_the_cap_in_a_block, lua, "repeat f(x until y", "repeat"),
+        (at_the_cap_in_a_block, lua, "while f(x do end", "while"),
+        (at_the_cap_in_an_expression, lua, "{1, 2", "{"),
+        (at_the_cap_in_an_expression, lua, "(x]", "("),
+        (at_the_cap_in_an_expression, lua, "{f(x}", "{"),
+        (at_the_cap_in_an_expression, luau, "`{f(x}`", "`{"),
+    ];
+    assert_one_error_at_the_opener(cases);
+}
+
+/// A generated program reaches the whole grammar, so skipping one whole
+/// inside each kind of refused construct has to end exactly where parsing it
+/// would have.
+#[test]
+fn a_refused_construct_holding_any_program_ends_where_parsing_would_have() {
+    for version in LuaVersion::ALL {
+        for seed in 0..24 {
+            let program = generate_full_embeddable(seed, version, 30);
+            let mut wrappers = vec![
+                at_the_cap_in_a_block(&format!(
+                    "do
+{program}
+end"
+                )),
+                at_the_cap_in_a_block(&format!(
+                    "repeat
+{program}
+until x"
+                )),
+                at_the_cap_in_a_block(&format!(
+                    "while x do
+{program}
+end"
+                )),
+                at_the_cap_in_a_block(&format!(
+                    "if x then
+{program}
+else
+{program}
+end"
+                )),
+                at_the_cap_in_an_expression(&format!(
+                    "function(...)
+{program}
+end"
+                )),
+                at_the_cap_in_an_expression(&format!(
+                    "{{function(...)
+{program}
+end}}"
+                )),
+            ];
+            if version.has_interpolated_strings() {
+                wrappers.push(at_the_cap_in_an_expression(&format!(
+                    "`a{{function(...)
+{program}
+end}}b`"
+                )));
+            }
+            for (_, source) in wrappers {
+                let result = parse(source.as_str(), version);
+                let [error] = result.errors.as_slice() else {
+                    panic!("{version:?} seed {seed}: {:?} in {program:?}", result.errors);
+                };
+                assert!(error.message.contains("luck parser resource limit"), "{error:?}");
+                let Some(Statement::LocalAssignment(after)) = result.block.stmts.last() else {
+                    panic!(
+                        "{version:?} seed {seed}: {:?} in {program:?}",
+                        result.block.stmts.last()
+                    );
+                };
+                assert_eq!(
+                    after.names.first().and_then(|name| name.name.identifier()),
+                    Some("after"),
+                    "{version:?} seed {seed} in {program:?}"
+                );
+            }
+        }
     }
 }
 

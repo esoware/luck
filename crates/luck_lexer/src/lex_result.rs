@@ -1,4 +1,4 @@
-use luck_token::{Comment, Token};
+use luck_token::{Comment, Span, Token};
 
 use crate::lex_error::LexError;
 
@@ -8,4 +8,7 @@ pub struct LexResult {
     pub tokens: Vec<Token>,
     pub comments: Vec<Comment>,
     pub errors: Vec<LexError>,
+    /// What [`Lexer::unterminated`](crate::Lexer::unterminated) gives once
+    /// the source is lexed.
+    pub unterminated: Vec<Span>,
 }

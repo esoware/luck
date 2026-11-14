@@ -1,3 +1,5 @@
+use core::fmt::Write as _;
+
 use predicates::prelude::*;
 use tempfile::TempDir;
 
@@ -127,6 +129,34 @@ fn bundle_minification_uses_discovered_and_explicit_config() {
         .assert()
         .success()
         .stdout(predicate::str::contains("1+2"));
+}
+
+/// Renaming a bundle's globals keeps the global loader's prefixed name.
+///
+/// A Lua 5.1 function with no upvalue left for a local loader reaches the
+/// bundle's loader through a global, whose name no host global shares.
+#[test]
+fn renaming_a_bundles_globals_keeps_its_global_loader_name() {
+    let directory = TempDir::new().expect("directory");
+    let mut locals = String::new();
+    for i in 0..59u32 {
+        let _unused = writeln!(locals, "local u{i} = {i}");
+    }
+    let sum = (0..59u32).map(|i| format!("u{i}")).collect::<Vec<_>>().join(" + ");
+    let entry = format!(
+        r#"{locals}local function f()
+  return require("dep"), {sum}
+end
+print(f())
+"#
+    );
+    write_file(directory.path(), "main.lua", &entry);
+    write_file(directory.path(), "dep.lua", "return 1");
+    luck_in(directory.path())
+        .args(["bundle", "main.lua", "-t", "51", "--minify", "--rename-globals"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("function __luck_require("));
 }
 
 #[test]

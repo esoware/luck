@@ -17,7 +17,6 @@ use tower_lsp_server::ls_types::{
 };
 
 use crate::document::DocumentState;
-use crate::providers::cursor::dotted_chain_ending_tokens;
 
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
@@ -126,6 +125,14 @@ fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> Semantic
     classifier.delta_encode(byte_range)
 }
 
+/// Where a name stands in the `Name(.Name)*` chain it ends.
+#[derive(Clone, Copy)]
+enum ChainLink {
+    Root,
+    /// What the chain resolves to in the stdlib, if anything.
+    Member(Option<&'static StdlibEntry>),
+}
+
 /// The classification passes, run in order over one token map.
 struct Classifier<'document> {
     document: &'document DocumentState,
@@ -196,31 +203,44 @@ impl Classifier<'_> {
         }
     }
 
-    /// Classifies names after a `.` or `:`. Each one walks its whole chain back
-    /// to the root so nested paths classify too: `Enum.Material.Grass`,
-    /// `game:GetService`, and `f:read` on a shaped local, not only `math.floor`.
+    /// Classifies names after a `.` or `:`, resolving each one's whole chain
+    /// back to its root, so nested paths classify too: `Enum.Material.Grass`,
+    /// `game:GetService`, and `f:read` on a shaped local, not only
+    /// `math.floor`. A path resolves one member at a time, so each name
+    /// resolves from the one before it rather than walking its chain again.
     fn classify_members(&mut self) {
         let Self { document, tokens, raw_tokens } = self;
+        let library = document.semantic.stdlib();
+        let mut links: Vec<Option<ChainLink>> = Vec::with_capacity(tokens.len());
         for (index, token) in tokens.iter().enumerate() {
             let TokenKind::Identifier(name) = &token.kind else {
+                links.push(None);
                 continue;
             };
-            let Some((separator, before_separator)) =
-                tokens.get(..index).and_then(<[Token]>::split_last)
-            else {
-                continue;
-            };
-            if !matches!(separator.kind, TokenKind::Dot | TokenKind::Colon) {
+            let separator = index.checked_sub(1).and_then(|before| tokens.get(before));
+            let is_after_dot = separator.is_some_and(|before| before.kind == TokenKind::Dot);
+            let is_member =
+                is_after_dot || separator.is_some_and(|before| before.kind == TokenKind::Colon);
+            let chain_before = index
+                .checked_sub(2)
+                .and_then(|before| Some((tokens.get(before)?, (*links.get(before)?)?)));
+            let entry = chain_before.and_then(|(before, link)| match link {
+                ChainLink::Root => {
+                    let root = before.identifier()?;
+                    document.semantic.resolve_stdlib_path(&[root, name.as_str()], before.span)
+                }
+                ChainLink::Member(entry) => library.child(entry?, name),
+            });
+            links.push(if is_after_dot {
+                chain_before.map(|_| ChainLink::Member(entry))
+            } else {
+                Some(ChainLink::Root)
+            });
+            if !is_member {
                 continue;
             }
-            let stdlib_member = dotted_chain_ending_tokens(before_separator).and_then(
-                |(mut segments, root_span)| {
-                    segments.push(name.as_str());
-                    document.semantic.resolve_stdlib_path(&segments, root_span).map(member_classify)
-                },
-            );
-            let classification =
-                stdlib_member.unwrap_or_else(|| match value_shape(tokens, index) {
+            let classification = entry.map_or_else(
+                || match value_shape(tokens, index) {
                     ValueShape::Called | ValueShape::AssignedFunction => {
                         Classification::plain(TYPE_METHOD)
                     }
@@ -228,7 +248,9 @@ impl Classifier<'_> {
                         token_type: TYPE_PROPERTY,
                         modifiers: if is_screaming_case(name) { MODIFIER_READONLY } else { 0 },
                     },
-                });
+                },
+                member_classify,
+            );
             raw_tokens.insert(token.span.start, (token.span, classification));
         }
     }

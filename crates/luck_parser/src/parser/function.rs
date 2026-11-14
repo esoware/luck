@@ -4,7 +4,7 @@ use luck_ast::{FunctionBody, Parameter, Punctuated, Type, VarArgParam};
 use luck_token::{Span, Token, TokenKind};
 
 use super::types::GenericsOwner;
-use super::{FunctionScope, Parser};
+use super::{Closer, FunctionScope, Parser};
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -15,6 +15,7 @@ impl Parser<'_> {
     /// attributes on the function.
     pub(super) fn parse_function_body(&mut self) -> FunctionBody {
         self.enter_depth();
+        self.open(Closer::End);
 
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
         let generics = (self.version.has_type_syntax() && matches!(self.peek(), TokenKind::Less))
@@ -23,9 +24,9 @@ impl Parser<'_> {
         let open = self.expect(&TokenKind::LeftParen);
         let start_span = generics.as_ref().map_or(open, |list| list.span);
 
+        self.open(Closer::Paren);
         let (params, vararg) = self.parse_params();
-
-        self.expect(&TokenKind::RightParen);
+        self.expect_closer(&TokenKind::RightParen, Closer::Paren);
 
         // Luau: optional return type annotation after `)`.
         let return_type = (self.version.has_type_syntax() && self.eat(&TokenKind::Colon))
@@ -40,6 +41,7 @@ impl Parser<'_> {
         let block = self.parse_block();
         self.function_scope = outer_scope;
 
+        self.close(Closer::End);
         let end_span = self.expect(&TokenKind::End);
 
         self.exit_depth();

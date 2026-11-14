@@ -21,7 +21,8 @@ luck_token = { workspace = true }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]
-luck_parser = { workspace = true }
+luck_parser  = { workspace = true }
+luck_testgen = { workspace = true }
 
 # The catalog generator reads stdlib_data with these.
 serde = { workspace = true }

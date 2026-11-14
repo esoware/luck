@@ -7,7 +7,7 @@
 use luck_ast::{Attribute, Expression, Field, FunctionAttribute, Punctuated};
 use luck_token::{Span, Token, TokenKind};
 
-use super::Parser;
+use super::{Closer, Parser};
 
 /// Whether `expr` is a constant string, which a backtick string with no holes
 /// also is in Luau.
@@ -91,6 +91,7 @@ impl Parser<'_> {
                 self.error(at_span, "attribute name must directly follow `@`");
             }
             if self.eat(&TokenKind::LeftBracket) {
+                self.open(Closer::Bracket);
                 loop {
                     let name = self.expect_identifier_recover();
                     let args = self.parse_attribute_args();
@@ -104,12 +105,11 @@ impl Parser<'_> {
                         name,
                         args,
                     });
-                    if self.eat(&TokenKind::Comma) {
-                    } else {
+                    if !self.eat(&TokenKind::Comma) {
                         break;
                     }
                 }
-                self.expect(&TokenKind::RightBracket);
+                self.expect_closer(&TokenKind::RightBracket, Closer::Bracket);
             } else {
                 let name = self.expect_identifier_recover();
                 self.validate_function_attribute(&name, None, &attributes);
@@ -146,12 +146,13 @@ impl Parser<'_> {
         match self.peek() {
             TokenKind::LeftParen => {
                 self.advance_span();
+                self.open(Closer::Paren);
                 let args = if matches!(self.peek(), TokenKind::RightParen) {
                     Punctuated::empty()
                 } else {
                     self.parse_expr_list()
                 };
-                self.expect(&TokenKind::RightParen);
+                self.expect_closer(&TokenKind::RightParen, Closer::Paren);
                 for expr in args.iter() {
                     if !is_attribute_literal(expr) {
                         self.error(expr.span(), "attribute arguments must be literals");

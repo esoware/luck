@@ -92,7 +92,14 @@ impl LocalFlow {
             // Stable, so each node's uses stay in reference order.
             uses.sort_by_key(|used| used.node);
             walk.mark_next_uses(&uses, local);
-            if !is_uninitialized && walk.is_overwritten_unread(graph.successors(local.node)) {
+            // The declaration's node runs on past it, so a use there comes
+            // next.
+            let is_initializer_overwritten =
+                uses.iter().find(|used| used.node == local.node).map_or_else(
+                    || walk.is_overwritten_unread(graph.successors(local.node)),
+                    |next| !next.kind.is_read(),
+                );
+            if !is_uninitialized && is_initializer_overwritten {
                 self.overwritten_values.push((symbol.id, symbol.definition_span));
             }
             for (i, used) in uses.iter().enumerate() {

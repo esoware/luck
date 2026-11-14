@@ -108,6 +108,11 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   written. The printers print each leaf as the tree holds it, so a token
 ///   that doesn't belong where it's placed, such as `end` as a name, or text
 ///   that isn't one numeral, prints output that doesn't read back as the tree.
+/// - **Type names.** A type reads a bare `typeof` as the start of
+///   `typeof(expr)`, so [`Synth::ty_named`] or [`Synth::ty_generic`] given
+///   `typeof` prints a type that doesn't read back. Don't build one: a type
+///   named `typeof` can be referred to only through its module, with
+///   [`Synth::ty_qualified`], or as a pack, with [`Synth::ty_generic_pack`].
 /// - **Nesting depth.** No constructor counts it. Every traversal, drop and
 ///   clone included, recurses once per level of nesting, so keep the tree
 ///   within [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH), the deepest

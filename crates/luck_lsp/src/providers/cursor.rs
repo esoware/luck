@@ -22,58 +22,50 @@ pub(crate) enum TextKind {
     String,
 }
 
+/// Text that a closing delimiter ends counts up to it, and text a line break
+/// or the end of the file cut off counts through its end, where typing goes
+/// on inside it.
 pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
     let comments = &document.parsed.comments;
     let at_offset = comments.get(comments.partition_point(|comment| comment.span.end < offset));
     let is_in_comment = at_offset.is_some_and(|comment| {
-        // A line comment runs through the end of its line, so typing there
-        // stays inside it. A block comment closes at its `]]`.
         let has_room = match comment.kind {
             CommentKind::Line | CommentKind::Shebang => offset <= comment.span.end,
             CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => offset < comment.span.end,
         };
         comment.span.start < offset && has_room
     });
-    if is_in_comment {
+    // An unterminated block comment is a lex error over its text rather than
+    // a comment, and no other error's text opens with `--`.
+    let is_in_unterminated_comment = document.parsed.errors.iter().any(|e| {
+        e.span.start < offset
+            && offset <= e.span.end
+            && e.span.text(document.text()).starts_with("--")
+    });
+    if is_in_comment || is_in_unterminated_comment {
         return TextKind::Comment;
     }
     let tokens = document.tokens();
-    let enclosing = tokens.get(tokens.partition_point(|token| token.span.end <= offset));
+    let enclosing = tokens.get(tokens.partition_point(|token| token.span.end < offset));
     let is_in_string = enclosing.is_some_and(|token| {
-        token.span.start < offset
-            && matches!(
-                token.kind,
-                TokenKind::StringLiteral(_)
-                    | TokenKind::InterpolatedStringBegin(_)
-                    | TokenKind::InterpolatedStringMiddle(_)
-                    | TokenKind::InterpolatedStringEnd(_)
-            )
+        matches!(
+            token.kind,
+            TokenKind::StringLiteral(_)
+                | TokenKind::InterpolatedStringBegin(_)
+                | TokenKind::InterpolatedStringMiddle(_)
+                | TokenKind::InterpolatedStringEnd(_)
+        ) && is_inside(document, token.span, offset)
     });
-    if is_in_string {
-        return TextKind::String;
-    }
-    // An unterminated string or block comment is a lex error over its text
-    // rather than a token, so its opener is what tells the two apart.
-    document
-        .parsed
-        .errors
-        .iter()
-        .find_map(|e| {
-            (e.span.start < offset && offset <= e.span.end)
-                .then(|| unterminated_text_kind(e.span.text(document.text())))
-        })
-        .unwrap_or(TextKind::Code)
+    if is_in_string { TextKind::String } else { TextKind::Code }
 }
 
-fn unterminated_text_kind(text: &str) -> TextKind {
-    if text.starts_with("--") {
-        TextKind::Comment
-    } else if text.starts_with(['"', '\'', '`']) || text.starts_with("[[") || text.starts_with("[=")
-    {
-        TextKind::String
-    } else {
-        TextKind::Code
-    }
+/// Whether `offset` is inside the string token at `span`: past its first
+/// byte, and before its end unless a line break or the end of the text cut it
+/// off there.
+fn is_inside(document: &DocumentState, span: Span, offset: u32) -> bool {
+    span.start < offset
+        && (offset < span.end
+            || (offset == span.end && document.unterminated_strings().contains(&span)))
 }
 
 /// The plain-name path `head` ends with (`a.b.c`), root first, and the
@@ -328,13 +320,17 @@ pub(crate) struct StringArgSite<'ast> {
 
 /// Find the innermost call whose argument list contains a string
 /// literal enclosing `offset` (cursor strictly inside the quotes).
-pub(crate) fn find_string_arg_at(block: &Block, offset: u32) -> Option<StringArgSite<'_>> {
-    let mut finder = StringArgFinder { offset, result: None };
-    finder.visit_block(block);
+pub(crate) fn find_string_arg_at(
+    document: &DocumentState,
+    offset: u32,
+) -> Option<StringArgSite<'_>> {
+    let mut finder = StringArgFinder { document, offset, result: None };
+    finder.visit_block(&document.parsed.block);
     finder.result
 }
 
 struct StringArgFinder<'ast> {
+    document: &'ast DocumentState,
     offset: u32,
     result: Option<StringArgSite<'ast>>,
 }
@@ -347,10 +343,10 @@ impl<'ast> Visitor<'ast> for StringArgFinder<'ast> {
 }
 
 impl<'ast> StringArgFinder<'ast> {
-    /// Strictly inside the quotes, so a cursor next to the literal doesn't
-    /// trigger value completion.
-    const fn contains(&self, span: Span) -> bool {
-        self.offset > span.start && self.offset < span.end
+    /// Inside the quotes, so a cursor next to the literal doesn't trigger
+    /// value completion.
+    fn contains(&self, span: Span) -> bool {
+        is_inside(self.document, span, self.offset)
     }
 
     fn try_record(&mut self, call: Call<'ast>) {
@@ -402,4 +398,50 @@ pub(crate) fn local_at(tree: &ScopeTree, offset: u32) -> Option<(SymbolId, Span)
                 && touches(symbol.definition_span, offset)
         })
         .map(|symbol| (symbol.id, symbol.definition_span))
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_core::LuaTarget;
+    use rustc_hash::FxHashSet;
+
+    use super::*;
+
+    /// The kind of text at each `|` in `marked`, which the text holds without
+    /// them.
+    fn kinds_at_marks(marked: &str, target: LuaTarget) -> Vec<TextKind> {
+        let text = marked.replace('|', "");
+        let document = DocumentState::new(text, 1, target, FxHashSet::default());
+        let mut offsets = Vec::new();
+        for (index, (position, _)) in marked.match_indices('|').enumerate() {
+            offsets.push(u32::try_from(position.saturating_sub(index)).expect("a small offset"));
+        }
+        offsets.into_iter().map(|offset| text_kind_at(&document, offset)).collect()
+    }
+
+    #[test]
+    fn a_string_cut_off_by_its_line_holds_its_end() {
+        use TextKind::{Code, Comment, String};
+        for (marked, target, expected) in [
+            ("x = `{|y}tail|", LuaTarget::Luau, vec![Code, String]),
+            ("x = `{y}ta|il`|", LuaTarget::Luau, vec![String, Code]),
+            ("x = `|tail|", LuaTarget::Luau, vec![String, String]),
+            ("x = `|", LuaTarget::Luau, vec![String]),
+            ("x = `a|`|", LuaTarget::Luau, vec![String, Code]),
+            ("x = \"a|bc|", LuaTarget::Lua54, vec![String, String]),
+            ("x = \"abc\"|", LuaTarget::Lua54, vec![Code]),
+            (
+                r#"x = "a\"|
+y = 1|"#,
+                LuaTarget::Lua54,
+                vec![String, Code],
+            ),
+            ("x = [[a|", LuaTarget::Lua54, vec![String]),
+            ("x = [[a]]|", LuaTarget::Lua54, vec![Code]),
+            ("--[[ a|", LuaTarget::Lua54, vec![Comment]),
+            ("--[[ a ]]|", LuaTarget::Lua54, vec![Code]),
+        ] {
+            assert_eq!(kinds_at_marks(marked, target), expected, "{marked:?}");
+        }
+    }
 }

@@ -1,26 +1,36 @@
 //! A construct the depth cap refuses is skipped by its tokens, not parsed.
 //!
 //! The skips loop over a heap stack, so they take no more host stack however
-//! deep the construct nests. Each stops where parsing the construct would
-//! have stopped, so the parser goes on from there as if it had.
+//! deep the construct nests. Each stops where parsing the construct would have
+//! stopped, so the parser goes on from there as if it had.
+//!
+//! A closer closes the innermost open construct it can, and closes everything
+//! open inside that construct with it, as parsing does when what's inside is
+//! missing its own closer. As in parsing, `end` and `until` each close any
+//! block. A closer that nothing open in the skip can close ends the skip
+//! before it when something the parser has open can. Otherwise it's stray: a
+//! closing bracket stands for the innermost open bracket, as a typo for its
+//! closer, and anything else is passed over.
 
 use luck_token::{TokenKind, UnOp};
 
-use super::Parser;
+use super::{Closer, OpenConstructs, Parser};
 
-/// An open construct whose closing token the skip is looking for.
+/// An open construct the skip is inside.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Frame {
-    /// A bracket. Everything inside is balanced, so only brackets and
-    /// interpolated strings count there.
-    Group,
+enum FrameKind {
+    /// `(`, `[`, or `{`, closed by its own kind of closing bracket.
+    Bracket(Closer),
+    /// A function's parameter list, which a Luau return type may follow.
+    Params,
     /// A Luau interpolated string, closed by its `InterpolatedStringEnd`.
     InterpolatedString,
     /// A type's `<`, closed by `>`.
     Angle,
-    /// `do`, `function`, a statement `if`, or a loop past its `do`, closed by
-    /// `end`.
+    /// `do`, `function`, or a loop past its `do`, closed by `end`.
     End,
+    /// A statement `if`, closed by `end` and continued by `else` and `elseif`.
+    If,
     /// `while` or `for` before its `do`.
     LoopHeader,
     /// `repeat`, closed by `until`.
@@ -28,6 +38,110 @@ enum Frame {
     /// A Luau if-expression, which has no closing token and ends at its
     /// `else`.
     IfExpr,
+}
+
+impl FrameKind {
+    const fn closes_at(self, closer: Closer) -> bool {
+        match (self, closer) {
+            (Self::Bracket(Closer::Paren) | Self::Params, Closer::Paren)
+            | (Self::Bracket(Closer::Bracket), Closer::Bracket)
+            | (Self::Bracket(Closer::Brace), Closer::Brace)
+            | (Self::InterpolatedString, Closer::StringSegment)
+            | (
+                Self::End | Self::If | Self::LoopHeader | Self::Until,
+                Closer::End | Closer::Until,
+            )
+            | (Self::If | Self::IfExpr, Closer::Else) => true,
+            (
+                Self::Bracket(_)
+                | Self::Params
+                | Self::InterpolatedString
+                | Self::Angle
+                | Self::End
+                | Self::If
+                | Self::LoopHeader
+                | Self::Until
+                | Self::IfExpr,
+                Closer::Paren
+                | Closer::Bracket
+                | Closer::Brace
+                | Closer::StringSegment
+                | Closer::End
+                | Closer::Else
+                | Closer::Until,
+            ) => false,
+        }
+    }
+
+    const fn is_bracket(self) -> bool {
+        matches!(self, Self::Bracket(_) | Self::Params)
+    }
+
+    /// The closers that close or continue this frame.
+    const fn closers(self) -> [Option<Closer>; 2] {
+        match self {
+            Self::Bracket(closer) => [Some(closer), None],
+            Self::Params => [Some(Closer::Paren), None],
+            Self::InterpolatedString => [Some(Closer::StringSegment), None],
+            Self::Angle => [None, None],
+            Self::End | Self::LoopHeader | Self::Until => [Some(Closer::End), None],
+            Self::If => [Some(Closer::End), Some(Closer::Else)],
+            Self::IfExpr => [Some(Closer::Else), None],
+        }
+    }
+
+    /// Whether statements go here, so an `if` may start one and Luau types
+    /// need following, since a type that ends in `>` ends an operand where a
+    /// `>` operator would leave one to come.
+    const fn holds_statements(self) -> bool {
+        match self {
+            Self::End | Self::If | Self::LoopHeader | Self::Until => true,
+            Self::Bracket(_)
+            | Self::Params
+            | Self::InterpolatedString
+            | Self::Angle
+            | Self::IfExpr => false,
+        }
+    }
+}
+
+/// Where a frame that holds statements is in the Luau grammar around types.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Context {
+    Expression,
+    /// The names after `local`, `const`, or `for`, which take annotations.
+    Bindings {
+        is_name_next: bool,
+    },
+    /// After `function`, up to its parameters.
+    FunctionName,
+    /// Right after a function's parameters, where a return type may follow.
+    AfterParams,
+    /// After a `type` declaration's keyword, up to its `=`.
+    TypeAliasName,
+    Type {
+        is_primary_next: bool,
+        is_in_bindings: bool,
+    },
+}
+
+impl Context {
+    /// Where the walk goes on once a type in this context ends.
+    const fn after_type(is_in_bindings: bool) -> Self {
+        if is_in_bindings { Self::Bindings { is_name_next: false } } else { Self::Expression }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Frame {
+    kind: FrameKind,
+    context: Context,
+}
+
+impl Frame {
+    const fn new(kind: FrameKind) -> Self {
+        Self { kind, context: Context::Expression }
+    }
 }
 
 /// Where a skipped Luau if-expression is.
@@ -62,16 +176,13 @@ pub(super) enum TypeExtent {
 }
 
 /// Whether an `if` right after `kind` starts an expression rather than a
-/// statement, outside an if-expression's `then` or `else`.
-///
-/// A Luau type ends in `>` more often than an expression continues with one,
-/// so `>` reads as ending an operand, and `a > if b then c else d` inside a
-/// skipped block throws its `end`s off by one.
+/// statement, where statements go.
 const fn precedes_expression(kind: &TokenKind) -> bool {
     !matches!(
         kind,
         TokenKind::Identifier(_)
             | TokenKind::Number(_)
+            | TokenKind::Integer(_)
             | TokenKind::StringLiteral(_)
             | TokenKind::Nil
             | TokenKind::True
@@ -81,7 +192,6 @@ const fn precedes_expression(kind: &TokenKind) -> bool {
             | TokenKind::RightBracket
             | TokenKind::RightBrace
             | TokenKind::InterpolatedStringEnd(_)
-            | TokenKind::Greater
             | TokenKind::Question
             | TokenKind::End
             | TokenKind::Do
@@ -89,6 +199,78 @@ const fn precedes_expression(kind: &TokenKind) -> bool {
             | TokenKind::Break
             | TokenKind::Semicolon
     )
+}
+
+/// The frames a skip has open, innermost last, and whether an `if` next
+/// starts an expression.
+///
+/// A closer looks for its frame only when one is open, and pops what it
+/// looks past, so however the source mismatches them, the skip stays linear.
+struct Skip {
+    frames: Vec<Frame>,
+    /// How many open frames each closer closes.
+    open: OpenConstructs,
+    /// Where each open frame other than a bracket is, innermost last.
+    blocks: Vec<usize>,
+    is_expr_next: bool,
+}
+
+impl Skip {
+    fn new(frame: Frame, is_expr_next: bool) -> Self {
+        let mut skip = Self {
+            frames: Vec::new(),
+            open: OpenConstructs::default(),
+            blocks: Vec::new(),
+            is_expr_next,
+        };
+        skip.push(frame.kind, frame.context);
+        skip
+    }
+
+    fn innermost_kind(&self) -> Option<FrameKind> {
+        self.frames.last().map(|frame| frame.kind)
+    }
+
+    fn innermost_block(&self) -> Option<(usize, FrameKind)> {
+        let index = *self.blocks.last()?;
+        Some((index, self.frames.get(index)?.kind))
+    }
+
+    fn push(&mut self, kind: FrameKind, context: Context) {
+        for closer in kind.closers().into_iter().flatten() {
+            let count = self.open.count_mut(closer);
+            *count = count.saturating_add(1);
+        }
+        if !kind.is_bracket() {
+            self.blocks.push(self.frames.len());
+        }
+        self.frames.push(Frame { kind, context });
+    }
+
+    /// Close every frame from `index` up, and tell the frame left innermost
+    /// what closed.
+    fn close_from(&mut self, index: usize) {
+        let closed = self.frames.get(index).map(|frame| frame.kind);
+        for frame in self.frames.drain(index..) {
+            for closer in frame.kind.closers().into_iter().flatten() {
+                let count = self.open.count_mut(closer);
+                *count = count.saturating_sub(1);
+            }
+        }
+        while self.blocks.last().is_some_and(|&block| block >= index) {
+            self.blocks.pop();
+        }
+        let Some(outer) = self.frames.last_mut() else {
+            return;
+        };
+        outer.context = match (outer.context, closed) {
+            (Context::Type { is_in_bindings, .. }, Some(FrameKind::Bracket(_))) => {
+                Context::Type { is_primary_next: false, is_in_bindings }
+            }
+            (Context::FunctionName, Some(FrameKind::Params)) => Context::AfterParams,
+            (context, _) => context,
+        };
+    }
 }
 
 #[expect(
@@ -103,188 +285,330 @@ impl Parser<'_> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token opens a bracket")]
     pub(super) fn skip_nested(&mut self) {
         let frame = match self.peek() {
-            TokenKind::Less => Frame::Angle,
-            TokenKind::Do | TokenKind::Function | TokenKind::If => Frame::End,
-            TokenKind::While | TokenKind::For => Frame::LoopHeader,
-            TokenKind::Repeat => Frame::Until,
-            TokenKind::InterpolatedStringBegin(_) => Frame::InterpolatedString,
-            _ => Frame::Group,
+            TokenKind::Less => Frame::new(FrameKind::Angle),
+            TokenKind::Do => Frame::new(FrameKind::End),
+            TokenKind::Function => Frame { kind: FrameKind::End, context: Context::FunctionName },
+            TokenKind::If => Frame::new(FrameKind::If),
+            TokenKind::While => Frame::new(FrameKind::LoopHeader),
+            TokenKind::For => Frame {
+                kind: FrameKind::LoopHeader,
+                context: Context::Bindings { is_name_next: true },
+            },
+            TokenKind::Repeat => Frame::new(FrameKind::Until),
+            TokenKind::InterpolatedStringBegin(_) => Frame::new(FrameKind::InterpolatedString),
+            TokenKind::LeftBracket => Frame::new(FrameKind::Bracket(Closer::Bracket)),
+            TokenKind::LeftBrace => Frame::new(FrameKind::Bracket(Closer::Brace)),
+            _ => Frame::new(FrameKind::Bracket(Closer::Paren)),
         };
         let opener = self.advance();
-        let mut frames = vec![frame];
-        let mut is_expr_next = precedes_expression(&opener.kind);
-        while let Some(&innermost) = frames.last() {
-            match innermost {
-                Frame::Group | Frame::InterpolatedString => {
-                    self.skip_in_group(&mut frames, &mut is_expr_next);
-                }
-                Frame::Angle => self.skip_in_angle(&mut frames),
-                Frame::End | Frame::LoopHeader | Frame::Until | Frame::IfExpr => {
-                    self.skip_in_block(&mut frames, &mut is_expr_next);
-                }
-            }
-            if self.is_at_eof() {
-                return;
-            }
+        let mut skip = Skip::new(frame, precedes_expression(&opener.kind));
+        while !skip.frames.is_empty() && !self.is_at_eof() {
+            self.skip_token(&mut skip);
         }
     }
 
-    /// Inside a bracket or an interpolated string, keywords are balanced, so
-    /// only brackets and strings open or close anything.
-    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token is inside the group")]
-    fn skip_in_group(&mut self, frames: &mut Vec<Frame>, is_expr_next: &mut bool) {
-        match self.peek() {
-            TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::LeftBrace => {
-                frames.push(Frame::Group);
-            }
-            TokenKind::InterpolatedStringBegin(_) => frames.push(Frame::InterpolatedString),
-            TokenKind::RightParen | TokenKind::RightBracket | TokenKind::RightBrace => {
-                // A string's parse ends at a bracket in its hole and leaves
-                // the bracket to what holds the string.
-                if frames.pop() == Some(Frame::InterpolatedString) {
-                    return;
-                }
-                *is_expr_next = false;
-            }
-            TokenKind::InterpolatedStringMiddle(_) | TokenKind::InterpolatedStringEnd(_) => {
-                *is_expr_next = false;
-                return self.skip_string_continuation(frames);
-            }
-            _ => {}
+    fn skip_token(&mut self, skip: &mut Skip) {
+        if let Some(closer) = Closer::of(self.peek()) {
+            return self.skip_closer(skip, closer);
         }
+        let Some(frame) = skip.frames.last().copied() else {
+            return;
+        };
+        if frame.kind == FrameKind::Angle {
+            return self.skip_in_angle(skip);
+        }
+        if frame.kind.holds_statements()
+            && self.version.has_type_syntax()
+            && self.skip_in_context(skip, frame.context)
+        {
+            skip.is_expr_next = false;
+            return;
+        }
+        self.skip_plain_token(skip);
+    }
+
+    /// Close the innermost frame `closer` closes, as parsing would.
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token closes its frame")]
+    fn skip_closer(&mut self, skip: &mut Skip, closer: Closer) {
+        let found = skip
+            .open
+            .expects(closer)
+            .then(|| skip.frames.iter().rposition(|frame| frame.kind.closes_at(closer)))
+            .flatten();
+        let Some(index) = found else {
+            return self.skip_unclosable(skip, closer);
+        };
+        let closed_kind = skip.frames.get(index).map(|frame| frame.kind);
+        let (is_kept, is_expr_next) = match self.peek() {
+            TokenKind::InterpolatedStringMiddle(_) | TokenKind::ElseIf => (true, true),
+            TokenKind::Else => {
+                let is_if_expr = closed_kind == Some(FrameKind::IfExpr);
+                (!is_if_expr, is_if_expr)
+            }
+            TokenKind::Until => (false, true),
+            _ => (false, false),
+        };
+        if is_kept {
+            skip.close_from(index.saturating_add(1));
+            if let Some(frame) = skip.frames.last_mut() {
+                frame.context = Context::Expression;
+            }
+        } else {
+            skip.close_from(index);
+        }
+        skip.is_expr_next = is_expr_next;
+        self.advance();
+    }
+
+    /// A closer nothing open in the skip closes ends the skip before it when
+    /// the parser has something open it closes, and is otherwise stray.
+    #[cold]
+    #[inline(never)]
+    fn skip_unclosable(&mut self, skip: &mut Skip, closer: Closer) {
+        if self.open.expects(closer) {
+            skip.frames.clear();
+            return;
+        }
+        if matches!(closer, Closer::Paren | Closer::Bracket | Closer::Brace)
+            && skip.innermost_kind().is_some_and(FrameKind::is_bracket)
+        {
+            skip.close_from(skip.frames.len().saturating_sub(1));
+        }
+        skip.is_expr_next = false;
         self.advance();
     }
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token is inside the type")]
-    fn skip_in_angle(&mut self, frames: &mut Vec<Frame>) {
+    fn skip_in_angle(&mut self, skip: &mut Skip) {
         match self.peek() {
-            TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::LeftBrace => {
-                frames.push(Frame::Group);
-            }
-            TokenKind::InterpolatedStringBegin(_) => frames.push(Frame::InterpolatedString),
-            TokenKind::RightParen | TokenKind::RightBracket | TokenKind::RightBrace => {
-                return self.close_stray_bracket(frames);
-            }
-            TokenKind::InterpolatedStringMiddle(_) | TokenKind::InterpolatedStringEnd(_) => {
-                return self.skip_string_continuation(frames);
-            }
-            TokenKind::Less => frames.push(Frame::Angle),
-            TokenKind::Greater => {
-                frames.pop();
-            }
+            TokenKind::Less => skip.push(FrameKind::Angle, Context::Expression),
+            TokenKind::Greater => skip.close_from(skip.frames.len().saturating_sub(1)),
             // The lexer reads `>>` and `>=` greedily. A `>` this skip doesn't
             // close stays for the parser.
-            TokenKind::ShiftRight if frames.len() >= 2 => {
-                frames.truncate(frames.len().saturating_sub(2));
+            TokenKind::ShiftRight
+                if skip.frames.iter().rev().take(2).all(|frame| frame.kind == FrameKind::Angle)
+                    && skip.frames.len() >= 2 =>
+            {
+                skip.close_from(skip.frames.len().saturating_sub(2));
             }
             TokenKind::ShiftRight => {
-                frames.pop();
+                skip.close_from(skip.frames.len().saturating_sub(1));
                 self.split_close_angle(TokenKind::Greater);
+                skip.is_expr_next = false;
                 return;
             }
             TokenKind::GreaterEqual => {
-                frames.pop();
+                skip.close_from(skip.frames.len().saturating_sub(1));
                 self.split_close_angle(TokenKind::Equal);
+                skip.is_expr_next = false;
                 return;
             }
-            _ => {}
+            _ => return self.skip_plain_token(skip),
         }
+        skip.is_expr_next = false;
         self.advance();
     }
 
-    /// Outside brackets, a block keyword opens or closes a construct, and an
-    /// `if` is a statement unless it follows a token that leaves an
-    /// expression to come.
-    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token is inside the block")]
-    fn skip_in_block(&mut self, frames: &mut Vec<Frame>, is_expr_next: &mut bool) {
+    /// Follow just enough Luau grammar where statements go to tell a type's
+    /// `<` and `>` from comparison operators. True when this took the token.
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token leaves the context")]
+    fn skip_in_context(&mut self, skip: &mut Skip, context: Context) -> bool {
+        let index = skip.frames.len().saturating_sub(1);
         let kind = self.peek();
-        let is_in_if_expr = frames.last() == Some(&Frame::IfExpr);
-        let next_is_expr = match kind {
-            TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::LeftBrace => {
-                frames.push(Frame::Group);
+        let next = match (context, kind) {
+            (Context::Expression, TokenKind::DoubleColon)
+            | (Context::TypeAliasName, TokenKind::Equal) => {
+                Context::Type { is_primary_next: true, is_in_bindings: false }
+            }
+            (Context::Expression, TokenKind::Local) => Context::Bindings { is_name_next: true },
+            (Context::Expression, TokenKind::Identifier(name))
+                if name == "const" && matches!(self.peek_next(), TokenKind::Identifier(_)) =>
+            {
+                Context::Bindings { is_name_next: true }
+            }
+            (Context::Expression, TokenKind::Identifier(name))
+                if name == "type" && matches!(self.peek_next(), TokenKind::Identifier(_)) =>
+            {
+                Context::TypeAliasName
+            }
+            // `f<<T>>`
+            (Context::Expression, TokenKind::Less)
+                if matches!(self.peek_next(), TokenKind::Less) =>
+            {
+                skip.push(FrameKind::Angle, Context::Expression);
+                Context::Expression
+            }
+            (Context::Bindings { is_name_next: true }, TokenKind::Identifier(_)) => {
+                Context::Bindings { is_name_next: false }
+            }
+            (Context::Bindings { is_name_next: false }, TokenKind::Comma) => {
+                Context::Bindings { is_name_next: true }
+            }
+            (
+                Context::Bindings { is_name_next: false } | Context::AfterParams,
+                TokenKind::Colon,
+            ) => Context::Type {
+                is_primary_next: true,
+                is_in_bindings: matches!(context, Context::Bindings { .. }),
+            },
+            (
+                Context::FunctionName,
+                TokenKind::Identifier(_) | TokenKind::Dot | TokenKind::Colon,
+            )
+            | (Context::TypeAliasName, TokenKind::Identifier(_)) => context,
+            (Context::FunctionName | Context::TypeAliasName, TokenKind::Less) => {
+                skip.push(FrameKind::Angle, Context::Expression);
+                context
+            }
+            (Context::FunctionName, TokenKind::LeftParen) => {
+                skip.push(FrameKind::Params, Context::Expression);
+                context
+            }
+            (Context::Type { is_primary_next: true, is_in_bindings }, _) => {
+                return self.skip_type_primary_token(skip, is_in_bindings);
+            }
+            (Context::Type { is_primary_next: false, is_in_bindings }, _) => {
+                let is_primary_next = match kind {
+                    TokenKind::Question | TokenKind::DotDotDot => false,
+                    TokenKind::Pipe | TokenKind::Ampersand | TokenKind::Arrow | TokenKind::Dot => {
+                        true
+                    }
+                    TokenKind::Less => {
+                        skip.push(FrameKind::Angle, Context::Expression);
+                        false
+                    }
+                    _ => return self.leave_context(skip, Context::after_type(is_in_bindings)),
+                };
+                Context::Type { is_primary_next, is_in_bindings }
+            }
+            (
+                Context::Expression
+                | Context::Bindings { .. }
+                | Context::FunctionName
+                | Context::AfterParams
+                | Context::TypeAliasName,
+                _,
+            ) => {
+                return context != Context::Expression
+                    && self.leave_context(skip, Context::Expression);
+            }
+        };
+        if let Some(frame) = skip.frames.get_mut(index) {
+            frame.context = next;
+        }
+        self.advance();
+        true
+    }
+
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token starts no type")]
+    fn skip_type_primary_token(&mut self, skip: &mut Skip, is_in_bindings: bool) -> bool {
+        let index = skip.frames.len().saturating_sub(1);
+        let is_primary_next = match self.peek() {
+            TokenKind::Identifier(name) => {
+                name == "typeof" && matches!(self.peek_next(), TokenKind::LeftParen)
+            }
+            TokenKind::Nil
+            | TokenKind::True
+            | TokenKind::False
+            | TokenKind::StringLiteral(_)
+            | TokenKind::Number(_)
+            | TokenKind::Integer(_) => false,
+            TokenKind::DotDotDot | TokenKind::Pipe | TokenKind::Ampersand => true,
+            TokenKind::LeftParen | TokenKind::LeftBrace => {
+                let closer = if matches!(self.peek(), TokenKind::LeftParen) {
+                    Closer::Paren
+                } else {
+                    Closer::Brace
+                };
+                skip.push(FrameKind::Bracket(closer), Context::Expression);
+                true
+            }
+            TokenKind::Less => {
+                skip.push(FrameKind::Angle, Context::Expression);
+                true
+            }
+            _ => return self.leave_context(skip, Context::after_type(is_in_bindings)),
+        };
+        if let Some(frame) = skip.frames.get_mut(index) {
+            frame.context = Context::Type { is_primary_next, is_in_bindings };
+        }
+        self.advance();
+        true
+    }
+
+    /// The current token ends the context it's in, and goes on in `next`,
+    /// right after a type or a name, which ends an operand.
+    fn leave_context(&mut self, skip: &mut Skip, next: Context) -> bool {
+        if let Some(frame) = skip.frames.last_mut() {
+            frame.context = next;
+        }
+        skip.is_expr_next = false;
+        let Some(frame) = skip.frames.last().copied() else {
+            return false;
+        };
+        self.skip_in_context(skip, frame.context)
+    }
+
+    /// Track what opens and closes constructs, and whether an `if` here
+    /// would start an expression.
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token is inside the construct")]
+    fn skip_plain_token(&mut self, skip: &mut Skip) {
+        let innermost = skip.innermost_kind();
+        let kind = self.peek();
+        let is_expr_next = match kind {
+            TokenKind::LeftParen => {
+                skip.push(FrameKind::Bracket(Closer::Paren), Context::Expression);
+                true
+            }
+            TokenKind::LeftBracket => {
+                skip.push(FrameKind::Bracket(Closer::Bracket), Context::Expression);
+                true
+            }
+            TokenKind::LeftBrace => {
+                skip.push(FrameKind::Bracket(Closer::Brace), Context::Expression);
                 true
             }
             TokenKind::InterpolatedStringBegin(_) => {
-                frames.push(Frame::InterpolatedString);
+                skip.push(FrameKind::InterpolatedString, Context::Expression);
                 true
-            }
-            TokenKind::RightParen | TokenKind::RightBracket | TokenKind::RightBrace => {
-                return self.close_stray_bracket(frames);
-            }
-            TokenKind::InterpolatedStringMiddle(_) | TokenKind::InterpolatedStringEnd(_) => {
-                return self.skip_string_continuation(frames);
-            }
-            TokenKind::Do => {
-                if let Some(frame @ Frame::LoopHeader) = frames.last_mut() {
-                    *frame = Frame::End;
-                } else {
-                    frames.push(Frame::End);
-                }
-                false
             }
             TokenKind::Function => {
-                frames.push(Frame::End);
+                skip.push(FrameKind::End, Context::FunctionName);
+                false
+            }
+            // A loop's `do` closes what its header left open.
+            TokenKind::Do => {
+                if let Some((index, FrameKind::LoopHeader)) = skip.innermost_block() {
+                    skip.close_from(index);
+                }
+                skip.push(FrameKind::End, Context::Expression);
+                false
+            }
+            TokenKind::While => {
+                skip.push(FrameKind::LoopHeader, Context::Expression);
                 true
             }
-            TokenKind::While | TokenKind::For => {
-                frames.push(Frame::LoopHeader);
+            TokenKind::For => {
+                skip.push(FrameKind::LoopHeader, Context::Bindings { is_name_next: true });
                 true
             }
             TokenKind::Repeat => {
-                frames.push(Frame::Until);
+                skip.push(FrameKind::Until, Context::Expression);
                 false
             }
             TokenKind::If => {
-                let is_expr = *is_expr_next && self.version.has_if_exprs();
-                frames.push(if is_expr { Frame::IfExpr } else { Frame::End });
+                let is_expr = self.version.has_if_exprs()
+                    && (skip.is_expr_next || !innermost.is_some_and(FrameKind::holds_statements));
+                skip.push(
+                    if is_expr { FrameKind::IfExpr } else { FrameKind::If },
+                    Context::Expression,
+                );
                 true
             }
-            // A Luau if-expression has no closer, so one still open here was
-            // missing its `else`.
-            TokenKind::End | TokenKind::Until => {
-                while frames.last() == Some(&Frame::IfExpr) {
-                    frames.pop();
-                }
-                frames.pop();
-                matches!(kind, TokenKind::Until)
-            }
-            TokenKind::Then => is_in_if_expr,
-            TokenKind::Else => {
-                if is_in_if_expr {
-                    frames.pop();
-                }
-                is_in_if_expr
-            }
+            TokenKind::Then => innermost == Some(FrameKind::IfExpr),
             _ => precedes_expression(kind),
         };
-        *is_expr_next = next_is_expr;
-        self.advance();
-    }
-
-    /// A closing bracket at block level closes the bracket open around the
-    /// unclosed constructs inside it, or, with none open, ends the skip
-    /// before it.
-    fn close_stray_bracket(&mut self, frames: &mut Vec<Frame>) {
-        let Some(group) = frames.iter().rposition(|frame| *frame == Frame::Group) else {
-            frames.clear();
-            return;
-        };
-        frames.truncate(group);
-        self.advance();
-    }
-
-    /// The lexer gives each string its own continuations, so one closes any
-    /// bracket left open in the hole before it, as parsing would. With no
-    /// string open, it belongs to a string around the skipped construct, and
-    /// the skip ends before it.
-    fn skip_string_continuation(&mut self, frames: &mut Vec<Frame>) {
-        let Some(string) = frames.iter().rposition(|frame| *frame == Frame::InterpolatedString)
-        else {
-            frames.clear();
-            return;
-        };
-        let is_end = matches!(self.peek(), TokenKind::InterpolatedStringEnd(_));
-        frames.truncate(if is_end { string } else { string.saturating_add(1) });
+        skip.is_expr_next = is_expr_next;
         self.advance();
     }
 
@@ -363,6 +687,7 @@ impl Parser<'_> {
             | TokenKind::True
             | TokenKind::False
             | TokenKind::Number(_)
+            | TokenKind::Integer(_)
             | TokenKind::StringLiteral(_)
             | TokenKind::DotDotDot => {
                 self.advance();
@@ -496,7 +821,8 @@ impl Parser<'_> {
             | TokenKind::True
             | TokenKind::False
             | TokenKind::StringLiteral(_)
-            | TokenKind::Number(_) => {
+            | TokenKind::Number(_)
+            | TokenKind::Integer(_) => {
                 self.advance();
             }
             TokenKind::LeftBrace => self.skip_nested(),

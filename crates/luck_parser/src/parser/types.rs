@@ -9,8 +9,8 @@ use luck_ast::{
 };
 use luck_token::{Span, Token, TokenKind, decode_string};
 
-use super::Parser;
 use super::skip::TypeExtent;
+use super::{Closer, Parser};
 
 /// Luau's flat type-suffix chain rejects `A | B & C`, `A? & B`, and the like.
 const MIXED_TYPE_MESSAGE: &str =
@@ -321,14 +321,16 @@ impl Parser<'_> {
             | TokenKind::True
             | TokenKind::False
             | TokenKind::StringLiteral(_)
-            | TokenKind::Number(_) => Type::Singleton(self.advance()),
+            | TokenKind::Number(_)
+            | TokenKind::Integer(_) => Type::Singleton(self.advance()),
             TokenKind::LeftBrace => self.parse_table_type(),
             TokenKind::LeftParen => self.parse_paren_or_function_type(false),
             // `<T>(...) -> R` is a generic function type.
             TokenKind::Less => self.parse_generic_function_type(),
             _ => {
                 let span = self.current_span();
-                self.error(span, format!("expected type, found {}", self.peek()));
+                let message = format!("expected type, found {}", self.peek());
+                self.syntax_error(span, message);
                 // Don't consume the token; it may close an enclosing construct
                 // or start the next statement.
                 Type::Error(span)
@@ -347,9 +349,10 @@ impl Parser<'_> {
         }
         self.enter_depth();
         self.advance_span();
+        self.open(Closer::Paren);
         let expr = self.parse_expr(0);
         self.exit_depth();
-        let close = self.expect(&TokenKind::RightParen);
+        let close = self.expect_closer(&TokenKind::RightParen, Closer::Paren);
         let span = typeof_span.merge(close);
         Type::Typeof(Box::new(TypeofType { span, expr }))
     }
@@ -500,7 +503,7 @@ impl Parser<'_> {
             _ => {
                 let span = self.current_span();
                 let message = format!("expected `>` to close generics, found {}", self.peek());
-                self.error(span, message);
+                self.syntax_error(span, message);
                 span
             }
         }
@@ -512,6 +515,7 @@ impl Parser<'_> {
         }
         let open = self.advance_span(); // `{`
         self.enter_depth();
+        self.open(Closer::Brace);
         let mut fields = Punctuated::<TypeField>::empty();
 
         while !matches!(self.peek(), TokenKind::RightBrace | TokenKind::Eof) {
@@ -567,7 +571,7 @@ impl Parser<'_> {
             }
         }
 
-        let close = self.expect(&TokenKind::RightBrace);
+        let close = self.expect_closer(&TokenKind::RightBrace, Closer::Brace);
         Type::Table(Box::new(TableType { span: open.merge(close), fields }))
     }
 
@@ -595,8 +599,9 @@ impl Parser<'_> {
 
     fn parse_indexer_type_field(&mut self, access: Option<Token>) -> TypeField {
         let open = self.advance_span();
+        self.open(Closer::Bracket);
         let key = self.parse_type();
-        self.expect(&TokenKind::RightBracket);
+        self.expect_closer(&TokenKind::RightBracket, Closer::Bracket);
         self.expect(&TokenKind::Colon);
         let value = self.parse_type();
         let start_span = access.as_ref().map_or(open, |token| token.span);
@@ -627,8 +632,9 @@ impl Parser<'_> {
     /// The caller has counted the level all three forms take.
     fn parse_paren_or_function_members(&mut self, is_pack_allowed: bool) -> Type {
         let open = self.advance_span(); // `(`
+        self.open(Closer::Paren);
         let params = self.parse_function_type_params();
-        let close = self.expect(&TokenKind::RightParen);
+        let close = self.expect_closer(&TokenKind::RightParen, Closer::Paren);
 
         if self.eat(&TokenKind::Arrow) {
             let return_type = self.parse_return_type();
@@ -710,7 +716,7 @@ impl Parser<'_> {
         }
         if !is_pack_allowed {
             if params.is_empty() {
-                self.error(span, "expected `->` after `()`, did you mean `nil`?");
+                self.syntax_error(span, "expected `->` after `()`, did you mean `nil`?");
             } else {
                 self.report_expected(&TokenKind::Arrow);
             }
@@ -740,7 +746,8 @@ impl Parser<'_> {
 
         if !matches!(self.peek(), TokenKind::LeftParen) {
             let span = self.current_span();
-            self.error(span, format!("expected `(` after generics, found {}", self.peek()));
+            let message = format!("expected `(` after generics, found {}", self.peek());
+            self.syntax_error(span, message);
             return Type::Error(start_span.merge(span));
         }
 
@@ -748,7 +755,10 @@ impl Parser<'_> {
         let Type::Function(mut function_type) = parsed else {
             // `<T>` followed by a paren type with no `->`, so the generics
             // have nothing to attach to.
-            self.error(parsed.span(), "expected `->` after generic function type parameters");
+            self.syntax_error(
+                parsed.span(),
+                "expected `->` after generic function type parameters",
+            );
             return parsed;
         };
         function_type.span = start_span.merge(function_type.span);

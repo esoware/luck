@@ -1,5 +1,6 @@
 use luck_ast::{
-    ElseIfExprClause, Expression, LastStatement, Statement, Suffix, TypeDeclarationValue, Var,
+    ElseIfExprClause, Expression, LastStatement, LocalFunctionKind, Statement, Suffix,
+    TypeDeclarationValue, Var,
 };
 
 use crate::common::{
@@ -431,7 +432,7 @@ fn const_bindings() {
     let function = parse_luau("const function cf() end");
     assert_no_errors(&function);
     if let Statement::LocalFunction(local_function) = &function.block.stmts[0] {
-        assert!(local_function.is_const);
+        assert_eq!(local_function.kind, LocalFunctionKind::Const);
     } else {
         panic!("expected LocalFunction, got {:?}", function.block.stmts[0]);
     }
@@ -511,7 +512,7 @@ fn an_unterminated_interpolated_string_is_one_error() {
 #[test]
 fn integer_literals_have_a_distinct_ast_node() {
     let result = parse_luau(
-        "return 1i, 1_000_000i, 0xffffffffffffffffi, \
+        "return 1i, 1_000_000i, 1i_, 0xffffffffffffffffi, \
          0b1000000000000000000000000000000000000000000000000000000000000000i",
     );
     assert_no_errors(&result);
@@ -602,8 +603,7 @@ fn value_exports_parse_and_enforce_module_rules() {
     let Statement::LocalFunction(function) = &result.block.stmts[2] else {
         panic!("expected exported function");
     };
-    assert!(function.is_exported);
-    assert!(function.is_const);
+    assert_eq!(function.kind, LocalFunctionKind::Export);
     assert_eq!(function.attributes.len(), 1);
 
     for source in [

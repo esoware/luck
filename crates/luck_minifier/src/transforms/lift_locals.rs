@@ -141,8 +141,8 @@ impl LiftableCollector<'_> {
             Statement::LocalAssignment(local) => self.collect_local(local),
             Statement::LocalFunction(local_function) => {
                 let name = identifier_name(&local_function.name);
-                if !local_function.is_const
-                    && !local_function.is_exported
+                if !local_function.kind.is_const()
+                    && !local_function.kind.is_exported()
                     && self.has_hoist_room(1)
                     && self.is_safe_to_lift(name)
                 {
@@ -509,8 +509,8 @@ impl LiftRewriter<'_> {
 
     fn rewrite_local_function(&mut self, local_function: Box<LocalFunction>) -> Statement {
         let name = identifier_name(&local_function.name);
-        let is_lifted = !local_function.is_const
-            && !local_function.is_exported
+        let is_lifted = !local_function.kind.is_const()
+            && !local_function.kind.is_exported()
             && self.liftable_names.contains(name)
             && !self.is_shadowed(name);
         if let Some(frame) = self.scope_names.last_mut() {

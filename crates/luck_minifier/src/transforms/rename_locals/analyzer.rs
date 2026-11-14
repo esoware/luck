@@ -362,7 +362,7 @@ impl<'ast> Visitor<'ast> for Analyzer {
                 self.visit_signature_annotations(&local_function.body);
                 self.declare_local(
                     identifier_name(&local_function.name),
-                    local_function.is_exported,
+                    local_function.kind.is_exported(),
                 );
                 self.visit_function_scope(&local_function.body, false);
             }

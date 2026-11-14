@@ -42,8 +42,12 @@ impl Exit {
 /// How many nodes the [`Exit`]s take, at the start of every graph.
 const EXIT_NODE_COUNT: usize = 5;
 
-/// A node is one piece of code that runs as a unit: a simple statement, a
-/// condition, or a loop header. No node has more than two successors.
+/// A node is one piece of code that runs as a unit: a run of simple
+/// statements, a condition, or a loop header. No node has more than two
+/// successors.
+///
+/// A run takes every simple statement one block holds in a row, so a walk
+/// over a long straight stretch costs one node, not one per statement.
 #[derive(Debug)]
 pub(crate) struct FlowGraph {
     successors: Vec<[Option<usize>; 2]>,
@@ -76,6 +80,7 @@ impl FlowGraph {
             },
             semantic,
             cursor: None,
+            run: None,
             scope_end: 0,
             break_target: Exit::Break.node(),
             continue_target: Exit::End.node(),
@@ -140,6 +145,9 @@ struct GraphBuilder<'ast, 'analysis> {
     semantic: &'analysis SemanticAnalysis,
     /// The node the next code runs after, or `None` right after a jump.
     cursor: Option<usize>,
+    /// The run of simple statements the cursor ends, which the next one
+    /// joins.
+    run: Option<usize>,
     scope_end: u32,
     break_target: usize,
     continue_target: usize,
@@ -181,6 +189,20 @@ impl<'ast> GraphBuilder<'ast, '_> {
         node
     }
 
+    /// A simple statement, which runs straight on from the one before it in
+    /// its block.
+    fn simple(&mut self, span: Span) -> usize {
+        if let Some(run) = self.run
+            && self.cursor == Some(run)
+        {
+            self.graph.code.push((span, run));
+            return run;
+        }
+        let node = self.code(span);
+        self.run = Some(node);
+        node
+    }
+
     fn jump(&mut self, span: Span, target: usize) {
         let node = self.code(span);
         self.connect(node, target);
@@ -198,6 +220,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
     }
 
     fn scoped_block(&mut self, block: &'ast Block, scope_end: u32) {
+        self.run = None;
         let outer_scope_end = mem::replace(&mut self.scope_end, scope_end);
         let outer_label_count = self.label_names.len();
         // A label is visible in its whole block, `goto`s before it included.
@@ -222,6 +245,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
             }
         }
         self.scope_end = outer_scope_end;
+        self.run = None;
     }
 
     fn label_node(&self, token: &Token) -> Option<usize> {
@@ -231,7 +255,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
     fn stmt(&mut self, stmt: &'ast Statement) {
         match stmt {
             Statement::FunctionCall(chain) => {
-                let node = self.code(chain.span);
+                let node = self.simple(chain.span);
                 if chain
                     .last_call()
                     .is_some_and(|call| is_global_call(call, "error", self.semantic))
@@ -241,7 +265,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
                 }
             }
             Statement::LocalAssignment(local) => {
-                let node = self.code(local.span);
+                let node = self.simple(local.span);
                 let scope_end = self.scope_end;
                 self.graph.locals.extend(local.names.iter().map(|attributed| LocalDeclaration {
                     name_span: attributed.name.span,
@@ -283,7 +307,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {
-                self.code(stmt.span());
+                self.simple(stmt.span());
             }
         }
     }
@@ -510,6 +534,26 @@ mod tests {
 
     fn points(source: &str) -> u32 {
         decision_points(&parse_block(source, LuaVersion::Lua54))
+    }
+
+    #[test]
+    fn a_straight_run_of_statements_is_one_node() {
+        let one = flow("local a").node_count();
+        let mut run = String::from("local a, b");
+        for i in 0..100u32 {
+            let _unused = write!(
+                run,
+                "
+a = {i}
+b = f(a)
+print(a, b)"
+            );
+        }
+        assert_eq!(flow(&run).node_count(), one);
+        let block_between = "local a
+do b() end
+c()";
+        assert_eq!(flow(block_between).node_count(), one + 2);
     }
 
     #[test]

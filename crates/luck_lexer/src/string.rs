@@ -19,34 +19,36 @@ static INTERPOLATED_STRING_STOP: ByteMatchTable =
     byte_match_table!(|b| matches!(b, b'\\' | b'{' | b'`' | b'\n' | b'\r'));
 
 /// Scan a single- or double-quoted string, with the cursor on the opening
-/// `quote`.
+/// `quote`, and return its token and whether its closing quote came.
 ///
-/// # Errors
-///
-/// Returns a [`LexError`] for an unterminated string or a malformed escape.
+/// A malformed escape goes to `errors` and stays text, so the string ends
+/// where it would have without it. A line break or the end of the source
+/// before the closing quote ends the string there, unterminated, which goes to
+/// `errors` too.
 pub(crate) fn scan_short_string(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     quote: u8,
-) -> Result<TokenKind, LexError> {
+    errors: &mut Vec<LexError>,
+) -> (TokenKind, bool) {
     let start = cursor.position();
     cursor.advance();
 
-    loop {
+    let is_terminated = loop {
         match cursor.peek() {
-            None | Some(b'\n' | b'\r') => {
-                return Err(lex_error(cursor.span_since(start), "unterminated string"));
-            }
+            None | Some(b'\n' | b'\r') => break false,
             Some(b'\\') => {
                 cursor.advance();
-                let Some(escaped) = cursor.peek() else {
-                    return Err(lex_error(cursor.span_since(start), "unterminated string"));
-                };
-                scan_escape(cursor, version, escaped)?;
+                // The next iteration reports the unterminated string.
+                if let Some(escaped) = cursor.peek()
+                    && let Err(error) = scan_escape(cursor, version, escaped)
+                {
+                    errors.push(error);
+                }
             }
             Some(c) if c == quote => {
                 cursor.advance();
-                return Ok(TokenKind::StringLiteral(cursor.text_since(start).into()));
+                break true;
             }
             Some(_) => {
                 cursor.advance();
@@ -65,9 +67,14 @@ pub(crate) fn scan_short_string(
                 }
             }
         }
+    };
+    if !is_terminated {
+        errors.push(lex_error(cursor.span_since(start), "unterminated string"));
     }
+    (TokenKind::StringLiteral(cursor.text_since(start).into()), is_terminated)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InterpolatedSegmentEnd {
     OpenBrace,
     Backtick,
@@ -292,27 +299,29 @@ pub(crate) fn eat_long_bracket_open(cursor: &mut Cursor<'_>) -> Option<usize> {
 }
 
 /// Advance from just past a long-bracket opener to past its matching `]=*]`
-/// closer. Shared by long-bracket strings and block comments, which name
-/// themselves in `unterminated`.
+/// closer, and return whether the closer came.
 ///
-/// # Errors
+/// Long-bracket strings and block comments share it, and name themselves in
+/// `unterminated`.
 ///
-/// Returns a [`LexError`] spanning from `start`, with the cursor at EOF, when
-/// the closer is missing, and when a level-0 body holds a `[[` that `version`
-/// rejects.
+/// A missing closer leaves the cursor at the end of the source and goes to
+/// `errors`, spanning from `start`, as does a level-0 body holding a `[[` that
+/// `version` rejects.
 pub(crate) fn advance_past_long_bracket_close(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
     level: usize,
     unterminated: &'static str,
-) -> Result<(), LexError> {
+    errors: &mut Vec<LexError>,
+) -> bool {
     let body_start = cursor.position();
     loop {
         let rest = cursor.rest();
         let Some(bracket_offset) = memchr::memchr(b']', rest) else {
             cursor.advance_by(rest.len());
-            return Err(lex_error(cursor.span_since(start), unterminated));
+            errors.push(lex_error(cursor.span_since(start), unterminated));
+            return false;
         };
         cursor.advance_by(bracket_offset);
         cursor.advance();
@@ -325,34 +334,35 @@ pub(crate) fn advance_past_long_bracket_close(
                 && version.has_long_bracket_nesting_error()
                 && memmem::find(cursor.text_since(body_start).as_bytes(), b"[[").is_some()
             {
-                return Err(lex_error(
+                errors.push(lex_error(
                     cursor.span_since(start),
                     "nesting of `[[...]]` is deprecated",
                 ));
             }
-            return Ok(());
+            return true;
         }
     }
 }
 
 /// Scan a long-bracket string of known `level` that opened at `start`, from
-/// a cursor just past its `[=*[` opener.
+/// a cursor just past its `[=*[` opener, and return its token and whether its
+/// closer came.
 ///
-/// # Errors
-///
-/// Returns a [`LexError`] for a missing closer or a `[[` `version` rejects.
+/// A missing closer runs the string to the end of the source.
 pub(crate) fn scan_long_string(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
     level: usize,
-) -> Result<TokenKind, LexError> {
-    advance_past_long_bracket_close(
+    errors: &mut Vec<LexError>,
+) -> (TokenKind, bool) {
+    let is_terminated = advance_past_long_bracket_close(
         cursor,
         version,
         start,
         level,
         "unterminated long bracket string",
-    )?;
-    Ok(TokenKind::StringLiteral(cursor.text_since(start).into()))
+        errors,
+    );
+    (TokenKind::StringLiteral(cursor.text_since(start).into()), is_terminated)
 }

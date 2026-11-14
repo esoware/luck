@@ -12,5 +12,6 @@ mod common;
 
 mod drift;
 mod roblox_api;
+mod stack;
 mod stdlib;
 mod stdlib_catalog;

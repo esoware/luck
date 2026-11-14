@@ -8,8 +8,8 @@ use luck_ast::{
     Assignment, AttributedName, Block, CompoundAssignment, DoBlock, Expression, FunctionAttribute,
     FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar,
     GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment, LocalFunction,
-    NumericFor, Punctuated, RepeatLoop, Statement, TypeDeclaration, TypeDeclarationValue,
-    WhileLoop, unwrap_parentheses,
+    LocalFunctionKind, NumericFor, Punctuated, RepeatLoop, Statement, TypeDeclaration,
+    TypeDeclarationValue, WhileLoop, unwrap_parentheses,
 };
 
 use crate::CollapseSimpleStatement;
@@ -409,12 +409,10 @@ impl Format for FunctionDecl {
 impl Format for LocalFunction {
     fn fmt(&self, f: &mut Formatter) {
         write_function_attributes(f, &self.attributes);
-        let keyword = if self.is_exported {
-            "export"
-        } else if self.is_const {
-            "const"
-        } else {
-            "local"
+        let keyword = match self.kind {
+            LocalFunctionKind::Local => "local",
+            LocalFunctionKind::Const => "const",
+            LocalFunctionKind::Export => "export",
         };
         (token(keyword), space(), token("function"), space(), &self.name, &self.body).fmt(f);
     }

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use luck_core::LuaTarget;
+use luck_lexer::LexResult;
 use luck_linter::{LintConfig, LintDiagnostic};
 use luck_parser::ParseResult;
 use luck_semantic::SemanticAnalysis;
@@ -23,7 +24,7 @@ pub(crate) struct DocumentState {
     pub parsed: ParseResult,
     pub semantic: SemanticAnalysis,
     pub line_index: LineIndex,
-    pub tokens: OnceLock<Vec<Token>>,
+    pub lexed: OnceLock<LexResult>,
 }
 
 impl DocumentState {
@@ -44,7 +45,7 @@ impl DocumentState {
             target.stdlib_environment(),
         );
         semantic.extra_globals = extra_globals;
-        Self { version, target, lua_version, parsed, semantic, line_index, tokens: OnceLock::new() }
+        Self { version, target, lua_version, parsed, semantic, line_index, lexed: OnceLock::new() }
     }
 
     pub(crate) fn with_text(&self, text: String, version: i32) -> Self {
@@ -58,7 +59,17 @@ impl DocumentState {
     /// This state's tokens, lexed on first use: most keystrokes serve no
     /// request that needs them.
     pub(crate) fn tokens(&self) -> &[Token] {
-        self.tokens.get_or_init(|| luck_lexer::lex(self.text(), self.lua_version).tokens)
+        &self.lexed().tokens
+    }
+
+    /// The spans of the string tokens the line or the text ended before they
+    /// closed.
+    pub(crate) fn unterminated_strings(&self) -> &[Span] {
+        &self.lexed().unterminated
+    }
+
+    fn lexed(&self) -> &LexResult {
+        self.lexed.get_or_init(|| luck_lexer::lex(self.text(), self.lua_version))
     }
 
     pub(crate) fn position(&self, offset: u32) -> Position {

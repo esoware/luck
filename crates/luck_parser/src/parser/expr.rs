@@ -6,8 +6,8 @@ use luck_ast::{
 };
 use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
-use super::Parser;
 use super::skip::{ExprTail, TypeExtent};
+use super::{Closer, Parser};
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -157,7 +157,9 @@ impl Parser<'_> {
             TokenKind::Nil => Expression::Nil(self.advance_span()),
             TokenKind::False => Expression::False(self.advance_span()),
             TokenKind::True => Expression::True(self.advance_span()),
-            TokenKind::Number(_) => self.parse_number(),
+            TokenKind::Number(_) => Expression::Number(self.advance_literal()),
+            // Luau
+            TokenKind::Integer(_) => Expression::Integer(self.advance_literal()),
             TokenKind::StringLiteral(_) => Expression::StringLiteral(self.advance_literal()),
             TokenKind::DotDotDot => self.parse_vararg(),
             TokenKind::Function => self.parse_function_def(),
@@ -200,10 +202,11 @@ impl Parser<'_> {
             return Expression::Error(self.refuse_group());
         }
         let open = self.advance_span();
+        self.open(Closer::Paren);
         self.enter_depth();
         let expr = self.parse_expr(0);
         self.exit_depth();
-        let close = self.expect(&TokenKind::RightParen);
+        let close = self.expect_closer(&TokenKind::RightParen, Closer::Paren);
         let span = open.merge(close);
         Expression::Parenthesized(Box::new(ParenthesizedExpression { span, expr }))
     }
@@ -228,17 +231,9 @@ impl Parser<'_> {
             TokenKind::Equal => " (use `==` for comparison, not `=`)",
             _ => "",
         };
-        self.error(span, format!("unexpected token {kind} in an expression{hint}"));
+        let message = format!("unexpected token {kind} in an expression{hint}");
+        self.syntax_error(span, message);
         Expression::Error(span)
-    }
-
-    fn parse_number(&mut self) -> Expression {
-        let literal = self.advance_literal();
-        if literal.text.ends_with('i') {
-            Expression::Integer(literal)
-        } else {
-            Expression::Number(literal)
-        }
     }
 
     /// The suffixes after `prefix` loop into one node, so a run of any
@@ -302,8 +297,9 @@ impl Parser<'_> {
             }
             TokenKind::LeftBracket => {
                 let open = self.advance_span();
+                self.open(Closer::Bracket);
                 let index = self.parse_expr(0);
-                let close = self.expect(&TokenKind::RightBracket);
+                let close = self.expect_closer(&TokenKind::RightBracket, Closer::Bracket);
                 Suffix::Index { span: open.merge(close), index }
             }
             TokenKind::Colon => self.parse_method_suffix(),
@@ -345,6 +341,7 @@ impl Parser<'_> {
         }
         let if_span = self.advance_span();
         self.enter_depth();
+        self.open(Closer::Else);
         let condition = self.parse_expr(0);
         self.expect(&TokenKind::Then);
         let then_expr = self.parse_expr(0);
@@ -354,6 +351,7 @@ impl Parser<'_> {
             elseif_clauses.push(self.parse_elseif_expr_clause());
         }
 
+        self.close(Closer::Else);
         self.expect(&TokenKind::Else);
         let else_expr = self.parse_expr(0);
         self.exit_depth();
@@ -384,7 +382,9 @@ impl Parser<'_> {
         let start_span = begin_token.span;
         let mut segments = Vec::new();
         self.enter_depth();
+        self.open(Closer::StringSegment);
         let interpolated = self.parse_interpolated_segments(begin_token, &mut segments);
+        self.close(Closer::StringSegment);
         self.exit_depth();
         let span = start_span.merge(interpolated);
         Expression::InterpolatedString(Box::new(InterpolatedString { span, segments }))
@@ -427,16 +427,9 @@ impl Parser<'_> {
         begin_token: Token,
         segments: &mut Vec<InterpolatedStringSegment>,
     ) -> Span {
+        // A plain string lexes as an empty `InterpolatedStringBegin` and an
+        // `InterpolatedStringEnd`, and so does `{}`, which the lexer reports.
         let end_token = self.advance();
-        // A plain string lexes as `InterpolatedStringBegin("")` plus an `InterpolatedStringEnd`
-        // that points back inside the begin token. A detached `InterpolatedStringEnd`
-        // means `{}` held no expression, which Luau rejects.
-        if end_token.span.start >= begin_token.span.end {
-            self.error(
-                end_token.span,
-                "malformed interpolated string: expected expression inside `{}`",
-            );
-        }
         segments.push(InterpolatedStringSegment { literal: begin_token, expr: None });
         let span = end_token.span;
         segments.push(InterpolatedStringSegment { literal: end_token, expr: None });
@@ -447,10 +440,8 @@ impl Parser<'_> {
     #[inline(never)]
     fn report_unfinished_interpolated_string(&mut self) -> Span {
         let span = self.current_span();
-        self.error(
-            span,
-            format!("expected interpolated string continuation, found {}", self.peek()),
-        );
+        let message = format!("expected interpolated string continuation, found {}", self.peek());
+        self.syntax_error(span, message);
         span
     }
 
@@ -476,7 +467,7 @@ impl Parser<'_> {
             TokenKind::StringLiteral(_) => FunctionArgs::StringLiteral(self.advance_literal()),
             _ => {
                 let span = self.current_span();
-                self.error(span, "expected function arguments");
+                self.syntax_error(span, "expected function arguments");
                 FunctionArgs::Parenthesized { span, args: Punctuated::empty() }
             }
         }
@@ -494,12 +485,13 @@ impl Parser<'_> {
             );
         }
         let open = self.advance_span();
+        self.open(Closer::Paren);
         let args = if matches!(self.peek(), TokenKind::RightParen) {
             Punctuated::empty()
         } else {
             self.parse_expr_list()
         };
-        let close = self.expect(&TokenKind::RightParen);
+        let close = self.expect_closer(&TokenKind::RightParen, Closer::Paren);
         FunctionArgs::Parenthesized { span: open.merge(close), args }
     }
 
@@ -512,7 +504,7 @@ impl Parser<'_> {
             attributes.first().map_or_else(|| self.current_span(), |attribute| attribute.span);
         if !matches!(self.peek(), TokenKind::Function) {
             let span = self.current_span();
-            self.error(span, "expected `function` after attribute");
+            self.syntax_error(span, "expected `function` after attribute");
             return Expression::Error(span);
         }
         self.advance_span(); // `function`
@@ -525,6 +517,7 @@ impl Parser<'_> {
     pub(super) fn parse_table_constructor(&mut self) -> TableConstructor {
         let start_span = self.advance_span(); // `{`
         self.enter_depth();
+        self.open(Closer::Brace);
 
         let mut fields = Punctuated::empty();
 
@@ -555,7 +548,7 @@ impl Parser<'_> {
 
         self.exit_depth();
 
-        let close = self.expect(&TokenKind::RightBrace);
+        let close = self.expect_closer(&TokenKind::RightBrace, Closer::Brace);
         let span = start_span.merge(close);
 
         TableConstructor { span, fields }
@@ -579,8 +572,9 @@ impl Parser<'_> {
 
     fn parse_bracketed_field(&mut self) -> Field {
         let open = self.advance_span();
+        self.open(Closer::Bracket);
         let key = self.parse_expr(0);
-        self.expect(&TokenKind::RightBracket);
+        self.expect_closer(&TokenKind::RightBracket, Closer::Bracket);
         self.expect(&TokenKind::Equal);
         let value = self.parse_expr(0);
         let span = open.merge(value.span());
