@@ -54,6 +54,29 @@ fn long_runs_project() -> TempDir {
     directory
 }
 
+/// One sibling list of each kind. A list is one level of nesting however long
+/// it is, and 20,000 `elseif`s overflowed `minify`'s stack when it recursed
+/// per clause.
+fn long_lists_project() -> TempDir {
+    const ITEMS: usize = 20_000;
+    let numbered = |template: &str| -> String {
+        (0..ITEMS).map(|i| template.replace('#', &i.to_string())).collect()
+    };
+    let source = format!(
+        "local a = ...\nif a == 0 then a(){}\nend\n\
+         -- luck: allow(duplicate_conditions)\nif false then a(){}\nelseif a then a()\nend\n\
+         local function f(_{}) return a end\nlocal t = {{{}}}\n{}return f, t\n",
+        numbered("\nelseif a == # then a()"),
+        "\nelseif false then a()".repeat(ITEMS),
+        numbered(", _#"),
+        numbered("k# = a, "),
+        numbered("goto l#\n::l#::\n"),
+    );
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", &source);
+    directory
+}
+
 #[cfg(windows)]
 fn set_directory_listing(directory: &Path, is_allowed: bool) {
     use std::process::Command;
@@ -463,6 +486,28 @@ fn fmt_survives_long_runs() {
         "`fmt` must finish instead of overflowing its stack:\n{}",
         stderr_text(&output)
     );
+}
+
+#[test]
+fn every_command_survives_long_lists() {
+    let directory = long_lists_project();
+
+    // `fmt` rewrites the file, so it goes last.
+    for args in [
+        &["lint", "main.lua"][..],
+        &["minify", "main.lua", "-o", "minified.lua"],
+        &["bundle", "main.lua", "-o", "bundle.lua"],
+        &["fmt", "main.lua"],
+    ] {
+        let output = run(directory.path(), args);
+        assert_eq!(
+            output.status.code(),
+            Some(0i32),
+            "`{}` must finish instead of overflowing its stack or going quadratic:\n{}",
+            args[0],
+            stderr_text(&output)
+        );
+    }
 }
 
 #[test]

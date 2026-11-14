@@ -10,6 +10,7 @@ use luck_ast::{
 };
 use luck_semantic::SemanticAnalysis;
 use luck_token::{BinOp, Span, Token};
+use rustc_hash::FxHashMap;
 
 use crate::call::is_global_call;
 
@@ -78,7 +79,8 @@ impl FlowGraph {
             scope_end: 0,
             break_target: Exit::Break.node(),
             continue_target: Exit::End.node(),
-            labels: Vec::new(),
+            labels: FxHashMap::default(),
+            label_names: Vec::new(),
         };
         let entry = builder.new_node();
         builder.cursor = Some(entry);
@@ -141,8 +143,10 @@ struct GraphBuilder<'ast, 'analysis> {
     scope_end: u32,
     break_target: usize,
     continue_target: usize,
-    /// Each label visible here, innermost last.
-    labels: Vec<(&'ast str, usize)>,
+    /// The node of each label visible here, by name, innermost last.
+    labels: FxHashMap<&'ast str, Vec<usize>>,
+    /// The name of each label in `labels`, in the order they became visible.
+    label_names: Vec<&'ast str>,
 }
 
 impl<'ast> GraphBuilder<'ast, '_> {
@@ -195,14 +199,15 @@ impl<'ast> GraphBuilder<'ast, '_> {
 
     fn scoped_block(&mut self, block: &'ast Block, scope_end: u32) {
         let outer_scope_end = mem::replace(&mut self.scope_end, scope_end);
-        let outer_label_count = self.labels.len();
+        let outer_label_count = self.label_names.len();
         // A label is visible in its whole block, `goto`s before it included.
         for stmt in &block.stmts {
             if let Statement::Label(label) = stmt
                 && let Some(name) = label.name.identifier()
             {
                 let node = self.new_node();
-                self.labels.push((name, node));
+                self.labels.entry(name).or_default().push(node);
+                self.label_names.push(name);
             }
         }
         for stmt in &block.stmts {
@@ -211,13 +216,16 @@ impl<'ast> GraphBuilder<'ast, '_> {
         if let Some(last) = &block.last_stmt {
             self.last_stmt(last);
         }
-        self.labels.truncate(outer_label_count);
+        for name in self.label_names.drain(outer_label_count..) {
+            if let Some(nodes) = self.labels.get_mut(name) {
+                nodes.pop();
+            }
+        }
         self.scope_end = outer_scope_end;
     }
 
     fn label_node(&self, token: &Token) -> Option<usize> {
-        let name = token.identifier()?;
-        self.labels.iter().rfind(|(label, _)| *label == name).map(|&(_, node)| node)
+        self.labels.get(token.identifier()?)?.last().copied()
     }
 
     fn stmt(&mut self, stmt: &'ast Statement) {
@@ -479,6 +487,8 @@ impl<'ast> Visitor<'ast> for DecisionPoints {
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use luck_token::LuaVersion;
 
     use super::*;
@@ -668,6 +678,32 @@ mod tests {
         let graph = FlowGraph::of_block(&while_loop.block, &semantic);
         assert!(graph.reaches(Exit::Break));
         assert!(!graph.reaches(Exit::End));
+    }
+
+    #[test]
+    fn goto_takes_the_innermost_label_of_its_name() {
+        // The outer `::a::` would loop forever.
+        let graph = flow("::a::\ndo\n  goto a\n  do return end\n  ::a::\nend");
+        assert!(graph.reaches(Exit::End));
+        assert!(!graph.reaches(Exit::ReturnEmpty));
+    }
+
+    #[test]
+    fn label_goes_out_of_sight_with_its_block() {
+        let graph = flow("do ::a:: end\ngoto a");
+        assert!(graph.reaches(Exit::Break));
+        assert!(!graph.reaches(Exit::End));
+    }
+
+    #[test]
+    fn gotos_find_their_labels_among_many() {
+        let mut source = String::new();
+        for i in 0..2_000u32 {
+            let _unused = writeln!(source, "goto l{i}\ndo return end\n::l{i}::");
+        }
+        let graph = flow(&source);
+        assert!(graph.reaches(Exit::End));
+        assert!(!graph.reaches(Exit::ReturnEmpty));
     }
 
     #[test]

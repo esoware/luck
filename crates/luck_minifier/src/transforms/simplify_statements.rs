@@ -28,39 +28,7 @@ impl Transform for StatementSimplifier {
 
     fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
-            Statement::IfStatement(mut outer_if) => {
-                // `if a then if b then X end end` becomes `if a and b then X end`.
-                // The check guarantees the pop yields the inner `if`. Each
-                // condition can gain the `and` and a pair of parentheses.
-                if has_no_else(&outer_if)
-                    && outer_if.block.last_stmt.is_none()
-                    && matches!(
-                        outer_if.block.stmts.as_slice(),
-                        [Statement::IfStatement(inner_if)]
-                            if has_no_else(inner_if)
-                                && fits_at_depth(self.depth, 2, &inner_if.condition)
-                    )
-                    && fits_at_depth(self.depth, 2, &outer_if.condition)
-                    && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
-                {
-                    // Left for the merged `if`'s own walk, so the body is
-                    // walked once and a rewrite inside either condition sees
-                    // the depth it ends up at.
-                    let merged_if = IfStatement {
-                        span: Span::default(),
-                        condition: logical(
-                            BinOp::And,
-                            outer_if.condition,
-                            iter::once(inner_if.condition),
-                        ),
-                        block: inner_if.block,
-                        elseif_clauses: Vec::new(),
-                        else_clause: None,
-                    };
-                    return self.transform_stmt(Statement::IfStatement(Box::new(merged_if)));
-                }
-                self.walk_stmt(Statement::IfStatement(outer_if))
-            }
+            Statement::IfStatement(outer_if) => self.merge_nested_ifs(outer_if),
             other @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::DoBlock(_)
@@ -88,6 +56,39 @@ impl Transform for StatementSimplifier {
         let walked = self.walk_block(block);
         // The walk has stepped back out of the block, which is one level in.
         try_convert_if_return_chain(walked, self.depth.saturating_add(1))
+    }
+}
+
+impl StatementSimplifier {
+    /// `if a then if b then X end end` becomes `if a and b then X end`, for
+    /// every level of the run at once. The run of `and`s is one level, so each
+    /// condition is measured once, for the `and` and a pair of parentheses it
+    /// can gain.
+    fn merge_nested_ifs(&mut self, mut outer_if: Box<IfStatement>) -> Statement {
+        let mut inner_conditions = Vec::new();
+        if has_no_else(&outer_if) && fits_at_depth(self.depth, 2, &outer_if.condition) {
+            // The check guarantees the pop yields the inner `if`.
+            while outer_if.block.last_stmt.is_none()
+                && matches!(
+                    outer_if.block.stmts.as_slice(),
+                    [Statement::IfStatement(inner_if)]
+                        if has_no_else(inner_if)
+                            && fits_at_depth(self.depth, 2, &inner_if.condition)
+                )
+                && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
+            {
+                let IfStatement { condition, block, .. } = *inner_if;
+                inner_conditions.push(condition);
+                outer_if.block = block;
+            }
+        }
+        if !inner_conditions.is_empty() {
+            outer_if.span = Span::default();
+            outer_if.condition = logical(BinOp::And, outer_if.condition.take(), inner_conditions);
+        }
+        // Left for the merged `if`'s own walk, so the body is walked once and
+        // a rewrite inside a condition sees the depth it ends up at.
+        self.walk_stmt(Statement::IfStatement(outer_if))
     }
 }
 
@@ -237,6 +238,14 @@ mod tests {
     }
 
     #[test]
+    fn flattens_a_run_of_nested_ifs_into_one_run_of_ands() {
+        let source = format!("{}x(){}", "if a or b then ".repeat(200), " end".repeat(200));
+        let result = apply(&source);
+        assert_reparses(&result, LuaVersion::Lua54);
+        assert_eq!(result, format!("if(a or b){}then x()end", "and(a or b)".repeat(199)));
+    }
+
+    #[test]
     fn if_return_to_ternary() {
         let result = apply("if x then return 1 end\nreturn 0\n");
         assert!(
@@ -323,6 +332,10 @@ mod tests {
             (
                 "if a then if if b then c else d then x() end end",
                 "if a and if b then c else d then x()end",
+            ),
+            (
+                "if a then if if b then c else d then if e then x() end end end",
+                "if a and(if b then c else d)and e then x()end",
             ),
             (
                 "if a then if if b then c else d then return 1 end end return 0",

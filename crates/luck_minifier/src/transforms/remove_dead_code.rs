@@ -1,9 +1,12 @@
+use core::{iter, mem};
+
 use luck_ast::{
-    BinaryOp, Block, DoBlock, Expression, FunctionBody, IfStatement, LastStatement,
-    LocalAssignment, OneOrMore, Punctuated, Statement, Transform, UnaryOp, Var, Visitor,
+    BinaryOp, Block, DoBlock, ElseClause, Expression, FunctionBody, IfStatement, LastStatement,
+    LocalAssignment, LocalFunction, OneOrMore, Punctuated, Statement, Transform, UnaryOp, Var,
+    Visitor,
 };
-use luck_token::{BinOp, CompactString, LuaVersion, Span, UnOp};
-use rustc_hash::FxHashSet;
+use luck_token::{BinOp, CompactString, LuaVersion, Span, Token, UnOp};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::binding::{has_attributed_or_env_name, identifier_name, is_env_binding};
 use crate::expr::{
@@ -14,7 +17,7 @@ use crate::expr::{
 pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
     loop {
         let mut remover = DeadCodeRemover {
-            referenced_names: collect_all_references(&block),
+            live_names: live_names(&block, version),
             version,
             has_changed: false,
             depth: 0,
@@ -69,40 +72,145 @@ fn stmt_has_loop_exit(stmt: &Statement) -> bool {
     }
 }
 
-fn collect_all_references(block: &Block) -> FxHashSet<CompactString> {
-    let mut collector = ReferenceCollector { references: FxHashSet::default() };
-    collector.visit_block(block);
-    collector.references
+/// Every name the code a round keeps uses, matched by name and not by
+/// binding.
+///
+/// A `local` the round drops when none of its names is live owns the uses in
+/// what goes with it, which count only once one of its names is live. So a
+/// run of locals each used only by the next goes in one round, where counting
+/// every use would take a round per link.
+fn live_names(block: &Block, version: LuaVersion) -> FxHashSet<CompactString> {
+    let mut scanner = UseScanner {
+        version,
+        owner: None,
+        owned_uses: Vec::new(),
+        owners_by_name: FxHashMap::default(),
+        unowned_uses: FxHashSet::default(),
+    };
+    scanner.visit_block(block);
+    let UseScanner { owned_uses, owners_by_name, unowned_uses: mut live, .. } = scanner;
+    let mut is_kept = vec![false; owned_uses.len()];
+    let mut pending: Vec<usize> = owners_by_name
+        .iter()
+        .filter(|(name, _)| live.contains(*name))
+        .flat_map(|(_, owners)| owners.iter().copied())
+        .collect();
+    while let Some(owner) = pending.pop() {
+        if is_kept.get_mut(owner).is_some_and(|kept| !mem::replace(kept, true)) {
+            for used in owned_uses.get(owner).into_iter().flatten() {
+                if live.insert(used.clone()) {
+                    pending.extend(owners_by_name.get(used).into_iter().flatten());
+                }
+            }
+        }
+    }
+    live
 }
 
-struct ReferenceCollector {
-    references: FxHashSet<CompactString>,
+struct UseScanner {
+    version: LuaVersion,
+    /// The innermost droppable `local` whose dropped parts the walk is in.
+    owner: Option<usize>,
+    /// The uses each droppable `local` owns, in the order the walk opened them.
+    owned_uses: Vec<Vec<CompactString>>,
+    owners_by_name: FxHashMap<CompactString, Vec<usize>>,
+    unowned_uses: FxHashSet<CompactString>,
 }
 
-impl<'ast> Visitor<'ast> for ReferenceCollector {
+impl UseScanner {
+    fn record_use(&mut self, name: &str) {
+        match self.owner.and_then(|owner| self.owned_uses.get_mut(owner)) {
+            Some(uses) => uses.push(name.into()),
+            None => {
+                self.unowned_uses.insert(name.into());
+            }
+        }
+    }
+
+    /// Makes a droppable `local` the owner, returning the one it replaces.
+    fn open_owner<'name, Names>(&mut self, names: Names) -> Option<usize>
+    where
+        Names: Iterator<Item = &'name Token>,
+    {
+        let owner = self.owned_uses.len();
+        self.owned_uses.push(Vec::new());
+        for name in names {
+            self.owners_by_name.entry(identifier_name(name).into()).or_default().push(owner);
+        }
+        self.owner.replace(owner)
+    }
+
+    fn visit_droppable_local(&mut self, local: &LocalAssignment) {
+        let outer_owner = self.open_owner(local.names.iter().map(|attributed| &attributed.name));
+        let owner = self.owner;
+        self.walk_attributed_names(&local.names);
+        for expr in local.exprs.iter().flat_map(Punctuated::iter) {
+            // A call stays when the `local` goes.
+            self.owner = if is_call(expr) { outer_owner } else { owner };
+            self.visit_expr(expr);
+        }
+        self.owner = outer_owner;
+    }
+}
+
+impl<'ast> Visitor<'ast> for UseScanner {
     fn visit_expr(&mut self, expr: &'ast Expression) {
         if let Expression::Name(name) = expr {
-            self.references.insert(identifier_name(name).into());
+            self.record_use(identifier_name(name));
         }
         self.walk_expr(expr);
     }
 
     fn visit_assignment_target(&mut self, target: &'ast Var) {
         if let Var::Name(name) = target {
-            self.references.insert(identifier_name(name).into());
+            self.record_use(identifier_name(name));
         }
         self.walk_assignment_target(target);
     }
 
-    // `function M.f()` reads `M` and `function f()` writes `f`, and neither
-    // root is a name expression or an assignment target.
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
-        if let Statement::FunctionDecl(function_decl) = stmt
-            && let Some(root) = function_decl.name.names.first()
-        {
-            self.references.insert(identifier_name(root).into());
+        match stmt {
+            Statement::LocalAssignment(local)
+                if !matches!(unused_local_action(local, self.version), DeadLocalAction::Keep) =>
+            {
+                self.visit_droppable_local(local);
+            }
+            Statement::LocalFunction(local_function)
+                if is_droppable_function(local_function, self.version) =>
+            {
+                let outer_owner = self.open_owner(iter::once(&local_function.name));
+                self.walk_stmt(stmt);
+                self.owner = outer_owner;
+            }
+            // `function M.f()` reads `M` and `function f()` writes `f`, and
+            // neither root is a name expression or an assignment target.
+            Statement::FunctionDecl(function_decl) => {
+                if let Some(root) = function_decl.name.names.first() {
+                    self.record_use(identifier_name(root));
+                }
+                self.walk_stmt(stmt);
+            }
+            Statement::LocalAssignment(_)
+            | Statement::LocalFunction(_)
+            | Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => self.walk_stmt(stmt),
         }
-        self.walk_stmt(stmt);
     }
 }
 
@@ -113,7 +221,7 @@ impl<'ast> Visitor<'ast> for ReferenceCollector {
 /// the same result as separate rebuilds in half the traversals.
 ///
 struct DeadCodeRemover {
-    referenced_names: FxHashSet<CompactString>,
+    live_names: FxHashSet<CompactString>,
     version: LuaVersion,
     has_changed: bool,
     /// Levels of nesting open where the walk is.
@@ -193,63 +301,94 @@ fn is_redundant_ternary(outer: &BinaryOp) -> bool {
 }
 
 impl DeadCodeRemover {
-    // Each rewrite is a function of its own, so a level of nested `if`s holds
-    // only the one it takes on the stack.
+    /// Rewrites the chain in one walk over its arms, in the order Lua tests
+    /// them, and walks each arm it keeps once. An arm under a falsy literal
+    /// never runs. The first under a truthy literal runs whenever it's
+    /// reached, so it becomes the `else` and every arm after it goes.
     fn simplify_if(&mut self, mut if_stmt: Box<IfStatement>) -> Statement {
-        if let Some(is_truthy) = constant_truthiness(&if_stmt.condition) {
-            if is_truthy {
-                return self.keep_only_block(if_stmt.block.take());
+        let IfStatement { span, condition, block, elseif_clauses, else_clause } = &mut *if_stmt;
+        *condition = self.transform_expr(condition.take());
+        let mut has_head = match constant_truthiness(condition) {
+            Some(true) => return self.keep_only_block(block.take()),
+            Some(false) => false,
+            None => {
+                *block = self.transform_block(block.take());
+                true
             }
-            // Elseif arms must be promoted before the else is considered:
-            // taking the else first would drop them.
-            if !if_stmt.elseif_clauses.is_empty() {
-                return self.promote_first_elseif(if_stmt);
+        };
+        let mut has_dropped_arm = !has_head;
+        let mut taken_block = None;
+        elseif_clauses.retain_mut(|clause| {
+            if taken_block.is_some() {
+                return false;
             }
-            if let Some(else_clause) = if_stmt.else_clause.take() {
-                return self.keep_only_block(else_clause.block);
+            clause.condition = self.transform_expr(clause.condition.take());
+            let truthiness = constant_truthiness(&clause.condition);
+            has_dropped_arm |= truthiness.is_some();
+            match truthiness {
+                Some(false) => false,
+                Some(true) => {
+                    taken_block = Some(clause.block.take());
+                    false
+                }
+                None if has_head => {
+                    clause.block = self.transform_block(clause.block.take());
+                    true
+                }
+                // The first arm left takes the dropped head's place.
+                None => {
+                    has_head = true;
+                    *condition = clause.condition.take();
+                    *block = self.transform_block(clause.block.take());
+                    false
+                }
             }
+        });
+        if let Some(taken) = taken_block {
+            *else_clause = Some(ElseClause { span: Span::default(), block: taken });
+        }
+        if let Some(clause) = else_clause {
+            clause.block = self.transform_block(clause.block.take());
+        }
+        if has_dropped_arm {
+            self.has_changed = true;
+            *span = Span::default();
+        }
+        if !has_head {
+            return match else_clause.take() {
+                Some(clause) => do_block(clause.block),
+                // `if false then ... end`, which `is_dead_branch` drops.
+                None => Statement::IfStatement(if_stmt),
+            };
         }
 
-        // The `not` and its parentheses nest the condition two levels deeper.
-        if if_stmt.block.stmts.is_empty()
-            && if_stmt.block.last_stmt.is_none()
-            && if_stmt.elseif_clauses.is_empty()
-            && if_stmt.else_clause.is_some()
-            && fits_at_depth(self.depth, 2, &if_stmt.condition)
-        {
-            return self.negate_into_else(if_stmt);
+        if elseif_clauses.is_empty() && else_clause.is_some() {
+            // The `not` and its parentheses nest the condition two levels
+            // deeper.
+            if block.stmts.is_empty()
+                && block.last_stmt.is_none()
+                && fits_at_depth(self.depth, 2, condition)
+            {
+                return self.negate_into_else(if_stmt);
+            }
+            if matches!(condition, Expression::UnaryOp(unop) if unop.op == UnOp::Not) {
+                return self.swap_negated_branches(if_stmt);
+            }
         }
-
-        if matches!(&if_stmt.condition, Expression::UnaryOp(unop) if matches!(unop.op, UnOp::Not))
-            && if_stmt.elseif_clauses.is_empty()
-            && if_stmt.else_clause.is_some()
-        {
-            return self.swap_negated_branches(if_stmt);
-        }
-        self.walk_stmt(Statement::IfStatement(if_stmt))
+        Statement::IfStatement(if_stmt)
     }
 
     fn keep_only_block(&mut self, block: Block) -> Statement {
         self.has_changed = true;
-        let new_block = self.transform_block(block);
-        Statement::DoBlock(Box::new(DoBlock { span: Span::default(), block: new_block }))
-    }
-
-    fn promote_first_elseif(&mut self, mut if_stmt: Box<IfStatement>) -> Statement {
-        self.has_changed = true;
-        let first_elseif = if_stmt.elseif_clauses.remove(0);
-        if_stmt.span = Span::default();
-        if_stmt.condition = self.transform_expr(first_elseif.condition);
-        if_stmt.block = self.transform_block(first_elseif.block);
-        self.transform_stmt(Statement::IfStatement(if_stmt))
+        do_block(self.transform_block(block))
     }
 
     fn negate_into_else(&mut self, mut if_stmt: Box<IfStatement>) -> Statement {
         self.has_changed = true;
         if_stmt.span = Span::default();
-        if_stmt.condition = negate_expr(if_stmt.condition);
+        if_stmt.condition = negate_expr(if_stmt.condition.take());
         if let Some(else_clause) = if_stmt.else_clause.take() {
-            if_stmt.block = self.transform_block(else_clause.block);
+            if_stmt.block = else_clause.block;
         }
         Statement::IfStatement(if_stmt)
     }
@@ -262,10 +401,8 @@ impl DeadCodeRemover {
             if_stmt.condition = unop.operand;
         }
         if let Some(else_clause) = &mut if_stmt.else_clause {
-            let then_block = if_stmt.block.take();
-            if_stmt.block = self.transform_block(else_clause.block.take());
+            mem::swap(&mut if_stmt.block, &mut else_clause.block);
             else_clause.span = Span::default();
-            else_clause.block = self.transform_block(then_block);
         }
         Statement::IfStatement(if_stmt)
     }
@@ -328,7 +465,7 @@ impl Transform for DeadCodeRemover {
             let transformed = self.transform_stmt(stmt);
             // Unused-local removal first: a dropped/extracted statement
             // never reaches the branch checks below.
-            match classify_dead_local(&transformed, &self.referenced_names, self.version) {
+            match classify_dead_local(&transformed, &self.live_names, self.version) {
                 DeadLocalAction::Keep => {
                     if is_dead_branch(&transformed) {
                         self.has_changed = true;
@@ -379,9 +516,7 @@ impl Transform for DeadCodeRemover {
                 if constant_truthiness(&repeat_loop.condition) == Some(true)
                     && !has_loop_exit(&repeat_loop.block) =>
             {
-                self.has_changed = true;
-                let new_block = self.transform_block(repeat_loop.block);
-                Statement::DoBlock(Box::new(DoBlock { span: Span::default(), block: new_block }))
+                self.keep_only_block(repeat_loop.block)
             }
             // A step of 1 is the default.
             Statement::NumericFor(mut numeric_for) => {
@@ -437,6 +572,10 @@ impl Transform for DeadCodeRemover {
     }
 }
 
+fn do_block(block: Block) -> Statement {
+    Statement::DoBlock(Box::new(DoBlock { span: Span::default(), block }))
+}
+
 fn negate_expr(expr: Expression) -> Expression {
     // Only wrap in `not`. Inverting a comparison operator would change which
     // metamethod is called, __lt instead of __le and so on.
@@ -455,46 +594,27 @@ enum DeadLocalAction {
 
 fn classify_dead_local(
     stmt: &Statement,
-    referenced_names: &FxHashSet<CompactString>,
+    live_names: &FxHashSet<CompactString>,
     version: LuaVersion,
 ) -> DeadLocalAction {
     match stmt {
         Statement::LocalAssignment(local) => {
-            // Exports, attributed names, and a 5.2+ `_ENV` are never dead.
-            if local.is_exported || has_attributed_or_env_name(local, version) {
-                return DeadLocalAction::Keep;
-            }
-            let is_unused = local
+            if local
                 .names
                 .iter()
-                .all(|attributed| !referenced_names.contains(identifier_name(&attributed.name)));
-            if !is_unused {
-                return DeadLocalAction::Keep;
-            }
-            let Some(exprs) = &local.exprs else {
-                return DeadLocalAction::Remove;
-            };
-            if exprs.iter().all(is_pure_expr) {
-                DeadLocalAction::Remove
-            } else if exprs.iter().all(|expr| {
-                is_pure_expr(expr) || matches!(expr, Expression::Suffixed(chain) if chain.is_call())
-            }) {
-                DeadLocalAction::ExtractCalls
-            } else {
-                DeadLocalAction::Keep
-            }
-        }
-        Statement::LocalFunction(local_function) => {
-            if local_function.is_exported
-                || is_env_binding(identifier_name(&local_function.name), version)
+                .any(|attributed| live_names.contains(identifier_name(&attributed.name)))
             {
                 return DeadLocalAction::Keep;
             }
-            let name = identifier_name(&local_function.name);
-            if referenced_names.contains(name) {
-                DeadLocalAction::Keep
-            } else {
+            unused_local_action(local, version)
+        }
+        Statement::LocalFunction(local_function) => {
+            if is_droppable_function(local_function, version)
+                && !live_names.contains(identifier_name(&local_function.name))
+            {
                 DeadLocalAction::Remove
+            } else {
+                DeadLocalAction::Keep
             }
         }
         Statement::DoBlock(do_block) => {
@@ -525,6 +645,35 @@ fn classify_dead_local(
     }
 }
 
+/// What goes of `local` when none of its names is live.
+///
+/// The transform can't make a value less pure, so a `local` this finds
+/// droppable before the round is droppable after it.
+fn unused_local_action(local: &LocalAssignment, version: LuaVersion) -> DeadLocalAction {
+    // Exports, attributed names, and a 5.2+ `_ENV` are never dead.
+    if local.is_exported || has_attributed_or_env_name(local, version) {
+        return DeadLocalAction::Keep;
+    }
+    let Some(exprs) = &local.exprs else {
+        return DeadLocalAction::Remove;
+    };
+    if exprs.iter().all(is_pure_expr) {
+        DeadLocalAction::Remove
+    } else if exprs.iter().all(|expr| is_pure_expr(expr) || is_call(expr)) {
+        DeadLocalAction::ExtractCalls
+    } else {
+        DeadLocalAction::Keep
+    }
+}
+
+fn is_droppable_function(local_function: &LocalFunction, version: LuaVersion) -> bool {
+    !local_function.is_exported && !is_env_binding(identifier_name(&local_function.name), version)
+}
+
+fn is_call(expr: &Expression) -> bool {
+    matches!(expr, Expression::Suffixed(chain) if chain.is_call())
+}
+
 fn call_stmts(local: LocalAssignment) -> impl Iterator<Item = Statement> {
     local.exprs.into_iter().flat_map(Punctuated::into_items).filter_map(|expr| {
         if let Expression::Suffixed(chain) = expr
@@ -539,6 +688,8 @@ fn call_stmts(local: LocalAssignment) -> impl Iterator<Item = Statement> {
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use super::*;
     use crate::fixtures::run_pass;
 
@@ -588,6 +739,58 @@ mod tests {
         assert!(!result.contains("local foo"), "only the root is a reference: {result}");
     }
 
+    /// One round of the pass, without `remove`'s loop.
+    fn apply_one_round(source: &str) -> String {
+        run_pass(source, LuaVersion::Lua54, |block| {
+            let mut remover = DeadCodeRemover {
+                live_names: live_names(&block, LuaVersion::Lua54),
+                version: LuaVersion::Lua54,
+                has_changed: false,
+                depth: 0,
+            };
+            remover.transform_block(block)
+        })
+    }
+
+    #[test]
+    fn removes_a_run_of_locals_each_used_only_by_the_next_in_one_round() {
+        let mut forward = String::from("local function f0() end\n");
+        for (i, previous) in (1..300u32).zip(0u32..) {
+            let _unused = writeln!(forward, "local function f{i}() f{previous}() end");
+        }
+        let mut backward = String::new();
+        for (i, next) in (0..300u32).zip(1u32..) {
+            let _unused = writeln!(backward, "local f{i} = function() f{next}() end");
+        }
+        for source in [forward, backward] {
+            assert_eq!(apply_one_round(&source), "", "source: {source}");
+        }
+    }
+
+    #[test]
+    fn keeps_a_local_used_by_a_kept_local() {
+        let source = "local a = function() end\nlocal b = function() return a end\nreturn b\n";
+        assert_eq!(
+            apply_one_round(source),
+            "local a=function()end local b=function()return a end return b"
+        );
+    }
+
+    #[test]
+    fn removes_an_unused_local_function_that_calls_itself() {
+        assert_eq!(apply_one_round("local function f() return f() end\n"), "");
+    }
+
+    #[test]
+    fn a_kept_call_keeps_what_it_uses() {
+        for (source, expected) in [
+            ("local y = 1\nlocal x = function() return y end, g()\n", "g()"),
+            ("local y = 1\nlocal x = g(y)\n", "local y=1 g(y)"),
+        ] {
+            assert_eq!(apply_one_round(source), expected, "source: {source}");
+        }
+    }
+
     #[test]
     fn removes_unused_local_function() {
         let result = apply("local function unused() return 1 end\nreturn 2\n");
@@ -615,6 +818,54 @@ mod tests {
         assert!(!result.contains("print(1)"), "dead branch must go: {result}");
         assert!(!result.contains("print(2)"), "dead elseif must go: {result}");
         assert!(result.contains("print(3)"), "else branch must survive: {result}");
+    }
+
+    #[test]
+    fn drops_falsy_arms_anywhere_in_the_chain() {
+        for (source, expected) in [
+            (
+                "if a then f(1) elseif false then f(2) elseif b then f(3) elseif nil then f(4) else f(5) end",
+                "if a then f(1)elseif b then f(3)else f(5)end",
+            ),
+            ("if false then f(1) elseif nil then f(2) elseif a then f(3) end", "if a then f(3)end"),
+            ("if false then f(1) elseif nil then f(2) else f(3) end", "do f(3)end"),
+            ("if false then f(1) elseif nil then f(2) end", ""),
+        ] {
+            assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn turns_the_first_truthy_arm_into_the_else() {
+        for (source, expected) in [
+            (
+                "if a then f(1) elseif 1 then f(2) elseif b then f(3) else f(4) end",
+                "if a then f(1)else f(2)end",
+            ),
+            (
+                "if false then f(1) elseif a then f(2) elseif 'x' then f(3) elseif true then f(4) end",
+                "if a then f(2)else f(3)end",
+            ),
+            ("if false then f(1) elseif true then f(2) elseif a then f(3) end", "do f(2)end"),
+            ("if true then f(1) elseif a then f(2) else f(3) end", "do f(1)end"),
+        ] {
+            assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn keeps_every_arm_whose_condition_is_not_a_literal() {
+        let source = "if a then f(1) elseif b() then f(2) elseif c.d then f(3) end";
+        assert_eq!(apply(source), "if a then f(1)elseif b()then f(2)elseif c.d then f(3)end");
+    }
+
+    #[test]
+    fn collapses_a_long_run_of_falsy_arms() {
+        let source = format!(
+            "if false then f(){} elseif a then g() end",
+            " elseif false then f()".repeat(5_000)
+        );
+        assert_eq!(apply(&source), "if a then g()end");
     }
 
     #[test]

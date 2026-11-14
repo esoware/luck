@@ -1,5 +1,6 @@
 use luck_ast::{FunctionName, Statement};
 use luck_token::Span;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Finding, line_column};
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -18,9 +19,8 @@ impl_rule!(
 impl WholeRule for DuplicateFunction {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut findings = Vec::new();
-        let mut definitions: Vec<(String, Span)> = Vec::new();
         for block in context.blocks {
-            definitions.clear();
+            let mut definitions: FxHashMap<String, Span> = FxHashMap::default();
             for stmt in &block.stmts {
                 // `redefining_local` covers local functions.
                 let (declared_name, name_span) = if let Statement::FunctionDecl(decl) = stmt {
@@ -34,9 +34,7 @@ impl WholeRule for DuplicateFunction {
                 let Some(name) = declared_name else {
                     continue;
                 };
-                if let Some((_, first_span)) =
-                    definitions.iter().find(|(defined_name, _)| *defined_name == name)
-                {
+                if let Some(first_span) = definitions.get(&name) {
                     let (line, _) =
                         line_column(context.source, first_span.start, context.semantic.version);
                     findings.push(Finding::new(
@@ -46,7 +44,7 @@ impl WholeRule for DuplicateFunction {
                         name_span,
                     ));
                 } else {
-                    definitions.push((name, name_span));
+                    definitions.insert(name, name_span);
                 }
             }
         }
@@ -72,6 +70,8 @@ fn full_name(function_name: &FunctionName) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use luck_token::LuaVersion;
 
     use super::*;
@@ -147,5 +147,15 @@ mod tests {
         let source = "global function f() end\nglobal function f() end";
         let diags = run_rule(&DuplicateFunction, source, LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "both statements define `f` in one block: {diags:?}");
+    }
+
+    #[test]
+    fn flags_each_repeat_in_a_long_block() {
+        let mut functions = String::new();
+        for i in 0..2_000u32 {
+            let _unused = writeln!(functions, "function m.f{i}() end");
+        }
+        let diags = run(&format!("{functions}{functions}"));
+        assert_eq!(diags.len(), 2_000, "{diags:?}");
     }
 }

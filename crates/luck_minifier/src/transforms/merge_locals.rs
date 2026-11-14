@@ -6,7 +6,7 @@ use luck_ast::{
     Var, Visitor,
 };
 use luck_token::{CompactString, LuaVersion, Span, Token};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::binding::{has_fixed_binding, identifier_name, is_env_binding};
 use crate::expr::{is_pure_modulo_name_reads, is_single_register_value};
@@ -19,6 +19,7 @@ pub(crate) fn merge(block: Block, version: LuaVersion) -> Block {
         version,
         live_registers: 0,
         locals: Vec::new(),
+        local_counts: FxHashMap::default(),
         global_names: FxHashSet::default(),
     }
     .transform_block(block)
@@ -29,6 +30,8 @@ struct LocalMerger {
     live_registers: usize,
     /// Declared locals and parameters in scope, upvalues included.
     locals: Vec<CompactString>,
+    /// How many of `locals` have each name.
+    local_counts: FxHashMap<CompactString, usize>,
     /// Lua 5.5: every name a `global` statement has declared so far, which
     /// stops counting as a local even past that statement's block.
     global_names: FxHashSet<CompactString>,
@@ -69,8 +72,25 @@ fn can_join_group(
 
 impl LocalMerger {
     fn declare_local(&mut self, name: &Token) {
-        self.locals.push(identifier_name(name).into());
+        self.bind_local(identifier_name(name));
         self.live_registers = self.live_registers.saturating_add(1);
+    }
+
+    fn bind_local(&mut self, name: &str) {
+        let count = self.local_counts.entry(name.into()).or_default();
+        *count = count.saturating_add(1);
+        self.locals.push(name.into());
+    }
+
+    fn unbind_locals_past(&mut self, local_count: usize) {
+        for name in self.locals.drain(local_count..) {
+            if let Some(count) = self.local_counts.get_mut(&name) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    self.local_counts.remove(&name);
+                }
+            }
+        }
     }
 
     /// A group stores right to left, so only a proven local may join, since
@@ -88,7 +108,7 @@ impl LocalMerger {
             let target = identifier_name(name);
             let is_proven_local = !is_env_binding(target, self.version)
                 && !self.global_names.contains(target)
-                && self.locals.iter().rev().any(|local| local == target);
+                && self.local_counts.contains_key(target);
             return is_proven_local.then_some((name, expr));
         }
         None
@@ -267,7 +287,7 @@ impl Transform for LocalMerger {
         });
 
         self.live_registers = outer_live_registers;
-        self.locals.truncate(outer_local_count);
+        self.unbind_locals_past(outer_local_count);
         Block { span: block.span, stmts: fused_stmts, last_stmt }
     }
 
@@ -299,9 +319,11 @@ impl Transform for LocalMerger {
     fn transform_function_body(&mut self, body: FunctionBody) -> FunctionBody {
         let outer_live_registers = mem::replace(&mut self.live_registers, parameter_locals(&body));
         let outer_local_count = self.locals.len();
-        self.locals.extend(body.params.iter().map(|param| identifier_name(&param.name).into()));
+        for param in body.params.iter() {
+            self.bind_local(identifier_name(&param.name));
+        }
         let walked = self.walk_function_body(body);
-        self.locals.truncate(outer_local_count);
+        self.unbind_locals_past(outer_local_count);
         self.live_registers = outer_live_registers;
         walked
     }

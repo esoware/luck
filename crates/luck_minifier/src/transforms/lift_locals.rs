@@ -201,10 +201,12 @@ fn can_lift_assignment(local: &LocalAssignment, version: LuaVersion) -> bool {
     local.exprs.is_some()
         && !has_fixed_binding(local, version)
         && local.names.iter().all(|attributed| attributed.type_annotation.is_none())
-        && local.names.iter().enumerate().all(|(i, attributed)| {
-            local.names.iter().take(i).all(|previous| {
-                identifier_name(&previous.name) != identifier_name(&attributed.name)
-            })
+        && (local.names.len() == 1 || {
+            let mut earlier_names = FxHashSet::default();
+            local
+                .names
+                .iter()
+                .all(|attributed| earlier_names.insert(identifier_name(&attributed.name)))
         })
 }
 
@@ -723,6 +725,25 @@ mod tests {
             !result.contains("local x"),
             "the loop-body declaration should lose its `local`: {result}"
         );
+    }
+
+    #[test]
+    fn lifts_a_multi_name_local_only_when_its_names_differ() {
+        let result = apply(concat!(
+            "local function f(c)\n",
+            "  if c then\n",
+            "    local a, b = 1, 2\n",
+            "    print(a, b)\n",
+            "  end\n",
+            "  if c then\n",
+            "    local d, d = 1, 2\n",
+            "    print(d)\n",
+            "  end\n",
+            "end\n",
+            "return f\n",
+        ));
+        assert!(result.contains("then a,b=1,2"), "distinct names should hoist: {result}");
+        assert!(result.contains("local d,d=1,2"), "a repeated name should stay local: {result}");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use luck_ast::{Block, Statement};
 use luck_token::{LuaVersion, Span, Token};
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Finding, line_column};
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -26,7 +27,7 @@ impl WholeRule for RedefiningLocal {
         let mut checker = RedefineChecker {
             source: context.source,
             version: context.semantic.version,
-            declarations: Vec::new(),
+            declarations: FxHashMap::default(),
             findings: Vec::new(),
         };
         for block in context.blocks {
@@ -39,13 +40,14 @@ impl WholeRule for RedefiningLocal {
 struct RedefineChecker<'ast> {
     source: &'ast str,
     version: LuaVersion,
-    declarations: Vec<(&'ast str, Span)>,
+    /// The first declaration of each name in the block.
+    declarations: FxHashMap<&'ast str, Span>,
     findings: Vec<Finding>,
 }
 
 impl<'ast> RedefineChecker<'ast> {
     fn check_block(&mut self, block: &'ast Block) {
-        self.declarations.clear();
+        self.declarations = FxHashMap::default();
         for stmt in &block.stmts {
             match stmt {
                 Statement::LocalAssignment(local) => {
@@ -85,24 +87,25 @@ impl<'ast> RedefineChecker<'ast> {
         if name.starts_with('_') {
             return;
         }
-        if let Some((_, first_span)) =
-            self.declarations.iter().find(|(declared_name, _)| *declared_name == name)
-        {
-            let (line, column) = line_column(self.source, first_span.start, self.version);
-            self.findings.push(
-                Finding::new(
-                    format!("local `{name}` is redeclared in the same block"),
-                    name_token.span,
-                )
-                .with_help(format!("first declared at {line}:{column}")),
-            );
-        }
-        self.declarations.push((name, name_token.span));
+        let Some(first_span) = self.declarations.get(name) else {
+            self.declarations.insert(name, name_token.span);
+            return;
+        };
+        let (line, column) = line_column(self.source, first_span.start, self.version);
+        self.findings.push(
+            Finding::new(
+                format!("local `{name}` is redeclared in the same block"),
+                name_token.span,
+            )
+            .with_help(format!("first declared at {line}:{column}")),
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
@@ -147,5 +150,20 @@ mod tests {
     fn ignores_underscore_names() {
         let diags = run("local _ = 1\nlocal _ = 2");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_each_redeclaration_in_a_long_block() {
+        let mut locals = String::new();
+        for i in 0..2_000u32 {
+            let _unused = writeln!(locals, "local x{i} = 1");
+        }
+        let diags = run(&format!("{locals}{locals}"));
+        assert_eq!(diags.len(), 2_000, "{diags:?}");
+        assert!(
+            diags[0].help.as_deref().is_some_and(|help| help.ends_with("1:7")),
+            "{:?}",
+            diags[0]
+        );
     }
 }

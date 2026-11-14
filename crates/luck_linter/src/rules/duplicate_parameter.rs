@@ -1,4 +1,5 @@
 use luck_ast::{Expression, Statement};
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
@@ -38,10 +39,10 @@ impl NodeRule for DuplicateParameter {
 fn duplicate_params(function: FunctionNode<'_>) -> impl Iterator<Item = Finding> {
     let vararg_name = function.body.vararg.as_deref().and_then(|vararg| vararg.name.as_ref());
     let names = function.body.params.items.iter().map(|param| &param.name).chain(vararg_name);
-    names.clone().enumerate().filter_map(move |(index, token)| {
+    let mut earlier_names = FxHashSet::default();
+    names.filter_map(move |token| {
         let name = token.identifier().filter(|&name| name != "_")?;
-        let is_duplicate = (function.is_method && name == "self")
-            || names.clone().take(index).any(|earlier| earlier.identifier() == Some(name));
+        let is_duplicate = !earlier_names.insert(name) || (function.is_method && name == "self");
         is_duplicate
             .then(|| Finding::new(format!("parameter `{name}` is already defined"), token.span))
     })
@@ -124,5 +125,12 @@ mod tests {
         let source = "local function f(a, ...a) return a end";
         let diags = run_rule(&DuplicateParameter, source, LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "the named vararg repeats parameter `a`: {diags:?}");
+    }
+
+    #[test]
+    fn flags_each_repeat_in_a_long_parameter_list() {
+        let params = (0..2_000u32).map(|i| format!("p{i}")).collect::<Vec<_>>().join(", ");
+        let diags = run(&format!("local function f({params}, {params}) end"));
+        assert_eq!(diags.len(), 2_000, "{diags:?}");
     }
 }
