@@ -185,9 +185,8 @@ fn fixpoint_within(
 
 #[cfg(test)]
 mod tests {
-    use crate::config::RuleLevel;
-
     use super::*;
+    use crate::config::RuleLevel;
     use crate::fixtures::diagnostic;
 
     fn diag_with_edit(start: u32, end: u32, replacement: &str) -> LintDiagnostic {

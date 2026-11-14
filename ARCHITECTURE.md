@@ -6,7 +6,7 @@ Core pipeline:
 luck_token -> luck_lexer -> luck_ast -> luck_parser -> luck_codegen
 ```
 
-Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and `luck_linter` transform or check it, and `luck_semantic` supplies scope analysis to the linter, the LSP, and the bundler. `luck_resolver` resolves require paths for `luck_bundler` and the LSP's document links. `luck_config` reads `luck.json` and `.editorconfig` into each tool's plain options for `luck_cli` and `luck_lsp`, and no tool depends on it. On top sit `luck` (facade re-exports), `luck_lsp` (language server), and `luck_cli`, which drives the stage crates directly and serves `luck_lsp`. `luck_testgen` and `luck_benchmark` are unpublished internal harnesses, one for generated test programs and one for benches.
+Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and `luck_linter` transform or check it, and `luck_semantic` supplies scope analysis to the linter, the LSP, and the bundler. `luck_resolver` resolves require paths for `luck_bundler` and the LSP's document links. `luck_config` reads `luck.json` and `.editorconfig` into each tool's plain options for `luck_cli`, `luck_lsp`, and embedders through the facade's `config` feature, and no tool depends on it. On top sit `luck` (facade re-exports), `luck_lsp` (language server), and `luck_cli`, which drives the stage crates directly and serves `luck_lsp`. `luck_testgen` and `luck_benchmark` are unpublished internal harnesses, one for generated test programs and one for benches.
 
 ## Crates
 
@@ -24,7 +24,7 @@ Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and 
 | `luck_minifier` | AST transform pipeline, with `TransformConfig` flags turning passes on and off | `pipeline.rs` `minify()` and `minify_block()`, `transforms/` |
 | `luck_formatter` | Wadler-style engine: `Format` trait + combinator IR, AST-in `format_block` formats synthetic ASTs (no source needed), idempotency invariant | `ir.rs`, `printer.rs`, `format_*.rs`, `comments.rs` |
 | `luck_linter` | `Rule` identity trait, `WholeRule`/`NodeRule` checking traits + `LintContext`, stateless rules in a static `RULES` registry reporting `Finding`s the driver turns into `LintDiagnostic`s, `NodeType`-bucketed single-pass bus over a flat pre-order node table, suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs`, `nodes.rs`, `node_type.rs` |
-| `luck_semantic` | Scope tree, refs (R/W/RW), upvalues, typed `NonZeroU32` ids, per-environment stdlib catalog TOMLs (5.1-5.5, luau, luau_roblox) with overloads, shapes, and deprecations, and generated Roblox API data | `analysis.rs`, `builder.rs`, `stdlib_model.rs`, `resolve.rs` |
+| `luck_semantic` | Scope tree, refs (R/W/RW), upvalues, typed `NonZeroU32` ids, per-environment stdlib catalog TOMLs (5.1-5.5, luau, luau_roblox) with overloads, shapes, and deprecations, generated into static Rust libraries so nothing is parsed at runtime, and generated Roblox API data | `analysis.rs`, `builder.rs`, `stdlib_model.rs`, `resolve.rs` |
 | `luck_lsp` | Library-only LSP backend (no binary), served by `luck lsp` | `backend.rs`, `transport.rs`, `providers/` |
 | `luck_cli` | Binary only: flat Clap commands, one module per command, rayon-parallel lint/fmt/check, ariadne rendering, exit codes 0/1/2, 16 MB-stack worker thread | `main.rs`, `cli.rs`, `commands/`, `render.rs` |
 | `luck` | Facade re-exports (no logic), published as package `luck_lua` with `[lib] name = "luck"`, so imports stay `luck::` | `lib.rs` |

@@ -521,7 +521,7 @@ const fn symbol_classify(kind: SymbolKind) -> Classification {
     }
 }
 
-fn stdlib_classify(entry: &StdlibEntry) -> Classification {
+const fn stdlib_classify(entry: &StdlibEntry) -> Classification {
     let token_type = match entry {
         StdlibEntry::Function(_) => TYPE_FUNCTION,
         StdlibEntry::Namespace(_) => TYPE_NAMESPACE,
@@ -539,7 +539,7 @@ fn stdlib_classify(entry: &StdlibEntry) -> Classification {
 
 /// Stdlib namespace members: same modifiers as bare globals, but member
 /// functions read as methods so call sites match the accessor grammar.
-fn member_classify(entry: &StdlibEntry) -> Classification {
+const fn member_classify(entry: &StdlibEntry) -> Classification {
     let mut classification = stdlib_classify(entry);
     if classification.token_type == TYPE_FUNCTION {
         classification.token_type = TYPE_METHOD;

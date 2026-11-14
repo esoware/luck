@@ -5,7 +5,6 @@ use luck_ast::{
     FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, IntersectionType,
     NamedType, TableType, Type, TypeArgs, TypeField, TypeofType, UnionType,
 };
-
 use luck_token::TokenKind;
 
 use crate::ir::{

@@ -9,24 +9,24 @@
 //! reads, or what any of its calls calls, costs one pass over it.
 
 use luck_ast::{ChainHead, Expression, Suffix, SuffixedExpression};
-use luck_token::{CompactString, Token};
+use luck_token::Token;
 use rustc_hash::FxHashMap;
 
 use crate::scope::{ScopeTree, SymbolId};
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
-pub(crate) type SymbolShapes = FxHashMap<SymbolId, CompactString>;
+pub(crate) type SymbolShapes = FxHashMap<SymbolId, &'static str>;
 
 /// What a chain's head reads, as far as it's known.
 #[derive(Debug, Clone, Copy, Default)]
-struct HeadState<'input> {
-    shape: Option<&'input CompactString>,
+struct HeadState {
+    shape: Option<&'static str>,
     /// The stdlib entry the head names while it's a dotted path from the
     /// host's global.
-    global: Option<&'input StdlibEntry>,
+    global: Option<&'static StdlibEntry>,
 }
 
-impl HeadState<'_> {
+impl HeadState {
     /// No suffix after an unknown head is known either.
     const fn is_unknown(self) -> bool {
         self.shape.is_none() && self.global.is_none()
@@ -36,14 +36,14 @@ impl HeadState<'_> {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ShapeResolver<'input> {
     tree: &'input ScopeTree,
-    library: &'input StdlibLibrary,
+    library: &'static StdlibLibrary,
     symbol_shapes: &'input SymbolShapes,
 }
 
 impl<'input> ShapeResolver<'input> {
     pub(crate) const fn new(
         tree: &'input ScopeTree,
-        library: &'input StdlibLibrary,
+        library: &'static StdlibLibrary,
         symbol_shapes: &'input SymbolShapes,
     ) -> Self {
         Self { tree, library, symbol_shapes }
@@ -51,7 +51,7 @@ impl<'input> ShapeResolver<'input> {
 
     /// The shape of `expr`, when statically known. See the module docs for
     /// what "known" means.
-    pub(crate) fn expr_shape(self, expr: &Expression) -> Option<&'input CompactString> {
+    pub(crate) fn expr_shape(self, expr: &Expression) -> Option<&'static str> {
         match expr {
             Expression::Name(token) => self.name_state(token).shape,
             Expression::Suffixed(_) => self.head_state(ChainHead::from(expr)).shape,
@@ -79,7 +79,7 @@ impl<'input> ShapeResolver<'input> {
 
     /// What `token` reads: a local's shape, or the host's global and its
     /// shape.
-    fn name_state(self, token: &Token) -> HeadState<'input> {
+    fn name_state(self, token: &Token) -> HeadState {
         let Some(reference) =
             token.identifier().and_then(|name| self.tree.reference_at(name, token.span))
         else {
@@ -87,7 +87,7 @@ impl<'input> ShapeResolver<'input> {
         };
         match reference.resolved {
             Some(symbol_id) => {
-                HeadState { shape: self.symbol_shapes.get(&symbol_id), global: None }
+                HeadState { shape: self.symbol_shapes.get(&symbol_id).copied(), global: None }
             }
             None if self.tree.is_host_global(reference) => {
                 let global = self.library.globals.get(&reference.name);
@@ -97,7 +97,7 @@ impl<'input> ShapeResolver<'input> {
         }
     }
 
-    fn prefix_state(self, prefix: &Expression) -> HeadState<'input> {
+    fn prefix_state(self, prefix: &Expression) -> HeadState {
         if let Expression::Name(token) = prefix {
             self.name_state(token)
         } else {
@@ -105,12 +105,12 @@ impl<'input> ShapeResolver<'input> {
         }
     }
 
-    fn head_state(self, head: ChainHead<'_>) -> HeadState<'input> {
+    fn head_state(self, head: ChainHead<'_>) -> HeadState {
         self.read(self.prefix_state(head.prefix), head.suffixes)
     }
 
     /// What a head that reads `state` reads once `suffixes` apply to it.
-    fn read(self, mut state: HeadState<'input>, suffixes: &[Suffix]) -> HeadState<'input> {
+    fn read(self, mut state: HeadState, suffixes: &[Suffix]) -> HeadState {
         for suffix in suffixes {
             if state.is_unknown() {
                 break;
@@ -122,7 +122,7 @@ impl<'input> ShapeResolver<'input> {
 
     /// A call accepts a method called with `.`: passing self explicitly
     /// doesn't change what the call returns.
-    fn after_suffix(self, suffix: &Suffix, state: HeadState<'input>) -> HeadState<'input> {
+    fn after_suffix(self, suffix: &Suffix, state: HeadState) -> HeadState {
         match suffix {
             Suffix::Field(name) => {
                 let member = state
@@ -136,7 +136,7 @@ impl<'input> ShapeResolver<'input> {
                     self.shape_method(state.shape?, method.identifier()?)
                 });
                 let shape = match callee {
-                    Some(StdlibEntry::Function(function)) => function.returns_shape.as_ref(),
+                    Some(StdlibEntry::Function(function)) => function.returns_shape,
                     Some(
                         StdlibEntry::Constant(_)
                         | StdlibEntry::Property(_)
@@ -152,7 +152,7 @@ impl<'input> ShapeResolver<'input> {
 
     /// Only method-flagged functions are colon-callable; a dot member
     /// reached with `:` would receive a bogus self.
-    fn shape_method(self, shape: &str, method_name: &str) -> Option<&'input StdlibEntry> {
+    fn shape_method(self, shape: &str, method_name: &str) -> Option<&'static StdlibEntry> {
         let entry = self.library.shape_member(shape, method_name)?;
         matches!(entry, StdlibEntry::Function(function) if function.is_method).then_some(entry)
     }
@@ -161,7 +161,7 @@ impl<'input> ShapeResolver<'input> {
     fn callee(
         self,
         head: ChainHead<'input>,
-        state: HeadState<'input>,
+        state: HeadState,
         method: Option<&'input Token>,
     ) -> Option<ResolvedCallee<'input>> {
         let Some(method_token) = method else {
@@ -176,8 +176,7 @@ impl<'input> ShapeResolver<'input> {
         let method_name = method_token.identifier()?;
         let shape = state.shape?;
         let entry = self.shape_method(shape, method_name)?;
-        let base =
-            head.as_name().map_or(shape.as_str(), |token| token.identifier().unwrap_or(shape));
+        let base = head.as_name().map_or(shape, |token| token.identifier().unwrap_or(shape));
         Some(ResolvedCallee { path: CalleePath::Method { base, method: method_name }, entry })
     }
 
@@ -192,11 +191,10 @@ impl<'input> ShapeResolver<'input> {
     }
 }
 
-/// The derived `string` shape's key, when the library has one (it does
-/// whenever a `string` namespace exists). Returned as the map key so
-/// callers get a library-lifetime reference.
-fn string_shape(library: &StdlibLibrary) -> Option<&CompactString> {
-    library.shapes.get_key_value("string").map(|(name, _shape)| name)
+/// The derived `string` shape, when the library has one (it does whenever a
+/// `string` namespace exists).
+fn string_shape(library: &StdlibLibrary) -> Option<&'static str> {
+    library.shapes.contains_key("string").then_some("string")
 }
 
 /// The shape of each never-reassigned local in `initialized_locals` whose
@@ -204,7 +202,7 @@ fn string_shape(library: &StdlibLibrary) -> Option<&CompactString> {
 /// reads it, so a shaped local seeds later ones.
 pub(crate) fn symbol_shapes(
     tree: &ScopeTree,
-    library: &StdlibLibrary,
+    library: &'static StdlibLibrary,
     initialized_locals: &[(SymbolId, &Expression)],
 ) -> SymbolShapes {
     let mut shapes = SymbolShapes::default();
@@ -213,7 +211,7 @@ pub(crate) fn symbol_shapes(
             continue;
         }
         let resolver = ShapeResolver::new(tree, library, &shapes);
-        let Some(shape) = resolver.expr_shape(initializer).cloned() else {
+        let Some(shape) = resolver.expr_shape(initializer) else {
             continue;
         };
         shapes.insert(symbol_id, shape);
@@ -225,7 +223,7 @@ pub(crate) fn symbol_shapes(
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedCallee<'call> {
     path: CalleePath<'call>,
-    entry: &'call StdlibEntry,
+    entry: &'static StdlibEntry,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -238,7 +236,7 @@ enum CalleePath<'call> {
     Dotted(ChainHead<'call>),
 }
 
-impl<'call> ResolvedCallee<'call> {
+impl ResolvedCallee<'_> {
     /// Display path, such as `table.insert` or `game:GetService`.
     #[must_use]
     pub fn name(&self) -> String {
@@ -251,7 +249,7 @@ impl<'call> ResolvedCallee<'call> {
     }
 
     #[must_use]
-    pub const fn entry(&self) -> &'call StdlibEntry {
+    pub const fn entry(&self) -> &'static StdlibEntry {
         self.entry
     }
 }
@@ -263,9 +261,9 @@ impl<'call> ResolvedCallee<'call> {
 pub struct ChainCallees<'chain> {
     resolver: ShapeResolver<'chain>,
     chain: &'chain SuffixedExpression,
-    prefix_state: HeadState<'chain>,
+    prefix_state: HeadState,
     /// What the head of the first `read_count` suffixes reads.
-    state: HeadState<'chain>,
+    state: HeadState,
     read_count: usize,
 }
 
@@ -312,97 +310,151 @@ mod tests {
 
     use super::*;
     use crate::builder;
-    use crate::stdlib_load::parse_library;
+    use crate::stdlib_catalog::{FUNCTION, NAMESPACE, VALUE, optional, required, signature};
+    use crate::stdlib_model::{
+        StdlibArgKind, StdlibFunction, StdlibMap, StdlibNamespace, StdlibShape, StdlibValue,
+    };
 
-    const SHAPED_LIBRARY: &str = r#"
-        [globals.game]
-        kind = "property"
-        shape = "DataModel"
+    static SHAPED_LIBRARY: StdlibLibrary = StdlibLibrary {
+        version: LuaVersion::Lua54,
+        environment: StdlibEnvironment::Standalone,
+        globals: StdlibMap::new(&[
+            ("game", StdlibEntry::Property(StdlibValue { shape: Some("DataModel"), ..VALUE })),
+            (
+                "io",
+                StdlibEntry::Namespace(StdlibNamespace {
+                    members: StdlibMap::new(&[(
+                        "open",
+                        StdlibEntry::Function(&StdlibFunction {
+                            signatures: &[signature(
+                                &[required(StdlibArgKind::String), optional(StdlibArgKind::String)],
+                                1,
+                                Some(2),
+                            )],
+                            returns_shape: Some("file"),
+                            ..FUNCTION
+                        }),
+                    )]),
+                    ..NAMESPACE
+                }),
+            ),
+            (
+                "string",
+                StdlibEntry::Namespace(StdlibNamespace {
+                    members: StdlibMap::new(&[(
+                        "upper",
+                        StdlibEntry::Function(&StdlibFunction {
+                            signatures: &[signature(
+                                &[required(StdlibArgKind::String)],
+                                1,
+                                Some(1),
+                            )],
+                            is_must_use: true,
+                            ..FUNCTION
+                        }),
+                    )]),
+                    ..NAMESPACE
+                }),
+            ),
+        ]),
+        shapes: StdlibMap::new(&[
+            (
+                "DataModel",
+                StdlibShape {
+                    members: StdlibMap::new(&[(
+                        "GetService",
+                        StdlibEntry::Function(&StdlibFunction {
+                            signatures: &[signature(
+                                &[required(StdlibArgKind::String)],
+                                1,
+                                Some(1),
+                            )],
+                            is_must_use: true,
+                            is_method: true,
+                            returns_shape: Some("Instance"),
+                            ..FUNCTION
+                        }),
+                    )]),
+                },
+            ),
+            (
+                "Instance",
+                StdlibShape {
+                    members: StdlibMap::new(&[(
+                        "FindFirstChild",
+                        StdlibEntry::Function(&StdlibFunction {
+                            signatures: &[signature(
+                                &[required(StdlibArgKind::String), optional(StdlibArgKind::Bool)],
+                                1,
+                                Some(2),
+                            )],
+                            is_method: true,
+                            ..FUNCTION
+                        }),
+                    )]),
+                },
+            ),
+            (
+                "file",
+                StdlibShape {
+                    members: StdlibMap::new(&[(
+                        "read",
+                        StdlibEntry::Function(&StdlibFunction {
+                            signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)],
+                            is_method: true,
+                            ..FUNCTION
+                        }),
+                    )]),
+                },
+            ),
+            (
+                "string",
+                StdlibShape {
+                    members: StdlibMap::new(&[(
+                        "upper",
+                        StdlibEntry::Function(&StdlibFunction {
+                            signatures: &[signature(&[], 0, Some(0))],
+                            is_must_use: true,
+                            is_method: true,
+                            returns_shape: Some("string"),
+                            ..FUNCTION
+                        }),
+                    )]),
+                },
+            ),
+        ]),
+    };
 
-        [globals.io]
-        kind = "namespace"
-        [globals.io.members.open]
-        kind = "function"
-        min_args = 1
-        max_args = 2
-        params = [{ kind = "string" }, { kind = "string", is_required = false }]
-        returns = "file"
-
-        [shapes.DataModel.members.GetService]
-        kind = "function"
-        is_method = true
-        min_args = 1
-        max_args = 1
-        params = [{ kind = "string" }]
-        returns = "Instance"
-
-        [shapes.Instance.members.FindFirstChild]
-        kind = "function"
-        is_method = true
-        min_args = 1
-        max_args = 2
-        params = [{ kind = "string" }, { kind = "bool", is_required = false }]
-
-        [shapes.file.members.read]
-        kind = "function"
-        is_method = true
-        min_args = 0
-        max_args = -1
-        params = [{ kind = "vararg", is_required = false }]
-
-        [globals.string]
-        kind = "namespace"
-        [globals.string.members.upper]
-        kind = "function"
-        min_args = 1
-        max_args = 1
-        is_must_use = true
-        params = [{ kind = "string" }]
-    "#;
-
-    fn shaped_library() -> StdlibLibrary {
-        parse_library(&[SHAPED_LIBRARY], LuaVersion::Lua54, StdlibEnvironment::Standalone)
-            .expect("test catalog loads")
-    }
-
-    fn shapes_for(source: &str, library: &StdlibLibrary) -> (ScopeTree, SymbolShapes) {
+    fn shapes_for(source: &str) -> (ScopeTree, SymbolShapes) {
         let parsed = luck_parser::parse(source, LuaVersion::Lua54);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let (tree, initialized_locals) =
             builder::build_with_initializers(&parsed.block, LuaVersion::Lua54);
-        let shapes = symbol_shapes(&tree, library, &initialized_locals);
+        let shapes = symbol_shapes(&tree, &SHAPED_LIBRARY, &initialized_locals);
         (tree, shapes)
     }
 
-    fn shape_of<'shapes>(
-        tree: &ScopeTree,
-        shapes: &'shapes SymbolShapes,
-        name: &str,
-    ) -> Option<&'shapes str> {
+    fn shape_of(tree: &ScopeTree, shapes: &SymbolShapes, name: &str) -> Option<&'static str> {
         let symbol = tree.symbols.iter().find(|symbol| symbol.name == name)?;
-        shapes.get(&symbol.id).map(CompactString::as_str)
+        shapes.get(&symbol.id).copied()
     }
 
     #[test]
     fn local_from_shaped_call_gets_shape() {
-        let library = shaped_library();
-        let (tree, shapes) = shapes_for("local f = io.open('x')", &library);
+        let (tree, shapes) = shapes_for("local f = io.open('x')");
         assert_eq!(shape_of(&tree, &shapes, "f"), Some("file"));
     }
 
     #[test]
     fn local_from_shaped_global_gets_shape() {
-        let library = shaped_library();
-        let (tree, shapes) = shapes_for("local g = game", &library);
+        let (tree, shapes) = shapes_for("local g = game");
         assert_eq!(shape_of(&tree, &shapes, "g"), Some("DataModel"));
     }
 
     #[test]
     fn method_chain_propagates_shapes() {
-        let library = shaped_library();
         let (tree, shapes) = shapes_for(
             "local players = game:GetService('Players')\nlocal again = players:FindFirstChild('x')",
-            &library,
         );
         assert_eq!(shape_of(&tree, &shapes, "players"), Some("Instance"));
         // FindFirstChild declares no return shape.
@@ -411,47 +463,40 @@ mod tests {
 
     #[test]
     fn reassigned_local_has_no_shape() {
-        let library = shaped_library();
-        let (tree, shapes) = shapes_for("local f = io.open('x')\nf = 1", &library);
+        let (tree, shapes) = shapes_for("local f = io.open('x')\nf = 1");
         assert_eq!(shape_of(&tree, &shapes, "f"), None);
     }
 
     #[test]
     fn shadowed_global_base_has_no_shape() {
-        let library = shaped_library();
-        let (tree, shapes) = shapes_for("local game = 1\nlocal g = game", &library);
+        let (tree, shapes) = shapes_for("local game = 1\nlocal g = game");
         assert_eq!(shape_of(&tree, &shapes, "g"), None);
     }
 
     #[test]
     fn string_literal_gets_string_shape() {
-        let library = shaped_library();
-        let (tree, shapes) = shapes_for("local s = 'abc'", &library);
+        let (tree, shapes) = shapes_for("local s = 'abc'");
         assert_eq!(shape_of(&tree, &shapes, "s"), Some("string"));
     }
 
     #[test]
     fn parenthesized_literal_method_chains_string_shape() {
-        // upper is derived with returns = "string", so the call result
+        // The string shape's upper returns a string, so the call result
         // seeds the local's shape.
-        let library = shaped_library();
-        let (tree, shapes) = shapes_for("local u = ('x'):upper()", &library);
+        let (tree, shapes) = shapes_for("local u = ('x'):upper()");
         assert_eq!(shape_of(&tree, &shapes, "u"), Some("string"));
     }
 
     #[test]
     fn misaligned_multi_assignment_ignored() {
-        let library = shaped_library();
-        let (tree, shapes) = shapes_for("local a, b = io.open('x')", &library);
+        let (tree, shapes) = shapes_for("local a, b = io.open('x')");
         assert_eq!(shape_of(&tree, &shapes, "a"), None);
         assert_eq!(shape_of(&tree, &shapes, "b"), None);
     }
 
     #[test]
     fn method_called_with_dot_still_yields_return_shape() {
-        let library = shaped_library();
-        let (tree, shapes) =
-            shapes_for("local players = game.GetService(game, 'Players')", &library);
+        let (tree, shapes) = shapes_for("local players = game.GetService(game, 'Players')");
         assert_eq!(shape_of(&tree, &shapes, "players"), Some("Instance"));
     }
 }

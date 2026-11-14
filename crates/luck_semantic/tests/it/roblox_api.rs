@@ -164,14 +164,15 @@ fn regenerate_roblox_api() {
 
     let mut generated = String::new();
     generated.push_str("# GENERATED FILE - do not hand-edit.\n");
-    generated
-        .push_str("# Regenerate: cargo test -p luck_semantic regenerate_roblox_api -- --ignored\n");
+    generated.push_str("# Regenerate: just roblox-api\n");
     generated.push_str(
         "# Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).\n",
     );
     generated
         .push_str("# Spliced into the luau_roblox library; luau_roblox.toml params reference\n");
-    generated.push_str("# these sets by name (see stdlib_load.rs for the constant_sets schema).\n");
+    generated.push_str(
+        "# these sets by name (see tests/it/stdlib_catalog.rs for the constant_sets schema).\n",
+    );
     generated.push_str("# Settings-provider classes (settings() / UserSettings() children) are\n");
     generated.push_str(
         "# excluded from roblox_services: they are not reachable via game:GetService.\n\n",
@@ -189,8 +190,8 @@ fn regenerate_roblox_api() {
 }
 
 /// Write `roblox_enums.toml`: every enum type and item in the dump, with
-/// deprecation tags carried over. `splice_enums` in `stdlib_load.rs` splices
-/// it in.
+/// deprecation tags carried over. `splice_enums` in `tests/it/stdlib_catalog.rs`
+/// splices it in.
 ///
 /// # Errors
 ///
@@ -222,14 +223,15 @@ fn write_enum_file(dump: &serde_json::Value) -> Result<(), Box<dyn Error>> {
 
     let mut generated = String::new();
     generated.push_str("# GENERATED FILE - do not hand-edit.\n");
-    generated
-        .push_str("# Regenerate: cargo test -p luck_semantic regenerate_roblox_api -- --ignored\n");
+    generated.push_str("# Regenerate: just roblox-api\n");
     generated.push_str(
         "# Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).\n",
     );
     generated.push_str("# Spliced into the luau_roblox library: each [enums.<Type>] becomes an\n");
     generated.push_str("# Enum-shaped member namespace of the Enum global, each item an\n");
-    generated.push_str("# EnumItem-shaped read-only constant (see stdlib_load.rs splice_enums).\n");
+    generated.push_str(
+        "# EnumItem-shaped read-only constant (see tests/it/stdlib_catalog.rs splice_enums).\n",
+    );
     for (name, is_deprecated, items) in &enum_types {
         writeln!(generated, "\n[enums.{name}]")?;
         if *is_deprecated {

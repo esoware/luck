@@ -23,8 +23,10 @@ luck_token    = { workspace = true }
 
 rayon      = { workspace = true }
 rustc-hash = { workspace = true }
-schemars   = { workspace = true }
 serde      = { workspace = true }
+
+# Derives `JsonSchema` for `LintConfig`. Only luck_config's schema tests turn it on.
+schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

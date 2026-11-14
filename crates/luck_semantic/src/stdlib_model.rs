@@ -1,10 +1,72 @@
-use alloc::collections::BTreeMap;
+use core::iter::Map;
+use core::slice;
 
-use luck_token::{CompactString, LuaVersion, StdlibEnvironment, offset_to_index};
+use luck_token::{LuaVersion, StdlibEnvironment, offset_to_index};
 
-#[derive(Debug, Clone)]
+/// Catalog entries by name, in name order.
+#[derive(Debug, Clone, Copy)]
+pub struct StdlibMap<V: 'static> {
+    entries: &'static [(&'static str, V)],
+}
+
+type Entries<V> = Map<
+    slice::Iter<'static, (&'static str, V)>,
+    fn(&'static (&'static str, V)) -> (&'static str, &'static V),
+>;
+
+impl<V: 'static> StdlibMap<V> {
+    /// `entries` must be sorted by name, with no name twice.
+    pub(crate) const fn new(entries: &'static [(&'static str, V)]) -> Self {
+        Self { entries }
+    }
+
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&'static V> {
+        let index = self.entries.partition_point(|(entry_name, _)| *entry_name < name);
+        match self.entries.get(index) {
+            Some((entry_name, value)) if *entry_name == name => Some(value),
+            Some(_) | None => None,
+        }
+    }
+
+    #[must_use]
+    pub fn contains_key(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
+    pub fn iter(&self) -> Entries<V> {
+        let pair: fn(&'static (&'static str, V)) -> (&'static str, &'static V) =
+            |(name, value)| (*name, value);
+        self.entries.iter().map(pair)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &'static str> {
+        self.entries.iter().map(|(name, _)| *name)
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl<V: 'static> IntoIterator for &StdlibMap<V> {
+    type Item = (&'static str, &'static V);
+    type IntoIter = Entries<V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum StdlibEntry {
-    Function(Box<StdlibFunction>),
+    Function(&'static StdlibFunction),
     Constant(StdlibValue),
     Property(StdlibValue),
     Namespace(StdlibNamespace),
@@ -12,7 +74,7 @@ pub enum StdlibEntry {
 
 impl StdlibEntry {
     #[must_use]
-    pub fn deprecation(&self) -> Option<&StdlibDeprecation> {
+    pub const fn deprecation(&self) -> Option<&StdlibDeprecation> {
         match self {
             Self::Function(function) => function.deprecated.as_ref(),
             Self::Constant(value) | Self::Property(value) => value.deprecated.as_ref(),
@@ -22,7 +84,7 @@ impl StdlibEntry {
 
     /// A namespace is always read-only, even when some members (`package.path`) aren't.
     #[must_use]
-    pub fn is_read_only(&self) -> bool {
+    pub const fn is_read_only(&self) -> bool {
         match self {
             Self::Function(function) => function.is_read_only,
             Self::Constant(value) | Self::Property(value) => value.is_read_only,
@@ -33,17 +95,17 @@ impl StdlibEntry {
     /// The shape of the value this entry names. A function's value has
     /// none; `returns_shape` is the shape of its call's result.
     #[must_use]
-    pub const fn shape(&self) -> Option<&CompactString> {
+    pub const fn shape(&self) -> Option<&'static str> {
         match self {
-            Self::Constant(value) | Self::Property(value) => value.shape.as_ref(),
-            Self::Namespace(namespace) => namespace.shape.as_ref(),
+            Self::Constant(value) | Self::Property(value) => value.shape,
+            Self::Namespace(namespace) => namespace.shape,
             Self::Function(_) => None,
         }
     }
 }
 
-/// Boxed in `StdlibEntry` to keep the enum small.
-#[derive(Debug, Clone)]
+/// Behind a reference in `StdlibEntry` to keep the enum small.
+#[derive(Debug, Clone, Copy)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "four independent flags, and all sixteen combinations are legal"
@@ -51,7 +113,7 @@ impl StdlibEntry {
 pub struct StdlibFunction {
     /// At least one, in catalog order. The first is the primary form,
     /// shown where only one fits.
-    pub signatures: Vec<StdlibSignature>,
+    pub signatures: &'static [StdlibSignature],
     pub is_pure: bool,
     pub is_must_use: bool,
     pub deprecated: Option<StdlibDeprecation>,
@@ -61,7 +123,7 @@ pub struct StdlibFunction {
     pub is_method: bool,
     /// Shape of the call's first return value, if it has one (e.g.
     /// `io.open` returns `file`).
-    pub returns_shape: Option<CompactString>,
+    pub returns_shape: Option<&'static str>,
 }
 
 impl StdlibFunction {
@@ -74,7 +136,7 @@ impl StdlibFunction {
     #[must_use]
     pub fn max_args(&self) -> Option<usize> {
         let mut max = 0;
-        for signature in &self.signatures {
+        for signature in self.signatures {
             max = max.max(signature.max_args?);
         }
         Some(max)
@@ -85,7 +147,10 @@ impl StdlibFunction {
         self.signatures.iter().any(|signature| signature.accepts(count))
     }
 
-    pub fn matching_signatures(&self, count: usize) -> impl Iterator<Item = &StdlibSignature> {
+    pub fn matching_signatures(
+        &self,
+        count: usize,
+    ) -> impl Iterator<Item = &'static StdlibSignature> {
         self.signatures.iter().filter(move |signature| signature.accepts(count))
     }
 
@@ -97,14 +162,18 @@ impl StdlibFunction {
     /// takes anything but a constant there, which leaves the argument
     /// unconstrained.
     #[must_use]
-    pub fn allowed_constants(&self, index: usize, count: usize) -> Option<Vec<&[StdlibConstant]>> {
-        let sets: Vec<&[StdlibConstant]> = self
+    pub fn allowed_constants(
+        &self,
+        index: usize,
+        count: usize,
+    ) -> Option<Vec<&'static [StdlibConstant]>> {
+        let sets: Vec<&'static [StdlibConstant]> = self
             .matching_signatures(count)
             .map(|signature| {
-                let StdlibArgKind::Constant(values) = &signature.params.get(index)?.kind else {
+                let StdlibArgKind::Constant(values) = signature.params.get(index)?.kind else {
                     return None;
                 };
-                Some(values.as_slice())
+                Some(values)
             })
             .collect::<Option<_>>()?;
         (!sets.is_empty()).then_some(sets)
@@ -113,9 +182,9 @@ impl StdlibFunction {
     #[must_use]
     #[expect(
         clippy::indexing_slicing,
-        reason = "every catalog function is loaded with at least one signature"
+        reason = "the catalog generator gives every function at least one signature"
     )]
-    pub fn primary_signature(&self) -> &StdlibSignature {
+    pub const fn primary_signature(&self) -> &'static StdlibSignature {
         &self.signatures[0]
     }
 
@@ -137,9 +206,9 @@ impl StdlibFunction {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StdlibSignature {
-    pub params: Vec<StdlibParam>,
+    pub params: &'static [StdlibParam],
     pub min_args: usize,
     /// `None` = unbounded (trailing vararg).
     pub max_args: Option<usize>,
@@ -152,7 +221,7 @@ impl StdlibSignature {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StdlibParam {
     pub kind: StdlibArgKind,
     pub is_required: bool,
@@ -161,7 +230,7 @@ pub struct StdlibParam {
     pub deprecated: Option<StdlibDeprecation>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum StdlibArgKind {
     Any,
     Bool,
@@ -171,66 +240,66 @@ pub enum StdlibArgKind {
     Table,
     /// A type with no variant of its own, e.g. "file" or "buffer". The
     /// string is only a display label.
-    Display(CompactString),
+    Display(&'static str),
     /// A fixed set of string literals, e.g. the options of
     /// `collectgarbage`.
-    Constant(Vec<StdlibConstant>),
+    Constant(&'static [StdlibConstant]),
     /// `...`, matching zero or more values of any type.
     Vararg,
 }
 
 /// One allowed value of a `Constant`-kind parameter. Individual values
 /// can be deprecated (e.g. `collectgarbage("setpause")` in 5.4).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StdlibConstant {
-    pub value: CompactString,
+    pub value: &'static str,
     pub deprecated: Option<StdlibDeprecation>,
     /// A curated common value, which completion lists first (e.g.
     /// `Players` among 300+ Roblox services).
     pub is_common: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StdlibDeprecation {
-    pub message: CompactString,
+    pub message: &'static str,
     /// Auto-fix replacement; see [`expand_replace_template`] for its
     /// placeholders.
-    pub replace_template: Option<CompactString>,
+    pub replace_template: Option<&'static str>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StdlibValue {
     pub is_read_only: bool,
     pub deprecated: Option<StdlibDeprecation>,
     /// The value's shape, if it has one (e.g. `game` is a `DataModel`,
     /// `io.stdout` a `file`).
-    pub shape: Option<CompactString>,
+    pub shape: Option<&'static str>,
 }
 
 /// A dotted-member container. `shape` is set when the namespace is also a
 /// value with methods, as each `Enum.<Type>` is an `Enum` with
 /// `GetEnumItems`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StdlibNamespace {
-    pub members: BTreeMap<CompactString, StdlibEntry>,
-    pub shape: Option<CompactString>,
+    pub members: StdlibMap<StdlibEntry>,
+    pub shape: Option<&'static str>,
     pub deprecated: Option<StdlibDeprecation>,
 }
 
 /// The members of a kind of value, such as a file handle, a string, or a
 /// Roblox instance. Members with `is_method` are colon-callable; the rest
 /// are dot accesses.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StdlibShape {
-    pub members: BTreeMap<CompactString, StdlibEntry>,
+    pub members: StdlibMap<StdlibEntry>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StdlibLibrary {
     pub version: LuaVersion,
     pub environment: StdlibEnvironment,
-    pub globals: BTreeMap<CompactString, StdlibEntry>,
-    pub shapes: BTreeMap<CompactString, StdlibShape>,
+    pub globals: StdlibMap<StdlibEntry>,
+    pub shapes: StdlibMap<StdlibShape>,
 }
 
 impl StdlibLibrary {
@@ -238,9 +307,9 @@ impl StdlibLibrary {
     /// property or constant, so `["game", "GetService"]` resolves through
     /// `game`'s shape.
     #[must_use]
-    pub fn lookup(&self, path: &[&str]) -> Option<&StdlibEntry> {
+    pub fn lookup(&self, path: &[&str]) -> Option<&'static StdlibEntry> {
         let (root, members) = path.split_first()?;
-        let mut current = self.globals.get(*root)?;
+        let mut current = self.globals.get(root)?;
         for segment in members {
             current = self.child(current, segment)?;
         }
@@ -250,11 +319,7 @@ impl StdlibLibrary {
     /// The member reachable from `entry` under `segment`: a namespace
     /// member, or a member of the entry's declared value shape.
     #[must_use]
-    pub fn child<'library>(
-        &'library self,
-        entry: &'library StdlibEntry,
-        segment: &str,
-    ) -> Option<&'library StdlibEntry> {
+    pub fn child(&self, entry: &StdlibEntry, segment: &str) -> Option<&'static StdlibEntry> {
         if let StdlibEntry::Namespace(namespace) = entry
             && let Some(member) = namespace.members.get(segment)
         {
@@ -266,7 +331,7 @@ impl StdlibLibrary {
     }
 
     #[must_use]
-    pub fn shape_member(&self, shape: &str, name: &str) -> Option<&StdlibEntry> {
+    pub fn shape_member(&self, shape: &str, name: &str) -> Option<&'static StdlibEntry> {
         self.shapes.get(shape)?.members.get(name)
     }
 }
@@ -339,6 +404,45 @@ fn is_bare_operand(arg: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stdlib_catalog::{FUNCTION, optional, required, signature};
+
+    #[test]
+    fn a_map_finds_exactly_its_names() {
+        static MAP: StdlibMap<u8> = StdlibMap::new(&[("b", 1), ("d", 2), ("f", 3)]);
+        assert_eq!(MAP.get("d"), Some(&2));
+        for absent in ["", "a", "c", "e", "g"] {
+            assert_eq!(MAP.get(absent), None, "{absent}");
+        }
+        assert_eq!(MAP.iter().collect::<Vec<_>>(), [("b", &1), ("d", &2), ("f", &3)]);
+    }
+
+    #[test]
+    fn overloads_answer_arity_queries() {
+        static OVERLOADED: StdlibFunction = StdlibFunction {
+            signatures: &[
+                signature(&[], 0, Some(0)),
+                signature(
+                    &[
+                        required(StdlibArgKind::Number),
+                        required(StdlibArgKind::Number),
+                        optional(StdlibArgKind::Number),
+                    ],
+                    2,
+                    Some(3),
+                ),
+            ],
+            ..FUNCTION
+        };
+        assert_eq!(OVERLOADED.min_args(), 0);
+        assert_eq!(OVERLOADED.max_args(), Some(3));
+        assert!(OVERLOADED.accepts_arg_count(0));
+        assert!(!OVERLOADED.accepts_arg_count(1));
+        assert!(OVERLOADED.accepts_arg_count(2));
+        assert!(OVERLOADED.accepts_arg_count(3));
+        assert!(!OVERLOADED.accepts_arg_count(4));
+        assert_eq!(OVERLOADED.matching_signatures(2).count(), 1);
+        assert_eq!(OVERLOADED.signature_index_for_active_param(1), 1);
+    }
 
     #[test]
     fn replace_template_substitutes_numbered_args() {

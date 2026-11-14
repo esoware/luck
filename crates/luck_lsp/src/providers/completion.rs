@@ -38,7 +38,7 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
         .stdlib()
         .globals
         .iter()
-        .map(|(name, entry)| item_for_entry(name.as_str(), entry))
+        .map(|(name, entry)| item_for_entry(name, entry))
         .collect();
     // Every local or parameter declared before the cursor, whether or not it's
     // still in scope there, because completion is best-effort. The implicit
@@ -104,19 +104,19 @@ fn member_completions(
         && !access.is_colon
     {
         for (name, member) in &namespace.members {
-            push(name.as_str(), member);
+            push(name, member);
         }
     }
     // A shaped local: `local f = io.open(...); f:` offers the file methods,
     // `local g = game; g:` the DataModel ones.
     let shape = match (stdlib_entry, root_local, segments.as_slice()) {
         (Some(entry), _, _) => entry.shape(),
-        (None, Some(symbol_id), [_]) => document.semantic.symbol_shapes.get(&symbol_id),
+        (None, Some(symbol_id), [_]) => document.semantic.symbol_shapes.get(&symbol_id).copied(),
         (None, _, _) => None,
     };
-    if let Some(shape_members) = shape.and_then(|name| stdlib.shapes.get(name.as_str())) {
+    if let Some(shape_members) = shape.and_then(|name| stdlib.shapes.get(name)) {
         for (name, member) in &shape_members.members {
-            push(name.as_str(), member);
+            push(name, member);
         }
     }
     items
@@ -141,7 +141,7 @@ fn constant_value_completions(
     let mut seen_values: FxHashSet<&str> = FxHashSet::default();
     let mut items: Vec<CompletionItem> = Vec::new();
     for constant in allowed_sets.into_iter().flatten() {
-        if !seen_values.insert(constant.value.as_str()) {
+        if !seen_values.insert(constant.value) {
             continue;
         }
         let is_deprecated = constant.deprecated.is_some();
@@ -154,10 +154,10 @@ fn constant_value_completions(
             '1'
         };
         items.push(CompletionItem {
-            label: constant.value.to_string(),
+            label: constant.value.to_owned(),
             kind: Some(CompletionItemKind::ENUM_MEMBER),
             sort_text: Some(format!("{rank}{}", constant.value)),
-            filter_text: Some(constant.value.to_string()),
+            filter_text: Some(constant.value.to_owned()),
             deprecated: Some(is_deprecated),
             tags: is_deprecated.then(|| vec![CompletionItemTag::DEPRECATED]),
             documentation: constant.deprecated.as_ref().map(|deprecation| {
@@ -168,7 +168,7 @@ fn constant_value_completions(
             }),
             text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                 range: interior,
-                new_text: constant.value.to_string(),
+                new_text: constant.value.to_owned(),
             })),
             ..Default::default()
         });

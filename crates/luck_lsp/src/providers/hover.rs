@@ -81,7 +81,7 @@ fn render_function(full_path: &str, function: &StdlibFunction) -> String {
     let signatures = function
         .signatures
         .iter()
-        .map(|signature| render_signature(full_path, signature.params.as_slice()))
+        .map(|signature| render_signature(full_path, signature.params))
         .collect::<Vec<_>>()
         .join("\n");
     let mut tags: Vec<&str> = Vec::new();

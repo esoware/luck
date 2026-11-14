@@ -3,11 +3,9 @@
 
 use alloc::collections::BTreeMap;
 use core::fmt;
-use core::hash::Hash;
 use core::marker::PhantomData;
 
 use luck_core::DiagnosticSeverity;
-use rustc_hash::FxHashSet;
 use serde::de::{
     Deserialize, Deserializer, Error, IgnoredAny, IntoDeserializer as _, SeqAccess, Visitor,
 };
@@ -16,9 +14,8 @@ use crate::diagnostic::Category;
 
 /// Linter settings from luck.json.
 // `Serialize` prints it back in the shape it parses, for `--print-config`.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct LintConfig {
     /// A level per rule category. `"warn"` and `"error"` run every rule in the
@@ -37,26 +34,9 @@ pub struct LintConfig {
     pub extra_globals: Vec<String>,
 }
 
-impl LintConfig {
-    /// Layers `self` over `base`, as `extends` does. `extra_globals`
-    /// concatenates base-first without repeats, and a category or rule that
-    /// `self` sets replaces the base's level for it. A bare level keeps the
-    /// base's options, as `-D` does, and options from both sides merge:
-    /// `paths` concatenate and `self`'s `max` wins.
-    #[must_use]
-    pub fn merge_onto(self, base: Self) -> Self {
-        Self {
-            categories: self.categories.merge_onto(base.categories),
-            rules: self.rules.merge_onto(base.rules),
-            extra_globals: concat(self.extra_globals, base.extra_globals),
-        }
-    }
-}
-
 /// Whether a rule runs, and the severity of what it reports.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum RuleLevel {
     Off,
@@ -77,19 +57,10 @@ impl RuleLevel {
 }
 
 /// The level of each rule category that sets one.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    serde::Deserialize,
-    serde::Serialize,
-    schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(transform = with_perf_alias))]
 #[serde(deny_unknown_fields)]
-#[schemars(transform = with_perf_alias)]
 pub struct CategoryLevels {
     /// Outright wrong or useless code.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -125,18 +96,10 @@ impl CategoryLevels {
         };
         *slot = Some(level);
     }
-
-    fn merge_onto(self, base: Self) -> Self {
-        Self {
-            correctness: self.correctness.or(base.correctness),
-            suspicious: self.suspicious.or(base.suspicious),
-            style: self.style.or(base.style),
-            performance: self.performance.or(base.performance),
-        }
-    }
 }
 
 /// schemars drops serde aliases, and the schema denies unknown keys.
+#[cfg(feature = "schemars")]
 fn with_perf_alias(schema: &mut schemars::Schema) {
     if let Some(properties) =
         schema.get_mut("properties").and_then(|properties| properties.as_object_mut())
@@ -150,9 +113,8 @@ fn with_perf_alias(schema: &mut schemars::Schema) {
 /// options.
 // A rule with options has its own field, so options on any other rule, or of
 // the wrong shape, fail to deserialize.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RuleSettings {
     /// Reports nothing until its options set `max`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -202,25 +164,6 @@ impl RuleSettings {
             .chain(restricted_module_paths)
             .chain(self.levels.keys().map(String::as_str))
     }
-
-    fn merge_onto(self, mut base: Self) -> Self {
-        base.levels.extend(self.levels);
-        Self {
-            cyclomatic_complexity: merge_setting(
-                self.cyclomatic_complexity,
-                base.cyclomatic_complexity,
-                |options, _| options,
-            ),
-            restricted_module_paths: merge_setting(
-                self.restricted_module_paths,
-                base.restricted_module_paths,
-                |options, base_options| RestrictedModulePathsOptions {
-                    paths: concat(options.paths, base_options.paths),
-                },
-            ),
-            levels: base.levels,
-        }
-    }
 }
 
 fn set_setting_level<Options>(setting: &mut Option<RuleSetting<Options>>, level: RuleLevel) {
@@ -230,32 +173,11 @@ fn set_setting_level<Options>(setting: &mut Option<RuleSetting<Options>>, level:
     });
 }
 
-fn merge_setting<Options>(
-    child: Option<RuleSetting<Options>>,
-    base: Option<RuleSetting<Options>>,
-    merge_options: impl FnOnce(Options, Options) -> Options,
-) -> Option<RuleSetting<Options>> {
-    match (child, base) {
-        (None, base_setting) => base_setting,
-        (Some(RuleSetting::Level(level)), mut base_setting) => {
-            set_setting_level(&mut base_setting, level);
-            base_setting
-        }
-        (
-            Some(RuleSetting::WithOptions(level, options)),
-            Some(RuleSetting::WithOptions(_, base_options)),
-        ) => Some(RuleSetting::WithOptions(level, merge_options(options, base_options))),
-        (
-            child_setting @ Some(RuleSetting::WithOptions(..)),
-            Some(RuleSetting::Level(_)) | None,
-        ) => child_setting,
-    }
-}
-
 /// One rule's entry in `rules`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(rename = "RuleSetting_{Options}"))]
 #[serde(untagged)]
-#[schemars(rename = "RuleSetting_{Options}")]
 pub enum RuleSetting<Options> {
     /// `"off"`, `"warn"`, or `"error"`.
     Level(RuleLevel),
@@ -327,9 +249,8 @@ where
 }
 
 /// Options of the `cyclomatic_complexity` rule.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct CyclomaticComplexityOptions {
     /// Complexity above which a function is flagged.
@@ -337,26 +258,13 @@ pub struct CyclomaticComplexityOptions {
 }
 
 /// Options of the `restricted_module_paths` rule.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RestrictedModulePathsOptions {
     /// Modules that can't be required. A trailing `.*` also covers
     /// submodules: `forbidden.*` matches `forbidden` and `forbidden.sub`.
     pub paths: Vec<String>,
-}
-
-/// `base` followed by the items of `child` it lacks, so a file layered twice
-/// through `extends` can't double a list.
-fn concat<T>(child: Vec<T>, mut base: Vec<T>) -> Vec<T>
-where
-    T: Eq + Hash,
-{
-    let present: FxHashSet<&T> = base.iter().collect();
-    let added: Vec<T> = child.into_iter().filter(|item| !present.contains(item)).collect();
-    base.extend(added);
-    base
 }
 
 #[cfg(test)]
@@ -555,92 +463,5 @@ mod tests {
             rules.names().collect::<Vec<_>>(),
             ["cyclomatic_complexity", "restricted_module_paths", "unused_variable"]
         );
-    }
-
-    #[test]
-    fn merge_onto_lets_the_child_replace_a_category_or_rule() {
-        let base = lint_config(
-            r#"{
-                "categories": { "style": "warn", "correctness": "off" },
-                "rules": {
-                    "empty_block": "warn",
-                    "unused_variable": "off",
-                    "cyclomatic_complexity": ["warn", { "max": 10 }]
-                }
-            }"#,
-        );
-        let child = lint_config(
-            r#"{
-                "categories": { "style": "error", "performance": "warn" },
-                "rules": { "unused_variable": "error", "cyclomatic_complexity": "off" }
-            }"#,
-        );
-        let lint = child.merge_onto(base);
-        assert_eq!(
-            lint.categories,
-            CategoryLevels {
-                correctness: Some(RuleLevel::Off),
-                suspicious: None,
-                style: Some(RuleLevel::Error),
-                performance: Some(RuleLevel::Warn),
-            }
-        );
-        assert_eq!(lint.rules.level("empty_block"), Some(RuleLevel::Warn));
-        assert_eq!(lint.rules.level("unused_variable"), Some(RuleLevel::Error));
-        assert_eq!(
-            lint.rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(RuleLevel::Off, CyclomaticComplexityOptions { max: 10 }))
-        );
-    }
-
-    /// A child that only raises a rule's severity mustn't silence it by
-    /// dropping the base's options.
-    #[test]
-    fn merge_onto_keeps_the_base_options_and_merges_the_child_s() {
-        let base = lint_config(
-            r#"{
-                "rules": {
-                    "cyclomatic_complexity": ["warn", { "max": 10 }],
-                    "restricted_module_paths": ["warn", { "paths": ["secret.*"] }]
-                }
-            }"#,
-        );
-        let raised = lint_config(r#"{ "rules": { "cyclomatic_complexity": "error" } }"#);
-        assert_eq!(
-            raised.merge_onto(base.clone()).rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(
-                RuleLevel::Error,
-                CyclomaticComplexityOptions { max: 10 }
-            ))
-        );
-
-        let extended = lint_config(
-            r#"{
-                "rules": {
-                    "cyclomatic_complexity": ["warn", { "max": 4 }],
-                    "restricted_module_paths": ["error", { "paths": ["legacy", "secret.*"] }]
-                }
-            }"#,
-        );
-        let rules = extended.merge_onto(base).rules;
-        assert_eq!(
-            rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(RuleLevel::Warn, CyclomaticComplexityOptions { max: 4 }))
-        );
-        assert_eq!(
-            rules.restricted_module_paths,
-            Some(RuleSetting::WithOptions(
-                RuleLevel::Error,
-                RestrictedModulePathsOptions {
-                    paths: vec!["secret.*".to_owned(), "legacy".to_owned()]
-                }
-            ))
-        );
-    }
-
-    #[test]
-    fn schema_takes_the_perf_category_alias() {
-        let schema = serde_json::to_value(schemars::schema_for!(CategoryLevels)).expect("schema");
-        assert_eq!(schema["properties"]["perf"], schema["properties"]["performance"]);
     }
 }

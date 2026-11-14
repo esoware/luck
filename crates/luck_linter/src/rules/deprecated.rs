@@ -55,7 +55,7 @@ fn check_call(site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec
         let fix = replacement_fix(call, entry, position, &name, deprecation, context);
         findings.push(
             Finding::new(format!("`{name}` is deprecated"), call.span())
-                .with_help(deprecation.message.as_str())
+                .with_help(deprecation.message)
                 .with_optional_fix(fix),
         );
         return;
@@ -89,7 +89,7 @@ fn deprecated_params(
                 format!("argument {arg_number} of `{}` is deprecated", callee.name()),
                 expr.span(),
             )
-            .with_help(deprecation.message.as_str())
+            .with_help(deprecation.message)
         })
     })
 }
@@ -120,7 +120,7 @@ fn deprecated_constants(
                 format!("`{value}` is a deprecated argument of `{}`", callee.name()),
                 span,
             )
-            .with_help(deprecation.message.as_str()),
+            .with_help(deprecation.message),
         )
     })
 }
@@ -288,7 +288,7 @@ fn check_field_accesses(
             let path = chain.head(read_index).dotted_path().map(|path| path.segments.join("."));
             findings.push(
                 Finding::new(format!("`{}` is deprecated", path.unwrap_or_default()), name.span)
-                    .with_help(deprecation.message.as_str()),
+                    .with_help(deprecation.message),
             );
         }
     }

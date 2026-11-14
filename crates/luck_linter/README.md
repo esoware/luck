@@ -55,7 +55,7 @@ A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix`
 | `cfg.rs` | `FlowGraph`, the control-flow graph of a block that rules ask how it ends and what can run, and the decision points `cyclomatic_complexity` counts |
 | `local_flow.rs` | `LocalFlow`, what each function's control flow says about its locals, shared by the rules that follow a local's value and computed once per chunk |
 | `diagnostic.rs` | `LintDiagnostic`, the `Finding` rules report, `Severity` (`luck_core`'s `DiagnosticSeverity`), `Category`, and the `line_column` positions that messages quote |
-| `config.rs` | `LintConfig`, the `lint` section of `luck.json`: category and rule levels, typed options for the rules that take them, `extra_globals`, the `extends` merge, and the serde impls that keep option errors specific |
+| `config.rs` | `LintConfig`, the `lint` section of `luck.json`: category and rule levels, typed options for the rules that take them, `extra_globals`, and the serde impls that keep option errors specific. The `schemars` feature derives `JsonSchema` for `luck_config`'s schema tests |
 | `suppression.rs` | `-- luck:` directive parsing, shared with `invalid_lint_filter`, and suppression |
 | `fix.rs` | `Fix` and `TextEdit`, and auto-fix application |
 | `format_pattern.rs` | Validators for `string.format`, pattern, `string.pack`, `gsub` replacement, and `os.date` literals |

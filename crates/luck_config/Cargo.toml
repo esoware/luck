@@ -29,6 +29,8 @@ serde      = { workspace = true }
 
 # Only the tests that generate and check the VS Code schema derive JsonSchema.
 [dev-dependencies]
+luck_linter = { workspace = true, features = ["schemars"] }
+
 schemars   = { workspace = true }
 serde_json = { workspace = true }
 tempfile   = { workspace = true }

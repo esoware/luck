@@ -15,7 +15,7 @@ On the right struct, mirroring its neighbors:
 - `#[serde(default)]` with a sensible default, because existing configs must keep working.
 - Keep the struct's `#[serde(deny_unknown_fields)]` contract intact.
 - Prefer enums over free-form strings/bools when there are >=2 modes.
-- Give it a `///` doc comment. It becomes the schema description users see in VS Code. `luck_config`'s types derive `schemars::JsonSchema` under `cfg_attr(test)`, and `luck_linter`'s config types derive it outright.
+- Give it a `///` doc comment. It becomes the schema description users see in VS Code. `luck_config`'s types derive `schemars::JsonSchema` under `cfg_attr(test)`, and `luck_linter`'s config types derive it under its `schemars` feature, which only `luck_config`'s dev-dependency turns on.
 
 ## 2. Regenerate the schema
 

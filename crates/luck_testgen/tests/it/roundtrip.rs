@@ -109,7 +109,7 @@ fn format_block_without_source_reparses_and_formats_as_itself() {
 }
 
 #[test]
-fn minify_reparses_and_reaches_a_fixpoint_by_the_second_pass() {
+fn minify_reparses_and_is_idempotent() {
     let config = TransformConfig::default();
     for program in programs() {
         let Program { source, version, label } = &program;
@@ -122,18 +122,9 @@ fn minify_reparses_and_reaches_a_fixpoint_by_the_second_pass() {
         let Ok(second) = luck_minifier::minify(&first, *version, &config) else {
             panic!("{label}: second minify errored.\nfirst output:\n{first}");
         };
-        // Names aren't byte-stable: lift and merge run after rename, so the
-        // second pass ranks slots against a different shape and may permute
-        // short names. What holds is the length (no growth, no further
-        // shrinkage) and a byte-exact fixpoint from the second pass on.
         assert_eq!(
-            first.len(),
-            second.len(),
-            "{label}: second minify changed size.\nfirst:\n{first}\nsecond:\n{second}"
+            first, second,
+            "{label}: minify not idempotent.\ninput:\n{source}\nfirst:\n{first}\nsecond:\n{second}"
         );
-        let Ok(third) = luck_minifier::minify(&second, *version, &config) else {
-            panic!("{label}: third minify errored");
-        };
-        assert_eq!(second, third, "{label}: minify has no fixpoint.\ninput:\n{source}");
     }
 }

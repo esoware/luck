@@ -49,9 +49,8 @@ fn table_getn_deprecated_in_51_and_fixes_to_length_from_52() {
             function.deprecated.as_ref().expect("table.getn must be deprecated in 5.2+");
         let template = deprecation
             .replace_template
-            .as_ref()
             .expect("table.getn deprecation must carry a replace template");
-        assert_eq!(template.as_str(), "#%1");
+        assert_eq!(template, "#%1");
     }
 }
 
@@ -64,9 +63,8 @@ fn unpack_deprecated_from_52() {
     for newer in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let function = function_at(standalone_library(newer), &["unpack"]);
         let deprecation = function.deprecated.as_ref().expect("unpack deprecated in 5.2+");
-        let template =
-            deprecation.replace_template.as_ref().expect("unpack has a replace template");
-        assert_eq!(template.as_str(), "table.unpack(%1)");
+        let template = deprecation.replace_template.expect("unpack has a replace template");
+        assert_eq!(template, "table.unpack(%1)");
     }
 }
 
@@ -105,9 +103,8 @@ fn utf8_only_53_plus() {
 fn loadstring_deprecated_in_52_fixes_to_load() {
     let function = function_at(standalone_library(LuaVersion::Lua52), &["loadstring"]);
     let deprecation = function.deprecated.as_ref().expect("loadstring is deprecated");
-    let template =
-        deprecation.replace_template.as_ref().expect("loadstring has a replace template");
-    assert_eq!(template.as_str(), "load(%1)");
+    let template = deprecation.replace_template.expect("loadstring has a replace template");
+    assert_eq!(template, "load(%1)");
 }
 
 #[test]
@@ -383,7 +380,7 @@ fn legacy_roblox_globals_are_deprecated() {
     }
     let deprecation =
         function_at(roblox(), &["ypcall"]).deprecated.as_ref().expect("ypcall deprecated");
-    assert_eq!(deprecation.replace_template.as_deref(), Some("pcall(%1)"), "ypcall fixes to pcall");
+    assert_eq!(deprecation.replace_template, Some("pcall(%1)"), "ypcall fixes to pcall");
 }
 
 #[test]
@@ -571,7 +568,7 @@ fn io_popen_mode_is_r_or_w_only() {
         let StdlibArgKind::Constant(values) = &mode.kind else {
             panic!("io.popen mode should be a constant set");
         };
-        let mut names: Vec<&str> = values.iter().map(|constant| constant.value.as_str()).collect();
+        let mut names: Vec<&str> = values.iter().map(|constant| constant.value).collect();
         names.sort_unstable();
         assert_eq!(names, ["r", "w"], "io.popen mode set in {version:?}");
     }
@@ -610,7 +607,7 @@ fn lua54_collectgarbage_overloads_and_constant_deprecation() {
 fn lua55_collectgarbage_param_form_replaces_setpause() {
     let function = function_at(standalone_library(LuaVersion::Lua55), &["collectgarbage"]);
     assert!(function.accepts_arg_count(3), "collectgarbage('param', 'pause', n) is valid in 5.5");
-    for signature in &function.signatures {
+    for signature in function.signatures {
         let StdlibArgKind::Constant(values) = &signature.params[0].kind else {
             continue;
         };
@@ -854,7 +851,7 @@ fn file_shape_present_in_all_numbered_versions() {
             &["io", "output"][..],
         ] {
             assert_eq!(
-                function_at(library, opener).returns_shape.as_deref(),
+                function_at(library, opener).returns_shape,
                 Some("file"),
                 "{version:?}: {opener:?} returns a file"
             );
@@ -863,7 +860,7 @@ fn file_shape_present_in_all_numbered_versions() {
             let Some(StdlibEntry::Property(value)) = library.lookup(&["io", stream]) else {
                 panic!("{version:?}: io.{stream} missing");
             };
-            assert_eq!(value.shape.as_deref(), Some("file"));
+            assert_eq!(value.shape, Some("file"));
         }
     }
 }
@@ -880,7 +877,7 @@ fn file_method_version_deltas() {
         let lines = shape_function(standalone_library(version), "file", "lines");
         assert_eq!(lines.max_args(), None, "{version:?}: lines takes formats");
         let write = shape_function(standalone_library(version), "file", "write");
-        assert_eq!(write.returns_shape.as_deref(), Some("file"), "{version:?}");
+        assert_eq!(write.returns_shape, Some("file"), "{version:?}");
     }
 }
 
@@ -890,7 +887,7 @@ fn string_receiver_shape_derived_in_every_library() {
         let upper = shape_function(library, "string", "upper");
         assert!(upper.is_method);
         assert_eq!(upper.min_args(), 0, "subject param dropped");
-        assert_eq!(upper.returns_shape.as_deref(), Some("string"));
+        assert_eq!(upper.returns_shape, Some("string"));
         let find = shape_function(library, "string", "find");
         assert!(find.min_args() >= 1, "pattern still required");
         for excluded in ["char", "dump"] {
@@ -952,7 +949,7 @@ fn game_is_a_shaped_datamodel() {
     let get_service = function_at(roblox(), &["game", "GetService"]);
     assert!(get_service.is_method);
     assert!(get_service.is_must_use);
-    assert_eq!(get_service.returns_shape.as_deref(), Some("Instance"));
+    assert_eq!(get_service.returns_shape, Some("Instance"));
     assert!(roblox().lookup(&["game", "FindService"]).is_some());
     assert!(roblox().lookup(&["game", "BindToClose"]).is_some());
     assert!(roblox().lookup(&["game", "IsLoaded"]).is_some());
@@ -1200,7 +1197,7 @@ fn enum_tree_is_populated() {
         "expected the full generated tree, got {} types",
         enum_global.members.len()
     );
-    assert_eq!(enum_global.shape.as_deref(), Some("Enums"));
+    assert_eq!(enum_global.shape, Some("Enums"));
 }
 
 #[test]
@@ -1216,7 +1213,7 @@ fn representative_items_resolve() {
             panic!("{path:?} should be a constant");
         };
         assert!(value.is_read_only);
-        assert_eq!(value.shape.as_deref(), Some("EnumItem"));
+        assert_eq!(value.shape, Some("EnumItem"));
     }
 }
 
@@ -1227,7 +1224,7 @@ fn enum_types_are_enum_shaped() {
     else {
         panic!("Enum.Material should be a namespace");
     };
-    assert_eq!(material.shape.as_deref(), Some("Enum"));
+    assert_eq!(material.shape, Some("Enum"));
 }
 
 #[test]
@@ -1420,7 +1417,7 @@ fn table_maxn_has_no_length_operator_fix() {
 
 fn lua53_bit32_replacement(name: &str) -> Option<&'static str> {
     let function = function_at(standalone_library(LuaVersion::Lua53), &["bit32", name]);
-    function.deprecated.as_ref()?.replace_template.as_deref()
+    function.deprecated.as_ref()?.replace_template
 }
 
 #[test]
@@ -1476,7 +1473,7 @@ fn fix_template<'library>(
     library: &'library StdlibLibrary,
     path: &[&str],
 ) -> Option<&'library str> {
-    function_at(library, path).deprecated.as_ref()?.replace_template.as_deref()
+    function_at(library, path).deprecated.as_ref()?.replace_template
 }
 
 fn returned_expr(text: &str, version: LuaVersion) -> Expression {

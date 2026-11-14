@@ -3,9 +3,10 @@
 # Standalone Luau is a separate file, luau.toml, because the two
 # environments diverge in both directions. Shared entries are duplicated,
 # and tests/it/drift.rs keeps them in sync. The generated service and enum
-# data in roblox_api.toml and roblox_enums.toml is spliced in at load.
+# data in roblox_api.toml and roblox_enums.toml is spliced in with it.
 #
-# Schema: see crates/luck_semantic/src/stdlib_load.rs. Each entry has
+# Schema: see crates/luck_semantic/tests/it/stdlib_catalog.rs, which
+# generates the catalog from these files. Each entry has
 # kind = "function" | "namespace" | "constant" | "property". A function
 # has either a flat signature (min_args, max_args, params; max_args = -1
 # means unbounded) or an overloads array. [shapes.<name>.members.*]

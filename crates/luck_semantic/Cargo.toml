@@ -19,11 +19,13 @@ luck_ast   = { workspace = true }
 luck_token = { workspace = true }
 
 rustc-hash = { workspace = true }
-serde      = { workspace = true }
-toml       = { workspace = true }
 
 [dev-dependencies]
 luck_parser = { workspace = true }
+
+# The catalog generator reads stdlib_data with these.
+serde = { workspace = true }
+toml  = { workspace = true }
 
 # Only the ignored regenerate_roblox_api test uses these, to fetch and parse the live Roblox API dump.
 serde_json = { workspace = true }

@@ -4,13 +4,13 @@
 
 ## Overview
 
-The tools take plain option types and never read a config file: `FormatOptions` and its enums in `luck_formatter`, `TransformConfig` in `luck_minifier`, and `DynamicRequire` in `luck_bundler`. This crate sits above them. It deserializes `luck.json` into a shape of its own for each one, under the same name, and converts that into the tool's type with `From`. The `lint` section is the exception: it deserializes straight into `luck_linter`'s `LintConfig`, since rule names are its keys and each rule decides the options it takes. Only `luck_cli` and `luck_lsp` depend on this crate.
+The tools take plain option types and never read a config file: `FormatOptions` and its enums in `luck_formatter`, `TransformConfig` in `luck_minifier`, and `DynamicRequire` in `luck_bundler`. This crate sits above them. It deserializes `luck.json` into a shape of its own for each one, under the same name, and converts that into the tool's type with `From`. The `lint` section is the exception: it deserializes straight into `luck_linter`'s `LintConfig`, since rule names are its keys and each rule decides the options it takes. `luck_cli` and `luck_lsp` depend on this crate, the `luck` facade re-exports it behind its `config` feature, and no tool depends on it.
 
 ## Architecture
 
 Every struct uses `#[serde(deny_unknown_fields)]`, and unknown keys and invalid enum values are hard errors. The one open map is the linter's `RuleSettings`, whose other keys are rule names for the linter to check.
 
-- **`config`** holds `LuckConfig`, its build sub-objects `EntryConfig` and `ProfileOverrides`, and the `extends` merge. `DialectKey` picks the `lua` or `luau` key for a file by its extension and holds each key's default, and `LuckConfig::target_for_path` resolves through it, so the CLI and the LSP pick a file's dialect the same way.
+- **`config`** holds `LuckConfig`, its build sub-objects `EntryConfig` and `ProfileOverrides`, and the `extends` merge of every section, `lint` included. `DialectKey` picks the `lua` or `luau` key for a file by its extension and holds each key's default, and `LuckConfig::target_for_path` resolves through it, so the CLI and the LSP pick a file's dialect the same way.
 - **`format_config`** holds the `format` section's `FormatConfig`, the `luck.json` spelling of each formatter enum, and the conversion into `FormatOptions`, which the CLI and the LSP both go through.
 - **`transform_config`** and **`dynamic_require`** hold the `transforms` and `dynamic_require` values and their conversions. A `transforms` key left out keeps the minifier's default.
 - **`load`** owns `parse_luck_config` (JSON5), the recursive `extends` chain with its cycle, depth, and transitive `root`-boundary checks, upward `discover_config`, and `load_or_discover_config`, which loads an explicit `-c` path or else discovers. Both return a `ProjectConfig`: the config and the directory holding it, which roots the project's relative paths and globs.
@@ -20,4 +20,4 @@ Every struct uses `#[serde(deny_unknown_fields)]`, and unknown keys and invalid 
 
 `.luaurc` files belong to `luck_resolver`, which parses and caches them for Luau alias resolution.
 
-The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated** from `LuckConfig`, and a test checks it for drift. The type names are its `$defs` keys and the doc comments its descriptions, so renaming a config type or editing one of its doc comments changes the schema. Only that test derives `JsonSchema` for this crate's types, so `schemars` is a dev-dependency. Regenerate the schema with `just schema`.
+The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated** from `LuckConfig`, and a test checks it for drift. The type names are its `$defs` keys and the doc comments its descriptions, so renaming a config type or editing one of its doc comments changes the schema. Only that test derives `JsonSchema`, for this crate's types and, through `luck_linter`'s `schemars` feature, for the `lint` section's, so `schemars` is a dev-dependency here and optional in `luck_linter`. Regenerate the schema with `just schema`.

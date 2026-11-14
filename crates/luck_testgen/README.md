@@ -33,7 +33,7 @@ Determinism matters most. A single xorshift64\* `Rng` (`rng.rs`) drives every ch
 - **Compact round-trip.** `compact` output re-parses cleanly.
 - **Format idempotency.** `format(format(x)) == format(x)`, and the output re-parses.
 - **AST-in format.** `format_block` on the bare parsed AST, with no source or comments, re-parses, and `format` leaves its output unchanged.
-- **Minify fixpoint.** Minified output re-parses, size is stable across passes, and a byte-exact fixpoint arrives from the second pass onward.
+- **Minify idempotency.** `minify(minify(x)) == minify(x)`, and the output re-parses.
 
 These sweeps back the formatter and minifier guarantees. Strengthen them instead of working around them.
 

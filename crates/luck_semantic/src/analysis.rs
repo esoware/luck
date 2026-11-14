@@ -1,11 +1,11 @@
 use luck_ast::{Block, Call, SuffixedExpression};
-use luck_token::{CompactString, LuaVersion, Span, StdlibEnvironment};
+use luck_token::{LuaVersion, Span, StdlibEnvironment};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::builder;
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
 use crate::scope::{Reference, ScopeTree, Symbol, SymbolId};
-use crate::stdlib_load::library_for;
+use crate::stdlib_catalog::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub struct SemanticAnalysis {
     pub environment: StdlibEnvironment,
     /// Shapes of never-reassigned locals initialized from a value of known
     /// shape, such as `local f = io.open(...)`.
-    pub symbol_shapes: FxHashMap<SymbolId, CompactString>,
+    pub symbol_shapes: FxHashMap<SymbolId, &'static str>,
 }
 
 /// Uses the [`StdlibEnvironment::Standalone`] stdlib, which is right for
@@ -165,8 +165,8 @@ impl SemanticAnalysis {
     }
 
     #[must_use]
-    pub fn shape_of_nearest_local(&self, name: &str, offset: u32) -> Option<&CompactString> {
-        self.symbol_shapes.get(&self.nearest_local(name, offset)?.id)
+    pub fn shape_of_nearest_local(&self, name: &str, offset: u32) -> Option<&'static str> {
+        self.symbol_shapes.get(&self.nearest_local(name, offset)?.id).copied()
     }
 }
 

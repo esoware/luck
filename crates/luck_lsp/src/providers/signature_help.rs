@@ -27,8 +27,7 @@ pub(crate) fn signature_help(
         return None;
     };
     let name = callee.name();
-    let deprecated_message =
-        function.deprecated.as_ref().map(|deprecation| deprecation.message.as_str());
+    let deprecated_message = function.deprecated.as_ref().map(|deprecation| deprecation.message);
     let signatures: Vec<SignatureInformation> = function
         .signatures
         .iter()

@@ -34,9 +34,10 @@ mod token;
 mod version;
 mod whitespace;
 
+pub use compact_str::CompactString;
+
 pub use code_buffer::CodeBuffer;
 pub use comment::{Comment, CommentKind, CommentPosition, leading_hot_comments};
-pub use compact_str::CompactString;
 pub use number::{LuaNumber, NumberSubtypes, parse_lua_number};
 pub use op::{Associativity, BinOp, CompoundOp, OperandSide, UnOp};
 pub use source_error::SourceError;

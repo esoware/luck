@@ -28,13 +28,11 @@
     )
 )]
 
-extern crate alloc;
-
 mod analysis;
 mod builder;
 mod resolve;
 mod scope;
-mod stdlib_load;
+mod stdlib_catalog;
 mod stdlib_model;
 
 pub use analysis::{SemanticAnalysis, analyze, analyze_with_environment};
@@ -44,9 +42,9 @@ pub use scope::{
     Reference, ReferenceId, ReferenceKind, Scope, ScopeId, ScopeKind, ScopeTree, Symbol, SymbolId,
     SymbolKind,
 };
-pub use stdlib_load::library_for;
+pub use stdlib_catalog::library_for;
 pub use stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
-    StdlibNamespace, StdlibParam, StdlibShape, StdlibSignature, StdlibValue,
+    StdlibMap, StdlibNamespace, StdlibParam, StdlibShape, StdlibSignature, StdlibValue,
     expand_replace_template,
 };
