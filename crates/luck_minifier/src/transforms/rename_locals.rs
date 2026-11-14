@@ -11,9 +11,7 @@ use self::analyzer::Analyzer;
 use self::globals::renamable_globals;
 use self::renamer::Renamer;
 
-/// Returns `None` when the renamer's walk falls out of step with the
-/// analyzer's, which leaves no tree worth keeping.
-pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) -> Option<Block> {
+pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) -> Block {
     // Opt-in, since renamed globals end up under new `_G` keys.
     let root_globals = if rename_globals { renamable_globals(&block, version) } else { Vec::new() };
 
@@ -27,7 +25,11 @@ pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) ->
     let mut renamer = Renamer::new(analyzer.renamed_bindings(), version);
     renamer.declare_root_globals(&root_globals);
     let output = renamer.transform_block(block);
-    renamer.is_in_step().then_some(output)
+    debug_assert!(
+        renamer.has_declared_every_binding(),
+        "the renamer's walk declared fewer bindings than its analyzer's"
+    );
+    output
 }
 
 #[cfg(test)]
@@ -42,9 +44,7 @@ mod tests {
     }
 
     fn apply_version(source: &str, version: LuaVersion) -> String {
-        let output = run_pass(source, version, |block| {
-            rename(block, version, true).expect("the walks stay in step")
-        });
+        let output = run_pass(source, version, |block| rename(block, version, true));
         assert_reparses(&output, version);
         output
     }

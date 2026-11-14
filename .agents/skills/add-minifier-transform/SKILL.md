@@ -11,6 +11,8 @@ A transform is a `Block -> Block` pass implementing `Transform` (`luck_ast/src/t
 
 Always recurse through `self.walk_*`, because hand-rolled recursion misses nested cases. Exhaustive matches only, no `_ =>` arms. If the pass needs scope or binding information, do **not** build a flat name-to-value map, which miscompiles shadowed names. Use a scope-aware analysis (see `rename_locals`'s Analyzer for the reference implementation), or don't write the pass yet. Purity questions go through `is_pure_expr` in `src/expr.rs`.
 
+Build every node in the shape the parser gives its printed text: splice a run or chain you extend with `BinaryOp::splice_operands` or `SuffixedExpression::splice_prefix`, parenthesize what would regroup, and decide nothing by span, since synthesized nodes don't carry source spans. The pipeline never reparses its output, so its fixpoint is only idempotent when each round's tree is the one its printed output parses to.
+
 ## 2. Config flag
 
 Every pass gets a bool on `TransformConfig` (`luck_minifier/src/transform_config.rs`), with its default there, and the same field on its `luck.json` shape and both conversions in `luck_config/src/transform_config.rs`, then `just schema` (the drift test fails if skipped).

@@ -642,8 +642,7 @@ mod tests {
 
     fn rename_and_lift(source: &str) -> String {
         let output = run_pass(source, LuaVersion::Lua54, |block| {
-            let renamed = rename(block, LuaVersion::Lua54, true).expect("the walks stay in step");
-            lift(renamed, LuaVersion::Lua54)
+            lift(rename(block, LuaVersion::Lua54, true), LuaVersion::Lua54)
         });
         assert_reparses(&output, LuaVersion::Lua54);
         output

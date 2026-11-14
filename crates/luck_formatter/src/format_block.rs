@@ -23,6 +23,7 @@ use crate::comments::{
     write_stalled_comments, write_tail_comments, write_trailing_comments,
 };
 use crate::ir::{Format, Formatter, empty_line, hard_line, indent, token};
+use crate::sort_requires::{RequireRun, sortable_require};
 use crate::{BlockNewlineGaps, Comments, FormatOptions};
 
 #[derive(Debug, Clone, Copy)]
@@ -141,7 +142,8 @@ impl Format for Block {
             }
         }
 
-        let Some(last_end) = write_items(f, printed_items(self)) else {
+        let should_sort_requires = f.sorts_requires_in(self);
+        let Some(last_end) = write_items(f, printed_items(self), should_sort_requires) else {
             write_dangling_comments(f, self.span.start);
             return;
         };
@@ -161,24 +163,32 @@ impl Format for Block {
     }
 }
 
-fn write_items<'block, Items>(f: &mut Formatter, items: Items) -> Option<u32>
+fn write_items<'block, Items>(
+    f: &mut Formatter,
+    items: Items,
+    should_sort_requires: bool,
+) -> Option<u32>
 where
     Items: Iterator<Item = BlockItem<'block>> + Clone,
 {
     let mut remaining = items.peekable();
     let mut previous: Option<PreviousItem> = None;
+    let mut requires = RequireRun::default();
     while let Some(item) =
         next_item(f, &mut remaining, previous.map_or(0, |last_item| last_item.end))
     {
         let Span { start, end } = item.span();
         let should_surround_with_blank = item.should_surround_with_blank();
 
-        if let Some(previous_item) = previous {
-            write_separator(f, previous_item, start, should_surround_with_blank);
-        }
+        let is_blank_before = previous.is_some_and(|previous_item| {
+            write_separator(f, previous_item, start, should_surround_with_blank)
+        });
 
+        let before_comments = f.element_count();
         let has_stalled_ignore = write_stalled_comments(f, start);
         let has_leading_ignore = write_leading_comments(f, start);
+        let has_comment_lines = f.element_count() != before_comments;
+        let is_opted_out = has_stalled_ignore || has_leading_ignore;
 
         // A statement starting with `(` would reparse as a call on the
         // one before it (`f()` then `(g)()` reads as `f()(g)()`), so it
@@ -191,11 +201,40 @@ where
             }
         }
 
-        write_verbatim_or(f, item, has_stalled_ignore || has_leading_ignore);
-        write_trailing_comments(f, start, end);
+        let item_start = f.element_count();
+        write_verbatim_or(f, item, is_opted_out);
+        let has_multi_line_trailer = write_trailing_comments(f, start, end);
+
+        if should_sort_requires {
+            // Requires move as whole lines, so a run ends at a blank line or a
+            // comment line between two of them.
+            if is_blank_before || has_comment_lines {
+                requires.finish(f);
+            }
+            let sortable = match item {
+                BlockItem::Stmt(stmt)
+                    if !is_opted_out
+                        && !has_multi_line_trailer
+                        && !f.comments().overlaps_disabled_region(Span::new(start, end)) =>
+                {
+                    sortable_require(stmt)
+                }
+                BlockItem::Stmt(_) | BlockItem::Last(_) | BlockItem::Verbatim { .. } => None,
+            };
+            match sortable {
+                Some(require) => {
+                    let source_end =
+                        f.comments().last_printed_end().map_or(end, |printed| printed.max(end));
+                    let elements = item_start..f.element_count();
+                    requires.push(require, elements, Span::new(start, source_end));
+                }
+                None => requires.finish(f),
+            }
+        }
 
         previous = Some(PreviousItem { end, should_surround_with_blank });
     }
+    requires.finish(f);
     previous.map(|last_item| last_item.end)
 }
 
@@ -309,7 +348,7 @@ pub(crate) fn format_selection(
     comments.restrict_to(Span::new(line_start, last_end));
 
     let mut f = Formatter::new(*options, comments);
-    write_items(&mut f, items);
+    write_items(&mut f, items, false);
     let end = f.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
     Some((Span::new(line_start, end), f.print(&base_indent)))
 }
@@ -347,17 +386,18 @@ fn run_has_blank(text: &str, version: LuaVersion) -> bool {
     text.split(';').any(|segment| line_breaks(segment, version).nth(1).is_some())
 }
 
-/// Write the line break between two adjacent items.
+/// Write the line break between two adjacent items, and return whether it's
+/// a blank line.
 ///
-/// It becomes a blank line when the source has one or, on the source-less
-/// path, when a neighbor wants surrounding blanks or the next statement's
-/// anchor asked for one.
+/// It becomes one when the source has one or, on the source-less path, when
+/// a neighbor wants surrounding blanks or the next statement's anchor asked
+/// for one.
 fn write_separator(
     f: &mut Formatter,
     previous: PreviousItem,
     next_start: u32,
     should_surround_next_with_blank: bool,
-) {
+) -> bool {
     let is_blank = f.comments().source_text().map_or_else(
         || {
             previous.should_surround_with_blank
@@ -383,6 +423,7 @@ fn write_separator(
     } else {
         hard_line().fmt(f);
     }
+    is_blank
 }
 
 /// A statement that opted out or has such a comment takes its block's

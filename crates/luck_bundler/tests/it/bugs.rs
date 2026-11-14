@@ -7,12 +7,14 @@ use std::fs;
 use std::path::Path;
 
 use luck_ast::{Call, Visitor};
-use luck_bundler::{BundleOptions, BundleResult, DynamicRequire, LineMapEntry, bundle};
+use luck_bundler::{BundleOptions, BundleResult, DynamicRequire, LineMapEntry};
 use luck_core::Diagnostic;
 use luck_semantic::{ScopeId, ScopeKind, ScopeTree, SymbolId};
 use luck_token::{LuaVersion, Token};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tempfile::TempDir;
+
+use crate::common::bundle_both;
 
 const LUA_REQUIRE_UTIL: &[u8] = b"local util = require(\"util\")\nprint(util)\n";
 const LUAU_REQUIRE_UTIL: &[u8] = b"local util = require(\"./util\")\nprint(util)\n";
@@ -36,7 +38,7 @@ fn bundle_project(
     version: LuaVersion,
 ) -> Result<BundleResult, Vec<Diagnostic>> {
     let search_paths = if version.is_luau() { vec![] } else { vec!["?.lua".to_owned()] };
-    bundle(
+    bundle_both(
         &directory.join(entry),
         &BundleOptions {
             version,

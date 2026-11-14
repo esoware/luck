@@ -1,6 +1,11 @@
+use core::mem;
+
+use luck_token::Span;
+
 use crate::expr::Expression;
 use crate::function::FunctionAttribute;
 use crate::stmt::{Block, Statement};
+use crate::types::Type;
 use crate::visitor::Visitor;
 
 /// The deepest tree `luck_parser` builds, in the levels [`Visitor::descend`]
@@ -32,24 +37,32 @@ pub fn expr_nesting_depth(expr: &Expression) -> usize {
     meter.deepest
 }
 
+/// How many levels deep `ty` nests, zero for a name, or
+/// `MAX_NESTING_DEPTH + 1` for anything deeper.
+///
+/// The walk stops there, so it is safe on a type of any depth.
+#[must_use]
+pub fn type_nesting_depth(ty: &Type) -> usize {
+    let mut meter = DepthMeter { depth: 0, deepest: 0 };
+    meter.visit_type(ty);
+    meter.deepest
+}
+
+/// The span of the innermost statement, expression, or type at each place
+/// where `block`, sitting `depth` levels down, nests past
+/// [`MAX_NESTING_DEPTH`]: one for each construct the cap refuses.
+///
+/// The walk stops at the cap, so it is safe on a tree of any depth.
+#[must_use]
+pub fn spans_past_nesting_cap(block: &Block, depth: usize) -> Vec<Span> {
+    let mut finder = OverflowFinder { depth, node: block.span, spans: Vec::new() };
+    finder.visit_block(block);
+    finder.spans
+}
+
 struct DepthMeter {
     depth: usize,
     deepest: usize,
-}
-
-impl DepthMeter {
-    /// The walkers skip attribute arguments, which the parser nests one level
-    /// under the function they sit on.
-    fn visit_attributes(&mut self, attributes: &[FunctionAttribute]) {
-        for args in attributes.iter().filter_map(|attribute| attribute.args.as_ref()) {
-            if self.descend() {
-                for arg in args.iter() {
-                    self.visit_expr(arg);
-                }
-            }
-            self.ascend();
-        }
-    }
 }
 
 impl<'ast> Visitor<'ast> for DepthMeter {
@@ -64,26 +77,98 @@ impl<'ast> Visitor<'ast> for DepthMeter {
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
-        if let Statement::FunctionDecl(function_decl) = stmt {
-            self.visit_attributes(&function_decl.attributes);
-        }
-        if let Statement::LocalFunction(local_function) = stmt {
-            self.visit_attributes(&local_function.attributes);
-        }
+        visit_stmt_attributes(self, stmt);
         self.walk_stmt(stmt);
     }
 
     fn visit_expr(&mut self, expr: &'ast Expression) {
-        if let Expression::FunctionDef(function_def) = expr {
-            self.visit_attributes(&function_def.attributes);
-        }
+        visit_expr_attributes(self, expr);
         self.walk_expr(expr);
+    }
+}
+
+struct OverflowFinder {
+    depth: usize,
+    /// The innermost statement, expression, or type the walk is in.
+    node: Span,
+    spans: Vec<Span>,
+}
+
+impl<'ast> Visitor<'ast> for OverflowFinder {
+    fn descend(&mut self) -> bool {
+        self.depth = self.depth.saturating_add(1);
+        let fits = self.depth <= MAX_NESTING_DEPTH;
+        if !fits {
+            self.spans.push(self.node);
+        }
+        fits
+    }
+
+    fn ascend(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+        let outer = mem::replace(&mut self.node, stmt.span());
+        visit_stmt_attributes(self, stmt);
+        self.walk_stmt(stmt);
+        self.node = outer;
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        let outer = mem::replace(&mut self.node, expr.span());
+        visit_expr_attributes(self, expr);
+        self.walk_expr(expr);
+        self.node = outer;
+    }
+
+    fn visit_type(&mut self, type_value: &'ast Type) {
+        let outer = mem::replace(&mut self.node, type_value.span());
+        self.walk_type(type_value);
+        self.node = outer;
+    }
+}
+
+fn visit_stmt_attributes<'ast, Meter>(meter: &mut Meter, stmt: &'ast Statement)
+where
+    Meter: Visitor<'ast>,
+{
+    if let Statement::FunctionDecl(function_decl) = stmt {
+        visit_attributes(meter, &function_decl.attributes);
+    }
+    if let Statement::LocalFunction(local_function) = stmt {
+        visit_attributes(meter, &local_function.attributes);
+    }
+}
+
+fn visit_expr_attributes<'ast, Meter>(meter: &mut Meter, expr: &'ast Expression)
+where
+    Meter: Visitor<'ast>,
+{
+    if let Expression::FunctionDef(function_def) = expr {
+        visit_attributes(meter, &function_def.attributes);
+    }
+}
+
+/// The walkers skip attribute arguments, which the parser nests one level
+/// under the function they sit on.
+fn visit_attributes<'ast, Meter>(meter: &mut Meter, attributes: &'ast [FunctionAttribute])
+where
+    Meter: Visitor<'ast>,
+{
+    for args in attributes.iter().filter_map(|attribute| attribute.args.as_ref()) {
+        if meter.descend() {
+            for arg in args.iter() {
+                meter.visit_expr(arg);
+            }
+        }
+        meter.ascend();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{BinOp, Span, UnOp};
+    use luck_token::{BinOp, UnOp};
 
     use super::*;
     use crate::expr::{BinaryLink, BinaryOp, UnaryOp};
@@ -179,6 +264,46 @@ mod tests {
         };
         let nested = run(run(leaf("a"), BinOp::Concat, leaf("b")), BinOp::Concat, leaf("c"));
         assert_eq!(expr_nesting_depth(&nested), 2);
+    }
+
+    #[test]
+    fn a_type_counts_the_levels_it_nests() {
+        let synth = Synth::new();
+        assert_eq!(type_nesting_depth(&synth.ty_named("T")), 0);
+        let nested = synth.ty_optional(synth.ty_table_array(synth.ty_named("T")));
+        assert_eq!(type_nesting_depth(&nested), 2);
+        let cast = synth.type_cast(synth.name_expr("x"), nested.clone());
+        assert_eq!(expr_nesting_depth(&cast), 1 + type_nesting_depth(&nested));
+    }
+
+    #[test]
+    fn spans_past_the_cap_name_each_construct_it_refuses() {
+        let synth = Synth::new();
+        let groups = |count: usize| {
+            let mut expr = synth.name_expr("x");
+            for _ in 0..count {
+                expr = synth.parenthesized(expr);
+            }
+            expr
+        };
+        // The `level`th group from the outside.
+        let group_span = |expr: &Expression, level: usize| {
+            let mut current = expr;
+            for _ in 1..level {
+                if let Expression::Parenthesized(parenthesized) = current {
+                    current = &parenthesized.expr;
+                }
+            }
+            current.span()
+        };
+        let (deep, deeper) = (groups(10), groups(12));
+        let expected = [group_span(&deep, 8), group_span(&deeper, 8)];
+        let pair = synth.call(synth.name_expr("f"), vec![deep, deeper]);
+        let block = synth.block(vec![synth.call_stmt(pair)], None);
+        // The block and the call take two levels, so seven groups of each
+        // argument fit under the cap from nine levels below it.
+        assert_eq!(spans_past_nesting_cap(&block, MAX_NESTING_DEPTH - 9), expected);
+        assert_eq!(spans_past_nesting_cap(&block, MAX_NESTING_DEPTH - 14), []);
     }
 
     #[test]

@@ -9,14 +9,16 @@ use luck_token::{Comment, LuaVersion, Token, TokenKind};
 use crate::FormatOptions;
 use crate::ast_equivalence::{AstDiff, blocks_equivalent};
 use crate::comments::unix_line_breaks;
-use crate::format::{FormatResult, format, format_source};
+use crate::format::{FormatResult, Formatted, format, format_source};
+use crate::sort_requires::sorted_source;
 
 /// This doesn't compile the output for any target VM. Input that fails to
 /// parse returns `Ok` with its errors in `FormatResult::errors`, as with
 /// [`format()`].
 ///
-/// It costs about two formats and three parses, plus two lexes when either
-/// text has comments.
+/// It costs two formats and three parses, and a fourth parse when
+/// `sort_requires` reordered a run, plus two lexes when either text has
+/// comments.
 ///
 /// # Errors
 ///
@@ -26,11 +28,16 @@ pub fn format_and_verify(
     version: LuaVersion,
     options: &FormatOptions,
 ) -> Result<FormatResult, (FormatResult, AstDiff)> {
-    // Compare against the text the formatter read, not `source`, since
-    // `sort_requires` may have reordered it.
-    let (result, parsed) = format_source(source, version, options);
-    let Some(original) = parsed else {
+    let Formatted { result, parsed, sorted_runs } = format_source(source, version, options);
+    let Some(source_parse) = parsed else {
         return Ok(result);
+    };
+    // Compare against `source` with each sorted run in the order it printed,
+    // so a reordering counts as no change.
+    let original = if sorted_runs.is_empty() {
+        source_parse
+    } else {
+        luck_parser::parse(sorted_source(&source_parse.source, &sorted_runs), version)
     };
     let reformatted = luck_parser::parse(&result.output, version);
     if !reformatted.errors.is_empty() {

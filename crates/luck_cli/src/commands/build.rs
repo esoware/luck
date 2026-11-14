@@ -5,11 +5,12 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use clap::Args;
-use luck_bundler::{BundleOptions, bundle};
+use luck_bundler::{BundleOptions, bundle, bundle_block};
 use luck_config::{
     BuildConfig, check_output_paths, config_directory, discover_config, load_or_discover_config,
     resolve_build_config,
 };
+use luck_core::Diagnostic;
 use luck_resolver::{native_path, normalize_path};
 use luck_token::{LuaVersion, chunk_start, has_shebang};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
@@ -17,7 +18,7 @@ use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::Recursiv
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::{format_size, write_output_file};
 use crate::project::current_directory;
-use crate::render::{print_diags, print_source_errors};
+use crate::render::print_diags;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -222,17 +223,13 @@ impl BuildArgs {
     ) -> Result<Vec<String>, BuildFailure> {
         let start = Instant::now();
         let version = config.target.lua_version();
-
-        let result = bundle(
-            &config.entry,
-            &BundleOptions {
-                version,
-                search_paths: &config.search_paths,
-                project_root: &config.project_root,
-                dynamic_require: config.dynamic_require,
-            },
-        )
-        .map_err(|errors| {
+        let options = BundleOptions {
+            version,
+            search_paths: &config.search_paths,
+            project_root: &config.project_root,
+            dynamic_require: config.dynamic_require,
+        };
+        let bundle_failure = |errors: Vec<Diagnostic>| {
             print_diags(&errors, version);
             let source_files = errors
                 .iter()
@@ -240,31 +237,41 @@ impl BuildArgs {
                 .chain([normalize_path(&config.entry)])
                 .collect();
             BuildFailure::Failed { message: "build failed", source_files }
-        })?;
+        };
+        let check_output = |source_files: &[String]| {
+            check_output_paths(source_files, [&config.output])
+                .map_err(|message| BuildFailure::Fatal(usage_error(message)))
+        };
 
-        check_output_paths(&result.source_files, [&config.output])
-            .map_err(|message| BuildFailure::Fatal(usage_error(message)))?;
-
-        if verbosity != Verbosity::Quiet {
-            print_diags(&result.warnings, version);
-        }
-
-        let source_files = result.source_files;
-        let mut output = result.output;
-        let pre_minify_size = output.len();
-
-        if config.minify {
-            output =
-                luck_minifier::minify(&output, version, &config.transforms).map_err(|errors| {
-                    print_source_errors("<bundle>".to_owned(), &output, &errors, version);
+        // A minified build compares its size with the sources', since it
+        // never writes the bundle unminified.
+        let (bundled, source_files, original_size) = if config.minify {
+            let bundled = bundle_block(&config.entry, &options).map_err(bundle_failure)?;
+            check_output(&bundled.source_files)?;
+            if verbosity != Verbosity::Quiet {
+                print_diags(&bundled.warnings, version);
+            }
+            let code = luck_minifier::minify_block(bundled.block, version, &config.transforms)
+                .map_err(|error| {
+                    eprintln!("error: cannot minify the bundle: {}", error.message);
                     BuildFailure::Failed {
                         message: "minification failed",
-                        source_files: source_files.clone(),
+                        source_files: bundled.source_files.clone(),
                     }
                 })?;
-        }
+            let mut minified = bundled.header;
+            minified.push_str(&code);
+            (minified, bundled.source_files, Some(bundled.source_byte_count))
+        } else {
+            let result = bundle(&config.entry, &options).map_err(bundle_failure)?;
+            check_output(&result.source_files)?;
+            if verbosity != Verbosity::Quiet {
+                print_diags(&result.warnings, version);
+            }
+            (result.output, result.source_files, None)
+        };
 
-        output = with_preamble(config, output, version);
+        let output = with_preamble(config, bundled, version);
 
         if self.dry_run {
             eprintln!("[dry-run] Would write: {}", config.output.display());
@@ -274,8 +281,7 @@ impl BuildArgs {
 
         let duration = start.elapsed();
         if verbosity != Verbosity::Quiet {
-            let original = config.minify.then_some(pre_minify_size);
-            print_build_stat(&config.output, output.len(), original, duration);
+            print_build_stat(&config.output, output.len(), original_size, duration);
         }
 
         Ok(source_files)

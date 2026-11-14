@@ -6,10 +6,12 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use luck_bundler::{BundleOptions, BundleResult, DependencyGraph, DynamicRequire, bundle};
+use luck_bundler::{BundleOptions, BundleResult, DependencyGraph, DynamicRequire};
 use luck_core::Diagnostic;
 use luck_token::LuaVersion;
 use tempfile::TempDir;
+
+use crate::common::bundle_both;
 
 fn fixture_directory(dialect: &str, name: &str) -> PathBuf {
     let manifest_directory = env!("CARGO_MANIFEST_DIR");
@@ -47,7 +49,7 @@ fn run_bundle_with(
     let entry = input_directory.join(entry_name);
     let search_paths =
         if version.is_luau() { vec![] } else { vec!["?.lua".to_owned(), "?/init.lua".to_owned()] };
-    bundle(
+    bundle_both(
         &entry,
         &BundleOptions {
             version,
@@ -154,7 +156,7 @@ fn circular_dependency_bundles_with_w003() {
 #[test]
 fn missing_entry_flags_e010() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let errors = bundle(
+    let errors = bundle_both(
         &directory.path().join("main.lua"),
         &BundleOptions {
             version: LuaVersion::Lua54,
@@ -394,7 +396,7 @@ fn emitted_paths_stay_project_relative() {
 
     // Rooted at the entry's own directory, as `luck bundle src/main.lua` does,
     // so `shared/` lands above the root.
-    let output = bundle(
+    let output = bundle_both(
         &source_directory.join("main.lua"),
         &BundleOptions {
             version: LuaVersion::Lua54,
@@ -431,7 +433,7 @@ fn temp_project(files: &[(&str, &[u8])]) -> io::Result<TempDir> {
 /// Returns the diagnostics that stopped the project at `directory` from
 /// bundling from `main.luau`.
 fn bundle_luau_project(directory: &Path) -> Result<BundleResult, Vec<Diagnostic>> {
-    bundle(
+    bundle_both(
         &directory.join("main.luau"),
         &BundleOptions {
             version: LuaVersion::Luau,
@@ -447,7 +449,7 @@ fn bundle_luau_project(directory: &Path) -> Result<BundleResult, Vec<Diagnostic>
 /// Returns the diagnostics that stopped the project at `directory` from
 /// bundling from `main.lua` for Lua 5.4.
 fn bundle_lua_project(directory: &Path) -> Result<BundleResult, Vec<Diagnostic>> {
-    bundle(
+    bundle_both(
         &directory.join("main.lua"),
         &BundleOptions {
             version: LuaVersion::Lua54,

@@ -2,11 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_bundler::{BundleOptions, DynamicRequire, LineMapEntry, bundle};
+use luck_bundler::{BundleOptions, DynamicRequire, LineMapEntry, bundle, bundle_block};
 use luck_config::check_output_paths;
 use luck_core::LuaTarget;
 
-use crate::exit::{Exit, fail_with_diags, fail_with_source_errors, operation_error, usage_error};
+use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::write_output;
 use crate::project::{
@@ -67,17 +67,31 @@ impl BundleArgs {
         let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default().into());
 
         let (entry_path, project_root) = entry_and_root(&self.entry)?;
+        let options = BundleOptions {
+            version,
+            search_paths: &self.search_paths,
+            project_root,
+            dynamic_require,
+        };
 
-        let result = bundle(
-            entry_path,
-            &BundleOptions {
-                version,
-                search_paths: &self.search_paths,
-                project_root,
-                dynamic_require,
-            },
-        )
-        .map_err(|errors| fail_with_diags(&errors, version))?;
+        if self.minify {
+            let tree = bundle_block(entry_path, &options)
+                .map_err(|errors| fail_with_diags(&errors, version))?;
+            check_output_paths(&tree.source_files, self.output.iter()).map_err(usage_error)?;
+            if verbosity != Verbosity::Quiet {
+                print_diags(&tree.warnings, version);
+            }
+            let code =
+                luck_minifier::minify_block(tree.block, version, &transforms).map_err(|error| {
+                    operation_error(format!("cannot minify the bundle: {}", error.message))
+                })?;
+            let mut minified = tree.header;
+            minified.push_str(&code);
+            return write_output(self.output.as_deref(), &minified);
+        }
+
+        let result =
+            bundle(entry_path, &options).map_err(|errors| fail_with_diags(&errors, version))?;
 
         check_output_paths(&result.source_files, self.output.iter().chain(&self.line_map))
             .map_err(usage_error)?;
@@ -86,19 +100,11 @@ impl BundleArgs {
             print_diags(&result.warnings, version);
         }
 
-        let mut code = result.output;
-
-        if self.minify {
-            code = luck_minifier::minify(&code, version, &transforms).map_err(|errors| {
-                fail_with_source_errors("<bundle>".to_owned(), &code, &errors, version)
-            })?;
-        }
-
         if let Some(map_path) = self.line_map.as_deref() {
             write_line_map(map_path, &result.line_map)?;
         }
 
-        write_output(self.output.as_deref(), &code)
+        write_output(self.output.as_deref(), &result.output)
     }
 }
 

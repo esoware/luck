@@ -7,10 +7,12 @@ use std::fs;
 use std::path::Path;
 
 use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth};
-use luck_bundler::{BundleOptions, BundleResult, DynamicRequire, bundle};
+use luck_bundler::{BundleOptions, BundleResult, DynamicRequire};
 use luck_core::Diagnostic;
 use luck_token::{LuaVersion, offset_to_index};
 use tempfile::TempDir;
+
+use crate::common::bundle_both;
 
 /// `1` inside `count` pairs of parentheses.
 fn parenthesized(count: usize) -> String {
@@ -35,7 +37,7 @@ fn bundle_project(
     version: LuaVersion,
 ) -> Result<BundleResult, Vec<Diagnostic>> {
     let search_paths = if version.is_luau() { vec![] } else { vec!["?.lua".to_owned()] };
-    bundle(
+    bundle_both(
         &directory.join(entry),
         &BundleOptions {
             version,
@@ -170,7 +172,7 @@ fn flags_e013_at_the_construct_a_wrapper_pushes_past_the_cap() {
         // The innermost group is the one past the cap.
         let innermost = shape.prefix.len() + parentheses - 1;
         assert_eq!(offset_to_index(error.span.start), innermost, "{}: {error:?}", shape.name);
-        assert_eq!(error.span.text(&deep_source), "(", "{}: {error:?}", shape.name);
+        assert_eq!(error.span.text(&deep_source), "(1)", "{}: {error:?}", shape.name);
         let help = error.help.as_deref().unwrap_or_default();
         assert!(
             help.contains(&format!("{} levels deeper", shape.wrapper_levels)),

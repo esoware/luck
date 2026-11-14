@@ -7,7 +7,12 @@
 //! module, and `Formatter`'s `write_*` methods. Only this module pushes raw
 //! elements, which is what keeps every tag paired.
 
-use luck_token::CompactString;
+use core::mem;
+use core::ops::Range;
+
+use luck_ast::Block;
+use luck_token::{CompactString, Span};
+use rustc_hash::FxHashSet;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::comments::{Comments, CommentsCheckpoint};
@@ -163,6 +168,7 @@ tuple_format!(First Second Third Fourth Fifth Sixth Seventh Eighth Ninth Tenth);
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Checkpoint {
     element_count: usize,
+    sorted_run_count: usize,
     comments: CommentsCheckpoint,
 }
 
@@ -172,6 +178,17 @@ pub(crate) struct Formatter {
     next_group_id: usize,
     options: FormatOptions,
     comments: Comments,
+    /// The spans of the blocks whose runs of requires print sorted, which
+    /// only [`crate::format()`] asks for.
+    sorting_blocks: FxHashSet<Span>,
+    sorted_runs: Vec<SortedRun>,
+}
+
+/// A run of statements the formatter printed in another order: the source
+/// each covers, in the order they print.
+#[derive(Debug)]
+pub(crate) struct SortedRun {
+    pub members: Vec<Span>,
 }
 
 impl Formatter {
@@ -180,7 +197,58 @@ impl Formatter {
         // still removes most realloc copies. Synthetic ASTs have no source
         // and start empty.
         let capacity = comments.source_text().map_or(0, |source| source.len().div_ceil(8));
-        Self { elements: Vec::with_capacity(capacity), next_group_id: 0, options, comments }
+        Self {
+            elements: Vec::with_capacity(capacity),
+            next_group_id: 0,
+            options,
+            comments,
+            sorting_blocks: FxHashSet::default(),
+            sorted_runs: Vec::new(),
+        }
+    }
+
+    pub(crate) fn sorting_requires_in(mut self, blocks: FxHashSet<Span>) -> Self {
+        self.sorting_blocks = blocks;
+        self
+    }
+
+    pub(crate) fn sorts_requires_in(&self, block: &Block) -> bool {
+        self.sorting_blocks.contains(&block.span)
+    }
+
+    /// Where the next element goes, which an emitter notes to find what it
+    /// wrote.
+    pub(crate) const fn element_count(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// Prints the statements written to `slices`, element ranges in stream
+    /// order, in `order`, which indexes `slices`. What lies between two of
+    /// them stays in place.
+    pub(crate) fn reorder(&mut self, slices: &[Range<usize>], order: &[usize], run: SortedRun) {
+        let (Some(first), Some(last)) = (slices.first(), slices.last()) else {
+            return;
+        };
+        let tail = self.elements.split_off(last.end);
+        let mut written = self.elements.split_off(first.start).into_iter();
+        let mut gaps = Vec::with_capacity(slices.len());
+        let mut pieces = Vec::with_capacity(slices.len());
+        let mut position = first.start;
+        for slice in slices {
+            gaps.push(
+                written.by_ref().take(slice.start.saturating_sub(position)).collect::<Vec<_>>(),
+            );
+            pieces.push(written.by_ref().take(slice.len()).collect::<Vec<_>>());
+            position = slice.end;
+        }
+        for (gap, &i) in gaps.into_iter().zip(order) {
+            self.elements.extend(gap);
+            if let Some(piece) = pieces.get_mut(i) {
+                self.elements.append(piece);
+            }
+        }
+        self.elements.extend(tail);
+        self.sorted_runs.push(run);
     }
 
     pub(crate) const fn options(&self) -> &FormatOptions {
@@ -241,12 +309,21 @@ impl Formatter {
     }
 
     pub(crate) const fn checkpoint(&self) -> Checkpoint {
-        Checkpoint { element_count: self.elements.len(), comments: self.comments.checkpoint() }
+        Checkpoint {
+            element_count: self.elements.len(),
+            sorted_run_count: self.sorted_runs.len(),
+            comments: self.comments.checkpoint(),
+        }
     }
 
     pub(crate) fn restore(&mut self, checkpoint: Checkpoint) {
         self.elements.truncate(checkpoint.element_count);
+        self.sorted_runs.truncate(checkpoint.sorted_run_count);
         self.comments.restore(checkpoint.comments);
+    }
+
+    pub(crate) fn take_sorted_runs(&mut self) -> Vec<SortedRun> {
+        mem::take(&mut self.sorted_runs)
     }
 
     pub(crate) fn print(self, base_indent: &str) -> String {

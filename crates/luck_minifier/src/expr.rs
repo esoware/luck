@@ -56,7 +56,7 @@ pub(crate) fn is_nil(expr: &Expression) -> bool {
 
 /// What the operators that can raise care about in a literal operand.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum LiteralKind {
+pub(crate) enum LiteralKind {
     /// A number with no known exact integer representation.
     Float,
     /// A number the bitwise operators accept.
@@ -81,7 +81,7 @@ impl LiteralKind {
 /// The kind of a literal expression whose evaluation can't raise, or `None`
 /// for anything else. Operators are checked against the operand kinds, since
 /// `nil + 1` and `1 < "a"` raise with no variable in sight.
-fn literal_kind(expr: &Expression) -> Option<LiteralKind> {
+pub(crate) fn literal_kind(expr: &Expression) -> Option<LiteralKind> {
     match expr {
         Expression::Number(literal) => Some(number_literal_kind(literal)),
         Expression::StringLiteral(_) => Some(LiteralKind::String),
@@ -117,7 +117,7 @@ fn number_literal_kind(literal: &Literal) -> LiteralKind {
     }
 }
 
-const fn unary_literal_kind(op: UnOp, operand: LiteralKind) -> Option<LiteralKind> {
+pub(crate) const fn unary_literal_kind(op: UnOp, operand: LiteralKind) -> Option<LiteralKind> {
     match op {
         UnOp::Not => Some(LiteralKind::Other),
         UnOp::Neg => {
@@ -161,7 +161,8 @@ fn run_literal_kind(run: &BinaryOp) -> Option<LiteralKind> {
             let mut kind = literal_kind(&run.first)?;
             for link in &run.links {
                 let operand = literal_kind(&link.operand)?;
-                kind = binary_literal_kind(kind, link.op, operand, &link.operand)?;
+                let is_nonzero = is_nonzero_number_literal(&link.operand);
+                kind = binary_literal_kind(kind, link.op, operand, is_nonzero)?;
             }
             Some(kind)
         }
@@ -171,21 +172,22 @@ fn run_literal_kind(run: &BinaryOp) -> Option<LiteralKind> {
             let left_operands =
                 before_last.iter().rev().map(|link| &link.operand).chain(iter::once(&run.first));
             for (link, left_operand) in run.links.iter().rev().zip(left_operands) {
-                kind =
-                    binary_literal_kind(literal_kind(left_operand)?, link.op, kind, &link.operand)?;
+                let is_nonzero = is_nonzero_number_literal(&link.operand);
+                kind = binary_literal_kind(literal_kind(left_operand)?, link.op, kind, is_nonzero)?;
             }
             Some(kind)
         }
     }
 }
 
-/// `rhs` is the right operand as written, which for a right-associative
-/// operator is the start of the rest of its run.
-fn binary_literal_kind(
+/// `is_rhs_nonzero` says whether the right operand as written, which for a
+/// right-associative operator is the start of the rest of its run, is a
+/// nonzero number literal.
+pub(crate) fn binary_literal_kind(
     left: LiteralKind,
     op: BinOp,
     right: LiteralKind,
-    rhs: &Expression,
+    is_rhs_nonzero: bool,
 ) -> Option<LiteralKind> {
     let are_numbers = left.is_number() && right.is_number();
     let are_integers = left == LiteralKind::Integer && right == LiteralKind::Integer;
@@ -203,16 +205,14 @@ fn binary_literal_kind(
         BinOp::Add | BinOp::Sub | BinOp::Mul => are_numbers.then_some(arithmetic_kind),
         BinOp::Div | BinOp::Pow => are_numbers.then_some(LiteralKind::Float),
         // `%` and `//` raise on a zero integer divisor in 5.3+.
-        BinOp::Mod | BinOp::FloorDiv => {
-            (are_numbers && is_nonzero_number_literal(rhs)).then_some(arithmetic_kind)
-        }
+        BinOp::Mod | BinOp::FloorDiv => (are_numbers && is_rhs_nonzero).then_some(arithmetic_kind),
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
             are_integers.then_some(LiteralKind::Integer)
         }
     }
 }
 
-fn is_nonzero_number_literal(expr: &Expression) -> bool {
+pub(crate) fn is_nonzero_number_literal(expr: &Expression) -> bool {
     let Expression::Number(literal) = unwrap_parentheses(expr) else {
         return false;
     };
@@ -291,6 +291,82 @@ fn is_effect_free(expr: &Expression, can_read_names: bool) -> bool {
     }
 }
 
+/// Whether `left` and `right` are one pure expression written twice, so
+/// either can stand for the other.
+///
+/// Spans don't count, and a function or a cast never matches, since telling
+/// two apart takes a whole body or type.
+pub(crate) fn is_same_pure_expr(left: &Expression, right: &Expression) -> bool {
+    match (left, right) {
+        (Expression::Nil(_), Expression::Nil(_))
+        | (Expression::True(_), Expression::True(_))
+        | (Expression::False(_), Expression::False(_))
+        | (Expression::VarArg(_), Expression::VarArg(_)) => true,
+        (Expression::Number(lhs), Expression::Number(rhs))
+        | (Expression::Integer(lhs), Expression::Integer(rhs))
+        | (Expression::StringLiteral(lhs), Expression::StringLiteral(rhs)) => lhs.text == rhs.text,
+        (Expression::Parenthesized(lhs), Expression::Parenthesized(rhs)) => {
+            is_same_pure_expr(&lhs.expr, &rhs.expr)
+        }
+        (Expression::UnaryOp(lhs), Expression::UnaryOp(rhs)) => {
+            lhs.op == rhs.op && is_same_pure_expr(&lhs.operand, &rhs.operand)
+        }
+        (Expression::BinaryOp(lhs), Expression::BinaryOp(rhs)) => {
+            lhs.links.len() == rhs.links.len()
+                && is_same_pure_expr(&lhs.first, &rhs.first)
+                && lhs.links.iter().zip(rhs.links.iter()).all(|(lhs_link, rhs_link)| {
+                    lhs_link.op == rhs_link.op
+                        && is_same_pure_expr(&lhs_link.operand, &rhs_link.operand)
+                })
+        }
+        (Expression::TableConstructor(lhs), Expression::TableConstructor(rhs)) => {
+            lhs.fields.len() == rhs.fields.len()
+                && lhs.fields.iter().zip(rhs.fields.iter()).all(|pair| match pair {
+                    (
+                        Field::Bracketed { key: lhs_key, value: lhs_value, .. },
+                        Field::Bracketed { key: rhs_key, value: rhs_value, .. },
+                    ) => {
+                        is_same_pure_expr(lhs_key, rhs_key)
+                            && is_same_pure_expr(lhs_value, rhs_value)
+                    }
+                    (
+                        Field::Named { name: lhs_name, value: lhs_value, .. },
+                        Field::Named { name: rhs_name, value: rhs_value, .. },
+                    ) => lhs_name.kind == rhs_name.kind && is_same_pure_expr(lhs_value, rhs_value),
+                    (
+                        Field::Positional { value: lhs_value, .. },
+                        Field::Positional { value: rhs_value, .. },
+                    ) => is_same_pure_expr(lhs_value, rhs_value),
+                    (
+                        Field::Bracketed { .. } | Field::Named { .. } | Field::Positional { .. },
+                        _,
+                    ) => false,
+                })
+        }
+        (
+            Expression::Nil(_)
+            | Expression::True(_)
+            | Expression::False(_)
+            | Expression::VarArg(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::Parenthesized(_)
+            | Expression::UnaryOp(_)
+            | Expression::BinaryOp(_)
+            | Expression::TableConstructor(_)
+            | Expression::FunctionDef(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::Error(_),
+            _,
+        ) => false,
+    }
+}
+
 /// Whether `key` is a table constructor `[key]` that can't raise: `nil` and
 /// NaN raise, and only a key spelled out as a literal is known to be neither.
 fn is_valid_table_key(key: &Expression) -> bool {
@@ -317,13 +393,6 @@ fn is_valid_table_key(key: &Expression) -> bool {
         | Expression::TypeCast(_)
         | Expression::Error(_) => false,
     }
-}
-
-/// Whether `expr` is a literal, or operators over literals, that can't raise:
-/// neither its value nor its evaluation depends on where it runs, so a pass
-/// can move it.
-pub(crate) fn is_closed_literal_expr(expr: &Expression) -> bool {
-    literal_kind(expr).is_some()
 }
 
 /// How many levels of nesting a rewrite may add, so a run of rewrites can't

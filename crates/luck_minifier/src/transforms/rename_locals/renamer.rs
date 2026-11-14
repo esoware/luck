@@ -28,10 +28,6 @@ impl RenamedBinding {
 pub(super) struct Renamer {
     bindings: Vec<RenamedBinding>,
     next_binding_id: usize,
-    /// Whether a declaration didn't match the analyzer's binding at its id.
-    /// The names handed out from there on belong to other bindings, so the
-    /// tree is wrong.
-    is_out_of_step: bool,
     name_stacks: FxHashMap<CompactString, Vec<CompactString>>,
     scope_binding_names: Vec<Vec<CompactString>>,
     version: LuaVersion,
@@ -42,16 +38,15 @@ impl Renamer {
         Self {
             bindings,
             next_binding_id: 0,
-            is_out_of_step: false,
             name_stacks: FxHashMap::default(),
             scope_binding_names: vec![Vec::new()],
             version,
         }
     }
 
-    /// Whether the walk declared exactly the analyzer's bindings, in order.
-    pub(super) const fn is_in_step(&self) -> bool {
-        !self.is_out_of_step && self.next_binding_id == self.bindings.len()
+    /// Whether the walk has declared every binding the analyzer did.
+    pub(super) const fn has_declared_every_binding(&self) -> bool {
+        self.next_binding_id == self.bindings.len()
     }
 
     pub(super) fn declare_root_globals(&mut self, names: &[&str]) {
@@ -61,13 +56,14 @@ impl Renamer {
     }
 
     fn declare_binding(&mut self, original: &str) -> CompactString {
-        let new_name = match self.bindings.get(self.next_binding_id) {
-            Some(binding) if binding.original_name == original => binding.new_name.clone(),
-            Some(_) | None => {
-                self.is_out_of_step = true;
-                original.into()
-            }
-        };
+        let binding = self.bindings.get(self.next_binding_id);
+        debug_assert!(
+            binding.is_some_and(|declared| declared.original_name == original),
+            "the renamer declared `{original}` where its analyzer declared {:?}",
+            binding.map(|declared| declared.original_name.as_str())
+        );
+        let new_name =
+            binding.map_or_else(|| original.into(), |declared| declared.new_name.clone());
         self.next_binding_id = self.next_binding_id.saturating_add(1);
         let original_name = CompactString::from(original);
         if let Some(scope_names) = self.scope_binding_names.last_mut() {
@@ -349,37 +345,17 @@ mod tests {
     use super::*;
     use crate::fixtures::parse;
 
-    fn binding(original_name: &str, new_name: &str) -> RenamedBinding {
-        RenamedBinding::new(original_name.into(), new_name.into())
-    }
-
-    fn is_in_step_after(source: &str, bindings: Vec<RenamedBinding>) -> bool {
+    #[test]
+    fn a_walk_gives_each_binding_the_name_the_analyzer_chose() {
+        let bindings = vec![
+            RenamedBinding::new("first".into(), "l".into()),
+            RenamedBinding::new("second".into(), "u".into()),
+        ];
         let mut renamer = Renamer::new(bindings, LuaVersion::Lua54);
-        let _renamed = renamer.transform_block(parse(source, LuaVersion::Lua54));
-        renamer.is_in_step()
-    }
-
-    #[test]
-    fn a_walk_that_declares_the_analyzers_bindings_is_in_step() {
-        let bindings = vec![binding("first", "l"), binding("second", "u")];
-        assert!(is_in_step_after("local first = 1 local second = first", bindings));
-    }
-
-    #[test]
-    fn a_walk_past_the_analyzers_bindings_is_out_of_step() {
-        assert!(!is_in_step_after("local first = 1", Vec::new()));
-        assert!(!is_in_step_after("local first, second = 1, 2", vec![binding("first", "l")]));
-    }
-
-    #[test]
-    fn a_walk_short_of_the_analyzers_bindings_is_out_of_step() {
-        let bindings = vec![binding("first", "l"), binding("second", "u")];
-        assert!(!is_in_step_after("local first = 1", bindings));
-    }
-
-    #[test]
-    fn a_walk_that_declares_another_name_is_out_of_step() {
-        let bindings = vec![binding("second", "l"), binding("first", "u")];
-        assert!(!is_in_step_after("local first = 1 local second = first", bindings));
+        let source = "local first = 1 local second = first";
+        let tree = renamer.transform_block(parse(source, LuaVersion::Lua54));
+        assert!(renamer.has_declared_every_binding());
+        let output = luck_codegen::compact(&tree).expect("the tree prints");
+        assert_eq!(output, "local l=1 local u=l");
     }
 }

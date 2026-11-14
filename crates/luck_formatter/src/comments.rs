@@ -454,11 +454,13 @@ pub(crate) fn write_stalled_comments(f: &mut Formatter, anchor: u32) -> bool {
     write_comment_lines(f, lines)
 }
 
-pub(crate) fn write_trailing_comments(f: &mut Formatter, anchor: u32, stmt_end: u32) {
-    let texts = match &mut f.comments_mut().store {
+/// Returns true when one of them is a block comment spanning lines, which
+/// ends its line somewhere other than where the statement's does.
+pub(crate) fn write_trailing_comments(f: &mut Formatter, anchor: u32, stmt_end: u32) -> bool {
+    let (texts, spans_lines) = match &mut f.comments_mut().store {
         Store::Sourced { comments, printed_count, source, version, .. } => {
             let mut gap_start = stmt_end;
-            comment_texts(take_pending_while(comments, printed_count, |comment| {
+            let taken = take_pending_while(comments, printed_count, |comment| {
                 if comment.position != CommentPosition::Trailing || gap_start > comment.span.start {
                     return false;
                 }
@@ -467,16 +469,23 @@ pub(crate) fn write_trailing_comments(f: &mut Formatter, anchor: u32, stmt_end: 
                 let gap = Span::new(gap_start, comment.span.start).text(source);
                 gap_start = comment.span.end;
                 !has_line_break(gap, *version) && is_code_free(gap)
-            }))
+            });
+            let spans_lines =
+                taken.iter().any(|comment| comment.kind == CommentKind::MultiLineBlock);
+            (comment_texts(taken), spans_lines)
         }
-        Store::Synthetic { comments, .. } => take_synthetic(comments, anchor, |comment| {
-            comment.position == CommentPosition::Trailing
-        }),
-        Store::Empty => Vec::new(),
+        Store::Synthetic { comments, .. } => (
+            take_synthetic(comments, anchor, |comment| {
+                comment.position == CommentPosition::Trailing
+            }),
+            false,
+        ),
+        Store::Empty => (Vec::new(), false),
     };
     for text in texts {
         f.write_line_suffix(text);
     }
+    spans_lines
 }
 
 /// `start` is the list's own start.
@@ -1013,7 +1022,7 @@ mod tests {
         );
         assert!(has_prefixed, "marker prefix added to bare text");
 
-        write_trailing_comments(&mut f, 5, 0);
+        assert!(!write_trailing_comments(&mut f, 5, 0));
         let has_suffix = f
             .elements()
             .iter()

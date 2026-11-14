@@ -73,6 +73,6 @@ The defaults follow the [Roblox Lua style guide](https://roblox.github.io/lua-st
 | `quotes.rs` | Quote style normalization |
 | `numbers.rs` | Numeric-literal normalization |
 | `tokens.rs` | Token-to-IR text emission |
-| `sort_requires.rs` | `require` statement sorting, over the lines of formatted text |
+| `sort_requires.rs` | `require` statement sorting, which the block emitter applies as it prints by moving each statement's printed lines |
 | `ast_equivalence.rs` | AST-equality verifier backing `format_and_verify`, with its comparisons in `ast_equivalence/` split by node family as `luck_ast` is: `stmt.rs`, `expr.rs`, `function.rs`, and `types.rs` |
 | `verify.rs` | `format_and_verify`: the re-parse, AST, comment-placement, and idempotency checks |

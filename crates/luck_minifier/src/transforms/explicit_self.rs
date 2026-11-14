@@ -101,7 +101,7 @@ mod tests {
     /// Rewrites, then renames, so an explicit `self` shows up renamed.
     fn rewrite_and_rename(source: &str) -> String {
         let output = run_pass(source, LuaVersion::Lua54, |block| {
-            rename(rewrite(block), LuaVersion::Lua54, true).expect("the walks stay in step")
+            rename(rewrite(block), LuaVersion::Lua54, true)
         });
         assert_reparses(&output, LuaVersion::Lua54);
         output

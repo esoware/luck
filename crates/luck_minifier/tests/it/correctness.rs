@@ -1,5 +1,7 @@
 use core::fmt::Write as _;
 
+use luck_token::LuaVersion;
+
 use crate::common::{minify_lua54, reparses};
 
 const MODULE_SOURCE: &str = r#"
@@ -189,6 +191,9 @@ fn long_if_return_run_minifies_within_the_depth_cap() {
 fn assert_minifies_within_the_depth_cap(source: &str) -> String {
     let output = minify_lua54(source);
     assert!(reparses(&output), "output must reparse");
+    let input = luck_parser::parse(source, LuaVersion::Lua54).block;
+    let compact_input = luck_codegen::compact(&input).expect("the input prints");
+    assert!(output.len() <= compact_input.len(), "output must be no longer than the compact input");
     assert!(minify_lua54(&output) == output, "output must be a fixpoint");
     output
 }

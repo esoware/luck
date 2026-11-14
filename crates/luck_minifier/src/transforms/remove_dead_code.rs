@@ -10,8 +10,8 @@ use rustc_hash::FxHashMap;
 
 use crate::binding::{has_attributed_or_env_name, identifier_name, is_env_binding};
 use crate::expr::{
-    binds_looser_than_unary, extract_boolean, fits_at_depth, is_nil, is_pure_expr, parenthesize,
-    truncate_multi_value,
+    binds_looser_than_unary, extract_boolean, fits_at_depth, is_nil, is_pure_expr,
+    is_same_pure_expr, parenthesize, truncate_multi_value,
 };
 
 pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
@@ -457,7 +457,7 @@ fn is_redundant_ternary(outer: &BinaryOp) -> bool {
     let conditions = inner.links.split_last().map_or(&[][..], |(_, before_last)| before_last);
     outer.links.first().op == BinOp::Or
         && inner.links.first().op == BinOp::And
-        && inner.links.last().operand == *alternative
+        && is_same_pure_expr(&inner.links.last().operand, alternative)
         && is_pure_expr(&inner.first)
         && conditions.iter().all(|link| is_pure_expr(&link.operand))
         // X must be pure too: a call that returns a falsy value runs twice in
@@ -1134,17 +1134,29 @@ mod tests {
 
     #[test]
     fn keeps_one_value_when_folding_a_vararg_ternary() {
-        let result = run_pass("return true and ... or ...\n", LuaVersion::Lua54, |mut block| {
-            // Parsed `...`s differ by span, so the fold needs both to share one.
-            if let Some(last) = &mut block.last_stmt
-                && let LastStatement::Return(return_stmt) = &mut **last
-                && let Some(Expression::BinaryOp(outer)) = return_stmt.exprs.items.first_mut()
-                && let Expression::BinaryOp(inner) = &mut outer.first
-            {
-                inner.links.last_mut().operand = outer.links.first().operand.clone();
-            }
-            remove(block, LuaVersion::Lua54)
-        });
-        assert_eq!(result, "return(...)");
+        assert_eq!(apply("return true and ... or ...\n"), "return(...)");
+    }
+
+    #[test]
+    fn folds_a_ternary_whose_branches_are_written_alike() {
+        for (source, expected) in [
+            ("return ... and 1 or 1\n", "return 1"),
+            ("return ... and -2 ^ 3 or -2 ^ 3\n", "return-2^3"),
+            ("return ... and {1, x = \"a\"} or {1, x = \"a\"}\n", "return{1,x=\"a\"}"),
+        ] {
+            assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn keeps_a_ternary_whose_branches_differ() {
+        for source in [
+            "return ... and 1 or 2\n",
+            "return ... and 1 or 1.0\n",
+            "return ... and {1} or {2}\n",
+            "return ... and function() end or function() end\n",
+        ] {
+            assert!(apply(source).contains("or"), "source: {source}");
+        }
     }
 }

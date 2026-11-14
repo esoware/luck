@@ -56,7 +56,10 @@ mod types;
 mod visitor;
 
 pub use chain::{Call, ChainHead};
-pub use depth::{MAX_NESTING_DEPTH, block_nesting_depth, expr_nesting_depth};
+pub use depth::{
+    MAX_NESTING_DEPTH, block_nesting_depth, expr_nesting_depth, spans_past_nesting_cap,
+    type_nesting_depth,
+};
 pub use expr::{
     BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
     FunctionDef, IfExpression, InterpolatedString, InterpolatedStringSegment, Literal,

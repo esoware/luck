@@ -1,14 +1,14 @@
 use core::ops::Range;
 
-use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth, spans_past_nesting_cap};
 use luck_core::Diagnostic;
 use luck_token::{
-    LuaVersion, Span, chunk_start, encode_string, ends_with_line_break, line_breaks,
-    offset_to_index,
+    CompactString, LuaVersion, Span, chunk_start, encode_string, ends_with_line_break, line_breaks,
 };
 use rustc_hash::FxHashSet;
 
-use crate::exports::{ExportLowering, has_value_exports, lower_exports};
+use crate::block_emitter::rewrite_module;
+use crate::exports::{ExportPlan, TextLowering, has_value_exports, lower_exports_in_text};
 use crate::graph::DependencyGraph;
 use crate::loader::{dynamic_entry_text, export_runtime_text, loader_text};
 use crate::module::{Dependency, ModuleId, ModuleInfo};
@@ -36,6 +36,8 @@ pub struct LineMapEntry {
     pub path: String,
 }
 
+/// What a bundle holds, which its text and its tree both follow.
+///
 /// Modules register as functions in a table and load lazily on first
 /// require, through a loader that mirrors the target version's own
 /// `require` (`ll_require` in `loadlib.c`):
@@ -59,200 +61,202 @@ pub struct LineMapEntry {
 ///
 /// Every generated identifier shares a prefix that appears nowhere in any
 /// module source, so user code can't capture or shadow loader internals.
-/// A lone module with no requires is emitted verbatim.
-///
-/// A shebang is only valid on a chunk's first line, so the entry's moves to
-/// the bundle's first line, which keeps the bundle runnable as a script, and
-/// every other module's is dropped.
 ///
 /// Each module registers in a top-level statement, so the only nesting a
 /// module gains is its own wrapper's.
-///
-/// # Errors
-///
-/// Returns an E013 for each construct a wrapper would nest past
-/// [`MAX_NESTING_DEPTH`], at its place in its module's source, since luck
-/// couldn't read that bundle back.
-pub(crate) fn emit(
-    graph: &DependencyGraph,
-    version: LuaVersion,
-) -> Result<(String, Vec<LineMapEntry>), Vec<Diagnostic>> {
-    let modules = &graph.modules;
-    let Some(entry) = modules.get(graph.entry_id.0) else {
-        return Ok((String::new(), Vec::new()));
-    };
-
-    if modules.len() == 1 && entry.dependencies.is_empty() {
-        let line_map = vec![LineMapEntry {
-            bundle_start_line: 1,
-            // A final line break closes its line rather than opening an empty one.
-            bundle_end_line: line_breaks(&entry.source, version)
-                .count()
-                .saturating_add(usize::from(!ends_with_line_break(&entry.source, version))),
-            path: entry.path.clone(),
-        }];
-        return Ok((entry.source.clone(), line_map));
-    }
-
-    let prefix = choose_prefix(modules);
-
-    // The sources plus rough room for each module's wrapper and the loader.
-    let capacity = modules
-        .iter()
-        .map(|module| module.source.len().saturating_add(96))
-        .sum::<usize>()
-        .saturating_add(512);
-    let mut writer = BundleWriter {
-        output: String::with_capacity(capacity),
-        next_line: 1,
-        line_map: Vec::with_capacity(modules.len()),
-        prefix: &prefix,
-        version,
-        errors: Vec::new(),
-    };
-
-    if let Some(shebang) = entry.shebang {
-        writer.push(shebang.text(&entry.source));
-        writer.push("\n");
-    }
-
-    // Luau only honors hot comments before any code, so the entry's leading
-    // ones go above the loader.
-    for hot_comment in &entry.hot_comments {
-        writer.push(hot_comment.text(&entry.source));
-        writer.push("\n");
-    }
-
-    let is_loader_global = modules.iter().any(|module| {
-        module.max_function_upvalues.saturating_add(LOADER_UPVALUES) > LUA51_MAX_UPVALUES
-    });
-    writer.push(&loader_text(&prefix, version, is_loader_global));
-    // Only Lua targets record dynamic callees, so only a Lua loader gets the
-    // entry point they're retargeted at.
-    if modules.iter().any(|module| !module.dynamic_callees.is_empty()) {
-        writer.push(&dynamic_entry_text(&prefix, is_loader_global));
-    }
-    if version.has_value_exports() && modules.iter().any(|module| has_value_exports(&module.block))
-    {
-        writer.push(&export_runtime_text(&prefix));
-    }
-
-    if version.is_luau() {
-        writer.push_luau_modules(graph, entry);
-    } else {
-        writer.push_lua_modules(graph, entry);
-    }
-
-    writer.push(&format!("return {prefix}entry(...)\n"));
-
-    if writer.errors.is_empty() { Ok((writer.output, writer.line_map)) } else { Err(writer.errors) }
+pub(crate) struct Plan {
+    pub prefix: String,
+    /// True only for a 5.1 bundle with a function that has no upvalue left
+    /// for a local loader.
+    pub is_loader_global: bool,
+    /// Only Lua targets record dynamic callees, so only a Lua loader gets the
+    /// entry point they're retargeted at.
+    pub has_dynamic_entry: bool,
+    pub has_export_runtime: bool,
+    /// Luau: each module's numeric slot, by `ModuleId`. `None` on Lua, whose
+    /// cache is keyed by require string.
+    pub slots: Option<Vec<Option<usize>>>,
+    /// In bundle order.
+    pub items: Vec<Item>,
 }
 
-#[derive(Clone, Copy)]
-enum ModuleKeys<'slots> {
-    /// Lua: the require string, as `package.loaded` keys its cache.
-    RequireString,
-    /// Luau: the numeric slot of the resolved file, by `ModuleId`.
-    Slot(&'slots [Option<usize>]),
+pub(crate) enum Item {
+    Module(WrappedModule),
+    Registration(Registration),
 }
 
-impl ModuleKeys<'_> {
-    /// `None` when the dependency's file has no slot, which leaves the call
-    /// as written.
-    fn key(self, dependency: &Dependency) -> Option<String> {
-        match self {
-            Self::RequireString => {
-                Some(encode_string(dependency.require_string.as_bytes()).into_string())
-            }
-            Self::Slot(slots) => {
-                slots.get(dependency.target.0).copied().flatten().map(|slot| slot.to_string())
-            }
-        }
-    }
+pub(crate) struct WrappedModule {
+    pub id: ModuleId,
+    /// What follows `-- module ` in the comment above the wrapper. `None` for
+    /// the entry.
+    pub label: Option<CompactString>,
+    pub binding: Binding,
+    pub wrapper: Wrapper,
+    pub exports: ExportPlan,
 }
 
 /// What a wrapped module's function is bound to.
-#[derive(Clone, Copy)]
-enum Binding<'slot> {
+pub(crate) enum Binding {
     /// A slot of the module table, such as `__luck_modules[1]`.
-    Slot(&'slot str),
+    Slot(Key),
     /// The entry's own local, which the bundle calls last.
     Entry,
 }
 
-/// The text around a module's body.
-struct Wrapper {
-    opening: String,
-    closing: &'static str,
-    /// How many levels deeper the body nests than the module's own chunk, as
-    /// [`MAX_NESTING_DEPTH`] counts them.
-    levels: usize,
+/// A key of the module or path table.
+#[derive(Clone)]
+pub(crate) enum Key {
+    /// Luau: a resolved file's slot.
+    Slot(usize),
+    /// Lua: a require string, as `package.loaded` keys its cache, held as a
+    /// string literal.
+    Name(CompactString),
 }
 
-/// Where a wrapped body landed in the bundle, so a position in it maps back to
-/// the module's source.
-struct BodyLayout {
-    /// Where the source from `source_start` on begins in the bundle.
-    output_start: usize,
-    source_start: usize,
-    /// The splices over the source, in source order.
-    edits: Vec<(Span, String)>,
-}
+impl Key {
+    fn name(require_string: &str) -> Self {
+        Self::Name(encode_string(require_string.as_bytes()))
+    }
 
-impl BodyLayout {
-    /// The source that `output`, a range of the bundle, came from. Text a
-    /// splice wrote maps to the span it replaced, and wrapper text to the
-    /// module's start.
-    fn source_span(&self, output: Range<usize>, source_len: usize) -> Span {
-        let wrapper_text = Span::from_indices(self.source_start, self.source_start);
-        if output.start < self.output_start {
-            return wrapper_text;
+    pub(crate) fn text(&self) -> CompactString {
+        match self {
+            Self::Slot(slot) => CompactString::from(slot.to_string()),
+            Self::Name(literal) => literal.clone(),
         }
-        let mut output_position = self.output_start;
-        let mut source_position = self.source_start;
-        for edit in self.edits.iter().map(Some).chain([None]) {
-            let verbatim_end = edit.map_or(source_len, |(span, _)| offset_to_index(span.start));
-            let verbatim_len = verbatim_end.saturating_sub(source_position);
-            let offset = output.start.saturating_sub(output_position);
-            if offset < verbatim_len {
-                let start = source_position.saturating_add(offset);
-                let end = start.saturating_add(output.len()).min(verbatim_end);
-                return Span::from_indices(start, end);
-            }
-            output_position = output_position.saturating_add(verbatim_len);
-            let Some((span, replacement)) = edit else {
-                break;
-            };
-            if output.start.saturating_sub(output_position) < replacement.len() {
-                return *span;
-            }
-            output_position = output_position.saturating_add(replacement.len());
-            source_position = offset_to_index(span.end);
-        }
-        wrapper_text
     }
 }
 
-struct BundleWriter<'prefix> {
-    output: String,
-    /// 1-based line the next pushed character lands on.
-    next_line: usize,
-    line_map: Vec<LineMapEntry>,
-    prefix: &'prefix str,
-    version: LuaVersion,
-    errors: Vec<Diagnostic>,
+/// A statement that registers a module's function under another key.
+pub(crate) enum Registration {
+    /// Luau: a value-export module's function, wrapped so a cycle gets a
+    /// placeholder: `P_modules[slot]=P_exporting(slot,P_modules[slot])`.
+    Exporting { slot: usize },
+    /// The entry's function under `key`, wrapped like a value-export module's
+    /// when `exporting_slot` is its slot.
+    Entry { key: Key, exporting_slot: Option<usize> },
+    /// Lua: a second require string for one file, which shares its function
+    /// but not its cache entry.
+    Alias { alias: Key, primary: Key },
+    /// Lua 5.2+: the project-relative path the chunk receives under `name`,
+    /// held as a string literal.
+    Path { name: Key, path: CompactString },
 }
 
-impl BundleWriter<'_> {
-    fn push(&mut self, fragment: &str) {
-        self.output.push_str(fragment);
-        self.next_line = self.next_line.saturating_add(line_breaks(fragment, self.version).count());
+impl Registration {
+    fn text(&self, prefix: &str) -> String {
+        match self {
+            Self::Exporting { slot } => {
+                format!(
+                    "{prefix}modules[{slot}]={prefix}exporting({slot},{prefix}modules[{slot}])\n"
+                )
+            }
+            Self::Entry { key, exporting_slot } => {
+                let registered = exporting_slot.map_or_else(
+                    || format!("{prefix}entry"),
+                    |slot| format!("{prefix}exporting({slot},{prefix}entry)"),
+                );
+                format!("{prefix}modules[{}]={registered}\n", key.text())
+            }
+            Self::Alias { alias, primary } => {
+                format!("{prefix}modules[{}]={prefix}modules[{}]\n", alias.text(), primary.text())
+            }
+            Self::Path { name, path } => format!("{prefix}paths[{}]={path}\n", name.text()),
+        }
+    }
+}
+
+/// The function around a module's body.
+#[derive(Clone, Copy)]
+pub(crate) struct Wrapper {
+    pub has_vararg_param: bool,
+    /// Lua 5.2+: the body gets a private `_ENV` of its own, which its first
+    /// statement makes upvalue 1, since the module can rebind it.
+    pub has_private_env: bool,
+    /// Lua 5.1: the body's first statement restores the global `arg`, which
+    /// the vararg function's hidden local shadows.
+    pub restores_arg: bool,
+}
+
+impl Wrapper {
+    const fn of(module: &ModuleInfo, version: LuaVersion) -> Self {
+        // 5.1's hidden `arg` and 5.5's `(vararg table)` each take a local
+        // slot in a vararg function, so a body that reads no `...` gets none.
+        let has_vararg_param = module.has_vararg_read
+            || !(version.has_implicit_vararg_table() || version.has_named_varargs());
+        Self {
+            has_vararg_param,
+            has_private_env: module.has_env_rebinding,
+            restores_arg: !module.has_env_rebinding
+                && module.has_vararg_read
+                && module.has_global_arg_read,
+        }
+    }
+
+    /// How many levels deeper the body nests than the module's own chunk, as
+    /// [`MAX_NESTING_DEPTH`] counts them.
+    pub(crate) const fn levels(self) -> usize {
+        if self.has_private_env { 3 } else { 2 }
+    }
+}
+
+impl Plan {
+    /// # Errors
+    ///
+    /// Returns an E013 for each construct a wrapper would nest past
+    /// [`MAX_NESTING_DEPTH`], at its place in its module's source, since luck
+    /// couldn't read that bundle back.
+    pub(crate) fn new(
+        graph: &DependencyGraph,
+        version: LuaVersion,
+    ) -> Result<Self, Vec<Diagnostic>> {
+        let modules = &graph.modules;
+        let mut plan = Self {
+            prefix: choose_prefix(modules),
+            is_loader_global: modules.iter().any(|module| {
+                module.max_function_upvalues.saturating_add(LOADER_UPVALUES) > LUA51_MAX_UPVALUES
+            }),
+            has_dynamic_entry: modules.iter().any(|module| !module.dynamic_callees.is_empty()),
+            has_export_runtime: version.has_value_exports()
+                && modules.iter().any(|module| has_value_exports(&module.block)),
+            slots: None,
+            items: Vec::new(),
+        };
+        if version.is_luau() {
+            plan.push_luau_modules(graph, version);
+        } else {
+            plan.push_lua_modules(graph, version);
+        }
+        let errors = plan.nesting_errors(graph, version);
+        if errors.is_empty() { Ok(plan) } else { Err(errors) }
+    }
+
+    /// The key of the module `dependency` loads. `None` when its file has no
+    /// slot, which leaves the call as written.
+    pub(crate) fn key(&self, dependency: &Dependency) -> Option<Key> {
+        self.slots.as_ref().map_or_else(
+            || Some(Key::name(&dependency.require_string)),
+            |slots| slots.get(dependency.target.0).copied().flatten().map(Key::Slot),
+        )
+    }
+
+    fn push_module(
+        &mut self,
+        id: ModuleId,
+        module: &ModuleInfo,
+        version: LuaVersion,
+        label: Option<CompactString>,
+        binding: Binding,
+    ) -> bool {
+        let exports = ExportPlan::new(&module.block, version);
+        let has_values = exports.has_values;
+        let wrapper = Wrapper::of(module, version);
+        self.items.push(Item::Module(WrappedModule { id, label, binding, wrapper, exports }));
+        has_values
     }
 
     /// Luau caches per resolved file: one numeric slot per module, including
     /// the entry when something requires it.
-    fn push_luau_modules(&mut self, graph: &DependencyGraph, entry: &ModuleInfo) {
-        let prefix = self.prefix;
+    fn push_luau_modules(&mut self, graph: &DependencyGraph, version: LuaVersion) {
         let mut slots: Vec<Option<usize>> = vec![None; graph.modules.len()];
         for (slot, (id, _)) in (1usize..).zip(non_entry_modules(graph)) {
             if let Some(module_slot) = slots.get_mut(id.0) {
@@ -269,24 +273,24 @@ impl BundleWriter<'_> {
         if let Some(entry_module_slot) = slots.get_mut(graph.entry_id.0) {
             *entry_module_slot = entry_slot;
         }
-        let keys = ModuleKeys::Slot(&slots);
+        self.slots = Some(slots);
 
-        for (slot, (_, module)) in (1usize..).zip(non_entry_modules(graph)) {
-            self.push_provenance(&format!("#{slot}"), &module.relative_path);
-            let module_slot = format!("{prefix}modules[{slot}]");
-            if self.push_wrapped(Binding::Slot(&module_slot), module, keys) {
-                self.push(&format!("{module_slot}={prefix}exporting({slot},{module_slot})\n"));
+        for (slot, (id, module)) in (1usize..).zip(non_entry_modules(graph)) {
+            let label = Some(CompactString::from(format!("#{slot}")));
+            if self.push_module(id, module, version, label, Binding::Slot(Key::Slot(slot))) {
+                self.items.push(Item::Registration(Registration::Exporting { slot }));
             }
         }
 
-        let has_entry_exports = self.push_wrapped(Binding::Entry, entry, keys);
+        let Some(entry) = graph.modules.get(graph.entry_id.0) else {
+            return;
+        };
+        let has_entry_exports =
+            self.push_module(graph.entry_id, entry, version, None, Binding::Entry);
         if let Some(slot) = entry_slot {
-            let registered = if has_entry_exports {
-                format!("{prefix}exporting({slot},{prefix}entry)")
-            } else {
-                format!("{prefix}entry")
-            };
-            self.push(&format!("{prefix}modules[{slot}]={registered}\n"));
+            let exporting_slot = has_entry_exports.then_some(slot);
+            let registration = Registration::Entry { key: Key::Slot(slot), exporting_slot };
+            self.items.push(Item::Registration(registration));
         }
     }
 
@@ -294,8 +298,7 @@ impl BundleWriter<'_> {
     /// Strings reaching the same file share its function but keep separate
     /// cache entries, so the file runs once per name, as with
     /// `package.loaded`.
-    fn push_lua_modules(&mut self, graph: &DependencyGraph, entry: &ModuleInfo) {
-        let prefix = self.prefix;
+    fn push_lua_modules(&mut self, graph: &DependencyGraph, version: LuaVersion) {
         let mut seen_strings: FxHashSet<&str> = FxHashSet::default();
         let mut strings_by_module: Vec<Vec<&str>> = vec![Vec::new(); graph.modules.len()];
         let ordered_dependencies = graph
@@ -318,34 +321,180 @@ impl BundleWriter<'_> {
             let Some((primary, aliases)) = strings.split_first() else {
                 continue;
             };
-            let first = encode_string(primary.as_bytes());
-            self.push_provenance(&first, &module.relative_path);
-            self.push_wrapped(
-                Binding::Slot(&format!("{prefix}modules[{first}]")),
-                module,
-                ModuleKeys::RequireString,
-            );
+            let first = Key::name(primary);
+            let label = Some(first.text());
+            self.push_module(id, module, version, label, Binding::Slot(first.clone()));
             for alias in aliases {
-                self.push(&format!(
-                    "{prefix}modules[{}]={prefix}modules[{first}]\n",
-                    encode_string(alias.as_bytes())
-                ));
+                let registration =
+                    Registration::Alias { alias: Key::name(alias), primary: first.clone() };
+                self.items.push(Item::Registration(registration));
             }
-            self.push_path_registrations(strings, &module.relative_path);
+            self.push_path_registrations(strings, &module.relative_path, version);
         }
 
-        self.push_wrapped(Binding::Entry, entry, ModuleKeys::RequireString);
+        let Some(entry) = graph.modules.get(graph.entry_id.0) else {
+            return;
+        };
+        self.push_module(graph.entry_id, entry, version, None, Binding::Entry);
         if let Some(entry_strings) =
             strings_by_module.get(graph.entry_id.0).filter(|strings| !strings.is_empty())
         {
             for string in entry_strings {
-                self.push(&format!(
-                    "{prefix}modules[{}]={prefix}entry\n",
-                    encode_string(string.as_bytes())
-                ));
+                let registration =
+                    Registration::Entry { key: Key::name(string), exporting_slot: None };
+                self.items.push(Item::Registration(registration));
             }
-            self.push_path_registrations(entry_strings, &entry.relative_path);
+            self.push_path_registrations(entry_strings, &entry.relative_path, version);
         }
+    }
+
+    fn push_path_registrations(
+        &mut self,
+        strings: &[&str],
+        relative_path: &str,
+        version: LuaVersion,
+    ) {
+        if !version.has_require_filepath_arg() {
+            return;
+        }
+        let path = encode_string(relative_path.as_bytes());
+        for string in strings {
+            let registration = Registration::Path { name: Key::name(string), path: path.clone() };
+            self.items.push(Item::Registration(registration));
+        }
+    }
+
+    /// Each construct a module's wrapper nests past [`MAX_NESTING_DEPTH`],
+    /// measured on the module as the bundle holds it, since lowering an
+    /// export to a field of the export table reads it one level deeper.
+    fn nesting_errors(&self, graph: &DependencyGraph, version: LuaVersion) -> Vec<Diagnostic> {
+        let mut errors = Vec::new();
+        for item in &self.items {
+            let Item::Module(wrapped) = item else {
+                continue;
+            };
+            let Some(module) = graph.modules.get(wrapped.id.0) else {
+                continue;
+            };
+            let levels = wrapped.wrapper.levels();
+            let most_levels = block_nesting_depth(&module.block)
+                .saturating_add(levels)
+                .saturating_add(usize::from(wrapped.exports.has_table()));
+            if most_levels <= MAX_NESTING_DEPTH {
+                continue;
+            }
+            let rewritten =
+                rewrite_module(module.block.clone(), module, self, &wrapped.exports, version);
+            errors.extend(
+                spans_past_nesting_cap(&rewritten, levels)
+                    .into_iter()
+                    .map(|span| Diagnostic::e013(&module.path, span, levels, MAX_NESTING_DEPTH)),
+            );
+        }
+        errors
+    }
+}
+
+/// The bundle's text, which keeps every module's source as written, with
+/// splices only where a require or an export is rewritten, and a line map
+/// back to it.
+///
+/// A lone module with no requires is emitted verbatim.
+///
+/// A shebang is only valid on a chunk's first line, so the entry's moves to
+/// the bundle's first line, which keeps the bundle runnable as a script, and
+/// every other module's is dropped.
+///
+/// # Errors
+///
+/// Returns the errors [`Plan::new`] does.
+pub(crate) fn emit(
+    graph: &DependencyGraph,
+    version: LuaVersion,
+) -> Result<(String, Vec<LineMapEntry>), Vec<Diagnostic>> {
+    let modules = &graph.modules;
+    let Some(entry) = modules.get(graph.entry_id.0) else {
+        return Ok((String::new(), Vec::new()));
+    };
+
+    if modules.len() == 1 && entry.dependencies.is_empty() {
+        let line_map = vec![LineMapEntry {
+            bundle_start_line: 1,
+            // A final line break closes its line rather than opening an empty one.
+            bundle_end_line: line_breaks(&entry.source, version)
+                .count()
+                .saturating_add(usize::from(!ends_with_line_break(&entry.source, version))),
+            path: entry.path.clone(),
+        }];
+        return Ok((entry.source.clone(), line_map));
+    }
+
+    let plan = Plan::new(graph, version)?;
+    let prefix = plan.prefix.as_str();
+
+    // The sources plus rough room for each module's wrapper and the loader.
+    let capacity = modules
+        .iter()
+        .map(|module| module.source.len().saturating_add(96))
+        .sum::<usize>()
+        .saturating_add(512);
+    let mut writer = BundleWriter {
+        output: String::with_capacity(capacity),
+        next_line: 1,
+        line_map: Vec::with_capacity(modules.len()),
+        plan: &plan,
+        version,
+    };
+
+    if let Some(shebang) = entry.shebang {
+        writer.push(shebang.text(&entry.source));
+        writer.push("\n");
+    }
+
+    // Luau only honors hot comments before any code, so the entry's leading
+    // ones go above the loader.
+    for hot_comment in &entry.hot_comments {
+        writer.push(hot_comment.text(&entry.source));
+        writer.push("\n");
+    }
+
+    writer.push(&loader_text(prefix, version, plan.is_loader_global));
+    if plan.has_dynamic_entry {
+        writer.push(&dynamic_entry_text(prefix, plan.is_loader_global));
+    }
+    if plan.has_export_runtime {
+        writer.push(&export_runtime_text(prefix));
+    }
+
+    for item in &plan.items {
+        match item {
+            Item::Module(wrapped) => {
+                if let Some(module) = modules.get(wrapped.id.0) {
+                    writer.push_wrapped(wrapped, module);
+                }
+            }
+            Item::Registration(registration) => writer.push(&registration.text(prefix)),
+        }
+    }
+
+    writer.push(&format!("return {prefix}entry(...)\n"));
+
+    Ok((writer.output, writer.line_map))
+}
+
+struct BundleWriter<'plan> {
+    output: String,
+    /// 1-based line the next pushed character lands on.
+    next_line: usize,
+    line_map: Vec<LineMapEntry>,
+    plan: &'plan Plan,
+    version: LuaVersion,
+}
+
+impl BundleWriter<'_> {
+    fn push(&mut self, fragment: &str) {
+        self.output.push_str(fragment);
+        self.next_line = self.next_line.saturating_add(line_breaks(fragment, self.version).count());
     }
 
     /// A line break in a file name would end the comment and turn the rest
@@ -355,131 +504,28 @@ impl BundleWriter<'_> {
         self.push(&format!("-- module {label}: {path}\n"));
     }
 
-    fn push_path_registrations(&mut self, strings: &[&str], relative_path: &str) {
-        if !self.version.has_require_filepath_arg() {
-            return;
+    fn push_wrapped(&mut self, wrapped: &WrappedModule, module: &ModuleInfo) {
+        if let Some(label) = &wrapped.label {
+            self.push_provenance(label, &module.relative_path);
         }
-        for string in strings {
-            self.push(&format!(
-                "{}paths[{}]={}\n",
-                self.prefix,
-                encode_string(string.as_bytes()),
-                encode_string(relative_path.as_bytes())
-            ));
-        }
-    }
-
-    /// Writes `module` wrapped in a function bound to `binding`, and reports
-    /// whether the module exports values, so it registers through
-    /// `{prefix}exporting`.
-    ///
-    /// A module the wrapper may nest past [`MAX_NESTING_DEPTH`] is checked by
-    /// reparsing its registration, which nests as it does in the bundle.
-    fn push_wrapped(
-        &mut self,
-        binding: Binding<'_>,
-        module: &ModuleInfo,
-        keys: ModuleKeys<'_>,
-    ) -> bool {
+        let prefix = self.plan.prefix.as_str();
         let lowering = if self.version.has_value_exports() {
-            lower_exports(&module.block, &module.source, self.version, self.prefix)
+            lower_exports_in_text(
+                &wrapped.exports,
+                &module.block,
+                &module.source,
+                self.version,
+                prefix,
+            )
         } else {
-            ExportLowering::default()
+            TextLowering::default()
         };
-        let wrapper = self.wrapper(binding, module);
-        let registration_start = self.output.len();
-        self.push(&wrapper.opening);
+        let (opening, closing) = wrapper_text(&wrapped.binding, wrapped.wrapper, prefix);
+        self.push(&opening);
         self.push(lowering.table_declaration.as_deref().unwrap_or_default());
         self.push("\n");
-        let has_exported_values = lowering.closing.is_some();
-        // Lowering reads an export the table holds as a field, one level
-        // deeper than the bare name, and the lines it adds are a few levels
-        // deep at most.
-        let lowering_levels = usize::from(lowering.table_declaration.is_some());
-        let layout = self.push_body(module, keys, lowering.edits, lowering.closing.as_deref());
-        self.push(wrapper.closing);
-
-        let most_levels = block_nesting_depth(&module.block)
-            .saturating_add(wrapper.levels)
-            .saturating_add(lowering_levels);
-        if most_levels > MAX_NESTING_DEPTH {
-            self.check_nesting(registration_start, module, &layout, wrapper.levels);
-        }
-        has_exported_values
-    }
-
-    /// A statement the wrapper puts before a body ends in `;`, so a body that
-    /// opens with `(` can't continue it as a call.
-    fn wrapper(&self, binding: Binding<'_>, module: &ModuleInfo) -> Wrapper {
-        // 5.1's hidden `arg` and 5.5's `(vararg table)` each take a local
-        // slot in a vararg function, so a body that reads no `...` gets none.
-        let params = if module.has_vararg_read
-            || !(self.version.has_implicit_vararg_table() || self.version.has_named_varargs())
-        {
-            "..."
-        } else {
-            ""
-        };
-        let entry = format!("{}entry", self.prefix);
-        let target = match binding {
-            Binding::Slot(slot) => slot,
-            Binding::Entry => entry.as_str(),
-        };
-        let is_entry = matches!(binding, Binding::Entry);
-        if module.has_env_rebinding {
-            // A real chunk's `_ENV` is its own and its upvalue 1, which
-            // 5.2's `module()` sets, so the block gives the module a private
-            // one and the body's first statement makes it upvalue 1.
-            let declaration = if is_entry { format!("local {target} ") } else { String::new() };
-            return Wrapper {
-                opening: format!(
-                    "{declaration}do local _ENV=_ENV {target}=function({params})_ENV=_ENV;"
-                ),
-                closing: "end end\n",
-                levels: 3,
-            };
-        }
-        let declaration = if is_entry { "local " } else { "" };
-        // 5.1: `function(...)` hides the global `arg` behind its hidden local.
-        let should_restore_arg = module.has_vararg_read && module.has_global_arg_read;
-        Wrapper {
-            opening: format!(
-                "{declaration}{target}=function({params}){}",
-                if should_restore_arg { "arg=_G.arg;" } else { "" }
-            ),
-            closing: "end\n",
-            levels: 2,
-        }
-    }
-
-    /// Reports each construct of `module` that its registration, written from
-    /// `registration_start` on, nests past [`MAX_NESTING_DEPTH`], at its place
-    /// in the module's source.
-    ///
-    /// The module parses alone, so each error here is a construct the cap
-    /// refuses.
-    #[cold]
-    #[inline(never)]
-    fn check_nesting(
-        &mut self,
-        registration_start: usize,
-        module: &ModuleInfo,
-        layout: &BodyLayout,
-        wrapper_levels: usize,
-    ) {
-        let registration = self.output.get(registration_start..).unwrap_or_default();
-        let reparsed = luck_parser::parse(registration, self.version);
-        for error in &reparsed.errors {
-            let Range { start, end } = Range::<usize>::from(error.span);
-            let output =
-                registration_start.saturating_add(start)..registration_start.saturating_add(end);
-            self.errors.push(Diagnostic::e013(
-                &module.path,
-                layout.source_span(output, module.source.len()),
-                wrapper_levels,
-                MAX_NESTING_DEPTH,
-            ));
-        }
+        self.push_body(module, lowering.edits, lowering.closing.as_deref());
+        self.push(closing);
     }
 
     /// A loader call keeps the newline count of the call it replaces, so the
@@ -487,11 +533,11 @@ impl BundleWriter<'_> {
     fn push_body(
         &mut self,
         module: &ModuleInfo,
-        keys: ModuleKeys<'_>,
         export_edits: Vec<(Span, String)>,
         closing: Option<&str>,
-    ) -> BodyLayout {
+    ) {
         let source = module.source.as_str();
+        let prefix = self.plan.prefix.as_str();
         let mut edits: Vec<(Span, String)> = module
             .dependencies
             .iter()
@@ -501,8 +547,8 @@ impl BundleWriter<'_> {
                     return None;
                 }
                 let newlines = "\n".repeat(line_breaks(call, self.version).count());
-                let key = keys.key(dependency)?;
-                Some((dependency.call_span, format!("{}require({key}{newlines})", self.prefix)))
+                let key = self.plan.key(dependency)?;
+                Some((dependency.call_span, format!("{prefix}require({}{newlines})", key.text())))
             })
             .collect();
 
@@ -513,7 +559,7 @@ impl BundleWriter<'_> {
                 .dynamic_callees
                 .iter()
                 .filter(|callee| !callee.text(source).is_empty())
-                .map(|callee| (*callee, format!("{}dynamic", self.prefix))),
+                .map(|callee| (*callee, format!("{prefix}dynamic"))),
         );
 
         edits.extend(export_edits);
@@ -532,8 +578,6 @@ impl BundleWriter<'_> {
         {
             self.push(" ");
         }
-        let source_start = cursor;
-        let output_start = self.output.len();
         for (span, replacement) in &edits {
             let range = Range::<usize>::from(*span);
             self.push(source.get(cursor..range.start).unwrap_or_default());
@@ -558,8 +602,29 @@ impl BundleWriter<'_> {
             bundle_end_line: self.next_line.saturating_sub(1),
             path: module.path.clone(),
         });
-        BodyLayout { output_start, source_start, edits }
     }
+}
+
+/// The text before and after a wrapped body. A statement the wrapper puts
+/// before the body ends in `;`, so a body that opens with `(` can't continue
+/// it as a call.
+fn wrapper_text(binding: &Binding, wrapper: Wrapper, prefix: &str) -> (String, &'static str) {
+    let params = if wrapper.has_vararg_param { "..." } else { "" };
+    let target = match binding {
+        Binding::Slot(key) => format!("{prefix}modules[{}]", key.text()),
+        Binding::Entry => format!("{prefix}entry"),
+    };
+    let is_entry = matches!(binding, Binding::Entry);
+    if wrapper.has_private_env {
+        let declaration = if is_entry { format!("local {target} ") } else { String::new() };
+        return (
+            format!("{declaration}do local _ENV=_ENV {target}=function({params})_ENV=_ENV;"),
+            "end end\n",
+        );
+    }
+    let declaration = if is_entry { "local " } else { "" };
+    let restore = if wrapper.restores_arg { "arg=_G.arg;" } else { "" };
+    (format!("{declaration}{target}=function({params}){restore}"), "end\n")
 }
 
 /// Every module but the entry, in the order the bundle registers them.

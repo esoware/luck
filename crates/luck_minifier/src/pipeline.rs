@@ -1,13 +1,11 @@
-use core::mem;
-
 use luck_ast::Block;
 use luck_token::{CommentKind, LuaVersion, SourceError, leading_hot_comments};
 
 use crate::transform_config::TransformConfig;
 use crate::transforms;
 
-/// Measured corpora converge in two outer rounds, so the cap only bounds
-/// pathological oscillation.
+/// Measured corpora settle in two or three rounds, so the cap only bounds a
+/// pass that never stops changing the tree, which the fixpoint tests catch.
 const MAX_PIPELINE_ROUNDS: usize = 8;
 
 /// Minifies Lua source, returning the compact output or the parse errors.
@@ -31,65 +29,59 @@ pub fn minify(
     // A shebang and Luau hot comments (--!strict, --!native, --!optimize N,
     // ...) only take effect before any code, so they go back on top of the
     // output.
-    let mut comment_prefix = String::new();
+    let mut output = String::new();
     if let Some(shebang) =
         result.comments.first().filter(|comment| comment.kind == CommentKind::Shebang)
     {
         // A trailing CR would pair with this line break into a CRLF.
-        comment_prefix.push_str(shebang.span.text(source).trim_end_matches('\r'));
-        comment_prefix.push('\n');
+        output.push_str(shebang.span.text(source).trim_end_matches('\r'));
+        output.push('\n');
     }
     if version.is_luau() {
         for comment in leading_hot_comments(&result.comments, source) {
-            comment_prefix.push_str(comment.span.text(source).trim_end());
-            comment_prefix.push('\n');
+            output.push_str(comment.span.text(source).trim_end());
+            output.push('\n');
         }
     }
-    let mut block = result.block;
+    let code = minify_block(result.block, version, config).map_err(|error| vec![error])?;
+    if output.is_empty() {
+        return Ok(code);
+    }
+    output.push_str(&code);
+    Ok(output)
+}
 
-    // The tail runs to its own fixpoint, so measured corpora converge here in
-    // two rounds: one does the work and one proves it stable.
-    //
-    // Each round that changes the output reparses it for the next round.
-    // Transform-built nodes aren't always shaped like their parsed
-    // equivalents (paren wrappers, span-less tokens), so a pass matching the
-    // parsed shape could miss work that a round trip would expose. Converging
-    // on emitted text is what keeps minify(minify(x)) == minify(x).
-    //
-    // A round whose tree doesn't print or reparse is dropped, so the output
-    // is always text the parser has read back.
-    let mut previous_output = luck_codegen::compact(&block).map_err(|error| vec![error])?;
+/// Minifies a tree as [`minify`] does the one it parses, and returns the
+/// compact output. A tree holds no comments, so a shebang or Luau hot
+/// comments the output needs on top are the caller's to write.
+///
+/// Every round works on the tree the last one left. The passes build nodes
+/// in the shape the parser gives their printed text, so the tree the rounds
+/// settle on is the one its own output parses to, which is what makes
+/// minifying the output again a fixpoint.
+///
+/// # Errors
+///
+/// Returns an error for a tree nested deeper than
+/// [`MAX_NESTING_DEPTH`](luck_ast::MAX_NESTING_DEPTH), which `luck_parser`
+/// never builds.
+pub fn minify_block(
+    mut block: Block,
+    version: LuaVersion,
+    config: &TransformConfig,
+) -> Result<String, SourceError> {
+    let mut output = luck_codegen::compact(&block)?;
     for _ in 0..MAX_PIPELINE_ROUNDS {
         block = apply_core_transforms(block, config, version);
-        block = apply_tail_transforms(block, config, version, previous_output.len());
-        let Ok(output) = luck_codegen::compact_with_capacity(&block, previous_output.len()) else {
-            debug_assert!(false, "a minified round nested past the parser's cap");
-            break;
-        };
-        if output == previous_output {
+        let (tail_block, round_output) =
+            apply_tail_transforms(block, config, version, output.len())?;
+        block = tail_block;
+        if round_output == output {
             break;
         }
-        // The parser hands its owned source back, so the round's output isn't
-        // copied to reparse it.
-        let reparsed = luck_parser::parse(output, version);
-        debug_assert!(
-            reparsed.errors.is_empty(),
-            "minified round output failed to reparse: {:?}\noutput:\n{}",
-            reparsed.errors,
-            reparsed.source
-        );
-        if !reparsed.errors.is_empty() {
-            break;
-        }
-        previous_output = reparsed.source;
-        block = reparsed.block;
+        output = round_output;
     }
-
-    if comment_prefix.is_empty() {
-        Ok(previous_output)
-    } else {
-        Ok(format!("{comment_prefix}{previous_output}"))
-    }
+    Ok(output)
 }
 
 fn apply_core_transforms(mut block: Block, config: &TransformConfig, version: LuaVersion) -> Block {
@@ -136,79 +128,42 @@ fn apply_core_transforms(mut block: Block, config: &TransformConfig, version: Lu
 /// same name, so each rename, lift, and merge round can unblock more lifts.
 ///
 /// The loop runs that cascade to its own fixpoint here, so the outer loop
-/// never reruns the core passes or reparses for tail-only work.
+/// never reruns the core passes for tail-only work. Returns the tree and its
+/// compact output.
+///
+/// # Errors
+///
+/// Returns the error [`luck_codegen::compact`] does.
 fn apply_tail_transforms(
     mut block: Block,
     config: &TransformConfig,
     version: LuaVersion,
     output_capacity: usize,
-) -> Block {
-    if !config.rename_locals && !config.lift_locals {
-        return block;
-    }
-
+) -> Result<(Block, String), SourceError> {
     // Explicit self goes before rename so the renamer can shorten the parameter.
     if config.rename_locals {
         block = transforms::explicit_self::rewrite(block);
     }
-
-    // The output doesn't shrink monotonically from one iteration to the
-    // next, so keep the smallest emit seen instead of wherever the loop
-    // stops. The last iteration is usually the best, so the reparse below
-    // rarely runs. Outputs move between the two slots instead of being
-    // copied, since each one is the size of the whole chunk.
-    //
-    // No tail pass nests the tree deeper, so one that doesn't print came in
-    // that way, and the caller drops the round.
-    let Ok(mut last_output) = luck_codegen::compact_with_capacity(&block, output_capacity) else {
-        return block;
-    };
-    // The shortest output of an iteration before the last, the first on ties.
-    let mut best_earlier_output: Option<String> = None;
-    for round in 0..MAX_PIPELINE_ROUNDS {
+    let mut output = luck_codegen::compact_with_capacity(&block, output_capacity)?;
+    if !config.rename_locals && !config.lift_locals {
+        return Ok((block, output));
+    }
+    for _ in 0..MAX_PIPELINE_ROUNDS {
         if config.rename_locals {
-            let renamed = transforms::rename_locals::rename(block, version, config.rename_globals);
-            let Some(renamed_block) = renamed else {
-                debug_assert!(false, "the renamer fell out of step with its analyzer");
-                // `last_output` is the tree as it stood before the rename.
-                return luck_parser::parse(last_output, version).block;
-            };
-            block = renamed_block;
+            block = transforms::rename_locals::rename(block, version, config.rename_globals);
         }
-
         if config.lift_locals {
             block = transforms::lift_locals::lift(block, version);
         }
-
         // Fuse `local X\nX=Y` back into `local X=Y` after lifting.
         if config.rename_locals && config.merge_locals {
             block = transforms::merge_locals::merge(block, version);
         }
-
-        let Ok(output) = luck_codegen::compact_with_capacity(&block, last_output.len()) else {
-            return block;
-        };
-        if output == last_output {
+        let next_output = luck_codegen::compact_with_capacity(&block, output.len())?;
+        if next_output == output {
             break;
         }
-        let earlier_output = mem::replace(&mut last_output, output);
-        // The first round's predecessor is the emit from before the tail ran,
-        // which isn't a candidate.
-        let is_shorter =
-            best_earlier_output.as_ref().is_none_or(|best| earlier_output.len() < best.len());
-        if round > 0 && is_shorter {
-            best_earlier_output = Some(earlier_output);
-        }
+        output = next_output;
     }
-    let Some(best_output) = best_earlier_output.filter(|best| best.len() < last_output.len())
-    else {
-        return block;
-    };
-    let reparsed = luck_parser::parse(best_output, version);
-    if reparsed.errors.is_empty() {
-        reparsed.block
-    } else {
-        debug_assert!(false, "tail best output failed to reparse: {}", reparsed.source);
-        block
-    }
+    Ok((block, output))
 }

@@ -36,6 +36,7 @@
 
 extern crate alloc;
 
+mod block_emitter;
 mod bundle;
 mod dynamic_require;
 mod emitter;
@@ -46,7 +47,7 @@ mod module;
 mod relative_path;
 mod require_extraction;
 
-pub use bundle::{BundleResult, bundle};
+pub use bundle::{BlockBundle, BundleResult, bundle, bundle_block};
 pub use dynamic_require::DynamicRequire;
 pub use emitter::LineMapEntry;
 pub use graph::{BundleOptions, DependencyGraph};

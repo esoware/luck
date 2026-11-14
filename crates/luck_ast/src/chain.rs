@@ -1,6 +1,6 @@
 use core::mem;
 
-use luck_token::{Associativity, BinOp, OperandSide, Span, Token};
+use luck_token::{Associativity, BinOp, OperandSide, Span, Token, TokenKind};
 
 use crate::expr::{
     BinaryLink, BinaryOp, CallSuffix, Expression, FunctionArgs, Suffix, SuffixedExpression,
@@ -144,14 +144,30 @@ impl SuffixedExpression {
     }
 
     /// Merges a suffixed prefix, which a rewrite may leave, into this run, so
-    /// the tree nests no deeper than the parser would read it.
+    /// the tree nests no deeper than the parser would read it. A prefix
+    /// nested any number of runs deep is merged in one pass over the
+    /// suffixes it moves.
     pub fn splice_prefix(&mut self) {
-        while matches!(self.prefix, Expression::Suffixed(_)) {
-            if let Expression::Suffixed(inner) = self.prefix.take() {
-                let Self { prefix, suffixes, .. } = *inner;
-                self.prefix = prefix;
-                self.suffixes.prepend(suffixes);
-            }
+        if !matches!(self.prefix, Expression::Suffixed(_)) {
+            return;
+        }
+        let mut fronts = Vec::new();
+        let mut prefix = self.prefix.take();
+        while let Expression::Suffixed(inner) = prefix {
+            let Self { prefix: inner_prefix, suffixes, .. } = *inner;
+            fronts.push(suffixes);
+            prefix = inner_prefix;
+        }
+        self.prefix = prefix;
+        let front_count = fronts.iter().map(|front| front.len()).sum::<usize>();
+        let mut suffixes = Vec::with_capacity(front_count.saturating_add(self.suffixes.len()));
+        for front in fronts.into_iter().rev() {
+            suffixes.extend(front.into_vec());
+        }
+        let placeholder = Suffix::Field(Token::new(TokenKind::Eof, Span::default()));
+        suffixes.extend(mem::replace(&mut self.suffixes, OneOrMore::new(placeholder)).into_vec());
+        if let Some(spliced) = OneOrMore::from_vec(suffixes) {
+            self.suffixes = spliced;
         }
     }
 }
@@ -171,8 +187,10 @@ impl BinaryOp {
 
     /// Merges each operand that a rewrite left as a bare run at this level
     /// into this run, as printing and reading it back would, so the tree
-    /// nests no deeper than the parser would read it. Each such operand's
-    /// own operands are taken as they are.
+    /// nests no deeper than the parser would read it.
+    ///
+    /// A bare run among a merged run's own operands merges too, however many
+    /// runs deep, in one pass over the operands that move.
     pub fn splice_operands(&mut self) {
         let level = self.precedence().0;
         let is_bare_run = |operand: &Expression| matches!(operand, Expression::BinaryOp(inner) if inner.precedence().0 == level);
@@ -182,31 +200,35 @@ impl BinaryOp {
         let placeholder = BinaryLink { op: BinOp::Or, operand: Expression::Error(Span::default()) };
         let old_links = mem::replace(&mut self.links, OneOrMore::new(placeholder));
         let mut links = Vec::with_capacity(old_links.len());
-        let (first, first_links) = split_run(self.first.take(), level);
-        self.first = first;
-        links.extend(first_links.into_iter().flat_map(OneOrMore::into_vec));
-        for BinaryLink { op, operand } in old_links.into_vec() {
-            let (operand_first, operand_links) = split_run(operand, level);
-            links.push(BinaryLink { op, operand: operand_first });
-            links.extend(operand_links.into_iter().flat_map(OneOrMore::into_vec));
+        // The operands still to place, innermost run's on top, and the next
+        // one with the operator before it, which the first operand lacks.
+        let mut pending = vec![old_links.into_vec().into_iter()];
+        let mut next = Some((None, self.first.take()));
+        while let Some((leading_op, operand)) = next.take() {
+            if is_bare_run(&operand) {
+                if let Expression::BinaryOp(inner) = operand {
+                    let Self { first, links: inner_links, .. } = *inner;
+                    pending.push(inner_links.into_vec().into_iter());
+                    next = Some((leading_op, first));
+                }
+                continue;
+            }
+            match leading_op {
+                None => self.first = operand,
+                Some(op) => links.push(BinaryLink { op, operand }),
+            }
+            while let Some(operands) = pending.last_mut() {
+                if let Some(link) = operands.next() {
+                    next = Some((Some(link.op), link.operand));
+                    break;
+                }
+                pending.pop();
+            }
         }
         if let Some(spliced) = OneOrMore::from_vec(links) {
             self.links = spliced;
         }
     }
-}
-
-/// `operand`'s first operand and links when it's a run at `level`, and
-/// `operand` itself otherwise.
-fn split_run(operand: Expression, level: u8) -> (Expression, Option<OneOrMore<BinaryLink>>) {
-    if let Expression::BinaryOp(inner) = operand {
-        if inner.precedence().0 != level {
-            return (Expression::BinaryOp(inner), None);
-        }
-        let BinaryOp { first, links, .. } = *inner;
-        return (first, Some(links));
-    }
-    (operand, None)
 }
 
 #[cfg(test)]
@@ -261,5 +283,34 @@ mod tests {
         assert_eq!(ops, [BinOp::Add, BinOp::Sub, BinOp::Add]);
         assert!(matches!(run.first, Expression::Name(_)));
         assert!(matches!(run.links[1].operand, Expression::BinaryOp(_)), "`c * d` stays a run");
+    }
+
+    #[test]
+    fn splicing_joins_runs_nested_any_number_of_levels_deep() {
+        let synth = Synth::new();
+        let name = || synth.name_expr("x");
+        let mut sum = name();
+        let mut concat = name();
+        let mut path = name();
+        for _ in 0..50_000u32 {
+            sum = unspliced_run(sum, BinOp::Add, name());
+            concat = unspliced_run(name(), BinOp::Concat, concat);
+            path = unspliced_chain(path, Suffix::Field(synth.identifier("a")));
+        }
+        for nested in [sum, concat] {
+            let Expression::BinaryOp(mut run) = nested else {
+                panic!("expected a binary run");
+            };
+            run.splice_operands();
+            assert_eq!(run.links.len(), 50_000);
+            assert!(matches!(run.first, Expression::Name(_)));
+            assert!(run.links.iter().all(|link| matches!(link.operand, Expression::Name(_))));
+        }
+        let Expression::Suffixed(mut chain) = path else {
+            panic!("expected a suffixed expression");
+        };
+        chain.splice_prefix();
+        assert_eq!(chain.suffixes.len(), 50_000);
+        assert!(matches!(chain.prefix, Expression::Name(_)));
     }
 }

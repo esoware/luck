@@ -1,8 +1,11 @@
+use core::{iter, mem};
+
 use luck_ast::{
-    Block, Expression, FunctionBody, Statement, SuffixedExpression, Transform, Var, Visitor,
-    expr_nesting_depth, is_prefix_expr,
+    BinaryOp, Block, Expression, FunctionBody, LocalAssignment, MAX_NESTING_DEPTH, Statement,
+    Suffix, SuffixedExpression, Transform, Var, Visitor, expr_nesting_depth, is_prefix_expr,
+    type_nesting_depth,
 };
-use luck_token::{BinOp, CompactString, LuaVersion, OperandSide};
+use luck_token::{Associativity, BinOp, CompactString, LuaVersion, OperandSide};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::binding::{
@@ -10,8 +13,8 @@ use crate::binding::{
     identifier_name,
 };
 use crate::expr::{
-    MAX_ADDED_DEPTH, binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs,
-    fits_at_depth, inner_operand_side, is_closed_literal_expr, parenthesize,
+    LiteralKind, MAX_ADDED_DEPTH, binary_literal_kind, binds_looser_than_unary, inner_operand_side,
+    is_nonzero_number_literal, literal_kind, parenthesize, unary_literal_kind,
 };
 
 /// This pass works on names, not bindings, so every candidate must be
@@ -26,24 +29,30 @@ use crate::expr::{
 ///   literals may raise (`1 + nil` keeps its error before later statements),
 ///   a table or closure moved into a loop mints a fresh object per iteration,
 ///   and `...` means something else across a function boundary.
-pub(crate) fn inline(mut block: Block, version: LuaVersion) -> Block {
-    loop {
-        let candidates = find_inline_candidates(&block, version);
-        if candidates.is_empty() {
-            break;
-        }
-        let mut inliner = Inliner { candidates };
-        block = inliner.transform_block(block);
+///
+/// One scan finds the names that qualify, and one walk decides each where
+/// it's declared, with the values declared before it already in place, so a
+/// chain of locals inlines whole. A value moves to its one read, and nothing
+/// walks it again.
+pub(crate) fn inline(block: Block, version: LuaVersion) -> Block {
+    let candidates = find_inline_candidates(&block, version);
+    if candidates.is_empty() {
+        return block;
     }
-    block
+    let mut inliner = Inliner {
+        candidates,
+        values: FxHashMap::default(),
+        is_in_value: false,
+        facts: Facts::OPAQUE,
+    };
+    let rewritten = inliner.transform_block(block);
+    debug_assert!(inliner.values.is_empty(), "every inlined value reaches its read");
+    rewritten
 }
 
-fn find_inline_candidates(
-    block: &Block,
-    version: LuaVersion,
-) -> FxHashMap<CompactString, Expression> {
+/// Each name that qualifies and the depth of its one read.
+fn find_inline_candidates(block: &Block, version: LuaVersion) -> FxHashMap<CompactString, usize> {
     let mut scanner = CandidateScanner {
-        declarations: FxHashMap::default(),
         declared_names: FxHashSet::default(),
         shadowed_names: FxHashSet::default(),
         references: FxHashMap::default(),
@@ -53,36 +62,33 @@ fn find_inline_candidates(
         version,
     };
     scanner.visit_block(block);
-
-    // The value can gain parentheses where it lands, and a cast inside it a
-    // second pair.
     scanner
-        .declarations
+        .references
         .into_iter()
-        .filter(|(name, initializer)| {
-            !scanner.shadowed_names.contains(name)
-                && scanner.references.get(name).is_some_and(|reference| {
-                    reference.count == 1 && fits_at_depth(reference.depth, 2, initializer)
-                })
+        .filter(|(name, reference)| {
+            reference.count == 1
+                && scanner.declared_names.contains(name)
+                && !scanner.shadowed_names.contains(name)
         })
+        .map(|(name, reference)| (name, reference.depth))
         .collect()
 }
 
-/// How often a candidate is read, and how deep its last read sits.
+/// How often a name is read in its declaration's scope, and how deep the
+/// first of those reads sits, which for a name read once is where its value
+/// lands.
 struct Reference {
     count: usize,
     depth: usize,
 }
 
 struct CandidateScanner {
-    declarations: FxHashMap<CompactString, Expression>,
-    // Every single-name local with one initializer, literal or not, so a
-    // second declaration disqualifies the name even if only one of the two
-    // initializers is a literal.
+    // Every single-name local with one initializer, so a second declaration
+    // disqualifies the name.
     declared_names: FxHashSet<CompactString>,
     shadowed_names: FxHashSet<CompactString>,
     references: FxHashMap<CompactString, Reference>,
-    /// Candidates whose scope the walk is inside.
+    /// Declared names whose scope the walk is inside.
     open_declarations: FxHashSet<CompactString>,
     /// `open_declarations` in opening order, to close them per scope.
     opened_in_scope: Vec<CompactString>,
@@ -141,29 +147,23 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
                     self.walk_stmt(stmt);
                     return;
                 }
-                let initializers = local.exprs.as_ref().map(|exprs| exprs.items.as_slice());
-                if let ([attributed], Some([expr])) = (local.names.items.as_slice(), initializers) {
-                    let name = identifier_name(&attributed.name);
+                if let Some(name) = single_declared_name(local) {
+                    // The local's scope starts after its statement, so a
+                    // read inside it is another binding's.
+                    self.walk_stmt(stmt);
                     if self.declared_names.contains(name) {
                         self.shadowed_names.insert(name.into());
                     } else {
                         self.declared_names.insert(name.into());
-                        // Each pass can inline into the last one's results, so
-                        // without a bound a run of locals nests without limit.
-                        if is_closed_literal_expr(expr)
-                            && expr_nesting_depth(expr) <= MAX_ADDED_DEPTH
-                        {
-                            self.declarations.insert(name.into(), expr.clone());
-                            self.open_declaration(name);
-                        }
+                        self.open_declaration(name);
                     }
-                } else {
-                    // Bare and multi-name locals are binders too: a
-                    // reference between `local x` and a later `local x = 1`
-                    // resolves to this one, so the name can't inline.
-                    for attributed in local.names.iter() {
-                        self.shadowed_names.insert(identifier_name(&attributed.name).into());
-                    }
+                    return;
+                }
+                // Bare and multi-name locals are binders too: a reference
+                // between `local x` and a later `local x = 1` resolves to this
+                // one, so the name can't inline.
+                for attributed in local.names.iter() {
+                    self.shadowed_names.insert(identifier_name(&attributed.name).into());
                 }
             }
             Statement::LocalFunction(local_function) => {
@@ -257,49 +257,168 @@ impl<'ast> Visitor<'ast> for CandidateScanner {
     }
 }
 
+/// The one name of a `local` with one name and one initializer.
+fn single_declared_name(local: &LocalAssignment) -> Option<&str> {
+    let initializers = local.exprs.as_ref().map(|exprs| exprs.items.as_slice());
+    if let ([attributed], Some([_])) = (local.names.items.as_slice(), initializers) {
+        Some(identifier_name(&attributed.name))
+    } else {
+        None
+    }
+}
+
+/// What an expression that may become a value evaluates to and how deep it
+/// nests, gathered as the walk rebuilds it, so a value inlined into it is
+/// never measured again.
+#[derive(Clone, Copy)]
+struct Facts {
+    /// The kind of a literal, or of operators over literals, that can't raise,
+    /// whose value and evaluation don't depend on where it runs. `None` for
+    /// any other expression.
+    kind: Option<LiteralKind>,
+    /// The levels it nests once every run left unspliced is spliced.
+    depth: usize,
+    is_nonzero_number: bool,
+    has_unspliced_run: bool,
+}
+
+impl Facts {
+    const OPAQUE: Self =
+        Self { kind: None, depth: 0, is_nonzero_number: false, has_unspliced_run: false };
+}
+
+/// A candidate's initializer, inlinable and waiting for the candidate's read.
+struct Value {
+    expr: Expression,
+    facts: Facts,
+}
+
 struct Inliner {
-    candidates: FxHashMap<CompactString, Expression>,
+    /// Each candidate's name and the depth of its one read.
+    candidates: FxHashMap<CompactString, usize>,
+    values: FxHashMap<CompactString, Value>,
+    /// Whether the walk is rebuilding an expression that may become a value.
+    /// There a value inlined bare into a run or a chain at its level stays
+    /// unspliced until the value lands, so a chain of them splices once.
+    is_in_value: bool,
+    /// The facts of what `transform_expr` returned last, when `is_in_value`.
+    facts: Facts,
 }
 
 impl Transform for Inliner {
-    fn transform_block(&mut self, block: Block) -> Block {
-        let stmts: Vec<_> = block
-            .stmts
-            .into_iter()
-            .filter_map(|stmt| {
-                let transformed = self.transform_stmt(stmt);
-                (!self.is_inlined_declaration(&transformed)).then_some(transformed)
-            })
-            .collect();
-
-        let last_stmt = block.last_stmt.map(|mut last| {
-            *last = self.transform_last_stmt(*last);
-            last
-        });
-
-        Block { span: block.span, stmts, last_stmt }
+    fn transform_block(&mut self, mut block: Block) -> Block {
+        let stmts = mem::take(&mut block.stmts);
+        block.stmts.reserve(stmts.len());
+        for stmt in stmts {
+            if let Statement::LocalAssignment(local) = stmt {
+                block.stmts.extend(self.transform_local(local));
+            } else {
+                block.stmts.push(self.transform_stmt(stmt));
+            }
+        }
+        if let Some(last) = &mut block.last_stmt {
+            **last = self.transform_last_stmt(last.take());
+        }
+        block
     }
 
     /// A value inlined as the prefix gets parentheses unless it can stand
     /// bare there, as `x["k"]` with `x = 37.5` becomes `(37.5)["k"]`.
     fn transform_suffixed(&mut self, chain: Box<SuffixedExpression>) -> Box<SuffixedExpression> {
+        let is_instantiation =
+            chain.suffixes.iter().all(|suffix| matches!(suffix, Suffix::TypeInstantiation { .. }));
+        if is_instantiation && self.is_in_value {
+            return self.inline_instantiation(chain);
+        }
+        let was_in_value = mem::replace(&mut self.is_in_value, false);
         let mut walked = self.walk_suffixed(chain);
+        self.is_in_value = was_in_value;
         if !is_prefix_expr(&walked.prefix) {
             walked.prefix = parenthesize(walked.prefix.take());
         }
         walked.splice_prefix();
+        self.facts = Facts::OPAQUE;
         walked
     }
 
-    fn transform_expr(&mut self, mut expr: Expression) -> Expression {
-        self.inline_operands(&mut expr);
-        let walked = self.walk_expr(expr);
-        if let Expression::Name(name) = &walked
-            && let Some(initializer) = self.candidates.get(identifier_name(name))
-        {
-            return initializer.clone();
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        match expr {
+            Expression::Name(name) => {
+                if let Some(value) = self.values.remove(identifier_name(&name)) {
+                    return self.land(value);
+                }
+                self.facts = Facts::OPAQUE;
+                Expression::Name(name)
+            }
+            literal @ (Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)) => {
+                self.facts = if self.is_in_value {
+                    Facts {
+                        kind: literal_kind(&literal),
+                        depth: 0,
+                        is_nonzero_number: is_nonzero_number_literal(&literal),
+                        has_unspliced_run: false,
+                    }
+                } else {
+                    Facts::OPAQUE
+                };
+                literal
+            }
+            Expression::Parenthesized(mut parenthesized) => {
+                parenthesized.expr = self.transform_expr(parenthesized.expr);
+                self.facts.depth = self.facts.depth.saturating_add(1);
+                Expression::Parenthesized(parenthesized)
+            }
+            Expression::UnaryOp(mut unary_op) => {
+                unary_op.operand = self.inline_operand(unary_op.operand, OperandPosition::Unary);
+                let operand = self.facts;
+                self.facts = Facts {
+                    kind: operand.kind.and_then(|kind| unary_literal_kind(unary_op.op, kind)),
+                    depth: operand.depth.saturating_add(1),
+                    is_nonzero_number: false,
+                    has_unspliced_run: operand.has_unspliced_run,
+                };
+                Expression::UnaryOp(unary_op)
+            }
+            Expression::BinaryOp(run) => self.inline_run(run),
+            Expression::Suffixed(chain) => Expression::Suffixed(self.transform_suffixed(chain)),
+            // Luau
+            Expression::TypeCast(mut cast) => {
+                cast.expr = self.inline_operand(cast.expr, OperandPosition::Cast);
+                let operand = self.facts;
+                let was_in_value = mem::replace(&mut self.is_in_value, false);
+                cast.type_annotation = self.transform_type(cast.type_annotation);
+                self.is_in_value = was_in_value;
+                self.facts = if self.is_in_value {
+                    let type_depth = type_nesting_depth(&cast.type_annotation);
+                    Facts {
+                        kind: operand.kind,
+                        depth: operand.depth.max(type_depth).saturating_add(1),
+                        is_nonzero_number: false,
+                        has_unspliced_run: operand.has_unspliced_run,
+                    }
+                } else {
+                    Facts::OPAQUE
+                };
+                Expression::TypeCast(cast)
+            }
+            other @ (Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::TableConstructor(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::Error(_)) => {
+                let was_in_value = mem::replace(&mut self.is_in_value, false);
+                let walked = self.walk_expr(other);
+                self.is_in_value = was_in_value;
+                self.facts = Facts::OPAQUE;
+                walked
+            }
         }
-        walked
     }
 }
 
@@ -311,25 +430,28 @@ enum OperandPosition {
     Cast,
 }
 
-/// Grouping lives in `Parenthesized` nodes and codegen prints the tree flat, so
-/// an operand that binds looser than its position silently regroups on reparse.
-fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
-    match expr {
-        Expression::BinaryOp(_) | Expression::UnaryOp(_) => match position {
-            OperandPosition::Left(op) => can_unwrap_in_binop_lhs(expr, op),
-            OperandPosition::Right(op) => can_unwrap_in_binop_rhs(expr, op),
-            OperandPosition::Unary => !matches!(
-                expr,
-                Expression::BinaryOp(binary_op) if binds_looser_than_unary(binary_op)
-            ),
+/// Grouping lives in `Parenthesized` nodes and codegen prints the tree flat,
+/// so a value that binds looser than its position would regroup on reparse.
+///
+/// A value is a closed literal expression, so none prints a Luau
+/// if-expression last.
+fn keeps_grouping(value: &Expression, position: OperandPosition) -> bool {
+    match value {
+        Expression::BinaryOp(run) => match position {
+            OperandPosition::Left(op) => run.can_nest_bare(op, OperandSide::Left),
+            OperandPosition::Right(op) => run.can_nest_bare(op, OperandSide::Right),
+            OperandPosition::Unary => !binds_looser_than_unary(run),
+            OperandPosition::Cast => false,
+        },
+        Expression::UnaryOp(_) => match position {
+            // Unary ops bind looser than ^, so (-a)^b needs its parens.
+            OperandPosition::Left(op) => op != BinOp::Pow,
+            OperandPosition::Right(_) | OperandPosition::Unary => true,
             OperandPosition::Cast => false,
         },
         // Luau: `::` takes a simple expression, and `x :: A :: B` doesn't
         // parse.
-        Expression::TypeCast(_) => match position {
-            OperandPosition::Left(_) | OperandPosition::Right(_) | OperandPosition::Unary => true,
-            OperandPosition::Cast => false,
-        },
+        Expression::TypeCast(_) => !matches!(position, OperandPosition::Cast),
         Expression::Number(_)
         | Expression::Integer(_)
         | Expression::StringLiteral(_)
@@ -350,79 +472,11 @@ fn keeps_grouping(expr: &Expression, position: OperandPosition) -> bool {
 
 /// The operand `expr` prints last, which is what a following token lands on.
 fn last_operand(expr: &mut Expression) -> &mut Expression {
-    match expr {
-        Expression::BinaryOp(binary_op) => last_operand(&mut binary_op.links.last_mut().operand),
-        Expression::UnaryOp(unop) => last_operand(&mut unop.operand),
-        operand @ (Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_)) => operand,
-    }
-}
-
-impl Inliner {
-    fn is_inlined_declaration(&self, stmt: &Statement) -> bool {
-        if let Statement::LocalAssignment(local) = stmt
-            && let [attributed] = local.names.items.as_slice()
-        {
-            return self.candidates.contains_key(identifier_name(&attributed.name));
-        }
-        false
-    }
-
-    /// Only in an operand position can a replacement regroup, so only there does it
-    /// gain parens. Anywhere else it stays bare, since `return (1+2)` is longer
-    /// than `return 1+2` and `simplify_parens` wouldn't strip those parens.
-    ///
-    /// A run inlined bare where it would merge into its operator's run joins
-    /// it, so a run of locals inlines without nesting.
-    fn inline_operands(&mut self, expr: &mut Expression) {
-        match expr {
-            Expression::BinaryOp(binary_op) => {
-                // The operand before each `<` is checked while it's still a
-                // name.
-                let mut before = &mut binary_op.first;
-                for link in &mut binary_op.links {
-                    if link.op == BinOp::Lt {
-                        self.close_cast_before_less_than(before);
-                    }
-                    before = &mut link.operand;
-                }
-                let op = binary_op.links.first().op;
-                let inner_position = match inner_operand_side(binary_op) {
-                    OperandSide::Left => OperandPosition::Left(op),
-                    OperandSide::Right => OperandPosition::Right(op),
-                };
-                self.inline_operand(&mut binary_op.first, OperandPosition::Left(op));
-                if let Some((last, inner)) = binary_op.links.split_last_mut() {
-                    for link in inner {
-                        self.inline_operand(&mut link.operand, inner_position);
-                    }
-                    self.inline_operand(&mut last.operand, OperandPosition::Right(op));
-                }
-                binary_op.splice_operands();
-            }
-            Expression::UnaryOp(unop) => {
-                self.inline_operand(&mut unop.operand, OperandPosition::Unary);
-            }
-            // Luau
-            Expression::TypeCast(cast) => {
-                self.inline_operand(&mut cast.expr, OperandPosition::Cast);
-            }
-            // These delimit their children or are leaves. A literal landing in
-            // a prefix position is `ensure_prefix`'s job.
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::BinaryOp(binary_op) => &mut binary_op.links.last_mut().operand,
+            Expression::UnaryOp(unop) => &mut unop.operand,
             Expression::Number(_)
             | Expression::Integer(_)
             | Expression::StringLiteral(_)
@@ -437,34 +491,251 @@ impl Inliner {
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
-            | Expression::Error(_) => {}
-        }
+            | Expression::TypeCast(_)
+            | Expression::Error(_) => return current,
+        };
     }
+}
 
-    fn inline_operand(&self, operand: &mut Expression, position: OperandPosition) {
-        if let Expression::Name(name) = operand
-            && let Some(initializer) = self.candidates.get(identifier_name(name))
+/// Splices every run and chain a value left unspliced in `expr`, which has
+/// landed for good. Each splice takes in a whole nested run at once, so this
+/// recurses no deeper than the spliced tree nests.
+fn splice_unspliced(expr: &mut Expression) {
+    match expr {
+        Expression::BinaryOp(run) => {
+            run.splice_operands();
+            splice_unspliced(&mut run.first);
+            for link in &mut run.links {
+                splice_unspliced(&mut link.operand);
+            }
+        }
+        Expression::Suffixed(chain) => {
+            chain.splice_prefix();
+            splice_unspliced(&mut chain.prefix);
+        }
+        Expression::UnaryOp(unop) => splice_unspliced(&mut unop.operand),
+        Expression::Parenthesized(parenthesized) => splice_unspliced(&mut parenthesized.expr),
+        Expression::TypeCast(cast) => splice_unspliced(&mut cast.expr),
+        // A value holds no other node that leaves a run unspliced.
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Name(_)
+        | Expression::TableConstructor(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::Error(_) => {}
+    }
+}
+
+impl Inliner {
+    /// Rewrites a `local`. A candidate's goes, and its value waits for the
+    /// candidate's read, when the value is inlinable.
+    fn transform_local(&mut self, mut local: Box<LocalAssignment>) -> Option<Statement> {
+        let Some(read_depth) =
+            single_declared_name(&local).and_then(|name| self.candidates.get(name).copied())
+        else {
+            return Some(self.walk_stmt(Statement::LocalAssignment(local)));
+        };
+        local.names = self.walk_attributed_names(local.names);
+        if let (Some(exprs), [attributed]) = (&mut local.exprs, local.names.items.as_slice())
+            && let [initializer] = exprs.items.as_mut_slice()
         {
-            let replacement = initializer.clone();
-            *operand = if keeps_grouping(&replacement, position) {
-                replacement
-            } else {
-                parenthesize(replacement)
-            };
+            let was_in_value = mem::replace(&mut self.is_in_value, true);
+            *initializer = self.transform_expr(initializer.take());
+            self.is_in_value = was_in_value;
+            let facts = self.facts;
+            // The value can gain parentheses where it lands, and a cast inside
+            // it a second pair.
+            let is_inlinable = facts.kind.is_some()
+                && facts.depth <= MAX_ADDED_DEPTH
+                && read_depth.saturating_add(2).saturating_add(facts.depth) <= MAX_NESTING_DEPTH;
+            if is_inlinable {
+                let value = Value { expr: initializer.take(), facts };
+                self.values.insert(identifier_name(&attributed.name).into(), value);
+                return None;
+            }
+            if facts.has_unspliced_run {
+                splice_unspliced(initializer);
+            }
         }
+        Some(Statement::LocalAssignment(local))
     }
 
-    /// Luau: a cast has no closing token and `T<` opens generic arguments, so a
-    /// cast inlined just before `<` needs parens of its own. A cast that was
+    /// Hands back a value at its read. A value lands for good outside
+    /// another value, so its unspliced runs splice there.
+    fn land(&mut self, value: Value) -> Expression {
+        let Value { mut expr, mut facts } = value;
+        if !self.is_in_value && facts.has_unspliced_run {
+            splice_unspliced(&mut expr);
+            facts.has_unspliced_run = false;
+        }
+        self.facts = facts;
+        expr
+    }
+
+    /// Only in an operand position can a value regroup, so only there does
+    /// it gain parens. Anywhere else it stays bare, since `return (1+2)` is
+    /// longer than `return 1+2` and `simplify_parens` wouldn't strip those
+    /// parens.
+    fn inline_operand(&mut self, operand: Expression, position: OperandPosition) -> Expression {
+        if let Expression::Name(name) = &operand
+            && let Some(value) = self.values.remove(identifier_name(name))
+        {
+            let expr = self.land(value);
+            if keeps_grouping(&expr, position) {
+                return expr;
+            }
+            self.facts.depth = self.facts.depth.saturating_add(1);
+            return parenthesize(expr);
+        }
+        self.transform_expr(operand)
+    }
+
+    /// A value inlined bare where it would merge into its operator's run
+    /// joins it, so a run of locals inlines without nesting.
+    fn inline_run(&mut self, mut run: Box<BinaryOp>) -> Expression {
+        // The operand before each `<` is checked while it's still a name.
+        let mut before = &mut run.first;
+        for link in &mut run.links {
+            if link.op == BinOp::Lt {
+                self.close_cast_before_less_than(before);
+            }
+            before = &mut link.operand;
+        }
+        let op = run.links.first().op;
+        let inner_position = match inner_operand_side(&run) {
+            OperandSide::Left => OperandPosition::Left(op),
+            OperandSide::Right => OperandPosition::Right(op),
+        };
+        let mut operand_facts = Vec::new();
+        if self.is_in_value {
+            operand_facts.reserve(run.links.len().saturating_add(1));
+        }
+        run.first = self.inline_operand(run.first.take(), OperandPosition::Left(op));
+        if self.is_in_value {
+            operand_facts.push(self.facts);
+        }
+        let last_index = run.links.len().saturating_sub(1);
+        for (i, link) in run.links.iter_mut().enumerate() {
+            let position =
+                if i == last_index { OperandPosition::Right(op) } else { inner_position };
+            link.operand = self.inline_operand(link.operand.take(), position);
+            if self.is_in_value {
+                operand_facts.push(self.facts);
+            }
+        }
+        if self.is_in_value {
+            self.facts = run_facts(&run, &operand_facts);
+        } else {
+            run.splice_operands();
+            self.facts = Facts::OPAQUE;
+        }
+        Expression::BinaryOp(run)
+    }
+
+    /// Luau: a chain of type instantiations, which evaluates to its prefix.
+    fn inline_instantiation(
+        &mut self,
+        mut chain: Box<SuffixedExpression>,
+    ) -> Box<SuffixedExpression> {
+        chain.prefix = self.transform_expr(chain.prefix.take());
+        let prefix = self.facts;
+        let was_in_value = mem::replace(&mut self.is_in_value, false);
+        let mut type_depth = 0usize;
+        for suffix in &mut chain.suffixes {
+            if let Suffix::TypeInstantiation { type_args, .. } = suffix {
+                for type_arg in &mut type_args.args.items {
+                    *type_arg = self.transform_type(type_arg.take());
+                    type_depth = type_depth.max(type_nesting_depth(type_arg));
+                }
+            }
+        }
+        self.is_in_value = was_in_value;
+        let is_joined = matches!(chain.prefix, Expression::Suffixed(_));
+        let prefix_depth = if is_joined {
+            // A chain that's the prefix joins this one once spliced.
+            prefix.depth.saturating_sub(1)
+        } else if is_prefix_expr(&chain.prefix) {
+            prefix.depth
+        } else {
+            chain.prefix = parenthesize(chain.prefix.take());
+            prefix.depth.saturating_add(1)
+        };
+        self.facts = Facts {
+            kind: prefix.kind,
+            depth: prefix_depth.max(type_depth).saturating_add(1),
+            is_nonzero_number: false,
+            has_unspliced_run: is_joined || prefix.has_unspliced_run,
+        };
+        chain
+    }
+
+    /// Luau: a cast has no closing token and `T<` opens generic arguments, so
+    /// a cast inlined just before `<` needs parens of its own. A cast that was
     /// already there parsed fine, so only inlining can cause this.
     fn close_cast_before_less_than(&mut self, left: &mut Expression) {
         if let Expression::Name(name) = last_operand(left)
-            && let Some(initializer) = self.candidates.get_mut(identifier_name(name))
+            && let Some(value) = self.values.get_mut(identifier_name(name))
         {
-            let cast = last_operand(initializer);
+            let cast = last_operand(&mut value.expr);
             if matches!(cast, Expression::TypeCast(_)) {
                 *cast = parenthesize(cast.take());
+                splice_unspliced(&mut value.expr);
+                value.facts.depth = expr_nesting_depth(&value.expr);
+                value.facts.has_unspliced_run = false;
             }
+        }
+    }
+}
+
+/// The facts of `run` from those of its operands, first operand first.
+///
+/// Each operator applies in the order the level groups them, as
+/// `literal_kind` folds a run. An operand that's a bare run at this level
+/// nests no deeper here than its own operands, since splicing joins them.
+fn run_facts(run: &BinaryOp, operands: &[Facts]) -> Facts {
+    let level = run.precedence().0;
+    let is_joined = |operand: &Expression| matches!(operand, Expression::BinaryOp(inner) if inner.precedence().0 == level);
+    let operand_exprs = iter::once(&run.first).chain(run.links.iter().map(|link| &link.operand));
+    let mut deepest = 0usize;
+    let mut has_unspliced_run = false;
+    for (operand, facts) in operand_exprs.zip(operands) {
+        let is_operand_joined = is_joined(operand);
+        has_unspliced_run |= is_operand_joined || facts.has_unspliced_run;
+        let depth = if is_operand_joined { facts.depth.saturating_sub(1) } else { facts.depth };
+        deepest = deepest.max(depth);
+    }
+    let kind = run_kind(run, operands);
+    Facts { kind, depth: deepest.saturating_add(1), is_nonzero_number: false, has_unspliced_run }
+}
+
+/// What `run` evaluates to when its operands, first operand first, have
+/// `operands`' kinds.
+fn run_kind(run: &BinaryOp, operands: &[Facts]) -> Option<LiteralKind> {
+    let kind_at = |i: usize| operands.get(i)?.kind;
+    let is_nonzero_at = |i: usize| operands.get(i).is_some_and(|facts| facts.is_nonzero_number);
+    match run.precedence().1 {
+        Associativity::Left => {
+            let mut kind = kind_at(0)?;
+            for (i, link) in run.links.iter().enumerate() {
+                let right = i.saturating_add(1);
+                kind = binary_literal_kind(kind, link.op, kind_at(right)?, is_nonzero_at(right))?;
+            }
+            Some(kind)
+        }
+        Associativity::Right => {
+            let mut kind = kind_at(run.links.len())?;
+            for (i, link) in run.links.iter().enumerate().rev() {
+                let is_nonzero = is_nonzero_at(i.saturating_add(1));
+                kind = binary_literal_kind(kind_at(i)?, link.op, kind, is_nonzero)?;
+            }
+            Some(kind)
         }
     }
 }
@@ -738,11 +1009,27 @@ mod tests {
 
     #[test]
     fn inlines_chained_single_use() {
-        // Pass 1 inlines x into y's initializer, giving `local y = 42 + 1`.
-        // Pass 2 finds that closed literal and inlines y, giving
-        // `return 42 + 1`.
+        // `x` is decided first, so `y`'s initializer is `42 + 1` by the time
+        // `y` is, and both inline in the one walk.
         let result = apply("local x = 42\nlocal y = x + 1\nreturn y\n");
-        assert!(!result.contains("local"), "Both should be inlined: {result}");
+        assert_eq!(result, "return 42+1");
+    }
+
+    #[test]
+    fn inlines_a_chain_of_any_length_in_one_walk() {
+        for links in [10u32, 100, 400, 20_000] {
+            let mut sum = String::from("local x0 = 1\n");
+            let mut concat = String::from("local x0 = \"z\"\n");
+            for (i, previous) in (1..=links).zip(0u32..) {
+                writeln!(sum, "local x{i} = x{previous} + 1").unwrap();
+                writeln!(concat, "local x{i} = \"a\" .. x{previous}").unwrap();
+            }
+            writeln!(sum, "return x{links}").unwrap();
+            writeln!(concat, "return x{links}").unwrap();
+            let count = usize::try_from(links).expect("the link count fits");
+            assert_eq!(apply(&sum), format!("return 1{}", "+1".repeat(count)));
+            assert_eq!(apply(&concat), format!("return{}\"z\"", "\"a\"..".repeat(count)));
+        }
     }
 
     #[test]
