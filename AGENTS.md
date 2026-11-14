@@ -114,6 +114,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - A fix test applies the edit and asserts that the result reparses.
 - Formatter tests go through `assert_format`, `assert_format_with`, `assert_format_range`, or, for a tree built in code, `assert_format_block`, which check exact output, idempotency, and reparsing on every call.
 - An error path asserts on the returned errors, never with `#[should_panic]`.
+- Test source or output that spans lines, or reads better across lines, is a multi-line string literal, never one with `\n` escapes. Text that reads fine on one line stays on one line.
 - Tests need the exact directive syntax. `-- luck: allow(rule_a, rule_b)`, `deny(...)`, or `warn(...)` applies to the next statement, `start` or `end` after it marks a region, and `-- #luck: allow(foo)` applies to the whole file. `-- luck: format off` and `-- luck: format on` turn the formatter off for a region, and `-- luck: ignore`, or its alias `-- luck: format ignore`, skips one statement.
 
 ## Extension
