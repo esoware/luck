@@ -6,8 +6,9 @@
 //! with no source text. It prints each leaf's text as the tree holds it,
 //! unchecked, and returns an error only for a tree nested past
 //! `luck_ast::MAX_NESTING_DEPTH`. [`format()`] and [`format_range`] parse
-//! source text first, which also gets them blank-line preservation,
-//! `-- luck: format off` regions, and comments placed by byte position.
+//! source text first, and [`format_parsed`] takes an existing parse. The
+//! parse gets all three blank-line preservation, `-- luck: format off`
+//! regions, and comments placed by byte position.
 //!
 //! # Usage
 //!
@@ -50,7 +51,7 @@ mod sort_requires;
 mod tokens;
 
 pub use comments::Comments;
-pub use format::{FormatError, FormatResult, format, format_block, format_range};
+pub use format::{FormatError, FormatResult, format, format_block, format_parsed, format_range};
 pub use format_options::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
     IndentStyle, LineEndings, QuoteStyle, SpaceAfterFunction,

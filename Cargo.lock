@@ -826,7 +826,6 @@ version = "0.0.0"
 dependencies = [
  "criterion2",
  "flate2",
- "luck_ast",
  "luck_bundler",
  "luck_codegen",
  "luck_core",
@@ -836,9 +835,9 @@ dependencies = [
  "luck_minifier",
  "luck_parser",
  "luck_semantic",
- "luck_testgen",
  "luck_token",
  "mimalloc-safe",
+ "rayon",
  "tar",
  "tempfile",
  "ureq",

@@ -25,7 +25,7 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 
 ### Pipeline
 
-1. **Parse.** Source text becomes an AST through `luck_parser`. (Skipped when a caller hands `format_block` an AST directly.)
+1. **Parse.** Source text becomes an AST through `luck_parser`. (Skipped when a caller hands `format_parsed` a parse or `format_block` an AST.)
 2. **IR generation.** Each node's `impl Format` writes into a `Formatter`, which records a flat stream of `FormatElement`s (text, soft and hard lines) with paired `Tag`s marking groups, indents, fills, line suffixes, and conditionals keyed by group id. Emitters build it with combinators rather than pushing elements by hand.
 3. **Print.** A `propagate_expand` pre-pass marks every group containing a forced break as expanded, then the printer walks the stream with a mode stack, measuring each unforced group's content against the remaining width and committing to flat or expanded (fits-then-commit).
 
@@ -57,7 +57,7 @@ The defaults follow the [Roblox Lua style guide](https://roblox.github.io/lua-st
 | Module | Role |
 |--------|------|
 | `lib.rs` | Module list and public re-exports |
-| `format.rs` | Public entry points (`format_block`, `format`, `format_range`) and `FormatResult` |
+| `format.rs` | Public entry points (`format_block`, `format`, `format_parsed`, `format_range`) and `FormatResult` |
 | `format_options.rs` | `FormatOptions` and its conversion from `FormatConfig` |
 | `ir.rs` | `Format` trait, `Formatter`, and the tag-stream IR (`FormatElement`, `Tag`, combinators) |
 | `printer.rs` | Line-width-aware IR printer (expand pre-pass + fits-then-commit) |

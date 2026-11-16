@@ -209,7 +209,7 @@ impl<N: Notifier> Backend<N> {
             spawn_blocking(move || settings.format_options(document_path.as_deref())).await.ok()?;
         let lua_version = document.lua_version;
         let (result, action) = byte_range.map_or_else(
-            || (luck_formatter::format(document.text(), lua_version, &options), "format"),
+            || (luck_formatter::format_parsed(&document.parsed, lua_version, &options), "format"),
             // `format_range` returns the whole file with text outside the
             // range kept byte-for-byte, so a whole-file edit only changes the
             // range.

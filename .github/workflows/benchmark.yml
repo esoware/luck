@@ -11,6 +11,7 @@ on:
       - "crates/luck_benchmark/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/benchmark.yml"
   push:
     branches: [main]
@@ -37,9 +38,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [lexer, parser, semantic, linter, codegen, formatter, minifier, bundler, synth]
+        component: [lexer, parser, semantic, linter, codegen, formatter, minifier, bundler]
     env:
       COMPONENT: ${{ matrix.component }}
+      # mimalloc purges freed memory on a 10 ms wall-clock timer, so under simulation it would fire at a different point in every run.
+      MIMALLOC_PURGE_DELAY: "-1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,13 +58,13 @@ jobs:
 
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-codspeed
+          tool: cargo-codspeed@6.0.0
 
-      # The corpus pins live in corpus.rs, so keying on it refetches only when a pin changes.
+      # The corpus pins live in corpus.rs and the cache layout in corpus_cache.rs, so keying on both refetches only when one changes.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: crates/luck_benchmark/corpus
-          key: bench-corpus-${{ hashFiles('crates/luck_benchmark/src/corpus.rs') }}
+          key: bench-corpus-${{ hashFiles('crates/luck_benchmark/src/corpus.rs', 'crates/luck_benchmark/src/corpus_cache.rs') }}
 
       - name: Build the benchmark
         run: cargo codspeed build -p luck_benchmark --bench "$COMPONENT" --features codspeed
@@ -87,13 +90,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: benchmark
-          save-if: false
+          shared-key: minsize
+          save-if: ${{ github.ref_name == 'main' }}
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: crates/luck_benchmark/corpus
-          key: bench-corpus-${{ hashFiles('crates/luck_benchmark/src/corpus.rs') }}
+          key: bench-corpus-${{ hashFiles('crates/luck_benchmark/src/corpus.rs', 'crates/luck_benchmark/src/corpus_cache.rs') }}
 
       - name: Check that minsize.snap is current
         run: cargo test -p luck_benchmark --test it minsize_is_up_to_date -- --ignored

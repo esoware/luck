@@ -4,7 +4,7 @@ Internal test harness: deterministic Lua/Luau program generators, the property t
 
 ## Overview
 
-Two generators turn a `(seed, LuaVersion, statement_budget)` triple into a source string. Both are fully deterministic: same inputs, byte-identical output, on every platform. That's what lets the benchmark corpus include generated programs without committing large files. The two profiles trade off differently:
+Two generators turn a `(seed, LuaVersion, statement_budget)` triple into a source string. Both are fully deterministic: same inputs, byte-identical output, on every platform. The two profiles trade off differently:
 
 | Generator | Entry | Guarantee | Purpose |
 |-----------|-------|-----------|---------|

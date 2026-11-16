@@ -10,7 +10,7 @@ use tar::Archive;
 #[cfg(test)]
 use crate::fixtures::{cache_directory_override, canned_response};
 
-pub(crate) fn cache_directory() -> PathBuf {
+fn cache_directory() -> PathBuf {
     #[cfg(test)]
     if let Some(directory) = cache_directory_override() {
         return directory;
@@ -18,8 +18,8 @@ pub(crate) fn cache_directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus")
 }
 
-/// CI runners see transient connection resets from GitHub's raw and
-/// codeload hosts, and one failed fetch would fail the whole bench job.
+/// CI runners see transient connection resets from GitHub's codeload host,
+/// and one failed fetch would fail the whole bench job.
 ///
 /// # Panics
 ///
@@ -41,26 +41,6 @@ fn fetch_bytes(url: &str) -> Vec<u8> {
         }
     }
     panic!("failed to fetch {url} after 3 attempts: {last_error}")
-}
-
-/// `base_url` ends in the pinned commit, which keys the cached copy.
-///
-/// # Panics
-///
-/// Panics when the file can't be fetched or isn't UTF-8.
-pub(crate) fn fetch_corpus_file(base_url: &str, file_name: &str) -> String {
-    let pinned_commit = base_url.rsplit('/').next().unwrap_or(base_url);
-    let cache_path = cache_directory().join(format!("{pinned_commit}-{file_name}"));
-    if let Ok(text) = fs::read_to_string(&cache_path) {
-        return text;
-    }
-    let url = format!("{base_url}/{file_name}");
-    let bytes = fetch_bytes(&url);
-    let text =
-        String::from_utf8(bytes).unwrap_or_else(|e| panic!("failed to read {url} as UTF-8: {e}"));
-    let _unused =
-        fs::create_dir_all(cache_directory()).and_then(|()| fs::write(&cache_path, &text));
-    text
 }
 
 /// # Panics
@@ -93,20 +73,6 @@ mod tests {
 
     use super::*;
     use crate::fixtures::{gzip, isolated_cache, tar_archive};
-
-    #[test]
-    fn fetch_corpus_file_refetches_when_the_pinned_commit_changes() {
-        let _cache = isolated_cache(|url| {
-            if url.contains("old-commit") { b"old pin".to_vec() } else { b"new pin".to_vec() }
-        });
-
-        assert_eq!(fetch_corpus_file("https://corpus.test/old-commit", "input.luau"), "old pin");
-        assert_eq!(
-            fetch_corpus_file("https://corpus.test/new-commit", "input.luau"),
-            "new pin",
-            "a file cached under one pinned commit must not satisfy a fetch of another"
-        );
-    }
 
     #[test]
     fn fetch_project_tarball_refetches_after_an_interrupted_extraction() {

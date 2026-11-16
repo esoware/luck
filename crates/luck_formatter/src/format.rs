@@ -1,6 +1,7 @@
 use core::ops::Range;
 
 use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_parser::ParseResult;
 use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 
 use crate::comments::{Comments, write_remaining_comments, write_shebang};
@@ -95,12 +96,24 @@ pub fn format_block(
 /// `FormatResult::errors`.
 #[must_use]
 pub fn format(source: &str, version: LuaVersion, options: &FormatOptions) -> FormatResult {
-    let parsed = luck_parser::parse(source, version);
-    if !parsed.errors.is_empty() {
-        return FormatResult { output: String::new(), errors: parsed.errors };
+    format_parsed(&luck_parser::parse(source, version), version, options)
+}
+
+/// [`format()`] without the parse, for a host that already holds one.
+///
+/// `parse` must come from `luck_parser` at `version`. One with errors returns
+/// empty output and those errors.
+#[must_use]
+pub fn format_parsed(
+    parse: &ParseResult,
+    version: LuaVersion,
+    options: &FormatOptions,
+) -> FormatResult {
+    if !parse.errors.is_empty() {
+        return FormatResult { output: String::new(), errors: parse.errors.clone() };
     }
-    let comments = Comments::from_source(&parsed.comments, &parsed.source, version);
-    let output = print_block(&parsed.block, comments, options, options.sort_requires);
+    let comments = Comments::from_source(&parse.comments, &parse.source, version);
+    let output = print_block(&parse.block, comments, options, options.sort_requires);
     FormatResult { output, errors: Vec::new() }
 }
 
