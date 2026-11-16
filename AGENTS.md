@@ -88,7 +88,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - Adding a Lua version is a `LuaVersion` variant, a `LuaTarget` variant, and an arm in every `has_<feature>` predicate. Each of those predicates is exhaustive so a new version has to answer it.
 - Modules are private, and each crate re-exports its public items from `lib.rs`, so every item has exactly one path. No `pub mod`. `lib.rs` holds the crate doc, the crate attributes, the module list, and the re-exports, and no other code.
 - Types that two crates share when neither depends on the other live in `luck_token` or `luck_core`, such as `LuaVersion`, which the parser and the formatter both read, or `Diagnostic`, which the bundler builds and the CLI renders.
-- The version is set in `[workspace.package]` in the root `Cargo.toml` and in `editors/vscode/package.json`, which must match. `.agents/skills/bump-versions/SKILL.md` changes both.
+- The version is set in `[workspace.package]` in the root `Cargo.toml` and in `editors/vscode/package.json`, which must match.
 
 ### Types and errors
 
