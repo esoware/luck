@@ -364,7 +364,7 @@ impl<'locals> NameReads<'locals> {
         }
         for var in assignment.targets.iter() {
             if !matches!(var, Var::Name(_)) {
-                self.visit_var(var);
+                self.visit_assignment_target(var);
             }
         }
     }
@@ -435,11 +435,18 @@ impl<'ast> Visitor<'ast> for NameReads<'_> {
         }
     }
 
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(name) = var {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(name) = expr {
             self.read(name);
         }
-        self.walk_var(var);
+        self.walk_expr(expr);
+    }
+
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Name(name) = target {
+            self.read(name);
+        }
+        self.walk_assignment_target(target);
     }
 
     // A function body's reads belong to its own scope.

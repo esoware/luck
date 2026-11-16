@@ -1,7 +1,8 @@
-use luck_ast::{BinaryOp, Expression, FunctionArgs, FunctionCall, Literal};
+use luck_ast::{Call, Expression, FunctionArgs, Literal};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{BinOp, LuaVersion, short_string_body};
 
+use crate::binary::operator_pairs;
 use crate::call::is_global_call;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -24,56 +25,67 @@ impl NodeRule for UnknownType {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
     fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let Expression::BinaryOp(binary_op) = expr else {
+        let Expression::BinaryOp(run) = expr else {
             return;
         };
-        if !matches!(binary_op.op, BinOp::Eq | BinOp::Ne) {
+        if !run.links.first().op.is_comparison() {
             return;
         }
-        let Some((callee, literal)) = classify_comparison(binary_op, context.semantic) else {
-            return;
-        };
-        // An escape could spell a valid name, so only plain text is checked.
-        let Some(name) = short_string_body(&literal.text).filter(|body| !body.contains('\\'))
-        else {
-            return;
-        };
-        let primitives = primitive_type_names(context.semantic.version);
-        if primitives.contains(&name) {
-            return;
+        for pair in operator_pairs(run) {
+            if matches!(pair.op, BinOp::Eq | BinOp::Ne)
+                && let (Some(lhs), Some(rhs)) = (pair.lhs, pair.rhs)
+                && let Some((callee, literal)) = classify_comparison(lhs, rhs, context.semantic)
+            {
+                check_literal(callee, literal, context, findings);
+            }
         }
-        // Roblox `typeof` also returns datatype names (`"Instance"`,
-        // `"Vector3"`) that aren't in this list, so only case typos of a
-        // primitive are flagged there.
-        let is_roblox_typeof = callee == "typeof" && context.semantic.environment.is_roblox();
-        let case_match = primitives.iter().find(|primitive| primitive.eq_ignore_ascii_case(name));
-        if is_roblox_typeof && case_match.is_none() {
-            return;
-        }
-        let suggestion = case_match
-            .copied()
-            .or_else(|| closest(name, primitives.iter().copied(), |distance, _| distance <= 2));
-        let mut finding = Finding::new(
-            format!("`{name}` is not a value that `{callee}` can return"),
-            literal.span,
-        );
-        if let Some(primitive) = suggestion {
-            finding = finding.with_help(format!("did you mean `{primitive}`?"));
-        }
-        findings.push(finding);
     }
 }
 
+fn check_literal(
+    callee: &str,
+    literal: &Literal,
+    context: &LintContext<'_>,
+    findings: &mut Vec<Finding>,
+) {
+    // An escape could spell a valid name, so only plain text is checked.
+    let Some(name) = short_string_body(&literal.text).filter(|body| !body.contains('\\')) else {
+        return;
+    };
+    let primitives = primitive_type_names(context.semantic.version);
+    if primitives.contains(&name) {
+        return;
+    }
+    // Roblox `typeof` also returns datatype names (`"Instance"`,
+    // `"Vector3"`) that aren't in this list, so only case typos of a
+    // primitive are flagged there.
+    let is_roblox_typeof = callee == "typeof" && context.semantic.environment.is_roblox();
+    let case_match = primitives.iter().find(|primitive| primitive.eq_ignore_ascii_case(name));
+    if is_roblox_typeof && case_match.is_none() {
+        return;
+    }
+    let suggestion = case_match
+        .copied()
+        .or_else(|| closest(name, primitives.iter().copied(), |distance, _| distance <= 2));
+    let mut finding =
+        Finding::new(format!("`{name}` is not a value that `{callee}` can return"), literal.span);
+    if let Some(primitive) = suggestion {
+        finding = finding.with_help(format!("did you mean `{primitive}`?"));
+    }
+    findings.push(finding);
+}
+
 fn classify_comparison<'ast>(
-    binary_op: &'ast BinaryOp,
+    lhs: &'ast Expression,
+    rhs: &'ast Expression,
     semantic: &SemanticAnalysis,
 ) -> Option<(&'static str, &'ast Literal)> {
-    let sides = [(&binary_op.lhs, &binary_op.rhs), (&binary_op.rhs, &binary_op.lhs)];
-    for (call_side, literal_side) in sides {
-        let Expression::FunctionCall(call) = call_side else {
+    for (call_side, literal_side) in [(lhs, rhs), (rhs, lhs)] {
+        let Expression::Suffixed(chain) = call_side else {
             continue;
         };
-        let Some(callee) = type_function_callee(call, semantic) else {
+        let Some(callee) = chain.last_call().and_then(|call| type_function_callee(call, semantic))
+        else {
             continue;
         };
         let Expression::StringLiteral(literal) = literal_side else {
@@ -86,7 +98,7 @@ fn classify_comparison<'ast>(
 
 /// `type`, or `typeof` on Luau, when `call` is a one-argument call to that
 /// global.
-fn type_function_callee(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<&'static str> {
+fn type_function_callee(call: Call<'_>, semantic: &SemanticAnalysis) -> Option<&'static str> {
     let callee = if is_global_call(call, "type", semantic) {
         "type"
     } else if semantic.version.is_luau() && is_global_call(call, "typeof", semantic) {
@@ -94,7 +106,7 @@ fn type_function_callee(call: &FunctionCall, semantic: &SemanticAnalysis) -> Opt
     } else {
         return None;
     };
-    let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+    let FunctionArgs::Parenthesized { args, .. } = call.args else {
         return None;
     };
     (args.len() == 1).then_some(callee)
@@ -187,8 +199,12 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_type() {
-        let diags =
-            run("local type = function() end\nlocal ok = type(x) == \"strng\"", LuaVersion::Lua54);
+        let diags = run(
+            "\
+local type = function() end
+local ok = type(x) == \"strng\"",
+            LuaVersion::Lua54,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 

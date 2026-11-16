@@ -1,3 +1,7 @@
+/// Locals active at once in one function, the same in every dialect:
+/// `MAXVARS` in PUC Lua and `kMaxLocalCount` in Luau.
+pub const MAX_ACTIVE_LOCALS: usize = 200;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LuaVersion {
     Lua51,

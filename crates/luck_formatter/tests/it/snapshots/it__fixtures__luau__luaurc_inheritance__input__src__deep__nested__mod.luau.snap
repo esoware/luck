@@ -1,0 +1,37 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/luau/luaurc_inheritance/input/src/deep/nested/mod.luau
+---
+-- line_width = 1
+local bar = require(
+	"@mid/bar"
+)
+local foo = require(
+	"@root/foo"
+)
+
+local result = foo.value
+	.. " "
+	.. bar.value
+print(
+	result
+)
+return result
+
+-- line_width = 40
+local bar = require("@mid/bar")
+local foo = require("@root/foo")
+
+local result =
+	foo.value .. " " .. bar.value
+print(result)
+return result
+
+-- line_width = 80, 100, 120
+local bar = require("@mid/bar")
+local foo = require("@root/foo")
+
+local result = foo.value .. " " .. bar.value
+print(result)
+return result

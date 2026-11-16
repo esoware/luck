@@ -1,4 +1,4 @@
-use luck_ast::{FunctionBody, LocalAssignment};
+use luck_ast::{FunctionBody, LocalAssignment, LocalAssignmentKind};
 use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 
 pub(crate) const METHOD_RECEIVER_NAME: &str = "self";
@@ -39,5 +39,5 @@ pub(crate) fn has_attributed_or_env_name(local: &LocalAssignment, version: LuaVe
 /// declaration: an export, a `const`, or one that
 /// [`has_attributed_or_env_name`].
 pub(crate) fn has_fixed_binding(local: &LocalAssignment, version: LuaVersion) -> bool {
-    local.is_const || local.is_exported || has_attributed_or_env_name(local, version)
+    local.kind != LocalAssignmentKind::Local || has_attributed_or_env_name(local, version)
 }

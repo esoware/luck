@@ -1,7 +1,7 @@
 use luck_ast::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
     IntersectionType, NamedType, OptionalType, ParenthesizedType, TableType, Type, TypeArgs,
-    TypeField, TypePack, TypeofType, UnionType, VariadicType, ensure_sufficient_stack,
+    TypeField, TypePack, TypeofType, UnionType, VariadicType,
 };
 
 use super::CompactPrinter;
@@ -115,7 +115,7 @@ impl CompactPrinter {
     }
 
     fn emit_optional_type(&mut self, optional: &OptionalType) {
-        ensure_sufficient_stack(|| self.emit_type(&optional.type_value));
+        self.emit_type(&optional.type_value);
         self.emit_fixed("?");
     }
 

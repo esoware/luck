@@ -1,7 +1,7 @@
 use luck_ast::{
-    BinaryOp, Expression, Field, FieldAccess, FunctionArgs, FunctionCall, FunctionDef,
-    IfExpression, IndexExpression, InterpolatedString, ParenthesizedExpression, TableConstructor,
-    TypeCast, TypeInstantiation, UnaryOp, Var, ensure_sufficient_stack, expr_starts_with_brace,
+    BinaryOp, CallSuffix, Expression, Field, FunctionArgs, FunctionDef, IfExpression,
+    InterpolatedString, ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor,
+    TypeCast, UnaryOp, Var, expr_starts_with_brace,
 };
 use luck_token::TokenKind;
 
@@ -26,8 +26,8 @@ impl CompactPrinter {
                 self.emit_piece(&literal.text, PieceClass::Other);
             }
             Expression::FunctionDef(function) => self.emit_function_definition(function),
-            Expression::Var(var) => self.emit_var(var),
-            Expression::FunctionCall(call) => self.emit_function_call(call),
+            Expression::Name(token) => self.emit_token(token),
+            Expression::Suffixed(chain) => self.emit_suffixed(chain),
             Expression::Parenthesized(parenthesized) => {
                 self.emit_parenthesized_expr(parenthesized);
             }
@@ -40,10 +40,6 @@ impl CompactPrinter {
             Expression::InterpolatedString(string) => self.emit_interpolated_string(string),
             // Luau
             Expression::TypeCast(cast) => self.emit_type_cast(cast),
-            // Luau
-            Expression::TypeInstantiation(instantiation) => {
-                self.emit_type_instantiation(instantiation);
-            }
             Expression::Error(_) => {}
         }
     }
@@ -51,8 +47,7 @@ impl CompactPrinter {
     pub(super) fn emit_var(&mut self, var: &Var) {
         match var {
             Var::Name(token) => self.emit_token(token),
-            Var::Index(index) => self.emit_index_expr(index),
-            Var::FieldAccess(field) => self.emit_field_access(field),
+            Var::Suffixed(chain) => self.emit_suffixed(chain),
         }
     }
 
@@ -62,18 +57,47 @@ impl CompactPrinter {
         self.emit_function_body(&function_definition.body);
     }
 
-    pub(super) fn emit_function_call(&mut self, call: &FunctionCall) {
-        ensure_sufficient_stack(|| self.emit_expr(&call.callee));
-        if let Some(method_name) = &call.method {
-            self.emit_fixed(":");
-            self.emit_token(method_name);
+    pub(super) fn emit_suffixed(&mut self, chain: &SuffixedExpression) {
+        self.emit_expr(&chain.prefix);
+        for suffix in &chain.suffixes {
+            self.emit_suffix(suffix);
         }
-        if let Some(type_args) = &call.explicit_type_args {
-            self.emit_fixed("<<");
-            self.emit_punctuated(&type_args.args, ",", Self::emit_type);
-            self.emit_fixed(">>");
+    }
+
+    fn emit_suffix(&mut self, suffix: &Suffix) {
+        match suffix {
+            Suffix::Field(name) => {
+                self.emit_fixed(".");
+                self.emit_token(name);
+            }
+            Suffix::Index { index, .. } => {
+                self.emit_fixed("[");
+                self.emit_expr(index);
+                self.emit_fixed("]");
+            }
+            Suffix::Call(call) => {
+                let args = match call {
+                    CallSuffix::Plain(args) => args,
+                    CallSuffix::Method(method) => {
+                        self.emit_fixed(":");
+                        self.emit_token(&method.name);
+                        if let Some(type_args) = &method.explicit_type_args {
+                            self.emit_fixed("<<");
+                            self.emit_punctuated(&type_args.args, ",", Self::emit_type);
+                            self.emit_fixed(">>");
+                        }
+                        &method.args
+                    }
+                };
+                self.emit_function_args(args);
+            }
+            // Luau
+            Suffix::TypeInstantiation { type_args, .. } => {
+                self.emit_fixed("<<");
+                self.emit_punctuated(&type_args.args, ",", Self::emit_type);
+                self.emit_fixed(">>");
+            }
         }
-        self.emit_function_args(&call.args);
     }
 
     fn emit_function_args(&mut self, function_args: &FunctionArgs) {
@@ -87,12 +111,13 @@ impl CompactPrinter {
             FunctionArgs::StringLiteral(literal) => {
                 self.emit_piece(&literal.text, PieceClass::Other);
             }
+            FunctionArgs::Error(_) => {}
         }
     }
 
     fn emit_parenthesized_expr(&mut self, parenthesized: &ParenthesizedExpression) {
         self.emit_fixed("(");
-        ensure_sufficient_stack(|| self.emit_expr(&parenthesized.expr));
+        self.emit_expr(&parenthesized.expr);
         self.emit_fixed(")");
     }
 
@@ -124,32 +149,17 @@ impl CompactPrinter {
         }
     }
 
-    fn emit_index_expr(&mut self, index: &IndexExpression) {
-        ensure_sufficient_stack(|| {
-            self.emit_expr(&index.prefix);
-            self.emit_fixed("[");
-            self.emit_expr(&index.index);
-            self.emit_fixed("]");
-        });
-    }
-
-    fn emit_field_access(&mut self, field: &FieldAccess) {
-        ensure_sufficient_stack(|| self.emit_expr(&field.prefix));
-        self.emit_fixed(".");
-        self.emit_token(&field.name);
-    }
-
     fn emit_binary_op(&mut self, binary_op: &BinaryOp) {
-        ensure_sufficient_stack(|| {
-            self.emit_expr(&binary_op.lhs);
-            self.emit_fixed(binary_op.op.static_text());
-            self.emit_expr(&binary_op.rhs);
-        });
+        self.emit_expr(&binary_op.first);
+        for link in &binary_op.links {
+            self.emit_fixed(link.op.static_text());
+            self.emit_expr(&link.operand);
+        }
     }
 
     fn emit_unary_op(&mut self, unary_op: &UnaryOp) {
         self.emit_fixed(unary_op.op.static_text());
-        ensure_sufficient_stack(|| self.emit_expr(&unary_op.operand));
+        self.emit_expr(&unary_op.operand);
     }
 
     fn emit_if_expr(&mut self, if_expr: &IfExpression) {
@@ -197,15 +207,8 @@ impl CompactPrinter {
     }
 
     fn emit_type_cast(&mut self, cast: &TypeCast) {
-        ensure_sufficient_stack(|| self.emit_expr(&cast.expr));
+        self.emit_expr(&cast.expr);
         self.emit_fixed("::");
         self.emit_type(&cast.type_annotation);
-    }
-
-    fn emit_type_instantiation(&mut self, instantiation: &TypeInstantiation) {
-        ensure_sufficient_stack(|| self.emit_expr(&instantiation.expr));
-        self.emit_fixed("<<");
-        self.emit_punctuated(&instantiation.type_args.args, ",", Self::emit_type);
-        self.emit_fixed(">>");
     }
 }

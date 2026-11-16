@@ -1,12 +1,12 @@
 use alloc::sync::Arc;
+use core::ops;
 
-use luck_ast::{Block, LastStatement, Statement, Visitor};
+use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
 use luck_linter::{Fix, LintDiagnostic};
-use luck_token::{Span, is_lua_whitespace, line_breaks, offset_to_index};
-use rustc_hash::FxHashMap;
+use luck_token::{Span, has_line_break, is_lua_whitespace, offset_to_index};
 use tower_lsp_server::ls_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
-    CodeActionResponse, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
+    CodeActionResponse, Diagnostic, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
 };
 
 use crate::document::DocumentState;
@@ -24,26 +24,36 @@ pub(crate) fn code_action(
     lints: &[LintDiagnostic],
 ) -> CodeActionResponse {
     let uri = &params.text_document.uri;
-    let lint_of_diagnostic: FxHashMap<(&str, Span), &LintDiagnostic> =
-        lints.iter().map(|lint| ((lint.rule, lint.span), lint)).collect();
+    let matched: Vec<(&Diagnostic, &str, &LintDiagnostic)> = params
+        .context
+        .diagnostics
+        .iter()
+        .filter_map(|diag| {
+            let Some(NumberOrString::String(rule)) = &diag.code else {
+                return None;
+            };
+            if diag.range.end < params.range.start || diag.range.start > params.range.end {
+                return None;
+            }
+            // A diagnostic carries its lint's rule and range back unchanged,
+            // so the pair names the one lint it came from.
+            let byte_range = document.byte_range(diag.range)?;
+            let span = Span::from_indices(byte_range.start, byte_range.end);
+            let lint = lint_at(lints, rule, span)?;
+            Some((diag, rule.as_str(), lint))
+        })
+        .collect();
+    // Directives apply only after a clean parse, so none can silence a syntax
+    // error.
+    let disabler = (!matched.is_empty() && document.parsed.errors.is_empty()).then(|| {
+        Disabler::new(
+            document,
+            &matched.iter().map(|(_, _, lint)| lint.span.start).collect::<Vec<_>>(),
+        )
+    });
 
     let mut actions: Vec<CodeActionOrCommand> = Vec::new();
-    for diag in &params.context.diagnostics {
-        let Some(NumberOrString::String(rule)) = &diag.code else {
-            continue;
-        };
-        if diag.range.end < params.range.start || diag.range.start > params.range.end {
-            continue;
-        }
-        // A diagnostic carries its lint's rule and range back unchanged, so
-        // the pair names the one lint it came from.
-        let Some(byte_range) = document.byte_range(diag.range) else {
-            continue;
-        };
-        let span = Span::from_indices(byte_range.start, byte_range.end);
-        let Some(lint) = lint_of_diagnostic.get(&(rule.as_str(), span)) else {
-            continue;
-        };
+    for (index, &(diag, rule, lint)) in matched.iter().enumerate() {
         if let Some(fix) = &lint.fix {
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                 title: fix.description.clone(),
@@ -56,11 +66,7 @@ pub(crate) fn code_action(
                 data: None,
             }));
         }
-        // Directives apply only after a clean parse, so none can silence a
-        // syntax error.
-        if document.parsed.errors.is_empty()
-            && let Some(edit) = disable_for_statement(document, lint.span, rule)
-        {
+        if let Some(edit) = disabler.as_ref().and_then(|active| active.edit(index, rule)) {
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                 title: format!("Disable {rule} for this statement"),
                 kind: Some(CodeActionKind::QUICKFIX),
@@ -93,6 +99,22 @@ pub(crate) fn code_action(
     actions
 }
 
+/// The lint `rule` reported at `span`, from `lints` in the order the linter
+/// returns them, sorted by where they start.
+fn lint_at<'lints>(
+    lints: &'lints [LintDiagnostic],
+    rule: &str,
+    span: Span,
+) -> Option<&'lints LintDiagnostic> {
+    let first = lints.partition_point(|lint| lint.span.start < span.start);
+    lints
+        .get(first..)?
+        .iter()
+        .take_while(|lint| lint.span.start == span.start)
+        .filter(|lint| lint.rule == rule && lint.span == span)
+        .last()
+}
+
 fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
     fix.edits
         .iter()
@@ -115,54 +137,100 @@ fn all_fix_edits(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<Text
         .collect()
 }
 
-/// A comment that disables `rule` for the innermost statement holding `span`,
-/// or `None` for a lint no statement holds.
+/// Where to put a comment that disables a rule for each lint of a request.
 ///
-/// It trails the statement, the one place a directive covers exactly that
-/// statement and no text can swallow it. A line comment fits only at the end
-/// of a line, and one before a following statement or comment needs the block
-/// form.
-fn disable_for_statement(document: &DocumentState, span: Span, rule: &str) -> Option<TextEdit> {
-    let statement_end = innermost_statement_end(&document.parsed.block, span.start)?;
-    let after_statement = document.text().get(offset_to_index(statement_end)..).unwrap_or_default();
-    let line_end = line_breaks(after_statement, document.lua_version)
-        .next()
-        .map_or(after_statement.len(), |line_break| line_break.start);
-    let is_line_end =
-        after_statement.get(..line_end).is_some_and(|rest| rest.bytes().all(is_lua_whitespace));
-    let new_text = if is_line_end {
-        format!(" -- luck: allow({rule})")
-    } else {
-        format!(" --[[ luck: allow({rule}) ]]")
-    };
-    let position = document.position(statement_end);
-    Some(TextEdit { range: Range::new(position, position), new_text })
+/// One walk finds the innermost statement holding every lint, so a request
+/// over a file's every lint stays linear in its size.
+struct Disabler<'document> {
+    document: &'document DocumentState,
+    /// The end of the innermost statement holding each lint, in the lints'
+    /// order, or `None` for a lint no statement holds.
+    statement_ends: Vec<Option<u32>>,
 }
 
-fn innermost_statement_end(block: &Block, offset: u32) -> Option<u32> {
-    let mut finder = StatementFinder { offset, end: None };
-    finder.visit_block(block);
-    finder.end
+impl<'document> Disabler<'document> {
+    fn new(document: &'document DocumentState, lint_starts: &[u32]) -> Self {
+        let mut starts: Vec<(u32, usize)> = lint_starts.iter().copied().zip(0..).collect();
+        starts.sort_unstable();
+        let mut finder = StatementFinder { starts, ends: vec![None; lint_starts.len()] };
+        finder.visit_block(&document.parsed.block);
+        Self { document, statement_ends: finder.ends }
+    }
+
+    /// A comment that disables `rule` for the innermost statement holding the
+    /// lint at `index`.
+    ///
+    /// It trails the statement, the one place a directive covers exactly that
+    /// statement and no text can swallow it. A line comment fits only at the
+    /// end of a line, and one before a following statement or comment needs
+    /// the block form.
+    fn edit(&self, index: usize, rule: &str) -> Option<TextEdit> {
+        let statement_end = (*self.statement_ends.get(index)?)?;
+        let rest = self.document.text().get(offset_to_index(statement_end)..).unwrap_or_default();
+        let blank_length = rest.bytes().take_while(|&b| is_lua_whitespace(b)).count();
+        let blank = rest.get(..blank_length).unwrap_or_default();
+        let is_line_end =
+            blank_length == rest.len() || has_line_break(blank, self.document.lua_version);
+        let new_text = if is_line_end {
+            format!(" -- luck: allow({rule})")
+        } else {
+            format!(" --[[ luck: allow({rule}) ]]")
+        };
+        let position = self.document.position(statement_end);
+        Some(TextEdit { range: Range::new(position, position), new_text })
+    }
 }
 
+/// Finds the innermost statement holding each of `starts`, walking only into
+/// what holds one.
 struct StatementFinder {
-    offset: u32,
-    end: Option<u32>,
+    /// Each lint's start and its index in the request, sorted.
+    starts: Vec<(u32, usize)>,
+    /// By the lint's index.
+    ends: Vec<Option<u32>>,
 }
 
 impl StatementFinder {
-    /// Whether a statement at `span` holds the offset, the same test a
-    /// directive's range applies to a lint's start.
-    const fn holds(&mut self, span: Span) -> bool {
-        let is_held = span.start <= self.offset && self.offset < span.end;
-        if is_held {
-            self.end = Some(span.end);
+    /// The positions in `starts` of those inside `span`.
+    fn held(&self, span: Span) -> ops::Range<usize> {
+        let first = self.starts.partition_point(|&(start, _)| start < span.start);
+        let end = self.starts.partition_point(|&(start, _)| start < span.end);
+        first..end.max(first)
+    }
+
+    /// Whether a statement at `span` holds a start, the same test a
+    /// directive's range applies to a lint's start, which it marks as held
+    /// there.
+    fn holds(&mut self, span: Span) -> bool {
+        let held = self.held(span);
+        let is_held = !held.is_empty();
+        for &(_, index) in self.starts.get(held).unwrap_or_default() {
+            if let Some(end) = self.ends.get_mut(index) {
+                *end = Some(span.end);
+            }
         }
         is_held
     }
 }
 
 impl<'ast> Visitor<'ast> for StatementFinder {
+    /// Only the statements between the first start and the last can hold
+    /// one, and a block's statements are in source order.
+    fn visit_block(&mut self, block: &'ast Block) {
+        let (Some(&(first, _)), Some(&(last, _))) = (self.starts.first(), self.starts.last())
+        else {
+            return;
+        };
+        let from = block.stmts.partition_point(|stmt| stmt.span().end <= first);
+        let to = block.stmts.partition_point(|stmt| stmt.span().start <= last);
+        for stmt in block.stmts.get(from..to).unwrap_or_default() {
+            self.visit_stmt(stmt);
+        }
+        if let Some(last_stmt) = &block.last_stmt {
+            self.visit_last_stmt(last_stmt);
+        }
+    }
+
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
         if self.holds(stmt.span()) {
             self.walk_stmt(stmt);
@@ -172,6 +240,12 @@ impl<'ast> Visitor<'ast> for StatementFinder {
     fn visit_last_stmt(&mut self, last: &'ast LastStatement) {
         if self.holds(last.span()) {
             self.walk_last_stmt(last);
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if !self.held(expr.span()).is_empty() {
+            self.walk_expr(expr);
         }
     }
 }
@@ -218,7 +292,7 @@ mod tests {
     use luck_linter::{Category, LintConfig, RuleLevel, Severity, TextEdit as LinterTextEdit};
     use rustc_hash::FxHashSet;
     use tower_lsp_server::ls_types::{
-        Diagnostic, PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams,
+        PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams,
     };
 
     use super::*;
@@ -274,8 +348,8 @@ mod tests {
         let document = document(text);
         let lints = document.lint(config);
         let lint = lints.get(lint_index).expect("the lint fired");
-        let edit =
-            disable_for_statement(&document, lint.span, lint.rule).expect("a statement holds it");
+        let disabler = Disabler::new(&document, &[lint.span.start]);
+        let edit = disabler.edit(0, lint.rule).expect("a statement holds it");
         applied(&document, vec![edit])
     }
 
@@ -360,18 +434,30 @@ mod tests {
 
     #[test]
     fn disable_comment_stays_out_of_a_long_string() {
-        let text = "local s = [[\nx]] local y = nil\n";
+        let text = "\
+local s = [[
+x]] local y = nil
+";
         let config = config_enabling("redundant_nil_init");
         let edited = disabled(text, &config, 0);
         assert!(
-            edited.contains("[[\nx]]"),
+            edited.contains(
+                "\
+[[
+x]]"
+            ),
             "the comment must not rewrite the string's contents: {edited:?}"
         );
     }
 
     #[test]
     fn disable_comment_does_not_silence_the_next_statement() {
-        let text = "local t = {\n  first_missing,\n}\nlocal u = second_missing\n";
+        let text = "\
+local t = {
+  first_missing,
+}
+local u = second_missing
+";
         let config = config_enabling("undefined_variable");
         let edited = disabled(text, &config, 0);
         let remaining = document(&edited).lint(&config);

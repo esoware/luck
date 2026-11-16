@@ -70,7 +70,12 @@ fn reports_e004_with_searched_paths_when_missing() {
     assert_eq!(error.message, "module not found: `nonexistent`");
     assert_eq!(
         error.help.as_deref(),
-        Some("searched paths:\n  - `src/nonexistent.lua`\n  - `src/nonexistent/init.lua`")
+        Some(
+            "\
+searched paths:
+  - `src/nonexistent.lua`
+  - `src/nonexistent/init.lua`"
+        )
     );
 }
 

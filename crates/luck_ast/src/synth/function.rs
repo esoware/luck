@@ -22,6 +22,10 @@ pub struct FunctionSignature {
 impl Synth {
     /// A Luau function attribute: `@name` when `args` is `None`, the
     /// bracketed `@[name(args)]` form otherwise.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn function_attribute(
         &self,
@@ -46,11 +50,17 @@ impl Synth {
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn param(&self, name: &str) -> Parameter {
         Parameter { span: self.next_span(), name: self.identifier(name), type_annotation: None }
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn param_typed(&self, name: &str, ty: Type) -> Parameter {
         Parameter { span: self.next_span(), name: self.identifier(name), type_annotation: Some(ty) }

@@ -109,8 +109,12 @@ fn reports_e004_with_searched_paths_when_relative_module_missing() {
     assert_eq!(error.message, "module not found: `./nonexistent`");
     let base = format!("{}/./nonexistent", normalized(&project, "src"));
     let expected_help = format!(
-        "searched paths:\n  - `{base}.luau`\n  - `{base}.lua`\n  - `{base}/init.luau`\n  - \
-         `{base}/init.lua`"
+        "\
+searched paths:
+  - `{base}.luau`
+  - `{base}.lua`
+  - `{base}/init.luau`
+  - `{base}/init.lua`"
     );
     assert_eq!(error.help, Some(expected_help));
 }
@@ -124,7 +128,11 @@ fn reports_e004_when_no_luaurc_declares_the_alias() {
     assert_eq!(error.message, "module not found: `@Missing/utils`");
     assert_eq!(
         error.help.as_deref(),
-        Some("searched paths:\n  - alias `@Missing` not found in any `.luaurc`")
+        Some(
+            "\
+searched paths:
+  - alias `@Missing` not found in any `.luaurc`"
+        )
     );
 }
 
@@ -403,6 +411,37 @@ fn requiring_file_with_same_named_directory_is_ambiguous() {
     assert_eq!(error.code, "E007");
 }
 
+// `VfsNavigator::resetToPath` drops the requiring file's extension, so
+// `main.luau` beside `main.lua` is as ambiguous as either required by name.
+#[test]
+fn requiring_file_with_both_extensions_is_ambiguous() {
+    let project = luau_project();
+    write_files(
+        project.path(),
+        &[("src/main.lua", "return {}"), ("src/.luaurc", r#"{"aliases":{"here":"."}}"#)],
+    );
+    let expected_help = format!(
+        "ambiguity: both `{}` and `{}` exist, so remove one of the conflicting files",
+        normalized(&project, "src/main.luau"),
+        normalized(&project, "src/main.lua")
+    );
+    for module in ["./utils", "@here/utils", "@self/utils"] {
+        let error = resolve_luau(&project, "src/main.luau", module)
+            .expect_err("a requiring file with both extensions must be ambiguous");
+        assert_eq!(error.code, "E007", "{module}");
+        assert_eq!(error.help.as_deref(), Some(expected_help.as_str()), "{module}");
+    }
+}
+
+// `navigateImpl` rejects the prefix before it resets to the requiring module.
+#[test]
+fn unprefixed_require_from_an_ambiguous_file_reports_the_prefix() {
+    let project = luau_project();
+    write_files(project.path(), &[("src/main.lua", "return {}")]);
+    let error = resolve_luau(&project, "src/main.luau", "utils").expect_err("unprefixed");
+    assert_eq!(error.code, "E004");
+}
+
 #[test]
 fn relative_require_accepts_backslash_separators() {
     let project = luau_project();
@@ -455,8 +494,13 @@ fn malformed_closer_luaurc_does_not_fall_through_to_a_parent_alias() {
 fn luaurc_with_non_utf8_bytes_keeps_its_aliases() {
     let project = luau_project();
     write_files(project.path(), &[("lib/m.luau", "return {}")]);
-    fs::write(project.path().join(".luaurc"), b"{// caf\xe9\n\"aliases\":{\"x\":\"./lib\"}}")
-        .expect("write .luaurc");
+    fs::write(
+        project.path().join(".luaurc"),
+        b"\
+{// caf\xe9
+\"aliases\":{\"x\":\"./lib\"}}",
+    )
+    .expect("write .luaurc");
     let resolved = resolve_luau(&project, "src/main.luau", "@x/m")
         .expect("Luau reads `.luaurc` as bytes, so a Latin-1 comment must not drop the aliases");
     assert_eq!(resolved.path, normalized(&project, "lib/m.luau"));

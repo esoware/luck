@@ -4,11 +4,21 @@ use compact_str::CompactString;
 
 use crate::{LuaVersion, Span};
 
+/// The kinds that carry text come first, so dropping a token, which the parser
+/// does for every token it consumes, tests one range of discriminants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     Identifier(CompactString),
     Number(CompactString),
+    /// Luau: a numeral with the `i` suffix, which reads as an exact 64-bit
+    /// integer.
+    Integer(CompactString),
     StringLiteral(CompactString),
+
+    // Luau interpolated string tokens
+    InterpolatedStringBegin(CompactString),  // `text{
+    InterpolatedStringMiddle(CompactString), // }text{
+    InterpolatedStringEnd(CompactString),    // }text`
 
     // Keywords (Lua 5.1 base)
     And,
@@ -80,11 +90,6 @@ pub enum TokenKind {
     CaretEqual,
     DotDotEqual,
 
-    // Luau interpolated string tokens
-    InterpolatedStringBegin(CompactString),  // `text{
-    InterpolatedStringMiddle(CompactString), // }text{
-    InterpolatedStringEnd(CompactString),    // }text`
-
     // Luau
     At,
     Arrow,
@@ -102,6 +107,7 @@ impl fmt::Display for TokenKind {
         match self {
             Self::Identifier(name) => write!(f, "identifier `{name}`"),
             Self::Number(text) => write!(f, "number `{text}`"),
+            Self::Integer(text) => write!(f, "integer `{text}`"),
             Self::StringLiteral(_) => f.write_str("string"),
             Self::InterpolatedStringBegin(_) => f.write_str("interpolated string start"),
             Self::InterpolatedStringMiddle(_) => f.write_str("interpolated string middle"),
@@ -121,6 +127,7 @@ impl TokenKind {
         Some(match self {
             Self::Identifier(_)
             | Self::Number(_)
+            | Self::Integer(_)
             | Self::StringLiteral(_)
             | Self::InterpolatedStringBegin(_)
             | Self::InterpolatedStringMiddle(_)

@@ -57,45 +57,63 @@ mod tests {
 
     #[test]
     fn flags_field_write_on_uninitialized() {
-        let diags = run("local x\nx.foo = 1");
+        let diags = run("\
+local x
+x.foo = 1");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]
     fn flags_index_write_on_uninitialized() {
-        let diags = run("local x\nx[1] = 2");
+        let diags = run("\
+local x
+x[1] = 2");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]
     fn ignores_when_initialized() {
-        let diags = run("local x = {}\nx.foo = 1");
+        let diags = run("\
+local x = {}
+x.foo = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_when_assigned_first() {
-        let diags = run("local x\nx = {}\nx.foo = 1");
+        let diags = run("\
+local x
+x = {}
+x.foo = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_read_before_field_write() {
-        let diags = run("local x\nprint(x)\nx.foo = 1");
+        let diags = run("\
+local x
+print(x)
+x.foo = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_underscore_prefixed() {
-        let diags = run("local _x\n_x.foo = 1");
+        let diags = run("\
+local _x
+_x.foo = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_forward_declaration_field_write_in_closure() {
-        let diags = run("local M\nlocal function init() M.x = 1 end\nM = {}\ninit()");
+        let diags = run("\
+local M
+local function init() M.x = 1 end
+M = {}
+init()");
         assert!(diags.is_empty(), "the closure runs after the assignment: {diags:?}");
     }
 }

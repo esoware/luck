@@ -81,58 +81,93 @@ mod tests {
 
     #[test]
     fn flags_global_confined_to_one_function() {
-        let diags = run(
-            "local function f()\n    counter = 0\n    counter = counter + 1\n    return counter\nend\nf()",
-        );
+        let diags = run("\
+local function f()
+    counter = 0
+    counter = counter + 1
+    return counter
+end
+f()");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("counter"), "{diags:?}");
     }
 
     #[test]
     fn flags_write_only_global_in_one_function() {
-        let diags = run("local function f()\n    cache = {}\nend\nf()");
+        let diags = run("\
+local function f()
+    cache = {}
+end
+f()");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn ignores_global_used_in_two_functions() {
-        let diags = run(
-            "local function f()\n    shared_state = 1\nend\nlocal function g()\n    return shared_state\nend\nf()\ng()",
-        );
+        let diags = run("\
+local function f()
+    shared_state = 1
+end
+local function g()
+    return shared_state
+end
+f()
+g()");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_global_also_used_at_top_level() {
-        let diags = run("local function f()\n    counter = 1\nend\nf()\nprint(counter)");
+        let diags = run("\
+local function f()
+    counter = 1
+end
+f()
+print(counter)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_module_level_global() {
         // Top-level globals may be the module's exports.
-        let diags = run("counter = 0\ncounter = counter + 1");
+        let diags = run("\
+counter = 0
+counter = counter + 1");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_read_only_global() {
-        let diags = run("local function f()\n    return config\nend\nf()");
+        let diags = run("\
+local function f()
+    return config
+end
+f()");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_stdlib_globals() {
-        let diags = run("local function f()\n    print(1)\nend\nf()");
+        let diags = run("\
+local function f()
+    print(1)
+end
+f()");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_nested_function_split_usage() {
         // `g` is a separate function, so `state` is used in two.
-        let diags = run(
-            "local function f()\n    state = 1\n    local function g()\n        return state\n    end\n    return g\nend\nf()",
-        );
+        let diags = run("\
+local function f()
+    state = 1
+    local function g()
+        return state
+    end
+    return g
+end
+f()");
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

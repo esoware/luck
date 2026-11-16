@@ -14,7 +14,7 @@ pub(crate) fn scan_number(
     version: LuaVersion,
 ) -> Result<TokenKind, LexError> {
     let start = cursor.position();
-    match cursor.rest() {
+    let is_integer = match cursor.rest() {
         // Every reference scanner reads the digit after a leading `.` as the
         // numeral's first, so `.0x` opens a hex scan that can never convert.
         [b'.', b'0', b'x' | b'X', ..] => {
@@ -33,16 +33,19 @@ pub(crate) fn scan_number(
                 Some(b'x' | b'X') => scan_hex_number(cursor, version, start, prefix_length)?,
                 // Luau
                 Some(b'b' | b'B') if version.has_binary_literals() => {
-                    scan_binary_number(cursor, version, start, prefix_length)?;
+                    scan_binary_number(cursor, version, start, prefix_length)?
                 }
                 _ => scan_decimal_number(cursor, version, start)?,
             }
         }
         _ => scan_decimal_number(cursor, version, start)?,
-    }
-    Ok(TokenKind::Number(cursor.text_since(start).into()))
+    };
+    let text = cursor.text_since(start).into();
+    Ok(if is_integer { TokenKind::Integer(text) } else { TokenKind::Number(text) })
 }
 
+/// Whether the numeral took the Luau `i` suffix.
+///
 /// # Errors
 ///
 /// Returns a [`LexError`] for a malformed hexadecimal numeral.
@@ -51,7 +54,7 @@ fn scan_hex_number(
     version: LuaVersion,
     start: usize,
     prefix_length: usize,
-) -> Result<(), LexError> {
+) -> Result<bool, LexError> {
     cursor.advance_by(prefix_length);
 
     let has_integer_part = eat_digits(cursor, version, u8::is_ascii_hexdigit);
@@ -95,7 +98,7 @@ fn scan_hex_number(
         }
     }
 
-    eat_integer_suffix(cursor, version, start, 16)?;
+    let is_integer = eat_integer_suffix(cursor, version, start, 16)?;
 
     if (version.has_hex_scan_dots() && cursor.peek() == Some(b'.'))
         || is_touching_numeral(cursor, version)
@@ -105,9 +108,11 @@ fn scan_hex_number(
             "malformed hexadecimal number",
         ));
     }
-    Ok(())
+    Ok(is_integer)
 }
 
+/// Whether the numeral took the Luau `i` suffix.
+///
 /// # Errors
 ///
 /// Returns a [`LexError`] for a malformed binary numeral.
@@ -116,7 +121,7 @@ fn scan_binary_number(
     version: LuaVersion,
     start: usize,
     prefix_length: usize,
-) -> Result<(), LexError> {
+) -> Result<bool, LexError> {
     cursor.advance_by(prefix_length);
 
     if !eat_digits(cursor, version, |b| matches!(b, b'0' | b'1')) {
@@ -126,14 +131,16 @@ fn scan_binary_number(
         ));
     }
 
-    eat_integer_suffix(cursor, version, start, 2)?;
+    let is_integer = eat_integer_suffix(cursor, version, start, 2)?;
 
     if is_touching_numeral(cursor, version) {
         return Err(touching_letter_error(cursor, start));
     }
-    Ok(())
+    Ok(is_integer)
 }
 
+/// Whether the numeral took the Luau `i` suffix.
+///
 /// # Errors
 ///
 /// Returns a [`LexError`] for a malformed decimal numeral.
@@ -141,7 +148,7 @@ fn scan_decimal_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
-) -> Result<(), LexError> {
+) -> Result<bool, LexError> {
     eat_digits(cursor, version, u8::is_ascii_digit);
 
     let mut is_float = false;
@@ -171,12 +178,12 @@ fn scan_decimal_number(
             "the `i` integer suffix is not allowed on float literals",
         ));
     }
-    eat_integer_suffix(cursor, version, start, 10)?;
+    let is_integer = eat_integer_suffix(cursor, version, start, 10)?;
 
     if is_touching_numeral(cursor, version) {
         return Err(touching_letter_error(cursor, start));
     }
-    Ok(())
+    Ok(is_integer)
 }
 
 /// Whether the byte at the cursor would join the numeral in `version`'s
@@ -231,7 +238,8 @@ fn eat_exponent(cursor: &mut Cursor<'_>, version: LuaVersion) -> bool {
     eat_digits(cursor, version, u8::is_ascii_digit)
 }
 
-/// Consume a Luau `i` suffix and any `_` after it, range-checking the integer.
+/// Consume a Luau `i` suffix and any `_` after it, range-checking the
+/// integer, and return whether there was one.
 ///
 /// # Errors
 ///
@@ -241,12 +249,13 @@ fn eat_integer_suffix(
     version: LuaVersion,
     start: usize,
     radix: u32,
-) -> Result<(), LexError> {
-    if version.has_luau_integer_literals() && cursor.eat(b'i') {
-        validate_integer_range(cursor, start, radix)?;
-        cursor.eat_while(|b| b == b'_');
+) -> Result<bool, LexError> {
+    if !(version.has_luau_integer_literals() && cursor.eat(b'i')) {
+        return Ok(false);
     }
-    Ok(())
+    validate_integer_range(cursor, start, radix)?;
+    cursor.eat_while(|b| b == b'_');
+    Ok(true)
 }
 
 /// Every reference scanner consumes `.` greedily up to an exponent, so that

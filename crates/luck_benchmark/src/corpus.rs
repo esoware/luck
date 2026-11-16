@@ -1,14 +1,12 @@
-//! Deterministic bench inputs, three kinds:
+//! Pinned bench inputs, two kinds:
 //!
-//! - two generated files from the full-grammar profile of `luck_testgen`
-//!   (every version-gated construct, realistic statement mix) at fixed
-//!   seeds, plus the idiomatic fixtures as a small hand-written sample;
-//! - two real-world single files mirrored in esoware/luck-bench-corpus;
+//! - five single files and the bundler's module tree in
+//!   esoware/luck-bench-corpus, fetched as one tarball;
 //! - two real multi-file projects fetched as pinned upstream tarballs:
 //!   Roact (Roblox Luau, ~80 files) and Penlight (Lua 5.1, ~40 files).
 //!
-//! Everything network-fetched lands in the gitignored `corpus/` cache and
-//! is pinned to a commit SHA, so inputs are immutable run to run.
+//! Everything lands in the gitignored `corpus/` cache and is pinned to a
+//! commit SHA, so an input changes only when its pin does.
 
 #![expect(
     clippy::expect_used,
@@ -16,7 +14,6 @@
     reason = "a bench has no way to report a failed corpus load"
 )]
 
-use core::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,7 +21,7 @@ use luck_core::LuaTarget;
 use luck_parser::ParseResult;
 use luck_token::LuaVersion;
 
-use crate::corpus_cache::{cache_directory, fetch_corpus_file, fetch_project_tarball};
+use crate::corpus_cache::fetch_project_tarball;
 
 #[derive(Debug)]
 pub struct TestFile {
@@ -79,24 +76,23 @@ fn parse_cleanly(name: &str, source_text: &str, version: LuaVersion) -> ParseRes
     parse_result
 }
 
-// Each program ends in a top-level `return`, so it gets a `do ... end`
-// wrapper to keep the concatenation one valid chunk. Luau value exports are
-// only valid at module scope, hence the embeddable variant.
-fn generated(version: LuaVersion) -> String {
-    let mut source = String::new();
-    for seed in 0..40 {
-        source.push_str("do\n");
-        source.push_str(&luck_testgen::generate_full_embeddable(seed, version, 60));
-        source.push_str("end\n");
-    }
-    source
-}
-
-// Third-party files kept out of this repo, pinned to a commit.
-const CORPUS_URL_BASE: &str = "https://raw.githubusercontent.com/esoware/luck-bench-corpus/9188b121d704c7fb2d0b2cd29e891bff0e57c384";
-
+const CORPUS_SHA: &str = "1922f00013366c3024f1fb95f62a6aa14c63a95a"; // esoware/luck-bench-corpus
 const ROACT_SHA: &str = "956891b70fdc5410e44e9664719cd0a9f7e6fabd"; // Roblox/roact v1.4.4
 const PENLIGHT_SHA: &str = "e0bc8f7fce3b6a4fdef3660066f5006bf8456b32"; // lunarmodules/Penlight 1.15.0
+
+fn corpus_root() -> PathBuf {
+    fetch_project_tarball("esoware", "luck-bench-corpus", CORPUS_SHA)
+}
+
+/// # Panics
+///
+/// Panics when the file can't be read.
+fn corpus_file(root: &Path, file_name: &'static str, target: LuaTarget) -> TestFile {
+    let path = root.join(file_name);
+    let source_text = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+    TestFile { file_name, source_text, target }
+}
 
 /// # Panics
 ///
@@ -130,83 +126,32 @@ fn collect_lua_files(root: &Path, filter: &str) -> Vec<ProjectFile> {
     files
 }
 
-// `module_pattern.lua` ends in a top-level `return`, so each fixture gets
-// its own `do ... end` to keep the concatenation one valid chunk.
-fn idiomatic() -> String {
-    [
-        include_str!("../../../tests/fixtures/idiomatic/control_flow.lua"),
-        include_str!("../../../tests/fixtures/idiomatic/module_pattern.lua"),
-        include_str!("../../../tests/fixtures/idiomatic/oop_self.lua"),
-    ]
-    .map(|fixture| format!("do\n{fixture}\nend\n"))
-    .join("\n")
-}
-
 #[must_use]
 pub fn test_files() -> Vec<TestFile> {
+    let root = corpus_root();
     vec![
-        TestFile {
-            file_name: "gen_full_lua54.lua",
-            source_text: generated(LuaVersion::Lua54),
-            target: LuaTarget::Lua54,
-        },
-        TestFile {
-            file_name: "gen_full_luau.luau",
-            source_text: generated(LuaVersion::Luau),
-            target: LuaTarget::Luau,
-        },
-        TestFile { file_name: "idiomatic.lua", source_text: idiomatic(), target: LuaTarget::Lua54 },
+        // 40 full-grammar `luck_testgen` programs, each in its own
+        // `do ... end`: every version-gated construct in a realistic mix.
+        corpus_file(&root, "gen_full_lua54.lua", LuaTarget::Lua54),
+        corpus_file(&root, "gen_full_luau.luau", LuaTarget::Luau),
+        // The `tests/fixtures/idiomatic` files, a small hand-written sample.
+        corpus_file(&root, "idiomatic.lua", LuaTarget::Lua54),
         // Real-world Roblox Luau: 13k lines of comment- and string-heavy
         // hand-written code (Infinite Yield admin script).
-        TestFile {
-            file_name: "infinite_yield.luau",
-            source_text: fetch_corpus_file(CORPUS_URL_BASE, "infinite_yield.luau"),
-            target: LuaTarget::LuauRoblox,
-        },
+        corpus_file(&root, "infinite_yield.luau", LuaTarget::LuauRoblox),
         // Adversarial: 2.2 MB of VM-obfuscated Luau on a single line.
-        TestFile {
-            file_name: "obfuscated_vm.luau",
-            source_text: fetch_corpus_file(CORPUS_URL_BASE, "obfuscated_vm.luau"),
-            target: LuaTarget::LuauRoblox,
-        },
+        corpus_file(&root, "obfuscated_vm.luau", LuaTarget::LuauRoblox),
     ]
 }
 
 /// Real projects don't bundle cleanly: Penlight requires stdlib modules and
 /// builds require strings dynamically, and Roact uses Roblox instance paths.
 ///
-/// So the full-grammar generator supplies the module bodies and a diamond DAG
-/// supplies the graph. Written fresh on every call so the tree always matches
-/// the current generator.
-///
-/// # Panics
-///
-/// Panics when the tree can't be written to disk.
+/// So this tree is a 40-module diamond DAG of generated Lua 5.4, entered at
+/// `main.lua`.
 #[must_use]
 pub fn bundle_project_root() -> PathBuf {
-    const MODULE_COUNT: u64 = 40;
-    let root = cache_directory().join("gen_bundle");
-    let lib_directory = root.join("lib");
-    fs::create_dir_all(&lib_directory)
-        .unwrap_or_else(|e| panic!("failed to create {}: {e}", lib_directory.display()));
-    for index in 0..MODULE_COUNT {
-        let mut source = String::new();
-        for offset in [1, 3] {
-            let dependency = index.saturating_add(offset);
-            if dependency < MODULE_COUNT {
-                let _unused =
-                    writeln!(source, "local dep{dependency} = require(\"lib.mod{dependency}\")");
-            }
-        }
-        source.push_str(&luck_testgen::generate_full(index, LuaVersion::Lua54, 15));
-        let path = lib_directory.join(format!("mod{index}.lua"));
-        fs::write(&path, source)
-            .unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
-    }
-    let entry_path = root.join("main.lua");
-    fs::write(&entry_path, "local root = require(\"lib.mod0\")\nreturn root\n")
-        .unwrap_or_else(|e| panic!("failed to write {}: {e}", entry_path.display()));
-    root
+    corpus_root().join("gen_bundle")
 }
 
 #[must_use]

@@ -1,10 +1,10 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall};
+use luck_ast::{Call, Expression, FunctionArgs};
 use luck_semantic::SemanticAnalysis;
 
 use crate::call::is_global_call;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnnecessaryAssert;
@@ -21,22 +21,17 @@ impl NodeRule for UnnecessaryAssert {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_call(
-        &self,
-        call: &FunctionCall,
-        _position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let call = site.call;
         findings.extend(check_call(call, context.semantic));
     }
 }
 
-fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<Finding> {
+fn check_call(call: Call<'_>, semantic: &SemanticAnalysis) -> Option<Finding> {
     if !is_global_call(call, "assert", semantic) {
         return None;
     }
-    let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+    let FunctionArgs::Parenthesized { args, .. } = call.args else {
         return None;
     };
     let finding = match args.first()? {
@@ -48,22 +43,21 @@ fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<Findin
         | Expression::InterpolatedString(_)
         | Expression::TableConstructor(_)
         | Expression::FunctionDef(_) => {
-            Finding::new("`assert` on a constant value always passes", call.span)
+            Finding::new("`assert` on a constant value always passes", call.span())
                 .with_help("remove the `assert` or check a real condition")
         }
         Expression::False(_) | Expression::Nil(_) => {
-            Finding::new("`assert` on a constant falsy value always errors", call.span)
+            Finding::new("`assert` on a constant falsy value always errors", call.span())
                 .with_help("use `error()` to raise unconditionally")
         }
         Expression::VarArg(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
         | Expression::Parenthesized(_)
         | Expression::BinaryOp(_)
         | Expression::UnaryOp(_)
         | Expression::IfExpression(_)
         | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
         | Expression::Error(_) => return None,
     };
     Some(finding)
@@ -128,7 +122,9 @@ mod tests {
 
     #[test]
     fn ignores_variable_condition() {
-        let diags = run("local x = 1\nassert(x)");
+        let diags = run("\
+local x = 1
+assert(x)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -140,7 +136,9 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_assert() {
-        let diags = run("local assert = function() end\nassert(true)");
+        let diags = run("\
+local assert = function() end
+assert(true)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

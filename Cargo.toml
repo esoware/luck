@@ -12,12 +12,13 @@ homepage     = "https://github.com/esoware/luck"
 keywords     = ["lua", "luau", "bundler", "minifier", "parser"]
 license      = "MIT"
 repository   = "https://github.com/esoware/luck"
-rust-version = "1.99.1"
+rust-version = "1.91"
 
 [workspace.dependencies]
 luck_ast       = { version = "0.5.0", path = "crates/luck_ast" }
 luck_bundler   = { version = "0.5.0", path = "crates/luck_bundler" }
 luck_codegen   = { version = "0.5.0", path = "crates/luck_codegen" }
+luck_config    = { version = "0.5.0", path = "crates/luck_config" }
 luck_core      = { version = "0.5.0", path = "crates/luck_core" }
 luck_formatter = { version = "0.5.0", path = "crates/luck_formatter" }
 luck_lexer     = { version = "0.5.0", path = "crates/luck_lexer" }
@@ -53,7 +54,6 @@ schemars              = "1"
 serde                 = { version = "1", features = ["derive"] }
 serde_json            = "1"
 simdutf8              = { version = "0.1.5", features = ["aarch64_neon"] }
-stacker               = "0.1"
 tar                   = "0.4"
 tempfile              = "3"
 tokio                 = "1"
@@ -72,6 +72,11 @@ debug = "line-tables-only"
 [profile.dev.package]
 insta.opt-level = 3
 similar.opt-level = 3
+
+# The stack tests hold every stage to a 1 MiB stack, which only an optimized
+# build's frames have to fit.
+[profile.test]
+opt-level = 1
 
 [profile.release]
 opt-level = 3
@@ -115,7 +120,7 @@ trivial_numeric_casts = "deny"
 unit_bindings = "deny"
 unnameable_types = "deny"
 unreachable_pub = "deny"
-# Deny, not forbid, so the justified sites in luck_token, luck_core, and
+# Deny, not forbid, so the justified sites in luck_token, luck_resolver, and
 # luck_benchmark can #[expect] it.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"

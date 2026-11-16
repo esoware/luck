@@ -1,10 +1,11 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use luck_core::{Diagnostic, native_path, normalize_path};
+use luck_core::Diagnostic;
 use rustc_hash::FxHashMap;
 
 use crate::luaurc::{AliasCache, AliasTarget};
+use crate::path::{native_path, normalize_path};
 use crate::{ResolveRequest, ResolvedModule};
 
 /// What's on disk at each module path a build has walked through, since many
@@ -64,18 +65,19 @@ pub(crate) fn resolve(
     request: &ResolveRequest<'_>,
 ) -> Result<ResolvedModule, Diagnostic> {
     let module = request.module.replace('\\', "/");
+    let alias_path = module.strip_prefix('@');
+    if alias_path.is_none() && !module.starts_with("./") && !module.starts_with("../") {
+        return Err(Diagnostic::e004_luau_scheme(request.from_file, request.span, request.module));
+    }
     let from_path = native_path(request.from_file);
     let requiring_module = requiring_module_path(&from_path);
-    // Luau resets to the requiring module first, so an ambiguous one fails
-    // every require it makes.
+    // Luau resets to the requiring module before it navigates, so an
+    // ambiguous one fails every require it makes with a valid prefix.
     probe(probes, &requiring_module, request)?;
     let parent = requiring_module.parent().unwrap_or_else(|| Path::new("."));
-    if module.starts_with("./") || module.starts_with("../") {
-        navigate(probes, parent, &module, request)
-    } else if let Some(alias) = module.strip_prefix('@') {
-        resolve_alias(aliases, probes, alias, parent, &requiring_module, request)
-    } else {
-        Err(Diagnostic::e004_luau_scheme(request.from_file, request.span, request.module))
+    match alias_path {
+        Some(alias) => resolve_alias(aliases, probes, alias, parent, &requiring_module, request),
+        None => navigate(probes, parent, &module, request),
     }
 }
 

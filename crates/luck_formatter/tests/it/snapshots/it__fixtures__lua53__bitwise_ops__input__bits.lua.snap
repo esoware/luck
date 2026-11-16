@@ -1,0 +1,23 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua53/bitwise_ops/input/bits.lua
+---
+-- line_width = 1
+local x = 0xFF
+	& 0x0F
+local y = x
+	| 0xF0
+local z = x
+	~ y
+return {
+	x = x,
+	y = y,
+	z = z,
+}
+
+-- line_width = 40, 80, 100, 120
+local x = 0xFF & 0x0F
+local y = x | 0xF0
+local z = x ~ y
+return { x = x, y = y, z = z }

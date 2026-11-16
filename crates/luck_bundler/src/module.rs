@@ -17,7 +17,7 @@ pub struct Dependency {
 
 #[derive(Debug, Clone)]
 pub struct ModuleInfo {
-    /// The canonical path, in the [`normalize_path`](luck_core::normalize_path)
+    /// The canonical path, in the [`normalize_path`](luck_resolver::normalize_path)
     /// form, which keys the graph.
     pub path: String,
     pub source: String,
@@ -49,4 +49,7 @@ pub struct ModuleInfo {
     pub max_function_upvalues: usize,
     /// The AST from graph construction, kept so the emitter doesn't reparse.
     pub block: Block,
+    /// `block`'s depth as its parse counted it, never below what
+    /// [`luck_ast::block_nesting_depth`] finds.
+    pub nesting_depth: usize,
 }

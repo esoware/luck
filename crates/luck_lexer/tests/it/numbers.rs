@@ -215,7 +215,7 @@ fn integer_suffix_lexes_only_on_luau_integers_within_64_bits() {
     ] {
         let result = lex(source, LuaVersion::Luau);
         assert!(result.errors.is_empty(), "{source}: {:?}", result.errors);
-        assert_eq!(result.tokens[0].kind, TokenKind::Number(source.into()));
+        assert_eq!(result.tokens[0].kind, TokenKind::Integer(source.into()));
     }
 
     // Decimal overflow applies even under a direct unary minus;
@@ -327,7 +327,7 @@ fn integer_range_normalization_preserves_boundaries_and_spans() {
             assert_eq!(result.errors.is_empty(), is_valid, "{source}: {:?}", result.errors);
             let span = Span::from_indices(2, source.len());
             if is_valid {
-                assert_eq!(result.tokens[0].kind, TokenKind::Number(literal.into()));
+                assert_eq!(result.tokens[0].kind, TokenKind::Integer(literal.into()));
                 assert_eq!(result.tokens[0].span, span);
             } else {
                 assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
@@ -428,6 +428,7 @@ fn luau_underscore_after_integer_suffix_lexes() {
         Vec::<SourceError>::new(),
         "Luau strips every `_` before conversion, so `1i_` should be the integer `1i`"
     );
+    assert_eq!(result.tokens[1].kind, TokenKind::Integer("1i_".into()));
 }
 
 #[test]

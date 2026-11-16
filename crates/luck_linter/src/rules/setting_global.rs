@@ -64,7 +64,15 @@ mod tests {
 
     #[test]
     fn ignores_declared_global_and_its_writes() {
-        for source in ["global x = 1", "global x\nx = 1", "global function f() end\nf = nil"] {
+        for source in [
+            "global x = 1",
+            "\
+global x
+x = 1",
+            "\
+global function f() end
+f = nil",
+        ] {
             let diags = run_rule(&SettingGlobal, source, LuaVersion::Lua55);
             assert!(diags.is_empty(), "{source}: {diags:?}");
         }
@@ -72,25 +80,37 @@ mod tests {
 
     #[test]
     fn ignores_known_global_and_discard() {
-        let diags = run("print = print\n_ = 1");
+        let diags = run("\
+print = print
+_ = 1");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_local_assignment() {
-        let diags = run("local counter\ncounter = 1");
+        let diags = run("\
+local counter
+counter = 1");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_write_through_local_env() {
-        let diags = run("local _ENV = {}\nx = 1");
+        let diags = run("\
+local _ENV = {}
+x = 1");
         assert!(diags.is_empty(), "`x` is a field of the local `_ENV`: {diags:?}");
     }
 
     #[test]
     fn ignores_write_after_global_star() {
-        let diags = run_rule(&SettingGlobal, "global *\nx = 1", LuaVersion::Lua55);
+        let diags = run_rule(
+            &SettingGlobal,
+            "\
+global *
+x = 1",
+            LuaVersion::Lua55,
+        );
         assert!(diags.is_empty(), "`global *` declares every free name: {diags:?}");
     }
 }

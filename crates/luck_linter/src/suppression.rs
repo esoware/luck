@@ -207,7 +207,10 @@ fn sorted_stmt_spans(nodes: &Nodes<'_>) -> Vec<Span> {
         .filter_map(|node| match node.kind {
             NodeKind::Statement(stmt) => Some(stmt.span()),
             NodeKind::LastStatement(last_stmt) => Some(last_stmt.span()),
-            NodeKind::Expression(_) | NodeKind::Table(_) => None,
+            NodeKind::Expression(_)
+            | NodeKind::Table(_)
+            | NodeKind::Chain(..)
+            | NodeKind::Call { .. } => None,
         })
         .collect();
     stmt_spans.sort_unstable_by_key(|span| span.start);

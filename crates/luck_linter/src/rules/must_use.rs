@@ -1,9 +1,8 @@
-use luck_ast::FunctionCall;
-use luck_semantic::{SemanticAnalysis, StdlibEntry};
+use luck_semantic::{ResolvedCallee, StdlibEntry};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MustUse;
@@ -22,24 +21,23 @@ impl NodeRule for MustUse {
     }
     fn on_call(
         &self,
-        call: &FunctionCall,
-        position: CallPosition,
-        context: &LintContext<'_>,
+        site: &CallSite<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
+        let CallSite { call, position, callee } = *site;
         if position == CallPosition::Statement
-            && let Some(name) = must_use_name(context.semantic, call)
+            && let Some(name) = callee.and_then(must_use_name)
         {
             findings.push(
-                Finding::new(format!("return value of `{name}` is discarded"), call.span)
+                Finding::new(format!("return value of `{name}` is discarded"), call.span())
                     .with_help("assign the result or remove the call"),
             );
         }
     }
 }
 
-fn must_use_name(semantic: &SemanticAnalysis, call: &FunctionCall) -> Option<String> {
-    let callee = semantic.resolve_callee(call)?;
+fn must_use_name(callee: ResolvedCallee<'_>) -> Option<String> {
     if let StdlibEntry::Function(function) = callee.entry()
         && function.is_must_use
     {
@@ -68,7 +66,12 @@ mod tests {
 
     #[test]
     fn ignores_used_tostring() {
-        let messages = run("local s = tostring(1)\nprint(s)", LuaVersion::Lua54);
+        let messages = run(
+            "\
+local s = tostring(1)
+print(s)",
+            LuaVersion::Lua54,
+        );
         assert!(messages.is_empty(), "{messages:?}");
     }
 
@@ -110,14 +113,24 @@ mod tests {
 
     #[test]
     fn flags_discarded_string_method() {
-        let messages = run("local s = 'x'\ns:upper()", LuaVersion::Lua54);
+        let messages = run(
+            "\
+local s = 'x'
+s:upper()",
+            LuaVersion::Lua54,
+        );
         assert!(messages.iter().any(|message| message.contains("s:upper")), "{messages:?}");
     }
 
     // A bare f:seek('set') rewind is idiomatic, so seek isn't must_use.
     #[test]
     fn ignores_discarded_file_seek() {
-        let messages = run("local f = io.open('x')\nf:seek('set')", LuaVersion::Lua54);
+        let messages = run(
+            "\
+local f = io.open('x')
+f:seek('set')",
+            LuaVersion::Lua54,
+        );
         assert!(messages.is_empty(), "{messages:?}");
     }
 

@@ -4,14 +4,16 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::{self, Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
-use luck_core::{Diagnostic, LuaTarget, LuckConfig, normalize_path, read_source_file};
+use luck_config::LuckConfig;
+use luck_core::{Diagnostic, LuaTarget};
 use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
-use luck_token::LuaVersion;
+use luck_resolver::{normalize_path, read_source_file};
+use luck_token::{LineIndex, LuaVersion};
 
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::read_stdin_source;
 use crate::project::{config_for_one_shot, outcomes_in_order, project_files, resolve_project};
-use crate::render::{LineIndex, render_document_diags};
+use crate::render::{line_and_column, render_document_diags};
 use crate::verbosity::Verbosity;
 
 #[derive(Clone, ValueEnum)]
@@ -421,8 +423,9 @@ impl LintArgs {
                 let line_index = LineIndex::new(source, version);
                 let mut lines = String::new();
                 for diag in diags {
-                    let (line, column) = line_index.line_and_column(diag.span.start);
-                    let (end_line, end_column) = line_index.line_and_column(diag.span.end);
+                    let (line, column) = line_and_column(&line_index, source, diag.span.start);
+                    let (end_line, end_column) =
+                        line_and_column(&line_index, source, diag.span.end);
                     let json_value = serde_json::json!({
                         "file": file_label,
                         "rule": diag.rule,
@@ -451,8 +454,9 @@ impl LintArgs {
                 let file = annotation_property(&normalize_path(&absolute));
                 let mut lines = String::new();
                 for diag in diags {
-                    let (line, column) = line_index.line_and_column(diag.span.start);
-                    let (end_line, end_column) = line_index.line_and_column(diag.span.end);
+                    let (line, column) = line_and_column(&line_index, source, diag.span.start);
+                    let (end_line, end_column) =
+                        line_and_column(&line_index, source, diag.span.end);
                     let message = diag.help.as_ref().map_or_else(
                         || diag.message.clone(),
                         |help| format!("{}\nhelp: {help}", diag.message),
@@ -735,7 +739,9 @@ mod tests {
 
     #[test]
     fn quiet_hides_warnings_but_not_errors() {
-        let source = "local unused = 1\nprint(undefined_var)";
+        let source = "\
+local unused = 1
+print(undefined_var)";
         let diags = luck_linter::lint_target(source, LuaTarget::Lua54, &LintConfig::default());
         let args = lint_args(&["--format", "json"]);
         let lines_when = |is_quiet: bool| match args.rendered(
@@ -758,7 +764,14 @@ mod tests {
 
     #[test]
     fn json_format_gives_the_line_and_column_of_a_finding() {
-        let lines = rendered_lines("json", "src/a.lua", "local a = 1\nlocal unused = 2\nprint(a)");
+        let lines = rendered_lines(
+            "json",
+            "src/a.lua",
+            "\
+local a = 1
+local unused = 2
+print(a)",
+        );
         let finding: serde_json::Value = serde_json::from_str(lines.trim()).expect("one finding");
         assert_eq!(finding["rule"], "unused_variable");
         let number = |key: &str| finding[key].as_u64().expect("a number");
@@ -771,8 +784,14 @@ mod tests {
     /// from the workspace root even when lint runs in a subdirectory.
     #[test]
     fn github_format_writes_one_annotation_per_finding() {
-        let lines =
-            rendered_lines("github", r"src\a.lua", "local a = 1\nlocal unused = 2\nprint(a)");
+        let lines = rendered_lines(
+            "github",
+            r"src\a.lua",
+            "\
+local a = 1
+local unused = 2
+print(a)",
+        );
         let (file, rest) = lines
             .strip_prefix("::warning file=")
             .and_then(|annotation| annotation.split_once(','))

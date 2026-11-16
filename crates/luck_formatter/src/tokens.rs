@@ -19,6 +19,7 @@ impl Format for Token {
             // depend on which segments hold an expression.
             TokenKind::Identifier(text)
             | TokenKind::Number(text)
+            | TokenKind::Integer(text)
             | TokenKind::StringLiteral(text)
             | TokenKind::InterpolatedStringBegin(text)
             | TokenKind::InterpolatedStringMiddle(text)

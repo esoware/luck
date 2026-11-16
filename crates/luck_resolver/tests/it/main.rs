@@ -10,3 +10,4 @@ mod common;
 
 mod lua;
 mod luau;
+mod path;

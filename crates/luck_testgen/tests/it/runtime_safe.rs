@@ -7,10 +7,7 @@
 )]
 
 use luck_testgen::generate_runtime_safe;
-use luck_token::LuaVersion;
-
-// Lua's own limit: `too many local variables (limit is 200)`.
-const MAX_LOCALS_PER_FUNCTION: usize = 200;
+use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS};
 
 fn tab_depth(line: &str) -> usize {
     line.chars().take_while(|c| *c == '\t').count()
@@ -204,8 +201,8 @@ fn runtime_module_scope_stays_within_the_local_limit() {
     let program = generate_runtime_safe(42, LuaVersion::Lua54, 500);
     let module_locals = program.lines().filter(|line| line.starts_with("local ")).count();
     assert!(
-        module_locals <= MAX_LOCALS_PER_FUNCTION,
+        module_locals <= MAX_ACTIVE_LOCALS,
         "{module_locals} module-scope locals: PUC-Rio Lua rejects a function with more than \
-         {MAX_LOCALS_PER_FUNCTION}, so the program must stay within the limit to parse"
+         {MAX_ACTIVE_LOCALS}, so the program must stay within the limit to parse"
     );
 }

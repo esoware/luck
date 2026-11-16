@@ -1,40 +1,13 @@
 use luck_ast::{
     Attribute, AttributedName, Expression, FunctionAttribute, FunctionDecl, FunctionName,
-    GlobalDeclaration, GlobalFunction, GlobalStar, LocalAssignment, LocalFunction, Punctuated,
-    Statement, TypeDeclaration, TypeDeclarationValue,
+    GlobalDeclaration, GlobalFunction, GlobalStar, LocalAssignment, LocalAssignmentKind,
+    LocalFunction, LocalFunctionKind, Punctuated, Statement, TypeDeclaration, TypeDeclarationValue,
+    is_multi_value,
 };
 use luck_token::{Span, Token, TokenKind};
 
 use super::Parser;
 use super::types::GenericsOwner;
-
-/// The declaration that introduced a local binding, which fixes its
-/// `is_const` and `is_exported` flags.
-#[derive(Clone, Copy)]
-enum LocalKind {
-    Local,
-    Const,
-    ExportedLocal,
-    /// Luau `export const`, and `export function`, whose binding is read-only
-    /// too.
-    ExportedConst,
-}
-
-impl LocalKind {
-    const fn is_const(self) -> bool {
-        match self {
-            Self::Const | Self::ExportedConst => true,
-            Self::Local | Self::ExportedLocal => false,
-        }
-    }
-
-    const fn is_exported(self) -> bool {
-        match self {
-            Self::ExportedLocal | Self::ExportedConst => true,
-            Self::Local | Self::Const => false,
-        }
-    }
-}
 
 /// The span of a `local` or `global` declaration, from `start_span` through
 /// its last value, or through its last name and that name's annotation and
@@ -78,7 +51,7 @@ impl Parser<'_> {
             TokenKind::Identifier(name) if name == "const" => self.parse_const_stmt(attributes),
             _ => {
                 let span = self.current_span();
-                self.error(
+                self.syntax_error(
                     span,
                     "expected `function`, `local`, `const`, or `export` after attribute",
                 );
@@ -90,8 +63,10 @@ impl Parser<'_> {
     pub(super) fn parse_function_decl(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
         let function_span = self.advance_span();
         let name = self.parse_function_name();
-        let body = self.parse_function_body();
         let start_span = attributes.first().map_or(function_span, |attribute| attribute.span);
+        let Some(body) = self.parse_function_body() else {
+            return Statement::Error(start_span);
+        };
         let span = start_span.merge(body.span);
 
         Statement::FunctionDecl(Box::new(FunctionDecl { span, attributes, name, body }))
@@ -122,49 +97,44 @@ impl Parser<'_> {
         let local_span = self.advance_span();
 
         if matches!(self.peek(), TokenKind::Function) {
-            return self.parse_local_function(local_span, attributes, LocalKind::Local);
+            return self.parse_local_function(local_span, attributes, LocalFunctionKind::Local);
         }
 
         if let Some(attribute) = attributes.first() {
             self.error(attribute.span, "attributes are only allowed on function declarations");
         }
-        self.parse_local_assignment(local_span, LocalKind::Local)
+        self.parse_local_assignment(local_span, LocalAssignmentKind::Local)
     }
 
     pub(super) fn parse_const_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
         let const_span = self.advance_span(); // contextual `const`
         if matches!(self.peek(), TokenKind::Function) {
-            return self.parse_local_function(const_span, attributes, LocalKind::Const);
+            return self.parse_local_function(const_span, attributes, LocalFunctionKind::Const);
         }
         if let Some(attribute) = attributes.first() {
             self.error(attribute.span, "attributes are only allowed on function declarations");
         }
-        self.parse_local_assignment(const_span, LocalKind::Const)
+        self.parse_local_assignment(const_span, LocalAssignmentKind::Const)
     }
 
     fn parse_local_function(
         &mut self,
         local_span: Span,
         attributes: Vec<FunctionAttribute>,
-        kind: LocalKind,
+        kind: LocalFunctionKind,
     ) -> Statement {
+        let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
         self.advance_span(); // `function`
         let name = self.expect_identifier_recover();
-        let body = self.parse_function_body();
-        let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
+        let Some(body) = self.parse_function_body() else {
+            return Statement::Error(start_span);
+        };
         let span = start_span.merge(body.span);
 
-        Statement::LocalFunction(Box::new(LocalFunction {
-            span,
-            attributes,
-            name,
-            body,
-            is_const: kind.is_const(),
-            is_exported: kind.is_exported(),
-        }))
+        Statement::LocalFunction(Box::new(LocalFunction { span, attributes, name, body, kind }))
     }
 
-    fn parse_local_assignment(&mut self, local_span: Span, kind: LocalKind) -> Statement {
+    fn parse_local_assignment(&mut self, local_span: Span, kind: LocalAssignmentKind) -> Statement {
         let names = self.parse_attname_list();
 
         // 5.4 manual section 3.3.7: "A list of variables can contain at most
@@ -187,23 +157,13 @@ impl Parser<'_> {
         // that a last call or `...` may supply the rest.
         if kind.is_const()
             && !exprs.as_ref().is_some_and(|values| {
-                values.len() == names.len()
-                    || matches!(
-                        values.last(),
-                        Some(Expression::FunctionCall(_) | Expression::VarArg(_))
-                    )
+                values.len() == names.len() || values.last().is_some_and(is_multi_value)
             })
         {
             self.error(span, "missing initializer in `const` declaration");
         }
 
-        Statement::LocalAssignment(Box::new(LocalAssignment {
-            span,
-            names,
-            exprs,
-            is_const: kind.is_const(),
-            is_exported: kind.is_exported(),
-        }))
+        Statement::LocalAssignment(Box::new(LocalAssignment { span, names, exprs, kind }))
     }
 
     /// The leading attribute is new in 5.5; in 5.4, attributes only follow
@@ -257,9 +217,12 @@ impl Parser<'_> {
         let global_span = self.advance_span();
 
         // `global function name(...) ... end`
-        if self.eat(&TokenKind::Function) {
+        if matches!(self.peek(), TokenKind::Function) {
+            self.advance_span();
             let name = self.expect_identifier_recover();
-            let body = self.parse_function_body();
+            let Some(body) = self.parse_function_body() else {
+                return Statement::Error(global_span);
+            };
             let span = global_span.merge(body.span);
             return Statement::GlobalFunction(Box::new(GlobalFunction { span, name, body }));
         }
@@ -331,10 +294,13 @@ impl Parser<'_> {
 
         // `type function Name funcbody` takes no `=`, and the body is
         // ordinary Luau.
-        if self.eat(&TokenKind::Function) {
+        if matches!(self.peek(), TokenKind::Function) {
+            self.advance_span();
             self.has_type_function = true;
             let name = self.expect_identifier_recover();
-            let body = self.parse_function_body();
+            let Some(body) = self.parse_function_body() else {
+                return Statement::Error(start_span);
+            };
             let span = start_span.merge(body.span);
             return Statement::TypeDeclaration(Box::new(TypeDeclaration {
                 span,
@@ -401,7 +367,7 @@ impl Parser<'_> {
                         export_span,
                         "`export local function` is not supported, use `export function`",
                     );
-                    self.parse_local_function(local_span, attributes, LocalKind::Local)
+                    self.parse_local_function(local_span, attributes, LocalFunctionKind::Local)
                 } else {
                     if !attributes.is_empty() {
                         self.error(
@@ -409,11 +375,11 @@ impl Parser<'_> {
                             "attributes are only allowed on exported functions",
                         );
                     }
-                    self.parse_local_assignment(export_span, LocalKind::ExportedLocal)
+                    self.parse_local_assignment(export_span, LocalAssignmentKind::ExportLocal)
                 }
             }
             TokenKind::Function => {
-                self.parse_local_function(export_span, attributes, LocalKind::ExportedConst)
+                self.parse_local_function(export_span, attributes, LocalFunctionKind::Export)
             }
             TokenKind::Identifier(name) if name == "const" => {
                 self.advance_span();
@@ -425,14 +391,14 @@ impl Parser<'_> {
                         export_span,
                         "`export const function` is not supported, use `export function`",
                     );
-                    self.parse_local_function(export_span, Vec::new(), LocalKind::Const)
+                    self.parse_local_function(export_span, Vec::new(), LocalFunctionKind::Const)
                 } else {
-                    self.parse_local_assignment(export_span, LocalKind::ExportedConst)
+                    self.parse_local_assignment(export_span, LocalAssignmentKind::ExportConst)
                 }
             }
             _ => {
                 let span = self.current_span();
-                self.error(
+                self.syntax_error(
                     span,
                     "`export` must be followed by `type`, `local`, `const`, or `function`",
                 );
@@ -446,14 +412,14 @@ impl Parser<'_> {
 
     fn register_exported_names(&mut self, stmt: &Statement) {
         if let Statement::LocalAssignment(local) = stmt
-            && local.is_exported
+            && local.kind.is_exported()
         {
             for attributed in local.names.iter() {
                 self.register_exported_name(&attributed.name);
             }
         }
         if let Statement::LocalFunction(function) = stmt
-            && function.is_exported
+            && function.kind.is_exported()
         {
             self.register_exported_name(&function.name);
         }

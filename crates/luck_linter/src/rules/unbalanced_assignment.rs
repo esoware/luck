@@ -94,14 +94,18 @@ mod tests {
 
     #[test]
     fn flags_assignment_with_extra_values() {
-        let diags = run("local a, b\na, b = 1, 2, 3");
+        let diags = run("\
+local a, b
+a, b = 1, 2, 3");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].message, "2 target(s) but 3 value(s) in assignment", "{diags:?}");
     }
 
     #[test]
     fn ignores_multi_value_tail() {
-        let diags = run("local a, b, c = 1, f()\nlocal function g(...) a, b, c = ... end");
+        let diags = run("\
+local a, b, c = 1, f()
+local function g(...) a, b, c = ... end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -113,7 +117,9 @@ mod tests {
 
     #[test]
     fn ignores_balanced_assignments() {
-        let diags = run("local a, b = 1, 2\na, b = b, a");
+        let diags = run("\
+local a, b = 1, 2
+a, b = b, a");
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

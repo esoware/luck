@@ -72,25 +72,41 @@ mod tests {
 
     #[test]
     fn flags_trailing_bare_return_in_function() {
-        let diags = run("local function f()\n    print(1)\n    return\nend\nf()");
+        let diags = run("\
+local function f()
+    print(1)
+    return
+end
+f()");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_trailing_bare_return_in_chunk() {
-        let diags = run("print(1)\nreturn");
+        let diags = run("\
+print(1)
+return");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_return_only_body() {
-        let diags = run("local function f()\n    return\nend\nf()");
+        let diags = run("\
+local function f()
+    return
+end
+f()");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn flags_and_fixes_trailing_return() {
-        let source = "local function f()\n    print(1)\n    return\nend\nf()";
+        let source = "\
+local function f()
+    print(1)
+    return
+end
+f()";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
@@ -99,7 +115,12 @@ mod tests {
 
     #[test]
     fn flags_and_fixes_trailing_return_with_semicolon() {
-        let source = "local function f()\n    print(1)\n    return;\nend\nf()";
+        let source = "\
+local function f()
+    print(1)
+    return;
+end
+f()";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
@@ -108,23 +129,37 @@ mod tests {
 
     #[test]
     fn ignores_return_with_values() {
-        let diags = run("local function f()\n    return 1\nend\nf()");
+        let diags = run("\
+local function f()
+    return 1
+end
+f()");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_early_return_in_nested_block() {
-        let diags = run(
-            "local function f(x)\n    if x then\n        return\n    end\n    print(x)\nend\nf(1)",
-        );
+        let diags = run("\
+local function f(x)
+    if x then
+        return
+    end
+    print(x)
+end
+f(1)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_nested_function_tail_return() {
-        let diags = run(
-            "local f = function()\n    local g = function()\n        return\n    end\n    return g\nend\nf()",
-        );
+        let diags = run("\
+local f = function()
+    local g = function()
+        return
+    end
+    return g
+end
+f()");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }

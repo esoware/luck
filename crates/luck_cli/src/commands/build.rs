@@ -5,18 +5,20 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use clap::Args;
-use luck_bundler::{BundleOptions, bundle};
-use luck_core::{
+use luck_bundler::{BundleOptions, bundle, bundle_minified};
+use luck_config::{
     BuildConfig, check_output_paths, config_directory, discover_config, load_or_discover_config,
-    native_path, normalize_path, resolve_build_config,
+    resolve_build_config,
 };
+use luck_core::Diagnostic;
+use luck_resolver::{native_path, normalize_path};
 use luck_token::{LuaVersion, chunk_start, has_shebang};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::{format_size, write_output_file};
 use crate::project::current_directory;
-use crate::render::{print_diags, print_source_errors};
+use crate::render::print_diags;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -48,10 +50,10 @@ pub(crate) struct BuildArgs {
 }
 
 enum BuildFailure {
-    /// Bundling or minifying failed and the diagnostics are already rendered.
-    /// Watch mode keeps going and watches `source_files`, since an edit to one
-    /// of them may fix the build.
-    Failed { message: &'static str, source_files: Vec<String> },
+    /// Bundling failed and the diagnostics are already rendered. Watch mode
+    /// keeps going and watches `source_files`, since an edit to one of them
+    /// may fix the build.
+    Failed { source_files: Vec<String> },
     /// The output can't be written. The run ends with this exit code, even in
     /// watch mode.
     Fatal(Exit),
@@ -109,8 +111,8 @@ impl BuildArgs {
         for config in &configs {
             match self.build_one(config, verbosity) {
                 Ok(_) => {}
-                Err(BuildFailure::Failed { message, .. }) => {
-                    eprintln!("\n  \x1b[31merror:\x1b[0m {message}");
+                Err(BuildFailure::Failed { .. }) => {
+                    eprintln!("\n  \x1b[31merror:\x1b[0m build failed");
                     return Err(Exit::Failure);
                 }
                 Err(BuildFailure::Fatal(exit)) => return Err(exit),
@@ -199,7 +201,7 @@ impl BuildArgs {
         let mut all_source_files = Vec::new();
         for config in &configs {
             match self.build_one(config, verbosity) {
-                Ok(source_files) | Err(BuildFailure::Failed { source_files, .. }) => {
+                Ok(source_files) | Err(BuildFailure::Failed { source_files }) => {
                     all_source_files.extend(source_files);
                 }
                 Err(BuildFailure::Fatal(exit)) => return Err(exit),
@@ -211,9 +213,9 @@ impl BuildArgs {
 
     /// # Errors
     ///
-    /// Returns [`BuildFailure::Failed`] after rendering bundle or minify
-    /// diagnostics, and [`BuildFailure::Fatal`] when the output can't be
-    /// written or would replace a bundled file.
+    /// Returns [`BuildFailure::Failed`] after rendering bundle diagnostics,
+    /// and [`BuildFailure::Fatal`] when the output can't be written or would
+    /// replace a bundled file.
     fn build_one(
         &self,
         config: &BuildConfig,
@@ -221,54 +223,46 @@ impl BuildArgs {
     ) -> Result<Vec<String>, BuildFailure> {
         let start = Instant::now();
         let version = config.target.lua_version();
-
-        let result = bundle(
-            &config.entry,
-            &BundleOptions {
-                version,
-                search_paths: &config.search_paths,
-                project_root: &config.project_root,
-                dynamic_require: config.dynamic_require,
-            },
-        )
-        .map_err(|errors| {
+        let options = BundleOptions {
+            version,
+            search_paths: &config.search_paths,
+            project_root: &config.project_root,
+            dynamic_require: config.dynamic_require,
+        };
+        let bundle_failure = |errors: Vec<Diagnostic>| {
             print_diags(&errors, version);
             let source_files = errors
                 .iter()
                 .map(|diag| diag.file_path.clone())
                 .chain([normalize_path(&config.entry)])
                 .collect();
-            BuildFailure::Failed { message: "build failed", source_files }
-        })?;
+            BuildFailure::Failed { source_files }
+        };
+        let check_output = |source_files: &[String]| {
+            check_output_paths(source_files, [&config.output])
+                .map_err(|message| BuildFailure::Fatal(usage_error(message)))
+        };
 
-        check_output_paths(&result.source_files, [&config.output])
-            .map_err(|message| BuildFailure::Fatal(usage_error(message)))?;
+        // A minified build compares its size with the sources', since it
+        // never writes the bundle unminified.
+        let (bundled, source_files, original_size) = if config.minify {
+            let minified = bundle_minified(&config.entry, &options, &config.transforms)
+                .map_err(bundle_failure)?;
+            check_output(&minified.source_files)?;
+            if verbosity != Verbosity::Quiet {
+                print_diags(&minified.warnings, version);
+            }
+            (minified.output, minified.source_files, Some(minified.source_byte_count))
+        } else {
+            let result = bundle(&config.entry, &options).map_err(bundle_failure)?;
+            check_output(&result.source_files)?;
+            if verbosity != Verbosity::Quiet {
+                print_diags(&result.warnings, version);
+            }
+            (result.output, result.source_files, None)
+        };
 
-        if verbosity != Verbosity::Quiet {
-            print_diags(&result.warnings, version);
-        }
-
-        let source_files = result.source_files;
-        let mut output = result.output;
-        let pre_minify_size = output.len();
-
-        if config.minify {
-            output =
-                luck_minifier::minify(&output, version, &config.transforms).map_err(|errors| {
-                    print_source_errors(
-                        config.entry.display().to_string(),
-                        &output,
-                        &errors,
-                        version,
-                    );
-                    BuildFailure::Failed {
-                        message: "minification failed",
-                        source_files: source_files.clone(),
-                    }
-                })?;
-        }
-
-        output = with_preamble(config, output, version);
+        let output = with_preamble(config, bundled, version);
 
         if self.dry_run {
             eprintln!("[dry-run] Would write: {}", config.output.display());
@@ -278,8 +272,7 @@ impl BuildArgs {
 
         let duration = start.elapsed();
         if verbosity != Verbosity::Quiet {
-            let original = config.minify.then_some(pre_minify_size);
-            print_build_stat(&config.output, output.len(), original, duration);
+            print_build_stat(&config.output, output.len(), original_size, duration);
         }
 
         Ok(source_files)
@@ -292,7 +285,8 @@ fn with_preamble(config: &BuildConfig, output: String, version: LuaVersion) -> S
     let mut lines = Vec::new();
 
     if let Some(text) = &config.preamble {
-        for line in text.lines() {
+        // A short comment ends at a CR as well as at an LF, on every target.
+        for line in text.lines().flat_map(|line| line.split('\r')) {
             lines.push(format!("-- {line}"));
         }
     }

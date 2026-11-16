@@ -1,6 +1,6 @@
 use luck_ast::{
     AttributedName, FunctionDecl, FunctionName, GlobalDeclaration, GlobalFunction, GlobalStar,
-    LocalAssignment, LocalFunction, TypeDeclaration, TypeDeclarationValue,
+    LocalAssignment, LocalFunction, LocalFunctionKind, TypeDeclaration, TypeDeclarationValue,
 };
 
 use super::CompactPrinter;
@@ -27,21 +27,21 @@ impl CompactPrinter {
 
     pub(super) fn emit_local_function(&mut self, local_function: &LocalFunction) {
         self.emit_function_attributes(&local_function.attributes);
-        if local_function.is_exported {
-            self.emit_fixed("export");
-        } else {
-            self.emit_fixed(if local_function.is_const { "const" } else { "local" });
-        }
+        self.emit_fixed(match local_function.kind {
+            LocalFunctionKind::Local => "local",
+            LocalFunctionKind::Const => "const",
+            LocalFunctionKind::Export => "export",
+        });
         self.emit_fixed("function");
         self.emit_token(&local_function.name);
         self.emit_function_body(&local_function.body);
     }
 
     pub(super) fn emit_local_assignment(&mut self, local_assignment: &LocalAssignment) {
-        if local_assignment.is_exported {
+        if local_assignment.kind.is_exported() {
             self.emit_fixed("export");
         }
-        self.emit_fixed(if local_assignment.is_const { "const" } else { "local" });
+        self.emit_fixed(if local_assignment.kind.is_const() { "const" } else { "local" });
         self.emit_punctuated(&local_assignment.names, ",", Self::emit_attributed_name);
         if let Some(exprs) = &local_assignment.exprs {
             self.emit_fixed("=");

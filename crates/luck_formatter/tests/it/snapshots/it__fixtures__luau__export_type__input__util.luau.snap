@@ -1,0 +1,24 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/luau/export_type/input/util.luau
+---
+-- line_width = 1
+local M = {}
+function M.add(
+	a: number,
+	b: number
+): number
+	return a
+		+ b
+end
+export type Adder = typeof(M.add)
+return M
+
+-- line_width = 40, 80, 100, 120
+local M = {}
+function M.add(a: number, b: number): number
+	return a + b
+end
+export type Adder = typeof(M.add)
+return M

@@ -112,7 +112,8 @@ fn rule_level_wins_over_its_category() {
 
 #[test]
 fn category_level_sets_the_severity_of_its_rules() {
-    let source = "local unused = 1
+    let source = "\
+local unused = 1
 print(undefined_var)";
     let defaults = lint(source, LuaVersion::Lua54, &LintConfig::default());
     let default_severities: Vec<Severity> = defaults.iter().map(|diag| diag.severity).collect();

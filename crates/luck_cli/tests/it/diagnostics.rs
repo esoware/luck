@@ -5,7 +5,11 @@ use tempfile::TempDir;
 
 use crate::common::{luck_in, write_file};
 
-const MISTYPED_TYPE_CHECK: &str = "local x = 1\nlocal ok = type(x) == \"strng\"\nreturn ok\n";
+const MISTYPED_TYPE_CHECK: &str = "\
+local x = 1
+local ok = type(x) == \"strng\"
+return ok
+";
 
 #[test]
 fn lint_prints_a_rules_help() {
@@ -77,7 +81,14 @@ fn unreadable_entry_reports_e010_without_a_debug_line() {
 #[test]
 fn minify_stats_are_ascii() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", "local value = 1\nreturn value\n");
+    write_file(
+        directory.path(),
+        "main.lua",
+        "\
+local value = 1
+return value
+",
+    );
 
     let assert =
         luck_in(directory.path()).args(["minify", "main.lua", "--stats"]).assert().code(0i32);
@@ -88,7 +99,14 @@ fn minify_stats_are_ascii() {
 #[test]
 fn build_progress_is_ascii() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", "local value = 1\nreturn value\n");
+    write_file(
+        directory.path(),
+        "main.lua",
+        "\
+local value = 1
+return value
+",
+    );
     write_file(
         directory.path(),
         "luck.json",

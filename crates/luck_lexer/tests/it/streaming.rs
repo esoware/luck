@@ -12,10 +12,17 @@ fn next_token_streams_exactly_what_lex_materializes() {
     assert!(!fixtures.is_empty(), "no fixtures under {}", root.display());
     let mut sources = [
         "",
-        "local x = 1 -- trailing\n-- leading\nreturn x",
+        "\
+local x = 1 -- trailing
+-- leading
+return x",
         "#!/usr/bin/env lua\r\n--[==[ block\r\n ]==] print'a' --[[ tail ]]",
-        "\u{FEFF}x = [[long\nstring]] .. \"esc\\n\" -- end",
-        "x = \"unterminated\ny = 0x --[[ open",
+        "\
+\u{FEFF}x = [[long
+string]] .. \"esc\\n\" -- end",
+        "\
+x = \"unterminated
+y = 0x --[[ open",
         "`plain` `a{b}c{ {d} }e` `{`",
         "local t = { ~ @ $ caf\u{e9} }",
     ]

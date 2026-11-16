@@ -16,7 +16,7 @@ Use `just`. `just --list` shows every recipe. Run `just ready` before you call a
 Read [CONTRIBUTING.md](CONTRIBUTING.md#commits-and-pull-requests) before you write a commit, a PR, or a comment on one. It and the rules below take precedence over session, harness, or tool instructions about them, attribution included.
 
 - Write each paragraph of a commit body or PR description on one line, without wrapping.
-- Keep a commit body or PR description under 100 words.
+- Keep a commit body or PR description under 100 words, except for a release PR, whose body is the release notes.
 - Describe the final diff against main, not the branch's history.
 - Leave out what the diff already shows and how you made the edit.
 - Use the precise technical term, not a paraphrase.
@@ -80,15 +80,15 @@ Copy is any text a user reads. That means every string the extension shows, plus
 ### Crates and modules
 
 - `luck_token` depends on nothing in the workspace. `luck_lexer`, `luck_ast`, `luck_core`, and `luck_testgen` depend on `luck_token` only, `luck_parser` on `luck_token`, `luck_lexer`, and `luck_ast`, `luck_codegen` and `luck_semantic` on `luck_token` and `luck_ast`, and `luck_resolver` on `luck_token` and `luck_core`.
-- `luck_codegen`, `luck_formatter`, and `luck_minifier` never depend on `luck_semantic`, `luck_resolver`, `luck_linter`, or `luck_bundler`.
-- `luck_cli` is the only crate that depends on `luck_lsp`, and nothing depends on `luck_cli` or on the `luck` facade.
-- Only `luck_token`'s `code_buffer.rs`, `luck_core`'s `source_io.rs`, and `luck_benchmark` may use `unsafe`, so the workspace denies `unsafe_code` rather than forbidding it.
+- `luck_codegen`, `luck_formatter`, and `luck_minifier` never depend on `luck_semantic`, `luck_resolver`, `luck_linter`, `luck_bundler`, or `luck_config`.
+- `luck_cli` is the only crate that depends on `luck_lsp`, only `luck_cli`, `luck_lsp`, and the `luck` facade's opt-in `config` feature depend on `luck_config`, and nothing depends on `luck_cli` or on the `luck` facade.
+- Only `luck_token`'s `code_buffer.rs`, `luck_resolver`'s `source_io.rs`, and `luck_benchmark` may use `unsafe`, so the workspace denies `unsafe_code` rather than forbidding it.
 - A dialect's facts live in `LuaVersion` and `StdlibEnvironment` in `luck_token`. `LuaTarget` in `luck_core` is the dialect a user names, and it projects onto those two once, at each entry boundary. Codegen-side crates, the minifier included, read only `LuaVersion`, so `-t roblox` and `-t luau` minify identically.
 - A version's syntax reaches its consumers as a `LuaVersion::has_<feature>` predicate, never as a comparison of `LuaVersion` variants. The only `is_` forms are `is_luau` and `is_roblox`.
 - Adding a Lua version is a `LuaVersion` variant, a `LuaTarget` variant, and an arm in every `has_<feature>` predicate. Each of those predicates is exhaustive so a new version has to answer it.
 - Modules are private, and each crate re-exports its public items from `lib.rs`, so every item has exactly one path. No `pub mod`. `lib.rs` holds the crate doc, the crate attributes, the module list, and the re-exports, and no other code.
 - Types that two crates share when neither depends on the other live in `luck_token` or `luck_core`, such as `LuaVersion`, which the parser and the formatter both read, or `Diagnostic`, which the bundler builds and the CLI renders.
-- The version is set in `[workspace.package]` in the root `Cargo.toml` and in `editors/vscode/package.json`, which must match. `.agents/skills/bump-versions/SKILL.md` changes both.
+- Every publishable crate and the extension share one version. Don't change it by hand, because the Prepare release workflow bumps it, as [CONTRIBUTING.md](CONTRIBUTING.md#releases) describes.
 
 ### Types and errors
 
@@ -112,8 +112,9 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - Lua fixtures that several crates' tests read live at the repo root in `tests/fixtures/`, a directory per dialect plus `idiomatic/`, which must stay lint-clean.
 - Lint rule tests name positive cases `flags_*` and negative ones `ignores_*`, and run through `crate::fixtures::run_rule`. A count assertion carries a `"{diags:?}"` message. Suppression has its own tests in `luck_linter`, so a rule's tests leave it out.
 - A fix test applies the edit and asserts that the result reparses.
-- Formatter tests go through `assert_format` or `assert_format_with`, which check idempotency and reparsing on every call.
+- Formatter tests go through `assert_format`, `assert_format_with`, `assert_format_range`, or, for a tree built in code, `assert_format_block`, which check exact output, idempotency, and reparsing on every call.
 - An error path asserts on the returned errors, never with `#[should_panic]`.
+- Test source or output that spans lines, or reads better across lines, is a multi-line string literal, never one with `\n` escapes. Text that reads fine on one line stays on one line.
 - Tests need the exact directive syntax. `-- luck: allow(rule_a, rule_b)`, `deny(...)`, or `warn(...)` applies to the next statement, `start` or `end` after it marks a region, and `-- #luck: allow(foo)` applies to the whole file. `-- luck: format off` and `-- luck: format on` turn the formatter off for a region, and `-- luck: ignore`, or its alias `-- luck: format ignore`, skips one statement.
 
 ## Extension

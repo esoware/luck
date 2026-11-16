@@ -1,13 +1,13 @@
-use luck_ast::{Expression, LastStatement, Statement, Visitor};
-use luck_token::Span;
+use luck_ast::{Expression, LastStatement, Statement, SuffixedExpression, Visitor};
+use luck_token::{Associativity, Span};
 use tower_lsp_server::ls_types::{Position, SelectionRange};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::touches;
 
 /// How many of the innermost enclosing spans reach the editor. The `parent`
-/// chain's drop and serialization recurse, so a long operator chain must not
-/// become an equally long list.
+/// chain's drop and serialization recurse, so a long run of operators or
+/// suffixes must not become an equally long list.
 const MAX_SELECTION_DEPTH: usize = 256;
 
 pub(crate) fn selection_ranges(
@@ -66,9 +66,32 @@ impl<'ast> Visitor<'ast> for SpanStack {
         self.walk_last_stmt(last);
     }
 
+    /// A run steps out through each pair it groups into, as if it nested.
     fn visit_expr(&mut self, expr: &'ast Expression) {
         self.record(expr.span());
+        if let Expression::BinaryOp(run) = expr {
+            let operands = || run.links.iter().map(|link| &link.operand);
+            let inner_count = run.links.len().saturating_sub(1);
+            if run.precedence().1 == Associativity::Left {
+                let start = run.first.span().start;
+                for operand in operands().take(inner_count).rev() {
+                    self.record(Span::new(start, operand.span().end));
+                }
+            } else {
+                let end = run.links.last().operand.span().end;
+                for operand in operands().take(inner_count) {
+                    self.record(Span::new(operand.span().start, end));
+                }
+            }
+        }
         self.walk_expr(expr);
+    }
+
+    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression) {
+        for count in (1..chain.suffixes.len()).rev() {
+            self.record(chain.head(count).span());
+        }
+        self.walk_suffixed(chain);
     }
 }
 
@@ -80,20 +103,30 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn a_selection_chain_at_a_statement_boundary_is_nested() {
-        // Offset 3 ends `f()` and starts `g()`. Either direction of nesting
-        // passes, so this is independent of the chain's order.
+    /// The selection at `offset` on the first line, innermost first.
+    fn ranges_at(source: &str, offset: u32) -> Vec<Range> {
         let document =
-            DocumentState::new("f()g()\n".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+            DocumentState::new(source.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
         assert!(document.parsed.errors.is_empty(), "{:?}", document.parsed.errors);
-        let selection = selection_for(&document, Position::new(0, 3));
+        let selection = selection_for(&document, Position::new(0, offset));
         let mut ranges = vec![selection.range];
         let mut current = &selection;
         while let Some(parent) = current.parent.as_deref() {
             ranges.push(parent.range);
             current = parent;
         }
+        ranges
+    }
+
+    fn columns(ranges: &[Range]) -> Vec<(u32, u32)> {
+        ranges.iter().map(|range| (range.start.character, range.end.character)).collect()
+    }
+
+    #[test]
+    fn a_selection_chain_at_a_statement_boundary_is_nested() {
+        // Offset 3 ends `f()` and starts `g()`. Either direction of nesting
+        // passes, so this is independent of the chain's order.
+        let ranges = ranges_at("f()g()\n", 3);
         let contains =
             |outer: Range, inner: Range| outer.start <= inner.start && inner.end <= outer.end;
         for pair in ranges.windows(2) {
@@ -104,6 +137,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_run_of_operators_steps_out_through_each_pair() {
+        // `x = a + b + c`, at `b`: `b`, `a + b`, the run, the statement.
+        assert_eq!(columns(&ranges_at("x = a + b + c\n", 8)), [(8, 9), (4, 9), (4, 13), (0, 13)]);
+        // `x = a .. b .. c` groups from the right: `b`, `b .. c`, the run.
+        assert_eq!(
+            columns(&ranges_at("x = a .. b .. c\n", 9)),
+            [(9, 10), (9, 15), (4, 15), (0, 15)]
+        );
+    }
+
+    #[test]
+    fn a_run_of_suffixes_steps_out_through_each_head() {
+        // `x = a.b:c(d).e`, at `a`: `a`, `a.b`, `a.b:c(d)`, the chain.
+        assert_eq!(
+            columns(&ranges_at("x = a.b:c(d).e\n", 4)),
+            [(4, 5), (4, 7), (4, 12), (4, 14), (0, 14)]
+        );
     }
 
     #[test]

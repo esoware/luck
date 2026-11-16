@@ -1,11 +1,9 @@
-use luck_ast::FunctionCall;
-
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::signed_number_value;
 use crate::roblox::global_new_call;
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxManualFromScaleOrFromOffset;
@@ -22,13 +20,8 @@ impl NodeRule for RobloxManualFromScaleOrFromOffset {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallExpr])
     }
-    fn on_call(
-        &self,
-        call: &FunctionCall,
-        position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let CallSite { call, position, .. } = *site;
         if position == CallPosition::Statement {
             return;
         }
@@ -62,12 +55,12 @@ impl NodeRule for RobloxManualFromScaleOrFromOffset {
         findings.push(
             Finding::new(
                 format!("this `UDim2.new` can be written as `UDim2.{constructor}`"),
-                call.span,
+                call.span(),
             )
             .with_help(format!("use `{replacement}`"))
             .with_fix(Fix {
                 description: format!("replace with `UDim2.{constructor}`"),
-                edits: vec![TextEdit { span: call.span, replacement }],
+                edits: vec![TextEdit { span: call.span(), replacement }],
             }),
         );
     }

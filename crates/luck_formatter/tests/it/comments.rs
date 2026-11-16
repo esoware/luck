@@ -1,44 +1,434 @@
+use core::fmt::Write as _;
 use core::ops::Range;
 
 use luck_formatter::{CollapseSimpleStatement, FormatOptions, LineEndings};
 use luck_token::LuaVersion;
 
-use crate::common::{assert_format, assert_format_with, format_once};
+use crate::common::{assert_format, assert_format_range, assert_format_with};
+
+/// Each source, its layout at width 1, and the one widths 60, 80, and 120
+/// share.
+const INTERIOR_COMMENT_CASES: [(&str, &str, &str); 24] = [
+    (
+        "if (first --[[ condition ]] and second) then run() end",
+        "if (first --[[ condition ]] and second) then run() end\n",
+        "if (first --[[ condition ]] and second) then run() end\n",
+    ),
+    (
+        "if first then run() elseif second --[[ branch ]] then stop() else finish() end",
+        "\
+if
+\tfirst
+then
+\trun()
+elseif
+\tsecond --[[ branch ]]
+then
+\tstop()
+else
+\tfinish()
+end
+",
+        "\
+if first then
+\trun()
+elseif second --[[ branch ]] then
+\tstop()
+else
+\tfinish()
+end
+",
+    ),
+    (
+        "while first --[[ loop ]] do run() end",
+        "\
+while
+\tfirst --[[ loop ]]
+do
+\trun()
+end
+",
+        "\
+while first --[[ loop ]] do
+\trun()
+end
+",
+    ),
+    (
+        "repeat run() until first --[[ condition ]] and second",
+        "repeat run() until first --[[ condition ]] and second\n",
+        "repeat run() until first --[[ condition ]] and second\n",
+    ),
+    (
+        "local function call() if first --[[ nested ]] then run() end end",
+        "\
+local function call()
+\tif
+\t\tfirst --[[ nested ]]
+\tthen
+\t\trun()
+\tend
+end
+",
+        "\
+local function call()
+\tif first --[[ nested ]] then
+\t\trun()
+\tend
+end
+",
+    ),
+    (
+        "local values = {first, --[[ item ]] second}",
+        "\
+local values = {
+\tfirst, --[[ item ]]
+\tsecond,
+}
+",
+        "\
+local values = {
+\tfirst, --[[ item ]]
+\tsecond,
+}
+",
+    ),
+    (
+        "call(first, --[[ argument ]] function() run() end)",
+        "\
+call(
+\tfirst, --[[ argument ]]
+\tfunction()
+\t\trun()
+\tend
+)
+",
+        "\
+call(
+\tfirst, --[[ argument ]]
+\tfunction()
+\t\trun()
+\tend
+)
+",
+    ),
+    (
+        "local function call(first, --[[ parameter ]] second) return first end",
+        "local function call(first, --[[ parameter ]] second) return first end\n",
+        "local function call(first, --[[ parameter ]] second) return first end\n",
+    ),
+    (
+        "\
+if first then run()
+-- tail inside body
+end",
+        "\
+if
+\tfirst
+then
+\trun()
+\t-- tail inside body
+end
+",
+        "\
+if first then
+\trun()
+\t-- tail inside body
+end
+",
+    ),
+    (
+        "\
+each(function(source) ---@async
+ if source then
+ ---@type string
+ local text = source[1]
+ use(text)
+ end
+end)",
+        "\
+each(function(
+\tsource
+)
+\t---@async
+\tif
+\t\tsource
+\tthen
+\t\t---@type string
+\t\tlocal text = source[1]
+\t\tuse(
+\t\t\ttext
+\t\t)
+\tend
+end)
+",
+        "\
+each(function(source)
+\t---@async
+\tif source then
+\t\t---@type string
+\t\tlocal text = source[1]
+\t\tuse(text)
+\tend
+end)
+",
+    ),
+    (
+        "\
+do
+local t = {
+              a = 1, -- x
+              b = 2,
+}
+end",
+        "\
+do
+\tlocal t = {
+\t\ta = 1, -- x
+\t\tb = 2,
+\t}
+end
+",
+        "\
+do
+\tlocal t = {
+\t\ta = 1, -- x
+\t\tb = 2,
+\t}
+end
+",
+    ),
+    (
+        "\
+do
+local t = {
+              a = (1 --[[why]]),
+}
+end",
+        "\
+do
+\tlocal t = {
+\t              a = (1 --[[why]]),
+\t}
+end
+",
+        "\
+do
+\tlocal t = {
+\t              a = (1 --[[why]]),
+\t}
+end
+",
+    ),
+    (
+        "\
+local x = 1; -- stalled
+-- luck: format off
+local  y  =  { --[[inner]] 2 }
+-- luck: format on
+local z = 3",
+        "\
+local x = 1 -- stalled
+-- luck: format off
+local  y  =  { --[[inner]] 2 }
+-- luck: format on
+local z = 3
+",
+        "\
+local x = 1 -- stalled
+-- luck: format off
+local  y  =  { --[[inner]] 2 }
+-- luck: format on
+local z = 3
+",
+    ),
+    (
+        "\
+-- comment
+;(function()
+\tBoo = 42
+end)()",
+        "\
+-- comment
+(function()
+\tBoo = 42
+end)()
+",
+        "\
+-- comment
+(function()
+\tBoo = 42
+end)()
+",
+    ),
+    (
+        "\
+-- on the separator
+;
+-- leading
+local y = 2",
+        "\
+-- on the separator
+-- leading
+local y = 2
+",
+        "\
+-- on the separator
+-- leading
+local y = 2
+",
+    ),
+    (
+        "\
+if first --[[ header ]] then
+-- luck: format off
+local  y  =  { --[[inner]] 2 }
+-- luck: format on
+end",
+        "\
+if
+\tfirst --[[ header ]]
+then
+-- luck: format off
+local  y  =  { --[[inner]] 2 }
+-- luck: format on
+end
+",
+        "\
+if first --[[ header ]] then
+-- luck: format off
+local  y  =  { --[[inner]] 2 }
+-- luck: format on
+end
+",
+    ),
+    (
+        "\
+if ready --[[ note ]] then
+\tlocal t = { a = 1, -- x
+\t\tb = 2 }
+end",
+        "\
+if
+\tready --[[ note ]]
+then
+\tlocal t = {
+\t\ta = 1, -- x
+\t\tb = 2,
+\t}
+end
+",
+        "\
+if ready --[[ note ]] then
+\tlocal t = {
+\t\ta = 1, -- x
+\t\tb = 2,
+\t}
+end
+",
+    ),
+    (
+        "\
+local t = --[[ why ]] { a = 1, -- x
+\tb = 2 }",
+        "\
+local t = --[[ why ]] { a = 1, -- x
+\tb = 2 }
+",
+        "\
+local t = --[[ why ]] { a = 1, -- x
+\tb = 2 }
+",
+    ),
+    (
+        "\
+render --[[ why ]] (a, -- x
+\tb)",
+        "\
+render --[[ why ]] (a, -- x
+\tb)
+",
+        "\
+render --[[ why ]] (a, -- x
+\tb)
+",
+    ),
+    (
+        "\
+do
+\tlocal t = { [[
+line1
+line2]], (1 --[[why]]) }
+end",
+        "\
+do
+\tlocal t = { [[
+line1
+line2]], (1 --[[why]]) }
+end
+",
+        "\
+do
+\tlocal t = { [[
+line1
+line2]], (1 --[[why]]) }
+end
+",
+    ),
+    (
+        "function f(a --[[ param ]]) end",
+        "function f(a --[[ param ]]) end\n",
+        "function f(a --[[ param ]]) end\n",
+    ),
+    (
+        "for i = 1, 10 --[[ limit ]] do run() end",
+        "\
+for i = 1, 10 --[[ limit ]] do
+\trun()
+end
+",
+        "\
+for i = 1, 10 --[[ limit ]] do
+\trun()
+end
+",
+    ),
+    (
+        "for k in pairs(t) --[[ iterator ]] do run() end",
+        "\
+for k in pairs(
+\tt
+) --[[ iterator ]] do
+\trun()
+end
+",
+        "\
+for k in pairs(t) --[[ iterator ]] do
+\trun()
+end
+",
+    ),
+    (
+        "repeat run() until first --[[ until ]]",
+        "\
+repeat
+\trun()
+until first --[[ until ]]
+",
+        "\
+repeat
+\trun()
+until first --[[ until ]]
+",
+    ),
+];
 
 #[test]
 fn interior_comments_never_cross_stmt_boundaries() {
-    let sources = [
-        "if (first --[[ condition ]] and second) then run() end",
-        "if first then run() elseif second --[[ branch ]] then stop() else finish() end",
-        "while first --[[ loop ]] do run() end",
-        "repeat run() until first --[[ condition ]] and second",
-        "local function call() if first --[[ nested ]] then run() end end",
-        "local values = {first, --[[ item ]] second}",
-        "call(first, --[[ argument ]] function() run() end)",
-        "local function call(first, --[[ parameter ]] second) return first end",
-        "if first then run()\n-- tail inside body\nend",
-        "each(function(source) ---@async\n if source then\n ---@type string\n local text = source[1]\n use(text)\n end\nend)",
-        "do\nlocal t = {\n              a = 1, -- x\n              b = 2,\n}\nend",
-        "do\nlocal t = {\n              a = (1 --[[why]]),\n}\nend",
-        "local x = 1; -- stalled\n-- luck: format off\nlocal  y  =  { --[[inner]] 2 }\n-- luck: format on\nlocal z = 3",
-        "-- comment\n;(function()\n\tBoo = 42\nend)()",
-        "-- on the separator\n;\n-- leading\nlocal y = 2",
-        "if first --[[ header ]] then\n-- luck: format off\nlocal  y  =  { --[[inner]] 2 }\n-- luck: format on\nend",
-        "if ready --[[ note ]] then\n\tlocal t = { a = 1, -- x\n\t\tb = 2 }\nend",
-        "local t = --[[ why ]] { a = 1, -- x\n\tb = 2 }",
-        "render --[[ why ]] (a, -- x\n\tb)",
-        "do\n\tlocal t = { [[\nline1\nline2]], (1 --[[why]]) }\nend",
-        "function f(a --[[ param ]]) end",
-        "for i = 1, 10 --[[ limit ]] do run() end",
-        "for k in pairs(t) --[[ iterator ]] do run() end",
-        "repeat run() until first --[[ until ]]",
-    ];
-    for source in sources {
-        for width in [1, 60, 80, 120] {
-            let options = FormatOptions { line_width: width, ..FormatOptions::default() };
-            let formatted = luck_formatter::format_and_verify(source, LuaVersion::Lua54, &options)
-                .unwrap_or_else(|(_, diff)| panic!("{source}: {diff:?}"));
-            assert_format_with(source, &formatted.output, LuaVersion::Lua54, &options);
+    for (source, narrowest, wider) in INTERIOR_COMMENT_CASES {
+        for (line_width, expected) in [(1, narrowest), (60, wider), (80, wider), (120, wider)] {
+            let options = FormatOptions { line_width, ..FormatOptions::default() };
+            assert_format_with(source, expected, LuaVersion::Lua54, &options);
         }
     }
 }
@@ -46,8 +436,14 @@ fn interior_comments_never_cross_stmt_boundaries() {
 #[test]
 fn semicolon_before_a_trailing_comment_keeps_it_attached() {
     assert_format(
-        "local x = 1; -- keep me\nlocal y = 2\n",
-        "local x = 1 -- keep me\nlocal y = 2\n",
+        "\
+local x = 1; -- keep me
+local y = 2
+",
+        "\
+local x = 1 -- keep me
+local y = 2
+",
     );
     assert_format("return 1; -- keep me\n", "return 1 -- keep me\n");
 }
@@ -55,8 +451,18 @@ fn semicolon_before_a_trailing_comment_keeps_it_attached() {
 #[test]
 fn comment_on_a_dropped_semicolon_stays_before_the_stmt() {
     assert_format(
-        "-- comment\n;(function()\n\tBoo = 42\nend)()\n",
-        "-- comment\n(function()\n\tBoo = 42\nend)()\n",
+        "\
+-- comment
+;(function()
+\tBoo = 42
+end)()
+",
+        "\
+-- comment
+(function()
+\tBoo = 42
+end)()
+",
     );
 }
 
@@ -65,24 +471,68 @@ fn table_claims_its_own_comments() {
     // Per-field comments keep their lines and the table formats normally -
     // no verbatim fallback, so the ragged `=` spacing is fixed up.
     assert_format(
-        "local config = {\n      name=\"x\",   -- the name\n   value=1,\n}\n",
-        "local config = {\n\tname = \"x\", -- the name\n\tvalue = 1,\n}\n",
+        "\
+local config = {
+      name=\"x\",   -- the name
+   value=1,
+}
+",
+        "\
+local config = {
+\tname = \"x\", -- the name
+\tvalue = 1,
+}
+",
     );
     assert_format(
-        "local t = {\n\t-- leading\n\ta = 1,\n\t-- before the brace\n}\n",
-        "local t = {\n\t-- leading\n\ta = 1,\n\t-- before the brace\n}\n",
+        "\
+local t = {
+\t-- leading
+\ta = 1,
+\t-- before the brace
+}
+",
+        "\
+local t = {
+\t-- leading
+\ta = 1,
+\t-- before the brace
+}
+",
     );
     // A nested table claims its own comment; the hard breaks it needs expand
     // the outer table too, which still uses its ordinary layout.
     assert_format(
-        "local t = { a = {x=1, -- inner\n}, b = 2 }\n",
-        "local t = {\n\ta = {\n\t\tx = 1, -- inner\n\t},\n\tb = 2,\n}\n",
+        "\
+local t = { a = {x=1, -- inner
+}, b = 2 }
+",
+        "\
+local t = {
+\ta = {
+\t\tx = 1, -- inner
+\t},
+\tb = 2,
+}
+",
     );
 }
 
 #[test]
 fn call_args_claim_their_own_comments() {
-    assert_format("render(a, b, -- why\n\tc)\n", "render(\n\ta,\n\tb, -- why\n\tc\n)\n");
+    assert_format(
+        "\
+render(a, b, -- why
+\tc)
+",
+        "\
+render(
+\ta,
+\tb, -- why
+\tc
+)
+",
+    );
 }
 
 #[test]
@@ -90,27 +540,80 @@ fn header_comment_keeps_its_place_and_its_stmt_formatted() {
     // The gap between a condition and its `then`/`do` belongs to no emitter.
     // Printing the comment where it was written keeps the body formatted;
     // stalling it would take the whole statement down the verbatim fallback.
-    assert_format("if a --[[c]] then run() end\n", "if a --[[c]] then\n\trun()\nend\n");
     assert_format(
-        "if ready --[[ note ]] then\n\tlocal t = { a = 1, -- x\n\t\tb = 2 }\nend\n",
-        "if ready --[[ note ]] then\n\tlocal t = {\n\t\ta = 1, -- x\n\t\tb = 2,\n\t}\nend\n",
+        "if a --[[c]] then run() end\n",
+        "\
+if a --[[c]] then
+\trun()
+end
+",
+    );
+    assert_format(
+        "\
+if ready --[[ note ]] then
+\tlocal t = { a = 1, -- x
+\t\tb = 2 }
+end
+",
+        "\
+if ready --[[ note ]] then
+\tlocal t = {
+\t\ta = 1, -- x
+\t\tb = 2,
+\t}
+end
+",
     );
     assert_format(
         "if a then x() elseif b --[[c]] then y() end\n",
-        "if a then\n\tx()\nelseif b --[[c]] then\n\ty()\nend\n",
+        "\
+if a then
+\tx()
+elseif b --[[c]] then
+\ty()
+end
+",
     );
-    assert_format("while a --[[c]] do run() end\n", "while a --[[c]] do\n\trun()\nend\n");
+    assert_format(
+        "while a --[[c]] do run() end\n",
+        "\
+while a --[[c]] do
+\trun()
+end
+",
+    );
     assert_format(
         "for i = 1, 10 --[[c]] do run() end\n",
-        "for i = 1, 10 --[[c]] do\n\trun()\nend\n",
+        "\
+for i = 1, 10 --[[c]] do
+\trun()
+end
+",
     );
     assert_format(
         "for k in pairs(t) --[[c]] do run() end\n",
-        "for k in pairs(t) --[[c]] do\n\trun()\nend\n",
+        "\
+for k in pairs(t) --[[c]] do
+\trun()
+end
+",
     );
     // A line comment would swallow the keyword that follows it, so the
     // statement still falls back to verbatim.
-    assert_format("if input -- why\nthen\n\trun()\nend\n", "if input -- why\nthen\n\trun()\nend\n");
+    assert_format(
+        "\
+if input -- why
+then
+\trun()
+end
+",
+        "\
+if input -- why
+then
+\trun()
+end
+",
+    );
 }
 
 #[test]
@@ -119,10 +622,25 @@ fn a_list_claims_only_the_comments_written_inside_it() {
     // that do belong to the list would carry it across the delimiter, so the
     // statement goes verbatim instead.
     assert_format(
-        "local t = --[[ why ]] { a = 1, -- x\n\tb = 2 }\n",
-        "local t = --[[ why ]] { a = 1, -- x\n\tb = 2 }\n",
+        "\
+local t = --[[ why ]] { a = 1, -- x
+\tb = 2 }
+",
+        "\
+local t = --[[ why ]] { a = 1, -- x
+\tb = 2 }
+",
     );
-    assert_format("render --[[ why ]] (a, -- x\n\tb)\n", "render --[[ why ]] (a, -- x\n\tb)\n");
+    assert_format(
+        "\
+render --[[ why ]] (a, -- x
+\tb)
+",
+        "\
+render --[[ why ]] (a, -- x
+\tb)
+",
+    );
 }
 
 #[test]
@@ -132,7 +650,14 @@ fn an_empty_body_claims_only_the_comments_it_can_reach() {
     assert_format("function f(a --[[c]]) end\n", "function f(a --[[c]]) end\n");
     // Nothing but whitespace separates this one from the body, so it lands
     // inside, indented.
-    assert_format("function f() --[[c]] end\n", "function f()\n\t--[[c]]\nend\n");
+    assert_format(
+        "function f() --[[c]] end\n",
+        "\
+function f()
+\t--[[c]]
+end
+",
+    );
 }
 
 #[test]
@@ -140,8 +665,20 @@ fn verbatim_stmt_keeps_long_string_contents() {
     // The newlines inside `[[...]]` are the string's own bytes: re-anchoring
     // the lines around them would indent the value.
     assert_format(
-        "do\n\tlocal t = { [[\nline1\nline2]], (1 --[[why]]) }\nend\n",
-        "do\n\tlocal t = { [[\nline1\nline2]], (1 --[[why]]) }\nend\n",
+        "\
+do
+\tlocal t = { [[
+line1
+line2]], (1 --[[why]]) }
+end
+",
+        "\
+do
+\tlocal t = { [[
+line1
+line2]], (1 --[[why]]) }
+end
+",
     );
 }
 
@@ -151,22 +688,58 @@ fn verbatim_stmt_is_reindented_to_its_block() {
     // whole statement verbatim; its continuation lines still move to the
     // depth the `do` block dictates.
     assert_format(
-        "do\nlocal t = {\n              a = (1 --[[why]]),\n}\nend\n",
-        "do\n\tlocal t = {\n\t              a = (1 --[[why]]),\n\t}\nend\n",
+        "\
+do
+local t = {
+              a = (1 --[[why]]),
+}
+end
+",
+        "\
+do
+\tlocal t = {
+\t              a = (1 --[[why]]),
+\t}
+end
+",
     );
 }
 
 #[test]
 fn stalled_comment_does_not_duplicate_a_format_off_region() {
     assert_format(
-        "local x = 1; -- stalled\n-- luck: format off\nlocal  y  =  { --[[inner]] 2 }\n-- luck: format on\nlocal z = 3\n",
-        "local x = 1 -- stalled\n-- luck: format off\nlocal  y  =  { --[[inner]] 2 }\n-- luck: format on\nlocal z = 3\n",
+        "\
+local x = 1; -- stalled
+-- luck: format off
+local  y  =  { --[[inner]] 2 }
+-- luck: format on
+local z = 3
+",
+        "\
+local x = 1 -- stalled
+-- luck: format off
+local  y  =  { --[[inner]] 2 }
+-- luck: format on
+local z = 3
+",
     );
     // The region is at statement level inside the `if`, so it goes out as
     // written and the header still formats.
     assert_format(
-        "if first --[[ header ]] then\n-- luck: format off\nlocal  y  =  { --[[inner]] 2 }\n-- luck: format on\nend\n",
-        "if first --[[ header ]] then\n-- luck: format off\nlocal  y  =  { --[[inner]] 2 }\n-- luck: format on\nend\n",
+        "\
+if first --[[ header ]] then
+-- luck: format off
+local  y  =  { --[[inner]] 2 }
+-- luck: format on
+end
+",
+        "\
+if first --[[ header ]] then
+-- luck: format off
+local  y  =  { --[[inner]] 2 }
+-- luck: format on
+end
+",
     );
 }
 
@@ -175,14 +748,32 @@ fn stalled_comment_stays_above_the_stmts_own_leading_comment() {
     // The `;` carries the first comment; the second leads `local y`. The run
     // is movable across the separator, so both stay above the statement.
     assert_format(
-        "-- on the separator\n;\n-- leading\nlocal y = 2\n",
-        "-- on the separator\n-- leading\nlocal y = 2\n",
+        "\
+-- on the separator
+;
+-- leading
+local y = 2
+",
+        "\
+-- on the separator
+-- leading
+local y = 2
+",
     );
 }
 
 #[test]
 fn leading_comment() {
-    assert_format("-- comment\nlocal x = 1\n", "-- comment\nlocal x = 1\n");
+    assert_format(
+        "\
+-- comment
+local x = 1
+",
+        "\
+-- comment
+local x = 1
+",
+    );
 }
 
 #[test]
@@ -195,25 +786,61 @@ fn comment_after_only_empty_stmts() {
     // A block holding only dropped `;` statements has nothing to print, so
     // the comment flush must not open a line before it.
     assert_format(";-- a\n", "-- a\n");
-    assert_format(";\n-- a\n-- b\n", "-- a\n-- b\n");
+    assert_format(
+        "\
+;
+-- a
+-- b
+",
+        "\
+-- a
+-- b
+",
+    );
 }
 
 #[test]
 fn comment_between_stmts() {
     assert_format(
-        "local x = 1\n-- between\nlocal y = 2\n",
-        "local x = 1\n-- between\nlocal y = 2\n",
+        "\
+local x = 1
+-- between
+local y = 2
+",
+        "\
+local x = 1
+-- between
+local y = 2
+",
     );
 }
 
 #[test]
 fn block_comment_verbatim() {
-    assert_format("--[[ block ]]\nlocal x = 1\n", "--[[ block ]]\nlocal x = 1\n");
+    assert_format(
+        "\
+--[[ block ]]
+local x = 1
+",
+        "\
+--[[ block ]]
+local x = 1
+",
+    );
 }
 
 #[test]
 fn shebang_preserved() {
-    assert_format("#!/usr/bin/env lua\nlocal x = 1\n", "#!/usr/bin/env lua\nlocal x = 1\n");
+    assert_format(
+        "\
+#!/usr/bin/env lua
+local x = 1
+",
+        "\
+#!/usr/bin/env lua
+local x = 1
+",
+    );
 }
 
 #[test]
@@ -229,12 +856,36 @@ fn shebang_drops_trailing_carriage_returns() {
 
 #[test]
 fn blank_line_preserved() {
-    assert_format("local x = 1\n\nlocal y = 2\n", "local x = 1\n\nlocal y = 2\n");
+    assert_format(
+        "\
+local x = 1
+
+local y = 2
+",
+        "\
+local x = 1
+
+local y = 2
+",
+    );
 }
 
 #[test]
 fn multiple_blank_lines_collapsed() {
-    assert_format("local x = 1\n\n\n\nlocal y = 2\n", "local x = 1\n\nlocal y = 2\n");
+    assert_format(
+        "\
+local x = 1
+
+
+
+local y = 2
+",
+        "\
+local x = 1
+
+local y = 2
+",
+    );
 }
 
 #[test]
@@ -249,70 +900,99 @@ fn comment_at_eof_gains_a_trailing_newline() {
 
 #[test]
 fn comment_inside_empty_function() {
-    assert_format("function foo()\n-- nothing\nend\n", "function foo()\n\t-- nothing\nend\n");
+    assert_format(
+        "\
+function foo()
+-- nothing
+end
+",
+        "\
+function foo()
+\t-- nothing
+end
+",
+    );
 }
 
 #[test]
 fn format_off_region() {
     assert_format(
-        "local   x  =  1\n-- luck: format off\nlocal   y  =  2\n-- luck: format on\nlocal   z  =  3\n",
-        "local x = 1\n-- luck: format off\nlocal   y  =  2\n-- luck: format on\nlocal z = 3\n",
+        "\
+local   x  =  1
+-- luck: format off
+local   y  =  2
+-- luck: format on
+local   z  =  3
+",
+        "\
+local x = 1
+-- luck: format off
+local   y  =  2
+-- luck: format on
+local z = 3
+",
     );
 }
 
 #[test]
 fn format_off_unclosed_extends_to_eof() {
-    let input = "local   x  =  1\n-- luck: format off\nlocal   y  =  2\nlocal   z  =  3\n";
-    let result = luck_formatter::format(input, LuaVersion::Lua54, &FormatOptions::default());
-    assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
-    assert!(result.output.contains("local x = 1"), "x should be formatted: {}", result.output);
-    assert!(result.output.contains("local   y  =  2"), "y should be preserved: {}", result.output);
-    assert!(result.output.contains("local   z  =  3"), "z should be preserved: {}", result.output);
+    assert_format(
+        "\
+local   x  =  1
+-- luck: format off
+local   y  =  2
+local   z  =  3
+",
+        "\
+local x = 1
+-- luck: format off
+local   y  =  2
+local   z  =  3
+",
+    );
 }
 
 #[test]
 fn format_ignore_single_stmt() {
     assert_format(
-        "-- luck: ignore\nlocal   x  =  1\nlocal   y  =  2\n",
-        "-- luck: ignore\nlocal   x  =  1\nlocal y = 2\n",
+        "\
+-- luck: ignore
+local   x  =  1
+local   y  =  2
+",
+        "\
+-- luck: ignore
+local   x  =  1
+local y = 2
+",
     );
 }
 
 #[test]
 fn windows_line_endings() {
-    let options = FormatOptions { line_endings: LineEndings::Windows, ..FormatOptions::default() };
-    let result = luck_formatter::format("if x then\ny=1\nend\n", LuaVersion::Lua54, &options);
-    assert_eq!(result.errors, Vec::<luck_token::SourceError>::new());
-    assert_eq!(result.output, "if x then\r\n\ty = 1\r\nend\r\n");
+    assert_format_with(
+        "if x then\ny=1\nend\n",
+        "if x then\r\n\ty = 1\r\nend\r\n",
+        LuaVersion::Lua54,
+        &windows_options(),
+    );
 }
 
 #[test]
 fn format_range_only_formats_selection() {
-    let input = "local   x  =  1\nlocal   y  =  2\nlocal   z  =  3\n";
-    // The range covers only the second statement.
-    let second_start = input.find("local   y").unwrap();
-    let second_end = input.find("\nlocal   z").unwrap();
-    let result = luck_formatter::format_range(
+    let input = "\
+local   x  =  1
+local   y  =  2
+local   z  =  3
+";
+    assert_format_range(
         input,
-        LuaVersion::Lua54,
-        &FormatOptions::default(),
-        second_start..second_end,
-    );
-    assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
-    assert!(
-        result.output.contains("local   x  =  1"),
-        "x should be verbatim (outside range): {}",
-        result.output
-    );
-    assert!(
-        result.output.contains("local y = 2"),
-        "y should be formatted (inside range): {}",
-        result.output
-    );
-    assert!(
-        result.output.contains("local   z  =  3"),
-        "z should be verbatim (outside range): {}",
-        result.output
+        range_of(input, "local   y  =  2"),
+        "\
+local   x  =  1
+local y = 2
+local   z  =  3
+",
     );
 }
 
@@ -323,7 +1003,12 @@ fn fill_mode_packs_positional_table_entries() {
     // The tab counts for four columns, so the wrap lands after `5,`.
     assert_format_with(
         "local t = {1, 2, 3, 4, 5, 6, 7, 8}\n",
-        "local t = {\n\t1, 2, 3, 4, 5,\n\t6, 7, 8,\n}\n",
+        "\
+local t = {
+\t1, 2, 3, 4, 5,
+\t6, 7, 8,
+}
+",
         LuaVersion::Lua54,
         &options,
     );
@@ -331,13 +1016,49 @@ fn fill_mode_packs_positional_table_entries() {
 
 #[test]
 fn comment_after_a_multi_line_block_comment_formats_stably() {
-    assert_format("local x --[[\n]] -- c\nlocal y\n", "local x --[[\n]]\n-- c\nlocal y\n");
+    assert_format(
+        "\
+local x --[[
+]] -- c
+local y
+",
+        "\
+local x --[[
+]]
+-- c
+local y
+",
+    );
 }
 
 #[test]
 fn line_break_inside_a_trailing_block_comment_is_not_a_blank_line() {
-    assert_format("local x --[[\n]]\nlocal y\n", "local x --[[\n]]\nlocal y\n");
-    assert_format("local x --[[\n]]\n\nlocal y\n", "local x --[[\n]]\n\nlocal y\n");
+    assert_format(
+        "\
+local x --[[
+]]
+local y
+",
+        "\
+local x --[[
+]]
+local y
+",
+    );
+    assert_format(
+        "\
+local x --[[
+]]
+
+local y
+",
+        "\
+local x --[[
+]]
+
+local y
+",
+    );
 }
 
 fn windows_options() -> FormatOptions {
@@ -395,18 +1116,97 @@ fn conditional_collapse_options() -> FormatOptions {
 fn collapse_leaves_a_body_with_a_comment_expanded() {
     let options = conditional_collapse_options();
     for (input, expected) in [
-        ("if a then\n  i = 7 -- c\nend\n", "if a then\n\ti = 7 -- c\nend\n"),
-        ("if a then\n  return 1 -- c\nend\n", "if a then\n\treturn 1 -- c\nend\n"),
-        ("if a then\n  -- c\n  i = 7\nend\n", "if a then\n\t-- c\n\ti = 7\nend\n"),
-        ("if a then i = 7 --[[c]] end\n", "if a then\n\ti = 7 --[[c]]\nend\n"),
-        ("if a then --[[c]] i = 7 end\n", "if a then\n\t--[[c]]\n\ti = 7\nend\n"),
         (
-            "function s()\nif a then\n  repeat -- c\n  until b\nend\nend\n",
-            "function s()\n\tif a then\n\t\trepeat\n\t\t\t-- c\n\t\tuntil b\n\tend\nend\n",
+            "\
+if a then
+  i = 7 -- c
+end
+",
+            "\
+if a then
+\ti = 7 -- c
+end
+",
         ),
         (
-            "function s()\nif a then\n  -- luck: ignore\n  x   =   1\nend\nend\n",
-            "function s()\n\tif a then\n\t\t-- luck: ignore\n\t\tx   =   1\n\tend\nend\n",
+            "\
+if a then
+  return 1 -- c
+end
+",
+            "\
+if a then
+\treturn 1 -- c
+end
+",
+        ),
+        (
+            "\
+if a then
+  -- c
+  i = 7
+end
+",
+            "\
+if a then
+\t-- c
+\ti = 7
+end
+",
+        ),
+        (
+            "if a then i = 7 --[[c]] end\n",
+            "\
+if a then
+\ti = 7 --[[c]]
+end
+",
+        ),
+        (
+            "if a then --[[c]] i = 7 end\n",
+            "\
+if a then
+\t--[[c]]
+\ti = 7
+end
+",
+        ),
+        (
+            "\
+function s()
+if a then
+  repeat -- c
+  until b
+end
+end
+",
+            "\
+function s()
+\tif a then
+\t\trepeat
+\t\t\t-- c
+\t\tuntil b
+\tend
+end
+",
+        ),
+        (
+            "\
+function s()
+if a then
+  -- luck: ignore
+  x   =   1
+end
+end
+",
+            "\
+function s()
+\tif a then
+\t\t-- luck: ignore
+\t\tx   =   1
+\tend
+end
+",
         ),
     ] {
         assert_format_with(input, expected, LuaVersion::Lua54, &options);
@@ -417,11 +1217,36 @@ fn collapse_leaves_a_body_with_a_comment_expanded() {
 fn collapse_keeps_comments_that_stay_in_place() {
     let options = conditional_collapse_options();
     for (input, expected) in [
-        ("if a then\n  i = 7\nend\n", "if a then i = 7 end\n"),
+        (
+            "\
+if a then
+  i = 7
+end
+",
+            "if a then i = 7 end\n",
+        ),
         ("if a then i = --[[c]] 7 end\n", "if a then i = --[[c]] 7 end\n"),
         ("if a --[[c]] then i = 7 end\n", "if a --[[c]] then i = 7 end\n"),
-        ("if a then\n  i = 7\nend -- c\n", "if a then i = 7 end -- c\n"),
-        ("-- c\nif a then\n  i = 7\nend\n", "-- c\nif a then i = 7 end\n"),
+        (
+            "\
+if a then
+  i = 7
+end -- c
+",
+            "if a then i = 7 end -- c\n",
+        ),
+        (
+            "\
+-- c
+if a then
+  i = 7
+end
+",
+            "\
+-- c
+if a then i = 7 end
+",
+        ),
     ] {
         assert_format_with(input, expected, LuaVersion::Lua54, &options);
     }
@@ -432,14 +1257,51 @@ fn directives_must_end_at_a_word_boundary() {
     for (input, expected) in [
         // `format on` must not close the region.
         (
-            "-- luck: format off\nlocal   x  =  1\n-- luck: format one-liner\nlocal   y  =  2\n",
-            "-- luck: format off\nlocal   x  =  1\n-- luck: format one-liner\nlocal   y  =  2\n",
+            "\
+-- luck: format off
+local   x  =  1
+-- luck: format one-liner
+local   y  =  2
+",
+            "\
+-- luck: format off
+local   x  =  1
+-- luck: format one-liner
+local   y  =  2
+",
         ),
         // `format off` must not open one.
-        ("-- luck: format offset\nlocal   x  =  1\n", "-- luck: format offset\nlocal x = 1\n"),
+        (
+            "\
+-- luck: format offset
+local   x  =  1
+",
+            "\
+-- luck: format offset
+local x = 1
+",
+        ),
         // `ignore` must not keep the next statement.
-        ("-- luck: ignored\nlocal   x  =  1\n", "-- luck: ignored\nlocal x = 1\n"),
-        ("-- luck: format ignored\nlocal   x  =  1\n", "-- luck: format ignored\nlocal x = 1\n"),
+        (
+            "\
+-- luck: ignored
+local   x  =  1
+",
+            "\
+-- luck: ignored
+local x = 1
+",
+        ),
+        (
+            "\
+-- luck: format ignored
+local   x  =  1
+",
+            "\
+-- luck: format ignored
+local x = 1
+",
+        ),
     ] {
         assert_format(input, expected);
     }
@@ -449,20 +1311,28 @@ fn directives_must_end_at_a_word_boundary() {
 fn directives_may_be_followed_by_other_words() {
     for (input, expected) in [
         (
-            "-- luck: format off because generated\nlocal   x  =  1\n",
-            "-- luck: format off because generated\nlocal   x  =  1\n",
+            "\
+-- luck: format off because generated
+local   x  =  1
+",
+            "\
+-- luck: format off because generated
+local   x  =  1
+",
         ),
         (
-            "-- luck: ignore this one\nlocal   x  =  1\n",
-            "-- luck: ignore this one\nlocal   x  =  1\n",
+            "\
+-- luck: ignore this one
+local   x  =  1
+",
+            "\
+-- luck: ignore this one
+local   x  =  1
+",
         ),
     ] {
         assert_format(input, expected);
     }
-}
-
-fn default_format(input: &str) -> String {
-    format_once(input, LuaVersion::Lua54, &FormatOptions::default())
 }
 
 fn range_of(input: &str, needle: &str) -> Range<usize> {
@@ -472,203 +1342,308 @@ fn range_of(input: &str, needle: &str) -> Range<usize> {
 
 #[test]
 fn comment_after_the_last_stmt_keeps_the_function_formatted() {
-    assert_eq!(
-        default_format("function f()\n  x   =   1\n  -- tail\nend\n"),
-        "function f()\n\tx = 1\n\t-- tail\nend\n",
-        "a comment after a block's last statement has a safe place in the block, so the function must still format"
+    // The comment has a safe place in the block, so the function needn't go
+    // verbatim.
+    assert_format(
+        "\
+function f()
+  x   =   1
+  -- tail
+end
+",
+        "\
+function f()
+\tx = 1
+\t-- tail
+end
+",
     );
 }
 
 #[test]
 fn comment_only_do_block_formats_like_an_empty_function_body() {
-    assert_eq!(
-        default_format("do\n      -- only\nend\n"),
-        "do\n\t-- only\nend\n",
-        "a comment alone in a `do` block must be indented like one alone in a function body"
+    assert_format(
+        "\
+do
+      -- only
+end
+",
+        "\
+do
+\t-- only
+end
+",
     );
 }
 
 #[test]
 fn comment_before_else_keeps_the_if_formatted() {
-    assert_eq!(
-        default_format("if a then\n  x   =   1\n  -- before else\nelse\n  y   =   2\nend\n"),
-        "if a then\n\tx = 1\n\t-- before else\nelse\n\ty = 2\nend\n",
-        "a comment closing a branch must not send the whole `if` to the verbatim fallback"
+    assert_format(
+        "\
+if a then
+  x   =   1
+  -- before else
+else
+  y   =   2
+end
+",
+        "\
+if a then
+\tx = 1
+\t-- before else
+else
+\ty = 2
+end
+",
     );
 }
 
 #[test]
 fn blank_line_after_a_leading_comment_is_preserved() {
-    assert_eq!(
-        default_format("-- license header\n\nlocal x = 1\n"),
-        "-- license header\n\nlocal x = 1\n",
-        "the blank line detaching a comment from the next statement must survive"
-    );
+    let input = "\
+-- license header
+
+local x = 1
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn blank_line_before_a_final_comment_is_preserved() {
-    assert_eq!(
-        default_format("local x = 1\n\n-- end of file\n"),
-        "local x = 1\n\n-- end of file\n",
-        "the blank line before a comment at end of file must survive"
-    );
+    let input = "\
+local x = 1
+
+-- end of file
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn second_trailing_comment_stays_on_its_stmt_line() {
-    assert_eq!(
-        default_format("x = 1 --[[a]] -- b\ny = 2\n"),
-        "x = 1 --[[a]] -- b\ny = 2\n",
-        "`-- b` trails `x = 1` and must not become a leading comment of `y = 2`"
-    );
+    let input = "\
+x = 1 --[[a]] -- b
+y = 2
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn format_off_keeps_trailing_comment_alignment() {
-    let input = "-- luck: format off\nx   = 1    -- one\nyyy = 22   -- two\n-- luck: format on\n";
-    assert_eq!(default_format(input), input, "a format-off region must keep its comment columns");
+    let input = "\
+-- luck: format off
+x   = 1    -- one
+yyy = 22   -- two
+-- luck: format on
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn format_off_keeps_blank_line_runs() {
-    let input = "-- luck: format off\nlocal a = 1\n\n\nlocal b = 2\n-- luck: format on\n";
-    assert_eq!(default_format(input), input, "a format-off region must keep its blank lines");
+    let input = "\
+-- luck: format off
+local a = 1
+
+
+local b = 2
+-- luck: format on
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn format_off_keeps_stmts_sharing_a_line() {
-    let input = "-- luck: format off\nlocal a = 1; local b = 2\n-- luck: format on\n";
-    assert_eq!(
-        default_format(input),
-        input,
-        "a format-off region must not drop `;` or split statements sharing a line"
-    );
+    let input = "\
+-- luck: format off
+local a = 1; local b = 2
+-- luck: format on
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn format_off_inside_a_table_keeps_the_region() {
-    let input = "local t = {\n\t-- luck: format off\n\t1, 0,\n\t0, 1,\n\t-- luck: format on\n}\n";
-    assert_eq!(default_format(input), input, "a format-off region inside a table must stay packed");
+    let input = "\
+local t = {
+\t-- luck: format off
+\t1, 0,
+\t0, 1,
+\t-- luck: format on
+}
+";
+    assert_format(input, input);
 }
 
 #[test]
 fn ignore_directive_survives_the_semicolon_guard() {
-    let first_pass = default_format("f();\n-- luck: ignore\n(g   )()\n");
-    assert_eq!(
-        default_format(&first_pass),
-        first_pass,
-        "`luck: ignore` must keep `(g   )()` as written after the formatter adds its `;` guard"
+    // The guard goes after the directive, which still keeps `(g   )()` as
+    // written.
+    assert_format(
+        "\
+f();
+-- luck: ignore
+(g   )()
+",
+        "\
+f()
+-- luck: ignore
+;(g   )()
+",
     );
 }
 
 #[test]
 fn collapse_stays_idempotent_with_a_comment_in_a_list() {
-    let options = conditional_collapse_options();
-    let first_pass = format_once("if a then b(1, --[[c]] 2) end\n", LuaVersion::Lua54, &options);
-    assert_eq!(
-        format_once(&first_pass, LuaVersion::Lua54, &options),
-        first_pass,
-        "an argument list that claims a comment breaks across lines, so the `if` must not collapse around it"
+    // An argument list that claims a comment breaks across lines, so the
+    // `if` can't collapse around it.
+    assert_format_with(
+        "if a then b(1, --[[c]] 2) end\n",
+        "\
+if a then
+\tb(
+\t\t1, --[[c]]
+\t\t2
+\t)
+end
+",
+        LuaVersion::Lua54,
+        &conditional_collapse_options(),
     );
 }
 
 #[test]
 fn collapse_leaves_a_multi_line_body_expanded() {
-    assert_eq!(
-        format_once(
-            "if a then\n  do x() end\nend\n",
-            LuaVersion::Lua54,
-            &conditional_collapse_options()
-        ),
-        "if a then\n\tdo\n\t\tx()\n\tend\nend\n",
-        "collapsing means onto one line, so a body that spans lines must stay expanded"
+    assert_format_with(
+        "\
+if a then
+  do x() end
+end
+",
+        "\
+if a then
+\tdo
+\t\tx()
+\tend
+end
+",
+        LuaVersion::Lua54,
+        &conditional_collapse_options(),
     );
 }
 
 #[test]
 fn collapse_leaves_a_too_long_if_expanded() {
     let options = FormatOptions { line_width: 30, ..conditional_collapse_options() };
-    assert_eq!(
-        format_once(
-            "if condition_name then call_function_name() end\n",
-            LuaVersion::Lua54,
-            &options
-        ),
-        "if condition_name then\n\tcall_function_name()\nend\n",
-        "a collapsed `if` wider than `line_width` must expand instead"
+    assert_format_with(
+        "if condition_name then call_function_name() end\n",
+        "\
+if condition_name then
+\tcall_function_name()
+end
+",
+        LuaVersion::Lua54,
+        &options,
     );
 }
 
 #[test]
 fn format_range_keeps_blank_line_runs_outside_the_selection() {
-    let input = "local a = 1\n\n\nlocal   b   =   2\n";
-    let result = luck_formatter::format_range(
+    let input = "\
+local a = 1
+
+
+local   b   =   2
+";
+    assert_format_range(
         input,
-        LuaVersion::Lua54,
-        &FormatOptions::default(),
         range_of(input, "local   b   =   2"),
-    );
-    assert_eq!(
-        result.output, "local a = 1\n\n\nlocal b = 2\n",
-        "text outside the selection, blank lines included, must be copied verbatim"
+        "\
+local a = 1
+
+
+local b = 2
+",
     );
 }
 
 #[test]
 fn format_range_keeps_indentation_outside_the_selection() {
-    let input = "function f()\n  local a=1\n  local   b=2\nend\n";
-    let result = luck_formatter::format_range(
+    let input = "\
+function f()
+  local a=1
+  local   b=2
+end
+";
+    assert_format_range(
         input,
-        LuaVersion::Lua54,
-        &FormatOptions::default(),
         range_of(input, "local   b=2"),
-    );
-    assert!(
-        result.output.contains("\n  local a=1\n"),
-        "an unselected sibling must keep its indentation: {:?}",
-        result.output
+        "\
+function f()
+  local a=1
+  local b = 2
+end
+",
     );
 }
 
 #[test]
 fn format_range_keeps_crlf_outside_the_selection() {
     let input = "local   a   =   1\r\nlocal   b   =   2\r\n";
-    let result = luck_formatter::format_range(
+    assert_format_range(
         input,
-        LuaVersion::Lua54,
-        &FormatOptions::default(),
         range_of(input, "local   a   =   1"),
-    );
-    assert!(
-        result.output.ends_with("\nlocal   b   =   2\r\n"),
-        "an unselected line must keep its CRLF: {:?}",
-        result.output
+        "local a = 1\r\nlocal   b   =   2\r\n",
     );
 }
 
 #[test]
 fn ignored_multi_line_stmt_keeps_its_lines_aligned() {
-    let output = default_format("do\n    -- luck: ignore\n    local   t = {\n    }\nend\n");
-    let indent_of = |needle: &str| {
-        output
-            .lines()
-            .find(|line| line.contains(needle))
-            .map(|line| line.strip_suffix(line.trim_start()).unwrap_or_default().to_owned())
-            .expect("the line is in the output")
-    };
-    assert_eq!(
-        indent_of("local   t"),
-        indent_of("}"),
-        "an ignored statement's lines must keep their relative layout: {output:?}"
+    assert_format(
+        "\
+do
+    -- luck: ignore
+    local   t = {
+    }
+end
+",
+        "\
+do
+\t-- luck: ignore
+\tlocal   t = {
+\t}
+end
+",
     );
 }
 
 #[test]
 fn unix_line_endings_normalize_a_block_comment() {
-    assert_eq!(
-        default_format("--[[a\r\nb]]\r\nlocal x\r\n"),
-        "--[[a\nb]]\nlocal x\n",
-        "`line_endings = unix` must not leave a CRLF inside a comment"
+    assert_format("--[[a\r\nb]]\r\nlocal x\r\n", "--[[a\nb]]\nlocal x\n");
+}
+
+#[test]
+fn a_long_commented_argument_list_formats_without_rescanning_its_comments() {
+    // Each argument asks whether a comment falls inside it. Answered by
+    // walking the pending comments from the first, this takes minutes.
+    let count = 450_000u32;
+    let arguments: Vec<String> =
+        (0..count).map(|index| format!("--[[c{index}]] {index}")).collect();
+    let last = count.saturating_sub(1);
+    let mut expected = String::from(
+        "\
+f(
+\t--[[c0]]
+",
     );
+    for index in 0..last {
+        writeln!(expected, "\t{index}, --[[c{}]]", index.saturating_add(1)).unwrap();
+    }
+    writeln!(
+        expected,
+        "\
+\t{last}
+)"
+    )
+    .unwrap();
+    assert_format(&format!("f({})\n", arguments.join(", ")), &expected);
 }

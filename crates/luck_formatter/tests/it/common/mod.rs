@@ -1,4 +1,6 @@
-use luck_formatter::{FormatOptions, format};
+use core::ops::Range;
+
+use luck_formatter::{FormatOptions, format, format_range};
 use luck_token::LuaVersion;
 
 /// `input` formatted, after checking that it parses, that the output formats
@@ -13,20 +15,8 @@ pub(crate) fn formatted_with(input: &str, version: LuaVersion, options: &FormatO
     result.output
 }
 
-/// `input` formatted once, after checking only that it parses, so a test can
-/// state its own expectation about the first pass.
-pub(crate) fn format_once(input: &str, version: LuaVersion, options: &FormatOptions) -> String {
-    let result = format(input, version, options);
-    assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
-    result.output
-}
-
-pub(crate) fn formatted(input: &str) -> String {
-    formatted_with(input, LuaVersion::Lua54, &FormatOptions::default())
-}
-
 pub(crate) fn assert_format(input: &str, expected: &str) {
-    assert_eq!(formatted(input), expected, "format mismatch");
+    assert_format_with(input, expected, LuaVersion::Lua54, &FormatOptions::default());
 }
 
 pub(crate) fn assert_format_with(
@@ -36,4 +26,20 @@ pub(crate) fn assert_format_with(
     options: &FormatOptions,
 ) {
     assert_eq!(formatted_with(input, version, options), expected, "format mismatch");
+}
+
+/// Nothing outside the selected statements changes, so the second pass finds
+/// them in the output at the same distance from each end of the text.
+pub(crate) fn assert_format_range(input: &str, range: Range<usize>, expected: &str) {
+    let version = LuaVersion::Lua54;
+    let options = FormatOptions::default();
+    let Range { start, end } = range;
+    let result = format_range(input, version, &options, start..end);
+    assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
+    assert_eq!(result.output, expected, "format mismatch");
+    let formatted_end = expected.len().saturating_sub(input.len().saturating_sub(end));
+    let second_pass = format_range(expected, version, &options, start..formatted_end);
+    assert_eq!(second_pass.output, expected, "not idempotent");
+    let reparsed = luck_parser::parse(expected, version);
+    assert!(reparsed.errors.is_empty(), "formatted output has parse errors: {:?}", reparsed.errors);
 }

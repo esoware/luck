@@ -1,7 +1,7 @@
 use std::env;
 use std::path::Path;
 
-use luck_core::normalize_path;
+use luck_resolver::normalize_path;
 
 /// An empty or relative root resolves against the working directory. If that's
 /// unavailable too, the input comes back unchanged and the build goes on, even

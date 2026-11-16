@@ -1,0 +1,29 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua54/diamond_deps/input/c.lua
+---
+-- line_width = 1
+local d = require(
+	"d"
+)
+
+local c = {}
+
+function c.value()
+	return d.base
+		+ 2
+end
+
+return c
+
+-- line_width = 40, 80, 100, 120
+local d = require("d")
+
+local c = {}
+
+function c.value()
+	return d.base + 2
+end
+
+return c

@@ -13,3 +13,4 @@ mod directives;
 mod fixes;
 mod idiomatic;
 mod rules;
+mod stack;

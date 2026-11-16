@@ -8,7 +8,7 @@ Rule-based linter for Lua and Luau with scope-aware analysis.
 
 ## Key features
 
-- **Four categories.** Correctness, Suspicious, Style, and Performance (`luck_core::Category`). Correctness rules run by default, each at its own severity, and the other three are opt-in. In `luck.json`, `categories` sets a category to `off`, `warn`, or `error`, which every rule in it then reports at, and `rules` sets one rule, which wins over its category.
+- **Four categories.** Correctness, Suspicious, Style, and Performance (`Category`). Correctness rules run by default, each at its own severity, and the other three are opt-in. In `luck.json`, `categories` sets a category to `off`, `warn`, or `error`, which every rule in it then reports at, and `rules` sets one rule, which wins over its category.
 - **Auto-fix.** Rules with a safe fix attach `TextEdit`s to their diagnostic, and `apply_fixes` applies them in a single pass, dropping a fix whole when it overlaps another.
 - **Suppression comments.** `-- luck: allow(rule_name)` suppresses the rule for the statement that follows, or for the statement it trails on the same line. `deny(...)` and `warn(...)` set the severity instead, `allow(...) start` and `allow(...) end` bound a region, `-- #luck: allow(...)` covers the whole file, and `*` matches every rule.
 - **Semantic-aware.** Unused/undefined variable, incorrect stdlib usage, and similar rules query `luck_semantic`'s `ScopeTree` and stdlib resolution instead of tracking scopes themselves.
@@ -33,7 +33,7 @@ Every rule implements the `Rule` trait through `impl_rule!`, which holds its ide
 
 Rules that need state across nodes (scope stacks, statement sequences, the scope tree's symbols) implement `WholeRule`, whose `fn check(&self, context: &LintContext<'_>) -> Vec<Finding>` sees the whole document at once. A rule that checks each block's statement list reads `context.blocks` instead of walking the tree, and any other walk goes through `Visitor`. The `LintContext` bundles the block, every block in pre-order, each function's block, the locals declared without a value, the flow facts about locals computed on first use, the semantic analysis, the source text, the comment array, and the resolved config.
 
-Rules whose logic is node-local implement `NodeRule` instead: per-node hooks (`on_stmt`, `on_expr`, `on_table`, which gets every table constructor including `f{...}` arguments, and `on_call`, which gets every call in either position and marks which) that push onto a `Vec<Finding>`, and a `NodeTypeSet` of the `NodeType`s they act on. The `bus` makes one pass over the node table and calls each node rule only for the node types it declared, so every node rule shares a single traversal, and a node rule whose types don't occur in a file is skipped. In debug builds the driver re-runs every node rule on every node and asserts the results match, which catches a `node_types` set that misses a type.
+Rules whose logic is node-local implement `NodeRule` instead: per-node hooks (`on_stmt`, `on_expr`, `on_table`, which gets every table constructor including `f{...}` arguments, `on_chain`, which gets every run of suffixes and marks whether it's a value or an assignment target, and `on_call`, which gets every call in either position as a `CallSite` that marks which and holds the stdlib entry it calls) that push onto a `Vec<Finding>`, and a `NodeTypeSet` of the `NodeType`s they act on. The `bus` makes one pass over the node table and calls each node rule only for the node types it declared, so every node rule shares a single traversal, and a node rule whose types don't occur in a file is skipped. It resolves each call's callee once for every rule, carrying the chain's resolution from one call to the next, so a chain's calls cost one pass over it. In debug builds the driver re-runs every node rule on every node and asserts the results match, which catches a `node_types` set that misses a type.
 
 A `Finding` holds only what differs per report: the message, span, optional help, and optional fix. The driver turns it into a public `LintDiagnostic` by adding the reporting rule's name and category and the severity the config resolves for it, so a rule can't report under another rule's name or set its own severity.
 
@@ -47,17 +47,19 @@ A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix`
 |------|---------|
 | `lib.rs` | Crate root: the module list and the public re-exports |
 | `driver.rs` | `lint()` and the other entry points, and the rule driver |
-| `rule.rs` | `Rule`, `WholeRule`, and `NodeRule` traits, the `impl_rule!` macro, `CallPosition`, `LintContext` |
+| `rule.rs` | `Rule`, `WholeRule`, and `NodeRule` traits, the `impl_rule!` macro, `ChainPosition`, `CallPosition`, `CallSite`, `LintContext` |
 | `rules.rs` | `RULES` registry, `rules()`, and the registered rule names |
 | `bus.rs` | The single-pass dispatch that drives every `NodeRule` in one shared walk |
 | `nodes.rs` | Flat pre-order node table (`Nodes::collect`) of borrowed `NodeKind` views that the bus walks, with the set of node types present, the pre-order block table whole rules read, the block of the chunk and each function, the `UninitializedLocals` built in the same walk, and `adjacent_stmts` for the rules that match neighboring statements |
 | `node_type.rs` | `NodeType`, one discriminant per statement, last-statement, and expression variant, and the `NodeTypeSet` bitset node rules declare |
 | `cfg.rs` | `FlowGraph`, the control-flow graph of a block that rules ask how it ends and what can run, and the decision points `cyclomatic_complexity` counts |
 | `local_flow.rs` | `LocalFlow`, what each function's control flow says about its locals, shared by the rules that follow a local's value and computed once per chunk |
-| `diagnostic.rs` | `LintDiagnostic`, the `Finding` rules report, `Severity` and `Category` from `luck_core`, and the `line_column` positions that messages quote |
+| `diagnostic.rs` | `LintDiagnostic`, the `Finding` rules report, `Severity` (`luck_core`'s `DiagnosticSeverity`), `Category`, and the `line_column` positions that messages quote |
+| `config.rs` | `LintConfig`, the `lint` section of `luck.json`: category and rule levels, typed options for the rules that take them, `extra_globals`, and the serde impls that keep option errors specific. The `schemars` feature derives `JsonSchema` for `luck_config`'s schema tests |
 | `suppression.rs` | `-- luck:` directive parsing, shared with `invalid_lint_filter`, and suppression |
 | `fix.rs` | `Fix` and `TextEdit`, and auto-fix application |
 | `format_pattern.rs` | Validators for `string.format`, pattern, `string.pack`, `gsub` replacement, and `os.date` literals |
+| `binary.rs` | Each operator of a binary run with the operands it applies to in the pairs the run groups into, outermost first, shared by the rules that match one operator at a time |
 | `call.rs` | Whether a call still names the host's global, a `root.field(...)` callee's parts, plus positional arguments, argument count, and raw string-argument text, shared by the rules that match calls |
 | `number.rs` | Values and digits of number literals, shared by `for_range`, `reversed_for_loop`, `manual_table_clone`, `table_operations`, `compare_nan`, `divide_by_zero`, `integer_parsing`, and the Roblox rules |
 | `function_node.rs` | `FunctionNode`, one view of function statements and function expressions, for the node rules that check every function |

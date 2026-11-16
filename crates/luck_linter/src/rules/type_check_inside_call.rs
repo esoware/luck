@@ -1,11 +1,11 @@
-use luck_ast::{Expression, FunctionArgs, FunctionCall};
+use luck_ast::{Call, Expression, FunctionArgs};
 use luck_semantic::SemanticAnalysis;
 use luck_token::BinOp;
 
 use crate::call::is_global_call;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
 
 /// Flags `type(x == "string")` written for `type(x) == "string"`.
 #[derive(Debug, Clone, Copy)]
@@ -23,31 +23,28 @@ impl NodeRule for TypeCheckInsideCall {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
     }
-    fn on_call(
-        &self,
-        call: &FunctionCall,
-        _position: CallPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+        let call = site.call;
         findings.extend(check_call(call, context.semantic));
     }
 }
 
-fn check_call(call: &FunctionCall, semantic: &SemanticAnalysis) -> Option<Finding> {
+fn check_call(call: Call<'_>, semantic: &SemanticAnalysis) -> Option<Finding> {
     if !is_global_call(call, "type", semantic) && !is_global_call(call, "typeof", semantic) {
         return None;
     }
-    let FunctionArgs::Parenthesized { args, .. } = &call.args else {
+    let FunctionArgs::Parenthesized { args, .. } = call.args else {
         return None;
     };
     let [Expression::BinaryOp(binary_op)] = args.items.as_slice() else {
         return None;
     };
-    matches!(binary_op.op, BinOp::Eq | BinOp::Ne).then(|| {
+    // A run of comparisons groups from the left, so its last one is
+    // outermost.
+    matches!(binary_op.links.last().op, BinOp::Eq | BinOp::Ne).then(|| {
         Finding::new(
             "comparison is inside the `type()` call, did you mean `type(x) == \"string\"`?",
-            call.span,
+            call.span(),
         )
         .with_help("move the comparison outside: `type(x) == \"string\"`")
     })
@@ -79,7 +76,10 @@ mod tests {
 
     #[test]
     fn ignores_method_call_on_a_table_named_type() {
-        let source = "type = {}\nfunction type:f(v) return v end\ntype:f(1 == 2)";
+        let source = "\
+type = {}
+function type:f(v) return v end
+type:f(1 == 2)";
         let diags = run(source);
         assert!(diags.is_empty(), "{diags:?}");
     }
@@ -104,7 +104,9 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_type() {
-        let diags = run("local function type(v) return v end\nlocal ok = type(x == 1)");
+        let diags = run("\
+local function type(v) return v end
+local ok = type(x == 1)");
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

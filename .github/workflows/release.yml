@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancels, so a release that has started publishing finishes.
+concurrency:
+  group: ${{ github.workflow }}
+
+# Any workflow run on main can write a cache entry.
+cache-mode: none
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check for an unreleased version
+    if: github.repository == 'esoware/luck' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    permissions:
+      actions: read # Reads the CI run on this commit.
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version=$(grep -m 1 '^version' Cargo.toml | cut -d '"' -f 2)
+          if gh api "repos/$GH_REPO/git/ref/tags/v$version" --silent 2>/dev/null; then
+            echo "v$version is already released."
+          else
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for CI to pass on this commit
+        if: steps.version.outputs.version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          while :; do
+            run=$(gh run list --workflow ci.yml --commit "$COMMIT" --event push --limit 1 --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' || true)
+            case "$run" in
+              "completed success") break ;;
+              completed*)
+                echo "::error::CI failed on $COMMIT. Fix main, then run this workflow again."
+                exit 1
+                ;;
+            esac
+            sleep 60
+          done
+
+  publish:
+    name: Publish v${{ needs.check.outputs.version }}
+    needs: check
+    if: needs.check.outputs.version
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      actions: write # Starts the VS Code workflow on the vscode-v tag.
+      contents: write # Creates the tags and the GitHub release.
+      id-token: write # Exchanges an OpenID Connect token for a crates.io token.
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      GH_REPO: ${{ github.repository }}
+      COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
+
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: git-cliff@2.14.2
+
+      # Catches a release PR that went stale while a breaking change or feature merged ahead of it.
+      - name: Write the release notes
+        run: |
+          bumped=$(git cliff --bumped-version)
+          if [ "$bumped" != "v$VERSION" ]; then
+            echo "::error::The commits since the last tag call for $bumped, not v$VERSION. Run the Prepare release workflow again and merge its PR."
+            exit 1
+          fi
+          git cliff --unreleased --strip all --output "$RUNNER_TEMP/notes.md"
+
+      # Builds every crate before the crates.io token's 30 minutes start.
+      - name: Check that every crate packages
+        run: cargo publish --workspace --dry-run
+
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+
+      # Skips the crates an earlier run published, so a rerun picks up where that one stopped.
+      - name: Publish the crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          packages=()
+          for crate in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.publish == null) | .name'); do
+            if ! curl -sf "https://index.crates.io/${crate:0:2}/${crate:2:2}/$crate" | grep -q "\"vers\":\"$VERSION\""; then
+              packages+=(--package "$crate")
+            fi
+          done
+          if [ ${#packages[@]} -gt 0 ]; then
+            cargo publish --no-verify "${packages[@]}"
+          fi
+
+      # A tag that GITHUB_TOKEN creates starts no workflow, so this starts the VS Code one itself.
+      - name: Release the VS Code extension
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api "repos/$GH_REPO/git/ref/tags/vscode-v$VERSION" --silent 2>/dev/null; then
+            gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/vscode-v$VERSION" -f sha="$COMMIT" --silent
+            gh workflow run vscode.yml --ref "vscode-v$VERSION"
+          fi
+
+      # Runs last, because the v tag it creates is what marks the release done.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v$VERSION" --target "$COMMIT" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"

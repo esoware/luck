@@ -25,6 +25,33 @@ fn empty_interpolated_string_lexes_as_an_empty_begin_end_pair() {
     );
 }
 
+/// The parser reports a `{}` that holds no expression.
+#[test]
+fn an_empty_hole_lexes_as_the_segments_around_it() {
+    for (source, expected) in [
+        (
+            "`a{}b`",
+            vec![
+                TokenKind::InterpolatedStringBegin("a".into()),
+                TokenKind::InterpolatedStringEnd("b".into()),
+            ],
+        ),
+        (
+            "`{x}a{ --[[c]] }b`",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                TokenKind::Identifier("x".into()),
+                TokenKind::InterpolatedStringMiddle("a".into()),
+                TokenKind::InterpolatedStringEnd("b".into()),
+            ],
+        ),
+    ] {
+        let result = lex(source, LuaVersion::Luau);
+        assert_eq!(result.errors, Vec::<SourceError>::new(), "{source}");
+        assert_eq!(kinds_in(source, LuaVersion::Luau), expected, "{source}");
+    }
+}
+
 #[test]
 fn interpolated_string_begin_stops_at_the_open_brace() {
     let result = lex("`hello {", LuaVersion::Luau);
@@ -59,6 +86,109 @@ fn interpolated_string_double_brace_is_error() {
     let result = lex("`{{x}}`", LuaVersion::Luau);
     assert_ne!(result.errors, Vec::<SourceError>::new());
     assert!(result.errors[0].message.contains("`{{` is not allowed"));
+}
+
+/// The parser and the skip past its depth cap find where a string ends by its
+/// `InterpolatedStringEnd`, so one still comes when the string's text is
+/// malformed.
+#[test]
+fn a_string_still_ends_when_its_text_is_malformed() {
+    let name = |text: &str| TokenKind::Identifier(text.into());
+    let cases = [
+        (
+            "\
+`{x}abc
+y",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                name("x"),
+                TokenKind::InterpolatedStringEnd("abc".into()),
+                name("y"),
+            ],
+            ("unterminated interpolated string", "}abc"),
+        ),
+        (
+            "`{x}a{{y}}b`",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                name("x"),
+                TokenKind::InterpolatedStringEnd("a{{y}}b".into()),
+            ],
+            ("`{{` is not allowed in interpolated strings, use `\\{` for a literal brace", "{{"),
+        ),
+        (
+            "`{x}a\\xZZ{y}b`",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                name("x"),
+                TokenKind::InterpolatedStringMiddle("a\\xZZ".into()),
+                name("y"),
+                TokenKind::InterpolatedStringEnd("b".into()),
+            ],
+            ("`\\x` escape requires exactly 2 hex digits, got 0", "\\x"),
+        ),
+        (
+            "`a\\u{}{x}`",
+            vec![
+                TokenKind::InterpolatedStringBegin("a\\u{}".into()),
+                name("x"),
+                TokenKind::InterpolatedStringEnd(CompactString::default()),
+            ],
+            ("`\\u{}` requires at least one hex digit", "\\u{"),
+        ),
+        (
+            "\
+`abc
+y",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                TokenKind::InterpolatedStringEnd("abc".into()),
+                name("y"),
+            ],
+            ("unterminated interpolated string", "`abc"),
+        ),
+    ];
+    for (source, expected, (message, text)) in cases {
+        let result = lex(source, LuaVersion::Luau);
+        let kinds: Vec<TokenKind> = result
+            .tokens
+            .into_iter()
+            .filter(|token| token.kind != TokenKind::Eof)
+            .map(|token| token.kind)
+            .collect();
+        assert_eq!(kinds, expected, "{source:?}");
+        let [error] = result.errors.as_slice() else {
+            panic!("{source:?}: {:?}", result.errors);
+        };
+        assert_eq!(
+            (error.message.as_str(), error.span.text(source)),
+            (message, text),
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unterminated_string_lists_the_tokens_it_cut_off() {
+    for (source, cut_off) in [
+        (
+            "\
+`{x}abc
+y",
+            vec!["}abc"],
+        ),
+        (
+            "\
+`abc
+y",
+            vec!["`abc", ""],
+        ),
+        ("`{x}a{y}b`", vec![]),
+    ] {
+        let result = lex(source, LuaVersion::Luau);
+        let texts: Vec<&str> = result.unterminated.iter().map(|span| span.text(source)).collect();
+        assert_eq!(texts, cut_off, "{source:?}");
+    }
 }
 
 #[test]

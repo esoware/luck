@@ -16,7 +16,9 @@ fn unused_variable_fix_prefixes_underscore() {
 #[test]
 fn parenthesized_conditions_fix_removes_parens() {
     let config = enable("parenthesized_conditions");
-    let source = "local x = 1\nif (x == 1) then end";
+    let source = "\
+local x = 1
+if (x == 1) then end";
     let diags = lint(source, LuaVersion::Lua54, &config);
     let fixed = apply_fixes(source, &diags, LuaVersion::Lua54);
     assert!(fixed.contains("if x == 1 then"));

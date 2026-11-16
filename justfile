@@ -15,7 +15,7 @@ init:
   npm ci --prefix editors/vscode
   cargo install --locked cargo-nextest@0.9.151 cargo-insta@1.49.0 cargo-deny@0.20.2 cargo-shear@1.14.0 zizmor@1.32.0
 
-# Run fmt, clippy, rustdoc, the fuzz crate's check, cargo-shear, zizmor, the extension's type check and oxlint, the tests, the doctests, and cargo-deny
+# Run fmt, clippy, rustdoc, the fuzz crate's check, cargo-shear, zizmor, the extension's type check and oxlint, the tests with the unreferenced-snapshot check, the doctests, and cargo-deny
 ready:
   just fmt
   just lint
@@ -25,7 +25,7 @@ ready:
   zizmor --offline --pedantic .github
   npm run --prefix editors/vscode check
   npm run --prefix editors/vscode lint
-  just test
+  just snapshots
   just doctest
   just deny
   git status
@@ -33,6 +33,10 @@ ready:
 # Run all tests, or narrow them with nextest args like -p luck_parser goto_stmt
 test *args:
   cargo nextest run {{args}}
+
+# Run all tests and fail on an insta snapshot none of them asserts, such as a deleted fixture's
+snapshots:
+  cargo insta test --check --fail-fast --unreferenced reject --test-runner nextest --disable-nextest-doctest
 
 # Run the doctests, which nextest skips
 doctest:
@@ -70,11 +74,16 @@ bench *args:
 
 # Regenerate editors/vscode/schemas/luckrc.schema.json after a config type changes
 schema:
-  cargo test -p luck_core regenerate_luckrc_schema -- --ignored
+  cargo test -p luck_config regenerate_luckrc_schema -- --ignored
 
-# Regenerate roblox_api.toml and roblox_enums.toml from the live Roblox API dump
+# Regenerate luck_semantic's static stdlib catalog after a stdlib_data file changes
+stdlib:
+  cargo test -p luck_semantic regenerate_stdlib_catalog -- --ignored
+
+# Regenerate roblox_api.toml and roblox_enums.toml from the live Roblox API dump, then the stdlib catalog
 roblox-api:
   cargo test -p luck_semantic regenerate_roblox_api -- --ignored
+  just stdlib
 
 # Regenerate the committed minsize.snap after the minifier or the corpus changes
 minsize:

@@ -1,0 +1,31 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua55/global_decls/input/counters.lua
+---
+-- line_width = 1
+local counters = {}
+
+local current <const> = {
+	base = 10,
+}
+
+function counters.bump(
+	delta
+)
+	return current.base
+		+ delta
+end
+
+return counters
+
+-- line_width = 40, 80, 100, 120
+local counters = {}
+
+local current <const> = { base = 10 }
+
+function counters.bump(delta)
+	return current.base + delta
+end
+
+return counters

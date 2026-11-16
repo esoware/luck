@@ -175,7 +175,7 @@ impl ScopeTree {
         &self.references[id.index()]
     }
 
-    fn reference_at(&self, name: &str, span: Span) -> Option<&Reference> {
+    pub(crate) fn reference_at(&self, name: &str, span: Span) -> Option<&Reference> {
         let reference = self.reference(*self.references_by_span.get(&span)?);
         (reference.name == name).then_some(reference)
     }
@@ -199,9 +199,12 @@ impl ScopeTree {
     /// no reference.
     #[must_use]
     pub fn reaches_host_global(&self, name: &str, span: Span) -> bool {
-        self.reference_at(name, span).is_some_and(|reference| {
-            self.is_global(reference) && !self.assigned_globals.contains(name)
-        })
+        self.reference_at(name, span).is_some_and(|reference| self.is_host_global(reference))
+    }
+
+    /// See [`Self::reaches_host_global`].
+    pub(crate) fn is_host_global(&self, reference: &Reference) -> bool {
+        self.is_global(reference) && !self.assigned_globals.contains(&reference.name)
     }
 
     /// Whether `symbol` is a Lua 5.2+ `_ENV`, which every free name in its

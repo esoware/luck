@@ -1,11 +1,38 @@
 use luck_token::LuaVersion;
 
-/// `is_loader_global` is true only for a 5.1 bundle with a function that has
-/// no upvalue left for a local loader.
-///
-/// A global read costs none, but two bundles in one Lua state then overwrite
-/// each other's loader.
-pub(crate) fn loader_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -> String {
+/// What every generated name starts with, unless a module's source holds it.
+pub(crate) const DEFAULT_PREFIX: &str = "__luck_";
+
+/// What decides the code a bundle opens with, apart from its prefix.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoaderShape {
+    pub version: LuaVersion,
+    /// True only for a 5.1 bundle with a function that has no upvalue left
+    /// for a local loader.
+    ///
+    /// A global read costs none, but two bundles in one Lua state then
+    /// overwrite each other's loader.
+    pub is_loader_global: bool,
+    /// Only Lua targets record dynamic callees, so only a Lua loader gets the
+    /// entry point they're retargeted at.
+    pub has_dynamic_entry: bool,
+    pub has_export_runtime: bool,
+}
+
+/// The loader a bundle opens with, then the entry point and the runtime its
+/// modules call for.
+pub(crate) fn prelude_text(prefix: &str, shape: LoaderShape) -> String {
+    let mut text = loader_text(prefix, shape.version, shape.is_loader_global);
+    if shape.has_dynamic_entry {
+        text.push_str(&dynamic_entry_text(prefix, shape.is_loader_global));
+    }
+    if shape.has_export_runtime {
+        text.push_str(&export_runtime_text(prefix));
+    }
+    text
+}
+
+fn loader_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -> String {
     if version.is_luau() {
         return luau_loader_text(prefix);
     }
@@ -27,8 +54,13 @@ pub(crate) fn loader_text(prefix: &str, version: LuaVersion, is_loader_global: b
     [cache_tables, paths_table, lua_require_text(prefix, version, is_loader_global)].concat()
 }
 
-const fn entry_point_keyword(is_loader_global: bool) -> &'static str {
-    if is_loader_global { "function" } else { "local function" }
+/// What a loader function's declaration opens and closes with.
+///
+/// A global one is declared inside `do ... end`, off the bundle's top level,
+/// where the minifier's `rename_globals` finds the globals a file defines, so
+/// it keeps its prefixed name, which no host global shares.
+const fn entry_point(is_loader_global: bool) -> (&'static str, &'static str) {
+    if is_loader_global { ("do function", " end") } else { ("local function", "") }
 }
 
 /// The cache holds only a non-nil result, so a raising or nil-returning
@@ -62,7 +94,7 @@ fn luau_loader_text(prefix: &str) -> String {
 /// `{prefix}exporting` hands a cyclic requirer a placeholder whose field
 /// accesses error until the module finishes, then fills and freezes it
 /// (`populatePlaceholder` in `Require/src/RequireImpl.cpp`).
-pub(crate) fn export_runtime_text(prefix: &str) -> String {
+fn export_runtime_text(prefix: &str) -> String {
     format!(
         "local {prefix}freeze=table.freeze\n\
          local {prefix}lock={{\n\
@@ -88,10 +120,10 @@ fn lua_require_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -
         // a module whose load previously raised) reproduces 5.1's "loop or
         // previous error" failure. It's a function because `module()` adopts
         // a table it finds in `package.loaded`.
-        let keyword = entry_point_keyword(is_loader_global);
+        let (opening, closing) = entry_point(is_loader_global);
         return format!(
             "local {prefix}loading=function()end\n\
-             {keyword} {prefix}require(name)\n\
+             {opening} {prefix}require(name)\n\
              local value={prefix}loaded[name]\n\
              if value then\n\
              if value=={prefix}loading then error(\"loop or previous error loading module '\"..name..\"'\",2)end\n\
@@ -107,7 +139,7 @@ fn lua_require_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -
              {prefix}loaded[name]=value\n\
              end\n\
              return value\n\
-             end\n"
+             end{closing}\n"
         );
     }
     if !version.has_require_loaderdata() {
@@ -166,13 +198,13 @@ fn lua_require_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -
 ///
 /// Anything else goes to the host's own `require`, looked up at call time so
 /// one the host installs later still counts.
-pub(crate) fn dynamic_entry_text(prefix: &str, is_loader_global: bool) -> String {
-    let keyword = entry_point_keyword(is_loader_global);
+fn dynamic_entry_text(prefix: &str, is_loader_global: bool) -> String {
+    let (opening, closing) = entry_point(is_loader_global);
     format!(
-        "{keyword} {prefix}dynamic(name)\n\
+        "{opening} {prefix}dynamic(name)\n\
          if {prefix}modules[name]~=nil or {prefix}preload[name]~=nil then return {prefix}require(name)end\n\
          if type(require)==\"function\" then return require(name)end\n\
          error(\"luck bundle: dynamic require of '\"..tostring(name)..\"' is not in the bundle and this runtime has no require\",2)\n\
-         end\n"
+         end{closing}\n"
     )
 }

@@ -16,7 +16,8 @@ pub fn compact(block: &Block) -> String {
     compact_with_capacity(block, 0)
 }
 
-/// The hint only affects allocation, never the output.
+/// The hint only affects allocation, never the output, and one the allocator
+/// can't meet is dropped.
 ///
 /// A previous output's length makes a good one. Source length over-reserves for comment-heavy
 /// input, and a transformed AST can print longer than its source.
@@ -57,23 +58,24 @@ impl CompactPrinter {
         self.emit_piece(text, PieceClass::of_fixed(text));
     }
 
-    /// Fixed-spelling kinds (`Type::Singleton` carries `nil`/`true`/`false`)
-    /// fall through to their static text.
+    /// Every kind prints what the formatter prints for it: the text it
+    /// carries, or its fixed spelling.
     #[expect(
         clippy::wildcard_enum_match_arm,
-        reason = "any other token takes the default path, and naming the rest of TokenKind adds nothing"
+        reason = "every other kind has a fixed spelling, which static_text matches exhaustively"
     )]
     fn emit_token(&mut self, token: &Token) {
         match &token.kind {
             TokenKind::Identifier(text) => self.emit_piece(text, PieceClass::Word),
-            TokenKind::Number(text) => self.emit_piece(text, PieceClass::Number),
-            TokenKind::StringLiteral(text) => self.emit_piece(text, PieceClass::Other),
-            TokenKind::Nil => self.emit_fixed("nil"),
-            TokenKind::True => self.emit_fixed("true"),
-            TokenKind::False => self.emit_fixed("false"),
-            other => {
-                debug_assert!(false, "unexpected token kind in AST: {other:?}");
+            TokenKind::Number(text) | TokenKind::Integer(text) => {
+                self.emit_piece(text, PieceClass::Number);
             }
+            TokenKind::StringLiteral(text)
+            | TokenKind::InterpolatedStringBegin(text)
+            | TokenKind::InterpolatedStringMiddle(text)
+            | TokenKind::InterpolatedStringEnd(text) => self.emit_piece(text, PieceClass::Other),
+            // `Eof` has no spelling, so it prints nothing.
+            fixed => self.emit_fixed(fixed.static_text().unwrap_or_default()),
         }
     }
 

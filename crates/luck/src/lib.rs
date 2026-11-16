@@ -11,16 +11,19 @@
 //! - `lexer` - Tokenizer (always on)
 //! - `ast` - AST nodes, `Visitor`, `Transform`, `span()` accessors (always on)
 //! - `parser` - Pratt + recursive-descent parser (always on)
-//! - `core` - Shared types, config, diagnostics (always on)
+//! - `core` - Dialect targets, diagnostics (always on)
 //! - `codegen` - Compact printer (feature `codegen`)
-//! - `resolver` - Module resolution (feature `resolver`)
+//! - `resolver` - Module resolution, source loading, path form (feature
+//!   `resolver`)
 //! - `bundler` - Dependency graph and lazy-loader bundling (feature `bundler`,
-//!   enables `resolver`)
+//!   enables `resolver` and `minifier`)
 //! - `minifier` - AST transform pipeline (feature `minifier`)
 //! - `formatter` - Prettier-style formatter (feature `formatter`)
 //! - `semantic` - Scope tree + stdlib model (feature `semantic`)
 //! - `linter` - Rule engine with auto-fixes (feature `linter`, enables
 //!   `semantic`)
+//! - `config` - `luck.json` and `.editorconfig` loading (feature `config`,
+//!   enables the stages it configures)
 //!
 //! # Usage
 //!
@@ -38,6 +41,8 @@ pub use luck_ast as ast;
 pub use luck_bundler as bundler;
 #[cfg(feature = "codegen")]
 pub use luck_codegen as codegen;
+#[cfg(feature = "config")]
+pub use luck_config as config;
 pub use luck_core as core;
 #[cfg(feature = "formatter")]
 pub use luck_formatter as formatter;

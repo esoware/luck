@@ -23,13 +23,8 @@ impl Synth {
     }
 
     /// A Luau integer literal from source-form text including the `i` suffix.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `text` doesn't end with `i`.
     #[must_use]
     pub fn integer_literal(&self, text: &str) -> Expression {
-        assert!(text.ends_with('i'), "synth: Luau integer literal must end with 'i'");
         Expression::Integer(Literal { text: CompactString::from(text), span: self.next_span() })
     }
 
@@ -137,11 +132,13 @@ impl Synth {
         }
         let must_avoid_level_zero = content.contains("[[")
             && self.version.is_none_or(LuaVersion::has_long_bracket_nesting_error);
-        let mut equals = if must_avoid_level_zero { "=".to_owned() } else { String::new() };
-        // The closer's first byte can finish a delimiter begun in content.
-        while content.contains(&format!("]{equals}]")) || content.ends_with(&format!("]{equals}")) {
-            equals.push('=');
+        let mut level = usize::from(must_avoid_level_zero);
+        for taken_level in taken_closer_levels(content) {
+            if taken_level == level {
+                level = level.saturating_add(1);
+            }
         }
+        let equals = "=".repeat(level);
         // Lua swallows a newline directly after the opening bracket.
         let leading_newline = if content.starts_with('\n') { "\n" } else { "" };
         Expression::StringLiteral(Literal {
@@ -205,6 +202,22 @@ impl Synth {
         segments.push(InterpolatedStringSegment { literal: self.token(end), expr: None });
         Expression::InterpolatedString(Box::new(InterpolatedString { span, segments }))
     }
+}
+
+/// The `=` count of every closer in `content`, ascending.
+///
+/// A closer is a `]=*]`, or a `]=*` the content ends with, which the
+/// literal's own closer would finish. One pass finds them all, where asking
+/// about each level in turn rereads the content once per level.
+fn taken_closer_levels(content: &str) -> Vec<usize> {
+    let mut pieces = content.split(']');
+    // What comes before the first `]` belongs to no closer.
+    pieces.next();
+    let mut levels: Vec<usize> =
+        pieces.filter(|piece| piece.trim_start_matches('=').is_empty()).map(str::len).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    levels
 }
 
 /// Escapes interpolated-string segment text. The lexer stores segment text
@@ -338,9 +351,12 @@ mod tests {
             let Expression::BinaryOp(division) = synth.number_f64(f64::from_bits(bits)) else {
                 panic!("expected NaN expression");
             };
-            assert_eq!(division.op, BinOp::Div);
-            assert!(matches!(&division.lhs, Expression::Number(literal) if literal.text == "0"));
-            assert!(matches!(&division.rhs, Expression::Number(literal) if literal.text == "0"));
+            let [link] = &*division.links else {
+                panic!("expected one division");
+            };
+            assert_eq!(link.op, BinOp::Div);
+            assert!(matches!(&division.first, Expression::Number(literal) if literal.text == "0"));
+            assert!(matches!(&link.operand, Expression::Number(literal) if literal.text == "0"));
         }
     }
 
@@ -384,6 +400,39 @@ mod tests {
 
         // A trailing `]` at level 0 would merge with the closer.
         assert_eq!(string_text(synth.long_string("x]")), "[=[x]]=]");
+    }
+
+    #[test]
+    fn long_string_skips_every_level_a_closer_in_the_content_takes() {
+        let synth = Synth::new();
+        for (content, expected) in [
+            ("]]", "[=[]]]=]"),
+            ("]=]", "[==[]=]]==]"),
+            ("]] ]=] ]===]", "[==[]] ]=] ]===]]==]"),
+            ("]]]=]==]", "[===[]]]=]==]]===]"),
+            ("a]=", "[[a]=]]"),
+            ("]] a]=", "[==[]] a]=]==]"),
+            ("]=x] ]", "[=[]=x] ]]=]"),
+            ("=]", "[=[=]]=]"),
+        ] {
+            assert_eq!(string_text(synth.long_string(content)), expected, "{content}");
+        }
+        let lua51 = Synth::new().with_version(LuaVersion::Lua51);
+        assert_eq!(string_text(lua51.long_string("[[ ]=]")), "[==[[[ ]=]]==]");
+    }
+
+    #[test]
+    fn long_string_takes_the_level_past_a_closer_at_every_level() {
+        let levels = 300;
+        let mut content = String::new();
+        for level in 0..levels {
+            content.push(']');
+            content.push_str(&"=".repeat(level));
+            content.push(']');
+        }
+        let literal = string_text(Synth::new().long_string(&content));
+        let equals = "=".repeat(levels);
+        assert_eq!(literal, format!("[{equals}[{content}]{equals}]"));
     }
 
     #[test]

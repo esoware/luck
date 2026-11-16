@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use luck_core::{LuaTarget, read_source_file};
+use luck_core::LuaTarget;
+use luck_resolver::read_source_file;
 
 use crate::exit::{Exit, fail_with_source_errors, operation_error};
 use crate::minify_flags::MinifyFlags;

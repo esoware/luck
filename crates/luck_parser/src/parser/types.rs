@@ -9,7 +9,7 @@ use luck_ast::{
 };
 use luck_token::{Span, Token, TokenKind, decode_string};
 
-use super::Parser;
+use super::{Closer, Parser};
 
 /// Luau's flat type-suffix chain rejects `A | B & C`, `A? & B`, and the like.
 const MIXED_TYPE_MESSAGE: &str =
@@ -45,8 +45,13 @@ impl Parser<'_> {
         if self.is_at_generic_pack() {
             return self.parse_generic_pack();
         }
-        let dots = self.advance_span();
+        let dots = self.current_span();
+        if !self.enter_depth() {
+            return Type::Error(dots);
+        }
+        self.advance_span();
         let type_value = self.parse_type();
+        self.exit_depth();
         let span = dots.merge(type_value.span());
         Type::Variadic(Box::new(VariadicType { span, type_value }))
     }
@@ -69,9 +74,8 @@ impl Parser<'_> {
         if !matches!(self.peek(), TokenKind::LeftParen) {
             return self.parse_type();
         }
-        if !self.enter_depth() {
-            return Type::Error(self.current_span());
-        }
+        let level = self.nesting_depth;
+        let outer = self.begin_operand();
         let mut first = self.parse_paren_or_function_type(true);
         // `parseReturnType` folds a suffix over `(T)` and over the `T` of
         // `(T, ...U)`, so `(A, B)?` and `() -> (A, B) | C` leave it unconsumed.
@@ -82,10 +86,14 @@ impl Parser<'_> {
             && let [element, Type::Variadic(_) | Type::GenericPack(_)] =
                 pack.types.items.as_mut_slice()
         {
+            // The suffix wraps an element one level inside the pack, and
+            // counts from the whole pack's deepest level.
+            self.nesting_depth = level.saturating_add(1);
             *element = self.parse_union_level(element.take());
+            self.nesting_depth = level;
             pack.span = pack.span.merge(element.span());
         }
-        self.exit_depth();
+        self.end_operand(outer);
         first
     }
 
@@ -96,70 +104,92 @@ impl Parser<'_> {
         if !matches!(self.peek(), TokenKind::LeftParen) {
             return self.parse_type();
         }
-        if !self.enter_depth() {
-            return Type::Error(self.current_span());
-        }
+        let outer = self.begin_operand();
         let first = self.parse_paren_or_function_type(true);
         let result =
             if matches!(first, Type::Pack(_)) { first } else { self.parse_union_level(first) };
-        self.exit_depth();
+        self.end_operand(outer);
         result
     }
 
     /// A pack is valid only where [`Self::parse_return_type`] or [`Self::parse_type_or_pack`] takes
     /// one.
+    ///
+    /// A type that holds others is a level of nesting, which each such type
+    /// counts where it's built. A union, an intersection, or a `?` wraps a
+    /// member already parsed, so it counts from that member's deepest level.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_type(&mut self) -> Type {
-        if !self.enter_depth() {
-            return Type::Error(self.current_span());
-        }
-
+        let outer = self.begin_operand();
         let result = match self.peek() {
             // A leading separator, as in the multiline definition style:
             // `type T =` newline `| A` newline `| B`.
             TokenKind::Pipe => {
-                let leading_pipe = self.advance_span();
-                let primary = self.parse_primary_type();
-                let first = self.parse_intersection_level(primary);
-                let types = self.parse_union_members(first);
-                let last_span = types.last().map_or(leading_pipe, Type::span);
-                Type::Union(Box::new(UnionType {
-                    span: leading_pipe.merge(last_span),
-                    has_leading_pipe: true,
-                    types,
-                }))
+                let leading_pipe = self.current_span();
+                if self.enter_depth() {
+                    self.advance_span();
+                    let first = self.parse_union_member();
+                    let types = self.parse_union_members(first);
+                    self.exit_depth();
+                    let last_span = types.last().map_or(leading_pipe, Type::span);
+                    Type::Union(Box::new(UnionType {
+                        span: leading_pipe.merge(last_span),
+                        has_leading_pipe: true,
+                        types,
+                    }))
+                } else {
+                    Type::Error(leading_pipe)
+                }
             }
             TokenKind::Ampersand => {
-                let leading_ampersand = self.advance_span();
-                let primary = self.parse_primary_type();
-                let first = self.parse_postfix_type(primary);
-                let types = self.parse_intersection_members(first);
-                let last_span = types.last().map_or(leading_ampersand, Type::span);
-                Type::Intersection(Box::new(IntersectionType {
-                    span: leading_ampersand.merge(last_span),
-                    has_leading_ampersand: true,
-                    types,
-                }))
+                let leading_ampersand = self.current_span();
+                if self.enter_depth() {
+                    self.advance_span();
+                    let first = self.parse_intersection_member();
+                    let types = self.parse_intersection_members(first);
+                    self.exit_depth();
+                    let last_span = types.last().map_or(leading_ampersand, Type::span);
+                    Type::Intersection(Box::new(IntersectionType {
+                        span: leading_ampersand.merge(last_span),
+                        has_leading_ampersand: true,
+                        types,
+                    }))
+                } else {
+                    Type::Error(leading_ampersand)
+                }
             }
             _ => {
                 let primary = self.parse_primary_type();
                 self.parse_union_level(primary)
             }
         };
-
-        self.exit_depth();
+        self.end_operand(outer);
         result
     }
 
     fn parse_union_level(&mut self, primary: Type) -> Type {
+        let level = self.nesting_depth;
         let first = self.parse_intersection_level(primary);
         if !matches!(self.peek(), TokenKind::Pipe) {
             return first;
         }
+        if !self.enter_wrapper(level) {
+            return Type::Error(first.span());
+        }
         let start_span = first.span();
         let types = self.parse_union_members(first);
+        self.nesting_depth = level;
         let span = start_span.merge(types.last().map_or(start_span, Type::span));
         Type::Union(Box::new(UnionType { span, has_leading_pipe: false, types }))
+    }
+
+    /// A member after the first, measured on its own.
+    fn parse_union_member(&mut self) -> Type {
+        let outer = self.begin_operand();
+        let primary = self.parse_primary_type();
+        let member = self.parse_intersection_level(primary);
+        self.end_operand(outer);
+        member
     }
 
     /// Luau's type suffix chain is flat, so `A & B | C` and `A | B & C` are
@@ -170,8 +200,7 @@ impl Parser<'_> {
         }
         let mut members = vec![first];
         while self.eat(&TokenKind::Pipe) {
-            let primary = self.parse_primary_type();
-            let next = self.parse_intersection_level(primary);
+            let next = self.parse_union_member();
             if matches!(next, Type::Intersection(_)) {
                 self.error(next.span(), MIXED_TYPE_MESSAGE);
             }
@@ -181,14 +210,28 @@ impl Parser<'_> {
     }
 
     fn parse_intersection_level(&mut self, primary: Type) -> Type {
+        let level = self.nesting_depth;
         let first = self.parse_postfix_type(primary);
         if !matches!(self.peek(), TokenKind::Ampersand) {
             return first;
         }
+        if !self.enter_wrapper(level) {
+            return Type::Error(first.span());
+        }
         let start_span = first.span();
         let types = self.parse_intersection_members(first);
+        self.nesting_depth = level;
         let span = start_span.merge(types.last().map_or(start_span, Type::span));
         Type::Intersection(Box::new(IntersectionType { span, has_leading_ampersand: false, types }))
+    }
+
+    /// A member after the first, measured on its own.
+    fn parse_intersection_member(&mut self) -> Type {
+        let outer = self.begin_operand();
+        let primary = self.parse_primary_type();
+        let member = self.parse_postfix_type(primary);
+        self.end_operand(outer);
+        member
     }
 
     /// `?` is a union in Luau, so `A? & B` and `A & B?` are the same mixing
@@ -199,8 +242,7 @@ impl Parser<'_> {
         }
         let mut members = vec![first];
         while self.eat(&TokenKind::Ampersand) {
-            let primary = self.parse_primary_type();
-            let next = self.parse_postfix_type(primary);
+            let next = self.parse_intersection_member();
             if matches!(next, Type::Optional(_)) {
                 self.error(next.span(), MIXED_TYPE_MESSAGE);
             }
@@ -209,10 +251,15 @@ impl Parser<'_> {
         Punctuated::from_items(members)
     }
 
+    /// `?` stacks (`T??`), which Luau also accepts, each one a level.
     fn parse_postfix_type(&mut self, primary: Type) -> Type {
+        let level = self.nesting_depth;
         let mut result = primary;
-        // `?` stacks (`T??`), which Luau also accepts.
         while matches!(self.peek(), TokenKind::Question) {
+            if !self.enter_wrapper(level) {
+                return Type::Error(result.span());
+            }
+            self.nesting_depth = level;
             let question = self.advance_span();
             let span = result.span().merge(question);
             result = Type::Optional(Box::new(OptionalType { span, type_value: result }));
@@ -239,17 +286,25 @@ impl Parser<'_> {
             | TokenKind::True
             | TokenKind::False
             | TokenKind::StringLiteral(_)
-            | TokenKind::Number(_) => Type::Singleton(self.advance()),
+            | TokenKind::Number(_)
+            | TokenKind::Integer(_) => Type::Singleton(self.advance()),
             TokenKind::LeftBrace => self.parse_table_type(),
             TokenKind::LeftParen => self.parse_paren_or_function_type(false),
             // `<T>(...) -> R` is a generic function type.
             TokenKind::Less => {
+                let open = self.current_span();
+                if !self.enter_depth() {
+                    return Type::Error(open);
+                }
                 let generics = self.parse_generic_type_list(GenericsOwner::Function);
-                self.parse_function_type(generics)
+                let parsed = self.parse_function_type(generics);
+                self.exit_depth();
+                parsed
             }
             _ => {
                 let span = self.current_span();
-                self.error(span, format!("expected type, found {}", self.peek()));
+                let message = format!("expected type, found {}", self.peek());
+                self.syntax_error(span, message);
                 // Don't consume the token; it may close an enclosing construct
                 // or start the next statement.
                 Type::Error(span)
@@ -263,9 +318,14 @@ impl Parser<'_> {
             self.report_expected(&TokenKind::LeftParen);
             return Type::Error(typeof_span);
         }
+        if !self.enter_depth() {
+            return Type::Error(typeof_span);
+        }
         self.advance_span();
+        self.open(Closer::Paren);
         let expr = self.parse_expr(0);
-        let close = self.expect(&TokenKind::RightParen);
+        self.exit_depth();
+        let close = self.expect_closer(&TokenKind::RightParen, Closer::Paren);
         let span = typeof_span.merge(close);
         Type::Typeof(Box::new(TypeofType { span, expr }))
     }
@@ -281,6 +341,9 @@ impl Parser<'_> {
             };
             return Type::Name { name, span: first_name.span };
         }
+        if !self.enter_depth() {
+            return Type::Error(first_name.span);
+        }
         let (prefix, name) = if self.eat(&TokenKind::Dot) {
             let name = self.expect_identifier_recover();
             (Some(first_name), name)
@@ -289,6 +352,7 @@ impl Parser<'_> {
         };
 
         let generics = matches!(self.peek(), TokenKind::Less).then(|| self.parse_type_args());
+        self.exit_depth();
 
         let start_span = prefix.as_ref().map_or(name.span, |module| module.span);
         let end_span = generics.as_ref().map_or(name.span, |args| args.span);
@@ -304,10 +368,7 @@ impl Parser<'_> {
         let open = self.advance_span(); // `<`
         let mut args = Punctuated::<Type>::empty();
 
-        if !matches!(
-            self.peek(),
-            TokenKind::Greater | TokenKind::ShiftRight | TokenKind::GreaterEqual | TokenKind::Eof
-        ) {
+        if !matches!(self.peek(), TokenKind::Greater | TokenKind::GreaterEqual | TokenKind::Eof) {
             loop {
                 let arg = self.parse_type_or_pack();
                 let is_error = matches!(arg, Type::Error(_));
@@ -352,13 +413,15 @@ impl Parser<'_> {
                             "default type parameters are only allowed in type alias declarations",
                         );
                     }
-                    // `(T)` in a pack position is a one-type pack.
+                    // `(T)` in a pack position is a one-type pack, and an error
+                    // has been reported already.
                     let is_pack_default = matches!(
                         default_type,
                         Type::Pack(_)
                             | Type::Variadic(_)
                             | Type::GenericPack(_)
                             | Type::Parenthesized(_)
+                            | Type::Error(_)
                     );
                     if dots.is_some() && !is_pack_default {
                         self.error(
@@ -396,35 +459,36 @@ impl Parser<'_> {
         GenericTypeList { span: open.merge(close), params }
     }
 
-    /// The lexer is greedy, so `Foo<Bar<T>>` ends in `ShiftRight` and
-    /// `Foo<T>=x` holds `GreaterEqual`. Both get split here: this returns the
-    /// first `>`'s span and leaves the rest as the current token.
+    /// The lexer is greedy, so `Foo<T>=x` holds `GreaterEqual`, which gets
+    /// split here: this returns the `>`'s span and leaves `=` as the current
+    /// token.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn consume_type_close_angle(&mut self) -> Span {
         match self.peek() {
             TokenKind::Greater => self.advance_span(),
-            TokenKind::ShiftRight => self.split_close_angle(TokenKind::Greater),
-            TokenKind::GreaterEqual => self.split_close_angle(TokenKind::Equal),
+            TokenKind::GreaterEqual => {
+                let span = self.current.span;
+                let split_at = span.start.saturating_add(1);
+                self.current = Token::new(TokenKind::Equal, Span::new(split_at, span.end));
+                self.previous_span = Span::new(span.start, split_at);
+                self.previous_span
+            }
             _ => {
                 let span = self.current_span();
                 let message = format!("expected `>` to close generics, found {}", self.peek());
-                self.error(span, message);
+                self.syntax_error(span, message);
                 span
             }
         }
     }
 
-    /// Split the leading `>` off the current two-character token, leaving
-    /// `remainder` as the current token.
-    fn split_close_angle(&mut self, remainder: TokenKind) -> Span {
-        let span = self.current.span;
-        let split_at = span.start.saturating_add(1);
-        self.current = Token::new(remainder, Span::new(split_at, span.end));
-        Span::new(span.start, split_at)
-    }
-
     fn parse_table_type(&mut self) -> Type {
-        let open = self.advance_span(); // `{`
+        let open = self.current_span();
+        if !self.enter_depth() {
+            return Type::Error(open);
+        }
+        self.advance_span(); // `{`
+        self.open(Closer::Brace);
         let mut fields = Punctuated::<TypeField>::empty();
 
         while !matches!(self.peek(), TokenKind::RightBrace | TokenKind::Eof) {
@@ -438,6 +502,7 @@ impl Parser<'_> {
                 break;
             }
         }
+        self.exit_depth();
 
         // Grammar: `TableType ::= '{' Type '}' | '{' [PropList] '}'`. An array
         // table holds exactly one type and no separator, and a PropList holds
@@ -479,7 +544,7 @@ impl Parser<'_> {
             }
         }
 
-        let close = self.expect(&TokenKind::RightBrace);
+        let close = self.expect_closer(&TokenKind::RightBrace, Closer::Brace);
         Type::Table(Box::new(TableType { span: open.merge(close), fields }))
     }
 
@@ -495,8 +560,9 @@ impl Parser<'_> {
 
         if matches!(self.peek(), TokenKind::LeftBracket) {
             let open = self.advance_span();
+            self.open(Closer::Bracket);
             let key = self.parse_type();
-            self.expect(&TokenKind::RightBracket);
+            self.expect_closer(&TokenKind::RightBracket, Closer::Bracket);
             self.expect(&TokenKind::Colon);
             let value = self.parse_type();
             let start_span = access.as_ref().map_or(open, |token| token.span);
@@ -520,7 +586,19 @@ impl Parser<'_> {
     /// or, when `is_pack_allowed`, a pack such as `()` or `(T, ...U)`. A `->`
     /// after the `)` decides which.
     fn parse_paren_or_function_type(&mut self, is_pack_allowed: bool) -> Type {
+        let open = self.current_span();
+        if !self.enter_depth() {
+            return Type::Error(open);
+        }
+        let parsed = self.parse_paren_or_function_members(is_pack_allowed);
+        self.exit_depth();
+        parsed
+    }
+
+    /// The caller has counted the level all three forms take.
+    fn parse_paren_or_function_members(&mut self, is_pack_allowed: bool) -> Type {
         let open = self.advance_span(); // `(`
+        self.open(Closer::Paren);
         let mut params = Punctuated::<FunctionTypeParam>::empty();
 
         if !matches!(self.peek(), TokenKind::RightParen | TokenKind::Eof) {
@@ -559,7 +637,7 @@ impl Parser<'_> {
             }
         }
 
-        let close = self.expect(&TokenKind::RightParen);
+        let close = self.expect_closer(&TokenKind::RightParen, Closer::Paren);
 
         if self.eat(&TokenKind::Arrow) {
             let return_type = self.parse_return_type();
@@ -594,7 +672,7 @@ impl Parser<'_> {
         }
         if !is_pack_allowed {
             if params.is_empty() {
-                self.error(span, "expected `->` after `()`, did you mean `nil`?");
+                self.syntax_error(span, "expected `->` after `()`, did you mean `nil`?");
             } else {
                 self.report_expected(&TokenKind::Arrow);
             }
@@ -613,15 +691,19 @@ impl Parser<'_> {
 
         if !matches!(self.peek(), TokenKind::LeftParen) {
             let span = self.current_span();
-            self.error(span, format!("expected `(` after generics, found {}", self.peek()));
+            let message = format!("expected `(` after generics, found {}", self.peek());
+            self.syntax_error(span, message);
             return Type::Error(start_span.merge(span));
         }
 
-        let parsed = self.parse_paren_or_function_type(true);
+        let parsed = self.parse_paren_or_function_members(true);
         let Type::Function(mut function_type) = parsed else {
             // `<T>` followed by a paren type with no `->`, so the generics
             // have nothing to attach to.
-            self.error(parsed.span(), "expected `->` after generic function type parameters");
+            self.syntax_error(
+                parsed.span(),
+                "expected `->` after generic function type parameters",
+            );
             return parsed;
         };
         function_type.span = start_span.merge(function_type.span);

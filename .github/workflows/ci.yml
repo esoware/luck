@@ -43,3 +43,21 @@ jobs:
 
       - name: Fail if just ready changed or added a file
         run: git add --all && git diff --cached --exit-code
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Lints are capped because the workspace denies lints older compilers don't know.
+      - name: Check the workspace on the rust-version toolchain
+        env:
+          RUSTFLAGS: --cap-lints=warn
+        run: |
+          msrv=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)
+          rustup toolchain install "$msrv" --profile minimal
+          cargo +"$msrv" check --workspace --locked

@@ -1,6 +1,6 @@
 use luck_semantic::SymbolKind;
 
-use crate::diagnostic::{Finding, line_column};
+use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -29,8 +29,7 @@ impl WholeRule for Shadowing {
                 continue;
             }
             let shadowed = semantic.scope_tree.symbol(shadowed_id);
-            let (line, column) =
-                line_column(context.source, shadowed.definition_span.start, semantic.version);
+            let (line, column) = context.line_index().line_column(shadowed.definition_span.start);
             findings.push(
                 Finding::new(
                     format!("variable `{}` shadows outer variable", symbol.name),
@@ -60,34 +59,47 @@ mod tests {
     fn flags_nested_block_shadow() {
         // Inner-scope redeclaration of an outer local. `redefining_local`
         // covers only the same block.
-        let diags = run("local x = 1\ndo local x = 2 print(x) end");
+        let diags = run("\
+local x = 1
+do local x = 2 print(x) end");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]
     fn flags_loop_variable_shadow() {
-        let diags = run("local i = 1\nfor i = 1, 3 do print(i) end");
+        let diags = run("\
+local i = 1
+for i = 1, 3 do print(i) end");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn ignores_distinct_names() {
-        let diags = run("local x = 1\ndo local y = 2 print(y) end");
+        let diags = run("\
+local x = 1
+do local y = 2 print(y) end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_underscore_names() {
-        let diags = run("local _ = 1\ndo local _ = 2 end");
+        let diags = run("\
+local _ = 1
+do local _ = 2 end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_implicit_self_of_nested_method() {
-        let diags = run(
-            "local M = {}\nfunction M:a()\n local t = {}\n function t:b() return self end\n return t\nend\nreturn M",
-        );
+        let diags = run("\
+local M = {}
+function M:a()
+ local t = {}
+ function t:b() return self end
+ return t
+end
+return M");
         assert!(diags.is_empty(), "an implicit `self` has no name to change: {diags:?}");
     }
 

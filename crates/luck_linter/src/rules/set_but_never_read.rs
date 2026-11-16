@@ -77,14 +77,19 @@ mod tests {
 
     #[test]
     fn flags_write_without_read() {
-        let diags = run("local x\nx = 1");
+        let diags = run("\
+local x
+x = 1");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]
     fn ignores_write_with_subsequent_read() {
-        let diags = run("local x\nx = 1\nreturn x");
+        let diags = run("\
+local x
+x = 1
+return x");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -97,20 +102,30 @@ mod tests {
 
     #[test]
     fn ignores_underscore_prefixed() {
-        let diags = run("local _x\n_x = 1");
+        let diags = run("\
+local _x
+_x = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_multiple_writes_no_reads() {
-        let diags = run("local x\nx = 1\nx = 2");
+        let diags = run("\
+local x
+x = 1
+x = 2");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]
     fn ignores_exported_local_only_written() {
-        let diags =
-            run_rule(&SetButNeverRead, "export local counter = 0\ncounter = 1", LuaVersion::Luau);
+        let diags = run_rule(
+            &SetButNeverRead,
+            "\
+export local counter = 0
+counter = 1",
+            LuaVersion::Luau,
+        );
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 }

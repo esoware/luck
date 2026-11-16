@@ -3,7 +3,7 @@ name                   = "luck_core"
 version.workspace      = true
 authors.workspace      = true
 categories.workspace   = true
-description            = "Shared types, configuration, and diagnostics for the luck toolchain"
+description            = "Dialect targets and diagnostics shared across the luck toolchain"
 edition.workspace      = true
 homepage.workspace     = true
 keywords.workspace     = true
@@ -16,14 +16,3 @@ workspace = true
 
 [dependencies]
 luck_token = { workspace = true }
-
-globset    = { workspace = true }
-json5      = { workspace = true }
-rustc-hash = { workspace = true }
-schemars   = { workspace = true }
-serde      = { workspace = true }
-simdutf8   = { workspace = true }
-
-[dev-dependencies]
-serde_json = { workspace = true }
-tempfile   = { workspace = true }

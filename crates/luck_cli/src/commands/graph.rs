@@ -1,6 +1,6 @@
 use clap::{Args, ValueEnum};
-use luck_bundler::{BundleOptions, DependencyGraph, ModuleId};
-use luck_core::{DynamicRequire, LuaTarget};
+use luck_bundler::{BundleOptions, DependencyGraph, DynamicRequire, ModuleId};
+use luck_core::LuaTarget;
 
 use crate::exit::{Exit, fail_with_diags};
 use crate::project::{

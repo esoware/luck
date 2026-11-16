@@ -1,6 +1,7 @@
 use luck_ast::{Expression, Statement};
 use luck_token::{BinOp, CompoundOp, Span};
 
+use crate::binary::operator_pairs;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::is_number_literal;
@@ -25,11 +26,19 @@ impl NodeRule for DivideByZero {
         NodeTypeSet::from_types(&[NodeType::BinaryOp, NodeType::CompoundAssignment])
     }
     fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        if let Expression::BinaryOp(binary_op) = expr
-            && let Some(op_name) = divisive_op_name(binary_op.op)
-            && is_number_literal(&binary_op.rhs, 0.0, context.semantic.version)
-        {
-            findings.push(zero_divisor_finding(op_name, binary_op.span));
+        let Expression::BinaryOp(run) = expr else {
+            return;
+        };
+        if run.precedence() != BinOp::Div.precedence() {
+            return;
+        }
+        for pair in operator_pairs(run) {
+            if let Some(op_name) = divisive_op_name(pair.op)
+                && let Some(divisor) = pair.rhs
+                && is_number_literal(divisor, 0.0, context.semantic.version)
+            {
+                findings.push(zero_divisor_finding(op_name, pair.span()));
+            }
         }
     }
     fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
@@ -145,7 +154,12 @@ mod tests {
 
     #[test]
     fn flags_compound_division_by_zero_on_luau() {
-        let diags = run("local x = 1\nx /= 0", LuaVersion::Luau);
+        let diags = run(
+            "\
+local x = 1
+x /= 0",
+            LuaVersion::Luau,
+        );
         assert_eq!(diags.len(), 1, "`x /= 0` divides by a literal zero: {diags:?}");
     }
 
@@ -169,13 +183,23 @@ mod tests {
 
     #[test]
     fn flags_compound_modulo_by_underscored_zero_on_luau() {
-        let diags = run("local x = 1\nx %= 0_0", LuaVersion::Luau);
+        let diags = run(
+            "\
+local x = 1
+x %= 0_0",
+            LuaVersion::Luau,
+        );
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn ignores_compound_multiplication_by_zero_on_luau() {
-        let diags = run("local x = 1\nx *= 0", LuaVersion::Luau);
+        let diags = run(
+            "\
+local x = 1
+x *= 0",
+            LuaVersion::Luau,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

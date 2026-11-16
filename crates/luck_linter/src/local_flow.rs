@@ -1,7 +1,7 @@
 use core::mem;
 
 use luck_semantic::{ReferenceId, ReferenceKind, Symbol, SymbolId, SymbolKind};
-use luck_token::Span;
+use luck_token::{MAX_ACTIVE_LOCALS, Span};
 
 use crate::cfg::{FlowGraph, LocalDeclaration};
 use crate::rule::LintContext;
@@ -44,6 +44,9 @@ impl LocalFlow {
                 continue;
             }
             let graph = FlowGraph::of_block(function_block, context.semantic);
+            if exceeds_local_limit(graph.locals()) {
+                continue;
+            }
             let mut walk = GraphWalk::new(&graph);
             for local in graph.locals() {
                 if let Ok(index) = tracked.binary_search_by_key(&local.name_span.start, |symbol| {
@@ -92,7 +95,14 @@ impl LocalFlow {
             // Stable, so each node's uses stay in reference order.
             uses.sort_by_key(|used| used.node);
             walk.mark_next_uses(&uses, local);
-            if !is_uninitialized && walk.is_overwritten_unread(graph.successors(local.node)) {
+            // The declaration's node runs on past it, so a use there comes
+            // next.
+            let is_initializer_overwritten =
+                uses.iter().find(|used| used.node == local.node).map_or_else(
+                    || walk.is_overwritten_unread(graph.successors(local.node)),
+                    |next| !next.kind.is_read(),
+                );
+            if !is_uninitialized && is_initializer_overwritten {
                 self.overwritten_values.push((symbol.id, symbol.definition_span));
             }
             for (i, used) in uses.iter().enumerate() {
@@ -111,6 +121,25 @@ impl LocalFlow {
             }
         }
     }
+}
+
+/// Whether more `local` names are active at once somewhere in the function
+/// than any Lua compiles.
+///
+/// Each local's walk covers the nodes where it's active, so under the limit
+/// the walks cost at most that many visits a node.
+///
+/// `locals` is in source order, and each one's scope holds those of the
+/// locals inside it, so the stack holds exactly those still active.
+fn exceeds_local_limit(locals: &[LocalDeclaration]) -> bool {
+    let mut active_scope_ends: Vec<u32> = Vec::new();
+    locals.iter().any(|local| {
+        while active_scope_ends.last().is_some_and(|&end| end <= local.name_span.start) {
+            active_scope_ends.pop();
+        }
+        active_scope_ends.push(local.scope_end);
+        active_scope_ends.len() > MAX_ACTIVE_LOCALS
+    })
 }
 
 #[derive(Debug, Clone, Copy)]

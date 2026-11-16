@@ -1,16 +1,18 @@
 use alloc::borrow::Cow;
 use std::path::Path;
 
-use luck_core::{DEFAULT_SEARCH_PATHS, Diagnostic};
+use luck_core::Diagnostic;
 use luck_token::{LuaVersion, Span};
 
 use crate::luau::ModuleProbes;
 use crate::luaurc::AliasCache;
 use crate::{lua, luau};
 
+const DEFAULT_SEARCH_PATHS: &[&str] = &["?.lua", "?/init.lua"];
+
 #[derive(Debug)]
 pub struct ResolvedModule {
-    /// In the [`normalize_path`](luck_core::normalize_path) form.
+    /// In the [`normalize_path`](crate::normalize_path) form.
     pub path: String,
     pub warnings: Vec<Diagnostic>,
 }
@@ -19,7 +21,7 @@ pub struct ResolvedModule {
 pub struct ResolveRequest<'request> {
     /// The require string, e.g. `"foo.bar"`, `"./sibling"`, or `"@alias/mod"`.
     pub module: &'request str,
-    /// In the [`normalize_path`](luck_core::normalize_path) form.
+    /// In the [`normalize_path`](crate::normalize_path) form.
     pub from_file: &'request str,
     pub span: Span,
 }
@@ -39,9 +41,9 @@ enum Scheme<'config> {
 }
 
 impl<'config> Resolver<'config> {
-    /// Lua 5.x tries each of `search_paths`, or [`DEFAULT_SEARCH_PATHS`] when
-    /// it's empty, against `project_root`. Luau ignores both and resolves from
-    /// the requiring file.
+    /// Lua 5.x tries each of `search_paths`, or `?.lua` and `?/init.lua`
+    /// when it's empty, against `project_root`. Luau ignores both and
+    /// resolves from the requiring file.
     #[must_use]
     pub fn new(
         version: LuaVersion,

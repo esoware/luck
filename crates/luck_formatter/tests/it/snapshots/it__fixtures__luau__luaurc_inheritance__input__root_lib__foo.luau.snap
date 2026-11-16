@@ -1,0 +1,11 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/luau/luaurc_inheritance/input/root_lib/foo.luau
+---
+-- line_width = 1, 40, 80, 100, 120
+local foo = {}
+
+foo.value = "from_root"
+
+return foo

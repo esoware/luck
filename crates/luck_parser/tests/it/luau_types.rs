@@ -101,6 +101,46 @@ fn optional_type() {
     assert!(matches!(alias_type("type X = number?"), Type::Optional(_)));
 }
 
+/// How many optionals wrap `ty`, and the type they wrap.
+fn unwrap_optionals(mut ty: &Type) -> (usize, &Type) {
+    let mut count = 0usize;
+    while let Type::Optional(optional) = ty {
+        count = count.saturating_add(1);
+        ty = &optional.type_value;
+    }
+    (count, ty)
+}
+
+/// Each `?` wraps the type before it, and the outermost spans all of them.
+#[test]
+fn each_question_mark_is_an_optional() {
+    for (source, question_count) in
+        [("type X = number?", 1), ("type X = number??", 2), ("type X = number? ? ?", 3)]
+    {
+        let alias = alias_type(source);
+        assert_eq!(source.get(Range::<usize>::from(alias.span())), source.get(9..), "{source}");
+        let (count, inner) = unwrap_optionals(&alias);
+        assert_eq!(count, question_count, "{source}");
+        assert!(matches!(inner, Type::Name { .. }), "{source}");
+    }
+}
+
+/// `parseReturnType` folds a suffix after `(T, ...U)` onto `T`.
+#[test]
+fn a_question_mark_folded_into_a_return_pack_wraps_its_first_element() {
+    let result = parse_luau("local function f(): (T?, ...U)?? end");
+    assert_no_errors(&result);
+    let Statement::LocalFunction(function) = &result.block.stmts[0] else {
+        panic!("expected a local function");
+    };
+    let Some(Type::Pack(pack)) = &function.body.return_type else {
+        panic!("expected a pack");
+    };
+    let (count, inner) = unwrap_optionals(pack.types.first().expect("an element"));
+    assert_eq!(count, 3);
+    assert!(matches!(inner, Type::Name { .. }));
+}
+
 #[test]
 fn negation_syntax_is_an_error_in_luau() {
     for source in [
@@ -273,7 +313,7 @@ fn typeof_type() {
     let Type::Typeof(typeof_type) = alias_type("type X = typeof(game.Workspace)") else {
         panic!("expected Typeof");
     };
-    assert!(matches!(typeof_type.expr, Expression::Var(_)));
+    assert!(matches!(typeof_type.expr, Expression::Suffixed(_)));
 }
 
 #[test]
@@ -342,8 +382,12 @@ fn generic_for_annotations_preserved() {
 
 #[test]
 fn generic_function_declaration() {
-    let result =
-        parse_luau("local function map<T, U>(items: {T}, fn: (T) -> U): {U}\n\treturn {}\nend");
+    let result = parse_luau(
+        "\
+local function map<T, U>(items: {T}, fn: (T) -> U): {U}
+\treturn {}
+end",
+    );
     assert_no_errors(&result);
     let Statement::LocalFunction(local_function) = &result.block.stmts[0] else {
         panic!("expected LocalFunction");

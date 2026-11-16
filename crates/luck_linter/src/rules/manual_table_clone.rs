@@ -1,4 +1,6 @@
-use luck_ast::{Block, Expression, GenericFor, LocalAssignment, NumericFor, Statement, Var};
+use luck_ast::{
+    Block, Expression, GenericFor, LocalAssignment, NumericFor, Statement, Suffix, Var,
+};
 use luck_semantic::{ScopeTree, SemanticAnalysis};
 use luck_token::{Span, Token, UnOp};
 
@@ -155,9 +157,10 @@ fn is_numeric_clone(loop_node: &NumericFor, destination: &Token, tree: &ScopeTre
         && has_unit_step
         && copied_value(&loop_node.block, destination, &loop_node.name, tree).is_some_and(
             |copied| {
-                matches!(copied, Expression::Var(Var::Index(copied_index))
-                    if is_same_binding(&copied_index.prefix, source_table, tree)
-                        && is_read_of_local(&copied_index.index, &loop_node.name, tree))
+                index_read(copied).is_some_and(|(prefix, index)| {
+                    is_same_binding(prefix, source_table, tree)
+                        && is_read_of_local(index, &loop_node.name, tree)
+                })
             },
         )
 }
@@ -175,22 +178,37 @@ fn copied_value<'ast>(
     let [Statement::Assignment(assignment)] = body.stmts.as_slice() else {
         return None;
     };
-    let ([Var::Index(target)], [value]) =
+    let ([Var::Suffixed(target)], [value]) =
         (assignment.targets.items.as_slice(), assignment.values.items.as_slice())
     else {
         return None;
     };
-    (is_read_of_local(&target.prefix, destination, tree)
-        && is_read_of_local(&target.index, key, tree))
-    .then_some(value)
+    let [Suffix::Index { index, .. }] = &*target.suffixes else {
+        return None;
+    };
+    (is_read_of_local(&target.prefix, destination, tree) && is_read_of_local(index, key, tree))
+        .then_some(value)
+}
+
+/// The table and the key of `table[key]`.
+fn index_read(expr: &Expression) -> Option<(&Expression, &Expression)> {
+    let Expression::Suffixed(chain) = expr else {
+        return None;
+    };
+    let [Suffix::Index { index, .. }] = &*chain.suffixes else {
+        return None;
+    };
+    Some((&chain.prefix, index))
 }
 
 /// A shadowed one is a user iterator, not a table walk.
 fn is_pairs_call(expr: &Expression, semantic: &SemanticAnalysis) -> bool {
-    let Expression::FunctionCall(call) = expr else {
+    let Expression::Suffixed(chain) = expr else {
         return false;
     };
-    is_global_call(call, "pairs", semantic) || is_global_call(call, "ipairs", semantic)
+    chain.last_call().is_some_and(|call| {
+        is_global_call(call, "pairs", semantic) || is_global_call(call, "ipairs", semantic)
+    })
 }
 
 fn length_of_name(expr: &Expression) -> Option<&Token> {
@@ -200,7 +218,7 @@ fn length_of_name(expr: &Expression) -> Option<&Token> {
     if unary.op != UnOp::Len {
         return None;
     }
-    let Expression::Var(Var::Name(token)) = &unary.operand else {
+    let Expression::Name(token) = &unary.operand else {
         return None;
     };
     Some(token)
@@ -212,14 +230,14 @@ fn declaration_of(name: &Token, tree: &ScopeTree) -> Option<Span> {
 }
 
 fn is_read_of_local(expr: &Expression, declaration: &Token, tree: &ScopeTree) -> bool {
-    matches!(expr, Expression::Var(Var::Name(token))
+    matches!(expr, Expression::Name(token)
         if declaration_of(token, tree) == Some(declaration.span))
 }
 
 /// Whether `expr` is the same name as `source`, resolving the same way, so a
 /// loop variable that shadows it doesn't count.
 fn is_same_binding(expr: &Expression, source: &Token, tree: &ScopeTree) -> bool {
-    matches!(expr, Expression::Var(Var::Name(token))
+    matches!(expr, Expression::Name(token)
         if token.identifier() == source.identifier()
             && declaration_of(token, tree) == declaration_of(source, tree))
 }
@@ -238,7 +256,9 @@ mod tests {
 
     #[test]
     fn flags_generic_for_pairs_on_luau() {
-        let source = "local out = {}\nfor k, v in pairs(src) do out[k] = v end";
+        let source = "\
+local out = {}
+for k, v in pairs(src) do out[k] = v end";
         let diags = run(source, LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(
@@ -250,7 +270,9 @@ mod tests {
 
     #[test]
     fn flags_numeric_for_on_lua54() {
-        let source = "local out = {}\nfor i = 1, #src do out[i] = src[i] end";
+        let source = "\
+local out = {}
+for i = 1, #src do out[i] = src[i] end";
         let diags = run(source, LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(
@@ -263,21 +285,28 @@ mod tests {
     #[test]
     fn ignores_pairs_copy_on_lua54() {
         // `table.move` copies only the array part.
-        let source = "local out = {}\nfor k, v in pairs(src) do out[k] = v end";
+        let source = "\
+local out = {}
+for k, v in pairs(src) do out[k] = v end";
         let diags = run(source, LuaVersion::Lua54);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_extra_body_stmt() {
-        let source = "local out = {}\nfor k, v in pairs(src) do out[k] = v\nprint(k) end";
+        let source = "\
+local out = {}
+for k, v in pairs(src) do out[k] = v
+print(k) end";
         let diags = run(source, LuaVersion::Luau);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_numeric_for_on_lua55_with_table_move() {
-        let source = "local out = {}\nfor i = 1, #src do out[i] = src[i] end";
+        let source = "\
+local out = {}
+for i = 1, #src do out[i] = src[i] end";
         let diags = run(source, LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(
@@ -291,42 +320,57 @@ mod tests {
     fn ignores_pairs_copy_on_lua55() {
         // The 5.5 stdlib has no `table.clone`, and `table.move` can't copy a
         // `pairs` loop.
-        let source = "local src = {1}\nlocal out = {}\nfor k, v in pairs(src) do out[k] = v end";
+        let source = "\
+local src = {1}
+local out = {}
+for k, v in pairs(src) do out[k] = v end";
         let diags = run(source, LuaVersion::Lua55);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_hex_start_and_step() {
-        let source = "local out = {}\nfor i = 0x1, #src, 0x1 do out[i] = src[i] end";
+        let source = "\
+local out = {}
+for i = 0x1, #src, 0x1 do out[i] = src[i] end";
         let diags = run(source, LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]
     fn ignores_generic_key_shadowing_destination() {
-        let source = "local src = {1}\nlocal out = {}\nfor out, v in pairs(src) do out[out] = v end\nreturn out";
+        let source = "\
+local src = {1}
+local out = {}
+for out, v in pairs(src) do out[out] = v end
+return out";
         let diags = run(source, LuaVersion::Luau);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_generic_value_shadowing_destination() {
-        let source = "local out = {}\nfor k, out in pairs(src) do out[k] = out end";
+        let source = "\
+local out = {}
+for k, out in pairs(src) do out[k] = out end";
         let diags = run(source, LuaVersion::Luau);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_numeric_variable_shadowing_destination() {
-        let source = "local out = {}\nfor out = 1, #src do out[out] = src[out] end";
+        let source = "\
+local out = {}
+for out = 1, #src do out[out] = src[out] end";
         let diags = run(source, LuaVersion::Lua54);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_numeric_variable_shadowing_source_table() {
-        let source = "local out = {}\nfor src = 1, #src do out[src] = src[src] end";
+        let source = "\
+local out = {}
+for src = 1, #src do out[src] = src[src] end";
         let diags = run(source, LuaVersion::Lua54);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -334,14 +378,18 @@ mod tests {
     #[test]
     fn ignores_lua51() {
         // Lua 5.1 has neither helper, so the rule stays silent.
-        let source = "local out = {}\nfor i = 1, #src do out[i] = src[i] end";
+        let source = "\
+local out = {}
+for i = 1, #src do out[i] = src[i] end";
         let diags = run(source, LuaVersion::Lua51);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_local_not_empty_table() {
-        let source = "local out = {1, 2}\nfor k, v in pairs(src) do out[k] = v end";
+        let source = "\
+local out = {1, 2}
+for k, v in pairs(src) do out[k] = v end";
         let diags = run(source, LuaVersion::Luau);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -350,28 +398,37 @@ mod tests {
     fn ignores_destination_differs() {
         // The assignment writes to a different table than the one
         // declared above the loop.
-        let source = "local out = {}\nfor k, v in pairs(src) do other[k] = v end";
+        let source = "\
+local out = {}
+for k, v in pairs(src) do other[k] = v end";
         let diags = run(source, LuaVersion::Luau);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_shadowed_pairs() {
-        let source = "local pairs = next\nlocal out = {}\nfor k, v in pairs(src) do out[k] = v end";
+        let source = "\
+local pairs = next
+local out = {}
+for k, v in pairs(src) do out[k] = v end";
         let diags = run(source, LuaVersion::Luau);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_ipairs_form() {
-        let source = "local out = {}\nfor k, v in ipairs(src) do out[k] = v end";
+        let source = "\
+local out = {}
+for k, v in ipairs(src) do out[k] = v end";
         let diags = run(source, LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]
     fn flags_copy_after_semicolon() {
-        let source = "local out = {};\nfor i = 1, #src do out[i] = src[i] end";
+        let source = "\
+local out = {};
+for i = 1, #src do out[i] = src[i] end";
         let diags = run(source, LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "a `;` doesn't change the copy: {diags:?}");
     }

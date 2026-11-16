@@ -1,5 +1,5 @@
-use luck_ast::{Block, FunctionBody, Parameter, Statement, Transform, Var, Visitor};
-use luck_token::Span;
+use luck_ast::{Block, Expression, FunctionBody, Parameter, Statement, Transform, Var, Visitor};
+use luck_token::{Span, Token};
 
 use crate::binding::{identifier_name, identifier_token};
 
@@ -17,14 +17,27 @@ fn count_self_references(body: &FunctionBody) -> usize {
 
 struct SelfCounter(usize);
 
-impl<'ast> Visitor<'ast> for SelfCounter {
-    fn visit_var(&mut self, var: &'ast Var) {
-        if let Var::Name(name) = var
-            && identifier_name(name) == "self"
-        {
+impl SelfCounter {
+    fn count(&mut self, name: &Token) {
+        if identifier_name(name) == "self" {
             self.0 = self.0.saturating_add(1);
         }
-        self.walk_var(var);
+    }
+}
+
+impl<'ast> Visitor<'ast> for SelfCounter {
+    fn visit_expr(&mut self, expr: &'ast Expression) {
+        if let Expression::Name(name) = expr {
+            self.count(name);
+        }
+        self.walk_expr(expr);
+    }
+
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Name(name) = target {
+            self.count(name);
+        }
+        self.walk_assignment_target(target);
     }
 
     // Skips nested functions. A nested method binds its own `self`, and
@@ -97,7 +110,15 @@ mod tests {
     #[test]
     fn rewrites_method_with_many_self_references() {
         let result = rewrite_and_rename(
-            "local t = {}\nfunction t:method(x)\n  self.a = 1\n  self.b = 2\n  return self.c + x\nend\nreturn t\n",
+            "\
+local t = {}
+function t:method(x)
+  self.a = 1
+  self.b = 2
+  return self.c + x
+end
+return t
+",
         );
         assert!(!result.contains("self"), "self should be renamed: {result}");
     }
@@ -105,7 +126,13 @@ mod tests {
     #[test]
     fn keeps_method_syntax_with_one_self_reference() {
         let result = rewrite_and_rename(
-            "local t = {}\nfunction t:method(x)\n  return self.a + x\nend\nreturn t\n",
+            "\
+local t = {}
+function t:method(x)
+  return self.a + x
+end
+return t
+",
         );
         assert!(result.contains("self"), "self should be kept (only 1 ref): {result}");
     }
@@ -113,7 +140,14 @@ mod tests {
     #[test]
     fn rewrites_method_without_params() {
         let result = rewrite_and_rename(
-            "local t = {}\nfunction t:method()\n  self.a = 1\n  self.b = 2\nend\nreturn t\n",
+            "\
+local t = {}
+function t:method()
+  self.a = 1
+  self.b = 2
+end
+return t
+",
         );
         assert!(!result.contains("self"), "self should be renamed: {result}");
     }
@@ -121,7 +155,15 @@ mod tests {
     #[test]
     fn vararg_only_method_keeps_comma() {
         let result = rewrite_and_rename(
-            "local t = {}\nfunction t:method(...)\n  self.a = 1\n  self.b = 2\n  return ...\nend\nreturn t\n",
+            "\
+local t = {}
+function t:method(...)
+  self.a = 1
+  self.b = 2
+  return ...
+end
+return t
+",
         );
         assert!(!result.contains("self"), "self should be renamed: {result}");
     }
@@ -129,7 +171,12 @@ mod tests {
     #[test]
     fn nested_method_keeps_its_own_self_after_the_rewrite() {
         let result = rewrite_and_rename(
-            "function M:outer()\n  print(self, self)\n  function t:inner() return self end\nend\n",
+            "\
+function M:outer()
+  print(self, self)
+  function t:inner() return self end
+end
+",
         );
         assert!(
             result.contains(":inner()return self"),

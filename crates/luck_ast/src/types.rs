@@ -85,7 +85,8 @@ pub struct FunctionTypeParam {
     pub type_value: Type,
 }
 
-#[derive(Eq)]
+/// One `?`, so `T??` is an optional of an optional.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OptionalType {
     pub span: Span,
     pub type_value: Type,

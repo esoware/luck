@@ -89,7 +89,9 @@ mod tests {
 
     #[test]
     fn flags_while_with_unconditional_return() {
-        let diags = run("local x = 1\nwhile x do return 1 end");
+        let diags = run("\
+local x = 1
+while x do return 1 end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("returns"));
     }
@@ -110,7 +112,10 @@ mod tests {
 
     #[test]
     fn ignores_when_some_path_falls_through() {
-        let diags = run("local x = 1\nlocal c = 1\nwhile x do if c then break end print() end");
+        let diags = run("\
+local x = 1
+local c = 1
+while x do if c then break end print() end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -130,7 +135,9 @@ mod tests {
     fn flags_when_if_else_both_return() {
         // The body's exit becomes Return when every if/else branch
         // returns.
-        let diags = run("local c = 1\nwhile c do if c then return 1 else return 2 end end");
+        let diags = run("\
+local c = 1
+while c do if c then return 1 else return 2 end end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
@@ -171,7 +178,9 @@ mod tests {
 
     #[test]
     fn ignores_shadowed_error_call() {
-        let diags = run("local function error(text) print(text) end\nfor i = 1, 3 do error(i) end");
+        let diags = run("\
+local function error(text) print(text) end
+for i = 1, 3 do error(i) end");
         assert!(diags.is_empty(), "a local `error` doesn't raise: {diags:?}");
     }
 

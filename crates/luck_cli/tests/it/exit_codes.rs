@@ -42,7 +42,14 @@ fn check_parse_error_exits_failure() {
 #[test]
 fn check_valid_file_exits_success() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "ok.lua", "local x = 1\nreturn x\n");
+    write_file(
+        directory.path(),
+        "ok.lua",
+        "\
+local x = 1
+return x
+",
+    );
 
     luck_in(directory.path()).args(["check", "ok.lua"]).assert().code(0i32);
 }
@@ -167,10 +174,18 @@ fn lint_stdin_fix_renders_spans_past_the_end_of_the_original() {
 
     luck_in(directory.path())
         .args(["lint", "--fix", "--stdin-filepath", "buffer.lua"])
-        .write_stdin("local unused = 1\nreturn missingglobal")
+        .write_stdin(
+            "\
+local unused = 1
+return missingglobal",
+        )
         .assert()
         .code(1i32)
-        .stdout("local _unused = 1\nreturn missingglobal")
+        .stdout(
+            "\
+local _unused = 1
+return missingglobal",
+        )
         .stderr(predicate::str::contains("buffer.lua:2:8"));
 }
 
@@ -183,10 +198,20 @@ fn lint_stdin_fix_renders_spans_against_the_shortened_text() {
     luck_in(directory.path())
         .args(["lint", "--fix", "--stdin-filepath", "buffer.lua"])
         .args(["-W", "redundant_nil_init"])
-        .write_stdin("local a = nil\nreturn a, missingglobal\n")
+        .write_stdin(
+            "\
+local a = nil
+return a, missingglobal
+",
+        )
         .assert()
         .code(1i32)
-        .stdout("local a\nreturn a, missingglobal\n")
+        .stdout(
+            "\
+local a
+return a, missingglobal
+",
+        )
         .stderr(predicate::str::contains("buffer.lua:2:11"));
 }
 
@@ -213,7 +238,14 @@ fn build_empty_entries_exits_usage() {
 fn fmt_range_formats_only_covered_stmt() {
     let directory = TempDir::new().unwrap();
     // Two unformatted statements; the range covers only the second line.
-    let path = write_file(directory.path(), "partial.lua", "local    a=1\nlocal    b=2\n");
+    let path = write_file(
+        directory.path(),
+        "partial.lua",
+        "\
+local    a=1
+local    b=2
+",
+    );
 
     luck_in(directory.path())
         .args(["fmt", "--range-start", "13", "partial.lua"])
@@ -305,7 +337,11 @@ fn bundle_with_dynamic_require_succeeds_and_warns() {
     write_file(
         directory.path(),
         "main.lua",
-        "local helper = require(\"helper\")\nlocal name = \"helper\"\nreturn helper.value + require(name).value\n",
+        "\
+local helper = require(\"helper\")
+local name = \"helper\"
+return helper.value + require(name).value
+",
     );
 
     let assert = luck_in(directory.path())
@@ -324,7 +360,11 @@ fn bundle_with_dynamic_require_fails_in_error_mode() {
     write_file(
         directory.path(),
         "main.lua",
-        "local helper = require(\"helper\")\nlocal name = \"helper\"\nreturn helper.value + require(name).value\n",
+        "\
+local helper = require(\"helper\")
+local name = \"helper\"
+return helper.value + require(name).value
+",
     );
 
     luck_in(directory.path())
@@ -353,7 +393,10 @@ fn bundle_of_a_bare_entry_name_emits_no_absolute_paths() {
     write_file(
         directory.path(),
         "main.lua",
-        "local helper = require(\"helper\")\nreturn helper.value\n",
+        "\
+local helper = require(\"helper\")
+return helper.value
+",
     );
 
     let assert = luck_in(directory.path()).args(["bundle", "main.lua"]).assert().code(0i32);

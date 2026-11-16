@@ -88,19 +88,40 @@ mod tests {
 
     #[test]
     fn a_table_call_argument_folds() {
-        let folds = folded_lines("setup {\n  a = 1,\n}\n", LuaTarget::Lua54);
+        let folds = folded_lines(
+            "\
+setup {
+  a = 1,
+}
+",
+            LuaTarget::Lua54,
+        );
         assert_eq!(folds, vec![(0, 2)], "`f {{...}}` is a table constructor like any other");
     }
 
     #[test]
     fn a_luau_type_function_folds() {
-        let folds = folded_lines("type function f(t)\n  return t\nend\n", LuaTarget::Luau);
+        let folds = folded_lines(
+            "\
+type function f(t)
+  return t
+end
+",
+            LuaTarget::Luau,
+        );
         assert_eq!(folds, vec![(0, 2)], "a `type function` body folds like any other");
     }
 
     #[test]
     fn a_lua55_global_function_folds() {
-        let folds = folded_lines("global function f()\n  return 1\nend\n", LuaTarget::Lua55);
+        let folds = folded_lines(
+            "\
+global function f()
+  return 1
+end
+",
+            LuaTarget::Lua55,
+        );
         assert_eq!(folds, vec![(0, 2)], "a `global function` body folds like any other");
     }
 }

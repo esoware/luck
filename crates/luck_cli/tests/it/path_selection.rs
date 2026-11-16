@@ -9,7 +9,11 @@ use tempfile::TempDir;
 
 use crate::common::{luck_in, write_file};
 
-const UNINDENTED: &str = "local function f()\nreturn 1\nend\n";
+const UNINDENTED: &str = "\
+local function f()
+return 1
+end
+";
 
 /// A root project indenting with two spaces, and a `pkg` project inside it
 /// indenting with tabs.

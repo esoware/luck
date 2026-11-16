@@ -31,28 +31,13 @@ mod render;
 mod verbosity;
 
 use std::process::ExitCode;
-use std::thread::Builder;
-
-use crate::exit::Exit;
 
 #[cfg(not(any(target_arch = "arm", target_arch = "riscv64", target_family = "wasm")))]
 #[global_allocator]
 static GLOBAL: mimalloc_safe::MiMalloc = mimalloc_safe::MiMalloc;
 
-/// Parsing and every AST pass recurse, so deeply nested sources can outgrow
-/// the main thread's stack, which is only 1 MB on Windows.
-const WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
-
-/// # Panics
-///
-/// Panics if the OS can't start the worker thread.
+/// Every stage fits in 1 MB of stack, a Windows main thread's, however deep
+/// the source nests, so each thread runs on the stack it starts with.
 fn main() -> ExitCode {
-    #[expect(clippy::expect_used, reason = "the CLI can't run without it")]
-    let thread = Builder::new()
-        .stack_size(WORKER_STACK_BYTES)
-        .spawn(cli::run)
-        .expect("failed to spawn worker thread");
-
-    // A panic in the worker exits with `Exit::Failure`.
-    thread.join().unwrap_or_else(|_| ExitCode::from(Exit::Failure))
+    cli::run()
 }

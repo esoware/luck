@@ -1,0 +1,35 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/lua51/basic_51/input/util.lua
+---
+-- line_width = 1
+local util = {}
+
+function util.sum(
+	...
+)
+	local total = 0
+	for _, value in ipairs({
+		...,
+	}) do
+		total = total
+			+ value
+	end
+	return total
+end
+
+return util
+
+-- line_width = 40, 80, 100, 120
+local util = {}
+
+function util.sum(...)
+	local total = 0
+	for _, value in ipairs({ ... }) do
+		total = total + value
+	end
+	return total
+end
+
+return util

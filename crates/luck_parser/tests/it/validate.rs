@@ -1,3 +1,4 @@
+use core::fmt::Write as _;
 use core::ops::Range;
 
 use luck_parser::ParseError;
@@ -25,32 +26,94 @@ fn assert_has_errors(errors: &[ParseError], description: &str) {
 #[test]
 fn assignment_to_const_attrib_rejected() {
     for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
-        assert_has_errors(&check("local x <const> = 1\nx = 2", version), "const reassignment");
-        assert_has_errors(&check("local x <close> = nil\nx = 2", version), "close reassignment");
+        assert_has_errors(
+            &check(
+                "\
+local x <const> = 1
+x = 2",
+                version,
+            ),
+            "const reassignment",
+        );
+        assert_has_errors(
+            &check(
+                "\
+local x <close> = nil
+x = 2",
+                version,
+            ),
+            "close reassignment",
+        );
         // Upvalue writes are compile errors too.
         assert_has_errors(
-            &check("local x <const> = 1\nlocal f = function() x = 2 end", version),
+            &check(
+                "\
+local x <const> = 1
+local f = function() x = 2 end",
+                version,
+            ),
             "const upvalue write",
         );
         // Reads, shadows, and table mutation stay legal.
-        assert_no_errors(&check("local x <const> = 1\nprint(x)", version));
-        assert_no_errors(&check("local x <const> = 1\nlocal x = 2\nx = 3\nprint(x)", version));
-        assert_no_errors(&check("local t <const> = {}\nt.x = 1\nt[1] = 2", version));
+        assert_no_errors(&check(
+            "\
+local x <const> = 1
+print(x)",
+            version,
+        ));
+        assert_no_errors(&check(
+            "\
+local x <const> = 1
+local x = 2
+x = 3
+print(x)",
+            version,
+        ));
+        assert_no_errors(&check(
+            "\
+local t <const> = {}
+t.x = 1
+t[1] = 2",
+            version,
+        ));
     }
 }
 
 #[test]
 fn assignment_to_luau_const_rejected() {
-    assert_has_errors(&check("const x = 1\nx = 2", LuaVersion::Luau), "luau const reassignment");
     assert_has_errors(
-        &check("const x = 1\nx += 1", LuaVersion::Luau),
+        &check(
+            "\
+const x = 1
+x = 2",
+            LuaVersion::Luau,
+        ),
+        "luau const reassignment",
+    );
+    assert_has_errors(
+        &check(
+            "\
+const x = 1
+x += 1",
+            LuaVersion::Luau,
+        ),
         "luau const compound assignment",
     );
     assert_has_errors(
-        &check("const function f() end\nf = nil", LuaVersion::Luau),
+        &check(
+            "\
+const function f() end
+f = nil",
+            LuaVersion::Luau,
+        ),
         "luau const function reassignment",
     );
-    assert_no_errors(&check("const x = 1\nprint(x)", LuaVersion::Luau));
+    assert_no_errors(&check(
+        "\
+const x = 1
+print(x)",
+        LuaVersion::Luau,
+    ));
 }
 
 #[test]
@@ -68,7 +131,12 @@ fn const_bindings_restore_after_nested_scopes() {
             "local function f(value) value = 1 end",
             "local f = function(value) value = 1 end",
         ] {
-            let source = format!("{declaration}\n{scoped}\nvalue = 2");
+            let source = format!(
+                "\
+{declaration}
+{scoped}
+value = 2"
+            );
             let errors = check(&source, version);
             assert_eq!(errors.len(), 1, "{version:?} {source}: {errors:?}");
             assert_eq!(errors[0].message, "attempt to assign to const variable `value`");
@@ -77,13 +145,20 @@ fn const_bindings_restore_after_nested_scopes() {
                 source.rfind("value = 2").expect("final assignment")
             );
         }
-        let source = format!("local value = 0\ndo {declaration} end\nvalue = 2");
+        let source = format!(
+            "\
+local value = 0
+do {declaration} end
+value = 2"
+        );
         assert_no_errors(&check(&source, version));
     }
     // A named vararg shadows the const, but it is read-only itself.
     assert_has_errors(
         &check(
-            "local value <const> = 1\nlocal function f(...value) value = 2 end",
+            "\
+local value <const> = 1
+local function f(...value) value = 2 end",
             LuaVersion::Lua55,
         ),
         "write to a named vararg",
@@ -95,7 +170,8 @@ fn validation_errors_follow_check_and_walk_order() {
     // Not sorted by position: const writes come before goto errors, a value's
     // writes before its own assignment's, and function bodies' gotos before
     // the main chunk's.
-    let source = "goto top
+    let source = "\
+goto top
 local x <const> = 1
 x = function() x = 2 goto inner end";
     let errors = check(source, LuaVersion::Lua54);
@@ -135,7 +211,9 @@ fn goto_undefined_label_rejected() {
     assert_has_errors(&check("do goto nowhere end", LuaVersion::Lua54), "undefined label");
     assert_has_errors(
         &check(
-            "goto onlyinfunction\nlocal f = function() ::onlyinfunction:: end",
+            "\
+goto onlyinfunction
+local f = function() ::onlyinfunction:: end",
             LuaVersion::Lua54,
         ),
         "label not visible across functions",
@@ -153,7 +231,9 @@ fn duplicate_label_rejected() {
     );
     // Same label name in sibling functions is fine.
     assert_no_errors(&check(
-        "local f = function() ::l:: goto l end\nlocal g = function() ::l:: goto l end",
+        "\
+local f = function() ::l:: goto l end
+local g = function() ::l:: goto l end",
         LuaVersion::Lua54,
     ));
 }
@@ -362,7 +442,12 @@ fn until_condition_resolves_const_writes_in_the_repeat_body_scope() {
 #[test]
 fn method_self_shadows_a_const_local() {
     // `function t:m()` declares an implicit `self` parameter.
-    let errors = check("local self <const> = 1\nfunction t:m() self = 2 end", LuaVersion::Lua54);
+    let errors = check(
+        "\
+local self <const> = 1
+function t:m() self = 2 end",
+        LuaVersion::Lua54,
+    );
     assert!(errors.is_empty(), "the write targets the implicit parameter: {errors:?}");
 }
 
@@ -381,4 +466,56 @@ fn continue_until_ignores_typeof_in_the_condition() {
     let source = "repeat if a then continue end local x = f() until (y :: typeof(x)) == 1";
     let errors = check(source, LuaVersion::Luau);
     assert!(errors.is_empty(), "luau compiles this program: {errors:?}");
+}
+
+#[test]
+fn goto_errors_come_in_source_order_whatever_their_names() {
+    let source = "\
+goto zeta
+goto alpha
+do goto mid goto zeta end
+goto beta
+do local x = 1 goto late end local y = 2 ::late:: print(y)
+goto late2 local z = 3 ::late2:: print(z)";
+    let messages: Vec<(usize, String)> = check(source, LuaVersion::Lua54)
+        .into_iter()
+        .map(|error| (error.span.start.try_into().unwrap(), error.message))
+        .collect();
+    let at = |needle: &str| source.find(needle).expect("the source holds the statement");
+    let unresolved = |name: &str| format!("no visible label `{name}` for `goto`");
+    let into_scope = |name: &str| format!("`goto {name}` jumps into the scope of a local");
+    assert_eq!(
+        messages,
+        [
+            (at("goto late end"), into_scope("late")),
+            (at("goto late2"), into_scope("late2")),
+            (at("goto zeta\n"), unresolved("zeta")),
+            (at("goto alpha"), unresolved("alpha")),
+            (at("goto mid"), unresolved("mid")),
+            (at("goto zeta end"), unresolved("zeta")),
+            (at("goto beta"), unresolved("beta")),
+        ]
+    );
+}
+
+#[test]
+fn many_forward_gotos_resolve_without_rescanning_the_pending_ones() {
+    // Each label takes the gotos waiting for its name. Found by walking every
+    // pending goto, this takes minutes.
+    let count = 60_000u32;
+    let mut source = String::new();
+    for index in 0..count {
+        writeln!(source, "goto l{index}").unwrap();
+    }
+    for index in 0..count {
+        writeln!(source, "::l{index}::").unwrap();
+    }
+    assert_no_errors(&check(&source, LuaVersion::Lua54));
+
+    let mut nested = String::new();
+    for index in 0..count {
+        writeln!(nested, "do goto l{index} end").unwrap();
+    }
+    nested.push_str("::l0::\n");
+    assert_eq!(check(&nested, LuaVersion::Lua54).len(), 59_999, "all but one label is missing");
 }

@@ -1,20 +1,15 @@
 # luck_core
 
-Shared types, configuration parsing, and diagnostics for the luck toolchain.
+Dialect targets and diagnostics shared across the luck toolchain.
 
 ## Overview
 
-`luck_core` sits one level above `luck_token` and provides everything else the higher-level tools share: build targets, transform and format configuration, diagnostics, and `luck.json` project configuration parsing.
+`luck_core` sits one level above `luck_token` and holds the types that crates share when neither depends on the other: the dialect a user names and diagnostics. It touches no files and depends on nothing but `luck_token`, so it links anywhere the core pipeline does. It has no configuration types. Each tool owns its options, and `luck_config` reads `luck.json` into them.
 
 ## Key features
 
 - **Build targets.** `LuaTarget` enumerates the supported flavors (Lua 5.1 through 5.5, standalone Luau, and Roblox Luau) and parses from common string forms (`"lua54"`, `"5.4"`, `"luau"`, `"roblox"`). It projects onto the two independent axes the rest of the workspace keys off: `lua_version()` (syntax) and `stdlib_environment()` (stdlib).
-- **Transform toggles.** `TransformConfig` enables and disables individual minifier passes, with serde-driven partial overrides from JSON.
-- **Format options.** The option enums (`IndentStyle`, `QuoteStyle`, `HexCase`, `CallParentheses`, `CollapseSimpleStatement`, `LineEndings`, `BlockNewlineGaps`, `SpaceAfterFunction`) live here so `FormatConfig` deserializes directly into them, and `luck_formatter` re-exports every type. Their defaults live in `luck_formatter`'s `FormatOptions`.
-- **Diagnostics.** `Diagnostic` carries a code, message, severity, file path, span, and help text. Its numbered `E002`-`E012` / `W001`-`W007` constructors, such as `Diagnostic::e008`, live in `diagnostic/codes.rs` and are the only way to build one with an `E` or `W` code.
-- **Project configuration.** `luck.json` (parsed as JSON5), profile overrides, `extends` chains, config discovery up the directory tree, and `.editorconfig` layering.
-- **Source loading.** `read_source_file` reads a file with SIMD UTF-8 validation, matching `fs::read_to_string`'s error behavior.
-- **Path form.** `normalize_path` gives the canonical, forward-slash form the resolver and bundler key modules on, and `native_path` turns such a path back into the platform's separators for filesystem calls.
+- **Diagnostics.** `Diagnostic` carries a code, message, severity, file path, span, and help text. Its numbered `E002`-`E013` / `W001`-`W007` constructors, such as `Diagnostic::e008`, live in `diagnostic/codes.rs` and are the only way to build one with an `E` or `W` code.
 
 Every item is exported once, from the crate root.
 
@@ -23,27 +18,6 @@ Every item is exported once, from the crate root.
 ### Build targets
 
 `LuaTarget` is the configuration-layer view of a dialect. It maps to `luck_token::LuaVersion` for the parser, lexer, codegen, and formatter, and to `luck_token::StdlibEnvironment` for the semantic layer, linter, and LSP. The split happens once at each entry boundary.
-
-### Transform configuration
-
-`TransformConfig` is a struct of bool flags, one per minifier pass: `fold_constants`, `rename_locals`, `inline_locals`, `merge_locals`, `remove_dead_code`, `simplify_statements`, `simplify_indexes`, `simplify_parens`, `shorten_strings`, `shorten_numbers`, `lift_locals`, and `rename_globals`. All default to on except `rename_globals`, which is opt-in because renamed globals live under different `_G` keys and break cross-chunk consumers.
-
-### Project configuration
-
-The `config` module handles project configuration, split into focused submodules. The deserialized `luck.json` types come first, one module per section. Every struct uses `#[serde(deny_unknown_fields)]` and every type derives `schemars::JsonSchema`, and unknown keys and invalid enum values are hard errors.
-
-- **`luck_config`** holds `LuckConfig`, its build sub-objects `EntryConfig` and `ProfileOverrides`, and the `extends` merge. `DialectKey` picks the `lua` or `luau` key for a file by its extension and holds each key's default, and `LuckConfig::target_for_path` resolves through it, so the CLI and the LSP pick a file's dialect the same way.
-- **`format_config`** holds the `format` section's `FormatConfig` and the formatter option enums.
-- **`lint_config`** holds the `lint` section's `LintConfig`: `CategoryLevels` gives a `Category` a `RuleLevel` (`off`, `warn`, or `error`), and `RuleSettings` gives one to a rule by name, which wins over its category. A rule that takes options has a typed field there and also accepts `[level, options]` as a `RuleSetting`, so options on any other rule fail to deserialize. The rest of `rules` is an open map of rule names, the one place a config struct doesn't deny unknown keys, and the linter checks those names. `LintConfig` serializes back to the shape it parses, for `luck lint --print-config`. `luck_linter` re-exports what its callers build configs from.
-- **`transform_config`** and **`dynamic_require`** hold `TransformConfig` and `DynamicRequire`, the `transforms` and `dynamic_require` values.
-- **`load`** owns `parse_luck_config` (JSON5), the recursive `extends` chain with its cycle, depth, and transitive `root`-boundary checks, upward `discover_config`, and `load_or_discover_config`, which loads an explicit `-c` path or else discovers. Both return a `ProjectConfig`: the config and the directory holding it, which roots the project's relative paths and globs.
-- **`resolve`** turns a loaded `LuckConfig` into `BuildConfig`s, applying the selected profile and resolving entry/output paths for the single-entry or multi-entry (`entries`) form. `check_output_paths` rejects an output that would replace a source file or another output, and `luck bundle` goes through it too.
-- **`filter`** holds `ProjectFilter`, which decides from `include`/`exclude` globs whether a file belongs to the project (exclude wins). `*` stops at `/` and `**/` crosses directories. `is_excluded` asks about `exclude` alone, which is all a file named on the command line is held to. The CLI and the LSP both build it through `LuckConfig::project_filter`. `glob_set` compiles globs with the same rules, and the CLI uses it for its path arguments.
-- **`editorconfig`** holds `resolved_format_config`, which layers `FormatConfig` precedence: built-in defaults < `.editorconfig` < the luck.json `format` section. Without a file path, for an untitled document or `fmt --no-editorconfig`, the `format` section stands alone. It reads the spec itself, and matches sections with a compiled glob whose memoized matching stays polynomial on any section.
-
-`.luaurc` files belong to `luck_resolver`, which parses and caches them for Luau alias resolution.
-
-The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated** from `LuckConfig`, and a test checks it for drift. The type names are its `$defs` keys and the doc comments its descriptions, so renaming a config type or editing one of its doc comments changes the schema. Regenerate it with `cargo test -p luck_core regenerate_luckrc_schema -- --ignored`.
 
 ### Diagnostics
 
@@ -63,6 +37,7 @@ The VS Code schema at `editors/vscode/schemas/luckrc.schema.json` is **generated
 | E010 | cannot read file (IO error) |
 | E011 | entry file not found (not emitted, since a missing entry reports E010) |
 | E012 | file too large (byte-length limit exceeded) |
+| E013 | construct the bundle's module wrapper would nest past the nesting cap |
 | W001 | duplicate require |
 | W002 | top-level vararg in bundled module (not emitted) |
 | W003 | circular dependency between lazily-loaded modules |

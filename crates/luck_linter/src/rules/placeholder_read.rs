@@ -1,4 +1,4 @@
-use luck_ast::{Expression, Var};
+use luck_ast::Expression;
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -23,10 +23,10 @@ impl_rule!(
 
 impl NodeRule for PlaceholderRead {
     fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::Var])
+        NodeTypeSet::from_types(&[NodeType::Name])
     }
     fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        if let Expression::Var(Var::Name(token)) = expr
+        if let Expression::Name(token) = expr
             && token.identifier() == Some("_")
         {
             findings.push(
@@ -72,7 +72,9 @@ mod tests {
 
     #[test]
     fn flags_prefix_and_key_of_assignment_target() {
-        let diags = run("_[_] = 1\n_.x = 2");
+        let diags = run("\
+_[_] = 1
+_.x = 2");
         assert_eq!(diags.len(), 3, "{diags:?}");
     }
 

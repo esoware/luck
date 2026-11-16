@@ -29,11 +29,17 @@ pub enum TypeFieldAccess {
     reason = "the synthesizer is one type with its constructors split by node family"
 )]
 impl Synth {
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_named(&self, name: &str) -> Type {
         Type::Name { name: self.identifier_name(name), span: self.next_span() }
     }
 
+    /// # Panics
+    ///
+    /// Panics if `module` or `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_qualified(&self, module: &str, name: &str) -> Type {
         Type::Named(Box::new(NamedType {
@@ -44,6 +50,9 @@ impl Synth {
         }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_generic(&self, name: &str, args: Vec<Type>) -> Type {
         Type::Named(Box::new(NamedType {
@@ -134,6 +143,9 @@ impl Synth {
         self.ty_table(vec![TypeFieldSpec::Array(element)])
     }
 
+    /// # Panics
+    ///
+    /// Panics if a field's name isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_record(&self, fields: Vec<(&str, Type)>) -> Type {
         self.ty_table(
@@ -146,7 +158,13 @@ impl Synth {
 
     /// Named fields and indexers can take a `read`/`write` access modifier.
     /// Luau allows the `{ T }` shorthand only alone, so an array element
-    /// beside other fields becomes its `[number]: T` long form.
+    /// beside other fields becomes its `[number]: T` long form, as does one
+    /// that opens with the name `read` or `write`, which the shorthand would
+    /// read back as an access modifier.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a [`TypeFieldSpec::Named`] name isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_table(&self, fields: Vec<TypeFieldSpec<'_>>) -> Type {
         let span = self.next_span();
@@ -166,7 +184,10 @@ impl Synth {
                     key,
                     value,
                 },
-                TypeFieldSpec::Array(value) if can_use_array_shorthand => {
+                TypeFieldSpec::Array(value)
+                    if can_use_array_shorthand
+                        && !matches!(leading_name(&value), Some("read" | "write")) =>
+                {
                     TypeField::Array { span: self.next_span(), access: None, value }
                 }
                 TypeFieldSpec::Array(value) => TypeField::Indexer {
@@ -194,6 +215,10 @@ impl Synth {
     }
 
     /// Each parameter is `(optional name, type)`. For a pack return, pass a [`Synth::ty_pack`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if a parameter's name isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_function_full(
         &self,
@@ -245,6 +270,9 @@ impl Synth {
         Type::Variadic(Box::new(VariadicType { span: self.next_span(), type_value: element }))
     }
 
+    /// # Panics
+    ///
+    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn ty_generic_pack(&self, name: &str) -> Type {
         Type::GenericPack(Box::new(GenericPackType {
@@ -254,6 +282,10 @@ impl Synth {
     }
 
     /// Each pair is a name and whether it's a pack (`T...`). Defaults aren't supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a parameter's name isn't a valid identifier, as [`Synth::identifier`] does.
     #[must_use]
     pub fn generic_type_list(&self, params: Vec<(&str, bool)>) -> GenericTypeList {
         let span = self.next_span();
@@ -267,6 +299,33 @@ impl Synth {
             })
             .collect();
         GenericTypeList { span, params: Punctuated::from_items(generic_params) }
+    }
+}
+
+/// The name `ty` prints first, if it opens with one.
+fn leading_name(ty: &Type) -> Option<&str> {
+    let mut current = ty;
+    loop {
+        current = match current {
+            Type::Name { name, .. } => return Some(name),
+            Type::Named(named) => return named.prefix.as_ref().unwrap_or(&named.name).identifier(),
+            Type::GenericPack(pack) => return pack.name.identifier(),
+            Type::Optional(optional) => &optional.type_value,
+            Type::Union(union) if !union.has_leading_pipe => union.types.first()?,
+            Type::Intersection(intersection) if !intersection.has_leading_ampersand => {
+                intersection.types.first()?
+            }
+            Type::Union(_)
+            | Type::Intersection(_)
+            | Type::Typeof(_)
+            | Type::Table(_)
+            | Type::Function(_)
+            | Type::Parenthesized(_)
+            | Type::Pack(_)
+            | Type::Singleton(_)
+            | Type::Variadic(_)
+            | Type::Error(_) => return None,
+        };
     }
 }
 
@@ -326,6 +385,26 @@ mod tests {
         assert!(function.generics.is_some());
         assert!(function.params.first().unwrap().name.is_some());
         assert!(matches!(function.return_type, Type::Pack(_)));
+    }
+
+    #[test]
+    fn ty_table_spells_out_an_element_the_shorthand_would_read_as_an_access_modifier() {
+        let synth = Synth::new();
+        let element_field = |element: Type| {
+            let Type::Table(table) = synth.ty_table_array(element) else {
+                panic!("expected a table type");
+            };
+            table.fields.items.into_iter().next().expect("one field")
+        };
+        for element in [
+            synth.ty_named("read"),
+            synth.ty_optional(synth.ty_named("write")),
+            synth.ty_union(vec![synth.ty_named("read"), synth.ty_named("T")]),
+            synth.ty_qualified("write", "T"),
+        ] {
+            assert!(matches!(element_field(element), TypeField::Indexer { .. }));
+        }
+        assert!(matches!(element_field(synth.ty_named("reader")), TypeField::Array { .. }));
     }
 
     #[test]

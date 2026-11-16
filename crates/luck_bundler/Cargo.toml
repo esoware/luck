@@ -11,6 +11,12 @@ license.workspace      = true
 repository.workspace   = true
 rust-version.workspace = true
 
+[features]
+# Derive `Deserialize` for `DynamicRequire`, the shape `luck.json` gives it.
+serde = ["dep:serde"]
+# Derive `JsonSchema` too, for the schema `luck_config` generates.
+schemars = ["dep:schemars", "serde"]
+
 [lints]
 workspace = true
 
@@ -18,6 +24,7 @@ workspace = true
 luck_ast      = { workspace = true }
 luck_core     = { workspace = true }
 luck_lexer    = { workspace = true }
+luck_minifier = { workspace = true }
 luck_parser   = { workspace = true }
 luck_resolver = { workspace = true }
 luck_semantic = { workspace = true }
@@ -25,7 +32,11 @@ luck_token    = { workspace = true }
 
 petgraph   = { workspace = true }
 rustc-hash = { workspace = true }
+schemars   = { workspace = true, optional = true }
+serde      = { workspace = true, optional = true }
 
 [dev-dependencies]
+luck_testgen = { workspace = true }
+
 insta    = { workspace = true }
 tempfile = { workspace = true }

@@ -1,0 +1,70 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/luau/merged_rfc_syntax.luau
+---
+-- line_width = 1
+export type Identifier =
+	| integer
+	| string
+type NonNil =
+	| number
+	| string
+
+export const MAX_ID: integer = 0x7fffffffffffffffi
+export local current: Identifier = 1i
+
+export function convert<
+	T
+>(
+	value: T
+): T
+	return value
+end
+
+local converted = convert<<
+	integer
+>>(
+	current
+)
+local mapped = converter:map<<integer, string>>(
+	converted
+)
+current = converted
+
+-- line_width = 40
+export type Identifier =
+	| integer
+	| string
+type NonNil = number | string
+
+export const MAX_ID: integer =
+	0x7fffffffffffffffi
+export local current: Identifier = 1i
+
+export function convert<T>(value: T): T
+	return value
+end
+
+local converted = convert<<integer>>(
+	current
+)
+local mapped = converter:map<<integer, string>>(
+	converted
+)
+current = converted
+
+-- line_width = 80, 100, 120
+export type Identifier = integer | string
+type NonNil = number | string
+
+export const MAX_ID: integer = 0x7fffffffffffffffi
+export local current: Identifier = 1i
+
+export function convert<T>(value: T): T
+	return value
+end
+
+local converted = convert<<integer>>(current)
+local mapped = converter:map<<integer, string>>(converted)
+current = converted

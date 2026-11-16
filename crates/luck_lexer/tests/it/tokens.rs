@@ -273,7 +273,15 @@ fn floor_div_lexes_only_in_lua53_plus_and_luau() {
 
 #[test]
 fn floor_div_not_confused_with_comment() {
-    assert_eq!(kinds_in("-- comment\n//", LuaVersion::Lua53), vec![TokenKind::FloorDiv]);
+    assert_eq!(
+        kinds_in(
+            "\
+-- comment
+//",
+            LuaVersion::Lua53
+        ),
+        vec![TokenKind::FloorDiv]
+    );
 }
 
 #[test]

@@ -7,7 +7,7 @@
 use luck_ast::{Attribute, Expression, Field, FunctionAttribute, Punctuated};
 use luck_token::{Span, Token, TokenKind};
 
-use super::Parser;
+use super::{Closer, Parser};
 
 /// Whether `expr` is a constant string, which a backtick string with no holes
 /// also is in Luau.
@@ -23,6 +23,8 @@ fn is_constant_string(expr: &Expression) -> bool {
 /// Whether `expr` fits the grammar's `literal` production for attribute
 /// arguments: nil, booleans, numbers, strings, and tables of literals with
 /// plain-name or positional fields.
+///
+/// An error passes, since it has been reported already.
 fn is_attribute_literal(expr: &Expression) -> bool {
     match expr {
         Expression::Nil(_)
@@ -30,7 +32,8 @@ fn is_attribute_literal(expr: &Expression) -> bool {
         | Expression::False(_)
         | Expression::Number(_)
         | Expression::Integer(_)
-        | Expression::StringLiteral(_) => true,
+        | Expression::StringLiteral(_)
+        | Expression::Error(_) => true,
         // Luau
         Expression::InterpolatedString(_) => is_constant_string(expr),
         Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
@@ -41,15 +44,13 @@ fn is_attribute_literal(expr: &Expression) -> bool {
         }),
         Expression::VarArg(_)
         | Expression::FunctionDef(_)
-        | Expression::Var(_)
-        | Expression::FunctionCall(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
         | Expression::Parenthesized(_)
         | Expression::BinaryOp(_)
         | Expression::UnaryOp(_)
         | Expression::IfExpression(_)
-        | Expression::TypeCast(_)
-        | Expression::TypeInstantiation(_)
-        | Expression::Error(_) => false,
+        | Expression::TypeCast(_) => false,
     }
 }
 
@@ -90,6 +91,7 @@ impl Parser<'_> {
                 self.error(at_span, "attribute name must directly follow `@`");
             }
             if self.eat(&TokenKind::LeftBracket) {
+                self.open(Closer::Bracket);
                 loop {
                     let name = self.expect_identifier_recover();
                     let args = self.parse_attribute_args();
@@ -103,12 +105,11 @@ impl Parser<'_> {
                         name,
                         args,
                     });
-                    if self.eat(&TokenKind::Comma) {
-                    } else {
+                    if !self.eat(&TokenKind::Comma) {
                         break;
                     }
                 }
-                self.expect(&TokenKind::RightBracket);
+                self.expect_closer(&TokenKind::RightBracket, Closer::Bracket);
             } else {
                 let name = self.expect_identifier_recover();
                 self.validate_function_attribute(&name, None, &attributes);
@@ -123,42 +124,49 @@ impl Parser<'_> {
     }
 
     /// Grammar: `pars ::= '(' [litlist] ')' | littable | STRING`. A string or
-    /// table argument becomes a one-element argument list.
-    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
+    /// table argument becomes a one-element argument list, so every form
+    /// nests its arguments one level, as the list it prints back as does.
+    #[expect(clippy::wildcard_enum_match_arm, reason = "the guard leaves only a string")]
     fn parse_attribute_args(&mut self) -> Option<Punctuated<Expression>> {
-        match self.peek() {
+        if !matches!(
+            self.peek(),
+            TokenKind::LeftParen | TokenKind::StringLiteral(_) | TokenKind::LeftBrace
+        ) || !self.enter_depth()
+        {
+            return None;
+        }
+        let args = match self.peek() {
             TokenKind::LeftParen => {
                 self.advance_span();
-                if !self.enter_depth() {
-                    return None;
-                }
+                self.open(Closer::Paren);
                 let args = if matches!(self.peek(), TokenKind::RightParen) {
                     Punctuated::empty()
                 } else {
                     self.parse_expr_list()
                 };
-                self.exit_depth();
-                self.expect(&TokenKind::RightParen);
+                self.expect_closer(&TokenKind::RightParen, Closer::Paren);
                 for expr in args.iter() {
                     if !is_attribute_literal(expr) {
                         self.error(expr.span(), "attribute arguments must be literals");
                     }
                 }
-                Some(args)
-            }
-            TokenKind::StringLiteral(_) => {
-                Some(Punctuated::from_item(Expression::StringLiteral(self.advance_literal())))
+                args
             }
             TokenKind::LeftBrace => {
-                let table = self.parse_table_constructor();
-                let expr = Expression::TableConstructor(Box::new(table));
+                let open = self.current_span();
+                let expr =
+                    self.parse_table_constructor().map_or(Expression::Error(open), |table| {
+                        Expression::TableConstructor(Box::new(table))
+                    });
                 if !is_attribute_literal(&expr) {
                     self.error(expr.span(), "attribute arguments must be literals");
                 }
-                Some(Punctuated::from_item(expr))
+                Punctuated::from_item(expr)
             }
-            _ => None,
-        }
+            _ => Punctuated::from_item(Expression::StringLiteral(self.advance_literal())),
+        };
+        self.exit_depth();
+        Some(args)
     }
 
     /// Luau validates attributes at parse time: only `checked`, `native`, and
@@ -209,7 +217,12 @@ impl Parser<'_> {
             return;
         };
         let Expression::TableConstructor(table) = arg else {
-            self.error(arg.span(), "`@deprecated` takes a table with `use` and `reason` fields");
+            if !matches!(arg, Expression::Error(_)) {
+                self.error(
+                    arg.span(),
+                    "`@deprecated` takes a table with `use` and `reason` fields",
+                );
+            }
             return;
         };
         for field in table.fields.iter() {
@@ -222,7 +235,7 @@ impl Parser<'_> {
                         );
                         continue;
                     }
-                    if !is_constant_string(value) {
+                    if !is_constant_string(value) && !matches!(value, Expression::Error(_)) {
                         self.error(value.span(), "`@deprecated` fields take constant strings");
                     }
                 }

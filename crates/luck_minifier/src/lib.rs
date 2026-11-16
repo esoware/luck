@@ -2,7 +2,8 @@
 //!
 //! AST transform pipeline for Lua/Luau minification.
 //!
-//! Parses source, runs the enabled transforms, and prints the result with
+//! [`minify`] parses source and [`minify_block`] takes a tree. Both run the
+//! enabled transforms on the tree and print the result with
 //! [`luck_codegen::compact_with_capacity`]. Each pass takes and returns a
 //! `Block` and is built on [`Transform`](luck_ast::Transform).
 //!
@@ -18,7 +19,7 @@
 //! # Usage
 //!
 //! ```
-//! use luck_core::TransformConfig;
+//! use luck_minifier::TransformConfig;
 //! use luck_token::LuaVersion;
 //!
 //! let output = luck_minifier::minify("return 1 + 2", LuaVersion::Lua54, &TransformConfig::default()).unwrap();
@@ -41,6 +42,8 @@ mod expr;
 mod fixtures;
 mod limits;
 mod pipeline;
+mod transform_config;
 mod transforms;
 
-pub use pipeline::minify;
+pub use pipeline::{minify, minify_block};
+pub use transform_config::TransformConfig;

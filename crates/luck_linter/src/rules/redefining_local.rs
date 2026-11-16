@@ -1,7 +1,7 @@
 use luck_ast::{Block, Statement};
-use luck_token::{LuaVersion, Span, Token};
+use luck_token::{LineIndex, MAX_ACTIVE_LOCALS, Span, Token};
 
-use crate::diagnostic::{Finding, line_column};
+use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags a local declared again in the same block (Luacheck 411), which
@@ -24,8 +24,7 @@ impl_rule!(
 impl WholeRule for RedefiningLocal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut checker = RedefineChecker {
-            source: context.source,
-            version: context.semantic.version,
+            lines: context.line_index(),
             declarations: Vec::new(),
             findings: Vec::new(),
         };
@@ -37,8 +36,10 @@ impl WholeRule for RedefiningLocal {
 }
 
 struct RedefineChecker<'ast> {
-    source: &'ast str,
-    version: LuaVersion,
+    lines: &'ast LineIndex,
+    /// Each name the block declares, in order. Every one stays active until
+    /// the block ends, so no Lua compiles a block with more than
+    /// [`MAX_ACTIVE_LOCALS`], and the rest of one isn't checked.
     declarations: Vec<(&'ast str, Span)>,
     findings: Vec<Finding>,
 }
@@ -81,6 +82,9 @@ impl<'ast> RedefineChecker<'ast> {
         let Some(name) = name_token.identifier() else {
             return;
         };
+        if self.declarations.len() > MAX_ACTIVE_LOCALS {
+            return;
+        }
         // A leading `_` marks a name as deliberately unused.
         if name.starts_with('_') {
             return;
@@ -88,7 +92,7 @@ impl<'ast> RedefineChecker<'ast> {
         if let Some((_, first_span)) =
             self.declarations.iter().find(|(declared_name, _)| *declared_name == name)
         {
-            let (line, column) = line_column(self.source, first_span.start, self.version);
+            let (line, column) = self.lines.line_column(first_span.start);
             self.findings.push(
                 Finding::new(
                     format!("local `{name}` is redeclared in the same block"),
@@ -103,6 +107,10 @@ impl<'ast> RedefineChecker<'ast> {
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
@@ -113,39 +121,78 @@ mod tests {
 
     #[test]
     fn flags_same_block_redeclaration() {
-        let diags = run("do local x = 1\nlocal x = 2\nprint(x) end");
+        let diags = run("\
+do local x = 1
+local x = 2
+print(x) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));
     }
 
     #[test]
     fn ignores_sibling_blocks() {
-        let diags = run("do local x = 1 end\ndo local x = 2 end");
+        let diags = run("\
+do local x = 1 end
+do local x = 2 end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_nested_block_shadowing() {
         // Inner block shadowing is `shadowing`'s job.
-        let diags = run("local x = 1\ndo local x = 2 end");
+        let diags = run("\
+local x = 1
+do local x = 2 end");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_multiple_redeclarations() {
-        let diags = run("local x = 1\nlocal x = 2\nlocal x = 3");
+        let diags = run("\
+local x = 1
+local x = 2
+local x = 3");
         assert_eq!(diags.len(), 2, "got: {diags:?}");
     }
 
     #[test]
     fn flags_local_function_redeclaration() {
-        let diags = run("local function f() end\nlocal function f() end");
+        let diags = run("\
+local function f() end
+local function f() end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]
     fn ignores_underscore_names() {
-        let diags = run("local _ = 1\nlocal _ = 2");
+        let diags = run("\
+local _ = 1
+local _ = 2");
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    fn locals_declared_twice(count: u32) -> String {
+        let mut locals = String::new();
+        for i in 0..count {
+            let _unused = writeln!(locals, "local x{i} = 1");
+        }
+        format!("{locals}{locals}")
+    }
+
+    #[test]
+    fn flags_each_redeclaration_in_a_block_at_the_local_limit() {
+        let diags = run(&locals_declared_twice(100));
+        assert_eq!(diags.len(), 100, "{diags:?}");
+        assert!(
+            diags[0].help.as_deref().is_some_and(|help| help.ends_with("1:7")),
+            "{:?}",
+            diags[0]
+        );
+    }
+
+    #[test]
+    fn ignores_the_rest_of_a_block_past_the_local_limit() {
+        let diags = run(&locals_declared_twice(201));
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

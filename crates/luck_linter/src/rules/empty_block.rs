@@ -84,7 +84,9 @@ mod tests {
 
     #[test]
     fn flags_each_empty_if_branch() {
-        let diags = run("local c = 1\nif c then elseif c then else end");
+        let diags = run("\
+local c = 1
+if c then elseif c then else end");
         let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
         assert_eq!(
             messages,
@@ -95,9 +97,13 @@ mod tests {
 
     #[test]
     fn flags_empty_loop_and_do_bodies() {
-        let diags = run(
-            "local c = 1\nwhile c do end\ndo end\nfor i = 1, 2 do end\nfor k in pairs({}) do end\nrepeat until c",
-        );
+        let diags = run("\
+local c = 1
+while c do end
+do end
+for i = 1, 2 do end
+for k in pairs({}) do end
+repeat until c");
         let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
         assert_eq!(
             messages,
@@ -120,7 +126,10 @@ mod tests {
 
     #[test]
     fn ignores_non_empty_blocks() {
-        let diags = run("local c = 1\nif c then print(1) else print(2) end\nwhile c do break end");
+        let diags = run("\
+local c = 1
+if c then print(1) else print(2) end
+while c do break end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

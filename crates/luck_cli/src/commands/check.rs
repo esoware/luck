@@ -2,7 +2,8 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_core::{LuaTarget, read_source_file};
+use luck_core::LuaTarget;
+use luck_resolver::read_source_file;
 
 use crate::exit::Exit;
 use crate::project::{outcomes_in_order, project_files};

@@ -1,51 +1,41 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
 use luck_benchmark::{
-    BenchmarkId, Criterion, ProjectFile, black_box, criterion_group, criterion_main, test_files,
-    test_projects,
+    BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main, test_files, test_projects,
 };
-use luck_core::TransformConfig;
+use luck_minifier::TransformConfig;
 
 fn bench_minifier(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("minifier");
+    let config = TransformConfig::default();
 
     for file in test_files() {
         let id = BenchmarkId::from_parameter(file.file_name);
-        let source_text = file.source_text.as_str();
         let version = file.target.lua_version();
-        let config = TransformConfig::default();
-        let minify = || luck_minifier::minify(black_box(source_text), version, &config);
-        let minified = minify();
-        assert!(minified.is_ok(), "{:?}", minified.err());
-        // `minify` has no parsed-AST entry point, so the measured section
-        // includes the initial parse; the transform fixpoint dominates.
+        let parsed_block = file.parse().block;
         group.bench_function(id, |bencher| {
-            bencher.iter(minify);
+            bencher.iter_batched(
+                || parsed_block.clone(),
+                |block| luck_minifier::minify_block(block, version, &config),
+                BatchSize::LargeInput,
+            );
         });
     }
 
     for project in test_projects() {
         let id = BenchmarkId::from_parameter(project.name);
         let version = project.target.lua_version();
-        let config = TransformConfig::default();
-        let files = project.files;
-        for ProjectFile { relative_path, source_text } in &files {
-            let minified = luck_minifier::minify(source_text.as_str(), version, &config);
-            assert!(minified.is_ok(), "{relative_path}: {:?}", minified.err());
-        }
+        let parsed_blocks: Vec<_> =
+            project.parse_files().into_iter().map(|parse_result| parse_result.block).collect();
         group.bench_function(id, |bencher| {
-            bencher.iter(|| {
-                for ProjectFile { source_text, .. } in &files {
-                    let _unused = black_box(luck_minifier::minify(
-                        black_box(source_text.as_str()),
-                        version,
-                        &config,
-                    ));
-                }
-            });
+            bencher.iter_batched(
+                || (parsed_blocks.clone(), Vec::with_capacity(parsed_blocks.len())),
+                |(blocks, mut outputs)| {
+                    for block in blocks {
+                        outputs.push(luck_minifier::minify_block(block, version, &config));
+                    }
+                    outputs
+                },
+                BatchSize::LargeInput,
+            );
         });
     }
 

@@ -1,17 +1,23 @@
 use core::mem;
 
-use luck_ast::{Block, FunctionBody, Parameter, Punctuated, Type, VarArgParam};
+use luck_ast::{FunctionBody, Parameter, Punctuated, Type, VarArgParam};
 use luck_token::{Token, TokenKind};
 
 use super::types::GenericsOwner;
-use super::{FunctionScope, Parser};
+use super::{Closer, FunctionScope, Parser};
 
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
-    pub(super) fn parse_function_body(&mut self) -> FunctionBody {
+    /// `None` when the body or its block would pass the depth cap.
+    pub(super) fn parse_function_body(&mut self) -> Option<FunctionBody> {
+        if !self.enter_depth() {
+            return None;
+        }
+        self.open(Closer::BlockEnd);
+
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
         let generics = (self.version.has_type_syntax() && matches!(self.peek(), TokenKind::Less))
             .then(|| Box::new(self.parse_generic_type_list(GenericsOwner::Function)));
@@ -19,20 +25,9 @@ impl Parser<'_> {
         let open = self.expect(&TokenKind::LeftParen);
         let start_span = generics.as_ref().map_or(open, |list| list.span);
 
-        if !self.enter_depth() {
-            return FunctionBody {
-                span: start_span,
-                generics,
-                params: Punctuated::empty(),
-                vararg: None,
-                return_type: None,
-                block: Block { span: start_span, stmts: Vec::new(), last_stmt: None },
-            };
-        }
-
+        self.open(Closer::Paren);
         let (params, vararg) = self.parse_params();
-
-        self.expect(&TokenKind::RightParen);
+        self.expect_closer(&TokenKind::RightParen, Closer::Paren);
 
         // Luau: optional return type annotation after `)`.
         let return_type = (self.version.has_type_syntax() && self.eat(&TokenKind::Colon))
@@ -44,16 +39,17 @@ impl Parser<'_> {
             &mut self.function_scope,
             FunctionScope { is_chunk: false, is_vararg: vararg.is_some(), is_in_loop: false },
         );
-        let block = self.parse_block();
+        let parsed_block = self.parse_block();
         self.function_scope = outer_scope;
-
-        let end_span = self.expect(&TokenKind::End);
-
         self.exit_depth();
+        let block = parsed_block?;
+
+        self.close(Closer::BlockEnd);
+        let end_span = self.expect(&TokenKind::End);
 
         let span = start_span.merge(end_span);
 
-        FunctionBody { span, generics, params, vararg, return_type, block }
+        Some(FunctionBody { span, generics, params, vararg, return_type, block })
     }
 
     /// Parse the parameter list between a function's parens, stopping before

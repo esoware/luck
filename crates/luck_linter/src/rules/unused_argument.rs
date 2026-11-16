@@ -115,7 +115,9 @@ mod tests {
 
     #[test]
     fn flags_method_arg_not_self() {
-        let source = "local obj = {}\nfunction obj:method(x) end";
+        let source = "\
+local obj = {}
+function obj:method(x) end";
         let diags = run(source);
         // Only `x` is flagged. `self` is the implicit method receiver.
         assert_eq!(diags.len(), 1, "got: {diags:?}");

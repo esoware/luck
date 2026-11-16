@@ -4,7 +4,7 @@ Internal test harness: deterministic Lua/Luau program generators, the property t
 
 ## Overview
 
-Two generators turn a `(seed, LuaVersion, statement_budget)` triple into a source string. Both are fully deterministic: same inputs, byte-identical output, on every platform. That's what lets the benchmark corpus include generated programs without committing large files. The two profiles trade off differently:
+Two generators turn a `(seed, LuaVersion, statement_budget)` triple into a source string. Both are fully deterministic: same inputs, byte-identical output, on every platform. The two profiles trade off differently:
 
 | Generator | Entry | Guarantee | Purpose |
 |-----------|-------|-----------|---------|
@@ -31,11 +31,15 @@ Determinism matters most. A single xorshift64\* `Rng` (`rng.rs`) drives every ch
 
 - **Parse cleanliness.** Every generated program parses with zero errors.
 - **Compact round-trip.** `compact` output re-parses cleanly.
-- **Format idempotency and structure.** `format(format(x)) == format(x)`, the output re-parses, and the AST structure survives (`blocks_equivalent`).
-- **AST-in format.** `format_block` on the bare parsed AST, with no source or comments, re-parses and keeps the structure.
-- **Minify fixpoint.** Minified output re-parses, size is stable across passes, and a byte-exact fixpoint arrives from the second pass onward.
+- **Format idempotency.** `format(format(x)) == format(x)`, and the output re-parses.
+- **AST-in format.** `format_block` on the bare parsed AST, with no source or comments, re-parses, and `format` leaves its output unchanged.
+- **Minify idempotency.** `minify(minify(x)) == minify(x)`, and the output re-parses.
 
 These sweeps back the formatter and minifier guarantees. Strengthen them instead of working around them.
+
+## Stack tests
+
+`stack.rs` holds one source per construct nested to the parser's cap, one per kind of run of operators or suffixes and of sibling list far longer than it, one per construct nested far past the cap, and one per way of breaking input at every level, and `on_the_smallest_stack` runs a stage over them, each on a thread with 1 MiB of stack, which is what a Windows main thread and a wasm module get. The test profile builds at `opt-level = 1`, so the frames measured are close to the ones that ship, and a stage that outgrows the budget takes the test process down. `tests/it/stack.rs` runs parse, validate, clone, compact, format, and minify over them, and the semantic, linter, bundler, language server, and CLI crates each run their own stages. A new recursive stage or a new nesting construct belongs in them.
 
 ## Fixtures
 

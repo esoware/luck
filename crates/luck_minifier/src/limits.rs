@@ -3,10 +3,6 @@
 
 use luck_ast::FunctionBody;
 
-/// Locals active at once in one function: `MAXVARS` in PUC Lua and
-/// `kMaxLocalCount` in Luau.
-pub(crate) const MAX_ACTIVE_LOCALS: usize = 200;
-
 /// Registers one function can use on the strictest target. 5.1's and 5.2's
 /// `MAXSTACK` is 250, and `luaK_checkstack` rejects reaching it.
 pub(crate) const MAX_REGISTERS: usize = 249;

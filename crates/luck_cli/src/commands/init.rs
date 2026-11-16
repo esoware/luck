@@ -94,7 +94,7 @@ fn init_config_content(target: LuaTarget) -> String {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::parse_luck_config;
+    use luck_config::parse_luck_config;
 
     use super::*;
 

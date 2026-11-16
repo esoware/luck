@@ -5,7 +5,7 @@ use luck_ast::{Expression, Field, Literal, TableConstructor};
 use luck_token::{LuaVersion, Span, decode_string};
 use rustc_hash::FxHashMap;
 
-use crate::diagnostic::{Finding, line_column};
+use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::signed_number_value;
 use crate::rule::{LintContext, NodeRule, impl_rule};
@@ -52,7 +52,7 @@ impl NodeRule for DuplicateKeys {
                 continue;
             };
             if let Some(first_span) = first_spans.get(&key) {
-                let (line, column) = line_column(context.source, first_span.start, version);
+                let (line, column) = context.line_index().line_column(first_span.start);
                 findings.push(
                     Finding::new(format!("duplicate key `{key}` in table constructor"), span)
                         .with_help(format!("previous definition at {line}:{column}")),

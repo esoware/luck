@@ -1,21 +1,35 @@
 //! The bus iterates the node table once, and rules that check each block
 //! read the block table, instead of each rule re-walking the tree.
 
+use core::ptr;
+
 use luck_ast::{
-    Block, Expression, FunctionBody, LastStatement, Statement, TableConstructor, Visitor,
+    Block, Expression, FunctionBody, LastStatement, Statement, Suffix, SuffixedExpression,
+    TableConstructor, Var, Visitor,
 };
 
 use crate::node_type::{NodeType, NodeTypeSet};
+use crate::rule::ChainPosition;
 use crate::uninitialized::UninitializedLocals;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum NodeKind<'ast> {
     Statement(&'ast Statement),
     LastStatement(&'ast LastStatement),
-    /// Never an `Expression::TableConstructor`, which is a [`Self::Table`].
+    /// Never an `Expression::TableConstructor`, which is a [`Self::Table`], or
+    /// an `Expression::Suffixed`, which is a [`Self::Chain`].
     Expression(&'ast Expression),
     /// A table in an expression or as a `f{...}` argument.
     Table(&'ast TableConstructor),
+    /// A chain in an expression, a call statement, or an assignment target.
+    Chain(&'ast SuffixedExpression, ChainPosition),
+    /// The call at `index` in a chain, other than the one a call statement
+    /// makes. A `u32` keeps the node at three words, and no source has more
+    /// suffixes than bytes.
+    Call {
+        chain: &'ast SuffixedExpression,
+        index: u32,
+    },
 }
 
 #[derive(Debug)]
@@ -43,6 +57,7 @@ impl<'ast> Nodes<'ast> {
                 uninitialized_locals: UninitializedLocals::default(),
                 present_types: NodeTypeSet::new(),
             },
+            call_statement: None,
         };
         collector.visit_block(block);
         collector.nodes.uninitialized_locals.sort();
@@ -80,6 +95,10 @@ pub(crate) fn adjacent_stmts(block: &Block) -> impl Iterator<Item = (&Statement,
 
 struct NodeCollector<'ast> {
     nodes: Nodes<'ast>,
+    /// The call statement being walked, and its chain. Its node is the
+    /// chain's last call, and follows the chain's other calls, so the bus
+    /// resolves them front to back.
+    call_statement: Option<(&'ast Statement, &'ast SuffixedExpression)>,
 }
 
 impl<'ast> NodeCollector<'ast> {
@@ -96,16 +115,50 @@ impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
-        self.push_node(NodeKind::Statement(stmt), NodeType::of_stmt(stmt));
+        if let Statement::FunctionCall(chain) = stmt {
+            self.call_statement = Some((stmt, chain));
+        } else {
+            self.push_node(NodeKind::Statement(stmt), NodeType::of_stmt(stmt));
+        }
         self.nodes.uninitialized_locals.record(stmt);
         self.walk_stmt(stmt);
     }
 
     fn visit_expr(&mut self, expr: &'ast Expression) {
-        if !matches!(expr, Expression::TableConstructor(_)) {
+        if !matches!(expr, Expression::TableConstructor(_) | Expression::Suffixed(_)) {
             self.push_node(NodeKind::Expression(expr), NodeType::of_expr(expr));
         }
         self.walk_expr(expr);
+    }
+
+    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression) {
+        self.push_node(NodeKind::Chain(chain, ChainPosition::Value), NodeType::Suffixed);
+        let statement = self
+            .call_statement
+            .filter(|(_, statement_chain)| ptr::eq(*statement_chain, chain))
+            .map(|(stmt, _)| stmt);
+        let expression_suffixes = if statement.is_some() {
+            chain.suffixes.len().saturating_sub(1)
+        } else {
+            chain.suffixes.len()
+        };
+        for (index, suffix) in (0u32..).zip(chain.suffixes.iter().take(expression_suffixes)) {
+            if matches!(suffix, Suffix::Call(_)) {
+                self.push_node(NodeKind::Call { chain, index }, NodeType::FunctionCallExpr);
+            }
+        }
+        if let Some(stmt) = statement {
+            self.push_node(NodeKind::Statement(stmt), NodeType::FunctionCallStmt);
+        }
+        self.walk_suffixed(chain);
+    }
+
+    fn visit_assignment_target(&mut self, target: &'ast Var) {
+        if let Var::Suffixed(chain) = target {
+            let kind = NodeKind::Chain(chain, ChainPosition::AssignmentTarget);
+            self.push_node(kind, NodeType::Suffixed);
+            self.walk_suffixed(chain);
+        }
     }
 
     fn visit_table_constructor(&mut self, table: &'ast TableConstructor) {
@@ -132,7 +185,12 @@ mod tests {
 
     #[test]
     fn table_matches_visitor_preorder() {
-        let parse = luck_parser::parse("local a = 1 + 2\nprint(a)", LuaVersion::Lua54);
+        let parse = luck_parser::parse(
+            "\
+local a = 1 + 2
+print(a)",
+            LuaVersion::Lua54,
+        );
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let nodes = Nodes::collect(&parse.block);
         let node_types: Vec<NodeType> =
@@ -144,9 +202,10 @@ mod tests {
                 NodeType::BinaryOp,
                 NodeType::Number,
                 NodeType::Number,
+                NodeType::Suffixed,
                 NodeType::FunctionCallStmt,
-                NodeType::Var,
-                NodeType::Var,
+                NodeType::Name,
+                NodeType::Name,
             ]
         );
         assert!(nodes.contains_any(NodeTypeSet::from_types(&[NodeType::BinaryOp])));
@@ -154,8 +213,18 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn node_is_three_words() {
+        assert_eq!(size_of::<AstNode<'_>>(), 24);
+    }
+
+    #[test]
     fn blocks_match_visitor_preorder() {
-        let source = "do local a = 1 end\nlocal function f()\n  if a then print(a) else end\nend";
+        let source = "\
+do local a = 1 end
+local function f()
+  if a then print(a) else end
+end";
         let parse = luck_parser::parse(source, LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let nodes = Nodes::collect(&parse.block);

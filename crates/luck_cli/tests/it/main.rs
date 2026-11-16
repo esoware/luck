@@ -15,3 +15,4 @@ mod lint_output;
 mod path_selection;
 mod project_config;
 mod regressions;
+mod stack;

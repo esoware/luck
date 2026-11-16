@@ -153,7 +153,9 @@ mod tests {
 
     #[test]
     fn flags_unknown_directive() {
-        let diags = run("--!foobar\nlocal _x = 1");
+        let diags = run("\
+--!foobar
+local _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("unknown comment directive `foobar`"));
         assert!(!diags[0].message.contains("did you mean"));
@@ -161,49 +163,64 @@ mod tests {
 
     #[test]
     fn flags_unknown_directive_with_suggestion() {
-        let diags = run("--!strcit\nlocal _x = 1");
+        let diags = run("\
+--!strcit
+local _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("did you mean `strict`"), "{diags:?}");
     }
 
     #[test]
     fn flags_directive_after_first_stmt() {
-        let diags = run("local _x = 1\n--!strict");
+        let diags = run("\
+local _x = 1
+--!strict");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("after the first statement"));
     }
 
     #[test]
     fn flags_directive_after_lone_return() {
-        let diags = run("return 1\n--!strict");
+        let diags = run("\
+return 1
+--!strict");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("after the first statement"));
     }
 
     #[test]
     fn flags_extra_symbols_after_mode() {
-        let diags = run("--!strict yes\nlocal _x = 1");
+        let diags = run("\
+--!strict yes
+local _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("extra symbols"));
     }
 
     #[test]
     fn flags_second_mode_directive() {
-        let diags = run("--!strict\n--!nocheck\nlocal _x = 1");
+        let diags = run("\
+--!strict
+--!nocheck
+local _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("set by an earlier directive"));
     }
 
     #[test]
     fn flags_optimize_without_level() {
-        let diags = run("--!optimize\nlocal _x = 1");
+        let diags = run("\
+--!optimize
+local _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("requires an optimization level"));
     }
 
     #[test]
     fn flags_optimize_bad_level() {
-        let diags = run("--!optimize 3\nlocal _x = 1");
+        let diags = run("\
+--!optimize 3
+local _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
             diags[0].message.contains("unknown optimization level `3`, expected `0`, `1`, or `2`"),
@@ -213,44 +230,64 @@ mod tests {
 
     #[test]
     fn flags_extra_symbols_after_native() {
-        let diags = run("--!native on\nlocal _x = 1");
+        let diags = run("\
+--!native on
+local _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("extra symbols"));
     }
 
     #[test]
     fn ignores_valid_directives() {
-        let diags = run("--!strict\n--!native\n--!optimize 2\nlocal _x = 1");
+        let diags = run("\
+--!strict
+--!native
+--!optimize 2
+local _x = 1");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_nolint_with_argument() {
-        let diags = run("--!nolint UnknownGlobal\nlocal _x = 1");
+        let diags = run("\
+--!nolint UnknownGlobal
+local _x = 1");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_plain_comments() {
-        let diags = run("-- not a directive\nlocal _x = 1");
+        let diags = run("\
+-- not a directive
+local _x = 1");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_non_luau() {
-        let diags = run_rule(&CommentDirective, "--!foobar\nlocal _x = 1", LuaVersion::Lua54);
+        let diags = run_rule(
+            &CommentDirective,
+            "\
+--!foobar
+local _x = 1",
+            LuaVersion::Lua54,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_reserved_space_comment() {
-        let diags = run("--! note\nlocal _x = 1");
+        let diags = run("\
+--! note
+local _x = 1");
         assert!(diags.is_empty(), "Luau reserves `--! ` for plain comments: {diags:?}");
     }
 
     #[test]
     fn ignores_reserved_space_comment_after_code() {
-        let diags = run("local _x = 1\n--! note");
+        let diags = run("\
+local _x = 1
+--! note");
         assert!(diags.is_empty(), "Luau reserves `--! ` for plain comments: {diags:?}");
     }
 }

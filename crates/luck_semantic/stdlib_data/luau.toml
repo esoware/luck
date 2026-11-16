@@ -6,7 +6,8 @@
 # Luau has the 4-arg vector.create. Shared entries are duplicated, and
 # tests/it/drift.rs keeps them in sync.
 #
-# Schema: see crates/luck_semantic/src/stdlib_load.rs. Each entry has
+# Schema: see crates/luck_semantic/tests/it/stdlib_catalog.rs, which
+# generates the catalog from these files. Each entry has
 # kind = "function" | "namespace" | "constant" | "property". A function
 # has either a flat signature (min_args, max_args, params; max_args = -1
 # means unbounded) or an overloads array.

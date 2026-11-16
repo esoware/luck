@@ -162,14 +162,21 @@ fn empty_stmt_gated_by_version() {
 #[test]
 fn ambiguous_newline_call_gated_by_version() {
     // 5.1 and Luau reject a call whose `(` starts a new line.
-    let source = "a = b\n(f)(g)";
+    let source = "\
+a = b
+(f)(g)";
     assert_has_errors(&parse(source, LuaVersion::Lua51));
     assert_has_errors(&parse(source, LuaVersion::Luau));
     assert_no_errors(&parse(source, LuaVersion::Lua54));
     // Same line: fine everywhere.
     assert_no_errors(&parse("a = b(f)(g)", LuaVersion::Lua51));
     // Non-paren call args never trigger the check.
-    assert_no_errors(&parse("a = b\n{ x = 1 }", LuaVersion::Lua51));
+    assert_no_errors(&parse(
+        "\
+a = b
+{ x = 1 }",
+        LuaVersion::Lua51,
+    ));
 }
 
 #[test]
@@ -184,7 +191,12 @@ fn luau_function_attributes_must_be_known_and_unique() {
 fn ambiguous_newline_check_covers_method_calls() {
     // `funcargs` and `parseFunctionArgs` apply the line check to `a:b(...)` too.
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-        let result = parse("a:b\n(c)", version);
+        let result = parse(
+            "\
+a:b
+(c)",
+            version,
+        );
         assert!(
             result.errors.iter().any(|e| e.message.contains("ambiguous")),
             "{version:?} must reject a method call whose `(` starts a new line: {:?}",

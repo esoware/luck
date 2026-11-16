@@ -209,7 +209,11 @@ async fn range_formatting_preserves_out_of_range_content() {
     let notifier = CapturedNotifier::default();
     let server = Backend::new(notifier.clone());
     let uri = workspace_uri("partial.lua");
-    let source = "local first=1\nlocal middle=2\nlocal last=3\n";
+    let source = "\
+local first=1
+local middle=2
+local last=3
+";
     open(&server, &uri, source).await;
 
     // Only the middle line is in range; the first and third must come back
@@ -297,7 +301,15 @@ async fn completion_lists_locals_and_stdlib_globals() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("completion.lua");
     // A visible local plus a bare-identifier completion site inside a call.
-    open(&server, &uri, "local myLocal = 1\nprint(m)\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local myLocal = 1
+print(m)
+",
+    )
+    .await;
 
     let response = server
         .completion(CompletionParams {
@@ -354,7 +366,16 @@ async fn signature_help_marks_active_parameter() {
 async fn document_symbol_reports_named_function() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("symbols.lua");
-    open(&server, &uri, "local function greet(name)\n    return name\nend\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local function greet(name)
+    return name
+end
+",
+    )
+    .await;
 
     let response = server
         .document_symbol(DocumentSymbolParams {
@@ -378,7 +399,16 @@ async fn document_symbol_reports_named_function() {
 async fn folding_range_covers_multiline_function() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("folding.lua");
-    open(&server, &uri, "local function greet(name)\n    return name\nend\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local function greet(name)
+    return name
+end
+",
+    )
+    .await;
 
     let ranges = server
         .folding_range(FoldingRangeParams {
@@ -399,7 +429,15 @@ async fn folding_range_covers_multiline_function() {
 async fn document_highlight_finds_all_occurrences() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("highlight.lua");
-    open(&server, &uri, "local count = 1\ncount = count + 1\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local count = 1
+count = count + 1
+",
+    )
+    .await;
 
     // Cursor on the write target `count` on line 1.
     let highlights = server
@@ -460,7 +498,15 @@ async fn selection_range_expands_from_identifier() {
 async fn semantic_tokens_cover_every_identifier() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("tokens.lua");
-    open(&server, &uri, "print(math.pi)\nlocal mine = my_helper(1)\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+print(math.pi)
+local mine = my_helper(1)
+",
+    )
+    .await;
 
     let result = server
         .semantic_tokens_full(SemanticTokensParams {
@@ -663,7 +709,15 @@ async fn syntax_tree_request_dumps_ast() {
 async fn goto_definition_jumps_to_declaration() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("definition.lua");
-    open(&server, &uri, "local value = 1\nprint(value)\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local value = 1
+print(value)
+",
+    )
+    .await;
 
     let response = server
         .goto_definition(GotoDefinitionParams {
@@ -703,7 +757,19 @@ async fn goto_definition_returns_none_for_a_global() {
 async fn references_are_scope_exact_for_shadowed_names() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("references.lua");
-    open(&server, &uri, "local x = 1\ndo\n    local x = 2\n    print(x)\nend\nprint(x)\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local x = 1
+do
+    local x = 2
+    print(x)
+end
+print(x)
+",
+    )
+    .await;
 
     // Cursor on the INNER x read at line 3.
     let locations = server
@@ -731,7 +797,15 @@ async fn references_are_scope_exact_for_shadowed_names() {
 async fn references_exclude_declaration_when_not_requested() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("references_no_decl.lua");
-    open(&server, &uri, "local count = 1\ncount = count + 1\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local count = 1
+count = count + 1
+",
+    )
+    .await;
 
     let locations = server
         .references(ReferenceParams {
@@ -753,7 +827,15 @@ async fn references_exclude_declaration_when_not_requested() {
 async fn prepare_rename_accepts_local_and_rejects_global() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("prepare_rename.lua");
-    open(&server, &uri, "local count = 1\nprint(count)\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local count = 1
+print(count)
+",
+    )
+    .await;
 
     let prepared = server
         .prepare_rename(position_params(&uri, 0, 8))
@@ -774,7 +856,15 @@ async fn prepare_rename_accepts_local_and_rejects_global() {
 async fn rename_updates_declaration_and_references() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("rename.lua");
-    open(&server, &uri, "local count = 1\ncount = count + 1\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local count = 1
+count = count + 1
+",
+    )
+    .await;
 
     let edit = server
         .rename(RenameParams {
@@ -794,7 +884,15 @@ async fn rename_updates_declaration_and_references() {
 async fn rename_rejects_keywords_used_names_and_builtins() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("rename_reject.lua");
-    open(&server, &uri, "local count = 1\nlocal other = count\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local count = 1
+local other = count
+",
+    )
+    .await;
 
     let keyword = server
         .rename(RenameParams {
@@ -830,7 +928,15 @@ async fn prepare_rename_handles_utf16_offsets() {
     let uri = workspace_uri("rename_utf16.lua");
     // The crab emoji is two UTF-16 units; positions after it require
     // real UTF-16 conversion, not byte arithmetic.
-    open(&server, &uri, "local s = \"\u{1F980}\" local target = 1\nprint(s, target)\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+local s = \"\u{1F980}\" local target = 1
+print(s, target)
+",
+    )
+    .await;
 
     let prepared = server
         .prepare_rename(position_params(&uri, 0, 23))
@@ -848,8 +954,24 @@ async fn workspace_symbols_filter_across_open_documents() {
     let server = Backend::new(CapturedNotifier::default());
     let first = workspace_uri("ws_first.lua");
     let second = workspace_uri("ws_second.lua");
-    open(&server, &first, "local function setup_camera() end\nsetup_camera()\n").await;
-    open(&server, &second, "local function teardown() end\nteardown()\n").await;
+    open(
+        &server,
+        &first,
+        "\
+local function setup_camera() end
+setup_camera()
+",
+    )
+    .await;
+    open(
+        &server,
+        &second,
+        "\
+local function teardown() end
+teardown()
+",
+    )
+    .await;
 
     let response = server
         .symbol(WorkspaceSymbolParams {
@@ -886,7 +1008,16 @@ async fn workspace_symbols_filter_across_open_documents() {
 async fn semantic_tokens_range_returns_subset() {
     let server = Backend::new(CapturedNotifier::default());
     let uri = workspace_uri("tokens_range.lua");
-    open(&server, &uri, "print(1)\nprint(2)\nprint(3)\n").await;
+    open(
+        &server,
+        &uri,
+        "\
+print(1)
+print(2)
+print(3)
+",
+    )
+    .await;
 
     let full_result = server
         .semantic_tokens_full(SemanticTokensParams {
@@ -1005,7 +1136,15 @@ async fn did_change_applies_multi_change_batch_with_shifted_ranges() {
     let notifier = CapturedNotifier::default();
     let server = Backend::new(notifier.clone());
     let uri = workspace_uri("batch.lua");
-    open(&server, &uri, "local a = 1\nlocal b = 2\nlocal c = 3").await;
+    open(
+        &server,
+        &uri,
+        "\
+local a = 1
+local b = 2
+local c = 3",
+    )
+    .await;
 
     // A single batch whose first edit inserts a line. The second edit's
     // range is expressed against the text the first one produced; applied
@@ -1017,7 +1156,10 @@ async fn did_change_applies_multi_change_batch_with_shifted_ranges() {
                 TextDocumentContentChangeEvent {
                     range: Some(Range::new(Position::new(0, 0), Position::new(0, 11))),
                     range_length: None,
-                    text: "local a = 10\nlocal aa = 11".to_owned(),
+                    text: "\
+local a = 10
+local aa = 11"
+                        .to_owned(),
                 },
                 TextDocumentContentChangeEvent {
                     range: Some(Range::new(Position::new(3, 10), Position::new(3, 11))),
