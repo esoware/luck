@@ -2,19 +2,21 @@ use core::iter;
 
 use luck_ast::{
     BinaryLink, BinaryOp, Block, Expression, IfStatement, LastStatement, OneOrMore, Punctuated,
-    ReturnStatement, Statement, Transform, is_multi_value,
+    ReturnStatement, Statement, Transform, ends_in_if_expr, is_multi_value,
 };
-use luck_token::{BinOp, Span};
+use luck_token::{BinOp, LuaVersion, Span};
 
-use crate::expr::{ends_in_if_expr, fits_at_depth, is_always_truthy, parenthesize};
+use crate::expr::{fits_at_depth, is_always_truthy, parenthesize};
 
-pub(crate) fn simplify(block: Block) -> Block {
-    StatementSimplifier { depth: 0 }.transform_block(block)
+pub(crate) fn simplify(block: Block, version: LuaVersion) -> Block {
+    StatementSimplifier { depth: 0, depth_limit: version.max_nesting_depth() }
+        .transform_block(block)
 }
 
 struct StatementSimplifier {
     /// Levels of nesting open where the walk is.
     depth: usize,
+    depth_limit: usize,
 }
 
 impl Transform for StatementSimplifier {
@@ -54,17 +56,20 @@ impl Transform for StatementSimplifier {
 
     fn transform_block(&mut self, block: Block) -> Block {
         let walked = self.walk_block(block);
-        // The walk has stepped back out of the block, which is one level in.
-        try_convert_if_return_chain(walked, self.depth.saturating_add(1))
+        // The walk has stepped back out of the block, whose statements are
+        // one level in.
+        try_convert_if_return_chain(walked, self.depth.saturating_add(1), self.depth_limit)
     }
 }
 
 impl StatementSimplifier {
     /// `if a then if b then X end end` becomes `if a and b then X end`, for
-    /// every level of the run at once. The run of `and`s is one level, so each
-    /// condition is measured once, for the `and` and a pair of parentheses it
-    /// can gain.
+    /// every level of the run at once. The run of `and`s opens a level for
+    /// each condition after the first, so each is measured once, for that
+    /// and a pair of parentheses it can gain.
+    #[inline(never)]
     fn merge_nested_ifs(&mut self, mut outer_if: Box<IfStatement>) -> Statement {
+        let limit = self.depth_limit;
         let mut inner_conditions = Vec::new();
         if has_no_else(&outer_if) {
             // The check guarantees the pop yields the inner `if`. The outer
@@ -74,10 +79,10 @@ impl StatementSimplifier {
                     outer_if.block.stmts.as_slice(),
                     [Statement::IfStatement(inner_if)]
                         if has_no_else(inner_if)
-                            && fits_at_depth(self.depth, 2, &inner_if.condition)
+                            && fits_at_depth(self.depth, 3, &inner_if.condition, limit)
                 )
                 && (!inner_conditions.is_empty()
-                    || fits_at_depth(self.depth, 2, &outer_if.condition))
+                    || fits_at_depth(self.depth, 2, &outer_if.condition, limit))
                 && let Some(Statement::IfStatement(inner_if)) = outer_if.block.stmts.pop()
             {
                 let IfStatement { condition, block, .. } = *inner_if;
@@ -97,8 +102,8 @@ impl StatementSimplifier {
 
 /// Converts `if c1 then return X end; if c2 then return Y end; return Z`
 /// into `return c1 and X or c2 and Y or Z` when `X` and `Y` are always
-/// truthy. `level` is the block's own level of nesting.
-fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
+/// truthy. `level` is the level of the block's statements.
+fn try_convert_if_return_chain(mut block: Block, level: usize, limit: usize) -> Block {
     let Some(LastStatement::Return(return_stmt)) = block.last_stmt.as_deref_mut() else {
         return block;
     };
@@ -113,7 +118,7 @@ fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
 
     // The guards and the fallback make one run of `or`s whatever its length,
     // and each guard's condition and value sit in a run of `and`s under it,
-    // each maybe in parentheses.
+    // each maybe in parentheses, at most three levels below the `return`.
     let link_count = block
         .stmts
         .iter()
@@ -121,8 +126,8 @@ fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
         .take_while(|stmt| match extract_if_return_guard(stmt) {
             Some((condition, return_expr)) => {
                 is_always_truthy(return_expr)
-                    && fits_at_depth(level, 3, condition)
-                    && fits_at_depth(level, 3, return_expr)
+                    && fits_at_depth(level, 3, condition, limit)
+                    && fits_at_depth(level, 3, return_expr, limit)
             }
             None => matches!(stmt, Statement::EmptyStatement(_)),
         })
@@ -132,7 +137,7 @@ fn try_convert_if_return_chain(mut block: Block, level: usize) -> Block {
         .stmts
         .get(chain_start..)
         .is_some_and(|chain| chain.iter().any(|stmt| extract_if_return_guard(stmt).is_some()));
-    if !has_guard || !fits_at_depth(level, 1, fallback_expr) {
+    if !has_guard || !fits_at_depth(level, 3, fallback_expr, limit) {
         return block;
     }
 
@@ -223,13 +228,11 @@ fn binds_looser(operand: &Expression, op: BinOp) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::fixtures::{assert_reparses, run_pass};
 
     fn apply(source: &str) -> String {
-        run_pass(source, LuaVersion::Lua54, simplify)
+        run_pass(source, LuaVersion::Lua54, |block| simplify(block, LuaVersion::Lua54))
     }
 
     #[test]
@@ -250,10 +253,10 @@ end
 
     #[test]
     fn flattens_a_run_of_nested_ifs_into_one_run_of_ands() {
-        let source = format!("{}x(){}", "if a or b then ".repeat(200), " end".repeat(200));
+        let source = format!("{}x(){}", "if a or b then ".repeat(150), " end".repeat(150));
         let result = apply(&source);
         assert_reparses(&result, LuaVersion::Lua54);
-        assert_eq!(result, format!("if(a or b){}then x()end", "and(a or b)".repeat(199)));
+        assert_eq!(result, format!("if(a or b){}then x()end", "and(a or b)".repeat(149)));
     }
 
     #[test]
@@ -387,7 +390,8 @@ return \"world\"
                 "return a and 1 or if b then c else d",
             ),
         ] {
-            let result = run_pass(source, LuaVersion::Luau, simplify);
+            let result =
+                run_pass(source, LuaVersion::Luau, |block| simplify(block, LuaVersion::Luau));
             assert_eq!(result, expected, "source: {source}");
             assert_reparses(&result, LuaVersion::Luau);
         }

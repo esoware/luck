@@ -1,13 +1,13 @@
 use core::ops::Range;
 
-use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::{Block, Call, FunctionArgs, MAX_NESTING_DEPTH, Visitor, block_nesting_depth};
 use luck_parser::ParseResult;
 use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 
 use crate::comments::{Comments, write_remaining_comments, write_shebang};
 use crate::format_block::{first_item_start, format_selection};
 use crate::ir::{Format as _, Formatter};
-use crate::{FormatOptions, LineEndings};
+use crate::{CallParentheses, FormatOptions, LineEndings};
 
 #[derive(Debug, Clone)]
 pub struct FormatResult {
@@ -46,6 +46,70 @@ fn print_block(
     output
 }
 
+/// `options`, unless the parentheses they put around a bare table or string
+/// argument, a level each, would nest the output of `block`, `depth` levels
+/// deep, past `limit`. Then every call keeps its arguments as they are.
+fn fitting_options(
+    block: &Block,
+    depth: usize,
+    limit: usize,
+    options: &FormatOptions,
+) -> FormatOptions {
+    // The parentheses add at most a level for each level of the tree.
+    if depth.saturating_mul(2) <= limit || printed_depth(block, depth, options) <= limit {
+        return *options;
+    }
+    FormatOptions { call_parentheses: CallParentheses::Input, ..*options }
+}
+
+fn printed_depth(block: &Block, depth: usize, options: &FormatOptions) -> usize {
+    let (has_table_parens, has_string_parens) = match options.call_parentheses {
+        CallParentheses::Always => (true, true),
+        CallParentheses::NoSingleString => (true, false),
+        CallParentheses::NoSingleTable => (false, true),
+        CallParentheses::None | CallParentheses::Input => (false, false),
+    };
+    let mut meter = PrintedDepth { depth: 0, deepest: 0, has_table_parens, has_string_parens };
+    meter.visit_block(block);
+    // The walk skips attribute arguments, which `depth` counts.
+    meter.deepest.max(depth)
+}
+
+struct PrintedDepth {
+    depth: usize,
+    deepest: usize,
+    has_table_parens: bool,
+    has_string_parens: bool,
+}
+
+impl<'ast> Visitor<'ast> for PrintedDepth {
+    fn descend(&mut self) -> bool {
+        self.depth = self.depth.saturating_add(1);
+        self.deepest = self.deepest.max(self.depth);
+        self.depth <= MAX_NESTING_DEPTH
+    }
+
+    fn ascend(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
+    fn visit_call(&mut self, call: Call<'ast>) {
+        let gains_parentheses = match call.args {
+            FunctionArgs::TableConstructor(_) => self.has_table_parens,
+            FunctionArgs::StringLiteral(_) => self.has_string_parens,
+            FunctionArgs::Parenthesized { .. } | FunctionArgs::Error(_) => false,
+        };
+        if !gains_parentheses {
+            self.walk_call(call);
+            return;
+        }
+        if self.descend() {
+            self.walk_call(call);
+        }
+        self.ascend();
+    }
+}
+
 /// Verbatim text can already hold CRLF or LFCR, from CRLF input or an earlier
 /// pass, and a second CR would be another line break in a long string.
 fn with_windows_line_endings(text: &str) -> String {
@@ -81,15 +145,15 @@ pub fn format_block(
     comments: Comments,
     options: &FormatOptions,
 ) -> Result<String, FormatError> {
-    if block_nesting_depth(block) > MAX_NESTING_DEPTH {
+    let depth = block_nesting_depth(block);
+    if depth > MAX_NESTING_DEPTH {
         return Err(FormatError {
             span: block.span,
-            message: format!(
-                "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
-            ),
+            message: format!("maximum nesting depth exceeded (limit: {MAX_NESTING_DEPTH})"),
         });
     }
-    Ok(print_block(block, comments, options, false))
+    let options = fitting_options(block, depth, MAX_NESTING_DEPTH, options);
+    Ok(print_block(block, comments, &options, false))
 }
 
 /// Input that fails to parse returns empty output with its parse errors in
@@ -113,7 +177,9 @@ pub fn format_parsed(
         return FormatResult { output: String::new(), errors: parse.errors.clone() };
     }
     let comments = Comments::from_source(&parse.comments, &parse.source, version);
-    let output = print_block(&parse.block, comments, options, options.sort_requires);
+    let limit = version.max_nesting_depth();
+    let options = fitting_options(&parse.block, parse.nesting_depth, limit, options);
+    let output = print_block(&parse.block, comments, &options, options.sort_requires);
     FormatResult { output, errors: Vec::new() }
 }
 
@@ -137,7 +203,9 @@ pub fn format_range(
 
     let offsets = index_to_offset(range.start)..index_to_offset(range.end);
     let comments = Comments::from_source(&parsed.comments, source, version);
-    let output = format_selection(&parsed.block, comments, options, &offsets).map_or_else(
+    let limit = version.max_nesting_depth();
+    let options = fitting_options(&parsed.block, parsed.nesting_depth, limit, options);
+    let output = format_selection(&parsed.block, comments, &options, &offsets).map_or_else(
         || source.to_owned(),
         |(span, selected)| {
             let text = if options.line_endings == LineEndings::Windows {

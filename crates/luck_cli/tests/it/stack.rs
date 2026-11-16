@@ -1,6 +1,6 @@
 //! The binary runs each command on the stack its thread starts with, which is
 //! 1 MB for a Windows main thread, so every command has to get through input
-//! nested to the parser's cap on it.
+//! nested as deep as Lua 5.4 and Luau take it on that stack.
 
 use assert_cmd::assert::Assert;
 use luck_testgen::sources_at_the_nesting_cap;
@@ -16,7 +16,8 @@ fn assert_ran(output: &Assert) {
 }
 
 #[test]
-fn every_command_gets_through_input_nested_to_the_cap() {
+#[cfg_attr(debug_assertions, ignore = "only a release build's frames fit, so `just stack` runs it")]
+fn every_command_fits_the_smallest_stack() {
     let directory = TempDir::new().expect("directory");
     write_file(directory.path(), "luck.json", r#"{"lua": "lua54", "luau": "luau"}"#);
     let mut files = Vec::new();

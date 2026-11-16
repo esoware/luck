@@ -8,7 +8,7 @@ mod types;
 use core::mem;
 use core::ops::Range;
 
-use luck_ast::{BinaryLink, Block, Expression, Literal, MAX_NESTING_DEPTH, Suffix};
+use luck_ast::{BinaryLink, Block, Expression, Literal, Suffix};
 use luck_lexer::Lexer;
 use luck_token::{Comment, CompactString, LuaVersion, Span, Token, TokenKind, has_line_break};
 use rustc_hash::FxHashSet;
@@ -33,8 +33,7 @@ fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
             Block { span: Span::new(0, 0), stmts: Vec::new(), last_stmt: None },
             Vec::new(),
             vec![error],
-            // The empty block's own level.
-            1,
+            0,
         ),
     };
     ParseResult { block, comments, errors, source, nesting_depth }
@@ -50,12 +49,12 @@ struct Parser<'source> {
     next: Token,
     previous_span: Span,
     version: LuaVersion,
-    /// Levels open where the parser is, as [`MAX_NESTING_DEPTH`] counts them.
+    /// Levels open where the parser is, counted as the reference compiler
+    /// counts them, the levels [`luck_ast::Visitor::descend`] defines.
     nesting_depth: usize,
-    /// The deepest level opened since the operand being parsed began. A node
-    /// that wraps a finished operand nests all of it one level deeper, so the
-    /// wrapper counts from here.
     deepest_level: usize,
+    /// [`LuaVersion::max_nesting_depth`].
+    depth_limit: usize,
     /// The chunk's own block is 1.
     block_depth: u32,
     /// The links of every binary run being parsed, innermost last. Each run
@@ -197,6 +196,7 @@ impl<'source> Parser<'source> {
             version,
             nesting_depth: 0,
             deepest_level: 0,
+            depth_limit: version.max_nesting_depth(),
             block_depth: 0,
             binary_links: Vec::new(),
             suffixes: Vec::new(),
@@ -216,12 +216,7 @@ impl<'source> Parser<'source> {
     /// Nothing is open around the chunk's block, so it reads to the end of
     /// the source, and the lexer is drained by then.
     fn parse_chunk(mut self) -> (Block, Vec<Comment>, Vec<ParseError>, usize) {
-        let start_span = self.current_span();
-        let block = self.parse_block().unwrap_or(Block {
-            span: start_span,
-            stmts: Vec::new(),
-            last_stmt: None,
-        });
+        let block = self.parse_block();
         let (comments, mut errors) = self.lexer.finish();
         errors.append(&mut self.errors);
         if self.has_type_function && errors.is_empty() {
@@ -438,12 +433,11 @@ impl<'source> Parser<'source> {
         }
     }
 
-    /// Count one more level of nesting, or at [`MAX_NESTING_DEPTH`], stop
-    /// the parse there and return false, leaving the count unchanged.
+    /// Count one more level of nesting, or at the dialect's limit, stop the
+    /// parse there and return false, leaving the count unchanged.
     #[must_use]
     fn enter_depth(&mut self) -> bool {
-        // A host-stack budget, independent of target VM compiler limits.
-        if self.nesting_depth >= MAX_NESTING_DEPTH {
+        if self.nesting_depth >= self.depth_limit {
             self.stop_at_depth_limit();
             return false;
         }
@@ -463,45 +457,11 @@ impl<'source> Parser<'source> {
     #[inline(never)]
     fn stop_at_depth_limit(&mut self) {
         let span = self.current_span();
-        self.syntax_error(
-            span,
-            format!(
-                "maximum nesting depth exceeded (luck parser resource limit: {MAX_NESTING_DEPTH})"
-            ),
-        );
+        let limit = self.depth_limit;
+        self.syntax_error(span, format!("maximum nesting depth exceeded (limit: {limit})"));
         while !self.is_at_eof() {
             self.advance();
         }
-    }
-
-    /// Start measuring an operand at the current level, returning the
-    /// deepest level of the operand around it. Hand that to
-    /// [`Self::end_operand`] once the operand is whole.
-    const fn begin_operand(&mut self) -> usize {
-        mem::replace(&mut self.deepest_level, self.nesting_depth)
-    }
-
-    /// Fold the finished operand's depth into that of the operand around it.
-    fn end_operand(&mut self, outer_deepest_level: usize) {
-        self.deepest_level = self.deepest_level.max(outer_deepest_level);
-    }
-
-    /// Count a node that wraps the operand parsed so far at `level`: a run of
-    /// binary operators or suffixes, a cast, or a type operator. Everything in
-    /// the operand moves one level down, so the cap applies to its deepest
-    /// level, and stops the parse as [`Self::enter_depth`] does.
-    ///
-    /// On success the parser stands one level in, where the wrapper's other
-    /// children go, and the caller steps back to `level` after them.
-    #[must_use]
-    fn enter_wrapper(&mut self, level: usize) -> bool {
-        if self.deepest_level >= MAX_NESTING_DEPTH {
-            self.stop_at_depth_limit();
-            return false;
-        }
-        self.deepest_level = self.deepest_level.saturating_add(1);
-        self.nesting_depth = level.saturating_add(1);
-        true
     }
 
     /// Skip to the block's end, or to where a statement reliably begins and
@@ -558,7 +518,7 @@ mod tests {
     /// The depth the parser counted and the depth of the tree it built.
     fn counted_and_built(source: &str, version: LuaVersion) -> (usize, usize) {
         let mut parser = Parser::new(source, version).expect("source fits in u32 spans");
-        let block = parser.parse_block().expect("the source is under the depth cap");
+        let block = parser.parse_block();
         assert!(parser.errors.is_empty(), "{:?}\n{source}", parser.errors.first());
         (parser.deepest_level, block_nesting_depth(&block))
     }
@@ -593,13 +553,11 @@ mod tests {
     }
 
     #[test]
-    fn a_suffix_folded_into_a_return_pack_counts_from_the_whole_pack() {
-        // `(T, ...{U})?` parses as `(T?, ...{U})`, and by then only the
-        // pack's depth is known, not its first element's.
+    fn a_suffix_folded_into_a_return_pack_counts_as_its_element() {
+        // `(T, ...{U})?` parses as `(T?, ...{U})`.
         let folded = "local function f(): (T, ...{U})? end";
         let written = "local function f(): (T?, ...{U}) end";
-        let (counted, built) = counted_and_built(folded, LuaVersion::Luau);
-        assert_eq!((counted, built), (6, 5));
+        assert_eq!(counted_and_built(folded, LuaVersion::Luau), (5, 5));
         assert_eq!(counted_and_built(written, LuaVersion::Luau), (5, 5));
     }
 

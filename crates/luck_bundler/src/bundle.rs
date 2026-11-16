@@ -33,7 +33,8 @@ pub struct MinifiedBundle {
 ///
 /// Returns every diagnostic that stopped the graph from building, as
 /// [`DependencyGraph::build`] does, or an E013 for each construct that a
-/// module's wrapper would nest past [`luck_ast::MAX_NESTING_DEPTH`].
+/// module's wrapper would nest past the dialect's
+/// [`max_nesting_depth`](luck_token::LuaVersion::max_nesting_depth).
 pub fn bundle(
     entry_path: &Path,
     options: &BundleOptions<'_>,

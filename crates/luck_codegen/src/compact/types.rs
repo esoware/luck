@@ -116,7 +116,9 @@ impl CompactPrinter {
 
     fn emit_optional_type(&mut self, optional: &OptionalType) {
         self.emit_type(&optional.type_value);
-        self.emit_fixed("?");
+        for _ in 0..optional.question_marks.get() {
+            self.emit_fixed("?");
+        }
     }
 
     fn emit_union_type(&mut self, union: &UnionType) {

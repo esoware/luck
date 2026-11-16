@@ -7,7 +7,7 @@ use crate::types::{Type, TypeArgs};
 
 /// Fixed-spelling leaves (`nil`, `true`, `false`, `...`) carry only their
 /// span; number and string leaves carry a [`Literal`] with their text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[expect(
     clippy::enum_variant_names,
     reason = "each variant is named for its payload, and the syntax tree view prints these names"
@@ -110,8 +110,7 @@ pub enum FunctionArgs {
     },
     TableConstructor(Box<TableConstructor>),
     StringLiteral(Literal),
-    /// Arguments the parser found missing, or a table argument the depth cap
-    /// stopped.
+    /// Arguments the parser found missing.
     Error(Span),
 }
 

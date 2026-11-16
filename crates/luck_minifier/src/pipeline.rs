@@ -1,4 +1,4 @@
-use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::{Block, block_nesting_depth};
 use luck_token::{
     Comment, CommentKind, LuaVersion, SourceError, chunk_header, leading_hot_comments,
 };
@@ -58,19 +58,19 @@ pub fn minify(
 ///
 /// # Errors
 ///
-/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
-/// which `luck_parser` never builds.
+/// Returns an error for a tree nested deeper than `version`'s
+/// [`max_nesting_depth`](LuaVersion::max_nesting_depth), which `luck_parser`
+/// never builds.
 pub fn minify_block(
     block: Block,
     version: LuaVersion,
     config: &TransformConfig,
 ) -> Result<String, SourceError> {
-    if block_nesting_depth(&block) > MAX_NESTING_DEPTH {
+    let limit = version.max_nesting_depth();
+    if block_nesting_depth(&block) > limit {
         return Err(SourceError {
             span: block.span,
-            message: format!(
-                "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
-            ),
+            message: format!("maximum nesting depth exceeded (limit: {limit})"),
         });
     }
     Ok(minify_tree(block, version, config))
@@ -96,7 +96,7 @@ fn apply_core_transforms(mut block: Block, config: &TransformConfig, version: Lu
         block = transforms::remove_dead_code::remove(block, version);
     }
     if config.simplify_statements {
-        block = transforms::simplify_statements::simplify(block);
+        block = transforms::simplify_statements::simplify(block, version);
     }
     if config.fold_constants {
         block = transforms::fold_constants::fold(block, version);

@@ -77,6 +77,35 @@ pub const fn is_prefix_expr(expr: &Expression) -> bool {
     }
 }
 
+/// Whether `expr` prints a Luau if-expression last, whose `else` branch would
+/// take in an operator printed after it.
+#[must_use]
+pub fn ends_in_if_expr(expr: &Expression) -> bool {
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::IfExpression(_) => return true,
+            Expression::BinaryOp(binary_op) => &binary_op.links.last().operand,
+            Expression::UnaryOp(unary_op) => &unary_op.operand,
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::Error(_) => return false,
+        };
+    }
+}
+
 /// Both printers must guard a statement starting with `(`. Printed after a statement that
 /// ends in an expression, `(...)` glues onto that expression and re-parses
 /// as a call, silently changing the meaning.

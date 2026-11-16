@@ -2,8 +2,8 @@ use core::mem;
 
 use luck_ast::{
     Assignment, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause, Expression,
-    GenericFor, GotoStatement, IfStatement, LabelStatement, LastStatement, MAX_NESTING_DEPTH,
-    NumericFor, Parameter, Punctuated, RepeatLoop, ReturnStatement, Statement, Var, WhileLoop,
+    GenericFor, GotoStatement, IfStatement, LabelStatement, LastStatement, NumericFor, Parameter,
+    Punctuated, RepeatLoop, ReturnStatement, Statement, Var, WhileLoop, block_nesting_depth,
 };
 use luck_token::{CompoundOp, Span, TokenKind};
 
@@ -157,13 +157,10 @@ const fn continues_a_name(kind: &TokenKind) -> bool {
 impl Parser<'_> {
     /// The block runs to a closer something open expects, or to the end of
     /// the source, so a stray closer is an error inside it rather than the
-    /// end of it. `None` when it would pass the depth cap.
+    /// end of it. Each statement is a level.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    pub(super) fn parse_block(&mut self) -> Option<Block> {
+    pub(super) fn parse_block(&mut self) -> Block {
         let start_span = self.current_span();
-        if !self.enter_depth() {
-            return None;
-        }
         self.block_depth = self.block_depth.saturating_add(1);
 
         let mut stmts = Vec::new();
@@ -193,20 +190,19 @@ impl Parser<'_> {
             }
 
             // No closer begins a statement, so the block's end is checked for
-            // last. A last statement comes with the deepest level it reaches.
-            let (last, deepest) = match self.peek() {
-                TokenKind::Eof => break,
-                TokenKind::Return => {
-                    let outer = self.begin_operand();
-                    let last = self.parse_return_stmt();
-                    let deepest = self.deepest_level;
-                    self.end_operand(outer);
-                    (last, deepest)
-                }
+            // last.
+            if self.is_at_eof() || (!is_stmt_start(self.peek()) && self.is_at_expected_closer()) {
+                break;
+            }
+            if !self.enter_depth() {
+                break;
+            }
+            let last = match self.peek() {
+                TokenKind::Return => self.parse_return_stmt(),
                 TokenKind::Break if self.version.has_last_stmt_break() => {
                     let span = self.advance_loop_exit("`break` outside a loop");
                     self.eat(&TokenKind::Semicolon);
-                    (LastStatement::Break(span), self.nesting_depth)
+                    LastStatement::Break(span)
                 }
                 // Luau: `continue` is a contextual keyword, only ever a last
                 // statement. Before what makes a name a call or a target, as
@@ -218,35 +214,35 @@ impl Parser<'_> {
                 {
                     let span = self.advance_loop_exit("`continue` outside a loop");
                     self.eat(&TokenKind::Semicolon);
-                    (LastStatement::Continue(span), self.nesting_depth)
+                    LastStatement::Continue(span)
                 }
-                kind if is_stmt_start(kind) => {
-                    stmts.push(self.parse_stmt());
-                    can_take_separator = true;
-                    continue;
-                }
-                _ if self.is_at_expected_closer() => break,
-                _ => {
-                    stmts.push(self.report_unexpected_in_block());
+                kind => {
+                    let stmt = if is_stmt_start(kind) {
+                        self.parse_stmt()
+                    } else {
+                        self.report_unexpected_in_block()
+                    };
+                    stmts.push(stmt);
+                    self.exit_depth();
                     can_take_separator = true;
                     continue;
                 }
             };
+            self.exit_depth();
             if self.is_at_block_end() {
                 last_stmt = Some(Box::new(last));
                 break;
             }
-            stmts.push(self.misplaced_last_stmt(last, deepest));
+            stmts.push(self.misplaced_last_stmt(last));
             can_take_separator = true;
         }
 
-        self.exit_depth();
         self.block_depth = self.block_depth.saturating_sub(1);
 
         let end_span =
             if stmts.is_empty() && last_stmt.is_none() { start_span } else { self.previous_span };
 
-        Some(Block { span: start_span.merge(end_span), stmts, last_stmt })
+        Block { span: start_span.merge(end_span), stmts, last_stmt }
     }
 
     /// A token that begins no statement. The block goes on at the next place
@@ -275,12 +271,11 @@ impl Parser<'_> {
     /// A `return`, or in 5.1 and Luau a `break` or `continue`, that a
     /// statement follows. It ends its block in every Lua, so the statements
     /// after it are an error, and it stands as the `do ... end` around it
-    /// that would make them valid, so they and it stay in the tree. One whose
-    /// `deepest` level is already the depth cap, which the wrapper would
-    /// pass, is an error node instead.
+    /// that would make them valid, so they and it stay in the tree. One the
+    /// wrapper would nest past the dialect's limit is an error node instead.
     #[cold]
     #[inline(never)]
-    fn misplaced_last_stmt(&mut self, last: LastStatement, deepest: usize) -> Statement {
+    fn misplaced_last_stmt(&mut self, last: LastStatement) -> Statement {
         if is_stmt_start(self.peek()) {
             let keyword = match &last {
                 LastStatement::Return(_) => "return",
@@ -292,14 +287,18 @@ impl Parser<'_> {
             self.syntax_error(span, format!("`{keyword}` must be the last statement in its block"));
         }
         let span = last.span();
-        if deepest >= MAX_NESTING_DEPTH {
+        let block = Block { span, stmts: Vec::new(), last_stmt: Some(Box::new(last)) };
+        // The `do` is a level, and the block's statement one inside it.
+        let deepest =
+            self.nesting_depth.saturating_add(1).saturating_add(block_nesting_depth(&block));
+        if deepest > self.depth_limit {
             return Statement::Error(span);
         }
-        let block = Block { span, stmts: Vec::new(), last_stmt: Some(Box::new(last)) };
+        self.deepest_level = self.deepest_level.max(deepest);
         Statement::DoBlock(Box::new(DoBlock { span, block }))
     }
 
-    fn parse_loop_block(&mut self) -> Option<Block> {
+    fn parse_loop_block(&mut self) -> Block {
         let was_in_loop = mem::replace(&mut self.function_scope.is_in_loop, true);
         let block = self.parse_block();
         self.function_scope.is_in_loop = was_in_loop;
@@ -392,6 +391,7 @@ impl Parser<'_> {
         }
     }
 
+    #[inline(never)]
     fn parse_return_stmt(&mut self) -> LastStatement {
         let return_span = self.advance_span();
 
@@ -422,24 +422,21 @@ impl Parser<'_> {
         }))
     }
 
+    #[inline(never)]
     fn parse_if_stmt(&mut self) -> Statement {
         let if_span = self.advance_span();
         self.open(Closer::BlockEnd);
         self.open(Closer::Else);
         let condition = self.parse_expr(0);
         self.expect_keyword(&TokenKind::Then, Construct::IfStatement);
-        let Some(block) = self.parse_block() else {
-            return Statement::Error(if_span);
-        };
+        let block = self.parse_block();
 
         let mut elseif_clauses = Vec::new();
         while matches!(self.peek(), TokenKind::ElseIf) {
             let elseif_span = self.advance_span();
             let elseif_condition = self.parse_expr(0);
             self.expect_keyword(&TokenKind::Then, Construct::IfStatement);
-            let Some(elseif_block) = self.parse_block() else {
-                return Statement::Error(if_span);
-            };
+            let elseif_block = self.parse_block();
             let span = elseif_span.merge(elseif_block.span);
             elseif_clauses.push(ElseIfClause {
                 span,
@@ -450,9 +447,7 @@ impl Parser<'_> {
 
         let else_clause = if matches!(self.peek(), TokenKind::Else) {
             let else_span = self.advance_span();
-            let Some(else_block) = self.parse_block() else {
-                return Statement::Error(if_span);
-            };
+            let else_block = self.parse_block();
             let span = else_span.merge(else_block.span);
             Some(ElseClause { span, block: else_block })
         } else {
@@ -473,14 +468,13 @@ impl Parser<'_> {
         }))
     }
 
+    #[inline(never)]
     fn parse_while_loop(&mut self) -> Statement {
         let while_span = self.advance_span();
         self.open(Closer::BlockEnd);
         let condition = self.parse_expr(0);
         self.expect_keyword(&TokenKind::Do, Construct::WhileLoop);
-        let Some(block) = self.parse_loop_block() else {
-            return Statement::Error(while_span);
-        };
+        let block = self.parse_loop_block();
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(&TokenKind::End, Construct::WhileLoop);
         let span = while_span.merge(end_span);
@@ -491,9 +485,7 @@ impl Parser<'_> {
     fn parse_do_block(&mut self) -> Statement {
         let do_span = self.advance_span();
         self.open(Closer::BlockEnd);
-        let Some(block) = self.parse_block() else {
-            return Statement::Error(do_span);
-        };
+        let block = self.parse_block();
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(&TokenKind::End, Construct::DoBlock);
         let span = do_span.merge(end_span);
@@ -501,6 +493,7 @@ impl Parser<'_> {
         Statement::DoBlock(Box::new(DoBlock { span, block }))
     }
 
+    #[inline(never)]
     fn parse_for_stmt(&mut self) -> Statement {
         let for_span = self.advance_span();
         self.open(Closer::BlockEnd);
@@ -525,9 +518,7 @@ impl Parser<'_> {
         let step = self.eat(&TokenKind::Comma).then(|| self.parse_expr(0));
 
         self.expect_keyword(&TokenKind::Do, Construct::ForLoop);
-        let Some(block) = self.parse_loop_block() else {
-            return Statement::Error(for_span);
-        };
+        let block = self.parse_loop_block();
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(&TokenKind::End, Construct::ForLoop);
         let span = for_span.merge(end_span);
@@ -556,9 +547,7 @@ impl Parser<'_> {
         self.expect_keyword(&TokenKind::In, Construct::ForLoop);
         let exprs = self.parse_expr_list();
         self.expect_keyword(&TokenKind::Do, Construct::ForLoop);
-        let Some(block) = self.parse_loop_block() else {
-            return Statement::Error(for_span);
-        };
+        let block = self.parse_loop_block();
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(&TokenKind::End, Construct::ForLoop);
         let span = for_span.merge(end_span);
@@ -566,12 +555,11 @@ impl Parser<'_> {
         Statement::GenericFor(Box::new(GenericFor { span, names, exprs, block }))
     }
 
+    #[inline(never)]
     fn parse_repeat_loop(&mut self) -> Statement {
         let repeat_span = self.advance_span();
         self.open(Closer::BlockEnd);
-        let Some(block) = self.parse_loop_block() else {
-            return Statement::Error(repeat_span);
-        };
+        let block = self.parse_loop_block();
         self.close(Closer::BlockEnd);
         self.expect_keyword(&TokenKind::Until, Construct::RepeatLoop);
         let condition = self.parse_expr(0);
@@ -580,6 +568,7 @@ impl Parser<'_> {
         Statement::RepeatLoop(Box::new(RepeatLoop { span, block, condition }))
     }
 
+    #[inline(never)]
     fn parse_goto_stmt(&mut self) -> Statement {
         let goto_span = self.advance_span();
         let name = self.expect_identifier_recover();
@@ -587,6 +576,7 @@ impl Parser<'_> {
         Statement::Goto(Box::new(GotoStatement { span, name }))
     }
 
+    #[inline(never)]
     fn parse_label_stmt(&mut self) -> Statement {
         let colons_open = self.advance_span();
         let name = self.expect_identifier_recover();
@@ -595,9 +585,18 @@ impl Parser<'_> {
         Statement::Label(Box::new(LabelStatement { span, name }))
     }
 
+    /// Lua reads a statement's call or first target with `suffixedexp`, and
+    /// Luau with `parsePrimaryExpr`, so neither is a level of its own, and
+    /// nor is any target after it.
     fn parse_assignment_or_call(&mut self) -> Statement {
-        let expr = self.parse_expr(0);
+        let expr = self.parse_expr_inner(0);
+        self.finish_assignment_or_call(expr)
+    }
 
+    /// Apart from [`Self::parse_assignment_or_call`], whose frame sits under
+    /// everything nested in the call or target.
+    #[inline(never)]
+    fn finish_assignment_or_call(&mut self, expr: Expression) -> Statement {
         // Luau compound assignment: `var op= expr`.
         if self.version.has_compound_assignment()
             && let Some(op) = CompoundOp::from_token_kind(self.peek())
@@ -616,7 +615,7 @@ impl Parser<'_> {
 
         // Assignment: `varlist = explist`.
         if matches!(self.peek(), TokenKind::Comma | TokenKind::Equal) {
-            let target_exprs = self.parse_exprs_after(expr);
+            let target_exprs = self.parse_exprs_after(expr, Self::parse_expr_inner);
 
             let equal = self.expect(&TokenKind::Equal);
 

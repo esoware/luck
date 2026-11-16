@@ -7,6 +7,7 @@ use luck_testgen::{
 use luck_token::StdlibEnvironment;
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "only a release build's frames fit, so `just stack` runs it")]
 fn analyzing_fits_the_smallest_stack() {
     let sources = deep_and_long_sources()
         .into_iter()

@@ -114,9 +114,11 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   named `typeof` can be referred to only through its module, with
 ///   [`Synth::ty_qualified`], or as a pack, with [`Synth::ty_generic_pack`].
 /// - **Nesting depth.** No constructor counts it. Every traversal, drop and
-///   clone included, recurses once per level of nesting, so keep the tree
-///   within [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH), the deepest
-///   `luck_parser` builds. A run of suffixes, of binary operators at one
+///   clone included, recurses a bounded number of times per level of
+///   nesting, so keep the tree within its dialect's
+///   [`max_nesting_depth`](luck_token::LuaVersion::max_nesting_depth), as
+///   `luck_parser` does, and never past
+///   [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH). A run of suffixes, of binary operators at one
 ///   level, or of `?`s on a type is one level however long it gets, and the
 ///   constructors join a run they extend rather than nest it.
 ///   [`block_nesting_depth`](crate::block_nesting_depth) and

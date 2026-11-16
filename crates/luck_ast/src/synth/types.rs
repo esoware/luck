@@ -1,3 +1,5 @@
+use core::num::NonZeroU32;
+
 use luck_token::{Token, TokenKind, encode_string};
 
 use crate::expr::Expression;
@@ -89,11 +91,17 @@ impl Synth {
         }
     }
 
+    /// An optional `inner` gains a `?`, as `T??` reads back.
     #[must_use]
     pub fn ty_optional(&self, inner: Type) -> Type {
+        if let Type::Optional(mut optional) = inner {
+            optional.question_marks = optional.question_marks.saturating_add(1);
+            return Type::Optional(optional);
+        }
         Type::Optional(Box::new(OptionalType {
             span: self.next_span(),
             type_value: self.parenthesize_if_composite(inner),
+            question_marks: NonZeroU32::MIN,
         }))
     }
 

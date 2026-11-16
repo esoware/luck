@@ -131,8 +131,11 @@ impl Parser<'_> {
         if !matches!(
             self.peek(),
             TokenKind::LeftParen | TokenKind::StringLiteral(_) | TokenKind::LeftBrace
-        ) || !self.enter_depth()
-        {
+        ) {
+            return None;
+        }
+        let is_list = matches!(self.peek(), TokenKind::LeftParen);
+        if !is_list && !self.enter_depth() {
             return None;
         }
         let args = match self.peek() {
@@ -153,11 +156,7 @@ impl Parser<'_> {
                 args
             }
             TokenKind::LeftBrace => {
-                let open = self.current_span();
-                let expr =
-                    self.parse_table_constructor().map_or(Expression::Error(open), |table| {
-                        Expression::TableConstructor(Box::new(table))
-                    });
+                let expr = Expression::TableConstructor(Box::new(self.parse_table_constructor()));
                 if !is_attribute_literal(&expr) {
                     self.error(expr.span(), "attribute arguments must be literals");
                 }
@@ -165,7 +164,9 @@ impl Parser<'_> {
             }
             _ => Punctuated::from_item(Expression::StringLiteral(self.advance_literal())),
         };
-        self.exit_depth();
+        if !is_list {
+            self.exit_depth();
+        }
         Some(args)
     }
 

@@ -1,8 +1,8 @@
 use core::mem;
 
 use luck_ast::{
-    BinaryOp, Block, Expression, FunctionBody, LocalAssignment, MAX_NESTING_DEPTH, Statement,
-    SuffixedExpression, Transform, Var, Visitor, expr_nesting_depth, is_prefix_expr,
+    BinaryOp, Block, Expression, FunctionBody, LocalAssignment, Statement, SuffixedExpression,
+    Transform, Var, Visitor, expr_nesting_depth, is_prefix_expr,
 };
 use luck_token::{BinOp, CompactString, LuaVersion, MAX_ACTIVE_LOCALS, OperandSide};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -42,6 +42,7 @@ pub(crate) fn inline(block: Block, version: LuaVersion) -> Block {
         values: FxHashMap::default(),
         has_bare_operand: false,
         landed_locals: 0,
+        depth_limit: version.max_nesting_depth(),
     };
     let rewritten = inliner.transform_block(block);
     debug_assert!(inliner.values.is_empty(), "every inlined value reaches its read");
@@ -284,6 +285,7 @@ struct Inliner {
     /// The candidates taken in by the values landed since the initializer
     /// being rebuilt began.
     landed_locals: usize,
+    depth_limit: usize,
 }
 
 impl Transform for Inliner {
@@ -447,7 +449,7 @@ impl Inliner {
                 // The value can gain parentheses where it lands, and a cast
                 // inside it a second pair.
                 if depth <= MAX_ADDED_DEPTH
-                    && read_depth.saturating_add(2).saturating_add(depth) <= MAX_NESTING_DEPTH
+                    && read_depth.saturating_add(2).saturating_add(depth) <= self.depth_limit
                 {
                     let value = Value { expr: initializer.take(), locals };
                     self.values.insert(identifier_name(&attributed.name).into(), value);

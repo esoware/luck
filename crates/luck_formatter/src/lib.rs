@@ -10,6 +10,10 @@
 //! parse gets all three blank-line preservation, `-- luck: format off`
 //! regions, and comments placed by byte position.
 //!
+//! A call's bare table or string argument gains parentheses under the
+//! default options, a level each, so a tree they would nest past its
+//! dialect's limit keeps every call's arguments as written instead.
+//!
 //! # Usage
 //!
 //! ```

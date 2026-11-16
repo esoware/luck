@@ -539,9 +539,12 @@ impl DeadCodeRemover<'_> {
         }
 
         if is_swappable(&if_stmt) {
-            // The `not` and its parentheses nest the condition two levels
-            // deeper.
-            if is_empty_block(&if_stmt.block) && fits_at_depth(self.depth, 2, &if_stmt.condition) {
+            // The `not` and its parentheses put the condition three levels
+            // below the statement.
+            let limit = self.version.max_nesting_depth();
+            if is_empty_block(&if_stmt.block)
+                && fits_at_depth(self.depth, 3, &if_stmt.condition, limit)
+            {
                 return self.negate_into_else(if_stmt);
             }
             if is_negation(&if_stmt.condition) {

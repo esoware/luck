@@ -3,12 +3,12 @@
 //! Pratt expression parser with recursive descent statement parsing for Lua
 //! 5.1-5.5 and Luau.
 //!
-//! Every tree it returns, with errors or without, is at most
-//! [`luck_ast::MAX_NESTING_DEPTH`] levels deep, measured as
-//! [`luck_ast::block_nesting_depth`] measures it, so no consumer of the tree
-//! needs more than a bounded stack. Nesting past the cap is one error that
-//! ends the parse, as input over 4 GiB is. Error recovery reports multiple
-//! parse errors in a single pass.
+//! Every tree it returns, with errors or without, nests no deeper than the
+//! dialect's reference compiler parses, in the levels it counts, which
+//! [`luck_ast::block_nesting_depth`] measures, so no consumer of the tree
+//! needs more than a bounded stack. Nesting past that is one error that ends
+//! the parse, as input over 4 GiB is. Error recovery reports multiple parse
+//! errors in a single pass.
 //!
 //! # Usage
 //!

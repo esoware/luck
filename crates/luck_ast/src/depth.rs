@@ -1,21 +1,23 @@
 use core::mem;
 
-use luck_token::Span;
+use luck_token::{Span, UnOp};
 
-use crate::expr::Expression;
+use crate::expr::{BinaryOp, Expression};
 use crate::function::FunctionAttribute;
+use crate::query::ends_in_if_expr;
 use crate::stmt::{Block, Statement};
 use crate::types::Type;
 use crate::visitor::Visitor;
 
-/// The deepest tree `luck_parser` builds, in the levels [`Visitor::descend`]
-/// counts.
+/// The deepest nesting any dialect parses, Luau's, in the levels
+/// [`Visitor::descend`] counts. Each dialect's own cap is
+/// [`LuaVersion::max_nesting_depth`](luck_token::LuaVersion::max_nesting_depth).
 ///
-/// Every traversal recurses once per level, drop and clone included, so this
-/// is what bounds their stack.
-pub const MAX_NESTING_DEPTH: usize = 256;
+/// Every traversal recurses a bounded number of times per level, drop and
+/// clone included, so this is what bounds their stack.
+pub const MAX_NESTING_DEPTH: usize = 1000;
 
-/// How many levels deep `block` nests, itself included, or
+/// How many levels deep `block`'s statements nest, or
 /// `MAX_NESTING_DEPTH + 1` for anything deeper.
 ///
 /// The walk stops there, so it is safe on a tree of any depth.
@@ -49,15 +51,141 @@ pub fn type_nesting_depth(ty: &Type) -> usize {
 }
 
 /// The span of the innermost statement, expression, or type at each place
-/// where `block`, sitting `depth` levels down, nests past
-/// [`MAX_NESTING_DEPTH`]: one for each construct the cap refuses.
+/// where `block`, sitting `depth` levels down, nests past `limit`: one for
+/// each construct the cap refuses.
 ///
 /// The walk stops at the cap, so it is safe on a tree of any depth.
 #[must_use]
-pub fn spans_past_nesting_cap(block: &Block, depth: usize) -> Vec<Span> {
-    let mut finder = OverflowFinder { depth, node: block.span, spans: Vec::new() };
+pub fn spans_past_nesting_cap(block: &Block, depth: usize, limit: usize) -> Vec<Span> {
+    let mut finder = OverflowFinder { depth, limit, node: block.span, spans: Vec::new() };
     finder.visit_block(block);
     finder.spans
+}
+
+// A child the parser reads as part of its parent opens no level of its own,
+// but a tree built in code can hold one bare where the printer has to put
+// parentheses, which the parser reads as a level. The walkers count that
+// level too, so a tree is never shallower than what it prints.
+
+/// What the rules for where an expression needs parentheses look at.
+#[derive(Clone, Copy)]
+enum Form {
+    /// Anything Luau can cast without parentheses.
+    Simple,
+    /// A run of binary operators at this precedence.
+    Run(u8),
+    Unary,
+    IfExpr,
+    Cast,
+}
+
+fn form(expr: &Expression) -> Form {
+    match expr {
+        Expression::BinaryOp(run) => Form::Run(run.precedence().0),
+        Expression::UnaryOp(_) => Form::Unary,
+        // Luau
+        Expression::IfExpression(_) => Form::IfExpr,
+        // Luau
+        Expression::TypeCast(_) => Form::Cast,
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
+        | Expression::Parenthesized(_)
+        | Expression::TableConstructor(_)
+        | Expression::InterpolatedString(_)
+        | Expression::Error(_) => Form::Simple,
+    }
+}
+
+pub(crate) fn first_operand_needs_parens(run: &BinaryOp) -> bool {
+    let precedence = run.precedence().0;
+    let binds_looser = match form(&run.first) {
+        Form::Run(inner) => inner <= precedence,
+        Form::Unary => precedence > UnOp::PRECEDENCE,
+        Form::Simple | Form::IfExpr | Form::Cast => false,
+    };
+    binds_looser || ends_in_if_expr(&run.first)
+}
+
+/// Only the last operand can end in an if-expression, which takes in
+/// everything after it.
+pub(crate) fn link_operand_needs_parens(
+    precedence: u8,
+    operand: &Expression,
+    is_last: bool,
+) -> bool {
+    let binds_looser = matches!(form(operand), Form::Run(inner) if inner <= precedence);
+    binds_looser || (!is_last && ends_in_if_expr(operand))
+}
+
+pub(crate) fn unary_operand_needs_parens(operand: &Expression) -> bool {
+    matches!(form(operand), Form::Run(inner) if inner < UnOp::PRECEDENCE)
+}
+
+pub(crate) fn cast_operand_needs_parens(operand: &Expression) -> bool {
+    match form(operand) {
+        Form::Simple => false,
+        Form::Run(_) | Form::Unary | Form::IfExpr | Form::Cast => true,
+    }
+}
+
+/// What the rules for where a type needs parentheses look at.
+#[derive(Clone, Copy)]
+enum TypeForm {
+    /// Anything a `?` can follow without parentheses.
+    Simple,
+    Optional,
+    Function,
+    Compound,
+}
+
+const fn type_form(type_value: &Type) -> TypeForm {
+    match type_value {
+        Type::Name { .. }
+        | Type::Named(_)
+        | Type::Typeof(_)
+        | Type::Table(_)
+        | Type::Singleton(_)
+        | Type::Parenthesized(_)
+        | Type::Error(_) => TypeForm::Simple,
+        Type::Optional(_) => TypeForm::Optional,
+        Type::Function(_) => TypeForm::Function,
+        Type::Union(_)
+        | Type::Intersection(_)
+        | Type::Pack(_)
+        | Type::Variadic(_)
+        | Type::GenericPack(_) => TypeForm::Compound,
+    }
+}
+
+pub(crate) const fn optional_inner_needs_parens(inner: &Type) -> bool {
+    !matches!(type_form(inner), TypeForm::Simple)
+}
+
+/// A function type's return type takes in what follows it, so only the last
+/// member can be one.
+pub(crate) const fn union_member_needs_parens(member: &Type, is_last: bool) -> bool {
+    match type_form(member) {
+        TypeForm::Simple | TypeForm::Optional => false,
+        TypeForm::Function => !is_last,
+        TypeForm::Compound => true,
+    }
+}
+
+/// As in a union, but a `?` beside `&` needs parentheses too.
+pub(crate) const fn intersection_member_needs_parens(member: &Type, is_last: bool) -> bool {
+    match type_form(member) {
+        TypeForm::Simple => false,
+        TypeForm::Function => !is_last,
+        TypeForm::Optional | TypeForm::Compound => true,
+    }
 }
 
 struct DepthMeter {
@@ -89,6 +217,7 @@ impl<'ast> Visitor<'ast> for DepthMeter {
 
 struct OverflowFinder {
     depth: usize,
+    limit: usize,
     /// The innermost statement, expression, or type the walk is in.
     node: Span,
     spans: Vec<Span>,
@@ -97,7 +226,7 @@ struct OverflowFinder {
 impl<'ast> Visitor<'ast> for OverflowFinder {
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
-        let fits = self.depth <= MAX_NESTING_DEPTH;
+        let fits = self.depth <= self.limit;
         if !fits {
             self.spans.push(self.node);
         }
@@ -150,46 +279,62 @@ where
     }
 }
 
-/// The walkers skip attribute arguments, which the parser nests one level
-/// under the function they sit on.
+/// The walkers skip attribute arguments, each of which the parser reads as
+/// a level under the function they sit on.
 fn visit_attributes<'ast, Meter>(meter: &mut Meter, attributes: &'ast [FunctionAttribute])
 where
     Meter: Visitor<'ast>,
 {
     for args in attributes.iter().filter_map(|attribute| attribute.args.as_ref()) {
-        if meter.descend() {
-            for arg in args.iter() {
+        for arg in args.iter() {
+            if meter.descend() {
                 meter.visit_expr(arg);
             }
+            meter.ascend();
         }
-        meter.ascend();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{BinOp, UnOp};
+    use luck_token::{BinOp, LuaVersion};
 
     use super::*;
-    use crate::expr::{BinaryLink, BinaryOp, UnaryOp};
+    use crate::expr::{BinaryLink, UnaryOp};
     use crate::one_or_more::OneOrMore;
-    use crate::synth::{FunctionSignature, Synth};
+    use crate::synth::{FieldSpec, FunctionSignature, Synth};
 
     fn return_depth(expr: Expression) -> usize {
         let synth = Synth::new();
         block_nesting_depth(&synth.block(Vec::new(), Some(synth.return_(vec![expr]))))
     }
 
-    #[test]
-    fn a_leaf_adds_no_level_to_its_block() {
-        let synth = Synth::new();
-        assert_eq!(expr_nesting_depth(&synth.name_expr("x")), 0);
-        assert_eq!(expr_nesting_depth(&synth.number("1")), 0);
-        assert_eq!(return_depth(synth.name_expr("x")), 1);
+    fn run(first: Expression, op: BinOp, operand: Expression) -> Expression {
+        Expression::BinaryOp(Box::new(BinaryOp {
+            span: Span::default(),
+            first,
+            links: OneOrMore::new(BinaryLink { op, operand }),
+        }))
     }
 
     #[test]
-    fn each_wrapping_node_is_one_level() {
+    fn no_dialect_nests_past_the_cap() {
+        for version in LuaVersion::ALL {
+            assert!(version.max_nesting_depth() <= MAX_NESTING_DEPTH, "{version:?}");
+        }
+    }
+
+    #[test]
+    fn a_statement_and_its_expression_are_a_level_each() {
+        let synth = Synth::new();
+        assert_eq!(expr_nesting_depth(&synth.name_expr("x")), 0);
+        assert_eq!(expr_nesting_depth(&synth.number("1")), 0);
+        assert_eq!(return_depth(synth.name_expr("x")), 2);
+        assert_eq!(block_nesting_depth(&synth.block(Vec::new(), None)), 0);
+    }
+
+    #[test]
+    fn each_nested_expression_is_one_level() {
         let synth = Synth::new();
         let leaf = || synth.name_expr("x");
         for (label, expr) in [
@@ -197,31 +342,49 @@ mod tests {
             ("unary operator", synth.unary_op(UnOp::Not, leaf())),
             ("binary operator", synth.binary_op(leaf(), BinOp::Add, leaf())),
             ("call", synth.call(leaf(), vec![leaf()])),
-            ("string call", synth.call_string(leaf(), "s")),
             ("index", synth.index(leaf(), leaf())),
-            ("field", synth.field(leaf(), "y")),
             ("instantiation", synth.type_instantiation(leaf(), vec![synth.ty_named("T")])),
             ("table", synth.array(vec![leaf()])),
-            ("empty table", synth.table(Vec::new())),
         ] {
             assert_eq!(expr_nesting_depth(&expr), 1, "{label}");
         }
     }
 
     #[test]
-    fn a_table_argument_nests_like_a_parenthesized_one() {
+    fn a_suffix_or_constructor_without_expressions_opens_no_level() {
         let synth = Synth::new();
-        let bare = synth.call_table(synth.name_expr("f"), Vec::new());
-        let parenthesized = synth.call(synth.name_expr("f"), vec![synth.table(Vec::new())]);
-        assert_eq!(expr_nesting_depth(&bare), 2);
+        let leaf = || synth.name_expr("x");
+        for (label, expr) in [
+            ("string call", synth.call_string(leaf(), "s")),
+            ("field", synth.field(leaf(), "y")),
+            ("empty table", synth.table(Vec::new())),
+            ("empty call", synth.call(leaf(), Vec::new())),
+        ] {
+            assert_eq!(expr_nesting_depth(&expr), 0, "{label}");
+        }
+    }
+
+    #[test]
+    fn a_table_argument_opens_no_level_of_its_own() {
+        let synth = Synth::new();
+        let bare = synth
+            .call_table(synth.name_expr("f"), vec![FieldSpec::Positional(synth.name_expr("x"))]);
+        let parenthesized =
+            synth.call(synth.name_expr("f"), vec![synth.array(vec![synth.name_expr("x")])]);
+        assert_eq!(expr_nesting_depth(&bare), 1);
         assert_eq!(expr_nesting_depth(&parenthesized), 2);
     }
 
     #[test]
-    fn a_function_adds_its_body_and_its_block() {
+    fn a_function_body_counts_its_statements() {
         let synth = Synth::new();
-        let function = synth.function_def(&[], synth.block(Vec::new(), None));
-        assert_eq!(expr_nesting_depth(&function), 2);
+        let empty = synth.function_def(&[], synth.block(Vec::new(), None));
+        assert_eq!(expr_nesting_depth(&empty), 0);
+        let returning = synth.function_def(
+            &[],
+            synth.block(Vec::new(), Some(synth.return_(vec![synth.name_expr("x")]))),
+        );
+        assert_eq!(expr_nesting_depth(&returning), 2);
     }
 
     #[test]
@@ -243,17 +406,17 @@ mod tests {
             path = synth.method_call(synth.field(path, "a"), "m", Vec::new());
             concat = synth.binary_op(synth.name_expr("s"), BinOp::Concat, concat);
         }
-        for run in [sum, path, concat] {
-            assert_eq!(expr_nesting_depth(&run), 1);
-            assert_eq!(return_depth(run), 2);
-        }
+        assert_eq!(expr_nesting_depth(&sum), 1);
+        assert_eq!(expr_nesting_depth(&path), 0);
+        assert_eq!(expr_nesting_depth(&concat), 1);
+        assert_eq!(return_depth(sum), 3);
     }
 
     #[test]
-    fn each_question_mark_is_one_level() {
+    fn a_run_of_question_marks_opens_no_level() {
         let synth = Synth::new();
         let twice = synth.ty_optional(synth.ty_optional(synth.ty_named("T")));
-        assert_eq!(type_nesting_depth(&twice), 2);
+        assert_eq!(type_nesting_depth(&twice), 0);
     }
 
     #[test]
@@ -262,15 +425,25 @@ mod tests {
         // which reads back as one run, so the tree is never shallower than
         // what it prints.
         let leaf = |name: &str| Synth::new().name_expr(name);
-        let run = |first: Expression, op: BinOp, operand: Expression| {
-            Expression::BinaryOp(Box::new(BinaryOp {
-                span: Span::default(),
-                first,
-                links: OneOrMore::new(BinaryLink { op, operand }),
-            }))
-        };
         let nested = run(run(leaf("a"), BinOp::Concat, leaf("b")), BinOp::Concat, leaf("c"));
         assert_eq!(expr_nesting_depth(&nested), 2);
+    }
+
+    #[test]
+    fn a_shape_the_parser_reads_only_in_parentheses_counts_them() {
+        let synth = Synth::new();
+        let leaf = |name: &str| synth.name_expr(name);
+        let looser = || run(leaf("a"), BinOp::Add, leaf("b"));
+        let if_expr = || synth.if_expr(leaf("c"), leaf("t"), Vec::new(), leaf("e"));
+        for (label, expr, depth) in [
+            ("looser first operand", run(looser(), BinOp::Mul, leaf("c")), 2),
+            ("looser operand", run(leaf("c"), BinOp::Mul, looser()), 3),
+            ("looser unary operand", synth.unary_op(UnOp::Neg, looser()), 3),
+            ("if-expression first", run(if_expr(), BinOp::Add, leaf("x")), 2),
+            ("if-expression last", run(leaf("x"), BinOp::Add, if_expr()), 2),
+        ] {
+            assert_eq!(expr_nesting_depth(&expr), depth, "{label}");
+        }
     }
 
     #[test]
@@ -278,7 +451,7 @@ mod tests {
         let synth = Synth::new();
         assert_eq!(type_nesting_depth(&synth.ty_named("T")), 0);
         let nested = synth.ty_optional(synth.ty_table_array(synth.ty_named("T")));
-        assert_eq!(type_nesting_depth(&nested), 2);
+        assert_eq!(type_nesting_depth(&nested), 1);
         let cast = synth.type_cast(synth.name_expr("x"), nested.clone());
         assert_eq!(expr_nesting_depth(&cast), 1 + type_nesting_depth(&nested));
     }
@@ -307,10 +480,11 @@ mod tests {
         let expected = [group_span(&deep, 8), group_span(&deeper, 8)];
         let pair = synth.call(synth.name_expr("f"), vec![deep, deeper]);
         let block = synth.block(vec![synth.call_stmt(pair)], None);
-        // The block and the call take two levels, so seven groups of each
-        // argument fit under the cap from nine levels below it.
-        assert_eq!(spans_past_nesting_cap(&block, MAX_NESTING_DEPTH - 9), expected);
-        assert_eq!(spans_past_nesting_cap(&block, MAX_NESTING_DEPTH - 14), []);
+        // The statement and each argument take two levels, so seven groups
+        // of each argument fit under the cap from nine levels below it.
+        let cap = MAX_NESTING_DEPTH;
+        assert_eq!(spans_past_nesting_cap(&block, cap - 9, cap), expected);
+        assert_eq!(spans_past_nesting_cap(&block, cap - 14, cap), []);
     }
 
     #[test]
@@ -320,7 +494,7 @@ mod tests {
         for _ in 0..9u32 {
             block = synth.block(vec![synth.do_block(block)], None);
         }
-        assert_eq!(block_nesting_depth(&block), 10);
+        assert_eq!(block_nesting_depth(&block), 9);
     }
 
     #[test]
@@ -355,6 +529,6 @@ mod tests {
             FunctionSignature::default(),
             synth.block(Vec::new(), None),
         );
-        assert_eq!(expr_nesting_depth(&function), 4);
+        assert_eq!(expr_nesting_depth(&function), 3);
     }
 }

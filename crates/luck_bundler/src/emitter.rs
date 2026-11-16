@@ -1,6 +1,6 @@
 use core::ops::Range;
 
-use luck_ast::{MAX_NESTING_DEPTH, spans_past_nesting_cap};
+use luck_ast::spans_past_nesting_cap;
 use luck_core::Diagnostic;
 use luck_token::{
     CompactString, LuaVersion, Span, chunk_start, encode_string, ends_with_line_break, line_breaks,
@@ -186,8 +186,9 @@ impl Wrapper {
         }
     }
 
-    /// How many levels deeper the body nests than the module's own chunk, as
-    /// [`MAX_NESTING_DEPTH`] counts them.
+    /// How many levels deeper the body nests than the module's own chunk:
+    /// the statement that registers it and its function, and the `do` block
+    /// around them for a private `_ENV`.
     pub(crate) const fn levels(self) -> usize {
         if self.has_private_env { 3 } else { 2 }
     }
@@ -196,9 +197,9 @@ impl Wrapper {
 impl Plan {
     /// # Errors
     ///
-    /// Returns an E013 for each construct a wrapper would nest past
-    /// [`MAX_NESTING_DEPTH`], at its place in its module's source, since luck
-    /// couldn't read that bundle back.
+    /// Returns an E013 for each construct a wrapper would nest past the
+    /// dialect's limit, at its place in its module's source, since neither
+    /// luck nor the dialect's compiler could read that bundle.
     pub(crate) fn new(
         graph: &DependencyGraph,
         version: LuaVersion,
@@ -362,10 +363,10 @@ impl Plan {
         }
     }
 
-    /// Each construct a module's wrapper nests past [`MAX_NESTING_DEPTH`],
-    /// measured on the module as the bundle holds it, since lowering an
-    /// export to a field of the export table reads it one level deeper.
+    /// Each construct a module's wrapper nests past the dialect's limit, at
+    /// its place in the module as the bundle holds it.
     fn nesting_errors(&self, graph: &DependencyGraph, version: LuaVersion) -> Vec<Diagnostic> {
+        let limit = version.max_nesting_depth();
         let mut errors = Vec::new();
         for item in &self.items {
             let Item::Module(wrapped) = item else {
@@ -375,19 +376,15 @@ impl Plan {
                 continue;
             };
             let levels = wrapped.wrapper.levels();
-            let most_levels = module
-                .nesting_depth
-                .saturating_add(levels)
-                .saturating_add(usize::from(wrapped.exports.has_table()));
-            if most_levels <= MAX_NESTING_DEPTH {
+            if module.nesting_depth.saturating_add(levels) <= limit {
                 continue;
             }
             let rewritten =
                 rewrite_module(module.block.clone(), module, self, &wrapped.exports, version);
             errors.extend(
-                spans_past_nesting_cap(&rewritten, levels)
+                spans_past_nesting_cap(&rewritten, levels, limit)
                     .into_iter()
-                    .map(|span| Diagnostic::e013(&module.path, span, levels, MAX_NESTING_DEPTH)),
+                    .map(|span| Diagnostic::e013(&module.path, span, levels, limit)),
             );
         }
         errors

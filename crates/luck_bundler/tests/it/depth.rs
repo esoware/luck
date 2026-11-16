@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::Path;
 
-use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::block_nesting_depth;
 use luck_bundler::{BundleOptions, BundleResult, DynamicRequire};
 use luck_core::Diagnostic;
 use luck_token::{LuaVersion, offset_to_index};
@@ -152,15 +152,16 @@ impl Shape {
 #[test]
 fn deepest_module_that_fits_bundles_to_the_cap_for_every_wrapper() {
     for shape in SHAPES {
-        // The module's own block is a level, and its groups stand on it.
-        let parentheses = MAX_NESTING_DEPTH - shape.wrapper_levels - 1;
+        let limit = shape.version.max_nesting_depth();
+        // The `return` and its value are a level each.
+        let parentheses = limit - shape.wrapper_levels - 2;
         let (_, result) = shape.bundle(parentheses);
         let output = result.unwrap_or_else(|errors| panic!("{}: {errors:?}", shape.name)).output;
         let reparsed = luck_parser::parse(&output, shape.version);
         assert!(reparsed.errors.is_empty(), "{}: {:?}", shape.name, reparsed.errors);
         assert_eq!(
             block_nesting_depth(&reparsed.block),
-            MAX_NESTING_DEPTH,
+            limit,
             "{}: the wrapper must add exactly {} levels",
             shape.name,
             shape.wrapper_levels
@@ -171,7 +172,7 @@ fn deepest_module_that_fits_bundles_to_the_cap_for_every_wrapper() {
 #[test]
 fn flags_e013_at_the_construct_a_wrapper_pushes_past_the_cap() {
     for shape in SHAPES {
-        let parentheses = MAX_NESTING_DEPTH - shape.wrapper_levels;
+        let parentheses = shape.version.max_nesting_depth() - shape.wrapper_levels - 1;
         let (deep_source, result) = shape.bundle(parentheses);
         let errors = result.err().unwrap_or_else(|| panic!("{}: must not bundle", shape.name));
         let [error] = errors.as_slice() else {
@@ -194,7 +195,7 @@ fn flags_e013_at_the_construct_a_wrapper_pushes_past_the_cap() {
 
 #[test]
 fn flags_e013_in_every_module_past_the_cap() {
-    let deep = format!("return {}\n", parenthesized(MAX_NESTING_DEPTH - 1));
+    let deep = format!("return {}\n", parenthesized(LuaVersion::Lua54.max_nesting_depth() - 2));
     let errors = bundle_files(
         "main.lua",
         &[
@@ -222,7 +223,7 @@ require(\"b\")
 
 #[test]
 fn lone_module_at_the_cap_bundles_verbatim() {
-    let source = format!("return {}\n", parenthesized(MAX_NESTING_DEPTH - 1));
+    let source = format!("return {}\n", parenthesized(LuaVersion::Lua54.max_nesting_depth() - 2));
     let output = bundle_files("main.lua", &[("main.lua", &source)], LuaVersion::Lua54)
         .expect("a lone module needs no wrapper")
         .output;
@@ -264,21 +265,24 @@ print(x)
         )
     };
 
-    let literal = luau_table_export_module(MAX_NESTING_DEPTH - 3, "1");
-    let output = bundle_export_module(&literal).expect("a literal at the cap fits").output;
+    // The `local` and its value are a level each, and the wrapper adds two.
+    let parentheses = LuaVersion::Luau.max_nesting_depth() - 4;
+    let literal = luau_table_export_module(parentheses, "1");
+    bundle_export_module(&literal).expect("a literal at the cap fits");
+
+    // Lowering reads `value` as a field of the export table, which opens no
+    // level, so a read at the cap fits as the literal does.
+    let export_read = luau_table_export_module(parentheses, "value");
+    let output = bundle_export_module(&export_read).expect("the lowered read fits").output;
     assert!(output.contains("__luck_exports.value"), "{output}");
     let reparsed = luck_parser::parse(&output, LuaVersion::Luau);
     assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
 
-    // Lowering reads `value` as a field of the export table, one level deeper.
-    let export_read = luau_table_export_module(MAX_NESTING_DEPTH - 3, "value");
-    let errors = bundle_export_module(&export_read).expect_err("the lowered read passes the cap");
+    let deeper_read = luau_table_export_module(parentheses + 1, "value");
+    let errors = bundle_export_module(&deeper_read).expect_err("one group deeper passes the cap");
     let [error] = errors.as_slice() else {
         panic!("expected one error: {errors:?}");
     };
     assert_eq!(error.code, "E013", "{error:?}");
-    assert_eq!(error.span.text(&export_read), "value", "{error:?}");
-
-    let shallower_read = luau_table_export_module(MAX_NESTING_DEPTH - 4, "value");
-    bundle_export_module(&shallower_read).expect("one level shallower fits");
+    assert_eq!(error.span.text(&deeper_read), "(value)", "{error:?}");
 }

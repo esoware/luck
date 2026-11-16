@@ -1,6 +1,3 @@
-use luck_formatter::FormatOptions;
-use luck_token::LuaVersion;
-
 use crate::common::assert_format;
 
 #[test]
@@ -173,37 +170,37 @@ fn nested_table_calls(levels: usize) -> String {
 }
 
 /// [`nested_table_calls`] formatted, where no call is short enough to stay
-/// on one line.
-fn broken_table_calls(levels: usize) -> String {
+/// on one line, with each table in parentheses or bare.
+fn broken_table_calls(levels: usize, has_parentheses: bool) -> String {
+    let (open, empty, close) =
+        if has_parentheses { ("f({", "f({})", "})") } else { ("f {", "f {}", "}") };
     let innermost = levels.saturating_sub(1);
-    let mut output = String::from("return f({\n");
+    let mut output = format!("return {open}\n");
     for depth in 1..innermost {
         output.push_str(&"\t".repeat(depth));
-        output.push_str("f({\n");
+        output.push_str(open);
+        output.push('\n');
     }
     output.push_str(&"\t".repeat(innermost));
-    output.push_str("f({}),\n");
+    output.push_str(empty);
+    output.push_str(",\n");
     for depth in (1..innermost).rev() {
         output.push_str(&"\t".repeat(depth));
-        output.push_str("}),\n");
+        output.push_str(close);
+        output.push_str(",\n");
     }
-    output.push_str("})\n");
+    output.push_str(close);
+    output.push('\n');
     output
 }
 
 #[test]
 fn call_parentheses_never_format_valid_input_past_the_nesting_cap() {
-    // `f{...}` gains parentheses by default, so a bare table argument has to
-    // count toward the cap as the parenthesized one it prints as does.
-    for levels in [100, 126, 127] {
-        assert_format(&nested_table_calls(levels), &broken_table_calls(levels));
-    }
-    for levels in [128, 129, 200, 255] {
-        let source = nested_table_calls(levels);
-        let result = luck_formatter::format(&source, LuaVersion::Lua54, &FormatOptions::default());
-        let [error] = result.errors.as_slice() else {
-            panic!("{levels} levels: {:?}", result.errors);
-        };
-        assert!(error.message.contains("maximum nesting depth exceeded"), "{levels}: {error:?}");
+    // `f{...}` gains parentheses by default, which make a call a level for its
+    // argument and one for the field it holds, so past half of Lua 5.4's
+    // limit every table stays bare.
+    for (levels, has_parentheses) in [(50, true), (99, true), (100, false), (199, false)] {
+        let expected = broken_table_calls(levels, has_parentheses);
+        assert_format(&nested_table_calls(levels), &expected);
     }
 }

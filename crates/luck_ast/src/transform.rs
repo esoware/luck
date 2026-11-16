@@ -2,13 +2,21 @@ use core::mem;
 
 use luck_token::{Span, Token, TokenKind};
 
+use crate::depth::{
+    cast_operand_needs_parens, first_operand_needs_parens, intersection_member_needs_parens,
+    link_operand_needs_parens, optional_inner_needs_parens, unary_operand_needs_parens,
+    union_member_needs_parens,
+};
 use crate::expr::{
-    CallSuffix, Expression, Field, FunctionArgs, Suffix, SuffixedExpression, TableConstructor, Var,
+    CallSuffix, Expression, Field, FunctionArgs, ParenthesizedExpression, Suffix,
+    SuffixedExpression, TableConstructor, Var,
 };
 use crate::function::{FunctionBody, Parameter};
 use crate::punctuated::Punctuated;
+use crate::query::is_prefix_expr;
 use crate::stmt::{
-    AttributedName, Block, IfStatement, LastStatement, Statement, TypeDeclarationValue,
+    AttributedName, Block, FunctionDecl, GlobalFunction, IfStatement, LastStatement, LocalFunction,
+    Statement, TypeDeclaration, TypeDeclarationValue,
 };
 use crate::types::{GenericTypeList, Type, TypeField};
 
@@ -65,14 +73,16 @@ pub trait Transform {
     }
 
     fn walk_block(&mut self, mut block: Block) -> Block {
-        self.descend();
         for stmt in &mut block.stmts {
+            self.descend();
             *stmt = self.transform_stmt(stmt.take());
+            self.ascend();
         }
         if let Some(last) = &mut block.last_stmt {
+            self.descend();
             **last = self.transform_last_stmt(last.take());
+            self.ascend();
         }
-        self.ascend();
         block
     }
 
@@ -94,24 +104,24 @@ pub trait Transform {
                 Statement::DoBlock(do_block)
             }
             Statement::WhileLoop(mut while_loop) => {
-                while_loop.condition = self.transform_expr(while_loop.condition);
+                while_loop.condition = transform_nested_expr(self, while_loop.condition);
                 while_loop.block = self.transform_block(while_loop.block);
                 Statement::WhileLoop(while_loop)
             }
             Statement::RepeatLoop(mut repeat_loop) => {
                 repeat_loop.block = self.transform_block(repeat_loop.block);
-                repeat_loop.condition = self.transform_expr(repeat_loop.condition);
+                repeat_loop.condition = transform_nested_expr(self, repeat_loop.condition);
                 Statement::RepeatLoop(repeat_loop)
             }
             Statement::IfStatement(if_stmt) => Statement::IfStatement(self.walk_if_stmt(if_stmt)),
             Statement::NumericFor(mut numeric_for) => {
                 if let Some(loop_variable_type) = &mut numeric_for.type_annotation {
-                    *loop_variable_type = self.transform_type(loop_variable_type.take());
+                    *loop_variable_type = transform_nested_type(self, loop_variable_type.take());
                 }
-                numeric_for.start = self.transform_expr(numeric_for.start);
-                numeric_for.limit = self.transform_expr(numeric_for.limit);
+                numeric_for.start = transform_nested_expr(self, numeric_for.start);
+                numeric_for.limit = transform_nested_expr(self, numeric_for.limit);
                 if let Some(step) = &mut numeric_for.step {
-                    *step = self.transform_expr(step.take());
+                    *step = transform_nested_expr(self, step.take());
                 }
                 numeric_for.block = self.transform_block(numeric_for.block);
                 Statement::NumericFor(numeric_for)
@@ -122,14 +132,8 @@ pub trait Transform {
                 generic_for.block = self.transform_block(generic_for.block);
                 Statement::GenericFor(generic_for)
             }
-            Statement::FunctionDecl(mut function_decl) => {
-                function_decl.body = self.transform_function_body(function_decl.body);
-                Statement::FunctionDecl(function_decl)
-            }
-            Statement::LocalFunction(mut local_function) => {
-                local_function.body = self.transform_function_body(local_function.body);
-                Statement::LocalFunction(local_function)
-            }
+            Statement::FunctionDecl(function_decl) => walk_function_decl(self, function_decl),
+            Statement::LocalFunction(local_function) => walk_local_function(self, local_function),
             Statement::LocalAssignment(mut local_assignment) => {
                 walk_names(self, &mut local_assignment.names.items);
                 if let Some(exprs) = &mut local_assignment.exprs {
@@ -140,13 +144,12 @@ pub trait Transform {
             // Luau
             Statement::CompoundAssignment(mut compound) => {
                 compound.var = self.transform_assignment_target(compound.var);
-                compound.expr = self.transform_expr(compound.expr);
+                compound.expr = transform_nested_expr(self, compound.expr);
                 Statement::CompoundAssignment(compound)
             }
             // Lua 5.5
-            Statement::GlobalFunction(mut global_function) => {
-                global_function.body = self.transform_function_body(global_function.body);
-                Statement::GlobalFunction(global_function)
+            Statement::GlobalFunction(global_function) => {
+                walk_global_function(self, global_function)
             }
             // Lua 5.5
             Statement::GlobalDeclaration(mut global_declaration) => {
@@ -157,20 +160,8 @@ pub trait Transform {
                 Statement::GlobalDeclaration(global_declaration)
             }
             // Luau
-            Statement::TypeDeclaration(mut type_declaration) => {
-                if let Some(generics) = &mut type_declaration.generics {
-                    walk_generic_params(self, generics);
-                }
-                type_declaration.type_value = match type_declaration.type_value {
-                    TypeDeclarationValue::Alias(alias_type) => {
-                        TypeDeclarationValue::Alias(self.transform_type(alias_type))
-                    }
-                    TypeDeclarationValue::TypeFunction(mut body) => {
-                        *body = self.transform_function_body(*body);
-                        TypeDeclarationValue::TypeFunction(body)
-                    }
-                };
-                Statement::TypeDeclaration(type_declaration)
+            Statement::TypeDeclaration(type_declaration) => {
+                walk_type_declaration(self, type_declaration)
             }
             leaf @ (Statement::EmptyStatement(_)
             | Statement::Goto(_)
@@ -182,10 +173,10 @@ pub trait Transform {
     }
 
     fn walk_if_stmt(&mut self, mut if_stmt: Box<IfStatement>) -> Box<IfStatement> {
-        if_stmt.condition = self.transform_expr(if_stmt.condition);
+        if_stmt.condition = transform_nested_expr(self, if_stmt.condition);
         if_stmt.block = self.transform_block(if_stmt.block);
         for clause in &mut if_stmt.elseif_clauses {
-            clause.condition = self.transform_expr(clause.condition.take());
+            clause.condition = transform_nested_expr(self, clause.condition.take());
             clause.block = self.transform_block(clause.block.take());
         }
         if let Some(clause) = &mut if_stmt.else_clause {
@@ -222,60 +213,53 @@ pub trait Transform {
                 Expression::FunctionDef(function_def)
             }
             Expression::Suffixed(chain) => Expression::Suffixed(self.transform_suffixed(chain)),
-            Expression::Parenthesized(mut parenthesized) => {
-                self.descend();
-                parenthesized.expr = self.transform_expr(parenthesized.expr);
-                self.ascend();
-                Expression::Parenthesized(parenthesized)
-            }
+            Expression::Parenthesized(parenthesized) => walk_parenthesized(self, parenthesized),
             Expression::TableConstructor(table) => {
                 Expression::TableConstructor(walk_boxed_table(self, table))
             }
-            Expression::BinaryOp(mut binary_op) => {
-                self.descend();
-                binary_op.first = self.transform_expr(binary_op.first);
-                for link in &mut binary_op.links {
-                    link.operand = self.transform_expr(link.operand.take());
+            Expression::BinaryOp(mut run) => {
+                let needs_parens = first_operand_needs_parens(&run);
+                run.first = transform_operand(self, run.first, needs_parens);
+                let precedence = run.precedence().0;
+                let last = run.links.len().saturating_sub(1);
+                for (i, link) in run.links.iter_mut().enumerate() {
+                    let needs_parens =
+                        link_operand_needs_parens(precedence, &link.operand, i == last);
+                    link.operand =
+                        transform_nested_operand(self, link.operand.take(), needs_parens);
                 }
-                self.ascend();
-                Expression::BinaryOp(binary_op)
+                Expression::BinaryOp(run)
             }
             Expression::UnaryOp(mut unary_op) => {
-                self.descend();
-                unary_op.operand = self.transform_expr(unary_op.operand);
-                self.ascend();
+                let needs_parens = unary_operand_needs_parens(&unary_op.operand);
+                unary_op.operand = transform_nested_operand(self, unary_op.operand, needs_parens);
                 Expression::UnaryOp(unary_op)
             }
             // Luau
             Expression::IfExpression(mut if_expr) => {
-                self.descend();
-                if_expr.condition = self.transform_expr(if_expr.condition);
-                if_expr.then_expr = self.transform_expr(if_expr.then_expr);
+                if_expr.condition = transform_nested_expr(self, if_expr.condition);
+                if_expr.then_expr = transform_nested_expr(self, if_expr.then_expr);
                 for clause in &mut if_expr.elseif_clauses {
-                    clause.condition = self.transform_expr(clause.condition.take());
-                    clause.expr = self.transform_expr(clause.expr.take());
+                    clause.condition = transform_nested_expr(self, clause.condition.take());
+                    clause.expr = transform_nested_expr(self, clause.expr.take());
                 }
-                if_expr.else_expr = self.transform_expr(if_expr.else_expr);
-                self.ascend();
+                if_expr.else_expr = transform_nested_expr(self, if_expr.else_expr);
                 Expression::IfExpression(if_expr)
             }
             // Luau
             Expression::InterpolatedString(mut interpolated_string) => {
-                self.descend();
                 for segment in &mut interpolated_string.segments {
                     if let Some(interpolated) = &mut segment.expr {
-                        *interpolated = self.transform_expr(interpolated.take());
+                        *interpolated = transform_nested_expr(self, interpolated.take());
                     }
                 }
-                self.ascend();
                 Expression::InterpolatedString(interpolated_string)
             }
             // Luau
             Expression::TypeCast(mut cast) => {
-                self.descend();
-                cast.expr = self.transform_expr(cast.expr);
-                cast.type_annotation = self.transform_type(cast.type_annotation);
-                self.ascend();
+                let needs_parens = cast_operand_needs_parens(&cast.expr);
+                cast.expr = transform_operand(self, cast.expr, needs_parens);
+                cast.type_annotation = transform_nested_type(self, cast.type_annotation);
                 Expression::TypeCast(cast)
             }
         }
@@ -294,12 +278,12 @@ pub trait Transform {
     /// arguments.
     #[expect(clippy::unnecessary_box_returns, reason = "the chain goes back into its own box")]
     fn walk_suffixed(&mut self, mut chain: Box<SuffixedExpression>) -> Box<SuffixedExpression> {
-        self.descend();
-        chain.prefix = self.transform_expr(chain.prefix);
+        let needs_parens = !is_prefix_expr(&chain.prefix);
+        chain.prefix = transform_operand(self, chain.prefix, needs_parens);
         for suffix in &mut chain.suffixes {
             match suffix {
                 Suffix::Field(_) => {}
-                Suffix::Index { index, .. } => *index = self.transform_expr(index.take()),
+                Suffix::Index { index, .. } => *index = transform_nested_expr(self, index.take()),
                 Suffix::Call(call) => {
                     let args = match call {
                         CallSuffix::Plain(args) => args,
@@ -318,7 +302,6 @@ pub trait Transform {
                 }
             }
         }
-        self.ascend();
         chain
     }
 
@@ -336,24 +319,21 @@ pub trait Transform {
     }
 
     fn walk_table_constructor(&mut self, mut table: TableConstructor) -> TableConstructor {
-        self.descend();
         for field in &mut table.fields.items {
             match field {
                 Field::Bracketed { key, value, .. } => {
-                    *key = self.transform_expr(key.take());
-                    *value = self.transform_expr(value.take());
+                    *key = transform_nested_expr(self, key.take());
+                    *value = transform_nested_expr(self, value.take());
                 }
                 Field::Named { value, .. } | Field::Positional { value, .. } => {
-                    *value = self.transform_expr(value.take());
+                    *value = transform_nested_expr(self, value.take());
                 }
             }
         }
-        self.ascend();
         table
     }
 
     fn walk_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
-        self.descend();
         if let Some(generics) = &mut body.generics {
             walk_generic_params(self, generics);
         }
@@ -361,95 +341,84 @@ pub trait Transform {
         if let Some(vararg) = &mut body.vararg
             && let Some(vararg_type) = &mut vararg.type_annotation
         {
-            *vararg_type = self.transform_type(vararg_type.take());
+            *vararg_type = transform_nested_type(self, vararg_type.take());
         }
         if let Some(return_type) = &mut body.return_type {
-            *return_type = self.transform_type(return_type.take());
+            *return_type = transform_nested_type(self, return_type.take());
         }
         body.block = self.transform_block(body.block);
-        self.ascend();
         body
     }
 
     fn walk_type(&mut self, type_value: Type) -> Type {
         match type_value {
             Type::Named(mut named) => {
-                self.descend();
                 if let Some(generics) = &mut named.generics {
                     walk_types(self, &mut generics.args.items);
                 }
-                self.ascend();
                 Type::Named(named)
             }
             // typeof embeds a real expression, so semantic passes must see it.
             Type::Typeof(mut typeof_type) => {
-                self.descend();
-                typeof_type.expr = self.transform_expr(typeof_type.expr);
-                self.ascend();
+                typeof_type.expr = transform_nested_expr(self, typeof_type.expr);
                 Type::Typeof(typeof_type)
             }
             Type::Table(mut table) => {
-                self.descend();
                 for field in &mut table.fields.items {
                     match field {
                         TypeField::Named { value, .. } | TypeField::Array { value, .. } => {
-                            *value = self.transform_type(value.take());
+                            *value = transform_nested_type(self, value.take());
                         }
                         TypeField::Indexer { key, value, .. } => {
-                            *key = self.transform_type(key.take());
-                            *value = self.transform_type(value.take());
+                            *key = transform_nested_type(self, key.take());
+                            *value = transform_nested_type(self, value.take());
                         }
                     }
                 }
-                self.ascend();
                 Type::Table(table)
             }
             Type::Function(mut function_type) => {
-                self.descend();
                 if let Some(generics) = &mut function_type.generics {
                     walk_generic_params(self, generics);
                 }
                 for param in &mut function_type.params.items {
-                    param.type_value = self.transform_type(param.type_value.take());
+                    param.type_value = transform_nested_type(self, param.type_value.take());
                 }
-                function_type.return_type = self.transform_type(function_type.return_type);
-                self.ascend();
+                function_type.return_type = transform_nested_type(self, function_type.return_type);
                 Type::Function(function_type)
             }
             Type::Optional(mut optional) => {
-                self.descend();
-                optional.type_value = self.transform_type(optional.type_value);
-                self.ascend();
+                let needs_parens = optional_inner_needs_parens(&optional.type_value);
+                optional.type_value =
+                    transform_type_operand(self, optional.type_value, needs_parens);
                 Type::Optional(optional)
             }
             Type::Union(mut union) => {
-                self.descend();
-                walk_types(self, &mut union.types.items);
-                self.ascend();
+                let last = union.types.items.len().saturating_sub(1);
+                for (i, member) in union.types.items.iter_mut().enumerate() {
+                    let needs_parens = union_member_needs_parens(member, i == last);
+                    *member = transform_type_operand(self, member.take(), needs_parens);
+                }
                 Type::Union(union)
             }
             Type::Intersection(mut intersection) => {
-                self.descend();
-                walk_types(self, &mut intersection.types.items);
-                self.ascend();
+                let last = intersection.types.items.len().saturating_sub(1);
+                for (i, member) in intersection.types.items.iter_mut().enumerate() {
+                    let needs_parens = intersection_member_needs_parens(member, i == last);
+                    *member = transform_type_operand(self, member.take(), needs_parens);
+                }
                 Type::Intersection(intersection)
             }
             Type::Parenthesized(mut parenthesized) => {
-                self.descend();
-                parenthesized.type_value = self.transform_type(parenthesized.type_value);
-                self.ascend();
+                parenthesized.type_value = transform_nested_type(self, parenthesized.type_value);
                 Type::Parenthesized(parenthesized)
             }
             Type::Pack(mut pack) => {
-                self.descend();
                 walk_types(self, &mut pack.types.items);
-                self.ascend();
                 Type::Pack(pack)
             }
             Type::Variadic(mut variadic) => {
-                self.descend();
-                variadic.type_value = self.transform_type(variadic.type_value);
-                self.ascend();
+                variadic.type_value = transform_nested_type(self, variadic.type_value);
                 Type::Variadic(variadic)
             }
             leaf @ (Type::Name { .. }
@@ -481,12 +450,84 @@ pub trait Transform {
     }
 }
 
+/// Rewrite `expr` a level down. An error stands for nothing the parser read,
+/// so it opens none.
+fn transform_nested_expr<T>(transform: &mut T, expr: Expression) -> Expression
+where
+    T: Transform + ?Sized,
+{
+    if matches!(expr, Expression::Error(_)) {
+        return transform.transform_expr(expr);
+    }
+    transform.descend();
+    let expr = transform.transform_expr(expr);
+    transform.ascend();
+    expr
+}
+
+/// Rewrite `expr` on its parent's level, or a level down where it needs
+/// parentheses.
+fn transform_operand<T>(transform: &mut T, expr: Expression, needs_parens: bool) -> Expression
+where
+    T: Transform + ?Sized,
+{
+    if needs_parens {
+        transform_nested_expr(transform, expr)
+    } else {
+        transform.transform_expr(expr)
+    }
+}
+
+/// Rewrite `expr` a level down, and one more where it needs parentheses.
+fn transform_nested_operand<T>(
+    transform: &mut T,
+    expr: Expression,
+    needs_parens: bool,
+) -> Expression
+where
+    T: Transform + ?Sized,
+{
+    if !needs_parens {
+        return transform_nested_expr(transform, expr);
+    }
+    transform.descend();
+    let expr = transform_nested_expr(transform, expr);
+    transform.ascend();
+    expr
+}
+
+/// As [`transform_nested_expr`], for a type.
+fn transform_nested_type<T>(transform: &mut T, type_value: Type) -> Type
+where
+    T: Transform + ?Sized,
+{
+    if matches!(type_value, Type::Error(_)) {
+        return transform.transform_type(type_value);
+    }
+    transform.descend();
+    let type_value = transform.transform_type(type_value);
+    transform.ascend();
+    type_value
+}
+
+/// As [`transform_operand`], for a type.
+fn transform_type_operand<T>(transform: &mut T, type_value: Type, needs_parens: bool) -> Type
+where
+    T: Transform + ?Sized,
+{
+    if needs_parens {
+        transform_nested_type(transform, type_value)
+    } else {
+        transform.transform_type(type_value)
+    }
+}
+
 fn walk_exprs<T>(transform: &mut T, exprs: &mut [Expression])
 where
     T: Transform + ?Sized,
 {
     for expr in exprs {
-        *expr = transform.transform_expr(expr.take());
+        *expr = transform_nested_expr(transform, expr.take());
     }
 }
 
@@ -495,8 +536,75 @@ where
     T: Transform + ?Sized,
 {
     for type_value in types {
-        *type_value = transform.transform_type(type_value.take());
+        *type_value = transform_nested_type(transform, type_value.take());
     }
+}
+
+// Moving a function body through `transform_function_body` reserves stack
+// for two copies of it, so the kinds that hold one rewrite in a frame of
+// their own, off the stack under every statement nested in them. A
+// parenthesized expression does too, for every expression nested in it.
+
+#[inline(never)]
+fn walk_function_decl<T>(transform: &mut T, mut function_decl: Box<FunctionDecl>) -> Statement
+where
+    T: Transform + ?Sized,
+{
+    function_decl.body = transform.transform_function_body(function_decl.body);
+    Statement::FunctionDecl(function_decl)
+}
+
+#[inline(never)]
+fn walk_local_function<T>(transform: &mut T, mut local_function: Box<LocalFunction>) -> Statement
+where
+    T: Transform + ?Sized,
+{
+    local_function.body = transform.transform_function_body(local_function.body);
+    Statement::LocalFunction(local_function)
+}
+
+#[inline(never)]
+fn walk_global_function<T>(transform: &mut T, mut global_function: Box<GlobalFunction>) -> Statement
+where
+    T: Transform + ?Sized,
+{
+    global_function.body = transform.transform_function_body(global_function.body);
+    Statement::GlobalFunction(global_function)
+}
+
+#[inline(never)]
+fn walk_type_declaration<T>(
+    transform: &mut T,
+    mut type_declaration: Box<TypeDeclaration>,
+) -> Statement
+where
+    T: Transform + ?Sized,
+{
+    if let Some(generics) = &mut type_declaration.generics {
+        walk_generic_params(transform, generics);
+    }
+    type_declaration.type_value = match type_declaration.type_value {
+        TypeDeclarationValue::Alias(alias_type) => {
+            TypeDeclarationValue::Alias(transform_nested_type(transform, alias_type))
+        }
+        TypeDeclarationValue::TypeFunction(mut body) => {
+            *body = transform.transform_function_body(*body);
+            TypeDeclarationValue::TypeFunction(body)
+        }
+    };
+    Statement::TypeDeclaration(type_declaration)
+}
+
+#[inline(never)]
+fn walk_parenthesized<T>(
+    transform: &mut T,
+    mut parenthesized: Box<ParenthesizedExpression>,
+) -> Expression
+where
+    T: Transform + ?Sized,
+{
+    parenthesized.expr = transform_nested_expr(transform, parenthesized.expr);
+    Expression::Parenthesized(parenthesized)
 }
 
 fn walk_params<T>(transform: &mut T, params: &mut [Parameter])
@@ -505,7 +613,7 @@ where
 {
     for param in params {
         if let Some(param_type) = &mut param.type_annotation {
-            *param_type = transform.transform_type(param_type.take());
+            *param_type = transform_nested_type(transform, param_type.take());
         }
     }
 }
@@ -516,7 +624,7 @@ where
 {
     for name in names {
         if let Some(name_type) = &mut name.type_annotation {
-            *name_type = transform.transform_type(name_type.take());
+            *name_type = transform_nested_type(transform, name_type.take());
         }
     }
 }
@@ -527,7 +635,7 @@ where
 {
     for param in &mut generics.params.items {
         if let Some(default) = &mut param.default {
-            *default = transform.transform_type(default.take());
+            *default = transform_nested_type(transform, default.take());
         }
     }
 }

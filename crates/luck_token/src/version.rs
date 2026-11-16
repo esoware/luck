@@ -17,6 +17,18 @@ impl LuaVersion {
     pub const ALL: [Self; 6] =
         [Self::Lua51, Self::Lua52, Self::Lua53, Self::Lua54, Self::Lua55, Self::Luau];
 
+    /// The deepest nesting the reference compiler parses, counted as it
+    /// counts: a statement, an expression it reads with `subexpr` or
+    /// `parseExpr`, and a Luau type each open one level. Lua's
+    /// `LUAI_MAXCCALLS` is 200, and Luau's `LuauRecursionLimit` is 1000.
+    #[must_use]
+    pub const fn max_nesting_depth(self) -> usize {
+        match self {
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => 200,
+            Self::Luau => 1000,
+        }
+    }
+
     #[must_use]
     pub const fn has_goto(self) -> bool {
         match self {

@@ -119,16 +119,28 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "only a release build's frames fit, so `just stack` runs it"
+    )]
     fn every_request_on_deep_and_long_input_fits_the_smallest_stack() {
         on_the_smallest_stack(deep_and_long_sources(), serve_every_request);
     }
 
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "only a release build's frames fit, so `just stack` runs it"
+    )]
     fn every_request_on_input_past_the_cap_fits_the_smallest_stack() {
         on_the_smallest_stack(sources_past_the_nesting_cap(), serve_every_request);
     }
 
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "only a release build's frames fit, so `just stack` runs it"
+    )]
     fn every_request_on_broken_input_fits_the_smallest_stack() {
         on_the_smallest_stack(broken_sources(), serve_every_request);
     }

@@ -1,11 +1,11 @@
 use luck_ast::{
-    Block, Expression, FunctionArgs, Suffix, SuffixedExpression, Transform, is_prefix_expr,
+    Block, Expression, FunctionArgs, Suffix, SuffixedExpression, Transform, ends_in_if_expr,
+    is_prefix_expr,
 };
 use luck_token::{BinOp, OperandSide};
 
 use crate::expr::{
-    binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, ends_in_if_expr,
-    inner_operand_side,
+    binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, inner_operand_side,
 };
 
 pub(crate) fn simplify(block: Block) -> Block {
@@ -209,7 +209,7 @@ fn can_unwrap_in_unary(inner: &Expression) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_ast::{LastStatement, expr_nesting_depth};
+    use luck_ast::LastStatement;
     use luck_token::LuaVersion;
 
     use super::*;
@@ -306,9 +306,13 @@ mod tests {
         let Some(LastStatement::Return(return_stmt)) = block.last_stmt.as_deref() else {
             panic!("expected a return, got {block:?}");
         };
-        let depths: Vec<usize> = return_stmt.exprs.iter().map(expr_nesting_depth).collect();
+        let links: Vec<usize> = return_stmt
+            .exprs
+            .iter()
+            .map(|expr| if let Expression::BinaryOp(run) = expr { run.links.len() } else { 0 })
+            .collect();
         // `a * b` binds tighter than `+`, so it stays a run of its own.
-        assert_eq!(depths, [1, 1, 2]);
+        assert_eq!(links, [2, 2, 1]);
     }
 
     #[test]

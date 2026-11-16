@@ -9,17 +9,23 @@ use luck_testgen::{
 };
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "only a release build's frames fit, so `just stack` runs it")]
 fn parsing_past_the_cap_fits_the_smallest_stack() {
     on_the_smallest_stack(sources_past_the_nesting_cap(), |source, version| {
         let parsed = luck_parser::parse(source, version);
         let [error] = parsed.errors.as_slice() else {
             panic!("{:?}: {:?}", source.get(..20), parsed.errors.first());
         };
-        assert!(error.message.contains("resource limit"), "{:?}: {error:?}", source.get(..20));
+        assert!(
+            error.message.contains("maximum nesting depth exceeded"),
+            "{:?}: {error:?}",
+            source.get(..20)
+        );
     });
 }
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "only a release build's frames fit, so `just stack` runs it")]
 fn parsing_broken_input_fits_the_smallest_stack() {
     on_the_smallest_stack(broken_sources(), |source, version| {
         let parsed = luck_parser::parse(source, version);
@@ -28,6 +34,7 @@ fn parsing_broken_input_fits_the_smallest_stack() {
 }
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "only a release build's frames fit, so `just stack` runs it")]
 fn parsing_validating_and_dropping_fit_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
         let parsed = luck_parser::parse(source, version);
@@ -39,6 +46,7 @@ fn parsing_validating_and_dropping_fit_the_smallest_stack() {
 }
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "only a release build's frames fit, so `just stack` runs it")]
 fn compact_printing_fits_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
         let parsed = luck_parser::parse(source, version);
@@ -48,6 +56,7 @@ fn compact_printing_fits_the_smallest_stack() {
 }
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "only a release build's frames fit, so `just stack` runs it")]
 fn formatting_fits_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
         let options = FormatOptions::default();
@@ -61,6 +70,7 @@ fn formatting_fits_the_smallest_stack() {
 }
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "only a release build's frames fit, so `just stack` runs it")]
 fn minifying_fits_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
         let config = TransformConfig::default();

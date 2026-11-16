@@ -916,15 +916,16 @@ fn nested_negations(wraps: usize) -> Block {
 
 #[test]
 fn a_tree_at_the_nesting_cap_formats_and_reparses() {
-    let wraps = MAX_NESTING_DEPTH - 1;
+    // The `return` and its value are a level each.
+    let wraps = MAX_NESTING_DEPTH - 2;
     let block = nested_negations(wraps);
     assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
-    assert_format_block(&block, LuaVersion::Lua54, &format!("return {}x\n", "not ".repeat(wraps)));
+    assert_format_block(&block, LuaVersion::Luau, &format!("return {}x\n", "not ".repeat(wraps)));
 }
 
 #[test]
 fn a_tree_past_the_nesting_cap_is_an_error_instead_of_output_that_cannot_reparse() {
-    let block = nested_negations(MAX_NESTING_DEPTH);
+    let block = nested_negations(MAX_NESTING_DEPTH - 1);
     let error = format_block(&block, Comments::none(), &FormatOptions::default())
         .expect_err("the tree nests one level too deep");
     assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
@@ -964,7 +965,8 @@ fn a_run_of_any_length_formats_as_one_level() {
         methods = synth.method_call(methods, "next", Vec::new());
     }
     let block = synth.block(vec![], Some(synth.return_(vec![sum, methods])));
-    assert_eq!(block_nesting_depth(&block), 2);
+    // The `return`, the sum, and the operands after its first.
+    assert_eq!(block_nesting_depth(&block), 3);
     let expected = format!(
         "\
 return x

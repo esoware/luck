@@ -1,7 +1,7 @@
 use core::iter;
 
 use luck_ast::{
-    BinaryOp, Expression, Field, Literal, MAX_NESTING_DEPTH, ParenthesizedExpression, Suffix,
+    BinaryOp, Expression, Field, Literal, ParenthesizedExpression, Suffix, ends_in_if_expr,
     expr_nesting_depth, is_multi_value, unwrap_parentheses,
 };
 use luck_token::{
@@ -390,13 +390,18 @@ fn is_valid_table_key(key: &Expression) -> bool {
 /// trade a flat program for one nested to the parser's cap.
 pub(crate) const MAX_ADDED_DEPTH: usize = 32;
 
-/// Whether `expr` still nests within the parser's cap once it sits
+/// Whether `expr` still nests within `limit`, the dialect's, once it sits
 /// `added_levels` below `depth`, the level a pass's walk has reached.
 ///
 /// The output has to reparse, so a rewrite that moves an expression deeper
 /// asks first.
-pub(crate) fn fits_at_depth(depth: usize, added_levels: usize, expr: &Expression) -> bool {
-    depth.saturating_add(added_levels).saturating_add(expr_nesting_depth(expr)) <= MAX_NESTING_DEPTH
+pub(crate) fn fits_at_depth(
+    depth: usize,
+    added_levels: usize,
+    expr: &Expression,
+    limit: usize,
+) -> bool {
+    depth.saturating_add(added_levels).saturating_add(expr_nesting_depth(expr)) <= limit
 }
 
 /// Whether `expr` evaluates into exactly one register with no temporaries.
@@ -489,34 +494,6 @@ pub(crate) fn inner_operand_side(run: &BinaryOp) -> OperandSide {
 /// Whether `run` is `and` or `or`, which no metamethod can intercept.
 pub(crate) fn is_logical(run: &BinaryOp) -> bool {
     matches!(run.links.first().op, BinOp::And | BinOp::Or)
-}
-
-/// Whether `expr` prints a Luau if-expression last, whose `else` branch would
-/// take in an operator printed after it.
-pub(crate) fn ends_in_if_expr(expr: &Expression) -> bool {
-    let mut current = expr;
-    loop {
-        current = match current {
-            Expression::IfExpression(_) => return true,
-            Expression::BinaryOp(binary_op) => &binary_op.links.last().operand,
-            Expression::UnaryOp(unop) => &unop.operand,
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => return false,
-        };
-    }
 }
 
 /// Whether `inner` printed bare as the left operand of `outer` reparses as

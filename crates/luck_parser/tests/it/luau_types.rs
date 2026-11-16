@@ -101,25 +101,24 @@ fn optional_type() {
     assert!(matches!(alias_type("type X = number?"), Type::Optional(_)));
 }
 
-/// How many optionals wrap `ty`, and the type they wrap.
-fn unwrap_optionals(mut ty: &Type) -> (usize, &Type) {
-    let mut count = 0usize;
-    while let Type::Optional(optional) = ty {
-        count = count.saturating_add(1);
-        ty = &optional.type_value;
+/// How many `?`s follow `ty`, and the type before them.
+fn unwrap_optional(ty: &Type) -> (u32, &Type) {
+    if let Type::Optional(optional) = ty {
+        (optional.question_marks.get(), &optional.type_value)
+    } else {
+        (0, ty)
     }
-    (count, ty)
 }
 
-/// Each `?` wraps the type before it, and the outermost spans all of them.
+/// A run of `?`s is one optional, which spans all of them.
 #[test]
-fn each_question_mark_is_an_optional() {
+fn a_run_of_question_marks_is_one_optional() {
     for (source, question_count) in
         [("type X = number?", 1), ("type X = number??", 2), ("type X = number? ? ?", 3)]
     {
         let alias = alias_type(source);
         assert_eq!(source.get(Range::<usize>::from(alias.span())), source.get(9..), "{source}");
-        let (count, inner) = unwrap_optionals(&alias);
+        let (count, inner) = unwrap_optional(&alias);
         assert_eq!(count, question_count, "{source}");
         assert!(matches!(inner, Type::Name { .. }), "{source}");
     }
@@ -136,7 +135,7 @@ fn a_question_mark_folded_into_a_return_pack_wraps_its_first_element() {
     let Some(Type::Pack(pack)) = &function.body.return_type else {
         panic!("expected a pack");
     };
-    let (count, inner) = unwrap_optionals(pack.types.first().expect("an element"));
+    let (count, inner) = unwrap_optional(pack.types.first().expect("an element"));
     assert_eq!(count, 3);
     assert!(matches!(inner, Type::Name { .. }));
 }

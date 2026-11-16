@@ -68,6 +68,22 @@ fn can_join_group(
 }
 
 impl LocalMerger {
+    /// Apart from [`Transform::transform_stmt`], whose frame sits under every
+    /// statement nested in `stmt`.
+    #[inline(never)]
+    fn declare_globals(&mut self, stmt: &Statement) {
+        // Lua 5.5
+        if let Statement::GlobalDeclaration(global) = stmt {
+            for attributed in global.names.iter() {
+                self.global_names.insert(identifier_name(&attributed.name).into());
+            }
+        }
+        // Lua 5.5
+        if let Statement::GlobalFunction(function) = stmt {
+            self.global_names.insert(identifier_name(&function.name).into());
+        }
+    }
+
     fn declare_local(&mut self, name: &Token) {
         self.locals.push(identifier_name(name).into());
         self.live_registers = self.live_registers.saturating_add(1);
@@ -100,6 +116,7 @@ impl LocalMerger {
         None
     }
 
+    #[inline(never)]
     fn merge_locals(
         &mut self,
         first: Box<LocalAssignment>,
@@ -140,6 +157,7 @@ impl LocalMerger {
         })))
     }
 
+    #[inline(never)]
     fn merge_assignments(
         &mut self,
         first: Box<Assignment>,
@@ -284,14 +302,8 @@ impl Transform for LocalMerger {
 
     fn transform_stmt(&mut self, stmt: Statement) -> Statement {
         // Lua 5.5
-        if let Statement::GlobalDeclaration(global) = &stmt {
-            for attributed in global.names.iter() {
-                self.global_names.insert(identifier_name(&attributed.name).into());
-            }
-        }
-        // Lua 5.5
-        if let Statement::GlobalFunction(function) = &stmt {
-            self.global_names.insert(identifier_name(&function.name).into());
+        if matches!(stmt, Statement::GlobalDeclaration(_) | Statement::GlobalFunction(_)) {
+            self.declare_globals(&stmt);
         }
         let outer_live_registers = self.live_registers;
         let loop_registers = if let Statement::NumericFor(_) = &stmt {
@@ -356,6 +368,7 @@ fn can_fuse_assignment(local: &LocalAssignment, stmt: &Statement) -> bool {
         && !assignment.values.iter().any(|v| references_any_in_expr(v, &declared_names))
 }
 
+#[inline(never)]
 fn fuse_bare_locals(stmts: Vec<Statement>, version: LuaVersion) -> Vec<Statement> {
     let mut fused_stmts: Vec<Statement> = Vec::with_capacity(stmts.len());
     let mut remaining = stmts.into_iter().peekable();

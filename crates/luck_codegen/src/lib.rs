@@ -6,8 +6,8 @@
 //! and a space only where two adjacent pieces would otherwise merge into one
 //! token. It never reads source text, so synthetic ASTs print too, and it
 //! prints each leaf's text as the tree holds it, unchecked. A tree nested past
-//! `luck_ast::MAX_NESTING_DEPTH` prints output the parser refuses, so check a
-//! tree built outside luck with `luck_ast::block_nesting_depth` first.
+//! its dialect's `max_nesting_depth` prints output the parser refuses, so check
+//! a tree built outside luck with `luck_ast::block_nesting_depth` first.
 //!
 //! # Usage
 //!

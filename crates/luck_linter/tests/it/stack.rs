@@ -22,6 +22,7 @@ fn every_rule() -> LintConfig {
 }
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "only a release build's frames fit, so `just stack` runs it")]
 fn linting_and_fixing_fit_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
         let pool = ThreadPoolBuilder::new()

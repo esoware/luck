@@ -1,6 +1,6 @@
 use core::fmt::Write as _;
 
-use luck_ast::{Block, MAX_NESTING_DEPTH, Synth, block_nesting_depth};
+use luck_ast::{Block, Synth, block_nesting_depth};
 use luck_minifier::TransformConfig;
 use luck_token::{LuaVersion, UnOp};
 
@@ -232,14 +232,15 @@ fn nested(open: &str, count: usize, innermost: &str, close: &str) -> String {
 
 #[test]
 fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
-    // The initializer is 31 levels deep, and its one use sits 241 levels in.
+    // The initializer nests 31 levels below its own, and its one use sits
+    // 200 levels in.
     let initializer = format!("{}#\"a\"{}", "#\"a\"+(".repeat(15), ")".repeat(15));
     let source = format!(
         "\
 local x = {initializer}
 return {}
 ",
-        nested("{", 240, "x", "}")
+        nested("{", 198, "x", "}")
     );
     let output = assert_minifies_within_the_depth_cap(&source);
     assert!(output.starts_with("local "), "the local must stay declared");
@@ -249,7 +250,7 @@ return {}
 local x = {initializer}
 return {}
 ",
-        nested("{", 200, "x", "}")
+        nested("{", 166, "x", "}")
     );
     let inlined = assert_minifies_within_the_depth_cap(&shallow);
     assert!(inlined.starts_with("return"), "the local fits where it's used");
@@ -261,7 +262,7 @@ fn an_if_return_run_stops_at_a_guard_whose_value_would_nest_past_the_cap() {
     for guard in 0..30u32 {
         writeln!(source, "if a{guard} then return {{}} end").unwrap();
     }
-    writeln!(source, "if deep then return {} end", nested("{", 253, "1", "}")).unwrap();
+    writeln!(source, "if deep then return {} end", nested("{", 197, "1", "}")).unwrap();
     for guard in 30..60u32 {
         writeln!(source, "if a{guard} then return {{}} end").unwrap();
     }
@@ -288,20 +289,20 @@ fn if_return_chains_in_nested_functions_do_not_compound_past_the_cap() {
 
 #[test]
 fn nested_ifs_are_not_merged_where_the_condition_would_nest_past_the_cap() {
-    let deep_condition = nested("f(", 254, "a", ")");
+    let deep_condition = nested("f(", 198, "a", ")");
     let source = format!("if {deep_condition} then if b then if c then x() end end end\n");
     let output = assert_minifies_within_the_depth_cap(&source);
     assert!(output.contains("b and c"), "the inner conditions still merge");
 
     // Two levels shallower, the condition fits under both `and`s.
-    let fitting = nested("f(", 252, "a", ")");
+    let fitting = nested("f(", 196, "a", ")");
     let merged = format!("if a then if b then if {fitting} then x() end end end\n");
     assert!(assert_minifies_within_the_depth_cap(&merged).starts_with("if a and b and f("));
 }
 
 #[test]
 fn an_empty_then_branch_is_not_negated_where_the_condition_would_nest_past_the_cap() {
-    let condition = format!("{} == b", nested("{", 254, "", "}"));
+    let condition = format!("{} == b", nested("{", 199, "", "}"));
     let source = format!("if {condition} then else x() end\n");
     let output = assert_minifies_within_the_depth_cap(&source);
     assert!(output.contains("else"), "the branches must stay as written");
@@ -321,16 +322,18 @@ fn nested_negations(wraps: usize) -> Block {
 
 #[test]
 fn a_tree_at_the_nesting_cap_minifies() {
-    let wraps = MAX_NESTING_DEPTH - 1;
+    let limit = LuaVersion::Lua54.max_nesting_depth();
+    // The `return` and its value are a level each.
+    let wraps = limit - 2;
     let block = nested_negations(wraps);
-    assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
+    assert_eq!(block_nesting_depth(&block), limit, "the tree sits at the cap");
     let output = luck_minifier::minify_block(block, LuaVersion::Lua54, &TransformConfig::default());
     assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps))));
 }
 
 #[test]
 fn a_tree_past_the_nesting_cap_is_an_error() {
-    let block = nested_negations(MAX_NESTING_DEPTH);
+    let block = nested_negations(LuaVersion::Lua54.max_nesting_depth() - 1);
     let error = luck_minifier::minify_block(block, LuaVersion::Lua54, &TransformConfig::default())
         .expect_err("the tree nests one level too deep");
     assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");

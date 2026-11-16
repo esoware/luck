@@ -9,15 +9,17 @@
 //! minifier's passes do. Override the `visit_*` or `transform_*` method you
 //! care about and call `self.walk_*` to recurse.
 //!
-//! A run of suffixes (`a.b[c]:d()`) is one [`SuffixedExpression`], and a
-//! run of binary operators at one precedence level (`a + b - c`) is one
-//! [`BinaryOp`], so however long a run gets, it nests one level.
+//! A run of suffixes (`a.b[c]:d()`) is one [`SuffixedExpression`], a run of
+//! binary operators at one precedence level (`a + b - c`) is one
+//! [`BinaryOp`], and a run of `?`s is one [`OptionalType`], so however long
+//! a run gets, it nests one level.
 //!
-//! Every traversal recurses on the plain stack, once per level of nesting.
-//! `luck_parser` builds no tree deeper than [`MAX_NESTING_DEPTH`]. Nothing
-//! checks a tree built with [`Synth`] as it grows, so measure one with
-//! [`block_nesting_depth`] or [`expr_nesting_depth`], which are safe at any
-//! depth.
+//! Every traversal recurses on the plain stack, a bounded number of times
+//! per level of nesting, in the levels the reference compilers count.
+//! `luck_parser` builds no tree deeper than its dialect allows, and none
+//! allows more than [`MAX_NESTING_DEPTH`]. Nothing checks a tree built with
+//! [`Synth`] as it grows, so measure one with [`block_nesting_depth`] or
+//! [`expr_nesting_depth`], which are safe at any depth.
 //!
 //! # Usage
 //!
@@ -40,6 +42,7 @@
 extern crate alloc;
 
 mod chain;
+mod clone;
 mod depth;
 mod expr;
 mod function;
@@ -69,8 +72,8 @@ pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
 pub use one_or_more::OneOrMore;
 pub use punctuated::Punctuated;
 pub use query::{
-    DottedPath, expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,
-    unwrap_parentheses,
+    DottedPath, ends_in_if_expr, expr_starts_with_brace, is_multi_value, is_prefix_expr,
+    stmt_starts_with_paren, unwrap_parentheses,
 };
 pub use stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,

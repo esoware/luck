@@ -151,6 +151,34 @@ impl Lifter {
         Statement::RepeatLoop(repeat_loop)
     }
 
+    // A body's scan opens and closes in functions of their own, so its
+    // temporaries stay off the stack under the functions nested in it.
+    #[inline(never)]
+    fn open_body(&mut self, body: &FunctionBody) {
+        let parameter_count = parameter_locals(body);
+        self.scans.push(BodyScan {
+            first_frame: self.frames.len(),
+            ineligible_names: if self.version.has_env_upvalue() {
+                FxHashSet::from_iter([CompactString::from("_ENV")])
+            } else {
+                FxHashSet::default()
+            },
+            active_locals: parameter_count,
+            peak_active_locals: parameter_count,
+            statement_expr_nodes: 0,
+            peak_registers: parameter_count,
+        });
+        self.frames.push(param_names(body));
+    }
+
+    #[inline(never)]
+    fn close_body(&mut self, body: &mut FunctionBody) {
+        self.frames.pop();
+        if let Some(scan) = self.scans.pop() {
+            lift_body(body, &scan, self.version);
+        }
+    }
+
     fn scan_numeric_for(&mut self, mut numeric_for: Box<NumericFor>) -> Statement {
         if let Some(loop_variable_type) = &mut numeric_for.type_annotation {
             *loop_variable_type = self.transform_type(loop_variable_type.take());
@@ -270,25 +298,9 @@ impl Transform for Lifter {
     /// The bodies the walk is already in see this one's bindings as a
     /// closure's.
     fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
-        let parameter_count = parameter_locals(&body);
-        self.scans.push(BodyScan {
-            first_frame: self.frames.len(),
-            ineligible_names: if self.version.has_env_upvalue() {
-                FxHashSet::from_iter([CompactString::from("_ENV")])
-            } else {
-                FxHashSet::default()
-            },
-            active_locals: parameter_count,
-            peak_active_locals: parameter_count,
-            statement_expr_nodes: 0,
-            peak_registers: parameter_count,
-        });
-        self.frames.push(param_names(&body));
+        self.open_body(&body);
         body.block = self.walk_block(body.block);
-        self.frames.pop();
-        if let Some(scan) = self.scans.pop() {
-            lift_body(&mut body, &scan, self.version);
-        }
+        self.close_body(&mut body);
         body
     }
 

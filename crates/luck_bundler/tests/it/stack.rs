@@ -18,6 +18,7 @@ use tempfile::TempDir;
 use crate::common::bundle_both;
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "only a release build's frames fit, so `just stack` runs it")]
 fn bundling_fits_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
         let directory = TempDir::new().expect("directory");

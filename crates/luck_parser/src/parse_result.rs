@@ -11,7 +11,7 @@ pub struct ParseResult {
     pub errors: Vec<ParseError>,
     pub source: String,
     /// How many levels deep `block` nests, as the parser counted them toward
-    /// [`luck_ast::MAX_NESTING_DEPTH`]. With no errors, that's never fewer
-    /// than [`luck_ast::block_nesting_depth`] finds.
+    /// the dialect's [`max_nesting_depth`](luck_token::LuaVersion::max_nesting_depth).
+    /// With no errors, that's what [`luck_ast::block_nesting_depth`] finds.
     pub nesting_depth: usize,
 }

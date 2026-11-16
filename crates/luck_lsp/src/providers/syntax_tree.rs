@@ -32,7 +32,6 @@ impl fmt::Write for BoundedDump {
 
 #[cfg(test)]
 mod tests {
-    use luck_ast::MAX_NESTING_DEPTH;
     use luck_core::LuaTarget;
     use luck_testgen::on_the_smallest_stack;
     use luck_token::LuaVersion;
@@ -45,9 +44,13 @@ mod tests {
     /// `{:#?}` writes through a writer per level open, so each such dump
     /// takes seconds, and the dump of this one ends within the bound.
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "only a release build's frames fit, so `just stack` runs it"
+    )]
     fn a_tree_at_the_cap_dumps_on_the_smallest_stack() {
-        // The chunk is a level, and each function a body and a block.
-        let levels = MAX_NESTING_DEPTH.saturating_sub(1).div_euclid(2);
+        // Each function and the innermost `local` and its value are a level.
+        let levels = LuaVersion::Lua54.max_nesting_depth() - 2;
         let source = format!(
             "{}local innermost = 1{}",
             "local function f() ".repeat(levels),

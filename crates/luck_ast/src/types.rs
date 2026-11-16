@@ -3,6 +3,8 @@
 //!
 //! Outside Luau these nodes never occur; the parser gates on `LuaVersion::has_type_syntax`.
 
+use core::num::NonZeroU32;
+
 use luck_token::{CompactString, Span, Token};
 
 use crate::expr::Expression;
@@ -85,11 +87,13 @@ pub struct FunctionTypeParam {
     pub type_value: Type,
 }
 
-/// One `?`, so `T??` is an optional of an optional.
+/// A run of `?`s, so `T??` is one node with two, since Luau reads any number
+/// of them without nesting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OptionalType {
     pub span: Span,
     pub type_value: Type,
+    pub question_marks: NonZeroU32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

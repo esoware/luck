@@ -206,7 +206,7 @@ impl Diagnostic {
     pub fn e013(file_path: &str, span: Span, wrapper_levels: usize, limit: usize) -> Self {
         Self::error_at(
             "E013",
-            format!("maximum nesting depth exceeded once bundled (luck resource limit: {limit})"),
+            format!("maximum nesting depth exceeded once bundled (limit: {limit})"),
             file_path,
             span,
         )

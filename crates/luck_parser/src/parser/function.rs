@@ -1,23 +1,49 @@
 use core::mem;
 
-use luck_ast::{FunctionBody, Parameter, Punctuated, Type, VarArgParam};
-use luck_token::{Token, TokenKind};
+use luck_ast::{Block, FunctionBody, GenericTypeList, Parameter, Punctuated, Type, VarArgParam};
+use luck_token::{Span, Token, TokenKind};
 
 use super::types::GenericsOwner;
 use super::{Closer, FunctionScope, Parser};
+
+/// What comes before a function's block.
+struct Signature {
+    start_span: Span,
+    generics: Option<Box<GenericTypeList>>,
+    params: Punctuated<Parameter>,
+    vararg: Option<Box<VarArgParam>>,
+    return_type: Option<Type>,
+}
 
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
-    /// `None` when the body or its block would pass the depth cap.
-    pub(super) fn parse_function_body(&mut self) -> Option<FunctionBody> {
-        if !self.enter_depth() {
-            return None;
-        }
+    pub(super) fn parse_function_body(&mut self) -> FunctionBody {
         self.open(Closer::BlockEnd);
+        let signature = self.parse_signature();
 
+        // A loop around the function doesn't make `break` or `continue` valid
+        // inside it, and `...` needs this function's own vararg parameter.
+        let scope = FunctionScope {
+            is_chunk: false,
+            is_vararg: signature.vararg.is_some(),
+            is_in_loop: false,
+        };
+        let outer_scope = mem::replace(&mut self.function_scope, scope);
+        let block = self.parse_block();
+        self.function_scope = outer_scope;
+
+        self.close(Closer::BlockEnd);
+        let end_span = self.expect(&TokenKind::End);
+        finish_function_body(signature, block, end_span)
+    }
+
+    /// Apart from [`Self::parse_function_body`], whose frame sits under
+    /// every function nested in the body.
+    #[inline(never)]
+    fn parse_signature(&mut self) -> Signature {
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
         let generics = (self.version.has_type_syntax() && matches!(self.peek(), TokenKind::Less))
             .then(|| Box::new(self.parse_generic_type_list(GenericsOwner::Function)));
@@ -32,24 +58,7 @@ impl Parser<'_> {
         // Luau: optional return type annotation after `)`.
         let return_type = (self.version.has_type_syntax() && self.eat(&TokenKind::Colon))
             .then(|| self.parse_return_type());
-
-        // A loop around the function doesn't make `break` or `continue` valid
-        // inside it, and `...` needs this function's own vararg parameter.
-        let outer_scope = mem::replace(
-            &mut self.function_scope,
-            FunctionScope { is_chunk: false, is_vararg: vararg.is_some(), is_in_loop: false },
-        );
-        let parsed_block = self.parse_block();
-        self.function_scope = outer_scope;
-        self.exit_depth();
-        let block = parsed_block?;
-
-        self.close(Closer::BlockEnd);
-        let end_span = self.expect(&TokenKind::End);
-
-        let span = start_span.merge(end_span);
-
-        Some(FunctionBody { span, generics, params, vararg, return_type, block })
+        Signature { start_span, generics, params, vararg, return_type }
     }
 
     /// Parse the parameter list between a function's parens, stopping before
@@ -101,4 +110,11 @@ impl Parser<'_> {
             .unwrap_or(dots);
         VarArgParam { span: dots.merge(end_span), name: vararg_name, type_annotation: vararg_type }
     }
+}
+
+#[inline(never)]
+fn finish_function_body(signature: Signature, block: Block, end_span: Span) -> FunctionBody {
+    let Signature { start_span, generics, params, vararg, return_type } = signature;
+    let span = start_span.merge(end_span);
+    FunctionBody { span, generics, params, vararg, return_type, block }
 }

@@ -42,6 +42,7 @@ fn declaration_span(
 )]
 impl Parser<'_> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
+    #[inline(never)]
     pub(super) fn parse_attributed_function(&mut self) -> Statement {
         let attributes = self.parse_function_attributes();
         match self.peek() {
@@ -60,15 +61,13 @@ impl Parser<'_> {
         }
     }
 
+    #[inline(never)]
     pub(super) fn parse_function_decl(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
         let function_span = self.advance_span();
         let name = self.parse_function_name();
         let start_span = attributes.first().map_or(function_span, |attribute| attribute.span);
-        let Some(body) = self.parse_function_body() else {
-            return Statement::Error(start_span);
-        };
+        let body = self.parse_function_body();
         let span = start_span.merge(body.span);
-
         Statement::FunctionDecl(Box::new(FunctionDecl { span, attributes, name, body }))
     }
 
@@ -126,11 +125,8 @@ impl Parser<'_> {
         let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
         self.advance_span(); // `function`
         let name = self.expect_identifier_recover();
-        let Some(body) = self.parse_function_body() else {
-            return Statement::Error(start_span);
-        };
+        let body = self.parse_function_body();
         let span = start_span.merge(body.span);
-
         Statement::LocalFunction(Box::new(LocalFunction { span, attributes, name, body, kind }))
     }
 
@@ -220,9 +216,7 @@ impl Parser<'_> {
         if matches!(self.peek(), TokenKind::Function) {
             self.advance_span();
             let name = self.expect_identifier_recover();
-            let Some(body) = self.parse_function_body() else {
-                return Statement::Error(global_span);
-            };
+            let body = self.parse_function_body();
             let span = global_span.merge(body.span);
             return Statement::GlobalFunction(Box::new(GlobalFunction { span, name, body }));
         }
@@ -298,9 +292,7 @@ impl Parser<'_> {
             self.advance_span();
             self.has_type_function = true;
             let name = self.expect_identifier_recover();
-            let Some(body) = self.parse_function_body() else {
-                return Statement::Error(start_span);
-            };
+            let body = self.parse_function_body();
             let span = start_span.merge(body.span);
             return Statement::TypeDeclaration(Box::new(TypeDeclaration {
                 span,
