@@ -73,8 +73,8 @@ debug = "line-tables-only"
 insta.opt-level = 3
 similar.opt-level = 3
 
-# The stack tests hold every stage to a 1 MiB stack, which only an optimized
-# build's frames have to fit.
+# Tests nest input to the cap on the test harness's own stack, which an
+# unoptimized build's frames don't fit.
 [profile.test]
 opt-level = 1
 
