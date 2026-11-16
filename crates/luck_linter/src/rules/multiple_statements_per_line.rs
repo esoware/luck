@@ -36,7 +36,7 @@ impl WholeRule for MultipleStatementsPerLine {
             spans.clear();
             spans.extend(stmt_spans.chain(block.last_stmt.as_deref().map(LastStatement::span)));
 
-            for [previous, next] in spans.array_windows() {
+            for (previous, next) in spans.iter().zip(spans.iter().skip(1)) {
                 // `end` is exclusive, so step back one byte to stay on the
                 // line where `previous` ends.
                 let previous_line = lines.line(previous.end.saturating_sub(1));

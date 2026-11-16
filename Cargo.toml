@@ -12,7 +12,7 @@ homepage     = "https://github.com/esoware/luck"
 keywords     = ["lua", "luau", "bundler", "minifier", "parser"]
 license      = "MIT"
 repository   = "https://github.com/esoware/luck"
-rust-version = "1.99.1"
+rust-version = "1.91"
 
 [workspace.dependencies]
 luck_ast       = { version = "0.5.0", path = "crates/luck_ast" }
