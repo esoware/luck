@@ -626,6 +626,8 @@ impl DeadCodeRemover<'_> {
 }
 
 impl Transform for DeadCodeRemover<'_> {
+    const COUNTS_LEVELS: bool = true;
+
     fn descend(&mut self) {
         self.depth = self.depth.saturating_add(1);
     }

@@ -20,6 +20,8 @@ struct StatementSimplifier {
 }
 
 impl Transform for StatementSimplifier {
+    const COUNTS_LEVELS: bool = true;
+
     fn descend(&mut self) {
         self.depth = self.depth.saturating_add(1);
     }

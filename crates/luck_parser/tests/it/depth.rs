@@ -344,6 +344,8 @@ struct Levels {
 }
 
 impl Visitor<'_> for Levels {
+    const COUNTS_LEVELS: bool = true;
+
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
         self.deepest = self.deepest.max(self.depth);

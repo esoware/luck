@@ -2,7 +2,7 @@ use core::mem;
 
 use luck_token::{Span, UnOp};
 
-use crate::expr::{BinaryOp, Expression};
+use crate::expr::Expression;
 use crate::function::FunctionAttribute;
 use crate::query::ends_in_if_expr;
 use crate::stmt::{Block, Statement};
@@ -79,7 +79,6 @@ enum Form {
     Cast,
 }
 
-#[inline]
 fn form(expr: &Expression) -> Form {
     match expr {
         Expression::BinaryOp(run) => Form::Run(run.precedence().0),
@@ -105,20 +104,17 @@ fn form(expr: &Expression) -> Form {
     }
 }
 
-#[inline]
-pub(crate) fn first_operand_needs_parens(run: &BinaryOp) -> bool {
-    let precedence = run.precedence().0;
-    let binds_looser = match form(&run.first) {
+pub(crate) fn first_operand_needs_parens(precedence: u8, first: &Expression) -> bool {
+    let binds_looser = match form(first) {
         Form::Run(inner) => inner <= precedence,
         Form::Unary => precedence > UnOp::PRECEDENCE,
         Form::Simple | Form::IfExpr | Form::Cast => false,
     };
-    binds_looser || ends_in_if_expr(&run.first)
+    binds_looser || ends_in_if_expr(first)
 }
 
 /// Only the last operand can end in an if-expression, which takes in
 /// everything after it.
-#[inline]
 pub(crate) fn link_operand_needs_parens(
     precedence: u8,
     operand: &Expression,
@@ -128,12 +124,10 @@ pub(crate) fn link_operand_needs_parens(
     binds_looser || (!is_last && ends_in_if_expr(operand))
 }
 
-#[inline]
 pub(crate) fn unary_operand_needs_parens(operand: &Expression) -> bool {
     matches!(form(operand), Form::Run(inner) if inner < UnOp::PRECEDENCE)
 }
 
-#[inline]
 pub(crate) fn cast_operand_needs_parens(operand: &Expression) -> bool {
     match form(operand) {
         Form::Simple => false,
@@ -151,7 +145,6 @@ enum TypeForm {
     Compound,
 }
 
-#[inline]
 const fn type_form(type_value: &Type) -> TypeForm {
     match type_value {
         Type::Name { .. }
@@ -171,14 +164,12 @@ const fn type_form(type_value: &Type) -> TypeForm {
     }
 }
 
-#[inline]
 pub(crate) const fn optional_inner_needs_parens(inner: &Type) -> bool {
     !matches!(type_form(inner), TypeForm::Simple)
 }
 
 /// A function type's return type takes in what follows it, so only the last
 /// member can be one.
-#[inline]
 pub(crate) const fn union_member_needs_parens(member: &Type, is_last: bool) -> bool {
     match type_form(member) {
         TypeForm::Simple | TypeForm::Optional => false,
@@ -188,7 +179,6 @@ pub(crate) const fn union_member_needs_parens(member: &Type, is_last: bool) -> b
 }
 
 /// As in a union, but a `?` beside `&` needs parentheses too.
-#[inline]
 pub(crate) const fn intersection_member_needs_parens(member: &Type, is_last: bool) -> bool {
     match type_form(member) {
         TypeForm::Simple => false,
@@ -203,6 +193,8 @@ struct DepthMeter {
 }
 
 impl<'ast> Visitor<'ast> for DepthMeter {
+    const COUNTS_LEVELS: bool = true;
+
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
         self.deepest = self.deepest.max(self.depth);
@@ -233,6 +225,8 @@ struct OverflowFinder {
 }
 
 impl<'ast> Visitor<'ast> for OverflowFinder {
+    const COUNTS_LEVELS: bool = true;
+
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
         let fits = self.depth <= self.limit;
@@ -309,7 +303,7 @@ mod tests {
     use luck_token::{BinOp, LuaVersion};
 
     use super::*;
-    use crate::expr::{BinaryLink, UnaryOp};
+    use crate::expr::{BinaryLink, BinaryOp, UnaryOp};
     use crate::one_or_more::OneOrMore;
     use crate::synth::{FieldSpec, FunctionSignature, Synth};
 

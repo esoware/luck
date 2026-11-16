@@ -121,6 +121,8 @@ impl CandidateScanner {
 }
 
 impl<'ast> Visitor<'ast> for CandidateScanner {
+    const COUNTS_LEVELS: bool = true;
+
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
         true

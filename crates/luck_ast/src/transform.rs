@@ -27,6 +27,9 @@ use crate::types::{GenericTypeList, Type, TypeField};
 /// are the default recursion, so overriding one instead of its hook would leave nothing to fall
 /// back on.
 pub trait Transform {
+    /// As [`Visitor::COUNTS_LEVELS`](crate::Visitor::COUNTS_LEVELS).
+    const COUNTS_LEVELS: bool = false;
+
     /// Called by the walkers on entering each level of nesting, the levels
     /// [`Visitor::descend`](crate::Visitor::descend) counts, and always
     /// paired with [`Transform::ascend`].
@@ -74,14 +77,10 @@ pub trait Transform {
 
     fn walk_block(&mut self, mut block: Block) -> Block {
         for stmt in &mut block.stmts {
-            self.descend();
-            *stmt = self.transform_stmt(stmt.take());
-            self.ascend();
+            *stmt = transform_level(self, |this| this.transform_stmt(stmt.take()));
         }
         if let Some(last) = &mut block.last_stmt {
-            self.descend();
-            **last = self.transform_last_stmt(last.take());
-            self.ascend();
+            **last = transform_level(self, |this| this.transform_last_stmt(last.take()));
         }
         block
     }
@@ -218,21 +217,21 @@ pub trait Transform {
                 Expression::TableConstructor(walk_boxed_table(self, table))
             }
             Expression::BinaryOp(mut run) => {
-                let first_needs_parens = first_operand_needs_parens(&run);
-                run.first = transform_operand(self, run.first, first_needs_parens);
                 let precedence = run.precedence().0;
+                run.first = transform_operand(self, run.first, |first| {
+                    first_operand_needs_parens(precedence, first)
+                });
                 let last = run.links.len().saturating_sub(1);
                 for (i, link) in run.links.iter_mut().enumerate() {
-                    let needs_parens =
-                        link_operand_needs_parens(precedence, &link.operand, i == last);
-                    link.operand =
-                        transform_nested_operand(self, link.operand.take(), needs_parens);
+                    link.operand = transform_nested_operand(self, link.operand.take(), |operand| {
+                        link_operand_needs_parens(precedence, operand, i == last)
+                    });
                 }
                 Expression::BinaryOp(run)
             }
             Expression::UnaryOp(mut unary_op) => {
-                let needs_parens = unary_operand_needs_parens(&unary_op.operand);
-                unary_op.operand = transform_nested_operand(self, unary_op.operand, needs_parens);
+                unary_op.operand =
+                    transform_nested_operand(self, unary_op.operand, unary_operand_needs_parens);
                 Expression::UnaryOp(unary_op)
             }
             // Luau
@@ -257,8 +256,7 @@ pub trait Transform {
             }
             // Luau
             Expression::TypeCast(mut cast) => {
-                let needs_parens = cast_operand_needs_parens(&cast.expr);
-                cast.expr = transform_operand(self, cast.expr, needs_parens);
+                cast.expr = transform_operand(self, cast.expr, cast_operand_needs_parens);
                 cast.type_annotation = transform_nested_type(self, cast.type_annotation);
                 Expression::TypeCast(cast)
             }
@@ -278,8 +276,7 @@ pub trait Transform {
     /// arguments.
     #[expect(clippy::unnecessary_box_returns, reason = "the chain goes back into its own box")]
     fn walk_suffixed(&mut self, mut chain: Box<SuffixedExpression>) -> Box<SuffixedExpression> {
-        let needs_parens = !is_prefix_expr(&chain.prefix);
-        chain.prefix = transform_operand(self, chain.prefix, needs_parens);
+        chain.prefix = transform_operand(self, chain.prefix, |prefix| !is_prefix_expr(prefix));
         for suffix in &mut chain.suffixes {
             match suffix {
                 Suffix::Field(_) => {}
@@ -388,24 +385,25 @@ pub trait Transform {
                 Type::Function(function_type)
             }
             Type::Optional(mut optional) => {
-                let needs_parens = optional_inner_needs_parens(&optional.type_value);
                 optional.type_value =
-                    transform_type_operand(self, optional.type_value, needs_parens);
+                    transform_type_operand(self, optional.type_value, optional_inner_needs_parens);
                 Type::Optional(optional)
             }
             Type::Union(mut union) => {
                 let last = union.types.items.len().saturating_sub(1);
                 for (i, member) in union.types.items.iter_mut().enumerate() {
-                    let needs_parens = union_member_needs_parens(member, i == last);
-                    *member = transform_type_operand(self, member.take(), needs_parens);
+                    *member = transform_type_operand(self, member.take(), |ty| {
+                        union_member_needs_parens(ty, i == last)
+                    });
                 }
                 Type::Union(union)
             }
             Type::Intersection(mut intersection) => {
                 let last = intersection.types.items.len().saturating_sub(1);
                 for (i, member) in intersection.types.items.iter_mut().enumerate() {
-                    let needs_parens = intersection_member_needs_parens(member, i == last);
-                    *member = transform_type_operand(self, member.take(), needs_parens);
+                    *member = transform_type_operand(self, member.take(), |ty| {
+                        intersection_member_needs_parens(ty, i == last)
+                    });
                 }
                 Type::Intersection(intersection)
             }
@@ -450,8 +448,21 @@ pub trait Transform {
     }
 }
 
-// Each helper calls its hook once, between the levels it opens, so a pass
-// that counts none pays nothing for them.
+/// Rewrite with `rewrite` a level down.
+fn transform_level<T, Node, Rewrite>(transform: &mut T, rewrite: Rewrite) -> Node
+where
+    T: Transform + ?Sized,
+    Rewrite: FnOnce(&mut T) -> Node,
+{
+    if T::COUNTS_LEVELS {
+        transform.descend();
+    }
+    let node = rewrite(transform);
+    if T::COUNTS_LEVELS {
+        transform.ascend();
+    }
+    node
+}
 
 /// Rewrite `expr` a level down. An error stands for nothing the parser read,
 /// so it opens none.
@@ -459,7 +470,7 @@ fn transform_nested_expr<T>(transform: &mut T, expr: Expression) -> Expression
 where
     T: Transform + ?Sized,
 {
-    let is_level = !matches!(expr, Expression::Error(_));
+    let is_level = T::COUNTS_LEVELS && !matches!(expr, Expression::Error(_));
     if is_level {
         transform.descend();
     }
@@ -472,45 +483,37 @@ where
 
 /// Rewrite `expr` on its parent's level, or a level down where it needs
 /// parentheses.
-fn transform_operand<T>(transform: &mut T, expr: Expression, needs_parens: bool) -> Expression
-where
-    T: Transform + ?Sized,
-{
-    let is_level = needs_parens && !matches!(expr, Expression::Error(_));
-    if is_level {
-        transform.descend();
-    }
-    let transformed = transform.transform_expr(expr);
-    if is_level {
-        transform.ascend();
-    }
-    transformed
-}
-
-/// Rewrite `expr` a level down, and one more where it needs parentheses.
-fn transform_nested_operand<T>(
+fn transform_operand<T, NeedsParens>(
     transform: &mut T,
     expr: Expression,
-    needs_parens: bool,
+    needs_parens: NeedsParens,
 ) -> Expression
 where
     T: Transform + ?Sized,
+    NeedsParens: FnOnce(&Expression) -> bool,
 {
-    let is_level = !matches!(expr, Expression::Error(_));
-    if needs_parens {
-        transform.descend();
+    if T::COUNTS_LEVELS && needs_parens(&expr) {
+        transform_nested_expr(transform, expr)
+    } else {
+        transform.transform_expr(expr)
     }
-    if is_level {
-        transform.descend();
+}
+
+/// Rewrite `expr` a level down, and one more where it needs parentheses.
+fn transform_nested_operand<T, NeedsParens>(
+    transform: &mut T,
+    expr: Expression,
+    needs_parens: NeedsParens,
+) -> Expression
+where
+    T: Transform + ?Sized,
+    NeedsParens: FnOnce(&Expression) -> bool,
+{
+    if T::COUNTS_LEVELS && needs_parens(&expr) {
+        transform_level(transform, |this| transform_nested_expr(this, expr))
+    } else {
+        transform_nested_expr(transform, expr)
     }
-    let transformed = transform.transform_expr(expr);
-    if is_level {
-        transform.ascend();
-    }
-    if needs_parens {
-        transform.ascend();
-    }
-    transformed
 }
 
 /// As [`transform_nested_expr`], for a type.
@@ -518,7 +521,7 @@ fn transform_nested_type<T>(transform: &mut T, type_value: Type) -> Type
 where
     T: Transform + ?Sized,
 {
-    let is_level = !matches!(type_value, Type::Error(_));
+    let is_level = T::COUNTS_LEVELS && !matches!(type_value, Type::Error(_));
     if is_level {
         transform.descend();
     }
@@ -530,19 +533,20 @@ where
 }
 
 /// As [`transform_operand`], for a type.
-fn transform_type_operand<T>(transform: &mut T, type_value: Type, needs_parens: bool) -> Type
+fn transform_type_operand<T, NeedsParens>(
+    transform: &mut T,
+    type_value: Type,
+    needs_parens: NeedsParens,
+) -> Type
 where
     T: Transform + ?Sized,
+    NeedsParens: FnOnce(&Type) -> bool,
 {
-    let is_level = needs_parens && !matches!(type_value, Type::Error(_));
-    if is_level {
-        transform.descend();
+    if T::COUNTS_LEVELS && needs_parens(&type_value) {
+        transform_nested_type(transform, type_value)
+    } else {
+        transform.transform_type(type_value)
     }
-    let transformed = transform.transform_type(type_value);
-    if is_level {
-        transform.ascend();
-    }
-    transformed
 }
 
 fn walk_exprs<T>(transform: &mut T, exprs: &mut [Expression])

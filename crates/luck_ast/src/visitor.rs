@@ -20,6 +20,11 @@ use crate::types::{GenericTypeList, Type, TypeField};
 /// keep recursing. The `walk_*` methods are the default recursion, so
 /// overriding one instead of its hook would leave nothing to fall back on.
 pub trait Visitor<'ast> {
+    /// Whether the walkers call [`Visitor::descend`] and [`Visitor::ascend`].
+    /// A visitor that overrides them sets this, and every other one skips
+    /// the look at each operand's shape that counting levels takes.
+    const COUNTS_LEVELS: bool = false;
+
     /// Called by the walkers on entering each level of nesting, and always
     /// paired with [`Visitor::ascend`]. Returning `false` skips what the
     /// level holds.
@@ -79,16 +84,10 @@ pub trait Visitor<'ast> {
 
     fn walk_block(&mut self, block: &'ast Block) {
         for stmt in &block.stmts {
-            if self.descend() {
-                self.visit_stmt(stmt);
-            }
-            self.ascend();
+            visit_level(self, |this| this.visit_stmt(stmt));
         }
         if let Some(last) = &block.last_stmt {
-            if self.descend() {
-                self.visit_last_stmt(last);
-            }
-            self.ascend();
+            visit_level(self, |this| this.visit_last_stmt(last));
         }
     }
 
@@ -231,18 +230,19 @@ pub trait Visitor<'ast> {
                 self.visit_table_constructor(table);
             }
             Expression::BinaryOp(run) => {
-                visit_operand(self, &run.first, first_operand_needs_parens(run));
                 let precedence = run.precedence().0;
+                visit_operand(self, &run.first, |first| {
+                    first_operand_needs_parens(precedence, first)
+                });
                 let last = run.links.len().saturating_sub(1);
                 for (i, link) in run.links.iter().enumerate() {
-                    let needs_parens =
-                        link_operand_needs_parens(precedence, &link.operand, i == last);
-                    visit_nested_operand(self, &link.operand, needs_parens);
+                    visit_nested_operand(self, &link.operand, |operand| {
+                        link_operand_needs_parens(precedence, operand, i == last)
+                    });
                 }
             }
             Expression::UnaryOp(unary_op) => {
-                let needs_parens = unary_operand_needs_parens(&unary_op.operand);
-                visit_nested_operand(self, &unary_op.operand, needs_parens);
+                visit_nested_operand(self, &unary_op.operand, unary_operand_needs_parens);
             }
             // Luau
             Expression::IfExpression(if_expr) => {
@@ -264,7 +264,7 @@ pub trait Visitor<'ast> {
             }
             // Luau
             Expression::TypeCast(cast) => {
-                visit_operand(self, &cast.expr, cast_operand_needs_parens(&cast.expr));
+                visit_operand(self, &cast.expr, cast_operand_needs_parens);
                 visit_nested_type(self, &cast.type_annotation);
             }
         }
@@ -278,7 +278,7 @@ pub trait Visitor<'ast> {
     }
 
     fn walk_suffixed(&mut self, chain: &'ast SuffixedExpression) {
-        visit_operand(self, &chain.prefix, !is_prefix_expr(&chain.prefix));
+        visit_operand(self, &chain.prefix, |prefix| !is_prefix_expr(prefix));
         for (i, suffix) in chain.suffixes.iter().enumerate() {
             match suffix {
                 Suffix::Field(_) => {}
@@ -386,21 +386,20 @@ pub trait Visitor<'ast> {
                 visit_nested_type(self, &function_type.return_type);
             }
             Type::Optional(optional) => {
-                let needs_parens = optional_inner_needs_parens(&optional.type_value);
-                visit_type_operand(self, &optional.type_value, needs_parens);
+                visit_type_operand(self, &optional.type_value, optional_inner_needs_parens);
             }
             Type::Union(union) => {
                 let last = union.types.len().saturating_sub(1);
                 for (i, member) in union.types.iter().enumerate() {
-                    let needs_parens = union_member_needs_parens(member, i == last);
-                    visit_type_operand(self, member, needs_parens);
+                    visit_type_operand(self, member, |ty| union_member_needs_parens(ty, i == last));
                 }
             }
             Type::Intersection(intersection) => {
                 let last = intersection.types.len().saturating_sub(1);
                 for (i, member) in intersection.types.iter().enumerate() {
-                    let needs_parens = intersection_member_needs_parens(member, i == last);
-                    visit_type_operand(self, member, needs_parens);
+                    visit_type_operand(self, member, |ty| {
+                        intersection_member_needs_parens(ty, i == last)
+                    });
                 }
             }
             Type::Parenthesized(parenthesized) => {
@@ -433,29 +432,46 @@ pub trait Visitor<'ast> {
     }
 }
 
+/// Run `visit` a level down.
+fn visit_level<'ast, V, Visit>(visitor: &mut V, visit: Visit)
+where
+    V: Visitor<'ast> + ?Sized,
+    Visit: FnOnce(&mut V),
+{
+    if V::COUNTS_LEVELS {
+        if visitor.descend() {
+            visit(visitor);
+        }
+        visitor.ascend();
+    } else {
+        visit(visitor);
+    }
+}
+
 /// Visit `expr` a level down. An error stands for nothing the parser read,
 /// so it opens none.
 fn visit_nested_expr<'ast, V>(visitor: &mut V, expr: &'ast Expression)
 where
     V: Visitor<'ast> + ?Sized,
 {
-    if matches!(expr, Expression::Error(_)) {
-        visitor.visit_expr(expr);
-        return;
-    }
-    if visitor.descend() {
+    if V::COUNTS_LEVELS && !matches!(expr, Expression::Error(_)) {
+        visit_level(visitor, |this| this.visit_expr(expr));
+    } else {
         visitor.visit_expr(expr);
     }
-    visitor.ascend();
 }
 
 /// Visit `expr` on its parent's level, or a level down where it needs
 /// parentheses.
-fn visit_operand<'ast, V>(visitor: &mut V, expr: &'ast Expression, needs_parens: bool)
-where
+fn visit_operand<'ast, V, NeedsParens>(
+    visitor: &mut V,
+    expr: &'ast Expression,
+    needs_parens: NeedsParens,
+) where
     V: Visitor<'ast> + ?Sized,
+    NeedsParens: FnOnce(&Expression) -> bool,
 {
-    if needs_parens {
+    if V::COUNTS_LEVELS && needs_parens(expr) {
         visit_nested_expr(visitor, expr);
     } else {
         visitor.visit_expr(expr);
@@ -463,18 +479,19 @@ where
 }
 
 /// Visit `expr` a level down, and one more where it needs parentheses.
-fn visit_nested_operand<'ast, V>(visitor: &mut V, expr: &'ast Expression, needs_parens: bool)
-where
+fn visit_nested_operand<'ast, V, NeedsParens>(
+    visitor: &mut V,
+    expr: &'ast Expression,
+    needs_parens: NeedsParens,
+) where
     V: Visitor<'ast> + ?Sized,
+    NeedsParens: FnOnce(&Expression) -> bool,
 {
-    if !needs_parens {
-        visit_nested_expr(visitor, expr);
-        return;
-    }
-    if visitor.descend() {
+    if V::COUNTS_LEVELS && needs_parens(expr) {
+        visit_level(visitor, |this| visit_nested_expr(this, expr));
+    } else {
         visit_nested_expr(visitor, expr);
     }
-    visitor.ascend();
 }
 
 /// As [`visit_nested_expr`], for a type.
@@ -482,22 +499,23 @@ fn visit_nested_type<'ast, V>(visitor: &mut V, type_value: &'ast Type)
 where
     V: Visitor<'ast> + ?Sized,
 {
-    if matches!(type_value, Type::Error(_)) {
-        visitor.visit_type(type_value);
-        return;
-    }
-    if visitor.descend() {
+    if V::COUNTS_LEVELS && !matches!(type_value, Type::Error(_)) {
+        visit_level(visitor, |this| this.visit_type(type_value));
+    } else {
         visitor.visit_type(type_value);
     }
-    visitor.ascend();
 }
 
 /// As [`visit_operand`], for a type.
-fn visit_type_operand<'ast, V>(visitor: &mut V, type_value: &'ast Type, needs_parens: bool)
-where
+fn visit_type_operand<'ast, V, NeedsParens>(
+    visitor: &mut V,
+    type_value: &'ast Type,
+    needs_parens: NeedsParens,
+) where
     V: Visitor<'ast> + ?Sized,
+    NeedsParens: FnOnce(&Type) -> bool,
 {
-    if needs_parens {
+    if V::COUNTS_LEVELS && needs_parens(type_value) {
         visit_nested_type(visitor, type_value);
     } else {
         visitor.visit_type(type_value);
