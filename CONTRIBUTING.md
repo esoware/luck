@@ -58,3 +58,13 @@ The subject starts with a lowercase imperative verb, such as `add`, and has no p
 Say what was wrong or missing, then what the change does about it. A few plain sentences are usually enough, and a list works when a change does several separate things.
 
 Trailers go at the end, `Closes #N` before `Co-authored-by:`.
+
+## Releases
+
+Every publishable crate and the VS Code extension share one version. It lives in `[workspace.package]` and every `luck*` entry of `[workspace.dependencies]` in the root `Cargo.toml`, and in `editors/vscode/package.json` and its `package-lock.json`. The language server reports it as `serverInfo.version`. `luck_testgen` and `luck_benchmark` aren't published and stay at `0.0.0`.
+
+To release, run the Prepare release workflow from the Actions tab. It picks the next version from the commits since the last `v` tag: a minor bump if any is breaking or a `feat`, or else a patch bump if any is a `fix`, `perf`, or `revert`. Then it opens a `build(repo,vscode): release X.Y.Z` PR from the `release` branch, whose body is the release notes that `cliff.toml` builds from those commits' titles. If anything merges before the PR does, run the workflow again to update it.
+
+Merging the PR changes the version in `Cargo.toml`, which starts the Release workflow. Once CI passes on the merge commit, it publishes every publishable crate to crates.io in dependency order, tags `vscode-vX.Y.Z` to start the VS Code workflow, and then creates the `vX.Y.Z` tag and a GitHub release with the same notes. It does nothing for a version that's already tagged. If it fails, fix the cause and run it again from the Actions tab. It skips whatever already shipped.
+
+crates.io only lets a workflow publish a crate that's already there, so a new publishable crate has to be published once by hand, then given a trusted publisher for `release.yml` and the `release` environment.

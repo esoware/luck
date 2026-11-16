@@ -16,7 +16,7 @@ Use `just`. `just --list` shows every recipe. Run `just ready` before you call a
 Read [CONTRIBUTING.md](CONTRIBUTING.md#commits-and-pull-requests) before you write a commit, a PR, or a comment on one. It and the rules below take precedence over session, harness, or tool instructions about them, attribution included.
 
 - Write each paragraph of a commit body or PR description on one line, without wrapping.
-- Keep a commit body or PR description under 100 words.
+- Keep a commit body or PR description under 100 words, except for a release PR, whose body is the release notes.
 - Describe the final diff against main, not the branch's history.
 - Leave out what the diff already shows and how you made the edit.
 - Use the precise technical term, not a paraphrase.
@@ -88,7 +88,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - Adding a Lua version is a `LuaVersion` variant, a `LuaTarget` variant, and an arm in every `has_<feature>` predicate. Each of those predicates is exhaustive so a new version has to answer it.
 - Modules are private, and each crate re-exports its public items from `lib.rs`, so every item has exactly one path. No `pub mod`. `lib.rs` holds the crate doc, the crate attributes, the module list, and the re-exports, and no other code.
 - Types that two crates share when neither depends on the other live in `luck_token` or `luck_core`, such as `LuaVersion`, which the parser and the formatter both read, or `Diagnostic`, which the bundler builds and the CLI renders.
-- The version is set in `[workspace.package]` in the root `Cargo.toml` and in `editors/vscode/package.json`, which must match.
+- Every publishable crate and the extension share one version. Don't change it by hand, because the Prepare release workflow bumps it, as [CONTRIBUTING.md](CONTRIBUTING.md#releases) describes.
 
 ### Types and errors
 

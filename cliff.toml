@@ -1,0 +1,32 @@
+# git-cliff picks the next version and writes the release notes from the commits since the last release tag.
+
+[changelog]
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}
+- {{ commit.scope }}: {{ commit.message }}
+{%- endfor %}
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+filter_commits = true
+# Leaves out the vscode-v tags.
+tag_pattern = "^v[0-9]"
+# group_by puts the sections in the order of these names.
+commit_parsers = [
+  { message = '^[a-z]+\([^)]+\)!:', group = "Breaking changes" },
+  { message = '^feat\(', group = "Features" },
+  { message = '^fix\(', group = "Fixes" },
+  { message = '^perf\(', group = "Performance" },
+  { message = '^revert\(', group = "Reverts" },
+]
+
+# In 0.x, a breaking change or a feature bumps the minor version, and a fix, speedup, or revert the patch.
+[bump]
+breaking_always_bump_major = false
+features_always_bump_minor = true
