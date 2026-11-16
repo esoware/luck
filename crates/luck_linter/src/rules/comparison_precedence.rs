@@ -67,7 +67,7 @@ fn check_pair(pair: OperatorPair<'_>, findings: &mut Vec<Finding>) {
             BinOp::Eq => "consider `x ~= y`, or add parentheses to make intent explicit",
             BinOp::Ne => "consider `x == y`, or add parentheses to make intent explicit",
             BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => "add parentheses to clarify intent",
-            // Unreachable: `outer.op` is a comparison.
+            // Unreachable: the run's operators are all comparisons.
             BinOp::Add
             | BinOp::Sub
             | BinOp::Mul

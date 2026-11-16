@@ -47,3 +47,27 @@ pub fn leading_hot_comments<'comments>(
         })
         .filter(move |comment| comment.span.text(source).starts_with("--!"))
 }
+
+/// The lines a chunk printed without its comments has to open with, each
+/// ending in a line break: its shebang, then its Luau hot comments, which
+/// take effect only there.
+pub fn chunk_header<HotComments>(
+    source: &str,
+    shebang: Option<Span>,
+    hot_comments: HotComments,
+) -> String
+where
+    HotComments: IntoIterator<Item = Span>,
+{
+    let mut header = String::new();
+    if let Some(span) = shebang {
+        // A trailing CR would pair with this line break into a CRLF.
+        header.push_str(span.text(source).trim_end_matches('\r'));
+        header.push('\n');
+    }
+    for span in hot_comments {
+        header.push_str(span.text(source).trim_end());
+        header.push('\n');
+    }
+    header
+}

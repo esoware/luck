@@ -1,8 +1,11 @@
-//! The `format` section, whose enums mirror `luck_formatter`'s variant for
-//! variant. `FormatOptions` holds the default each field takes when no config
-//! sets it.
+//! The `format` section. Each field is the `luck_formatter` option of the
+//! same name, unset when the config leaves it out, and `FormatOptions` holds
+//! the default it takes then.
 
-use luck_formatter::FormatOptions;
+use luck_formatter::{
+    BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
+    IndentStyle, LineEndings, QuoteStyle, SpaceAfterFunction,
+};
 
 /// Formatter settings from luck.json.
 #[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
@@ -87,141 +90,20 @@ impl From<&FormatConfig> for FormatOptions {
         let defaults = Self::default();
         Self {
             line_width: line_width.unwrap_or(defaults.line_width),
-            indent_style: indent_style.map_or(defaults.indent_style, Into::into),
+            indent_style: indent_style.unwrap_or(defaults.indent_style),
             indent_width: indent_width.unwrap_or(defaults.indent_width),
-            quote_style: quote_style.map_or(defaults.quote_style, Into::into),
-            hexadecimal_case: hexadecimal_case.map_or(defaults.hexadecimal_case, Into::into),
-            call_parentheses: call_parentheses.map_or(defaults.call_parentheses, Into::into),
+            quote_style: quote_style.unwrap_or(defaults.quote_style),
+            hexadecimal_case: hexadecimal_case.unwrap_or(defaults.hexadecimal_case),
+            call_parentheses: call_parentheses.unwrap_or(defaults.call_parentheses),
             collapse_simple_statement: collapse_simple_statement
-                .map_or(defaults.collapse_simple_statement, Into::into),
-            line_endings: line_endings.map_or(defaults.line_endings, Into::into),
-            block_newline_gaps: block_newline_gaps.map_or(defaults.block_newline_gaps, Into::into),
+                .unwrap_or(defaults.collapse_simple_statement),
+            line_endings: line_endings.unwrap_or(defaults.line_endings),
+            block_newline_gaps: block_newline_gaps.unwrap_or(defaults.block_newline_gaps),
             sort_requires: sort_requires.unwrap_or(defaults.sort_requires),
             space_after_function_names: space_after_function_names
-                .map_or(defaults.space_after_function_names, Into::into),
+                .unwrap_or(defaults.space_after_function_names),
             magic_trailing_comma: magic_trailing_comma.unwrap_or(defaults.magic_trailing_comma),
         }
-    }
-}
-
-/// Declares the `luck.json` spelling of the `luck_formatter` enum of the same
-/// name, and its conversion into that enum.
-macro_rules! formatter_enum {
-    (
-        $(#[$attribute:meta])*
-        $name:ident { $($(#[$variant_attribute:meta])* $variant:ident,)+ }
-    ) => {
-        $(#[$attribute])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-        #[cfg_attr(test, derive(schemars::JsonSchema))]
-        #[serde(rename_all = "snake_case")]
-        pub enum $name {
-            $($(#[$variant_attribute])* $variant,)+
-        }
-
-        impl From<$name> for luck_formatter::$name {
-            fn from(value: $name) -> Self {
-                match value {
-                    $($name::$variant => Self::$variant,)+
-                }
-            }
-        }
-    };
-}
-
-formatter_enum! {
-    IndentStyle {
-        Tabs,
-        Spaces,
-    }
-}
-
-formatter_enum! {
-    QuoteStyle {
-        /// Always use double quotes.
-        Double,
-        /// Always use single quotes.
-        Single,
-        /// Use double quotes, switching to single when that needs strictly
-        /// fewer escaped quotes.
-        AutoPreferDouble,
-        /// Use single quotes, switching to double when that needs strictly
-        /// fewer escaped quotes.
-        AutoPreferSingle,
-    }
-}
-
-formatter_enum! {
-    /// Case of the hexadecimal digits `A`-`F` in numeric literals. The base
-    /// prefix (`0x`, `0b`) and exponent markers (`e`, `p`) are always lowercase,
-    /// so this setting only governs the digits.
-    HexCase {
-        /// Leave the author's digit case untouched (`0xB0` and `0xb0` both stand).
-        Preserve,
-        /// `0xB0` -> `0xb0`.
-        Lower,
-        /// `0xb0` -> `0xB0`.
-        Upper,
-    }
-}
-
-formatter_enum! {
-    /// When a call drops the parentheses around a lone string or table argument.
-    CallParentheses {
-        /// Always use parentheses: `f("hello")`, `f({1, 2})`.
-        Always,
-        /// Omit parentheses for a single string argument: `f "hello"`.
-        NoSingleString,
-        /// Omit parentheses for a single table argument: `f {1, 2}`.
-        NoSingleTable,
-        /// Omit parentheses for single string or table arguments.
-        None,
-        /// Keep the source's choice: `f"x"` stays bare and `f("x")` keeps its
-        /// parentheses.
-        Input,
-    }
-}
-
-formatter_enum! {
-    LineEndings {
-        Unix,
-        Windows,
-    }
-}
-
-formatter_enum! {
-    /// Which simple single-statement blocks collapse onto one line. Function
-    /// bodies never do.
-    CollapseSimpleStatement {
-        /// Always expand blocks.
-        Never,
-        /// Collapse simple conditionals: `if x then return y end`.
-        ConditionalOnly,
-    }
-}
-
-formatter_enum! {
-    /// Whether a block body can start or end with a blank line.
-    BlockNewlineGaps {
-        /// Strip blank lines at the start and end of every block body.
-        Never,
-        /// Keep one blank line at the start or end of a block body when the source
-        /// has any there.
-        Preserve,
-    }
-}
-
-formatter_enum! {
-    /// Where a space goes before the `(` of a function definition or call.
-    SpaceAfterFunction {
-        /// No space: `function foo()`, `foo()`.
-        Never,
-        /// Space before a definition's parameter list only: `function foo ()`.
-        Definitions,
-        /// Space between a callee and its `(` only: `foo ()`.
-        Calls,
-        /// Space in both definitions and calls.
-        Always,
     }
 }
 

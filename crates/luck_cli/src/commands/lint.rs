@@ -8,12 +8,12 @@ use luck_config::LuckConfig;
 use luck_core::{Diagnostic, LuaTarget};
 use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
 use luck_resolver::{normalize_path, read_source_file};
-use luck_token::LuaVersion;
+use luck_token::{LineIndex, LuaVersion};
 
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::read_stdin_source;
 use crate::project::{config_for_one_shot, outcomes_in_order, project_files, resolve_project};
-use crate::render::{LineIndex, render_document_diags};
+use crate::render::{line_and_column, render_document_diags};
 use crate::verbosity::Verbosity;
 
 #[derive(Clone, ValueEnum)]
@@ -423,8 +423,9 @@ impl LintArgs {
                 let line_index = LineIndex::new(source, version);
                 let mut lines = String::new();
                 for diag in diags {
-                    let (line, column) = line_index.line_and_column(diag.span.start);
-                    let (end_line, end_column) = line_index.line_and_column(diag.span.end);
+                    let (line, column) = line_and_column(&line_index, source, diag.span.start);
+                    let (end_line, end_column) =
+                        line_and_column(&line_index, source, diag.span.end);
                     let json_value = serde_json::json!({
                         "file": file_label,
                         "rule": diag.rule,
@@ -453,8 +454,9 @@ impl LintArgs {
                 let file = annotation_property(&normalize_path(&absolute));
                 let mut lines = String::new();
                 for diag in diags {
-                    let (line, column) = line_index.line_and_column(diag.span.start);
-                    let (end_line, end_column) = line_index.line_and_column(diag.span.end);
+                    let (line, column) = line_and_column(&line_index, source, diag.span.start);
+                    let (end_line, end_column) =
+                        line_and_column(&line_index, source, diag.span.end);
                     let message = diag.help.as_ref().map_or_else(
                         || diag.message.clone(),
                         |help| format!("{}\nhelp: {help}", diag.message),

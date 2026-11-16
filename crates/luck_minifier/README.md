@@ -4,7 +4,7 @@ AST-level minification for Lua and Luau.
 
 ## Overview
 
-`luck_minifier` runs a sequence of AST transforms on a parsed program and emits the result through `luck_codegen` in compact mode. Each pass takes and returns a `Block` and shares no state with the others, so passes compose and can be tested on their own. `minify` parses source, and `minify_block` takes a tree, such as the bundle `luck_bundler::bundle_block` builds, and refuses one nested past `luck_ast::MAX_NESTING_DEPTH`.
+`luck_minifier` runs a sequence of AST transforms on a parsed program and emits the result through `luck_codegen` in compact mode. Each pass takes and returns a `Block` and shares no state with the others, so passes compose and can be tested on their own. `minify` parses source, and `minify_block` takes a tree, such as the bundle `luck_bundler::bundle_minified` builds, and refuses one nested past `luck_ast::MAX_NESTING_DEPTH`.
 
 ## Key features
 

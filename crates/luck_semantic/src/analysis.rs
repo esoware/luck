@@ -108,7 +108,8 @@ impl SemanticAnalysis {
         self.shape_resolver().head_callee(call.callee, call.method)
     }
 
-    /// Resolves the calls of `chain` in one pass over it.
+    /// Resolves the calls of `chain`, asked for front to back, in one pass
+    /// over it.
     #[must_use]
     pub fn chain_callees<'chain>(
         &'chain self,

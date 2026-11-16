@@ -108,6 +108,31 @@ impl ExportPlan {
     pub(crate) fn is_table_statement(&self, span: Span) -> bool {
         self.table_statements.contains(&span.start)
     }
+
+    /// What opens the wrapper's body when an export lives in the table.
+    pub(crate) fn table_declaration(&self, prefix: &str) -> String {
+        if self.has_table() { format!("local {prefix}exports={{}}") } else { String::new() }
+    }
+
+    /// The lines that end the module with its frozen export table, when it
+    /// exports a value.
+    pub(crate) fn closing(&self, prefix: &str) -> Option<String> {
+        if !self.has_values {
+            return None;
+        }
+        if self.has_table() {
+            let copies = self
+                .local_exports
+                .iter()
+                .map(|name| format!("{prefix}exports.{name}={name}\n"))
+                .collect::<Vec<_>>()
+                .concat();
+            return Some(format!("{copies}return {prefix}freeze({prefix}exports)\n"));
+        }
+        let fields =
+            self.local_exports.iter().map(|name| format!("{name}={name}")).collect::<Vec<_>>();
+        Some(format!("return {prefix}freeze({{{}}})\n", fields.join(",")))
+    }
 }
 
 /// Whether the module exports a value, so its bundled wrapper returns the
@@ -138,25 +163,14 @@ pub(crate) fn has_value_exports(block: &Block) -> bool {
     })
 }
 
-/// The splices that lower a module's exports in its source text, and the
-/// lines around its body.
-#[derive(Debug, Default)]
-pub(crate) struct TextLowering {
-    pub edits: Vec<(Span, String)>,
-    /// Opens the wrapper when an export lives in the table.
-    pub table_declaration: Option<String>,
-    /// Ends the module with its frozen export table. `None` when it exports
-    /// no value.
-    pub closing: Option<String>,
-}
-
-pub(crate) fn lower_exports_in_text(
+/// The splices that lower a module's exports in its source text.
+pub(crate) fn export_edits(
     plan: &ExportPlan,
     block: &Block,
     source: &str,
     version: LuaVersion,
     prefix: &str,
-) -> TextLowering {
+) -> Vec<(Span, String)> {
     let lowering = TextLowerer { source, version, prefix };
     let mut edits = Vec::new();
     for stmt in &block.stmts {
@@ -198,26 +212,7 @@ pub(crate) fn lower_exports_in_text(
     edits.extend(
         plan.field_references.iter().map(|span| (*span, lowering.table_field(span.text(source)))),
     );
-    if !plan.has_values {
-        return TextLowering { edits, table_declaration: None, closing: None };
-    }
-    let (table_declaration, closing) = if plan.has_table() {
-        let copies = plan
-            .local_exports
-            .iter()
-            .map(|name| format!("{prefix}exports.{name}={name}\n"))
-            .collect::<Vec<_>>()
-            .concat();
-        (
-            Some(format!("local {prefix}exports={{}}")),
-            format!("{copies}return {prefix}freeze({prefix}exports)\n"),
-        )
-    } else {
-        let fields =
-            plan.local_exports.iter().map(|name| format!("{name}={name}")).collect::<Vec<_>>();
-        (None, format!("return {prefix}freeze({{{}}})\n", fields.join(",")))
-    };
-    TextLowering { edits, table_declaration, closing: Some(closing) }
+    edits
 }
 
 struct TextLowerer<'input> {

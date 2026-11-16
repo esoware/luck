@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use clap::Args;
-use luck_bundler::{BundleOptions, bundle, bundle_block};
+use luck_bundler::{BundleOptions, bundle, bundle_minified};
 use luck_config::{
     BuildConfig, check_output_paths, config_directory, discover_config, load_or_discover_config,
     resolve_build_config,
@@ -216,7 +216,6 @@ impl BuildArgs {
     /// Returns [`BuildFailure::Failed`] after rendering bundle diagnostics,
     /// and [`BuildFailure::Fatal`] when the output can't be written or would
     /// replace a bundled file.
-    #[expect(clippy::missing_panics_doc, reason = "the bundler refuses a tree past the cap")]
     fn build_one(
         &self,
         config: &BuildConfig,
@@ -247,21 +246,13 @@ impl BuildArgs {
         // A minified build compares its size with the sources', since it
         // never writes the bundle unminified.
         let (bundled, source_files, original_size) = if config.minify {
-            let bundled = bundle_block(&config.entry, &options).map_err(bundle_failure)?;
-            check_output(&bundled.source_files)?;
+            let minified = bundle_minified(&config.entry, &options, &config.transforms)
+                .map_err(bundle_failure)?;
+            check_output(&minified.source_files)?;
             if verbosity != Verbosity::Quiet {
-                print_diags(&bundled.warnings, version);
+                print_diags(&minified.warnings, version);
             }
-            #[expect(
-                clippy::expect_used,
-                clippy::unwrap_in_result,
-                reason = "the bundler refuses a tree past the cap"
-            )]
-            let code = luck_minifier::minify_block(bundled.block, version, &config.transforms)
-                .expect("a bundle nests within the cap");
-            let mut minified = bundled.header;
-            minified.push_str(&code);
-            (minified, bundled.source_files, Some(bundled.source_byte_count))
+            (minified.output, minified.source_files, Some(minified.source_byte_count))
         } else {
             let result = bundle(&config.entry, &options).map_err(bundle_failure)?;
             check_output(&result.source_files)?;

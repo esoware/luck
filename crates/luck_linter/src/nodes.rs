@@ -57,7 +57,7 @@ impl<'ast> Nodes<'ast> {
                 uninitialized_locals: UninitializedLocals::default(),
                 present_types: NodeTypeSet::new(),
             },
-            statement_chain: None,
+            call_statement: None,
         };
         collector.visit_block(block);
         collector.nodes.uninitialized_locals.sort();
@@ -95,9 +95,10 @@ pub(crate) fn adjacent_stmts(block: &Block) -> impl Iterator<Item = (&Statement,
 
 struct NodeCollector<'ast> {
     nodes: Nodes<'ast>,
-    /// The chain of the call statement being walked, whose last call is that
-    /// statement's node.
-    statement_chain: Option<&'ast SuffixedExpression>,
+    /// The call statement being walked, and its chain. Its node is the
+    /// chain's last call, and follows the chain's other calls, so the bus
+    /// resolves them front to back.
+    call_statement: Option<(&'ast Statement, &'ast SuffixedExpression)>,
 }
 
 impl<'ast> NodeCollector<'ast> {
@@ -114,11 +115,12 @@ impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
-        self.push_node(NodeKind::Statement(stmt), NodeType::of_stmt(stmt));
-        self.nodes.uninitialized_locals.record(stmt);
         if let Statement::FunctionCall(chain) = stmt {
-            self.statement_chain = Some(chain);
+            self.call_statement = Some((stmt, chain));
+        } else {
+            self.push_node(NodeKind::Statement(stmt), NodeType::of_stmt(stmt));
         }
+        self.nodes.uninitialized_locals.record(stmt);
         self.walk_stmt(stmt);
     }
 
@@ -131,8 +133,11 @@ impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
 
     fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression) {
         self.push_node(NodeKind::Chain(chain, ChainPosition::Value), NodeType::Suffixed);
-        let is_statement = self.statement_chain.is_some_and(|statement| ptr::eq(statement, chain));
-        let expression_suffixes = if is_statement {
+        let statement = self
+            .call_statement
+            .filter(|(_, statement_chain)| ptr::eq(*statement_chain, chain))
+            .map(|(stmt, _)| stmt);
+        let expression_suffixes = if statement.is_some() {
             chain.suffixes.len().saturating_sub(1)
         } else {
             chain.suffixes.len()
@@ -141,6 +146,9 @@ impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
             if matches!(suffix, Suffix::Call(_)) {
                 self.push_node(NodeKind::Call { chain, index }, NodeType::FunctionCallExpr);
             }
+        }
+        if let Some(stmt) = statement {
+            self.push_node(NodeKind::Statement(stmt), NodeType::FunctionCallStmt);
         }
         self.walk_suffixed(chain);
     }
@@ -194,8 +202,8 @@ print(a)",
                 NodeType::BinaryOp,
                 NodeType::Number,
                 NodeType::Number,
-                NodeType::FunctionCallStmt,
                 NodeType::Suffixed,
+                NodeType::FunctionCallStmt,
                 NodeType::Name,
                 NodeType::Name,
             ]

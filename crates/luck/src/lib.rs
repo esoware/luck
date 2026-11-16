@@ -16,7 +16,7 @@
 //! - `resolver` - Module resolution, source loading, path form (feature
 //!   `resolver`)
 //! - `bundler` - Dependency graph and lazy-loader bundling (feature `bundler`,
-//!   enables `resolver`)
+//!   enables `resolver` and `minifier`)
 //! - `minifier` - AST transform pipeline (feature `minifier`)
 //! - `formatter` - Prettier-style formatter (feature `formatter`)
 //! - `semantic` - Scope tree + stdlib model (feature `semantic`)

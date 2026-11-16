@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_bundler::{BundleOptions, DynamicRequire, LineMapEntry, bundle, bundle_block};
+use luck_bundler::{BundleOptions, DynamicRequire, LineMapEntry, bundle, bundle_minified};
 use luck_config::check_output_paths;
 use luck_core::LuaTarget;
 
@@ -59,13 +59,12 @@ impl BundleArgs {
     /// Returns [`Exit::Usage`] on a bad config, a bad entry path, or an output
     /// that would replace a bundled file or another output, and
     /// [`Exit::Failure`] when bundling or writing fails.
-    #[expect(clippy::missing_panics_doc, reason = "the bundler refuses a tree past the cap")]
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let config = config_for_one_shot(self.config.as_deref(), &self.entry)?;
         let target = resolve_configured_target(&config, self.target, &self.entry)?;
         let version = target.lua_version();
         let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require);
-        let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default().into());
+        let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default());
 
         let (entry_path, project_root) = entry_and_root(&self.entry)?;
         let options = BundleOptions {
@@ -76,22 +75,13 @@ impl BundleArgs {
         };
 
         if self.minify {
-            let tree = bundle_block(entry_path, &options)
+            let minified = bundle_minified(entry_path, &options, &transforms)
                 .map_err(|errors| fail_with_diags(&errors, version))?;
-            check_output_paths(&tree.source_files, self.output.iter()).map_err(usage_error)?;
+            check_output_paths(&minified.source_files, self.output.iter()).map_err(usage_error)?;
             if verbosity != Verbosity::Quiet {
-                print_diags(&tree.warnings, version);
+                print_diags(&minified.warnings, version);
             }
-            #[expect(
-                clippy::expect_used,
-                clippy::unwrap_in_result,
-                reason = "the bundler refuses a tree past the cap"
-            )]
-            let code = luck_minifier::minify_block(tree.block, version, &transforms)
-                .expect("a bundle nests within the cap");
-            let mut minified = tree.header;
-            minified.push_str(&code);
-            return write_output(self.output.as_deref(), &minified);
+            return write_output(self.output.as_deref(), &minified.output);
         }
 
         let result =

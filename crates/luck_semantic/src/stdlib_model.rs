@@ -140,12 +140,14 @@ impl<V: 'static> IntoIterator for &StdlibMap<V> {
     }
 }
 
+/// Each variant holds a reference, so an entry is two words, and a table of
+/// them stays dense for the lookups that scan it.
 #[derive(Debug, Clone, Copy)]
 pub enum StdlibEntry {
     Function(&'static StdlibFunction),
-    Constant(StdlibValue),
-    Property(StdlibValue),
-    Namespace(StdlibNamespace),
+    Constant(&'static StdlibValue),
+    Property(&'static StdlibValue),
+    Namespace(&'static StdlibNamespace),
 }
 
 impl StdlibEntry {
@@ -180,7 +182,6 @@ impl StdlibEntry {
     }
 }
 
-/// Behind a reference in `StdlibEntry` to keep the enum small.
 #[derive(Debug, Clone, Copy)]
 #[expect(
     clippy::struct_excessive_bools,

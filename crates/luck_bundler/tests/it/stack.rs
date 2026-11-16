@@ -1,8 +1,8 @@
 //! Bundling fits the smallest stack.
 //!
-//! The bundler parses, analyzes, rewrites, and prints every module, and the
-//! minifier takes the tree it builds, so a module nested to the parser's cap,
-//! or holding long runs and lists, gets through all of that.
+//! The bundler parses, analyzes, rewrites, prints, and minifies every module,
+//! so a module nested to the parser's cap, or holding long runs and lists,
+//! gets through all of that.
 
 #![expect(
     clippy::missing_panics_doc,
@@ -11,8 +11,7 @@
 
 use std::fs;
 
-use luck_bundler::{BundleOptions, DynamicRequire, bundle_block};
-use luck_minifier::TransformConfig;
+use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_testgen::{deep_and_long_sources, on_the_smallest_stack};
 use tempfile::TempDir;
 
@@ -43,16 +42,9 @@ print(m)
             project_root: directory.path(),
             dynamic_require: DynamicRequire::default(),
         };
-        match bundle_both(&entry, &options) {
-            Ok(_) => {
-                let tree = bundle_block(&entry, &options).expect("the tree bundles too");
-                luck_minifier::minify_block(tree.block, version, &TransformConfig::default())
-                    .expect("the tree minifies");
-            }
-            // A module nested to the cap passes it inside its wrapper.
-            Err(errors) => {
-                assert!(errors.iter().all(|error| error.code == "E013"), "{errors:?}");
-            }
+        // A module nested to the cap passes it inside its wrapper.
+        if let Err(errors) = bundle_both(&entry, &options) {
+            assert!(errors.iter().all(|error| error.code == "E013"), "{errors:?}");
         }
     });
 }

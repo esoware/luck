@@ -49,7 +49,7 @@ fn dispatch(
 
 /// The call `node` makes, if it's a call node. `callees` holds the chain
 /// of the call before it, so the calls of a chain, which follow each other in
-/// the table, resolve in one pass over it.
+/// the table front to back, resolve in one pass over it.
 fn call_site<'ast>(
     node: &AstNode<'ast>,
     callees: &mut Option<ChainCallees<'ast>>,

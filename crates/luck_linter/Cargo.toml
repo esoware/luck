@@ -11,6 +11,12 @@ license.workspace      = true
 repository.workspace   = true
 rust-version.workspace = true
 
+[features]
+# Derive `Deserialize` and `Serialize` for `LintConfig`, the shape `luck.json` gives it.
+serde = ["dep:serde"]
+# Derive `JsonSchema` too, for the schema `luck_config` generates.
+schemars = ["dep:schemars", "serde"]
+
 [lints]
 workspace = true
 
@@ -23,10 +29,8 @@ luck_token    = { workspace = true }
 
 rayon      = { workspace = true }
 rustc-hash = { workspace = true }
-serde      = { workspace = true }
-
-# Derives `JsonSchema` for `LintConfig`. Only luck_config's schema tests turn it on.
-schemars = { workspace = true, optional = true }
+schemars   = { workspace = true, optional = true }
+serde      = { workspace = true, optional = true }
 
 [dev-dependencies]
 luck_testgen = { workspace = true }

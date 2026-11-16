@@ -8,8 +8,7 @@ use crate::luau::ModuleProbes;
 use crate::luaurc::AliasCache;
 use crate::{lua, luau};
 
-/// Lua 5.x search path templates used when `search_paths` is unset or empty.
-pub const DEFAULT_SEARCH_PATHS: &[&str] = &["?.lua", "?/init.lua"];
+const DEFAULT_SEARCH_PATHS: &[&str] = &["?.lua", "?/init.lua"];
 
 #[derive(Debug)]
 pub struct ResolvedModule {
@@ -42,9 +41,9 @@ enum Scheme<'config> {
 }
 
 impl<'config> Resolver<'config> {
-    /// Lua 5.x tries each of `search_paths`, or [`DEFAULT_SEARCH_PATHS`] when
-    /// it's empty, against `project_root`. Luau ignores both and resolves from
-    /// the requiring file.
+    /// Lua 5.x tries each of `search_paths`, or `?.lua` and `?/init.lua`
+    /// when it's empty, against `project_root`. Luau ignores both and
+    /// resolves from the requiring file.
     #[must_use]
     pub fn new(
         version: LuaVersion,

@@ -7,7 +7,8 @@
 //! [`SourceError`], the literal semantics every crate shares
 //! ([`parse_lua_number`], [`decode_string`], [`encode_string`],
 //! [`short_string_body`]), the definition of a line break ([`line_breaks`],
-//! [`has_line_break`]), and the [`CodeBuffer`] output builder.
+//! [`has_line_break`]) and the [`LineIndex`] over it, and the [`CodeBuffer`]
+//! output builder.
 //!
 //! This crate has zero internal dependencies, and every other luck crate
 //! depends on it.
@@ -37,7 +38,7 @@ mod whitespace;
 pub use compact_str::CompactString;
 
 pub use code_buffer::CodeBuffer;
-pub use comment::{Comment, CommentKind, CommentPosition, leading_hot_comments};
+pub use comment::{Comment, CommentKind, CommentPosition, chunk_header, leading_hot_comments};
 pub use number::{LuaNumber, NumberSubtypes, parse_lua_number};
 pub use op::{Associativity, BinOp, CompoundOp, OperandSide, UnOp};
 pub use source_error::SourceError;
@@ -46,6 +47,6 @@ pub use string::{decode_string, encode_string, short_string_body, unicode_escape
 pub use token::{Token, TokenKind};
 pub use version::{LuaVersion, MAX_ACTIVE_LOCALS, StdlibEnvironment};
 pub use whitespace::{
-    chunk_start, ends_with_line_break, has_line_break, has_shebang, is_lua_whitespace, line_breaks,
-    strip_line_break,
+    LineIndex, chunk_start, ends_with_line_break, has_line_break, has_shebang, is_lua_whitespace,
+    line_breaks, strip_line_break,
 };

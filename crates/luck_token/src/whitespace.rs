@@ -7,7 +7,7 @@
 use core::iter;
 use core::ops::Range;
 
-use crate::LuaVersion;
+use crate::{LuaVersion, index_to_offset, offset_to_index};
 
 /// Whether `byte` is whitespace to the lexer: Lua's `isspace` in the C locale,
 /// which Luau's `isSpace` matches.
@@ -64,6 +64,42 @@ pub fn ends_with_line_break(text: &str, version: LuaVersion) -> bool {
 #[must_use]
 pub fn chunk_start(source: &str, version: LuaVersion) -> usize {
     if version.has_bom_skip() && source.starts_with('\u{FEFF}') { '\u{FEFF}'.len_utf8() } else { 0 }
+}
+
+/// Where each line of a source starts, with lines broken as `version` breaks
+/// them and the first one starting past a BOM its loader skips.
+#[derive(Debug, Clone)]
+pub struct LineIndex {
+    line_starts: Vec<u32>,
+}
+
+impl LineIndex {
+    #[must_use]
+    pub fn new(source: &str, version: LuaVersion) -> Self {
+        let first_line_start = index_to_offset(chunk_start(source, version));
+        let line_starts = iter::once(first_line_start)
+            .chain(line_breaks(source, version).map(|line_break| index_to_offset(line_break.end)))
+            .collect();
+        Self { line_starts }
+    }
+
+    /// The one-based line `offset` is on.
+    #[must_use]
+    pub fn line(&self, offset: u32) -> u32 {
+        index_to_offset(self.line_starts.partition_point(|&start| start <= offset)).max(1)
+    }
+
+    /// The one-based line and byte column of `offset`.
+    #[must_use]
+    pub fn line_column(&self, offset: u32) -> (u32, u32) {
+        let line = self.line(offset);
+        let line_start = self
+            .line_starts
+            .get(offset_to_index(line.saturating_sub(1)))
+            .copied()
+            .unwrap_or_default();
+        (line, offset.saturating_sub(line_start).saturating_add(1))
+    }
 }
 
 /// Whether `chunk`, the source from [`chunk_start`] on, opens with a first line

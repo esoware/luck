@@ -2,10 +2,10 @@ use std::sync::OnceLock;
 
 use luck_ast::{Block, Call, Expression, Statement, SuffixedExpression, TableConstructor};
 use luck_semantic::{ResolvedCallee, SemanticAnalysis};
-use luck_token::Comment;
+use luck_token::{Comment, LineIndex};
 
 use crate::config::LintConfig;
-use crate::diagnostic::{Category, Finding, LineIndex, Severity};
+use crate::diagnostic::{Category, Finding, Severity};
 use crate::local_flow::LocalFlow;
 use crate::node_type::NodeTypeSet;
 use crate::uninitialized::UninitializedLocals;

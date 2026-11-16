@@ -1,5 +1,7 @@
 use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
-use luck_token::{CommentKind, LuaVersion, SourceError, leading_hot_comments};
+use luck_token::{
+    Comment, CommentKind, LuaVersion, SourceError, chunk_header, leading_hot_comments,
+};
 
 use crate::transform_config::TransformConfig;
 use crate::transforms;
@@ -26,23 +28,17 @@ pub fn minify(
     if !result.errors.is_empty() {
         return Err(result.errors);
     }
-    // A shebang and Luau hot comments (--!strict, --!native, --!optimize N,
-    // ...) only take effect before any code, so they go back on top of the
-    // output.
-    let mut output = String::new();
-    if let Some(shebang) =
-        result.comments.first().filter(|comment| comment.kind == CommentKind::Shebang)
-    {
-        // A trailing CR would pair with this line break into a CRLF.
-        output.push_str(shebang.span.text(source).trim_end_matches('\r'));
-        output.push('\n');
-    }
-    if version.is_luau() {
-        for comment in leading_hot_comments(&result.comments, source) {
-            output.push_str(comment.span.text(source).trim_end());
-            output.push('\n');
-        }
-    }
+    let shebang = result
+        .comments
+        .first()
+        .filter(|comment| comment.kind == CommentKind::Shebang)
+        .map(|comment| comment.span);
+    let hot_comments: &[Comment] = if version.is_luau() { &result.comments } else { &[] };
+    let mut output = chunk_header(
+        source,
+        shebang,
+        leading_hot_comments(hot_comments, source).map(|comment| comment.span),
+    );
     let code = minify_tree(result.block, version, config);
     if output.is_empty() {
         return Ok(code);

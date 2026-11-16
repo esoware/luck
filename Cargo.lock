@@ -850,7 +850,6 @@ version = "0.5.0"
 dependencies = [
  "insta",
  "luck_ast",
- "luck_codegen",
  "luck_core",
  "luck_lexer",
  "luck_minifier",
@@ -861,6 +860,8 @@ dependencies = [
  "luck_token",
  "petgraph",
  "rustc-hash",
+ "schemars",
+ "serde",
  "tempfile",
 ]
 
@@ -915,7 +916,6 @@ dependencies = [
  "luck_formatter",
  "luck_linter",
  "luck_minifier",
- "luck_resolver",
  "rustc-hash",
  "schemars",
  "serde",
@@ -941,6 +941,8 @@ dependencies = [
  "luck_testgen",
  "luck_token",
  "rustc-hash",
+ "schemars",
+ "serde",
  "unicode-width",
 ]
 
@@ -1022,6 +1024,8 @@ dependencies = [
  "luck_token",
  "rustc-hash",
  "ryu",
+ "schemars",
+ "serde",
 ]
 
 [[package]]

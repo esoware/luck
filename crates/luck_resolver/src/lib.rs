@@ -58,5 +58,5 @@ mod resolver;
 mod source_io;
 
 pub use path::{native_path, normalize_path};
-pub use resolver::{DEFAULT_SEARCH_PATHS, ResolveRequest, ResolvedModule, Resolver};
+pub use resolver::{ResolveRequest, ResolvedModule, Resolver};
 pub use source_io::read_source_file;

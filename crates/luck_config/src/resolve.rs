@@ -37,14 +37,12 @@ pub fn resolve_build_config(
     let profile_overrides = select_profile(config, profile)?;
     let minify =
         profile_overrides.and_then(|overrides| overrides.minify).or(config.minify).unwrap_or(false);
-    let transforms: TransformConfig = profile_overrides
+    let transforms = profile_overrides
         .and_then(|overrides| overrides.transforms)
         .or(config.transforms)
-        .unwrap_or_default()
-        .into();
-    let dynamic_require: DynamicRequire =
-        config.dynamic_require.map(Into::into).unwrap_or_default();
-    let search_paths = config.search_paths_or_default();
+        .unwrap_or_default();
+    let dynamic_require = config.dynamic_require.unwrap_or_default();
+    let search_paths = config.search_paths.clone().unwrap_or_default();
     let luck_preamble = config.luck_preamble.unwrap_or(false);
 
     let build_config = |target, entry, output| BuildConfig {

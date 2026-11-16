@@ -1,7 +1,7 @@
 use LuaVersion::{Lua51, Lua54, Luau};
 use luck_token::{
-    LuaVersion, chunk_start, ends_with_line_break, has_line_break, is_lua_whitespace, line_breaks,
-    strip_line_break,
+    LineIndex, LuaVersion, chunk_start, ends_with_line_break, has_line_break, is_lua_whitespace,
+    line_breaks, strip_line_break,
 };
 
 #[test]
@@ -64,4 +64,34 @@ fn chunk_start_skips_a_bom_only_where_the_loader_does() {
     assert_eq!(chunk_start("return", Lua54), 0);
     assert_eq!(chunk_start("\u{FEFF}return", Lua51), 0);
     assert_eq!(chunk_start("\u{FEFF}return", Luau), 0);
+}
+
+#[test]
+fn line_index_counts_lines_and_byte_columns_from_one() {
+    let source = "\
+local x
+do local y
+end";
+    let lines = LineIndex::new(source, Lua54);
+    assert_eq!(lines.line_column(0), (1, 1));
+    assert_eq!(lines.line_column(6), (1, 7));
+    // The `d` of `do`.
+    assert_eq!(lines.line_column(8), (2, 1));
+    assert_eq!(lines.line_column(17), (2, 10));
+    assert_eq!(lines.line(17), 2);
+}
+
+#[test]
+fn line_index_breaks_lines_as_the_version_does() {
+    assert_eq!(LineIndex::new("a\rb", Lua54).line(2), 2);
+    assert_eq!(LineIndex::new("a\rb", Luau).line(2), 1);
+}
+
+#[test]
+fn line_index_starts_the_first_line_past_a_skipped_bom() {
+    let source = "\u{feff}local x
+y";
+    assert_eq!(LineIndex::new(source, Lua54).line_column(3), (1, 1));
+    assert_eq!(LineIndex::new(source, Lua54).line_column(11), (2, 1));
+    assert_eq!(LineIndex::new(source, Lua51).line_column(3), (1, 4));
 }

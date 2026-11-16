@@ -211,19 +211,22 @@ impl Classifier<'_> {
     fn classify_members(&mut self) {
         let Self { document, tokens, raw_tokens } = self;
         let library = document.semantic.stdlib();
-        let mut links: Vec<Option<ChainLink>> = Vec::with_capacity(tokens.len());
+        // A name's path continues the one two tokens back, past the separator.
+        let (mut link_two_back, mut link_one_back): (Option<ChainLink>, Option<ChainLink>) =
+            (None, None);
         for (index, token) in tokens.iter().enumerate() {
+            let link_before = link_two_back;
+            link_two_back = link_one_back;
             let TokenKind::Identifier(name) = &token.kind else {
-                links.push(None);
+                link_one_back = None;
                 continue;
             };
             let separator = index.checked_sub(1).and_then(|before| tokens.get(before));
             let is_after_dot = separator.is_some_and(|before| before.kind == TokenKind::Dot);
             let is_member =
                 is_after_dot || separator.is_some_and(|before| before.kind == TokenKind::Colon);
-            let chain_before = index
-                .checked_sub(2)
-                .and_then(|before| Some((tokens.get(before)?, (*links.get(before)?)?)));
+            let chain_before =
+                link_before.and_then(|link| Some((tokens.get(index.checked_sub(2)?)?, link)));
             let entry = chain_before.and_then(|(before, link)| match link {
                 ChainLink::Root => {
                     let root = before.identifier()?;
@@ -231,11 +234,11 @@ impl Classifier<'_> {
                 }
                 ChainLink::Member(entry) => library.child(entry?, name),
             });
-            links.push(if is_after_dot {
+            link_one_back = if is_after_dot {
                 chain_before.map(|_| ChainLink::Member(entry))
             } else {
                 Some(ChainLink::Root)
-            });
+            };
             if !is_member {
                 continue;
             }

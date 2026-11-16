@@ -25,7 +25,7 @@ luck_bundler   = { workspace = true }
 luck_config    = { workspace = true }
 luck_core      = { workspace = true }
 luck_formatter = { workspace = true }
-luck_linter    = { workspace = true }
+luck_linter    = { workspace = true, features = ["serde"] }
 luck_lsp       = { workspace = true }
 luck_minifier  = { workspace = true }
 luck_parser    = { workspace = true }

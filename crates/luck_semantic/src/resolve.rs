@@ -254,14 +254,12 @@ impl ResolvedCallee<'_> {
     }
 }
 
-/// Resolves the calls of one chain, carrying what each suffix reads on to
-/// the next, so its calls resolve in one pass over it when asked for in
-/// order.
+/// Resolves the calls of one chain front to back, carrying what each suffix
+/// reads on to the next, so its calls resolve in one pass over it.
 #[derive(Debug, Clone, Copy)]
 pub struct ChainCallees<'chain> {
     resolver: ShapeResolver<'chain>,
     chain: &'chain SuffixedExpression,
-    prefix_state: HeadState,
     /// What the head of the first `read_count` suffixes reads.
     state: HeadState,
     read_count: usize,
@@ -269,8 +267,8 @@ pub struct ChainCallees<'chain> {
 
 impl<'chain> ChainCallees<'chain> {
     pub(crate) fn new(resolver: ShapeResolver<'chain>, chain: &'chain SuffixedExpression) -> Self {
-        let prefix_state = resolver.prefix_state(&chain.prefix);
-        Self { resolver, chain, prefix_state, state: prefix_state, read_count: 0 }
+        let state = resolver.prefix_state(&chain.prefix);
+        Self { resolver, chain, state, read_count: 0 }
     }
 
     #[must_use]
@@ -282,17 +280,13 @@ impl<'chain> ChainCallees<'chain> {
     /// [`SemanticAnalysis::resolve_callee`](crate::SemanticAnalysis::resolve_callee)
     /// gives it. `None` for a suffix that's no call.
     ///
-    /// A call is read on from the one asked for before it, so one earlier in
-    /// the chain starts over from the prefix.
+    /// A call is read on from the one asked for before it, so `index` is
+    /// never below an earlier one.
     pub fn callee(&mut self, index: usize) -> Option<ResolvedCallee<'chain>> {
         let suffixes: &'chain [Suffix] = &self.chain.suffixes;
         let Suffix::Call(call) = suffixes.get(index)? else {
             return None;
         };
-        if index < self.read_count {
-            self.state = self.prefix_state;
-            self.read_count = 0;
-        }
         let unread = suffixes.get(self.read_count..index).unwrap_or_default();
         self.state = self.resolver.read(self.state, unread);
         self.read_count = index;
@@ -310,7 +304,7 @@ mod tests {
 
     use super::*;
     use crate::builder;
-    use crate::stdlib_catalog::{FUNCTION, NAMESPACE, VALUE, optional, required, signature};
+    use crate::stdlib_catalog::{FUNCTION, VALUE, optional, required, signature};
     use crate::stdlib_model::{
         StdlibArgKind, StdlibFunction, StdlibNamespace, StdlibShape, StdlibValue, stdlib_map,
     };
@@ -321,10 +315,10 @@ mod tests {
         globals: stdlib_map!(
             StdlibEntry,
             [
-                ("game", StdlibEntry::Property(StdlibValue { shape: Some("DataModel"), ..VALUE })),
+                ("game", StdlibEntry::Property(&StdlibValue { shape: Some("DataModel"), ..VALUE })),
                 (
                     "io",
-                    StdlibEntry::Namespace(StdlibNamespace {
+                    StdlibEntry::Namespace(&StdlibNamespace {
                         members: stdlib_map!(
                             StdlibEntry,
                             [(
@@ -343,12 +337,13 @@ mod tests {
                                 }),
                             )]
                         ),
-                        ..NAMESPACE
+                        shape: None,
+                        deprecated: None,
                     }),
                 ),
                 (
                     "string",
-                    StdlibEntry::Namespace(StdlibNamespace {
+                    StdlibEntry::Namespace(&StdlibNamespace {
                         members: stdlib_map!(
                             StdlibEntry,
                             [(
@@ -364,7 +359,8 @@ mod tests {
                                 }),
                             )]
                         ),
-                        ..NAMESPACE
+                        shape: None,
+                        deprecated: None,
                     }),
                 ),
             ]

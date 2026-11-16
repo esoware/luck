@@ -40,12 +40,16 @@ impl Default for FormatOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum IndentStyle {
     Tabs,
     Spaces,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum QuoteStyle {
     /// Always use double quotes.
     Double,
@@ -60,8 +64,11 @@ pub enum QuoteStyle {
 }
 
 /// Case of the hexadecimal digits `A`-`F` in numeric literals. The base
-/// prefix (`0x`, `0b`) and exponent markers (`e`, `p`) are always lowercase.
+/// prefix (`0x`, `0b`) and exponent markers (`e`, `p`) are always lowercase,
+/// so this setting only governs the digits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum HexCase {
     /// Leave the author's digit case untouched (`0xB0` and `0xb0` both stand).
     Preserve,
@@ -73,6 +80,8 @@ pub enum HexCase {
 
 /// When a call drops the parentheses around a lone string or table argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum CallParentheses {
     /// Always use parentheses: `f("hello")`, `f({1, 2})`.
     Always,
@@ -88,6 +97,8 @@ pub enum CallParentheses {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum LineEndings {
     Unix,
     Windows,
@@ -96,6 +107,8 @@ pub enum LineEndings {
 /// Which simple single-statement blocks collapse onto one line. Function
 /// bodies never do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum CollapseSimpleStatement {
     /// Always expand blocks.
     Never,
@@ -105,6 +118,8 @@ pub enum CollapseSimpleStatement {
 
 /// Whether a block body can start or end with a blank line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum BlockNewlineGaps {
     /// Strip blank lines at the start and end of every block body.
     Never,
@@ -115,6 +130,8 @@ pub enum BlockNewlineGaps {
 
 /// Where a space goes before the `(` of a function definition or call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum SpaceAfterFunction {
     /// No space: `function foo()`, `foo()`.
     Never,

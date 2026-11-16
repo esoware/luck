@@ -1,10 +1,12 @@
 //! # `luck_config`
 //!
 //! Reads `luck.json` and `.editorconfig` into the options each luck tool
-//! takes. The tools own plain option types and know nothing of config files.
-//! This crate holds the `luck.json` shape of each one, with the same name, and
-//! converts it into the tool's type with `From`. The `lint` section is the
-//! linter's own [`LintConfig`], since rule names are its keys.
+//! takes. Each tool derives the `luck.json` shape of its own option types
+//! behind its `serde` feature, which this crate turns on, so `transforms`,
+//! `dynamic_require`, and `lint` deserialize straight into them. The
+//! `format` section is [`FormatConfig`], which leaves each formatter option
+//! unset unless the config sets it, so it layers over `.editorconfig`, and
+//! converts into `luck_formatter::FormatOptions` with `From`.
 //!
 //! Every config struct denies unknown fields. The one open map is
 //! `RuleSettings`, whose other keys are rule names for the linter to check.
@@ -22,8 +24,6 @@
 //! let options = FormatOptions::from(&config.format.unwrap_or_default());
 //! assert_eq!(options.line_width, 80);
 //! ```
-//!
-//! [`LintConfig`]: luck_linter::LintConfig
 
 #![cfg_attr(
     test,
@@ -34,26 +34,19 @@
 )]
 
 mod config;
-mod dynamic_require;
 mod editorconfig;
 mod filter;
 mod format_config;
 mod load;
 mod path;
 mod resolve;
-mod transform_config;
 
 pub use config::{DialectKey, EntryConfig, LuckConfig, ProfileOverrides};
-pub use dynamic_require::DynamicRequire;
 pub use editorconfig::resolved_format_config;
 pub use filter::{ProjectFilter, glob_set};
-pub use format_config::{
-    BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatConfig, HexCase, IndentStyle,
-    LineEndings, QuoteStyle, SpaceAfterFunction,
-};
+pub use format_config::FormatConfig;
 pub use load::{
     CONFIG_FILE_NAME, ProjectConfig, config_directory, discover_config, load_or_discover_config,
     load_with_extends, parse_luck_config,
 };
 pub use resolve::{BuildConfig, check_output_paths, resolve_build_config};
-pub use transform_config::TransformConfig;

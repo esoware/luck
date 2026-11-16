@@ -1,8 +1,7 @@
 use luck_ast::{Block, Statement};
-use luck_token::{Span, Token};
-use rustc_hash::FxHashMap;
+use luck_token::{LineIndex, MAX_ACTIVE_LOCALS, Span, Token};
 
-use crate::diagnostic::{Finding, LineIndex};
+use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags a local declared again in the same block (Luacheck 411), which
@@ -26,7 +25,7 @@ impl WholeRule for RedefiningLocal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut checker = RedefineChecker {
             lines: context.line_index(),
-            declarations: FxHashMap::default(),
+            declarations: Vec::new(),
             findings: Vec::new(),
         };
         for block in context.blocks {
@@ -38,14 +37,16 @@ impl WholeRule for RedefiningLocal {
 
 struct RedefineChecker<'ast> {
     lines: &'ast LineIndex,
-    /// The first declaration of each name in the block.
-    declarations: FxHashMap<&'ast str, Span>,
+    /// Each name the block declares, in order. Every one stays active until
+    /// the block ends, so no Lua compiles a block with more than
+    /// [`MAX_ACTIVE_LOCALS`], and the rest of one isn't checked.
+    declarations: Vec<(&'ast str, Span)>,
     findings: Vec<Finding>,
 }
 
 impl<'ast> RedefineChecker<'ast> {
     fn check_block(&mut self, block: &'ast Block) {
-        self.declarations = FxHashMap::default();
+        self.declarations.clear();
         for stmt in &block.stmts {
             match stmt {
                 Statement::LocalAssignment(local) => {
@@ -81,22 +82,26 @@ impl<'ast> RedefineChecker<'ast> {
         let Some(name) = name_token.identifier() else {
             return;
         };
+        if self.declarations.len() > MAX_ACTIVE_LOCALS {
+            return;
+        }
         // A leading `_` marks a name as deliberately unused.
         if name.starts_with('_') {
             return;
         }
-        let Some(first_span) = self.declarations.get(name) else {
-            self.declarations.insert(name, name_token.span);
-            return;
-        };
-        let (line, column) = self.lines.line_column(first_span.start);
-        self.findings.push(
-            Finding::new(
-                format!("local `{name}` is redeclared in the same block"),
-                name_token.span,
-            )
-            .with_help(format!("first declared at {line}:{column}")),
-        );
+        if let Some((_, first_span)) =
+            self.declarations.iter().find(|(declared_name, _)| *declared_name == name)
+        {
+            let (line, column) = self.lines.line_column(first_span.start);
+            self.findings.push(
+                Finding::new(
+                    format!("local `{name}` is redeclared in the same block"),
+                    name_token.span,
+                )
+                .with_help(format!("first declared at {line}:{column}")),
+            );
+        }
+        self.declarations.push((name, name_token.span));
     }
 }
 
@@ -166,18 +171,28 @@ local _ = 2");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
-    #[test]
-    fn flags_each_redeclaration_in_a_long_block() {
+    fn locals_declared_twice(count: u32) -> String {
         let mut locals = String::new();
-        for i in 0..2_000u32 {
+        for i in 0..count {
             let _unused = writeln!(locals, "local x{i} = 1");
         }
-        let diags = run(&format!("{locals}{locals}"));
-        assert_eq!(diags.len(), 2_000, "{diags:?}");
+        format!("{locals}{locals}")
+    }
+
+    #[test]
+    fn flags_each_redeclaration_in_a_block_at_the_local_limit() {
+        let diags = run(&locals_declared_twice(100));
+        assert_eq!(diags.len(), 100, "{diags:?}");
         assert!(
             diags[0].help.as_deref().is_some_and(|help| help.ends_with("1:7")),
             "{:?}",
             diags[0]
         );
+    }
+
+    #[test]
+    fn ignores_the_rest_of_a_block_past_the_local_limit() {
+        let diags = run(&locals_declared_twice(201));
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

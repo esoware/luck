@@ -3,17 +3,14 @@
 use core::hash::Hash;
 use std::path::Path;
 
+use luck_bundler::DynamicRequire;
 use luck_core::LuaTarget;
-use luck_linter::{
-    CategoryLevels, LintConfig, RestrictedModulePathsOptions, RuleSetting, RuleSettings,
-};
-use luck_resolver::DEFAULT_SEARCH_PATHS;
+use luck_linter::LintConfig;
+use luck_minifier::TransformConfig;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::dynamic_require::DynamicRequire;
 use crate::filter::ProjectFilter;
 use crate::format_config::FormatConfig;
-use crate::transform_config::TransformConfig;
 
 /// One of the two `luck.json` keys that name a dialect by file extension.
 ///
@@ -130,14 +127,6 @@ impl LuckConfig {
         ProjectFilter::new(root, self.include.as_deref(), self.exclude.as_deref())
     }
 
-    /// An empty list reaches the resolver, which treats it as the defaults too.
-    #[must_use]
-    pub fn search_paths_or_default(&self) -> Vec<String> {
-        self.search_paths
-            .clone()
-            .unwrap_or_else(|| DEFAULT_SEARCH_PATHS.iter().map(ToString::to_string).collect())
-    }
-
     /// `include`, `exclude`, and `search_paths` concatenate base-first without
     /// repeats, `format` and `lint` merge field by field, and `extends` is
     /// cleared.
@@ -164,7 +153,7 @@ impl LuckConfig {
             preamble: self.preamble.or(base.preamble),
             luck_preamble: self.luck_preamble.or(base.luck_preamble),
             format: merge_with(self.format, base.format, FormatConfig::merge_onto),
-            lint: merge_with(self.lint, base.lint, merge_lint),
+            lint: merge_with(self.lint, base.lint, LintConfig::merge_onto),
         }
     }
 }
@@ -176,56 +165,6 @@ where
     match (child, base) {
         (Some(child_value), Some(base_value)) => Some(merge(child_value, base_value)),
         (child_value, base_value) => child_value.or(base_value),
-    }
-}
-
-/// A category or rule the child sets replaces the base's level for it.
-///
-/// A bare level keeps the base's options, as `-D` does, and options from both
-/// sides merge: `paths` concatenate like `extra_globals`, base-first without
-/// repeats, and the child's `max` wins.
-fn merge_lint(child: LintConfig, base: LintConfig) -> LintConfig {
-    let categories = CategoryLevels {
-        correctness: child.categories.correctness.or(base.categories.correctness),
-        suspicious: child.categories.suspicious.or(base.categories.suspicious),
-        style: child.categories.style.or(base.categories.style),
-        performance: child.categories.performance.or(base.categories.performance),
-    };
-    let mut levels = base.rules.levels;
-    levels.extend(child.rules.levels);
-    let rules = RuleSettings {
-        cyclomatic_complexity: merge_rule_setting(
-            child.rules.cyclomatic_complexity,
-            base.rules.cyclomatic_complexity,
-            |options, _| options,
-        ),
-        restricted_module_paths: merge_rule_setting(
-            child.rules.restricted_module_paths,
-            base.rules.restricted_module_paths,
-            |options, base_options| RestrictedModulePathsOptions {
-                paths: concat(options.paths, base_options.paths),
-            },
-        ),
-        levels,
-    };
-    LintConfig { categories, rules, extra_globals: concat(child.extra_globals, base.extra_globals) }
-}
-
-fn merge_rule_setting<Options>(
-    child: Option<RuleSetting<Options>>,
-    base: Option<RuleSetting<Options>>,
-    merge_options: impl FnOnce(Options, Options) -> Options,
-) -> Option<RuleSetting<Options>> {
-    match (child, base) {
-        (None, base_setting) => base_setting,
-        (Some(RuleSetting::Level(level)), Some(RuleSetting::WithOptions(_, base_options))) => {
-            Some(RuleSetting::WithOptions(level, base_options))
-        }
-        (
-            Some(RuleSetting::WithOptions(level, options)),
-            Some(RuleSetting::WithOptions(_, base_options)),
-        ) => Some(RuleSetting::WithOptions(level, merge_options(options, base_options))),
-        (child_setting @ Some(_), Some(RuleSetting::Level(_)) | None) => child_setting,
     }
 }
 
@@ -244,8 +183,6 @@ where
 #[cfg(test)]
 mod tests {
     use std::fs;
-
-    use luck_linter::{CyclomaticComplexityOptions, RuleLevel};
 
     use super::*;
     use crate::load::parse_luck_config;
@@ -514,6 +451,16 @@ mod tests {
     }
 
     #[test]
+    fn omitted_transform_keys_keep_their_defaults() {
+        let config = parse_luck_config(r#"{ "transforms": { "fold_constants": false } }"#)
+            .expect("deserialize failed");
+        let transforms = config.transforms.expect("transforms present");
+        assert!(!transforms.fold_constants);
+        assert!(transforms.rename_locals);
+        assert!(!transforms.rename_globals);
+    }
+
+    #[test]
     fn merge_onto_concatenates_lint_lists_and_keeps_unset_base_keys() {
         let base = parse_luck_config(
             r#"{ "lua":"lua54","lint":{"extra_globals":["a"],
@@ -530,88 +477,5 @@ mod tests {
         assert_eq!(lint.extra_globals, vec!["a".to_owned(), "b".to_owned()]);
         assert_eq!(lint.rules.names().collect::<Vec<_>>(), ["x", "y"]);
         assert_eq!(merged.lua.as_deref(), Some("lua54"));
-    }
-
-    fn merged_lint(child_lint_json: &str, base_lint_json: &str) -> LintConfig {
-        let parse = |lint_json: &str| {
-            parse_luck_config(&format!(r#"{{ "lint": {lint_json} }}"#)).expect("parse")
-        };
-        parse(child_lint_json).merge_onto(parse(base_lint_json)).lint.expect("lint")
-    }
-
-    #[test]
-    fn merge_onto_lets_the_child_replace_a_category_or_rule() {
-        let lint = merged_lint(
-            r#"{
-                "categories": { "style": "error", "performance": "warn" },
-                "rules": { "unused_variable": "error", "cyclomatic_complexity": "off" }
-            }"#,
-            r#"{
-                "categories": { "style": "warn", "correctness": "off" },
-                "rules": {
-                    "empty_block": "warn",
-                    "unused_variable": "off",
-                    "cyclomatic_complexity": ["warn", { "max": 10 }]
-                }
-            }"#,
-        );
-        assert_eq!(
-            lint.categories,
-            CategoryLevels {
-                correctness: Some(RuleLevel::Off),
-                suspicious: None,
-                style: Some(RuleLevel::Error),
-                performance: Some(RuleLevel::Warn),
-            }
-        );
-        assert_eq!(lint.rules.level("empty_block"), Some(RuleLevel::Warn));
-        assert_eq!(lint.rules.level("unused_variable"), Some(RuleLevel::Error));
-        assert_eq!(
-            lint.rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(RuleLevel::Off, CyclomaticComplexityOptions { max: 10 }))
-        );
-    }
-
-    /// A child that only raises a rule's severity mustn't silence it by
-    /// dropping the base's options.
-    #[test]
-    fn merge_onto_keeps_the_base_options_and_merges_the_child_s() {
-        let base = r#"{
-            "rules": {
-                "cyclomatic_complexity": ["warn", { "max": 10 }],
-                "restricted_module_paths": ["warn", { "paths": ["secret.*"] }]
-            }
-        }"#;
-        let raised = merged_lint(r#"{ "rules": { "cyclomatic_complexity": "error" } }"#, base);
-        assert_eq!(
-            raised.rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(
-                RuleLevel::Error,
-                CyclomaticComplexityOptions { max: 10 }
-            ))
-        );
-
-        let extended = merged_lint(
-            r#"{
-                "rules": {
-                    "cyclomatic_complexity": ["warn", { "max": 4 }],
-                    "restricted_module_paths": ["error", { "paths": ["legacy", "secret.*"] }]
-                }
-            }"#,
-            base,
-        );
-        assert_eq!(
-            extended.rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(RuleLevel::Warn, CyclomaticComplexityOptions { max: 4 }))
-        );
-        assert_eq!(
-            extended.rules.restricted_module_paths,
-            Some(RuleSetting::WithOptions(
-                RuleLevel::Error,
-                RestrictedModulePathsOptions {
-                    paths: vec!["secret.*".to_owned(), "legacy".to_owned()]
-                }
-            ))
-        );
     }
 }

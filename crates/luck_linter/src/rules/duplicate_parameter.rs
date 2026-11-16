@@ -1,5 +1,5 @@
 use luck_ast::{Expression, Statement};
-use rustc_hash::FxHashSet;
+use luck_token::MAX_ACTIVE_LOCALS;
 
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
@@ -23,12 +23,12 @@ impl NodeRule for DuplicateParameter {
     }
     fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Some(function) = FunctionNode::of_stmt(stmt) {
-            findings.extend(duplicate_params(function));
+            check_params(function, findings);
         }
     }
     fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         if let Some(function) = FunctionNode::of_expr(expr) {
-            findings.extend(duplicate_params(function));
+            check_params(function, findings);
         }
     }
 }
@@ -36,16 +36,26 @@ impl NodeRule for DuplicateParameter {
 /// Flags each parameter named like an earlier one, or `self` in a colon
 /// method, which already has an implicit `self`. `_` may repeat, and a Lua
 /// 5.5 named vararg counts as the last parameter.
-fn duplicate_params(function: FunctionNode<'_>) -> impl Iterator<Item = Finding> {
+///
+/// Parameters are locals, so no Lua compiles a function with more than
+/// [`MAX_ACTIVE_LOCALS`] of them, and one that has more isn't checked.
+fn check_params(function: FunctionNode<'_>, findings: &mut Vec<Finding>) {
+    let params = &function.body.params.items;
     let vararg_name = function.body.vararg.as_deref().and_then(|vararg| vararg.name.as_ref());
-    let names = function.body.params.items.iter().map(|param| &param.name).chain(vararg_name);
-    let mut earlier_names = FxHashSet::default();
-    names.filter_map(move |token| {
-        let name = token.identifier().filter(|&name| name != "_")?;
-        let is_duplicate = !earlier_names.insert(name) || (function.is_method && name == "self");
-        is_duplicate
-            .then(|| Finding::new(format!("parameter `{name}` is already defined"), token.span))
-    })
+    if params.len().saturating_add(usize::from(vararg_name.is_some())) > MAX_ACTIVE_LOCALS {
+        return;
+    }
+    for (i, token) in params.iter().map(|param| &param.name).chain(vararg_name).enumerate() {
+        let Some(name) = token.identifier().filter(|&name| name != "_") else {
+            continue;
+        };
+        let is_repeat =
+            params.iter().take(i).any(|earlier| earlier.name.identifier() == Some(name));
+        if is_repeat || (function.is_method && name == "self") {
+            findings
+                .push(Finding::new(format!("parameter `{name}` is already defined"), token.span));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,9 +142,16 @@ function t.m(self) end");
     }
 
     #[test]
-    fn flags_each_repeat_in_a_long_parameter_list() {
-        let params = (0..2_000u32).map(|i| format!("p{i}")).collect::<Vec<_>>().join(", ");
+    fn flags_each_repeat_in_a_list_at_the_local_limit() {
+        let params = (0..100u32).map(|i| format!("p{i}")).collect::<Vec<_>>().join(", ");
         let diags = run(&format!("local function f({params}, {params}) end"));
-        assert_eq!(diags.len(), 2_000, "{diags:?}");
+        assert_eq!(diags.len(), 100, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_a_list_past_the_local_limit() {
+        let params = (0..101u32).map(|i| format!("p{i}")).collect::<Vec<_>>().join(", ");
+        let diags = run(&format!("local function f({params}, {params}) end"));
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

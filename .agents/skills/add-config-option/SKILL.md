@@ -5,17 +5,17 @@ description: Adds or changes a luck.json configuration field end-to-end, coverin
 
 # Add a config option
 
-Config is one typed source of truth in `luck_config` (`src/*.rs`, one module per `luck.json` section), deserialized with `deny_unknown_fields`, projected into a generated JSON schema, and layered under a strict precedence. The tools never read config: each takes a plain option type, and `luck_config` holds the `luck.json` shape of it under the same name and converts it with `From`. The `lint` section is the exception, deserializing straight into `luck_linter`'s `LintConfig`. Skipping the schema regen fails a test. Skipping the precedence or CLI/LSP plumbing fails **silently**. Those are the steps this checklist exists for.
+Config is one typed source of truth in `luck_config` (`src/*.rs`, one module per `luck.json` section), deserialized with `deny_unknown_fields`, projected into a generated JSON schema, and layered under a strict precedence. The tools never read config, but each derives the `luck.json` shape of its own option types behind optional `serde` and `schemars` features, and `luck_config` deserializes straight into them. The `format` section is the exception: `luck_config`'s `FormatConfig` holds each formatter option unset unless the config sets it, and converts into `FormatOptions` with `From`. Skipping the schema regen fails a test. Skipping the precedence or CLI/LSP plumbing fails **silently**. Those are the steps this checklist exists for.
 
 ## 1. Add the typed field
 
 On the right struct, mirroring its neighbors:
 
-- A tool option goes on the tool's type (`luck_formatter::FormatOptions`, `luck_minifier::TransformConfig`, `luck_bundler::DynamicRequire`) with its default there, on the `luck.json` shape in `luck_config`, and into the `From` conversion between them. The conversions destructure in full, so a missed field fails to compile.
+- A tool option goes on the tool's type (`luck_minifier::TransformConfig`, `luck_bundler::DynamicRequire`, `luck_linter::LintConfig`) with its default there and its serde attributes under `cfg_attr(feature = "serde", ...)`. A formatter option goes on `luck_formatter::FormatOptions`, as an `Option` on `luck_config`'s `FormatConfig`, and into `FormatConfig::merge_onto` and the `From` conversion, which destructures in full, so a missed field fails to compile.
 - `#[serde(default)]` with a sensible default, because existing configs must keep working.
 - Keep the struct's `#[serde(deny_unknown_fields)]` contract intact.
 - Prefer enums over free-form strings/bools when there are >=2 modes.
-- Give it a `///` doc comment. It becomes the schema description users see in VS Code. `luck_config`'s types derive `schemars::JsonSchema` under `cfg_attr(test)`, and `luck_linter`'s config types derive it under its `schemars` feature, which only `luck_config`'s dev-dependency turns on.
+- Give it a `///` doc comment. It becomes the schema description users see in VS Code. `luck_config`'s types derive `schemars::JsonSchema` under `cfg_attr(test)`, and each tool's types derive it under its `schemars` feature, which only `luck_config`'s dev-dependencies turn on.
 
 ## 2. Regenerate the schema
 
@@ -23,7 +23,7 @@ On the right struct, mirroring its neighbors:
 
 ## 3. Thread it to the consumer, in BOTH paths
 
-Find where the option's struct is used (formatter, minifier, bundler, linter driver) and read the field there. Grep for a neighboring field to find every site: a field read in only one of the CLI (`luck_cli`) and LSP (`luck_lsp/src/settings.rs`) paths is a recurring bug. When both paths read a key the same way, give `luck_config` one function they both go through, as `LuckConfig::target`, `LuckConfig::project_filter`, `LuckConfig::search_paths_or_default`, and `resolved_format_config` do, instead of reading the raw field twice.
+Find where the option's struct is used (formatter, minifier, bundler, linter driver) and read the field there. Grep for a neighboring field to find every site: a field read in only one of the CLI (`luck_cli`) and LSP (`luck_lsp/src/settings.rs`) paths is a recurring bug. When both paths read a key the same way, give `luck_config` one function they both go through, as `LuckConfig::target`, `LuckConfig::project_filter`, and `resolved_format_config` do, instead of reading the raw field twice.
 
 ## 4. Respect precedence (format options only)
 

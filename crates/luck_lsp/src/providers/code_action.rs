@@ -1,10 +1,9 @@
 use alloc::sync::Arc;
 use core::ops;
 
-use luck_ast::{Expression, LastStatement, Statement, Visitor};
+use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
 use luck_linter::{Fix, LintDiagnostic};
-use luck_token::{Span, index_to_offset, is_lua_whitespace, line_breaks};
-use rustc_hash::FxHashMap;
+use luck_token::{Span, has_line_break, is_lua_whitespace, offset_to_index};
 use tower_lsp_server::ls_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
     CodeActionResponse, Diagnostic, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
@@ -25,9 +24,6 @@ pub(crate) fn code_action(
     lints: &[LintDiagnostic],
 ) -> CodeActionResponse {
     let uri = &params.text_document.uri;
-    let lint_of_diagnostic: FxHashMap<(&str, Span), &LintDiagnostic> =
-        lints.iter().map(|lint| ((lint.rule, lint.span), lint)).collect();
-
     let matched: Vec<(&Diagnostic, &str, &LintDiagnostic)> = params
         .context
         .diagnostics
@@ -43,13 +39,13 @@ pub(crate) fn code_action(
             // so the pair names the one lint it came from.
             let byte_range = document.byte_range(diag.range)?;
             let span = Span::from_indices(byte_range.start, byte_range.end);
-            let lint = lint_of_diagnostic.get(&(rule.as_str(), span))?;
-            Some((diag, rule.as_str(), *lint))
+            let lint = lint_at(lints, rule, span)?;
+            Some((diag, rule.as_str(), lint))
         })
         .collect();
     // Directives apply only after a clean parse, so none can silence a syntax
     // error.
-    let disabler = document.parsed.errors.is_empty().then(|| {
+    let disabler = (!matched.is_empty() && document.parsed.errors.is_empty()).then(|| {
         Disabler::new(
             document,
             &matched.iter().map(|(_, _, lint)| lint.span.start).collect::<Vec<_>>(),
@@ -103,6 +99,22 @@ pub(crate) fn code_action(
     actions
 }
 
+/// The lint `rule` reported at `span`, from `lints` in the order the linter
+/// returns them, sorted by where they start.
+fn lint_at<'lints>(
+    lints: &'lints [LintDiagnostic],
+    rule: &str,
+    span: Span,
+) -> Option<&'lints LintDiagnostic> {
+    let first = lints.partition_point(|lint| lint.span.start < span.start);
+    lints
+        .get(first..)?
+        .iter()
+        .take_while(|lint| lint.span.start == span.start)
+        .filter(|lint| lint.rule == rule && lint.span == span)
+        .last()
+}
+
 fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
     fix.edits
         .iter()
@@ -134,27 +146,15 @@ struct Disabler<'document> {
     /// The end of the innermost statement holding each lint, in the lints'
     /// order, or `None` for a lint no statement holds.
     statement_ends: Vec<Option<u32>>,
-    /// Where each line's trailing whitespace starts, by the line break that
-    /// ends it, or the text's end for the last line.
-    line_tails: Vec<(u32, u32)>,
 }
 
 impl<'document> Disabler<'document> {
     fn new(document: &'document DocumentState, lint_starts: &[u32]) -> Self {
-        let mut order: Vec<usize> = (0..lint_starts.len()).collect();
-        order.sort_by_key(|&index| lint_starts.get(index).copied());
-        let sorted_starts =
-            order.iter().filter_map(|&index| lint_starts.get(index).copied()).collect();
-        let mut finder =
-            StatementFinder { starts: sorted_starts, ends: vec![None; lint_starts.len()] };
+        let mut starts: Vec<(u32, usize)> = lint_starts.iter().copied().zip(0..).collect();
+        starts.sort_unstable();
+        let mut finder = StatementFinder { starts, ends: vec![None; lint_starts.len()] };
         finder.visit_block(&document.parsed.block);
-        let mut statement_ends = vec![None; lint_starts.len()];
-        for (&index, end) in order.iter().zip(finder.ends) {
-            if let Some(slot) = statement_ends.get_mut(index) {
-                *slot = end;
-            }
-        }
-        Self { document, statement_ends, line_tails: line_tails(document) }
+        Self { document, statement_ends: finder.ends }
     }
 
     /// A comment that disables `rule` for the innermost statement holding the
@@ -166,9 +166,11 @@ impl<'document> Disabler<'document> {
     /// the block form.
     fn edit(&self, index: usize, rule: &str) -> Option<TextEdit> {
         let statement_end = (*self.statement_ends.get(index)?)?;
-        let line = self.line_tails.partition_point(|&(line_end, _)| line_end < statement_end);
+        let rest = self.document.text().get(offset_to_index(statement_end)..).unwrap_or_default();
+        let blank_length = rest.bytes().take_while(|&b| is_lua_whitespace(b)).count();
+        let blank = rest.get(..blank_length).unwrap_or_default();
         let is_line_end =
-            self.line_tails.get(line).is_none_or(|&(_, blank_from)| blank_from <= statement_end);
+            blank_length == rest.len() || has_line_break(blank, self.document.lua_version);
         let new_text = if is_line_end {
             format!(" -- luck: allow({rule})")
         } else {
@@ -179,37 +181,20 @@ impl<'document> Disabler<'document> {
     }
 }
 
-/// Each line of `document`, as its Lua dialect breaks lines, as the offset its
-/// break starts at and the offset its trailing whitespace starts at.
-fn line_tails(document: &DocumentState) -> Vec<(u32, u32)> {
-    let text = document.text();
-    let mut tails = Vec::new();
-    let mut line_start = 0;
-    let breaks = line_breaks(text, document.lua_version).map(|line_break| line_break.start);
-    for line_end in breaks.chain([text.len()]) {
-        let line = text.as_bytes().get(line_start..line_end).unwrap_or_default();
-        let blank_length = line.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count();
-        tails.push((
-            index_to_offset(line_end),
-            index_to_offset(line_end.saturating_sub(blank_length)),
-        ));
-        line_start = line_end;
-    }
-    tails
-}
-
-/// Finds the innermost statement holding each of `starts`, which are sorted,
-/// walking only into what holds one.
+/// Finds the innermost statement holding each of `starts`, walking only into
+/// what holds one.
 struct StatementFinder {
-    starts: Vec<u32>,
+    /// Each lint's start and its index in the request, sorted.
+    starts: Vec<(u32, usize)>,
+    /// By the lint's index.
     ends: Vec<Option<u32>>,
 }
 
 impl StatementFinder {
-    /// The indexes of the starts inside `span`.
+    /// The positions in `starts` of those inside `span`.
     fn held(&self, span: Span) -> ops::Range<usize> {
-        let first = self.starts.partition_point(|&start| start < span.start);
-        let end = self.starts.partition_point(|&start| start < span.end);
+        let first = self.starts.partition_point(|&(start, _)| start < span.start);
+        let end = self.starts.partition_point(|&(start, _)| start < span.end);
         first..end.max(first)
     }
 
@@ -219,14 +204,33 @@ impl StatementFinder {
     fn holds(&mut self, span: Span) -> bool {
         let held = self.held(span);
         let is_held = !held.is_empty();
-        for end in self.ends.get_mut(held).into_iter().flatten() {
-            *end = Some(span.end);
+        for &(_, index) in self.starts.get(held).unwrap_or_default() {
+            if let Some(end) = self.ends.get_mut(index) {
+                *end = Some(span.end);
+            }
         }
         is_held
     }
 }
 
 impl<'ast> Visitor<'ast> for StatementFinder {
+    /// Only the statements between the first start and the last can hold
+    /// one, and a block's statements are in source order.
+    fn visit_block(&mut self, block: &'ast Block) {
+        let (Some(&(first, _)), Some(&(last, _))) = (self.starts.first(), self.starts.last())
+        else {
+            return;
+        };
+        let from = block.stmts.partition_point(|stmt| stmt.span().end <= first);
+        let to = block.stmts.partition_point(|stmt| stmt.span().start <= last);
+        for stmt in block.stmts.get(from..to).unwrap_or_default() {
+            self.visit_stmt(stmt);
+        }
+        if let Some(last_stmt) = &block.last_stmt {
+            self.visit_last_stmt(last_stmt);
+        }
+    }
+
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
         if self.holds(stmt.span()) {
             self.walk_stmt(stmt);

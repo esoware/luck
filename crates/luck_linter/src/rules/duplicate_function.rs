@@ -19,8 +19,9 @@ impl_rule!(
 impl WholeRule for DuplicateFunction {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut findings = Vec::new();
+        let mut definitions: FxHashMap<String, Span> = FxHashMap::default();
         for block in context.blocks {
-            let mut definitions: FxHashMap<String, Span> = FxHashMap::default();
+            definitions.clear();
             for stmt in &block.stmts {
                 // `redefining_local` covers local functions.
                 let (declared_name, name_span) = if let Statement::FunctionDecl(decl) = stmt {

@@ -8,7 +8,7 @@ use luck_token::{
 use rustc_hash::FxHashSet;
 
 use crate::block_emitter::rewrite_module;
-use crate::exports::{ExportPlan, TextLowering, has_value_exports, lower_exports_in_text};
+use crate::exports::{ExportPlan, export_edits, has_value_exports};
 use crate::graph::DependencyGraph;
 use crate::loader::{DEFAULT_PREFIX, LoaderShape, prelude_text};
 use crate::module::{Dependency, ModuleId, ModuleInfo};
@@ -428,21 +428,50 @@ pub(crate) fn emit(
     }
 
     let plan = Plan::new(graph, version)?;
-    let prefix = plan.prefix.as_str();
-
     // The sources plus rough room for each module's wrapper and the loader.
     let capacity = modules
         .iter()
         .map(|module| module.source.len().saturating_add(96))
         .sum::<usize>()
         .saturating_add(512);
+    let writer = write(graph, entry, &plan, version, capacity, false);
+    Ok((writer.output, writer.line_map))
+}
+
+/// What a module's body is in the text [`skeleton`] writes: a call of this,
+/// after the bundle's prefix, which no module's source holds.
+pub(crate) const HOLE: &str = "body";
+
+/// The bundle's text with each module's body written as a call of the
+/// prefixed [`HOLE`], so the tree that holds the modules' own trees can take
+/// everything else from the text's parse.
+pub(crate) fn skeleton(
+    graph: &DependencyGraph,
+    entry: &ModuleInfo,
+    plan: &Plan,
+    version: LuaVersion,
+) -> String {
+    let capacity = graph.modules.len().saturating_mul(128).saturating_add(1024);
+    write(graph, entry, plan, version, capacity, true).output
+}
+
+fn write<'plan>(
+    graph: &DependencyGraph,
+    entry: &ModuleInfo,
+    plan: &'plan Plan,
+    version: LuaVersion,
+    capacity: usize,
+    should_leave_holes: bool,
+) -> BundleWriter<'plan> {
     let mut writer = BundleWriter {
         output: String::with_capacity(capacity),
         next_line: 1,
-        line_map: Vec::with_capacity(modules.len()),
-        plan: &plan,
+        line_map: Vec::with_capacity(graph.modules.len()),
+        plan,
         version,
+        should_leave_holes,
     };
+    let prefix = plan.prefix.as_str();
 
     if let Some(shebang) = entry.shebang {
         writer.push(shebang.text(&entry.source));
@@ -461,7 +490,7 @@ pub(crate) fn emit(
     for item in &plan.items {
         match item {
             Item::Module(wrapped) => {
-                if let Some(module) = modules.get(wrapped.id.0) {
+                if let Some(module) = graph.modules.get(wrapped.id.0) {
                     writer.push_wrapped(wrapped, module);
                 }
             }
@@ -470,8 +499,7 @@ pub(crate) fn emit(
     }
 
     writer.push(&format!("return {prefix}entry(...)\n"));
-
-    Ok((writer.output, writer.line_map))
+    writer
 }
 
 struct BundleWriter<'plan> {
@@ -481,6 +509,7 @@ struct BundleWriter<'plan> {
     line_map: Vec<LineMapEntry>,
     plan: &'plan Plan,
     version: LuaVersion,
+    should_leave_holes: bool,
 }
 
 impl BundleWriter<'_> {
@@ -501,22 +530,22 @@ impl BundleWriter<'_> {
             self.push_provenance(label, &module.relative_path);
         }
         let prefix = self.plan.prefix.as_str();
-        let lowering = if self.version.has_value_exports() {
-            lower_exports_in_text(
-                &wrapped.exports,
-                &module.block,
-                &module.source,
-                self.version,
-                prefix,
-            )
-        } else {
-            TextLowering::default()
-        };
         let (opening, closing) = wrapper_text(&wrapped.binding, wrapped.wrapper, prefix);
         self.push(&opening);
-        self.push(lowering.table_declaration.as_deref().unwrap_or_default());
+        self.push(&wrapped.exports.table_declaration(prefix));
         self.push("\n");
-        self.push_body(module, lowering.edits, lowering.closing.as_deref());
+        let export_closing = wrapped.exports.closing(prefix);
+        if self.should_leave_holes {
+            self.push(&format!("{prefix}{HOLE}()\n"));
+            self.push(export_closing.as_deref().unwrap_or_default());
+        } else {
+            let export_edits = if self.version.has_value_exports() {
+                export_edits(&wrapped.exports, &module.block, &module.source, self.version, prefix)
+            } else {
+                Vec::new()
+            };
+            self.push_body(module, export_edits, export_closing.as_deref());
+        }
         self.push(closing);
     }
 

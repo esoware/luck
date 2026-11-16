@@ -11,6 +11,12 @@ license.workspace      = true
 repository.workspace   = true
 rust-version.workspace = true
 
+[features]
+# Derive `Deserialize` for the option enums, the shape `luck.json` gives it.
+serde = ["dep:serde"]
+# Derive `JsonSchema` too, for the schema `luck_config` generates.
+schemars = ["dep:schemars", "serde"]
+
 [lints]
 workspace = true
 
@@ -21,6 +27,8 @@ luck_parser = { workspace = true }
 luck_token  = { workspace = true }
 
 rustc-hash    = { workspace = true }
+schemars      = { workspace = true, optional = true }
+serde         = { workspace = true, optional = true }
 unicode-width = { workspace = true }
 
 [dev-dependencies]

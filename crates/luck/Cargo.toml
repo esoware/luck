@@ -25,7 +25,7 @@ full = ["codegen", "bundler", "minifier", "formatter", "linter", "config"]
 
 codegen   = ["luck_codegen"]
 resolver  = ["luck_resolver"]
-bundler   = ["luck_bundler", "resolver"]
+bundler   = ["luck_bundler", "resolver", "minifier"]
 minifier  = ["luck_minifier"]
 formatter = ["luck_formatter"]
 semantic  = ["luck_semantic"]

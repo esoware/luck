@@ -69,7 +69,7 @@ pub(crate) fn resolve_dynamic_require(
     config: &LuckConfig,
     flag: Option<DynamicRequire>,
 ) -> DynamicRequire {
-    flag.or_else(|| config.dynamic_require.map(Into::into)).unwrap_or_default()
+    flag.or(config.dynamic_require).unwrap_or_default()
 }
 
 /// That's `-c` resolved through `extends` when given.

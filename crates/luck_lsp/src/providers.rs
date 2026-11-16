@@ -108,7 +108,6 @@ mod tests {
         let _tokens = semantic_tokens::semantic_tokens(&document);
         let _ranged_tokens = semantic_tokens::in_range(&document, full_range);
         let _links = document_link::document_links(&document, &uri, &settings);
-        let _tree = syntax_tree::syntax_tree(&document);
         let documents = [(uri, Arc::new(document))];
         let _workspace_symbols = workspace_symbol::workspace_symbols(&documents, "a");
         let _range_formatted = luck_formatter::format_range(

@@ -1,8 +1,8 @@
 use core::mem;
 use std::path::Path;
 
-use luck_ast::Block;
 use luck_core::Diagnostic;
+use luck_minifier::TransformConfig;
 
 use crate::block_emitter;
 use crate::emitter::{self, LineMapEntry};
@@ -18,17 +18,10 @@ pub struct BundleResult {
     pub line_map: Vec<LineMapEntry>,
 }
 
-/// The bundle [`bundle`] writes, as a tree, for a caller such as the
-/// minifier that works on one: each module keeps the tree its own parse
-/// gave it, rewritten as the text splices it.
 #[derive(Debug)]
-pub struct BlockBundle {
-    /// The bundle's text parses to this, apart from spans, comments, and `;`.
-    pub block: Block,
-    /// The lines a printed bundle opens with, each ending in a line break: the
-    /// entry's shebang and its Luau hot comments, which take effect only
-    /// there.
-    pub header: String,
+pub struct MinifiedBundle {
+    /// Opens with the entry's shebang and its Luau hot comments.
+    pub output: String,
     pub warnings: Vec<Diagnostic>,
     /// Every bundled module's canonical path, in discovery order.
     pub source_files: Vec<String>,
@@ -55,17 +48,30 @@ pub fn bundle(
     })
 }
 
+/// The bundle [`bundle`] writes, minified from the tree that holds each
+/// module's own parse, so its text is never parsed again.
+///
 /// # Errors
 ///
 /// Returns what [`bundle`] does.
-pub fn bundle_block(
+#[expect(clippy::missing_panics_doc, reason = "the emitter refuses a tree past the cap")]
+pub fn bundle_minified(
     entry_path: &Path,
     options: &BundleOptions<'_>,
-) -> Result<BlockBundle, Vec<Diagnostic>> {
+    transforms: &TransformConfig,
+) -> Result<MinifiedBundle, Vec<Diagnostic>> {
     let mut graph = DependencyGraph::build(entry_path, options)?;
     let warnings = mem::take(&mut graph.warnings);
     let source_files = graph.modules.iter().map(|module| module.path.clone()).collect();
     let source_byte_count = graph.modules.iter().map(|module| module.source.len()).sum();
-    let (block, header) = block_emitter::emit_block(graph, options.version)?;
-    Ok(BlockBundle { block, header, warnings, source_files, source_byte_count })
+    let (block, mut output) = block_emitter::emit_block(graph, options.version)?;
+    #[expect(
+        clippy::expect_used,
+        clippy::unwrap_in_result,
+        reason = "the emitter refuses a tree past the cap"
+    )]
+    let code = luck_minifier::minify_block(block, options.version, transforms)
+        .expect("a bundle nests within the cap");
+    output.push_str(&code);
+    Ok(MinifiedBundle { output, warnings, source_files, source_byte_count })
 }

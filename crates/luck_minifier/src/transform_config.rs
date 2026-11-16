@@ -1,6 +1,8 @@
 /// Turns individual minifier passes on or off. Every pass except
 /// `rename_globals` is on by default.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(default, deny_unknown_fields))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::struct_excessive_bools, reason = "each bool turns one independent pass on or off")]
 pub struct TransformConfig {
     pub remove_dead_code: bool,

@@ -6,10 +6,11 @@ mod glob;
 use std::fs;
 use std::path::{self, Path};
 
+use luck_formatter::{IndentStyle, LineEndings};
 use rustc_hash::FxHashMap;
 
 use self::glob::SectionGlob;
-use crate::format_config::{FormatConfig, IndentStyle, LineEndings};
+use crate::format_config::FormatConfig;
 
 const EDITORCONFIG_FILE_NAME: &str = ".editorconfig";
 

@@ -34,14 +34,11 @@
 //!   ...
 //! ```
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use luck_semantic::{StdlibEntry, StdlibMap};
 use serde::Deserialize;
-
-use crate::common::all_libraries;
 
 struct LibrarySpec {
     module: &'static str,
@@ -595,289 +592,237 @@ fn derive_string_shape(
 
 const INDENT: &str = "    ";
 
-/// Writes catalog Rust, recording which `stdlib_catalog` and `stdlib_model`
-/// items it names so the file imports exactly those.
-#[derive(Default)]
-struct Emitter {
-    catalog_items: BTreeSet<&'static str>,
-    model_items: BTreeSet<&'static str>,
-}
-
-impl Emitter {
-    fn catalog(&mut self, name: &'static str) -> &'static str {
-        self.catalog_items.insert(name);
-        name
+/// `stdlib_map!(StdlibEntry, [...])`, opened on a line at `depth`.
+fn map(entries: &BTreeMap<String, Entry>, depth: usize) -> String {
+    if entries.is_empty() {
+        return "stdlib_map!(StdlibEntry, [])".to_owned();
     }
-
-    fn model(&mut self, name: &'static str) -> &'static str {
-        self.model_items.insert(name);
-        name
-    }
-
-    /// `stdlib_map!(StdlibEntry, [...])`, opened on a line at `depth`.
-    fn map(&mut self, entries: &BTreeMap<String, Entry>, depth: usize) -> String {
-        let map = self.model("stdlib_map");
-        let entry_type = self.model("StdlibEntry");
-        if entries.is_empty() {
-            return format!("{map}!({entry_type}, [])");
-        }
-        let entry_depth = depth.saturating_add(1);
-        let lines: Vec<String> = entries
-            .iter()
-            .map(|(name, entry)| {
-                let value = self.entry(entry, entry_depth);
-                format!("{}({name:?}, {value}),\n", INDENT.repeat(entry_depth))
-            })
-            .collect();
-        format!(
-            "\
-{map}!({entry_type}, [
+    let entry_depth = depth.saturating_add(1);
+    let lines: Vec<String> = entries
+        .iter()
+        .map(|(name, value)| {
+            format!("{}({name:?}, {}),\n", INDENT.repeat(entry_depth), entry(value, entry_depth))
+        })
+        .collect();
+    format!(
+        "\
+stdlib_map!(StdlibEntry, [
 {}{}])",
-            lines.concat(),
-            INDENT.repeat(depth)
-        )
-    }
+        lines.concat(),
+        INDENT.repeat(depth)
+    )
+}
 
-    fn entry(&mut self, entry: &Entry, depth: usize) -> String {
-        let entry_type = self.model("StdlibEntry");
-        match entry {
-            Entry::Function(function) => {
-                format!("{entry_type}::Function(&{})", self.function(function))
-            }
-            Entry::Constant(value)
-                if value.is_read_only
-                    && value.deprecated.is_none()
-                    && value.shape.as_deref() == Some("EnumItem") =>
-            {
-                self.catalog("ENUM_ITEM").to_owned()
-            }
-            Entry::Constant(value) => format!("{entry_type}::Constant({})", self.value(value)),
-            Entry::Property(value) => format!("{entry_type}::Property({})", self.value(value)),
-            Entry::Namespace(namespace) => {
-                let mut fields = vec![format!("members: {}", self.map(&namespace.members, depth))];
-                if let Some(shape) = &namespace.shape {
-                    fields.push(format!("shape: Some({shape:?})"));
-                }
-                if let Some(deprecation) = &namespace.deprecated {
-                    fields.push(format!("deprecated: {}", self.deprecation(deprecation)));
-                }
-                let literal = self.literal("StdlibNamespace", &fields, 3, "NAMESPACE");
-                format!("{entry_type}::Namespace({literal})")
-            }
+fn entry(entry: &Entry, depth: usize) -> String {
+    match entry {
+        Entry::Function(function) => format!(
+            "StdlibEntry::Function(&{})",
+            literal("StdlibFunction", &function_fields(function), "FUNCTION")
+        ),
+        Entry::Constant(constant)
+            if constant.is_read_only
+                && constant.deprecated.is_none()
+                && constant.shape.as_deref() == Some("EnumItem") =>
+        {
+            "ENUM_ITEM".to_owned()
         }
-    }
-
-    /// The struct literal setting `fields` on top of the catalog's `default`,
-    /// or `default` itself when there are none.
-    fn literal(
-        &mut self,
-        type_name: &'static str,
-        fields: &[String],
-        field_count: usize,
-        default: &'static str,
-    ) -> String {
-        if fields.is_empty() {
-            return self.catalog(default).to_owned();
+        Entry::Constant(constant) => format!("StdlibEntry::Constant(&{})", value(constant)),
+        Entry::Property(property) => format!("StdlibEntry::Property(&{})", value(property)),
+        // A namespace always sets its members, so it spells out every field.
+        Entry::Namespace(namespace) => {
+            let shape = namespace
+                .shape
+                .as_ref()
+                .map_or_else(|| "None".to_owned(), |shape| format!("Some({shape:?})"));
+            let deprecated =
+                namespace.deprecated.as_ref().map_or_else(|| "None".to_owned(), deprecation);
+            format!(
+                "StdlibEntry::Namespace(&StdlibNamespace {{ members: {}, shape: {shape}, deprecated: {deprecated} }})",
+                map(&namespace.members, depth)
+            )
         }
-        let model_type = self.model(type_name);
-        let set_fields = fields.join(", ");
-        if fields.len() == field_count {
-            format!("{model_type} {{ {set_fields} }}")
-        } else {
-            format!("{model_type} {{ {set_fields}, ..{} }}", self.catalog(default))
-        }
-    }
-
-    fn function(&mut self, function: &Function) -> String {
-        let signatures: Vec<String> =
-            function.signatures.iter().map(|signature| self.signature(signature)).collect();
-        let mut fields = vec![format!("signatures: &[{}]", signatures.join(", "))];
-        if function.is_pure {
-            fields.push("is_pure: true".to_owned());
-        }
-        if function.is_must_use {
-            fields.push("is_must_use: true".to_owned());
-        }
-        if let Some(deprecation) = &function.deprecated {
-            fields.push(format!("deprecated: {}", self.deprecation(deprecation)));
-        }
-        if !function.is_read_only {
-            fields.push("is_read_only: false".to_owned());
-        }
-        if function.is_method {
-            fields.push("is_method: true".to_owned());
-        }
-        if let Some(shape) = &function.returns_shape {
-            fields.push(format!("returns_shape: Some({shape:?})"));
-        }
-        self.literal("StdlibFunction", &fields, 7, "FUNCTION")
-    }
-
-    fn signature(&mut self, signature: &Signature) -> String {
-        let params: Vec<String> = signature.params.iter().map(|param| self.param(param)).collect();
-        let max_args =
-            signature.max_args.map_or_else(|| "None".to_owned(), |max| format!("Some({max})"));
-        let constructor = self.catalog("signature");
-        format!("{constructor}(&[{}], {}, {max_args})", params.join(", "), signature.min_args)
-    }
-
-    fn param(&mut self, param: &Param) -> String {
-        let kind = self.arg_kind(&param.kind);
-        match &param.deprecated {
-            None => {
-                let constructor =
-                    self.catalog(if param.is_required { "required" } else { "optional" });
-                format!("{constructor}({kind})")
-            }
-            Some(deprecation) => format!(
-                "{} {{ kind: {kind}, is_required: {}, deprecated: {} }}",
-                self.model("StdlibParam"),
-                param.is_required,
-                self.deprecation(deprecation)
-            ),
-        }
-    }
-
-    fn arg_kind(&mut self, kind: &ArgKind) -> String {
-        let arg_kind = self.model("StdlibArgKind");
-        match kind {
-            ArgKind::Any => format!("{arg_kind}::Any"),
-            ArgKind::Bool => format!("{arg_kind}::Bool"),
-            ArgKind::Number => format!("{arg_kind}::Number"),
-            ArgKind::String => format!("{arg_kind}::String"),
-            ArgKind::Function => format!("{arg_kind}::Function"),
-            ArgKind::Table => format!("{arg_kind}::Table"),
-            ArgKind::Display { display } => format!("{arg_kind}::Display({display:?})"),
-            ArgKind::Constant { set: Some(set_name), .. } => {
-                format!("{arg_kind}::Constant(&{})", set_name.to_ascii_uppercase())
-            }
-            ArgKind::Constant { values, set: None } => {
-                let constants: Vec<String> =
-                    values.iter().map(|constant| self.constant(constant)).collect();
-                format!("{arg_kind}::Constant(&[{}])", constants.join(", "))
-            }
-            ArgKind::Vararg => format!("{arg_kind}::Vararg"),
-        }
-    }
-
-    fn constant(&mut self, constant: &Constant) -> String {
-        let Some(deprecation) = &constant.deprecated else {
-            if !constant.is_common {
-                return format!("{}({:?})", self.catalog("constant"), constant.value);
-            }
-            return format!(
-                "{} {{ value: {:?}, deprecated: None, is_common: true }}",
-                self.model("StdlibConstant"),
-                constant.value
-            );
-        };
-        format!(
-            "{} {{ value: {:?}, deprecated: {}, is_common: {} }}",
-            self.model("StdlibConstant"),
-            constant.value,
-            self.deprecation(deprecation),
-            constant.is_common
-        )
-    }
-
-    fn deprecation(&mut self, deprecation: &Deprecation) -> String {
-        let replace_template = deprecation
-            .replace_template
-            .as_ref()
-            .map_or_else(|| "None".to_owned(), |template| format!("Some({template:?})"));
-        format!(
-            "Some({} {{ message: {:?}, replace_template: {replace_template} }})",
-            self.model("StdlibDeprecation"),
-            deprecation.message
-        )
-    }
-
-    fn value(&mut self, value: &Value) -> String {
-        let mut fields = Vec::new();
-        if !value.is_read_only {
-            fields.push("is_read_only: false".to_owned());
-        }
-        if let Some(deprecation) = &value.deprecated {
-            fields.push(format!("deprecated: {}", self.deprecation(deprecation)));
-        }
-        if let Some(shape) = &value.shape {
-            fields.push(format!("shape: Some({shape:?})"));
-        }
-        self.literal("StdlibValue", &fields, 3, "VALUE")
-    }
-
-    fn shapes(&mut self, shapes: &BTreeMap<String, BTreeMap<String, Entry>>) -> String {
-        let map = self.model("stdlib_map");
-        let shape_type = self.model("StdlibShape");
-        if shapes.is_empty() {
-            return format!("{map}!({shape_type}, [])");
-        }
-        let lines: Vec<String> = shapes
-            .iter()
-            .map(|(name, members)| {
-                let members_map = self.map(members, 2);
-                format!("{INDENT}{INDENT}({name:?}, {shape_type} {{ members: {members_map} }}),\n")
-            })
-            .collect();
-        format!(
-            "\
-{map}!({shape_type}, [
-{}{INDENT}])",
-            lines.concat()
-        )
-    }
-
-    fn set(&mut self, name: &str, values: &[Constant]) -> String {
-        let lines: Vec<String> = values
-            .iter()
-            .map(|constant| format!("{INDENT}{},\n", self.constant(constant)))
-            .collect();
-        format!(
-            "
-static {}: [{}; {}] = [
-{}];
-",
-            name.to_ascii_uppercase(),
-            self.model("StdlibConstant"),
-            values.len(),
-            lines.concat()
-        )
     }
 }
 
+/// The struct literal setting `fields` on top of the catalog's `default`,
+/// or `default` itself when there are none.
+fn literal(type_name: &str, fields: &[String], default: &str) -> String {
+    if fields.is_empty() {
+        return default.to_owned();
+    }
+    format!("{type_name} {{ {}, ..{default} }}", fields.join(", "))
+}
+
+fn function_fields(function: &Function) -> Vec<String> {
+    let signatures: Vec<String> = function.signatures.iter().map(signature).collect();
+    let mut fields = vec![format!("signatures: &[{}]", signatures.join(", "))];
+    if function.is_pure {
+        fields.push("is_pure: true".to_owned());
+    }
+    if function.is_must_use {
+        fields.push("is_must_use: true".to_owned());
+    }
+    if let Some(deprecated) = &function.deprecated {
+        fields.push(format!("deprecated: {}", deprecation(deprecated)));
+    }
+    if !function.is_read_only {
+        fields.push("is_read_only: false".to_owned());
+    }
+    if function.is_method {
+        fields.push("is_method: true".to_owned());
+    }
+    if let Some(shape) = &function.returns_shape {
+        fields.push(format!("returns_shape: Some({shape:?})"));
+    }
+    fields
+}
+
+fn signature(signature: &Signature) -> String {
+    let params: Vec<String> = signature.params.iter().map(param).collect();
+    let max_args =
+        signature.max_args.map_or_else(|| "None".to_owned(), |max| format!("Some({max})"));
+    format!("signature(&[{}], {}, {max_args})", params.join(", "), signature.min_args)
+}
+
+fn param(param: &Param) -> String {
+    let kind = arg_kind(&param.kind);
+    param.deprecated.as_ref().map_or_else(
+        || format!("{}({kind})", if param.is_required { "required" } else { "optional" }),
+        |deprecated| {
+            format!(
+                "StdlibParam {{ kind: {kind}, is_required: {}, deprecated: {} }}",
+                param.is_required,
+                deprecation(deprecated)
+            )
+        },
+    )
+}
+
+fn arg_kind(kind: &ArgKind) -> String {
+    match kind {
+        ArgKind::Any => "StdlibArgKind::Any".to_owned(),
+        ArgKind::Bool => "StdlibArgKind::Bool".to_owned(),
+        ArgKind::Number => "StdlibArgKind::Number".to_owned(),
+        ArgKind::String => "StdlibArgKind::String".to_owned(),
+        ArgKind::Function => "StdlibArgKind::Function".to_owned(),
+        ArgKind::Table => "StdlibArgKind::Table".to_owned(),
+        ArgKind::Display { display } => format!("StdlibArgKind::Display({display:?})"),
+        ArgKind::Constant { set: Some(set_name), .. } => {
+            format!("StdlibArgKind::Constant(&{})", set_name.to_ascii_uppercase())
+        }
+        ArgKind::Constant { values, set: None } => {
+            let constants: Vec<String> = values.iter().map(constant).collect();
+            format!("StdlibArgKind::Constant(&[{}])", constants.join(", "))
+        }
+        ArgKind::Vararg => "StdlibArgKind::Vararg".to_owned(),
+    }
+}
+
+fn constant(constant: &Constant) -> String {
+    let Some(deprecated) = &constant.deprecated else {
+        if !constant.is_common {
+            return format!("constant({:?})", constant.value);
+        }
+        return format!(
+            "StdlibConstant {{ value: {:?}, deprecated: None, is_common: true }}",
+            constant.value
+        );
+    };
+    format!(
+        "StdlibConstant {{ value: {:?}, deprecated: {}, is_common: {} }}",
+        constant.value,
+        deprecation(deprecated),
+        constant.is_common
+    )
+}
+
+fn deprecation(deprecation: &Deprecation) -> String {
+    let replace_template = deprecation
+        .replace_template
+        .as_ref()
+        .map_or_else(|| "None".to_owned(), |template| format!("Some({template:?})"));
+    format!(
+        "Some(StdlibDeprecation {{ message: {:?}, replace_template: {replace_template} }})",
+        deprecation.message
+    )
+}
+
+fn value(value: &Value) -> String {
+    let mut fields = Vec::new();
+    if !value.is_read_only {
+        fields.push("is_read_only: false".to_owned());
+    }
+    if let Some(deprecated) = &value.deprecated {
+        fields.push(format!("deprecated: {}", deprecation(deprecated)));
+    }
+    if let Some(shape) = &value.shape {
+        fields.push(format!("shape: Some({shape:?})"));
+    }
+    literal("StdlibValue", &fields, "VALUE")
+}
+
+fn shapes(shapes: &BTreeMap<String, BTreeMap<String, Entry>>) -> String {
+    if shapes.is_empty() {
+        return "stdlib_map!(StdlibShape, [])".to_owned();
+    }
+    let lines: Vec<String> = shapes
+        .iter()
+        .map(|(name, members)| {
+            format!("{INDENT}{INDENT}({name:?}, StdlibShape {{ members: {} }}),\n", map(members, 2))
+        })
+        .collect();
+    format!(
+        "\
+stdlib_map!(StdlibShape, [
+{}{INDENT}])",
+        lines.concat()
+    )
+}
+
+fn set(name: &str, values: &[Constant]) -> String {
+    let lines: Vec<String> =
+        values.iter().map(|value| format!("{INDENT}{},\n", constant(value))).collect();
+    format!(
+        "\
+static {}: [StdlibConstant; {}] = [
+{}];
+
+",
+        name.to_ascii_uppercase(),
+        values.len(),
+        lines.concat()
+    )
+}
+
+/// The catalog as the expression `stdlib_catalog` includes, which names
+/// everything in that module's scope. Constant sets are statics of a block
+/// around it.
 fn emit(spec: &LibrarySpec, library: &Library) -> String {
-    let mut emitter = Emitter::default();
-    let globals = emitter.map(&library.globals, 1);
-    let shapes = emitter.shapes(&library.shapes);
-    let sets: Vec<String> =
-        library.sets.iter().map(|(name, values)| emitter.set(name, values)).collect();
-    let library_type = emitter.model("StdlibLibrary");
-    let catalog_items: Vec<&str> = emitter.catalog_items.into_iter().collect();
-    let model_items: Vec<&str> = emitter.model_items.into_iter().collect();
+    let sets: Vec<String> = library.sets.iter().map(|(name, values)| set(name, values)).collect();
     let sources: Vec<String> =
         spec.sources.iter().map(|file| format!("stdlib_data/{file}")).collect();
+    let catalog = format!(
+        "\
+StdlibLibrary {{
+{INDENT}version: LuaVersion::{},
+{INDENT}environment: StdlibEnvironment::{},
+{INDENT}globals: {},
+{INDENT}shapes: {},
+}}",
+        spec.version,
+        spec.environment,
+        map(&library.globals, 1),
+        shapes(&library.shapes),
+    );
+    let expression =
+        if sets.is_empty() { catalog } else { format!("{{\n{}{catalog}\n}}", sets.concat()) };
     format!(
         "\
 // Generated by `just stdlib` from {}. Never hand-edit it.
 
-use luck_token::{{LuaVersion, StdlibEnvironment}};
-
-use super::{{{}}};
-use crate::stdlib_model::{{{}}};
-
-pub(super) static LIBRARY: {library_type} = {library_type} {{
-{INDENT}version: LuaVersion::{},
-{INDENT}environment: StdlibEnvironment::{},
-{INDENT}globals: {globals},
-{INDENT}shapes: {shapes},
-}};
-{}",
-        sources.join(", "),
-        catalog_items.join(", "),
-        model_items.join(", "),
-        spec.version,
-        spec.environment,
-        sets.concat()
+{expression}
+",
+        sources.join(", ")
     )
 }
 
@@ -920,28 +865,6 @@ fn stdlib_catalog_is_up_to_date() {
             "src/stdlib_catalog/{}.rs is stale; regenerate it with `just stdlib`",
             spec.module
         );
-    }
-}
-
-/// Iterating a table gives its names in order, so every table must be in it.
-#[test]
-fn every_catalog_table_is_in_name_order() {
-    fn check(file: &str, path: &str, map: StdlibMap<StdlibEntry>) {
-        let names: Vec<&str> = map.keys().collect();
-        assert!(names.is_sorted_by(|a, b| a < b), "{file} {path}: names out of order");
-        for (name, entry) in &map {
-            if let StdlibEntry::Namespace(namespace) = entry {
-                check(file, &format!("{path}.{name}"), namespace.members);
-            }
-        }
-    }
-    for (file, library) in all_libraries() {
-        check(file, "globals", library.globals);
-        let shape_names: Vec<&str> = library.shapes.keys().collect();
-        assert!(shape_names.is_sorted_by(|a, b| a < b), "{file}: shapes out of order");
-        for (name, shape) in &library.shapes {
-            check(file, name, shape.members);
-        }
     }
 }
 

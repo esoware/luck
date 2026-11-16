@@ -67,7 +67,7 @@ impl ProjectSettings {
             filter: config.project_filter(filter_base).unwrap_or_else(|_| {
                 ProjectFilter::new(filter_base, None, None).unwrap_or_default()
             }),
-            search_paths: config.search_paths_or_default(),
+            search_paths: config.search_paths.clone().unwrap_or_default(),
             root,
         }
     }

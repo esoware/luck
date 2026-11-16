@@ -5,70 +5,42 @@
 
 use std::path::Path;
 
-use luck_ast::{Block, Statement, Transform};
-use luck_bundler::{BlockBundle, BundleOptions, BundleResult, bundle, bundle_block};
+use luck_bundler::{BundleOptions, BundleResult, bundle, bundle_minified};
 use luck_core::Diagnostic;
-use luck_token::{CommentKind, LuaVersion, leading_hot_comments};
+use luck_minifier::TransformConfig;
 
-/// Bundles `entry` as text and as a tree, which has to be the tree the text
-/// parses to, and returns the text's result.
+/// Bundles `entry` as text and minified, which has to be what minifying the
+/// text gives, and returns the text's result.
 ///
 /// # Errors
 ///
-/// Returns the diagnostics that stopped the bundle, which the tree reports
-/// alike.
+/// Returns the diagnostics that stopped the bundle, which the minified form
+/// reports alike.
 #[expect(clippy::panic_in_result_fn, reason = "a form that disagrees fails the calling test")]
 pub(crate) fn bundle_both(
     entry: &Path,
     options: &BundleOptions<'_>,
 ) -> Result<BundleResult, Vec<Diagnostic>> {
+    let transforms = TransformConfig::default();
     let text_result = bundle(entry, options);
-    match (&text_result, bundle_block(entry, options)) {
-        (Ok(text), Ok(tree)) => assert_tree_is_the_parse(&text.output, tree, options.version),
-        (Err(text_errors), Err(tree_errors)) => assert_eq!(
+    match (&text_result, bundle_minified(entry, options, &transforms)) {
+        (Ok(text), Ok(minified)) => {
+            let output = &text.output;
+            let expected = luck_minifier::minify(output, options.version, &transforms)
+                .unwrap_or_else(|errors| panic!("the bundle must parse: {errors:?}\n{output}"));
+            assert_eq!(
+                minified.output, expected,
+                "the tree minifies apart from the text:\n{output}"
+            );
+        }
+        (Err(text_errors), Err(minified_errors)) => assert_eq!(
             format!("{text_errors:?}"),
-            format!("{tree_errors:?}"),
+            format!("{minified_errors:?}"),
             "the two forms report different errors"
         ),
-        (text, tree) => panic!("only one form bundles:\ntext: {text:?}\ntree: {tree:?}"),
-    }
-    text_result
-}
-
-/// The parse holds a `;` for each one the text writes, which the tree,
-/// whose printer writes one where it's needed, leaves out.
-struct WithoutEmptyStatements;
-
-impl Transform for WithoutEmptyStatements {
-    fn transform_block(&mut self, mut block: Block) -> Block {
-        block.stmts.retain(|stmt| !matches!(stmt, Statement::EmptyStatement(_)));
-        self.walk_block(block)
-    }
-}
-
-fn assert_tree_is_the_parse(output: &str, tree: BlockBundle, version: LuaVersion) {
-    let parsed = luck_parser::parse(output, version);
-    assert!(parsed.errors.is_empty(), "the bundle must parse: {:?}\n{output}", parsed.errors);
-    let expected = WithoutEmptyStatements.transform_block(parsed.block);
-    let actual = WithoutEmptyStatements.transform_block(tree.block);
-    assert_eq!(
-        luck_codegen::compact(&actual),
-        luck_codegen::compact(&expected),
-        "the tree prints apart from the bundle's parse:\n{output}"
-    );
-    // What the minifier keeps on top of the text it reads.
-    let mut text_header = String::new();
-    if let Some(shebang) =
-        parsed.comments.first().filter(|comment| comment.kind == CommentKind::Shebang)
-    {
-        text_header.push_str(shebang.span.text(output).trim_end_matches('\r'));
-        text_header.push('\n');
-    }
-    if version.is_luau() {
-        for comment in leading_hot_comments(&parsed.comments, output) {
-            text_header.push_str(comment.span.text(output).trim_end());
-            text_header.push('\n');
+        (text, minified) => {
+            panic!("only one form bundles:\ntext: {text:?}\nminified: {minified:?}")
         }
     }
-    assert_eq!(tree.header, text_header, "the tree's header isn't the bundle's:\n{output}");
+    text_result
 }

@@ -47,7 +47,7 @@ mod module;
 mod relative_path;
 mod require_extraction;
 
-pub use bundle::{BlockBundle, BundleResult, bundle, bundle_block};
+pub use bundle::{BundleResult, MinifiedBundle, bundle, bundle_minified};
 pub use dynamic_require::DynamicRequire;
 pub use emitter::LineMapEntry;
 pub use graph::{BundleOptions, DependencyGraph};

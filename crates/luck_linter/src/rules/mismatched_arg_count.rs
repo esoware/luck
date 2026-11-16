@@ -1,10 +1,10 @@
 use luck_ast::{Call, Expression, FunctionBody, Statement, Visitor};
 use luck_semantic::ScopeTree;
-use luck_token::Span;
+use luck_token::{LineIndex, Span};
 use rustc_hash::FxHashMap;
 
 use crate::call::{has_multi_value_tail, positional_args};
-use crate::diagnostic::{Finding, LineIndex};
+use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]

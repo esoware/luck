@@ -19,7 +19,7 @@ The parse core (`token`, `lexer`, `ast`, `parser`, and `core`) is always present
 | `luck::core` | [`luck_core`](../luck_core) | always on |
 | `luck::codegen` | [`luck_codegen`](../luck_codegen) | `codegen` |
 | `luck::resolver` | [`luck_resolver`](../luck_resolver) | `resolver` |
-| `luck::bundler` | [`luck_bundler`](../luck_bundler) | `bundler` (pulls in `resolver`) |
+| `luck::bundler` | [`luck_bundler`](../luck_bundler) | `bundler` (pulls in `resolver` and `minifier`) |
 | `luck::minifier` | [`luck_minifier`](../luck_minifier) | `minifier` |
 | `luck::formatter` | [`luck_formatter`](../luck_formatter) | `formatter` |
 | `luck::semantic` | [`luck_semantic`](../luck_semantic) | `semantic` |
@@ -38,7 +38,7 @@ luck = { package = "luck_lua", version = "0.5", features = ["bundler", "minifier
 
 ```rust
 use luck::bundler;
-use luck::minifier;
+use luck::minifier::TransformConfig;
 
 let options = bundler::BundleOptions {
     version: target.lua_version(),
@@ -46,8 +46,7 @@ let options = bundler::BundleOptions {
     project_root: &project_root,
     dynamic_require,
 };
-let bundled = bundler::bundle(&entry_path, &options)?;
-let minified = minifier::minify(&bundled.output, target.lua_version(), &Default::default())?;
+let minified = bundler::bundle_minified(&entry_path, &options, &TransformConfig::default())?;
 ```
 
 The underlying crates stay published, so you can depend on a single one if that's all you need.
