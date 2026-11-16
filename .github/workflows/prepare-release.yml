@@ -18,7 +18,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
-    # Holds the release app's key, and only main can deploy to it.
+    # Holds the release token, and only main can deploy to it.
     environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,27 +53,17 @@ jobs:
           git cliff --unreleased --strip all --output "$RUNNER_TEMP/notes.md"
           echo "version=$next" >> "$GITHUB_OUTPUT"
 
-      # A PR that GITHUB_TOKEN opens or pushes to starts no workflow, so CI would never run on it.
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        id: app-token
-        with:
-          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          permission-contents: write
-          permission-pull-requests: write
-
+      # A PR that GITHUB_TOKEN opens or pushes to starts no workflow, so CI would never run on
+      # it. A personal access token's push and PR do.
       - name: Open or update the release PR
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           VERSION: ${{ steps.bump.outputs.version }}
         run: |
-          bot="$APP_SLUG[bot]"
-          bot_id=$(gh api "users/$bot" --jq .id)
           title="build(repo,vscode): release $VERSION"
           git switch --create release
-          git -c user.name="$bot" -c user.email="$bot_id+$bot@users.noreply.github.com" commit --all --quiet --message "$title"
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit --all --quiet --message "$title"
           gh auth setup-git
           git push --force origin release
           if [ "$(gh pr list --head release --json number --jq length)" = 0 ]; then
