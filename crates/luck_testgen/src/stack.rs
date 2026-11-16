@@ -268,11 +268,18 @@ pub fn deep_and_long_sources() -> Vec<(LuaVersion, String)> {
 /// # Panics
 ///
 /// Panics when a thread can't start, or when `stage` panics.
+#[expect(
+    clippy::print_stderr,
+    reason = "the harness shows it only for a test that failed, and an overflow ends the process before the stage can say which source it was on"
+)]
 pub fn on_the_smallest_stack<Sources>(sources: Sources, stage: fn(&str, LuaVersion))
 where
     Sources: IntoIterator<Item = (LuaVersion, String)>,
 {
     for (version, source) in sources {
+        let dialect = if version.is_luau() { "Luau" } else { "Lua" };
+        let head: String = source.chars().take(60).collect();
+        eprintln!("{dialect}: {head}");
         #[expect(clippy::expect_used, reason = "the stage can't run without its thread")]
         let worker = thread::Builder::new()
             .stack_size(SMALLEST_STACK_BYTES)

@@ -450,18 +450,23 @@ pub trait Transform {
     }
 }
 
+// Each helper calls its hook once, between the levels it opens, so a pass
+// that counts none pays nothing for them.
+
 /// Rewrite `expr` a level down. An error stands for nothing the parser read,
 /// so it opens none.
 fn transform_nested_expr<T>(transform: &mut T, expr: Expression) -> Expression
 where
     T: Transform + ?Sized,
 {
-    if matches!(expr, Expression::Error(_)) {
-        return transform.transform_expr(expr);
+    let is_level = !matches!(expr, Expression::Error(_));
+    if is_level {
+        transform.descend();
     }
-    transform.descend();
     let transformed = transform.transform_expr(expr);
-    transform.ascend();
+    if is_level {
+        transform.ascend();
+    }
     transformed
 }
 
@@ -471,11 +476,15 @@ fn transform_operand<T>(transform: &mut T, expr: Expression, needs_parens: bool)
 where
     T: Transform + ?Sized,
 {
-    if needs_parens {
-        transform_nested_expr(transform, expr)
-    } else {
-        transform.transform_expr(expr)
+    let is_level = needs_parens && !matches!(expr, Expression::Error(_));
+    if is_level {
+        transform.descend();
     }
+    let transformed = transform.transform_expr(expr);
+    if is_level {
+        transform.ascend();
+    }
+    transformed
 }
 
 /// Rewrite `expr` a level down, and one more where it needs parentheses.
@@ -487,12 +496,20 @@ fn transform_nested_operand<T>(
 where
     T: Transform + ?Sized,
 {
-    if !needs_parens {
-        return transform_nested_expr(transform, expr);
+    let is_level = !matches!(expr, Expression::Error(_));
+    if needs_parens {
+        transform.descend();
     }
-    transform.descend();
-    let transformed = transform_nested_expr(transform, expr);
-    transform.ascend();
+    if is_level {
+        transform.descend();
+    }
+    let transformed = transform.transform_expr(expr);
+    if is_level {
+        transform.ascend();
+    }
+    if needs_parens {
+        transform.ascend();
+    }
     transformed
 }
 
@@ -501,12 +518,14 @@ fn transform_nested_type<T>(transform: &mut T, type_value: Type) -> Type
 where
     T: Transform + ?Sized,
 {
-    if matches!(type_value, Type::Error(_)) {
-        return transform.transform_type(type_value);
+    let is_level = !matches!(type_value, Type::Error(_));
+    if is_level {
+        transform.descend();
     }
-    transform.descend();
     let transformed = transform.transform_type(type_value);
-    transform.ascend();
+    if is_level {
+        transform.ascend();
+    }
     transformed
 }
 
@@ -515,11 +534,15 @@ fn transform_type_operand<T>(transform: &mut T, type_value: Type, needs_parens: 
 where
     T: Transform + ?Sized,
 {
-    if needs_parens {
-        transform_nested_type(transform, type_value)
-    } else {
-        transform.transform_type(type_value)
+    let is_level = needs_parens && !matches!(type_value, Type::Error(_));
+    if is_level {
+        transform.descend();
     }
+    let transformed = transform.transform_type(type_value);
+    if is_level {
+        transform.ascend();
+    }
+    transformed
 }
 
 fn walk_exprs<T>(transform: &mut T, exprs: &mut [Expression])

@@ -41,7 +41,7 @@ snapshots:
 
 # Run the stack tests, which only a release build's frames pass
 stack:
-  cargo nextest run --release -E 'test(smallest_stack)'
+  cargo nextest run --release --no-fail-fast -E 'test(smallest_stack)'
 
 # Run the doctests, which nextest skips
 doctest:

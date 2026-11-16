@@ -79,6 +79,7 @@ enum Form {
     Cast,
 }
 
+#[inline]
 fn form(expr: &Expression) -> Form {
     match expr {
         Expression::BinaryOp(run) => Form::Run(run.precedence().0),
@@ -104,6 +105,7 @@ fn form(expr: &Expression) -> Form {
     }
 }
 
+#[inline]
 pub(crate) fn first_operand_needs_parens(run: &BinaryOp) -> bool {
     let precedence = run.precedence().0;
     let binds_looser = match form(&run.first) {
@@ -116,6 +118,7 @@ pub(crate) fn first_operand_needs_parens(run: &BinaryOp) -> bool {
 
 /// Only the last operand can end in an if-expression, which takes in
 /// everything after it.
+#[inline]
 pub(crate) fn link_operand_needs_parens(
     precedence: u8,
     operand: &Expression,
@@ -125,10 +128,12 @@ pub(crate) fn link_operand_needs_parens(
     binds_looser || (!is_last && ends_in_if_expr(operand))
 }
 
+#[inline]
 pub(crate) fn unary_operand_needs_parens(operand: &Expression) -> bool {
     matches!(form(operand), Form::Run(inner) if inner < UnOp::PRECEDENCE)
 }
 
+#[inline]
 pub(crate) fn cast_operand_needs_parens(operand: &Expression) -> bool {
     match form(operand) {
         Form::Simple => false,
@@ -146,6 +151,7 @@ enum TypeForm {
     Compound,
 }
 
+#[inline]
 const fn type_form(type_value: &Type) -> TypeForm {
     match type_value {
         Type::Name { .. }
@@ -165,12 +171,14 @@ const fn type_form(type_value: &Type) -> TypeForm {
     }
 }
 
+#[inline]
 pub(crate) const fn optional_inner_needs_parens(inner: &Type) -> bool {
     !matches!(type_form(inner), TypeForm::Simple)
 }
 
 /// A function type's return type takes in what follows it, so only the last
 /// member can be one.
+#[inline]
 pub(crate) const fn union_member_needs_parens(member: &Type, is_last: bool) -> bool {
     match type_form(member) {
         TypeForm::Simple | TypeForm::Optional => false,
@@ -180,6 +188,7 @@ pub(crate) const fn union_member_needs_parens(member: &Type, is_last: bool) -> b
 }
 
 /// As in a union, but a `?` beside `&` needs parentheses too.
+#[inline]
 pub(crate) const fn intersection_member_needs_parens(member: &Type, is_last: bool) -> bool {
     match type_form(member) {
         TypeForm::Simple => false,

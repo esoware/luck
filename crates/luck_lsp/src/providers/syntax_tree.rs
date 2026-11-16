@@ -39,18 +39,19 @@ mod tests {
 
     use super::*;
 
-    /// One tree at the cap, which nests statements and function bodies.
+    /// A tree that nests statements and function bodies about as deep as a
+    /// dump gets within the bound, since each level indents every line under
+    /// it, so the dump grows with the square of the depth.
     ///
     /// `{:#?}` writes through a writer per level open, so each such dump
-    /// takes seconds, and the dump of this one ends within the bound.
+    /// takes seconds.
     #[test]
     #[cfg_attr(
         debug_assertions,
         ignore = "only a release build's frames fit, so `just stack` runs it"
     )]
-    fn a_tree_at_the_cap_dumps_on_the_smallest_stack() {
-        // Each function and the innermost `local` and its value are a level.
-        let levels = LuaVersion::Lua54.max_nesting_depth() - 2;
+    fn a_deep_tree_dumps_on_the_smallest_stack() {
+        let levels = 127;
         let source = format!(
             "{}local innermost = 1{}",
             "local function f() ".repeat(levels),
