@@ -62,12 +62,12 @@ jobs:
           VERSION: ${{ steps.bump.outputs.version }}
         run: |
           title="build(repo,vscode): release $VERSION"
-          git switch --create release
+          git switch --create release-pr
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit --all --quiet --message "$title"
           gh auth setup-git
-          git push --force origin release
-          if [ "$(gh pr list --head release --json number --jq length)" = 0 ]; then
-            gh pr create --base main --head release --title "$title" --body-file "$RUNNER_TEMP/notes.md"
+          git push --force origin release-pr
+          if [ "$(gh pr list --head release-pr --json number --jq length)" = 0 ]; then
+            gh pr create --base main --head release-pr --title "$title" --body-file "$RUNNER_TEMP/notes.md"
           else
-            gh pr edit release --title "$title" --body-file "$RUNNER_TEMP/notes.md"
+            gh pr edit release-pr --title "$title" --body-file "$RUNNER_TEMP/notes.md"
           fi
