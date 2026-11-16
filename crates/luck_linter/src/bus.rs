@@ -10,8 +10,9 @@ use crate::node_type::NodeType;
 use crate::nodes::{AstNode, NodeKind};
 use crate::rule::{CallPosition, CallSite, LintContext, NodeRule};
 
-/// Below this many nodes the chunk setup costs more than it saves.
-const MIN_PARALLEL_NODES: usize = 4096;
+/// Below this many nodes, handing work to the rayon pool costs more than it
+/// saves.
+pub(crate) const MIN_PARALLEL_NODES: usize = 4096;
 
 thread_local! {
     /// For each node type, the indices of the rules subscribed to it. Kept
@@ -77,21 +78,17 @@ fn call_site<'ast>(
     Some(CallSite { call: Call::new(chain.head(index), suffix), position, callee })
 }
 
-/// Large tables are split into contiguous chunks across the rayon pool.
-/// Chunk results concatenate in order, so each rule's findings come out
-/// as a sequential pass would give them.
-pub(crate) fn run<'ast>(
+/// Splits `nodes` into contiguous chunks across the rayon pool. Chunk results
+/// concatenate in order, so each rule's findings come out as [`run`] gives
+/// them.
+pub(crate) fn run_in_parallel<'ast>(
     rules: &[&dyn NodeRule],
     nodes: &[AstNode<'ast>],
     context: &LintContext<'ast>,
 ) -> Vec<Vec<Finding>> {
-    if nodes.len() < MIN_PARALLEL_NODES {
-        return run_chunk(rules, nodes, context);
-    }
-
     let nodes_per_chunk = nodes.len().div_ceil(rayon::current_num_threads());
     let chunk_results: Vec<Vec<Vec<Finding>>> =
-        nodes.par_chunks(nodes_per_chunk).map(|chunk| run_chunk(rules, chunk, context)).collect();
+        nodes.par_chunks(nodes_per_chunk).map(|chunk| run(rules, chunk, context)).collect();
 
     let mut findings_by_rule = vec![Vec::new(); rules.len()];
     for chunk in chunk_results {
@@ -102,7 +99,8 @@ pub(crate) fn run<'ast>(
     findings_by_rule
 }
 
-fn run_chunk<'ast>(
+/// Each rule's findings, in node order.
+pub(crate) fn run<'ast>(
     rules: &[&dyn NodeRule],
     nodes: &[AstNode<'ast>],
     context: &LintContext<'ast>,

@@ -189,7 +189,7 @@ fn pure_require_reads(expr: &Expression) -> Option<(&str, Option<&str>)> {
     let (Expression::Name(callee), [Suffix::Call(call)]) = (&chain.prefix, &*chain.suffixes) else {
         return None;
     };
-    let (method, args) = (&call.method, &call.args);
+    let (method, args) = (call.method(), call.args());
     let callee_name = callee.identifier()?;
 
     if let Some(method_name) = method {

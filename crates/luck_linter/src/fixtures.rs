@@ -73,6 +73,7 @@ fn check(
         comments: &parse.comments,
         config,
         local_flow: OnceLock::new(),
+        line_index: OnceLock::new(),
     };
     let entry = RULES
         .iter()

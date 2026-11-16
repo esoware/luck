@@ -595,10 +595,7 @@ fn explicit_type_instantiation_is_a_suffix() {
     let Suffix::Call(method_call) = method_chain.suffixes.last() else {
         panic!("expected method call");
     };
-    assert_eq!(
-        method_call.explicit_type_args.as_ref().expect("method type arguments").args.len(),
-        2
-    );
+    assert_eq!(method_call.explicit_type_args().expect("method type arguments").args.len(), 2);
 }
 
 #[test]

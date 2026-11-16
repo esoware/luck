@@ -80,6 +80,7 @@ pub fn lint_analyzed(
         comments: &parse.comments,
         config,
         local_flow: OnceLock::new(),
+        line_index: OnceLock::new(),
     };
 
     let mut diags = run_rules(&context, &nodes);
@@ -117,8 +118,8 @@ fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
     }
 }
 
-/// Node rules share one bus pass while whole-tree rules run in parallel
-/// beside it.
+/// Node rules share one bus pass while whole-tree rules run beside it, on
+/// the rayon pool for a file large enough to gain from it.
 ///
 /// Results go back into registry order, so the caller's stable sort breaks
 /// ties the way a sequential run would. A node rule is skipped when none of
@@ -148,22 +149,23 @@ fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic
         }
     }
 
-    let (node_results, whole_results) = rayon::join(
-        || bus::run(&node_rules, nodes.as_slice(), context),
-        || {
-            whole_rules
-                .par_iter()
-                .map(|&(slot, rule)| (slot, rule.check(context)))
-                .collect::<Vec<_>>()
-        },
-    );
+    let check_whole = |&(slot, rule): &(usize, &dyn WholeRule)| (slot, rule.check(context));
+    let ast_nodes = nodes.as_slice();
+    let (node_results, whole_results): (_, Vec<_>) = if ast_nodes.len() < bus::MIN_PARALLEL_NODES {
+        (bus::run(&node_rules, ast_nodes, context), whole_rules.iter().map(check_whole).collect())
+    } else {
+        rayon::join(
+            || bus::run_in_parallel(&node_rules, ast_nodes, context),
+            || whole_rules.par_iter().map(check_whole).collect(),
+        )
+    };
 
     #[cfg(debug_assertions)]
     bus::assert_dispatch_is_pure(
         &node_rules,
         &skipped_node_rules,
         &node_results,
-        nodes.as_slice(),
+        ast_nodes,
         context,
     );
 

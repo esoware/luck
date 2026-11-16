@@ -614,11 +614,12 @@ impl Emitter {
         name
     }
 
-    /// `StdlibMap::new(&[...])`, opened on a line at `depth`.
+    /// `stdlib_map!(StdlibEntry, [...])`, opened on a line at `depth`.
     fn map(&mut self, entries: &BTreeMap<String, Entry>, depth: usize) -> String {
-        let map = self.model("StdlibMap");
+        let map = self.model("stdlib_map");
+        let entry_type = self.model("StdlibEntry");
         if entries.is_empty() {
-            return format!("{map}::new(&[])");
+            return format!("{map}!({entry_type}, [])");
         }
         let entry_depth = depth.saturating_add(1);
         let lines: Vec<String> = entries
@@ -630,7 +631,7 @@ impl Emitter {
             .collect();
         format!(
             "\
-{map}::new(&[
+{map}!({entry_type}, [
 {}{}])",
             lines.concat(),
             INDENT.repeat(depth)
@@ -806,11 +807,11 @@ impl Emitter {
     }
 
     fn shapes(&mut self, shapes: &BTreeMap<String, BTreeMap<String, Entry>>) -> String {
-        let map = self.model("StdlibMap");
-        if shapes.is_empty() {
-            return format!("{map}::new(&[])");
-        }
+        let map = self.model("stdlib_map");
         let shape_type = self.model("StdlibShape");
+        if shapes.is_empty() {
+            return format!("{map}!({shape_type}, [])");
+        }
         let lines: Vec<String> = shapes
             .iter()
             .map(|(name, members)| {
@@ -820,7 +821,7 @@ impl Emitter {
             .collect();
         format!(
             "\
-{map}::new(&[
+{map}!({shape_type}, [
 {}{INDENT}])",
             lines.concat()
         )
@@ -922,7 +923,7 @@ fn stdlib_catalog_is_up_to_date() {
     }
 }
 
-/// `StdlibMap::get` binary-searches, so every table must be in name order.
+/// Iterating a table gives its names in order, so every table must be in it.
 #[test]
 fn every_catalog_table_is_in_name_order() {
     fn check(file: &str, path: &str, map: StdlibMap<StdlibEntry>) {

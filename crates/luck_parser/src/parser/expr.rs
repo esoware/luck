@@ -1,8 +1,8 @@
 use luck_ast::{
     BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
-    FunctionDef, IfExpression, InterpolatedString, InterpolatedStringSegment, OneOrMore,
-    ParenthesizedExpression, Punctuated, Suffix, SuffixedExpression, TableConstructor, TypeArgs,
-    TypeCast, UnaryOp,
+    FunctionDef, IfExpression, InterpolatedString, InterpolatedStringSegment, MethodCall,
+    OneOrMore, ParenthesizedExpression, Punctuated, Suffix, SuffixedExpression, TableConstructor,
+    TypeArgs, TypeCast, UnaryOp,
 };
 use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
@@ -289,7 +289,10 @@ impl Parser<'_> {
             TokenKind::Less => {
                 let open = self.current_span();
                 let (type_args, close) = self.parse_type_instantiation();
-                Suffix::TypeInstantiation { span: open.merge(close), type_args }
+                Suffix::TypeInstantiation {
+                    span: open.merge(close),
+                    type_args: Box::new(type_args),
+                }
             }
             TokenKind::Dot => {
                 self.advance_span();
@@ -303,21 +306,17 @@ impl Parser<'_> {
                 Suffix::Index { span: open.merge(close), index }
             }
             TokenKind::Colon => self.parse_method_suffix(),
-            _ => Suffix::Call(CallSuffix {
-                method: None,
-                explicit_type_args: None,
-                args: self.parse_function_args(),
-            }),
+            _ => Suffix::Call(CallSuffix::Plain(self.parse_function_args())),
         }
     }
 
     fn parse_method_suffix(&mut self) -> Suffix {
         self.advance_span();
-        let method = Some(self.expect_identifier_recover());
+        let name = self.expect_identifier_recover();
         let explicit_type_args =
             self.is_at_type_instantiation().then(|| Box::new(self.parse_type_instantiation().0));
         let args = self.parse_function_args();
-        Suffix::Call(CallSuffix { method, explicit_type_args, args })
+        Suffix::Call(CallSuffix::Method(Box::new(MethodCall { name, explicit_type_args, args })))
     }
 
     const fn is_at_type_instantiation(&self) -> bool {

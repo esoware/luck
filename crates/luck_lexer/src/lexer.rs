@@ -356,9 +356,14 @@ impl<'source> Lexer<'source> {
     /// break, so what follows on later lines lexes as it would have.
     fn lex_short_string(&mut self, quote: u8) -> Token {
         let start = self.cursor.position();
-        let (kind, is_terminated) =
-            scan_short_string(&mut self.cursor, self.version, quote, &mut self.errors);
-        self.make_string_token(kind, start, is_terminated)
+        let kind = scan_short_string(
+            &mut self.cursor,
+            self.version,
+            quote,
+            &mut self.errors,
+            &mut self.unterminated,
+        );
+        self.make_token(kind, start)
     }
 
     fn lex_long_string_or_bracket(&mut self) -> Option<Token> {
@@ -366,17 +371,15 @@ impl<'source> Lexer<'source> {
         let Some(level) = eat_long_bracket_open(&mut self.cursor) else {
             return self.lex_symbol();
         };
-        let (kind, is_terminated) =
-            scan_long_string(&mut self.cursor, self.version, start, level, &mut self.errors);
-        Some(self.make_string_token(kind, start, is_terminated))
-    }
-
-    fn make_string_token(&mut self, kind: TokenKind, start: usize, is_terminated: bool) -> Token {
-        let token = self.make_token(kind, start);
-        if !is_terminated {
-            self.unterminated.push(token.span);
-        }
-        token
+        let kind = scan_long_string(
+            &mut self.cursor,
+            self.version,
+            start,
+            level,
+            &mut self.errors,
+            &mut self.unterminated,
+        );
+        Some(self.make_token(kind, start))
     }
 
     /// A string with no expressions becomes an empty `InterpolatedStringBegin`

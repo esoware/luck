@@ -66,7 +66,7 @@ pub(crate) fn chain_shape(chain: &SuffixedExpression) -> String {
         let _unused = match suffix {
             Suffix::Field(name) => write!(shape, ".{}", name.identifier().unwrap_or_default()),
             Suffix::Index { .. } => write!(shape, "[]"),
-            Suffix::Call(call) => match &call.method {
+            Suffix::Call(call) => match call.method() {
                 Some(method) => write!(shape, ":{}()", method.identifier().unwrap_or_default()),
                 None => write!(shape, "()"),
             },

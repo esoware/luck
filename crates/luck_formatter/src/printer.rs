@@ -46,6 +46,9 @@ pub(crate) fn print(
         .bytes()
         .map(|b| if b == b'\t' { columns_per_indent } else { 1 })
         .fold(0usize, usize::saturating_add);
+    let mut group_modes = vec![None; group_count];
+    let mut hugs = vec![Vec::new(); group_count];
+    let text_bytes = propagate_expand(elements, &mut group_modes, &mut hugs);
     let mut printer = Printer {
         line_width: usize::from(options.line_width),
         indent_byte,
@@ -53,21 +56,19 @@ pub(crate) fn print(
         columns_per_indent,
         base_indent: base_indent.to_owned(),
         base_indent_columns,
-        // Synthetic ASTs have no source, so size by element count. Four bytes
-        // per element is close enough to avoid most reallocations.
-        output: CodeBuffer::with_capacity(elements.len().saturating_mul(4)),
+        output: CodeBuffer::with_capacity(text_bytes),
         line_start: 0,
         display_column: 0,
         indent_level: 0,
         modes: Vec::new(),
-        group_modes: vec![None; group_count],
-        hugs: vec![Vec::new(); group_count],
+        group_modes,
+        hugs,
         next_line_moves: Vec::new(),
         suffixes: Vec::new(),
         is_pending_space: false,
         is_pending_indent: !base_indent.is_empty(),
+        group_start_run: None,
     };
-    propagate_expand(elements, &mut printer.group_modes, &mut printer.hugs);
     printer.print_elements(elements);
     printer.flush_suffixes();
     printer.output.into_string()
@@ -149,6 +150,9 @@ struct Printer {
     suffixes: Vec<FormatElement>,
     is_pending_space: bool,
     is_pending_indent: bool,
+    /// The last group measured: how many elements followed its start tag,
+    /// and how many group start tags came first among them.
+    group_start_run: Option<(usize, usize)>,
 }
 
 /// A forced break marks every group on the stack of enclosing groups.
@@ -156,13 +160,17 @@ struct Printer {
 /// The exception is the group right around a hugged group the break is in,
 /// which can stay flat while the hugged group breaks. Line suffixes are
 /// boundaries: breaks inside them don't force anything outside.
+///
+/// Returns how many bytes the elements' text, spaces, and lines take, which
+/// the output takes at least.
 fn propagate_expand(
     elements: &[FormatElement],
     group_modes: &mut [Option<PrintMode>],
     hugs: &mut [Vec<Hug>],
-) {
+) -> usize {
     let mut open_groups: Vec<OpenGroup> = Vec::new();
     let mut is_in_suffix = false;
+    let mut text_bytes = 0usize;
 
     for (index, element) in elements.iter().enumerate() {
         let content_start = index.saturating_add(1);
@@ -179,6 +187,7 @@ fn propagate_expand(
             FormatElement::Tag(Tag::StartLineSuffix) => is_in_suffix = true,
             FormatElement::Tag(Tag::EndLineSuffix) => is_in_suffix = false,
             FormatElement::Line(mode) => {
+                text_bytes = text_bytes.saturating_add(1);
                 if let [.., parent, child] = open_groups.as_slice()
                     && child.is_hugged
                     && let Some(siblings) = hugs.get_mut(parent.id.index())
@@ -204,26 +213,35 @@ fn propagate_expand(
                     mark_expanded(&open_groups, group_modes);
                 }
             }
-            FormatElement::Text(_, width) | FormatElement::Verbatim(_, width) => {
+            FormatElement::Text(content, width) | FormatElement::Verbatim(content, width) => {
+                text_bytes = text_bytes.saturating_add(content.len());
                 if !is_in_suffix && width.columns().is_none() {
                     mark_expanded(&open_groups, group_modes);
                 }
             }
-            FormatElement::Token(_)
-            | FormatElement::Space
-            | FormatElement::LineSuffixBoundary
-            | FormatElement::Tag(_) => {}
+            FormatElement::Token(content) => text_bytes = text_bytes.saturating_add(content.len()),
+            FormatElement::Space => text_bytes = text_bytes.saturating_add(1),
+            FormatElement::LineSuffixBoundary | FormatElement::Tag(_) => {}
         }
     }
+    text_bytes
 }
 
+/// Marks from the innermost group out, and stops at one already marked.
+///
+/// The break that marked it settled every group around it, and each of those
+/// is still open around the same inner group, so the same hug still exempts
+/// it.
 fn mark_expanded(open_groups: &[OpenGroup], group_modes: &mut [Option<PrintMode>]) {
-    let mut inner_groups = open_groups.iter().skip(1);
-    for group in open_groups {
-        let is_hugging = inner_groups.next().is_some_and(|inner| inner.is_hugged);
-        if !is_hugging && let Some(mode) = group_modes.get_mut(group.id.index()) {
+    let mut is_inner_hugged = false;
+    for group in open_groups.iter().rev() {
+        if !is_inner_hugged && let Some(mode) = group_modes.get_mut(group.id.index()) {
+            if *mode == Some(PrintMode::Expanded) {
+                return;
+            }
             *mode = Some(PrintMode::Expanded);
         }
+        is_inner_hugged = group.is_hugged;
     }
 }
 
@@ -364,7 +382,17 @@ impl Printer {
     fn decide_mode(&mut self, id: GroupId, rest: &[FormatElement]) -> PrintMode {
         // An enclosing flat group already measured this content;
         // re-measuring can't change the answer.
-        if self.current_mode() == PrintMode::Flat || self.fits(rest, Region::Group, 0) {
+        if self.current_mode() == PrintMode::Flat {
+            return PrintMode::Flat;
+        }
+        let inner_starts = self.inner_group_starts(rest);
+        let content = rest.get(inner_starts..).unwrap_or_default();
+        if self.fits_from(
+            content,
+            Region::Group,
+            self.occupied_width(),
+            inner_starts.wrapping_add(1),
+        ) {
             return PrintMode::Flat;
         }
         let hugs = self.hugs.get(id.index()).map_or(&[][..], Vec::as_slice);
@@ -388,6 +416,28 @@ impl Printer {
             return PrintMode::Flat;
         }
         PrintMode::Expanded
+    }
+
+    /// How many group start tags `rest` opens with, which measuring the group
+    /// before them skips, as they take no width.
+    ///
+    /// A chain's runs open that many groups at once, each measured in turn, so
+    /// the count carries over from the group a tag earlier rather than being
+    /// taken again for each.
+    fn inner_group_starts(&mut self, rest: &[FormatElement]) -> usize {
+        let count = match self.group_start_run {
+            Some((rest_length, count))
+                if rest_length == rest.len().wrapping_add(1) && count > 0 =>
+            {
+                count.wrapping_sub(1)
+            }
+            Some(_) | None => rest
+                .iter()
+                .take_while(|element| matches!(element, FormatElement::Tag(Tag::StartGroup(_))))
+                .count(),
+        };
+        self.group_start_run = Some((rest.len(), count));
+        count
     }
 
     fn print_line(&mut self, mode: LineMode) {
@@ -536,7 +586,7 @@ impl Printer {
         elements: &[FormatElement],
         region: Region,
         mut used_width: usize,
-        mut depth: u32,
+        mut depth: usize,
     ) -> bool {
         let mut remaining = elements;
 

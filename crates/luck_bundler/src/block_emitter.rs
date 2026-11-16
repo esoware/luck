@@ -1,9 +1,9 @@
 use core::mem;
 
 use luck_ast::{
-    Assignment, Block, Expression, FunctionArgs, FunctionDecl, FunctionName, FunctionSignature,
-    Literal, LocalAssignment, LocalFunction, LocalFunctionKind, OneOrMore, Punctuated, Statement,
-    Suffix, SuffixedExpression, Synth, Transform, Var,
+    Assignment, Block, CallSuffix, Expression, FunctionArgs, FunctionDecl, FunctionName,
+    FunctionSignature, Literal, LocalAssignment, LocalFunction, LocalFunctionKind, OneOrMore,
+    Punctuated, Statement, Suffix, SuffixedExpression, Synth, Transform, Var,
 };
 use luck_core::Diagnostic;
 use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
@@ -277,18 +277,15 @@ struct ModuleRewriter<'plan> {
 impl ModuleRewriter<'_> {
     /// `require("name")` becomes a call of the loader with the module's key.
     fn retarget_require(&self, chain: &mut SuffixedExpression) {
-        let (Expression::Name(callee), Some(Suffix::Call(call))) =
+        let (Expression::Name(callee), Some(Suffix::Call(CallSuffix::Plain(args)))) =
             (&mut chain.prefix, chain.suffixes.first_mut())
         else {
             return;
         };
-        if call.method.is_some() {
-            return;
-        }
-        let args_span = call.args.span();
+        let args_span = args.span();
         if let Some(key) = self.require_keys.get(&callee.span.merge(args_span)) {
             callee.kind = self.require.clone();
-            call.args = FunctionArgs::Parenthesized {
+            *args = FunctionArgs::Parenthesized {
                 span: args_span,
                 args: Punctuated::from_item(key_expr(key)),
             };
@@ -298,7 +295,7 @@ impl ModuleRewriter<'_> {
     /// The export table's field that a lowered export's reference reads or
     /// writes.
     fn export_field(&self, name: &Token) -> Option<Box<SuffixedExpression>> {
-        self.field_references.contains(&name.span).then(|| self.table_field(name.clone()))
+        self.field_references.contains(&name.span).then(|| Box::new(self.table_field(name.clone())))
     }
 
     /// A top-level `export` declaration loses the keyword. One whose exports
@@ -319,7 +316,7 @@ impl ModuleRewriter<'_> {
                 let targets = names
                     .into_items()
                     .into_iter()
-                    .map(|attributed| Var::Suffixed(self.table_field(attributed.name)))
+                    .map(|attributed| Var::Suffixed(Box::new(self.table_field(attributed.name))))
                     .collect();
                 let values = exprs.unwrap_or_else(|| Punctuated::from_item(Expression::Nil(span)));
                 Statement::Assignment(Box::new(Assignment {
@@ -370,12 +367,12 @@ impl ModuleRewriter<'_> {
     }
 
     /// The export table's field `name`, spanning it.
-    fn table_field(&self, name: Token) -> Box<SuffixedExpression> {
-        Box::new(SuffixedExpression {
+    fn table_field(&self, name: Token) -> SuffixedExpression {
+        SuffixedExpression {
             span: name.span,
             prefix: Expression::Name(Token::new(self.exports.clone(), name.span)),
             suffixes: OneOrMore::new(Suffix::Field(name)),
-        })
+        }
     }
 }
 

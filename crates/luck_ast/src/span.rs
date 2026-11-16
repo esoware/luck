@@ -132,8 +132,8 @@ impl Suffix {
             Self::Field(name) => name.span,
             Self::Index { span, .. } | Self::TypeInstantiation { span, .. } => *span,
             Self::Call(call) => {
-                let args_span = call.args.span();
-                call.method.as_ref().map_or(args_span, |method| method.span.merge(args_span))
+                let args_span = call.args().span();
+                call.method().map_or(args_span, |method| method.span.merge(args_span))
             }
         }
     }

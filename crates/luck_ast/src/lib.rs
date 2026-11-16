@@ -62,7 +62,7 @@ pub use depth::{
 };
 pub use expr::{
     BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
-    FunctionDef, IfExpression, InterpolatedString, InterpolatedStringSegment, Literal,
+    FunctionDef, IfExpression, InterpolatedString, InterpolatedStringSegment, Literal, MethodCall,
     ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};

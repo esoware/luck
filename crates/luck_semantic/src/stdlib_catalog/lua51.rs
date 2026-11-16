@@ -3,12 +3,12 @@
 use luck_token::{LuaVersion, StdlibEnvironment};
 
 use super::{FUNCTION, NAMESPACE, VALUE, constant, optional, required, signature};
-use crate::stdlib_model::{StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary, StdlibMap, StdlibNamespace, StdlibShape, StdlibValue};
+use crate::stdlib_model::{StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary, StdlibNamespace, StdlibShape, StdlibValue, stdlib_map};
 
 pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
     version: LuaVersion::Lua51,
     environment: StdlibEnvironment::Standalone,
-    globals: StdlibMap::new(&[
+    globals: stdlib_map!(StdlibEntry, [
         ("_G", StdlibEntry::Property(StdlibValue { is_read_only: false, ..VALUE })),
         ("_PROMPT", StdlibEntry::Property(StdlibValue { is_read_only: false, ..VALUE })),
         ("_PROMPT2", StdlibEntry::Property(StdlibValue { is_read_only: false, ..VALUE })),
@@ -16,7 +16,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ("arg", StdlibEntry::Property(StdlibValue { is_read_only: false, ..VALUE })),
         ("assert", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any), optional(StdlibArgKind::String), optional(StdlibArgKind::Vararg)], 1, None)], ..FUNCTION })),
         ("collectgarbage", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Constant(&[constant("collect"), constant("count"), constant("restart"), constant("setpause"), constant("setstepmul"), constant("step"), constant("stop")])), optional(StdlibArgKind::Number)], 0, Some(2))], ..FUNCTION })),
-        ("coroutine", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("coroutine", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("create", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("resume", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("coroutine")), optional(StdlibArgKind::Vararg)], 1, None)], ..FUNCTION })),
             ("running", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
@@ -24,7 +24,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("wrap", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("yield", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("debug", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("debug", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("debug", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], ..FUNCTION })),
             ("getfenv", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("gethook", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Any)], 0, Some(1))], is_must_use: true, ..FUNCTION })),
@@ -45,7 +45,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ("gcinfo", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, deprecated: Some(StdlibDeprecation { message: "use collectgarbage('count') instead", replace_template: Some("collectgarbage('count')") }), ..FUNCTION })),
         ("getfenv", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Any)], 0, Some(1))], is_must_use: true, ..FUNCTION })),
         ("getmetatable", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
-        ("io", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("io", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("close", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Display("file"))], 0, Some(1))], ..FUNCTION })),
             ("flush", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], ..FUNCTION })),
             ("input", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Display("file"))], 0, Some(1))], returns_shape: Some("file"), ..FUNCTION })),
@@ -65,7 +65,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ("load", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function), optional(StdlibArgKind::String)], 1, Some(2))], ..FUNCTION })),
         ("loadfile", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::String)], 0, Some(1))], ..FUNCTION })),
         ("loadstring", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::String)], 1, Some(2))], ..FUNCTION })),
-        ("math", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("math", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("abs", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("acos", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("asin", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -101,7 +101,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ("module", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Vararg)], 1, None)], ..FUNCTION })),
         ("newproxy", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Bool)], 0, Some(1))], is_must_use: true, ..FUNCTION })),
         ("next", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), optional(StdlibArgKind::Any)], 1, Some(2))], ..FUNCTION })),
-        ("os", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("os", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("clock", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
             ("date", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::String), optional(StdlibArgKind::Number)], 0, Some(2))], is_must_use: true, ..FUNCTION })),
             ("difftime", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -114,7 +114,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("time", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Table)], 0, Some(1))], is_must_use: true, ..FUNCTION })),
             ("tmpname", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("package", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("package", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("cpath", StdlibEntry::Property(StdlibValue { is_read_only: false, ..VALUE })),
             ("loaded", StdlibEntry::Property(StdlibValue { is_read_only: false, ..VALUE })),
             ("loaders", StdlibEntry::Property(StdlibValue { is_read_only: false, ..VALUE })),
@@ -133,7 +133,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ("select", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any), optional(StdlibArgKind::Vararg)], 1, None)], is_must_use: true, ..FUNCTION })),
         ("setfenv", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any), required(StdlibArgKind::Table)], 2, Some(2))], ..FUNCTION })),
         ("setmetatable", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), required(StdlibArgKind::Table)], 2, Some(2))], ..FUNCTION })),
-        ("string", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("string", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("byte", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 1, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("char", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Vararg)], 0, None)], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("dump", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
@@ -150,7 +150,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("sub", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), required(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 2, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("upper", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("table", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("table", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("concat", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), optional(StdlibArgKind::String), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 1, Some(4))], is_must_use: true, ..FUNCTION })),
             ("foreach", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), required(StdlibArgKind::Function)], 2, Some(2))], deprecated: Some(StdlibDeprecation { message: "use a 'for' loop with 'pairs()' instead", replace_template: None }), ..FUNCTION })),
             ("foreachi", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), required(StdlibArgKind::Function)], 2, Some(2))], deprecated: Some(StdlibDeprecation { message: "use a 'for' loop with 'ipairs()' instead", replace_template: None }), ..FUNCTION })),
@@ -166,8 +166,8 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ("unpack", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 1, Some(3))], is_must_use: true, ..FUNCTION })),
         ("xpcall", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function), required(StdlibArgKind::Function)], 2, Some(2))], is_must_use: true, ..FUNCTION })),
     ]),
-    shapes: StdlibMap::new(&[
-        ("file", StdlibShape { members: StdlibMap::new(&[
+    shapes: stdlib_map!(StdlibShape, [
+        ("file", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("close", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_method: true, ..FUNCTION })),
             ("flush", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_method: true, ..FUNCTION })),
             ("lines", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, is_method: true, ..FUNCTION })),
@@ -176,7 +176,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("setvbuf", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Constant(&[constant("no"), constant("full"), constant("line")])), optional(StdlibArgKind::Number)], 1, Some(2))], is_method: true, ..FUNCTION })),
             ("write", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], is_method: true, ..FUNCTION })),
         ]) }),
-        ("string", StdlibShape { members: StdlibMap::new(&[
+        ("string", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("byte", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(2))], is_pure: true, is_must_use: true, is_method: true, ..FUNCTION })),
             ("find", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Number), optional(StdlibArgKind::Bool)], 1, Some(3))], is_must_use: true, is_method: true, ..FUNCTION })),
             ("format", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], is_must_use: true, is_method: true, returns_shape: Some("string"), ..FUNCTION })),

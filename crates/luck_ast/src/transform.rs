@@ -1,6 +1,7 @@
 use crate::expr::{
-    BinaryOp, Expression, Field, FunctionArgs, FunctionDef, IfExpression, InterpolatedString,
-    ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
+    BinaryOp, CallSuffix, Expression, Field, FunctionArgs, FunctionDef, IfExpression,
+    InterpolatedString, ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor,
+    TypeCast, UnaryOp, Var,
 };
 use crate::function::{FunctionBody, Parameter};
 use crate::punctuated::Punctuated;
@@ -46,6 +47,7 @@ pub trait Transform {
     /// Reached from a call statement, an expression, and an assignment
     /// target. The chain stays boxed, so a pass moves a pointer, not the
     /// node.
+    #[expect(clippy::unnecessary_box_returns, reason = "the chain goes back into its own box")]
     fn transform_suffixed(&mut self, chain: Box<SuffixedExpression>) -> Box<SuffixedExpression> {
         self.walk_suffixed(chain)
     }
@@ -184,6 +186,7 @@ pub trait Transform {
     /// `Visitor` walk reaches them: an index, a call's explicit type
     /// arguments and then its arguments, or a Luau instantiation's type
     /// arguments.
+    #[expect(clippy::unnecessary_box_returns, reason = "the chain goes back into its own box")]
     fn walk_suffixed(&mut self, mut chain: Box<SuffixedExpression>) -> Box<SuffixedExpression> {
         self.descend();
         chain.prefix = self.transform_expr(chain.prefix);
@@ -192,10 +195,16 @@ pub trait Transform {
                 Suffix::Field(_) => {}
                 Suffix::Index { index, .. } => *index = self.transform_expr(index.take()),
                 Suffix::Call(call) => {
-                    if let Some(type_args) = &mut call.explicit_type_args {
-                        walk_types(self, &mut type_args.args.items);
-                    }
-                    call.args = self.transform_function_args(call.args.take());
+                    let args = match call {
+                        CallSuffix::Plain(args) => args,
+                        CallSuffix::Method(method) => {
+                            if let Some(type_args) = &mut method.explicit_type_args {
+                                walk_types(self, &mut type_args.args.items);
+                            }
+                            &mut method.args
+                        }
+                    };
+                    *args = self.transform_function_args(args.take());
                 }
                 // Luau
                 Suffix::TypeInstantiation { type_args, .. } => {

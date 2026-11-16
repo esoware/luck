@@ -5,7 +5,7 @@ use luck_semantic::{ResolvedCallee, SemanticAnalysis};
 use luck_token::Comment;
 
 use crate::config::LintConfig;
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::{Category, Finding, LineIndex, Severity};
 use crate::local_flow::LocalFlow;
 use crate::node_type::NodeTypeSet;
 use crate::uninitialized::UninitializedLocals;
@@ -24,11 +24,16 @@ pub(crate) struct LintContext<'document> {
     pub comments: &'document [Comment],
     pub config: &'document LintConfig,
     pub local_flow: OnceLock<LocalFlow>,
+    pub line_index: OnceLock<LineIndex>,
 }
 
 impl LintContext<'_> {
     pub(crate) fn local_flow(&self) -> &LocalFlow {
         self.local_flow.get_or_init(|| LocalFlow::compute(self))
+    }
+
+    pub(crate) fn line_index(&self) -> &LineIndex {
+        self.line_index.get_or_init(|| LineIndex::new(self.source, self.semantic.version))
     }
 }
 

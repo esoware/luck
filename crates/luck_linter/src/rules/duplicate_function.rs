@@ -2,7 +2,7 @@ use luck_ast::{FunctionName, Statement};
 use luck_token::Span;
 use rustc_hash::FxHashMap;
 
-use crate::diagnostic::{Finding, line_column};
+use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -35,8 +35,7 @@ impl WholeRule for DuplicateFunction {
                     continue;
                 };
                 if let Some(first_span) = definitions.get(&name) {
-                    let (line, _) =
-                        line_column(context.source, first_span.start, context.semantic.version);
+                    let line = context.line_index().line(first_span.start);
                     findings.push(Finding::new(
                         format!(
                             "duplicate function definition `{name}`, also defined on line {line}"

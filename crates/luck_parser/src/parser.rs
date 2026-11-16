@@ -74,11 +74,11 @@ struct Parser<'source> {
     has_type_function: bool,
     open: OpenConstructs,
     /// Whether a syntax error has been reported since the last statement
-    /// began where one reliably does. What follows it in the same statement
-    /// is in doubt, so its errors would only echo the first.
-    is_recovering: bool,
-    /// How many of the lexer's unterminated strings the parser has consumed.
-    consumed_unterminated: usize,
+    /// began where one reliably does.
+    has_syntax_error: bool,
+    /// How many of the lexer's unterminated strings come before that
+    /// statement.
+    settled_unterminated: usize,
     errors: Vec<ParseError>,
 }
 
@@ -128,6 +128,18 @@ struct OpenConstructs {
 }
 
 impl OpenConstructs {
+    /// Each open pairs with a later close, and no more constructs nest than
+    /// the source has tokens, so a count never wraps.
+    const fn open(&mut self, closer: Closer) {
+        let count = self.count_mut(closer);
+        *count = count.wrapping_add(1);
+    }
+
+    const fn close(&mut self, closer: Closer) {
+        let count = self.count_mut(closer);
+        *count = count.wrapping_sub(1);
+    }
+
     const fn count_mut(&mut self, closer: Closer) -> &mut u32 {
         match closer {
             Closer::Paren => &mut self.parens,
@@ -205,8 +217,8 @@ impl<'source> Parser<'source> {
             exported_names: FxHashSet::default(),
             has_type_function: false,
             open: OpenConstructs::default(),
-            is_recovering: false,
-            consumed_unterminated: 0,
+            has_syntax_error: false,
+            settled_unterminated: 0,
             errors: Vec::new(),
         })
     }
@@ -277,20 +289,24 @@ impl<'source> Parser<'source> {
     #[inline]
     fn advance(&mut self) -> Token {
         self.previous_span = self.current.span;
-        if self.lexer.unterminated().get(self.consumed_unterminated) == Some(&self.current.span) {
-            self.consume_unterminated();
-        }
         mem::replace(&mut self.current, mem::replace(&mut self.next, self.lexer.next_token()))
     }
 
-    /// A string cut off at its line break took what followed it on the line,
-    /// often the closer of what holds it, and its lex error stands for what
-    /// that leaves broken.
-    #[cold]
-    #[inline(never)]
-    const fn consume_unterminated(&mut self) {
-        self.consumed_unterminated = self.consumed_unterminated.saturating_add(1);
-        self.is_recovering = true;
+    /// Whether a syntax error was reported, or a string cut off at its line
+    /// break consumed, since the last statement began where one reliably
+    /// does. Errors that follow either in the statement would only echo it: a
+    /// cut-off string took the rest of its line, often the closer of what
+    /// holds it.
+    ///
+    /// Worked out when asked rather than as each token is consumed.
+    #[inline]
+    fn is_recovering(&self) -> bool {
+        self.has_syntax_error
+            || self
+                .lexer
+                .unterminated()
+                .get(self.settled_unterminated)
+                .is_some_and(|span| span.start < self.current.span.start)
     }
 
     #[inline]
@@ -321,26 +337,27 @@ impl<'source> Parser<'source> {
 
     /// Count a construct `closer` closes as open from here.
     const fn open(&mut self, closer: Closer) {
-        let count = self.open.count_mut(closer);
-        *count = count.saturating_add(1);
+        self.open.open(closer);
     }
 
     /// Count the construct `closer` closes as closed from here.
     const fn close(&mut self, closer: Closer) {
-        let count = self.open.count_mut(closer);
-        *count = count.saturating_sub(1);
+        self.open.close(closer);
     }
 
     /// Close the bracket `opened` and consume its `kind` closer, as
     /// [`Self::expect`] does.
-    ///
-    /// A closing bracket of another kind that nothing open expects is a typo
-    /// for this one, so it closes this bracket too.
+    #[inline]
     fn expect_closer(&mut self, kind: &TokenKind, opened: Closer) -> Span {
         self.close(opened);
-        if self.is_at(kind) {
-            return self.advance_span();
-        }
+        if self.is_at(kind) { self.advance_span() } else { self.report_missing_closer(kind) }
+    }
+
+    /// A closing bracket of another kind that nothing open expects is a typo
+    /// for the missing `kind`, so it closes the bracket too.
+    #[cold]
+    #[inline(never)]
+    fn report_missing_closer(&mut self, kind: &TokenKind) -> Span {
         let span = self.report_expected(kind);
         if matches!(
             self.peek(),
@@ -391,7 +408,7 @@ impl<'source> Parser<'source> {
     #[inline(never)]
     fn report_expected(&mut self, kind: &TokenKind) -> Span {
         let span = self.current_span();
-        if !self.is_recovering {
+        if !self.is_recovering() {
             let message = format!("expected {kind}, found {}", self.peek());
             self.syntax_error(span, message);
         }
@@ -401,7 +418,7 @@ impl<'source> Parser<'source> {
     #[cold]
     #[inline(never)]
     fn report_expected_identifier(&mut self) {
-        if !self.is_recovering {
+        if !self.is_recovering() {
             let span = self.current_span();
             let message = format!("expected identifier, found {}", self.peek());
             self.syntax_error(span, message);
@@ -413,12 +430,11 @@ impl<'source> Parser<'source> {
         self.errors.push(ParseError { span, message: message.into() });
     }
 
-    /// Record a syntax error unless one is already being recovered from,
-    /// since what follows an error in the same statement is in doubt.
+    /// Record a syntax error unless one is already being recovered from.
     #[cold]
     fn syntax_error(&mut self, span: Span, message: impl Into<String>) {
-        if !self.is_recovering {
-            self.is_recovering = true;
+        if !self.is_recovering() {
+            self.has_syntax_error = true;
             self.error(span, message);
         }
     }
@@ -520,6 +536,25 @@ impl<'source> Parser<'source> {
         self.current = Token::new(remainder, Span::new(split_at, span.end));
         self.previous_span = Span::new(span.start, split_at);
         self.previous_span
+    }
+
+    /// Skip to the block's end, or to where a statement reliably begins and
+    /// recovery ends. False when it skipped, so the block looks again.
+    #[cold]
+    #[inline(never)]
+    fn recover_at_statement(&mut self) -> bool {
+        if self.is_at_block_end() {
+            return true;
+        }
+        if !self.is_at_reliable_stmt_start() {
+            self.skip_to_statement();
+            return false;
+        }
+        let start = self.current.span.start;
+        self.has_syntax_error = false;
+        self.settled_unterminated =
+            self.lexer.unterminated().partition_point(|span| span.start < start);
+        true
     }
 
     /// Skip to where a statement reliably begins, or to a closer something

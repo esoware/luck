@@ -3,6 +3,7 @@ use luck_token::{CommentKind, LuaVersion, SourceError, leading_hot_comments};
 
 use crate::transform_config::TransformConfig;
 use crate::transforms;
+use crate::transforms::remove_dead_code::Liveness;
 
 /// Measured corpora settle in two or three rounds, so the cap only bounds a
 /// pass that never stops changing the tree, which the fixpoint tests catch.
@@ -71,8 +72,9 @@ pub fn minify_block(
     config: &TransformConfig,
 ) -> Result<String, SourceError> {
     let mut output = luck_codegen::compact(&block)?;
+    let mut liveness = Liveness::default();
     for _ in 0..MAX_PIPELINE_ROUNDS {
-        block = apply_core_transforms(block, config, version);
+        block = apply_core_transforms(block, config, version, &mut liveness);
         let (tail_block, round_output) =
             apply_tail_transforms(block, config, version, output.len())?;
         block = tail_block;
@@ -84,9 +86,14 @@ pub fn minify_block(
     Ok(output)
 }
 
-fn apply_core_transforms(mut block: Block, config: &TransformConfig, version: LuaVersion) -> Block {
+fn apply_core_transforms(
+    mut block: Block,
+    config: &TransformConfig,
+    version: LuaVersion,
+    liveness: &mut Liveness,
+) -> Block {
     if config.remove_dead_code {
-        block = transforms::remove_dead_code::remove(block, version);
+        block = transforms::remove_dead_code::remove(block, version, liveness);
     }
     if config.simplify_statements {
         block = transforms::simplify_statements::simplify(block);
@@ -104,7 +111,7 @@ fn apply_core_transforms(mut block: Block, config: &TransformConfig, version: Lu
     // Folding those (`local DEBUG = false` inlined into `if DEBUG then`)
     // exposes new dead branches within the same round.
     if config.remove_dead_code {
-        block = transforms::remove_dead_code::remove(block, version);
+        block = transforms::remove_dead_code::remove(block, version, liveness);
     }
     if config.merge_locals {
         block = transforms::merge_locals::merge(block, version);

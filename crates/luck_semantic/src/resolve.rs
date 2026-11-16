@@ -132,7 +132,7 @@ impl<'input> ShapeResolver<'input> {
                 HeadState { shape: member.and_then(StdlibEntry::shape), global: member }
             }
             Suffix::Call(call) => {
-                let callee = call.method.as_ref().map_or(state.global, |method| {
+                let callee = call.method().map_or(state.global, |method| {
                     self.shape_method(state.shape?, method.identifier()?)
                 });
                 let shape = match callee {
@@ -300,7 +300,7 @@ impl<'chain> ChainCallees<'chain> {
             prefix: &self.chain.prefix,
             suffixes: suffixes.get(..index).unwrap_or_default(),
         };
-        self.resolver.callee(head, self.state, call.method.as_ref())
+        self.resolver.callee(head, self.state, call.method())
     }
 }
 
@@ -312,117 +312,151 @@ mod tests {
     use crate::builder;
     use crate::stdlib_catalog::{FUNCTION, NAMESPACE, VALUE, optional, required, signature};
     use crate::stdlib_model::{
-        StdlibArgKind, StdlibFunction, StdlibMap, StdlibNamespace, StdlibShape, StdlibValue,
+        StdlibArgKind, StdlibFunction, StdlibNamespace, StdlibShape, StdlibValue, stdlib_map,
     };
 
     static SHAPED_LIBRARY: StdlibLibrary = StdlibLibrary {
         version: LuaVersion::Lua54,
         environment: StdlibEnvironment::Standalone,
-        globals: StdlibMap::new(&[
-            ("game", StdlibEntry::Property(StdlibValue { shape: Some("DataModel"), ..VALUE })),
-            (
-                "io",
-                StdlibEntry::Namespace(StdlibNamespace {
-                    members: StdlibMap::new(&[(
-                        "open",
-                        StdlibEntry::Function(&StdlibFunction {
-                            signatures: &[signature(
-                                &[required(StdlibArgKind::String), optional(StdlibArgKind::String)],
-                                1,
-                                Some(2),
-                            )],
-                            returns_shape: Some("file"),
-                            ..FUNCTION
-                        }),
-                    )]),
-                    ..NAMESPACE
-                }),
-            ),
-            (
-                "string",
-                StdlibEntry::Namespace(StdlibNamespace {
-                    members: StdlibMap::new(&[(
-                        "upper",
-                        StdlibEntry::Function(&StdlibFunction {
-                            signatures: &[signature(
-                                &[required(StdlibArgKind::String)],
-                                1,
-                                Some(1),
-                            )],
-                            is_must_use: true,
-                            ..FUNCTION
-                        }),
-                    )]),
-                    ..NAMESPACE
-                }),
-            ),
-        ]),
-        shapes: StdlibMap::new(&[
-            (
-                "DataModel",
-                StdlibShape {
-                    members: StdlibMap::new(&[(
-                        "GetService",
-                        StdlibEntry::Function(&StdlibFunction {
-                            signatures: &[signature(
-                                &[required(StdlibArgKind::String)],
-                                1,
-                                Some(1),
-                            )],
-                            is_must_use: true,
-                            is_method: true,
-                            returns_shape: Some("Instance"),
-                            ..FUNCTION
-                        }),
-                    )]),
-                },
-            ),
-            (
-                "Instance",
-                StdlibShape {
-                    members: StdlibMap::new(&[(
-                        "FindFirstChild",
-                        StdlibEntry::Function(&StdlibFunction {
-                            signatures: &[signature(
-                                &[required(StdlibArgKind::String), optional(StdlibArgKind::Bool)],
-                                1,
-                                Some(2),
-                            )],
-                            is_method: true,
-                            ..FUNCTION
-                        }),
-                    )]),
-                },
-            ),
-            (
-                "file",
-                StdlibShape {
-                    members: StdlibMap::new(&[(
-                        "read",
-                        StdlibEntry::Function(&StdlibFunction {
-                            signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)],
-                            is_method: true,
-                            ..FUNCTION
-                        }),
-                    )]),
-                },
-            ),
-            (
-                "string",
-                StdlibShape {
-                    members: StdlibMap::new(&[(
-                        "upper",
-                        StdlibEntry::Function(&StdlibFunction {
-                            signatures: &[signature(&[], 0, Some(0))],
-                            is_must_use: true,
-                            is_method: true,
-                            returns_shape: Some("string"),
-                            ..FUNCTION
-                        }),
-                    )]),
-                },
-            ),
-        ]),
+        globals: stdlib_map!(
+            StdlibEntry,
+            [
+                ("game", StdlibEntry::Property(StdlibValue { shape: Some("DataModel"), ..VALUE })),
+                (
+                    "io",
+                    StdlibEntry::Namespace(StdlibNamespace {
+                        members: stdlib_map!(
+                            StdlibEntry,
+                            [(
+                                "open",
+                                StdlibEntry::Function(&StdlibFunction {
+                                    signatures: &[signature(
+                                        &[
+                                            required(StdlibArgKind::String),
+                                            optional(StdlibArgKind::String)
+                                        ],
+                                        1,
+                                        Some(2),
+                                    )],
+                                    returns_shape: Some("file"),
+                                    ..FUNCTION
+                                }),
+                            )]
+                        ),
+                        ..NAMESPACE
+                    }),
+                ),
+                (
+                    "string",
+                    StdlibEntry::Namespace(StdlibNamespace {
+                        members: stdlib_map!(
+                            StdlibEntry,
+                            [(
+                                "upper",
+                                StdlibEntry::Function(&StdlibFunction {
+                                    signatures: &[signature(
+                                        &[required(StdlibArgKind::String)],
+                                        1,
+                                        Some(1),
+                                    )],
+                                    is_must_use: true,
+                                    ..FUNCTION
+                                }),
+                            )]
+                        ),
+                        ..NAMESPACE
+                    }),
+                ),
+            ]
+        ),
+        shapes: stdlib_map!(
+            StdlibShape,
+            [
+                (
+                    "DataModel",
+                    StdlibShape {
+                        members: stdlib_map!(
+                            StdlibEntry,
+                            [(
+                                "GetService",
+                                StdlibEntry::Function(&StdlibFunction {
+                                    signatures: &[signature(
+                                        &[required(StdlibArgKind::String)],
+                                        1,
+                                        Some(1),
+                                    )],
+                                    is_must_use: true,
+                                    is_method: true,
+                                    returns_shape: Some("Instance"),
+                                    ..FUNCTION
+                                }),
+                            )]
+                        ),
+                    },
+                ),
+                (
+                    "Instance",
+                    StdlibShape {
+                        members: stdlib_map!(
+                            StdlibEntry,
+                            [(
+                                "FindFirstChild",
+                                StdlibEntry::Function(&StdlibFunction {
+                                    signatures: &[signature(
+                                        &[
+                                            required(StdlibArgKind::String),
+                                            optional(StdlibArgKind::Bool)
+                                        ],
+                                        1,
+                                        Some(2),
+                                    )],
+                                    is_method: true,
+                                    ..FUNCTION
+                                }),
+                            )]
+                        ),
+                    },
+                ),
+                (
+                    "file",
+                    StdlibShape {
+                        members: stdlib_map!(
+                            StdlibEntry,
+                            [(
+                                "read",
+                                StdlibEntry::Function(&StdlibFunction {
+                                    signatures: &[signature(
+                                        &[optional(StdlibArgKind::Vararg)],
+                                        0,
+                                        None
+                                    )],
+                                    is_method: true,
+                                    ..FUNCTION
+                                }),
+                            )]
+                        ),
+                    },
+                ),
+                (
+                    "string",
+                    StdlibShape {
+                        members: stdlib_map!(
+                            StdlibEntry,
+                            [(
+                                "upper",
+                                StdlibEntry::Function(&StdlibFunction {
+                                    signatures: &[signature(&[], 0, Some(0))],
+                                    is_must_use: true,
+                                    is_method: true,
+                                    returns_shape: Some("string"),
+                                    ..FUNCTION
+                                }),
+                            )]
+                        ),
+                    },
+                ),
+            ]
+        ),
     };
 
     fn shapes_for(source: &str) -> (ScopeTree, SymbolShapes) {

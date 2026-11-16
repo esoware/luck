@@ -1,5 +1,5 @@
 use luck_token::{
-    CompactString, LuaVersion, TokenKind, is_lua_whitespace, unicode_escape_codepoint,
+    CompactString, LuaVersion, Span, TokenKind, is_lua_whitespace, unicode_escape_codepoint,
 };
 use memchr::memmem;
 
@@ -19,24 +19,27 @@ static INTERPOLATED_STRING_STOP: ByteMatchTable =
     byte_match_table!(|b| matches!(b, b'\\' | b'{' | b'`' | b'\n' | b'\r'));
 
 /// Scan a single- or double-quoted string, with the cursor on the opening
-/// `quote`, and return its token and whether its closing quote came.
+/// `quote`.
 ///
 /// A malformed escape goes to `errors` and stays text, so the string ends
 /// where it would have without it. A line break or the end of the source
 /// before the closing quote ends the string there, unterminated, which goes to
-/// `errors` too.
+/// `errors` too, and its span to `unterminated`.
 pub(crate) fn scan_short_string(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     quote: u8,
     errors: &mut Vec<LexError>,
-) -> (TokenKind, bool) {
+    unterminated: &mut Vec<Span>,
+) -> TokenKind {
     let start = cursor.position();
     cursor.advance();
 
-    let is_terminated = loop {
+    loop {
         match cursor.peek() {
-            None | Some(b'\n' | b'\r') => break false,
+            None | Some(b'\n' | b'\r') => {
+                return cut_off_string(cursor, start, errors, unterminated);
+            }
             Some(b'\\') => {
                 cursor.advance();
                 // The next iteration reports the unterminated string.
@@ -48,7 +51,7 @@ pub(crate) fn scan_short_string(
             }
             Some(c) if c == quote => {
                 cursor.advance();
-                break true;
+                return TokenKind::StringLiteral(cursor.text_since(start).into());
             }
             Some(_) => {
                 cursor.advance();
@@ -67,11 +70,22 @@ pub(crate) fn scan_short_string(
                 }
             }
         }
-    };
-    if !is_terminated {
-        errors.push(lex_error(cursor.span_since(start), "unterminated string"));
     }
-    (TokenKind::StringLiteral(cursor.text_since(start).into()), is_terminated)
+}
+
+/// The token of a short string from `start` that ends at the cursor without
+/// its closing quote.
+#[cold]
+fn cut_off_string(
+    cursor: &Cursor<'_>,
+    start: usize,
+    errors: &mut Vec<LexError>,
+    unterminated: &mut Vec<Span>,
+) -> TokenKind {
+    let span = cursor.span_since(start);
+    errors.push(lex_error(span, "unterminated string"));
+    unterminated.push(span);
+    TokenKind::StringLiteral(cursor.text_since(start).into())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -345,17 +359,18 @@ pub(crate) fn advance_past_long_bracket_close(
 }
 
 /// Scan a long-bracket string of known `level` that opened at `start`, from
-/// a cursor just past its `[=*[` opener, and return its token and whether its
-/// closer came.
+/// a cursor just past its `[=*[` opener.
 ///
-/// A missing closer runs the string to the end of the source.
+/// A missing closer runs the string to the end of the source, and its span
+/// goes to `unterminated`.
 pub(crate) fn scan_long_string(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
     level: usize,
     errors: &mut Vec<LexError>,
-) -> (TokenKind, bool) {
+    unterminated: &mut Vec<Span>,
+) -> TokenKind {
     let is_terminated = advance_past_long_bracket_close(
         cursor,
         version,
@@ -364,5 +379,8 @@ pub(crate) fn scan_long_string(
         "unterminated long bracket string",
         errors,
     );
-    (TokenKind::StringLiteral(cursor.text_since(start).into()), is_terminated)
+    if !is_terminated {
+        unterminated.push(cursor.span_since(start));
+    }
+    TokenKind::StringLiteral(cursor.text_since(start).into())
 }

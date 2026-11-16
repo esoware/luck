@@ -3,10 +3,14 @@ use core::slice;
 
 use luck_token::{LuaVersion, StdlibEnvironment, offset_to_index};
 
-/// Catalog entries by name, in name order.
+/// Catalog entries by name, in name order, with a hash table over them built
+/// at compile time.
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibMap<V: 'static> {
     entries: &'static [(&'static str, V)],
+    /// Open addressing by [`name_hash`]: each slot holds an entry's index plus
+    /// one, or zero when it's empty, and at least half of them are.
+    slots: &'static [u16],
 }
 
 type Entries<V> = Map<
@@ -14,18 +18,90 @@ type Entries<V> = Map<
     fn(&'static (&'static str, V)) -> (&'static str, &'static V),
 >;
 
+/// A [`StdlibMap`] of `$value`s from `(name, value)` entries sorted by name,
+/// with no name twice.
+///
+/// The entries are a `static`, since a value may point to another `static`,
+/// as a constant set does.
+macro_rules! stdlib_map {
+    ($value:ty, [$($entry:expr),* $(,)?]) => {{
+        const COUNT: usize = <[()]>::len(&[$($crate::stdlib_model::stdlib_map!(@unit $entry)),*]);
+        static ENTRIES: [(&str, $value); COUNT] = [$($entry),*];
+        static SLOTS: [u16; $crate::stdlib_model::slot_count(COUNT)] =
+            $crate::stdlib_model::hash_slots(&ENTRIES);
+        $crate::stdlib_model::StdlibMap::new(&ENTRIES, &SLOTS)
+    }};
+    (@unit $entry:expr) => {
+        ()
+    };
+}
+
+pub(crate) use stdlib_map;
+
+/// FNV-1a, which both compile-time table building and lookups run.
+#[expect(clippy::as_conversions, reason = "`u32::from` isn't const")]
+const fn name_hash(name: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    let mut remaining = name.as_bytes();
+    while let [b, rest @ ..] = remaining {
+        hash = (hash ^ *b as u32).wrapping_mul(0x0100_0193);
+        remaining = rest;
+    }
+    hash
+}
+
+pub(crate) const fn slot_count(entry_count: usize) -> usize {
+    entry_count.saturating_mul(2).next_power_of_two()
+}
+
+/// # Panics
+///
+/// When a `u16` can't index every entry, which fails the build, since this
+/// only runs at compile time.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::indexing_slicing,
+    reason = "runs at compile time, where an index out of range fails the build, and the checked \
+              conversions aren't const"
+)]
+pub(crate) const fn hash_slots<V, const SLOTS: usize>(entries: &[(&str, V)]) -> [u16; SLOTS] {
+    assert!(entries.len() < u16::MAX as usize, "a stdlib table has too many entries for its slots");
+    let mut slots = [0; SLOTS];
+    let mask = SLOTS.wrapping_sub(1);
+    let mut index = 0usize;
+    let mut remaining = entries;
+    while let [(name, _), rest @ ..] = remaining {
+        index = index.wrapping_add(1);
+        let mut slot = name_hash(name) as usize & mask;
+        while slots[slot] != 0 {
+            slot = slot.wrapping_add(1) & mask;
+        }
+        slots[slot] = index as u16;
+        remaining = rest;
+    }
+    slots
+}
+
 impl<V: 'static> StdlibMap<V> {
-    /// `entries` must be sorted by name, with no name twice.
-    pub(crate) const fn new(entries: &'static [(&'static str, V)]) -> Self {
-        Self { entries }
+    /// `slots` is [`hash_slots`] of `entries`, which [`stdlib_map`] builds.
+    pub(crate) const fn new(entries: &'static [(&'static str, V)], slots: &'static [u16]) -> Self {
+        Self { entries, slots }
     }
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&'static V> {
-        let index = self.entries.partition_point(|(entry_name, _)| *entry_name < name);
-        match self.entries.get(index) {
-            Some((entry_name, value)) if *entry_name == name => Some(value),
-            Some(_) | None => None,
+        let mask = self.slots.len().wrapping_sub(1);
+        let mut slot = offset_to_index(name_hash(name)) & mask;
+        // An empty slot ends every probe, since at least half are empty.
+        loop {
+            let entry = self.slots.get(slot)?.checked_sub(1)?;
+            if let Some((entry_name, value)) = self.entries.get(usize::from(entry))
+                && *entry_name == name
+            {
+                return Some(value);
+            }
+            slot = slot.wrapping_add(1) & mask;
         }
     }
 
@@ -408,7 +484,7 @@ mod tests {
 
     #[test]
     fn a_map_finds_exactly_its_names() {
-        static MAP: StdlibMap<u8> = StdlibMap::new(&[("b", 1), ("d", 2), ("f", 3)]);
+        static MAP: StdlibMap<u8> = stdlib_map!(u8, [("b", 1), ("d", 2), ("f", 3)]);
         assert_eq!(MAP.get("d"), Some(&2));
         for absent in ["", "a", "c", "e", "g"] {
             assert_eq!(MAP.get(absent), None, "{absent}");

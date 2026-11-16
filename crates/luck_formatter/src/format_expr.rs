@@ -127,7 +127,7 @@ impl Format for SuffixedExpression {
                     [Suffix::Call(_), ..] if is_method_chain(run) => {
                         indent(format_with(|indented| {
                             for call in calls(run) {
-                                if call.method.is_some() {
+                                if call.method().is_some() {
                                     soft_line().fmt(indented);
                                 }
                                 call.fmt(indented);
@@ -182,7 +182,7 @@ fn calls(run: &[Suffix]) -> impl Iterator<Item = &CallSuffix> {
 }
 
 fn is_method_chain(run: &[Suffix]) -> bool {
-    calls(run).filter(|call| call.method.is_some()).count() >= 2
+    calls(run).filter(|call| call.method().is_some()).count() >= 2
 }
 
 /// An operand that binds tighter keeps a group of its own, so

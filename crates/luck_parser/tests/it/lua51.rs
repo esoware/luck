@@ -255,7 +255,7 @@ fn call_with_string_arg() {
         panic!("expected FunctionCall");
     };
     assert!(
-        matches!(call.suffixes.last(), Suffix::Call(suffix) if matches!(suffix.args, FunctionArgs::StringLiteral(_)))
+        matches!(call.suffixes.last(), Suffix::Call(suffix) if matches!(suffix.args(), FunctionArgs::StringLiteral(_)))
     );
 }
 
@@ -267,7 +267,7 @@ fn call_with_table_arg() {
         panic!("expected FunctionCall");
     };
     assert!(
-        matches!(call.suffixes.last(), Suffix::Call(suffix) if matches!(suffix.args, FunctionArgs::TableConstructor(_)))
+        matches!(call.suffixes.last(), Suffix::Call(suffix) if matches!(suffix.args(), FunctionArgs::TableConstructor(_)))
     );
 }
 

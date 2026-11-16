@@ -2,8 +2,8 @@ use luck_token::{BinOp, OperandSide, UnOp, encode_string};
 
 use crate::expr::{
     BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
-    FunctionDef, IfExpression, Literal, ParenthesizedExpression, Suffix, SuffixedExpression,
-    TableConstructor, TypeCast, UnaryOp, Var,
+    FunctionDef, IfExpression, Literal, MethodCall, ParenthesizedExpression, Suffix,
+    SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 use crate::function::FunctionAttribute;
 use crate::one_or_more::OneOrMore;
@@ -121,6 +121,7 @@ impl Synth {
         Expression::Suffixed(self.suffixed(prefix, Suffix::Field(self.identifier(name))))
     }
 
+    #[expect(clippy::unnecessary_box_returns, reason = "joining a run hands back the run's box")]
     fn index_chain(&self, prefix: Expression, index: Expression) -> Box<SuffixedExpression> {
         let span = self.next_span();
         self.suffixed(prefix, Suffix::Index { span, index })
@@ -128,6 +129,7 @@ impl Synth {
 
     /// `prefix` and then `suffix`, which joins `prefix`'s own run when it has
     /// one, so the run stays one node. Joining copies the suffixes before it.
+    #[expect(clippy::unnecessary_box_returns, reason = "joining a run hands back the run's box")]
     fn suffixed(&self, prefix: Expression, suffix: Suffix) -> Box<SuffixedExpression> {
         let wrapped = self.wrap_prefix(prefix);
         if let Expression::Suffixed(mut chain) = wrapped {
@@ -268,7 +270,10 @@ impl Synth {
     pub fn type_instantiation(&self, expr: Expression, type_args: Vec<Type>) -> Expression {
         let suffix = Suffix::TypeInstantiation {
             span: self.next_span(),
-            type_args: TypeArgs { span: self.next_span(), args: Punctuated::from_items(type_args) },
+            type_args: Box::new(TypeArgs {
+                span: self.next_span(),
+                args: Punctuated::from_items(type_args),
+            }),
         };
         Expression::Suffixed(self.suffixed(expr, suffix))
     }
@@ -318,7 +323,7 @@ impl Synth {
 
     #[must_use]
     pub fn call(&self, callee: Expression, args: Vec<Expression>) -> Expression {
-        self.call_node(callee, None, None, self.parenthesized_args(args))
+        self.call_node(callee, CallSuffix::Plain(self.parenthesized_args(args)))
     }
 
     /// # Panics
@@ -331,7 +336,7 @@ impl Synth {
         name: &str,
         args: Vec<Expression>,
     ) -> Expression {
-        self.call_node(receiver, Some(name), None, self.parenthesized_args(args))
+        self.method_call_node(receiver, name, None, self.parenthesized_args(args))
     }
 
     /// # Panics
@@ -345,7 +350,7 @@ impl Synth {
         type_args: Vec<Type>,
         args: Vec<Expression>,
     ) -> Expression {
-        self.call_node(receiver, Some(name), Some(type_args), self.parenthesized_args(args))
+        self.method_call_node(receiver, name, Some(type_args), self.parenthesized_args(args))
     }
 
     /// # Panics
@@ -354,7 +359,7 @@ impl Synth {
     #[must_use]
     pub fn call_table(&self, callee: Expression, fields: Vec<FieldSpec<'_>>) -> Expression {
         let args = FunctionArgs::TableConstructor(Box::new(self.table_constructor(fields)));
-        self.call_node(callee, None, None, args)
+        self.call_node(callee, CallSuffix::Plain(args))
     }
 
     /// `callee"content"`, the string argument form (content is unquoted).
@@ -364,7 +369,7 @@ impl Synth {
             text: encode_string(content.as_bytes()),
             span: self.next_span(),
         });
-        self.call_node(callee, None, None, args)
+        self.call_node(callee, CallSuffix::Plain(args))
     }
 
     /// # Panics
@@ -378,7 +383,7 @@ impl Synth {
         fields: Vec<FieldSpec<'_>>,
     ) -> Expression {
         let args = FunctionArgs::TableConstructor(Box::new(self.table_constructor(fields)));
-        self.call_node(receiver, Some(name), None, args)
+        self.method_call_node(receiver, name, None, args)
     }
 
     /// # Panics
@@ -395,23 +400,27 @@ impl Synth {
             text: encode_string(content.as_bytes()),
             span: self.next_span(),
         });
-        self.call_node(receiver, Some(name), None, args)
+        self.method_call_node(receiver, name, None, args)
     }
 
-    fn call_node(
+    fn method_call_node(
         &self,
-        callee: Expression,
-        method: Option<&str>,
+        receiver: Expression,
+        name: &str,
         type_args: Option<Vec<Type>>,
         args: FunctionArgs,
     ) -> Expression {
-        let call = CallSuffix {
-            method: method.map(|name| self.identifier(name)),
+        let call = MethodCall {
+            name: self.identifier(name),
             explicit_type_args: type_args.map(|types| {
                 Box::new(TypeArgs { span: self.next_span(), args: Punctuated::from_items(types) })
             }),
             args,
         };
+        self.call_node(receiver, CallSuffix::Method(Box::new(call)))
+    }
+
+    fn call_node(&self, callee: Expression, call: CallSuffix) -> Expression {
         Expression::Suffixed(self.suffixed(callee, Suffix::Call(call)))
     }
 
@@ -801,17 +810,17 @@ mod tests {
     fn builds_sugar_call_forms() {
         let synth = Synth::new();
         let string_call = synth.call_string(synth.name_expr("require"), "module");
-        assert!(matches!(last_call(&string_call).args, FunctionArgs::StringLiteral(_)));
+        assert!(matches!(last_call(&string_call).args(), FunctionArgs::StringLiteral(_)));
 
         let table_call = synth.call_table(
             synth.name_expr("configure"),
             vec![FieldSpec::Named("debug", synth.boolean(true))],
         );
-        assert!(matches!(last_call(&table_call).args, FunctionArgs::TableConstructor(_)));
+        assert!(matches!(last_call(&table_call).args(), FunctionArgs::TableConstructor(_)));
 
         let method_call = synth.method_call_string(synth.name_expr("s"), "gsub", "pattern");
-        assert!(last_call(&method_call).method.is_some());
-        assert!(matches!(last_call(&method_call).args, FunctionArgs::StringLiteral(_)));
+        assert!(last_call(&method_call).method().is_some());
+        assert!(matches!(last_call(&method_call).args(), FunctionArgs::StringLiteral(_)));
     }
 
     #[test]
@@ -884,8 +893,7 @@ mod tests {
             vec![synth.ty_named("string")],
             vec![synth.string("value")],
         );
-        let method_type_args =
-            last_call(&method).explicit_type_args.as_ref().expect("type arguments");
+        let method_type_args = last_call(&method).explicit_type_args().expect("type arguments");
         assert_eq!(method_type_args.args.len(), 1);
     }
 }

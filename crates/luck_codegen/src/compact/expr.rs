@@ -1,7 +1,7 @@
 use luck_ast::{
-    BinaryOp, Expression, Field, FunctionArgs, FunctionDef, IfExpression, InterpolatedString,
-    ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
-    expr_starts_with_brace,
+    BinaryOp, CallSuffix, Expression, Field, FunctionArgs, FunctionDef, IfExpression,
+    InterpolatedString, ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor,
+    TypeCast, UnaryOp, Var, expr_starts_with_brace,
 };
 use luck_token::TokenKind;
 
@@ -79,16 +79,20 @@ impl CompactPrinter {
                 self.emit_fixed("]");
             }
             Suffix::Call(call) => {
-                if let Some(method_name) = &call.method {
-                    self.emit_fixed(":");
-                    self.emit_token(method_name);
-                }
-                if let Some(type_args) = &call.explicit_type_args {
-                    self.emit_fixed("<<");
-                    self.emit_punctuated(&type_args.args, ",", Self::emit_type);
-                    self.emit_fixed(">>");
-                }
-                self.emit_function_args(&call.args);
+                let args = match call {
+                    CallSuffix::Plain(args) => args,
+                    CallSuffix::Method(method) => {
+                        self.emit_fixed(":");
+                        self.emit_token(&method.name);
+                        if let Some(type_args) = &method.explicit_type_args {
+                            self.emit_fixed("<<");
+                            self.emit_punctuated(&type_args.args, ",", Self::emit_type);
+                            self.emit_fixed(">>");
+                        }
+                        &method.args
+                    }
+                };
+                self.emit_function_args(args);
             }
             // Luau
             Suffix::TypeInstantiation { type_args, .. } => {

@@ -3,16 +3,16 @@
 use luck_token::{LuaVersion, StdlibEnvironment};
 
 use super::{ENUM_ITEM, FUNCTION, NAMESPACE, VALUE, constant, optional, required, signature};
-use crate::stdlib_model::{StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary, StdlibMap, StdlibNamespace, StdlibParam, StdlibShape, StdlibValue};
+use crate::stdlib_model::{StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary, StdlibNamespace, StdlibParam, StdlibShape, StdlibValue, stdlib_map};
 
 pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
     version: LuaVersion::Luau,
     environment: StdlibEnvironment::Roblox,
-    globals: StdlibMap::new(&[
-        ("Axes", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+    globals: stdlib_map!(StdlibEntry, [
+        ("Axes", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("BrickColor", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("BrickColor", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("Black", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("Blue", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("DarkGray", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -25,7 +25,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("palette", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("random", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("CFrame", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("CFrame", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("Angles", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 3, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("fromAxisAngle", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("Vector3")), required(StdlibArgKind::Number)], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("fromEulerAngles", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), optional(StdlibArgKind::Display("Enum.RotationOrder"))], 3, Some(4))], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -39,28 +39,28 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("lookAt", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("Vector3")), required(StdlibArgKind::Display("Vector3")), optional(StdlibArgKind::Display("Vector3"))], 2, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0)), signature(&[required(StdlibArgKind::Display("Vector3"))], 1, Some(1)), signature(&[required(StdlibArgKind::Display("Vector3")), required(StdlibArgKind::Display("Vector3"))], 2, Some(2)), signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 3, Some(3)), signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 7, Some(7)), signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 12, Some(12))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("CatalogSearchParams", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("CatalogSearchParams", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Color3", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Color3", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("fromHSV", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 3, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("fromHex", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("fromRGB", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("ColorSequence", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("ColorSequence", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any)], 1, Some(1)), signature(&[required(StdlibArgKind::Display("Color3")), required(StdlibArgKind::Display("Color3"))], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("ColorSequenceKeypoint", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("ColorSequenceKeypoint", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Display("Color3"))], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Content", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Content", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("fromAssetId", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("fromObject", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("Object"))], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("fromUri", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("none", StdlibEntry::Constant(VALUE)),
         ]), ..NAMESPACE })),
-        ("DateTime", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("DateTime", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("fromIsoDate", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("fromLocalTime", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(7))], is_must_use: true, ..FUNCTION })),
             ("fromUniversalTime", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(7))], is_must_use: true, ..FUNCTION })),
@@ -69,15 +69,15 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("now", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
         ("DebuggerManager", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, deprecated: Some(StdlibDeprecation { message: "deprecated on Roblox", replace_template: None }), ..FUNCTION })),
-        ("DockWidgetPluginGuiInfo", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("DockWidgetPluginGuiInfo", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Display("Enum.InitialDockState")), optional(StdlibArgKind::Bool), optional(StdlibArgKind::Bool), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(7))], is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Enum", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
-            ("AccessModifierType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Enum", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
+            ("AccessModifierType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Allow", ENUM_ITEM),
                 ("Deny", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AccessoryType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AccessoryType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Back", ENUM_ITEM),
                 ("DressSkirt", ENUM_ITEM),
                 ("Eyebrow", ENUM_ITEM),
@@ -99,24 +99,24 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Unknown", ENUM_ITEM),
                 ("Waist", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ActionOnAutoResumeSync", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ActionOnAutoResumeSync", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("DontResume", ENUM_ITEM),
                 ("KeepLocal", ENUM_ITEM),
                 ("KeepStudio", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ActionOnStopSync", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ActionOnStopSync", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AlwaysAsk", ENUM_ITEM),
                 ("DeleteLocalFiles", ENUM_ITEM),
                 ("KeepLocalFiles", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ActionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ActionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Draw", ENUM_ITEM),
                 ("Lose", ENUM_ITEM),
                 ("Nothing", ENUM_ITEM),
                 ("Pause", ENUM_ITEM),
                 ("Win", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ActivePayerStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ActivePayerStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Casual50Percent", ENUM_ITEM),
                 ("Intermediate35Percent", ENUM_ITEM),
                 ("Lapsed", ENUM_ITEM),
@@ -124,17 +124,17 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Top15Percent", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ActuatorRelativeTo", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ActuatorRelativeTo", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Attachment0", ENUM_ITEM),
                 ("Attachment1", ENUM_ITEM),
                 ("World", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ActuatorType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ActuatorType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Motor", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Servo", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AdAvailabilityResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AdAvailabilityResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("DeviceIneligible", ENUM_ITEM),
                 ("ExperienceIneligible", ENUM_ITEM),
                 ("InternalError", ENUM_ITEM),
@@ -143,7 +143,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("PlayerIneligible", ENUM_ITEM),
                 ("PublisherIneligible", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AdEventType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AdEventType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("RewardedAdGrant", ENUM_ITEM),
                 ("RewardedAdLoaded", ENUM_ITEM),
                 ("RewardedAdUnloaded", ENUM_ITEM),
@@ -151,19 +151,19 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("VideoLoaded", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("VideoRemoved", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AdFormat", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AdFormat", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("RewardedVideo", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AdShape", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AdShape", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("HorizontalRectangle", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AdTeleportMethod", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AdTeleportMethod", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("InGameMenuBackButton", ENUM_ITEM),
                 ("PortalForward", ENUM_ITEM),
                 ("UIBackButton", ENUM_ITEM),
                 ("Undefined", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AdUIEventType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AdUIEventType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AdLabelClicked", ENUM_ITEM),
                 ("CloseButtonClicked", ENUM_ITEM),
                 ("FullscreenButtonClicked", ENUM_ITEM),
@@ -174,31 +174,31 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("VolumeButtonClicked", ENUM_ITEM),
                 ("WhyThisAdClicked", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AdUIType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AdUIType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Image", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Video", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AdUnitStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AdUnitStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Active", ENUM_ITEM),
                 ("Inactive", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AdornCullingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AdornCullingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Never", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AdornShading", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AdornShading", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AlwaysOnTop", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Shaded", ENUM_ITEM),
                 ("XRay", ENUM_ITEM),
                 ("XRayShaded", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AgeCheckStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AgeCheckStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Checked", ENUM_ITEM),
                 ("Unchecked", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AlignType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AlignType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AllAxes", ENUM_ITEM),
                 ("Parallel", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Perpendicular", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
@@ -206,27 +206,27 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("PrimaryAxisParallel", ENUM_ITEM),
                 ("PrimaryAxisPerpendicular", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AlphaMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AlphaMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Opaque", ENUM_ITEM),
                 ("Overlay", ENUM_ITEM),
                 ("TintMask", ENUM_ITEM),
                 ("Transparency", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnalyticsCustomFieldKeys", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnalyticsCustomFieldKeys", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomField01", ENUM_ITEM),
                 ("CustomField02", ENUM_ITEM),
                 ("CustomField03", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnalyticsEconomyAction", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnalyticsEconomyAction", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Acquire", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Spend", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnalyticsEconomyFlowType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnalyticsEconomyFlowType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Sink", ENUM_ITEM),
                 ("Source", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnalyticsEconomyTransactionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnalyticsEconomyTransactionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ContextualPurchase", ENUM_ITEM),
                 ("Gameplay", ENUM_ITEM),
                 ("IAP", ENUM_ITEM),
@@ -234,7 +234,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Shop", ENUM_ITEM),
                 ("TimedReward", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnalyticsLogLevel", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnalyticsLogLevel", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Debug", ENUM_ITEM),
                 ("Error", ENUM_ITEM),
                 ("Fatal", ENUM_ITEM),
@@ -242,20 +242,20 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Trace", ENUM_ITEM),
                 ("Warning", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnalyticsProgressionStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnalyticsProgressionStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Abandon", ENUM_ITEM),
                 ("Begin", ENUM_ITEM),
                 ("Complete", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Fail", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnalyticsProgressionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnalyticsProgressionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Complete", ENUM_ITEM),
                 ("Custom", ENUM_ITEM),
                 ("Fail", ENUM_ITEM),
                 ("Start", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnimationClipFromVideoStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnimationClipFromVideoStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Cancelled", ENUM_ITEM),
                 ("ErrorGeneric", ENUM_ITEM),
                 ("ErrorMultiplePeople", ENUM_ITEM),
@@ -269,31 +269,31 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Success", ENUM_ITEM),
                 ("Timeout", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnimationNodeBlend2DInputMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnimationNodeBlend2DInputMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Cartesian", ENUM_ITEM),
                 ("Polar", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnimationNodeInterruptible", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnimationNodeInterruptible", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Always", ENUM_ITEM),
                 ("Finished", ENUM_ITEM),
                 ("Trigger", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnimationNodePhaseSync", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnimationNodePhaseSync", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Synced", ENUM_ITEM),
                 ("Unsynced", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnimationNodePlayMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnimationNodePlayMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Loop", ENUM_ITEM),
                 ("OnceAndHold", ENUM_ITEM),
                 ("OnceAndReset", ENUM_ITEM),
                 ("PingPong", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnimationNodeTransitionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnimationNodeTransitionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CrossFade", ENUM_ITEM),
                 ("DeadBlend", ENUM_ITEM),
                 ("InertialBlend", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnimationNodeType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnimationNodeType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AddNode", ENUM_ITEM),
                 ("Blend1DNode", ENUM_ITEM),
                 ("Blend2DNode", ENUM_ITEM),
@@ -309,11 +309,11 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("SpeedNode", ENUM_ITEM),
                 ("SubtractNode", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnimationNodeWaitFor", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnimationNodeWaitFor", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Finished", ENUM_ITEM),
                 ("Trigger", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnimationPriority", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnimationPriority", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Action", ENUM_ITEM),
                 ("Action2", ENUM_ITEM),
                 ("Action3", ENUM_ITEM),
@@ -322,52 +322,52 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Idle", ENUM_ITEM),
                 ("Movement", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnimatorRetargetingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnimatorRetargetingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnnotationChannelContentPreference", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnnotationChannelContentPreference", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnnotationEditingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnnotationEditingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("None", ENUM_ITEM),
                 ("PlacingNew", ENUM_ITEM),
                 ("WritingNew", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnnotationPlaceContentPreference", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnnotationPlaceContentPreference", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("MentionsAndReplies", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnnotationRequestStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnnotationRequestStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ErrorInternalFailure", ENUM_ITEM),
                 ("ErrorModerated", ENUM_ITEM),
                 ("ErrorNotFound", ENUM_ITEM),
                 ("Loading", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AnnotationRequestType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AnnotationRequestType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Create", ENUM_ITEM),
                 ("Delete", ENUM_ITEM),
                 ("Edit", ENUM_ITEM),
                 ("Resolve", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AntiAliasing", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AntiAliasing", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AppLifecycleManagerState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AppLifecycleManagerState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Active", ENUM_ITEM),
                 ("Detached", ENUM_ITEM),
                 ("Hidden", ENUM_ITEM),
                 ("Inactive", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AppShellActionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AppShellActionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AvatarEditorPageLoaded", ENUM_ITEM),
                 ("GamePageLoaded", ENUM_ITEM),
                 ("HomePageInteractive", ENUM_ITEM),
@@ -381,7 +381,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("TapGamePageTab", ENUM_ITEM),
                 ("TapHomePageTab", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AppShellFeature", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AppShellFeature", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AvatarEditor", ENUM_ITEM),
                 ("Chat", ENUM_ITEM),
                 ("GamePage", ENUM_ITEM),
@@ -391,7 +391,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("None", ENUM_ITEM),
                 ("WatchPage", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AppUpdateStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AppUpdateStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Available", ENUM_ITEM),
                 ("AvailableBetaProgram", ENUM_ITEM),
                 ("AvailableBoundChannel", ENUM_ITEM),
@@ -400,30 +400,30 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("NotSupported", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ApplyStrokeMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ApplyStrokeMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Border", ENUM_ITEM),
                 ("Contextual", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AspectType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AspectType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FitWithinMaxSize", ENUM_ITEM),
                 ("ScaleWithParentSize", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AssetCreatorType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AssetCreatorType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Group", ENUM_ITEM),
                 ("User", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AssetFetchStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AssetFetchStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Failure", ENUM_ITEM),
                 ("Loading", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
                 ("TimedOut", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AssetRepresentation", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AssetRepresentation", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FullLength", ENUM_ITEM),
                 ("ShortPreview", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AssetType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AssetType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Animation", ENUM_ITEM),
                 ("Audio", ENUM_ITEM),
                 ("AvatarBackground", ENUM_ITEM),
@@ -490,18 +490,18 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("WaistAccessory", ENUM_ITEM),
                 ("WalkAnimation", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AssetTypeVerification", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AssetTypeVerification", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Always", ENUM_ITEM),
                 ("ClientOnly", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AudioApiRollout", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AudioApiRollout", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AudioCaptureMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AudioChannelLayout", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AudioCaptureMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, []), shape: Some("Enum"), ..NAMESPACE })),
+            ("AudioChannelLayout", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Mono", ENUM_ITEM),
                 ("Quad", ENUM_ITEM),
                 ("Stereo", ENUM_ITEM),
@@ -510,7 +510,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Surround_7_1", ENUM_ITEM),
                 ("Surround_7_1_4", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AudioFilterType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AudioFilterType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bandpass", ENUM_ITEM),
                 ("HighShelf", ENUM_ITEM),
                 ("Highpass12dB", ENUM_ITEM),
@@ -524,35 +524,35 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Notch", ENUM_ITEM),
                 ("Peak", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AudioSimulationFidelity", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AudioSimulationFidelity", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AudioSubType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AudioSubType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Music", ENUM_ITEM),
                 ("SoundEffect", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AudioWindowSize", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AudioWindowSize", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Large", ENUM_ITEM),
                 ("Medium", ENUM_ITEM),
                 ("Small", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AuthorityMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AuthorityMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Server", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AutoIndentRule", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AutoIndentRule", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Absolute", ENUM_ITEM),
                 ("Off", ENUM_ITEM),
                 ("Relative", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AutomaticSize", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AutomaticSize", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("None", ENUM_ITEM),
                 ("X", ENUM_ITEM),
                 ("XY", ENUM_ITEM),
                 ("Y", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarAssetType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarAssetType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AvatarBackground", ENUM_ITEM),
                 ("BackAccessory", ENUM_ITEM),
                 ("ClimbAnimation", ENUM_ITEM),
@@ -598,7 +598,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("WaistAccessory", ENUM_ITEM),
                 ("WalkAnimation", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarChatServiceFeature", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarChatServiceFeature", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("None", ENUM_ITEM),
                 ("PlaceAudio", ENUM_ITEM),
                 ("PlaceVideo", ENUM_ITEM),
@@ -611,13 +611,13 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("UserVideo", ENUM_ITEM),
                 ("UserVideoEligible", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarContextMenuOption", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarContextMenuOption", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Chat", ENUM_ITEM),
                 ("Emote", ENUM_ITEM),
                 ("Friend", ENUM_ITEM),
                 ("InspectMenu", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarGenerationError", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarGenerationError", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Canceled", ENUM_ITEM),
                 ("DownloadFailed", ENUM_ITEM),
                 ("JobNotFound", ENUM_ITEM),
@@ -626,111 +626,111 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Timeout", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarItemType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarItemType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Asset", ENUM_ITEM),
                 ("Bundle", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarPromptResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarPromptResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Failed", ENUM_ITEM),
                 ("PermissionDenied", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsAccessoryLimitMethod", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsAccessoryLimitMethod", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("PreviewRemove", ENUM_ITEM),
                 ("PreviewScale", ENUM_ITEM),
                 ("Remove", ENUM_ITEM),
                 ("Scale", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsAccessoryMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsAccessoryMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomLimit", ENUM_ITEM),
                 ("PlayerChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsAnimationClipsMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsAnimationClipsMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomClips", ENUM_ITEM),
                 ("PlayerChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsAnimationPacksMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsAnimationPacksMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("PlayerChoice", ENUM_ITEM),
                 ("StandardR15", ENUM_ITEM),
                 ("StandardR6", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsAppearanceMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsAppearanceMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomBody", ENUM_ITEM),
                 ("CustomParts", ENUM_ITEM),
                 ("PlayerChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsBuildMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsBuildMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomBuild", ENUM_ITEM),
                 ("PlayerChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsCharacterControllerMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsCharacterControllerMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("LegacyHumanoid", ENUM_ITEM),
                 ("LuaCharacterController", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsClothingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsClothingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomLimit", ENUM_ITEM),
                 ("PlayerChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsCollisionMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsCollisionMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Legacy", ENUM_ITEM),
                 ("SingleCollider", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsCustomAccessoryMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsCustomAccessoryMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomAccessories", ENUM_ITEM),
                 ("PlayerChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsCustomBodyType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsCustomBodyType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AvatarReference", ENUM_ITEM),
                 ("BundleId", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsCustomClothingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsCustomClothingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomClothing", ENUM_ITEM),
                 ("PlayerChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsHitAndTouchDetectionMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsHitAndTouchDetectionMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("UseCollider", ENUM_ITEM),
                 ("UseParts", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsJumpMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsJumpMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("JumpHeight", ENUM_ITEM),
                 ("JumpPower", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsLegacyCollisionMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsLegacyCollisionMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("InnerBoxColliders", ENUM_ITEM),
                 ("R6Colliders", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarSettingsScaleMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarSettingsScaleMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomScale", ENUM_ITEM),
                 ("PlayerChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarThumbnailCustomizationType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarThumbnailCustomizationType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Closeup", ENUM_ITEM),
                 ("FullBody", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("AvatarUnificationMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("AvatarUnificationMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Axis", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Axis", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("X", ENUM_ITEM),
                 ("Y", ENUM_ITEM),
                 ("Z", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("BenefitType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("BenefitType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AvatarAsset", ENUM_ITEM),
                 ("AvatarBundle", ENUM_ITEM),
                 ("DeveloperProduct", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("BinType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("BinType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Clone", ENUM_ITEM),
                 ("GameTool", ENUM_ITEM),
                 ("Grab", ENUM_ITEM),
                 ("Hammer", ENUM_ITEM),
                 ("Script", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("BodyPart", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("BodyPart", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Head", ENUM_ITEM),
                 ("LeftArm", ENUM_ITEM),
                 ("LeftLeg", ENUM_ITEM),
@@ -738,7 +738,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("RightLeg", ENUM_ITEM),
                 ("Torso", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("BodyPartR15", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("BodyPartR15", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Head", ENUM_ITEM),
                 ("LeftFoot", ENUM_ITEM),
                 ("LeftHand", ENUM_ITEM),
@@ -757,43 +757,43 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Unknown", ENUM_ITEM),
                 ("UpperTorso", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("BorderMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("BorderMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Inset", ENUM_ITEM),
                 ("Middle", ENUM_ITEM),
                 ("Outline", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("BorderStrokePosition", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("BorderStrokePosition", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Center", ENUM_ITEM),
                 ("Inner", ENUM_ITEM),
                 ("Outer", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("BreakReason", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("BreakReason", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Error", ENUM_ITEM),
                 ("Other", ENUM_ITEM),
                 ("SpecialBreakpoint", ENUM_ITEM),
                 ("UserBreakpoint", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("BreakpointRemoveReason", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("BreakpointRemoveReason", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Requested", ENUM_ITEM),
                 ("ScriptChanged", ENUM_ITEM),
                 ("ScriptRemoved", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("BulkMoveMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("BulkMoveMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FireAllEvents", ENUM_ITEM),
                 ("FireCFrameChanged", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("BundleType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("BundleType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Animations", ENUM_ITEM),
                 ("BodyParts", ENUM_ITEM),
                 ("DynamicHead", ENUM_ITEM),
                 ("DynamicHeadAvatar", ENUM_ITEM),
                 ("Shoes", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Button", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Button", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Dismount", ENUM_ITEM),
                 ("Jump", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ButtonStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ButtonStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", ENUM_ITEM),
                 ("RobloxButton", ENUM_ITEM),
                 ("RobloxButtonDefault", ENUM_ITEM),
@@ -801,28 +801,28 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("RobloxRoundDefaultButton", ENUM_ITEM),
                 ("RobloxRoundDropdownButton", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CageType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CageType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Inner", ENUM_ITEM),
                 ("Outer", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CameraMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CameraMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Classic", ENUM_ITEM),
                 ("LockFirstPerson", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CameraNavigationModel", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CameraNavigationModel", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("IndustryCompatible", ENUM_ITEM),
                 ("Roblox", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CameraPanMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CameraPanMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Classic", ENUM_ITEM),
                 ("EdgeBump", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CameraSpeedAdjustBinding", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CameraSpeedAdjustBinding", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AltScroll", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("RmbScroll", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CameraType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CameraType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Attach", ENUM_ITEM),
                 ("Custom", ENUM_ITEM),
                 ("Fixed", ENUM_ITEM),
@@ -832,7 +832,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Track", ENUM_ITEM),
                 ("Watch", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CanCollaborateError", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CanCollaborateError", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AgeVerificationCountryBlocked", ENUM_ITEM),
                 ("Invalid", ENUM_ITEM),
                 ("None", ENUM_ITEM),
@@ -847,14 +847,14 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("PCBlock", ENUM_ITEM),
                 ("TooManyCollaborators", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CaptureGalleryPermission", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CaptureGalleryPermission", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ReadAndUpload", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CaptureType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CaptureType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Screenshot", ENUM_ITEM),
                 ("Video", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CatalogCategoryFilter", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CatalogCategoryFilter", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Collectibles", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("CommunityCreations", ENUM_ITEM),
                 ("Featured", ENUM_ITEM),
@@ -862,7 +862,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Premium", ENUM_ITEM),
                 ("Recommended", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CatalogSortAggregation", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CatalogSortAggregation", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AllTime", ENUM_ITEM),
                 ("Past12Hours", ENUM_ITEM),
                 ("Past3Days", ENUM_ITEM),
@@ -870,7 +870,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("PastMonth", ENUM_ITEM),
                 ("PastWeek", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CatalogSortType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CatalogSortType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bestselling", ENUM_ITEM),
                 ("MostFavorited", ENUM_ITEM),
                 ("PriceHighToLow", ENUM_ITEM),
@@ -878,14 +878,14 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("RecentlyCreated", ENUM_ITEM),
                 ("Relevance", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CellBlock", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CellBlock", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CornerWedge", ENUM_ITEM),
                 ("HorizontalWedge", ENUM_ITEM),
                 ("InverseCornerWedge", ENUM_ITEM),
                 ("Solid", ENUM_ITEM),
                 ("VerticalWedge", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CellMaterial", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CellMaterial", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Aluminum", ENUM_ITEM),
                 ("Asphalt", ENUM_ITEM),
                 ("BluePlastic", ENUM_ITEM),
@@ -905,65 +905,65 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("WoodLog", ENUM_ITEM),
                 ("WoodPlank", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CellOrientation", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CellOrientation", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NegX", ENUM_ITEM),
                 ("NegZ", ENUM_ITEM),
                 ("X", ENUM_ITEM),
                 ("Z", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CenterDialogType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CenterDialogType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ModalDialog", ENUM_ITEM),
                 ("PlayerInitiatedDialog", ENUM_ITEM),
                 ("QuitDialog", ENUM_ITEM),
                 ("UnsolicitedDialog", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CharacterControlMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CharacterControlMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Legacy", ENUM_ITEM),
                 ("LuaCharacterController", ENUM_ITEM),
                 ("NoCharacterController", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ChatCallbackType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ChatCallbackType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("OnClientFormattingMessage", ENUM_ITEM),
                 ("OnClientSendingMessage", ENUM_ITEM),
                 ("OnCreatingChatWindow", ENUM_ITEM),
                 ("OnServerReceivingMessage", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ChatColor", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ChatColor", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Blue", ENUM_ITEM),
                 ("Green", ENUM_ITEM),
                 ("Red", ENUM_ITEM),
                 ("White", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ChatMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ChatMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Menu", ENUM_ITEM),
                 ("TextAndMenu", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ChatPrivacyMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ChatPrivacyMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AllUsers", ENUM_ITEM),
                 ("Friends", ENUM_ITEM),
                 ("NoOne", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ChatRestrictionStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ChatRestrictionStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NotRestricted", ENUM_ITEM),
                 ("Restricted", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ChatStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ChatStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bubble", ENUM_ITEM),
                 ("Classic", ENUM_ITEM),
                 ("ClassicAndBubble", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ChatVersion", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ChatVersion", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("LegacyChatService", ENUM_ITEM),
                 ("TextChatService", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ClientAnimatorThrottlingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ClientAnimatorThrottlingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CloseReason", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CloseReason", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("DeveloperShutdown", ENUM_ITEM),
                 ("DeveloperUpdate", ENUM_ITEM),
                 ("Moderation", ENUM_ITEM),
@@ -972,36 +972,36 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("ServerEmpty", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CollaboratorStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CollaboratorStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Editing3D", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("PrivateScripting", ENUM_ITEM),
                 ("Scripting", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CollisionFidelity", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CollisionFidelity", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Box", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Hull", ENUM_ITEM),
                 ("PreciseConvexDecomposition", ENUM_ITEM),
                 ("Scalable", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CommandPermission", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CommandPermission", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("LocalUser", ENUM_ITEM),
                 ("Plugin", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CompileTarget", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CompileTarget", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Client", ENUM_ITEM),
                 ("CoreScript", ENUM_ITEM),
                 ("CoreScriptRaw", ENUM_ITEM),
                 ("Studio", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CompletionAcceptanceBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CompletionAcceptanceBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Insert", ENUM_ITEM),
                 ("InsertOnEnterReplaceOnTab", ENUM_ITEM),
                 ("Replace", ENUM_ITEM),
                 ("ReplaceOnEnterInsertOnTab", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CompletionItemKind", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CompletionItemKind", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Class", ENUM_ITEM),
                 ("Color", ENUM_ITEM),
                 ("Constant", ENUM_ITEM),
@@ -1028,7 +1028,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Value", ENUM_ITEM),
                 ("Variable", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CompletionItemTag", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CompletionItemTag", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AddParens", ENUM_ITEM),
                 ("ClientServerBoundaryViolation", ENUM_ITEM),
                 ("CommandLinePermissions", ENUM_ITEM),
@@ -1041,12 +1041,12 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("RobloxPermissions", ENUM_ITEM),
                 ("TypeCorrect", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CompletionTriggerKind", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CompletionTriggerKind", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Invoked", ENUM_ITEM),
                 ("TriggerCharacter", ENUM_ITEM),
                 ("TriggerForIncompleteCompletions", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CompositeValueCurveType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CompositeValueCurveType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ColorHSV", ENUM_ITEM),
                 ("ColorRGB", ENUM_ITEM),
                 ("NumberRange", ENUM_ITEM),
@@ -1056,26 +1056,26 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Vector2", ENUM_ITEM),
                 ("Vector3", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CompressionAlgorithm", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CompressionAlgorithm", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Zstd", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ComputerCameraMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ComputerCameraMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CameraToggle", ENUM_ITEM),
                 ("Classic", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Follow", ENUM_ITEM),
                 ("Orbital", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ComputerMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ComputerMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ClickToMove", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("KeyboardMouse", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ConfigSnapshotErrorState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ConfigSnapshotErrorState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("LoadFailed", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ConnectionError", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ConnectionError", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AlreadyConnected", ENUM_ITEM),
                 ("AndroidAnticheatKick", ENUM_ITEM),
                 ("AndroidEmulatorKick", ENUM_ITEM),
@@ -1183,30 +1183,30 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("TeleportUnauthorized", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ConnectionState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ConnectionState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Connected", ENUM_ITEM),
                 ("Disconnected", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ContentSourceType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ContentSourceType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("None", ENUM_ITEM),
                 ("Object", ENUM_ITEM),
                 ("Opaque", ENUM_ITEM),
                 ("Uri", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ContextActionPriority", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ContextActionPriority", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("High", ENUM_ITEM),
                 ("Low", ENUM_ITEM),
                 ("Medium", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ContextActionResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ContextActionResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Pass", ENUM_ITEM),
                 ("Sink", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ControlMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ControlMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Classic", ENUM_ITEM),
                 ("MouseLockSwitch", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CoreGuiType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CoreGuiType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("AvatarSwitcher", ENUM_ITEM),
                 ("Backpack", ENUM_ITEM),
@@ -1218,49 +1218,49 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("PlayerList", ENUM_ITEM),
                 ("SelfView", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CreateAssetResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CreateAssetResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("PermissionDenied", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
                 ("UploadFailed", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CreateContentResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CreateContentResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("PermissionDenied", ENUM_ITEM),
                 ("StorageLimitExceeded", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
                 ("UploadFailed", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CreateOutfitFailure", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CreateOutfitFailure", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("InvalidName", ENUM_ITEM),
                 ("Other", ENUM_ITEM),
                 ("OutfitLimitReached", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CreatorType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CreatorType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Group", ENUM_ITEM),
                 ("User", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CreatorTypeFilter", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CreatorTypeFilter", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("Group", ENUM_ITEM),
                 ("User", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CurrencyType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CurrencyType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Robux", ENUM_ITEM),
                 ("Tix", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("CustomCameraMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("CustomCameraMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Classic", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Follow", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DataModelExtractorFileType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DataModelExtractorFileType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FirstSlice", ENUM_ITEM),
                 ("NonFirstSlice", ENUM_ITEM),
                 ("PlaceFile", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DataStoreRequestType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DataStoreRequestType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("GetAsync", ENUM_ITEM),
                 ("GetSortedAsync", ENUM_ITEM),
                 ("GetVersionAsync", ENUM_ITEM),
@@ -1279,12 +1279,12 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("StandardWrite", ENUM_ITEM),
                 ("UpdateAsync", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DebugBreakModeType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DebugBreakModeType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Always", ENUM_ITEM),
                 ("Never", ENUM_ITEM),
                 ("Unhandled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DebuggerEndReason", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DebuggerEndReason", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ClientRequest", ENUM_ITEM),
                 ("ConfigurationFailed", ENUM_ITEM),
                 ("Disconnected", ENUM_ITEM),
@@ -1294,16 +1294,16 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("ServerShutdown", ENUM_ITEM),
                 ("Timeout", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DebuggerExceptionBreakMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DebuggerExceptionBreakMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Always", ENUM_ITEM),
                 ("Never", ENUM_ITEM),
                 ("Unhandled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DebuggerFrameType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DebuggerFrameType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("C", ENUM_ITEM),
                 ("Lua", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DebuggerPauseReason", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DebuggerPauseReason", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Breakpoint", ENUM_ITEM),
                 ("Entrypoint", ENUM_ITEM),
                 ("Exception", ENUM_ITEM),
@@ -1311,13 +1311,13 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("SingleStep", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DebuggerResumeType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DebuggerResumeType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Resume", ENUM_ITEM),
                 ("StepInto", ENUM_ITEM),
                 ("StepOut", ENUM_ITEM),
                 ("StepOver", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DebuggerStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DebuggerStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ConnectionClosed", ENUM_ITEM),
                 ("ConnectionLost", ENUM_ITEM),
                 ("InternalError", ENUM_ITEM),
@@ -1328,34 +1328,34 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Success", ENUM_ITEM),
                 ("Timeout", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DefaultScriptSyncFileType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DefaultScriptSyncFileType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Lua", ENUM_ITEM),
                 ("Luau", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DevCameraOcclusionMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DevCameraOcclusionMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Invisicam", ENUM_ITEM),
                 ("Zoom", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DevComputerCameraMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DevComputerCameraMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CameraToggle", ENUM_ITEM),
                 ("Classic", ENUM_ITEM),
                 ("Follow", ENUM_ITEM),
                 ("Orbital", ENUM_ITEM),
                 ("UserChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DevComputerMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DevComputerMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ClickToMove", ENUM_ITEM),
                 ("KeyboardMouse", ENUM_ITEM),
                 ("Scriptable", ENUM_ITEM),
                 ("UserChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DevTouchCameraMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DevTouchCameraMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Classic", ENUM_ITEM),
                 ("Follow", ENUM_ITEM),
                 ("Orbital", ENUM_ITEM),
                 ("UserChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DevTouchMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DevTouchMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ClickToMove", ENUM_ITEM),
                 ("DPad", ENUM_ITEM),
                 ("DynamicThumbstick", ENUM_ITEM),
@@ -1364,7 +1364,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Thumbstick", ENUM_ITEM),
                 ("UserChoice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DeveloperMemoryTag", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DeveloperMemoryTag", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Animation", ENUM_ITEM),
                 ("BaseParts", ENUM_ITEM),
                 ("GeometryCSG", ENUM_ITEM),
@@ -1390,81 +1390,81 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("StreamingSounds", ENUM_ITEM),
                 ("TerrainVoxels", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DeviceFeatureType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DeviceFeatureType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("DeviceCapture", ENUM_ITEM),
                 ("InExperienceFAE", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DeviceForm", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DeviceForm", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Console", ENUM_ITEM),
                 ("Desktop", ENUM_ITEM),
                 ("Phone", ENUM_ITEM),
                 ("Tablet", ENUM_ITEM),
                 ("VR", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DeviceLevel", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DeviceLevel", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("High", ENUM_ITEM),
                 ("Low", ENUM_ITEM),
                 ("Medium", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DeviceSimulatorScalingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DeviceSimulatorScalingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ActualResolution", ENUM_ITEM),
                 ("FitToWindow", ENUM_ITEM),
                 ("ScaleToPhysicalSize", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DeviceType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DeviceType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Desktop", ENUM_ITEM),
                 ("Phone", ENUM_ITEM),
                 ("TV", ENUM_ITEM),
                 ("Tablet", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DialogBehaviorType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DialogBehaviorType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("MultiplePlayers", ENUM_ITEM),
                 ("SinglePlayer", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DialogPurpose", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DialogPurpose", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Help", ENUM_ITEM),
                 ("Quest", ENUM_ITEM),
                 ("Shop", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DialogTone", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DialogTone", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Enemy", ENUM_ITEM),
                 ("Friendly", ENUM_ITEM),
                 ("Neutral", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DigitsRigDescriptionSide", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DigitsRigDescriptionSide", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Left", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Right", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DiscountType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DiscountType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Uncategorized", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DisplayScalingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DisplayScalingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Legacy", ENUM_ITEM),
                 ("Responsive", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DisplaySize", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DisplaySize", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Large", ENUM_ITEM),
                 ("Medium", ENUM_ITEM),
                 ("Small", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DomainType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DomainType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("EXPERIENCE", ENUM_ITEM),
                 ("OAUTH", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DominantAxis", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DominantAxis", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Height", ENUM_ITEM),
                 ("Width", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DraftStatusCode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DraftStatusCode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("DraftCommitted", ENUM_ITEM),
                 ("DraftOutdated", ENUM_ITEM),
                 ("OK", ENUM_ITEM),
                 ("ScriptRemoved", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DragDetectorDragStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DragDetectorDragStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("BestForDevice", ENUM_ITEM),
                 ("RotateAxis", ENUM_ITEM),
                 ("RotateTrackball", ENUM_ITEM),
@@ -1475,35 +1475,35 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("TranslatePlaneOrLine", ENUM_ITEM),
                 ("TranslateViewPlane", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DragDetectorPermissionPolicy", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DragDetectorPermissionPolicy", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Everybody", ENUM_ITEM),
                 ("Nobody", ENUM_ITEM),
                 ("Scriptable", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DragDetectorResponseStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DragDetectorResponseStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", ENUM_ITEM),
                 ("Geometric", ENUM_ITEM),
                 ("Physical", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DraggerCoordinateSpace", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DraggerCoordinateSpace", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Object", ENUM_ITEM),
                 ("World", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DraggerMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DraggerMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Geometric", ENUM_ITEM),
                 ("Physical", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("DraggingScrollBar", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("DraggingScrollBar", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Horizontal", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Vertical", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("EasingDirection", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("EasingDirection", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("In", ENUM_ITEM),
                 ("InOut", ENUM_ITEM),
                 ("Out", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("EasingStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("EasingStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Back", ENUM_ITEM),
                 ("Bounce", ENUM_ITEM),
                 ("Circular", ENUM_ITEM),
@@ -1516,33 +1516,33 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Quint", ENUM_ITEM),
                 ("Sine", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("EditableStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("EditableStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Allowed", ENUM_ITEM),
                 ("Disallowed", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ElasticBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ElasticBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Always", ENUM_ITEM),
                 ("Never", ENUM_ITEM),
                 ("WhenScrollable", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("EmitterPositionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("EmitterPositionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Instance", ENUM_ITEM),
                 ("Parent", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("EngagementLevel", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("EngagementLevel", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("High", ENUM_ITEM),
                 ("Inactive", ENUM_ITEM),
                 ("Low", ENUM_ITEM),
                 ("Medium", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("EngineFolder", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("EngineFolder", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Logs", ENUM_ITEM),
                 ("Screenshots", ENUM_ITEM),
                 ("Videos", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("EnviromentalPhysicsThrottle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("EnviromentalPhysicsThrottle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Always", ENUM_ITEM),
                 ("DefaultAuto", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
@@ -1551,69 +1551,69 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Skip4", ENUM_ITEM),
                 ("Skip8", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ExperienceActivationStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ExperienceActivationStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Active", ENUM_ITEM),
                 ("Lapsed", ENUM_ITEM),
                 ("New", ENUM_ITEM),
                 ("Reactivated", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ExperienceAuthScope", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ExperienceAuthScope", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CreatorAssetsCreate", ENUM_ITEM),
                 ("DefaultScope", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ExperienceEventStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ExperienceEventStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Active", ENUM_ITEM),
                 ("Cancelled", ENUM_ITEM),
                 ("Moderated", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
                 ("Unpublished", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ExperienceStateCaptureSelectionMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ExperienceStateCaptureSelectionMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("SafetyHighlightMode", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ExperienceStateRecordingLoadMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ExperienceStateRecordingLoadMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ContiguousSlice", ENUM_ITEM),
                 ("NewReplay", ENUM_ITEM),
                 ("NoncontiguousSlice", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ExperienceStateRecordingLoadSourceType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ExperienceStateRecordingLoadSourceType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("File", ENUM_ITEM),
                 ("S3Url", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ExperienceStateRecordingPlaybackMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ExperienceStateRecordingPlaybackMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Playing", ENUM_ITEM),
                 ("Rewinding", ENUM_ITEM),
                 ("Stopped", ENUM_ITEM),
                 ("Undefined", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ExplosionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ExplosionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Craters", ENUM_ITEM),
                 ("NoCraters", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ExternalEditorMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ExternalEditorMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("SystemDefault", ENUM_ITEM),
                 ("UserSelectedEditor", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FACSDataLod", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FACSDataLod", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("LOD0", ENUM_ITEM),
                 ("LOD1", ENUM_ITEM),
                 ("LODCount", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FacialAgeEstimationResultType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FacialAgeEstimationResultType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Cancel", ENUM_ITEM),
                 ("Complete", ENUM_ITEM),
                 ("Error", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FacialAnimationStreamingState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FacialAnimationStreamingState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Audio", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Place", ENUM_ITEM),
                 ("Server", ENUM_ITEM),
                 ("Video", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FacsActionUnit", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FacsActionUnit", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ChinRaiser", ENUM_ITEM),
                 ("ChinRaiserUpperLip", ENUM_ITEM),
                 ("Corrugator", ENUM_ITEM),
@@ -1665,24 +1665,24 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("TongueUp", ENUM_ITEM),
                 ("UpperLipSuck", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FeatureRestrictionAbuseVector", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FeatureRestrictionAbuseVector", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Communication", ENUM_ITEM),
                 ("ExperienceChat", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FeedbackType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FeedbackType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Feedback", ENUM_ITEM),
                 ("PlayerSupport", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FieldOfViewMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FieldOfViewMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Diagonal", ENUM_ITEM),
                 ("MaxAxis", ENUM_ITEM),
                 ("Vertical", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FillDirection", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FillDirection", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Horizontal", ENUM_ITEM),
                 ("Vertical", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FilterErrorType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FilterErrorType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("BackslashNotEscapingAnything", ENUM_ITEM),
                 ("BadBespokeFilter", ENUM_ITEM),
                 ("BadName", ENUM_ITEM),
@@ -1703,29 +1703,29 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("UnknownBespokeFilter", ENUM_ITEM),
                 ("WildcardInProperty", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FilterResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FilterResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Accepted", ENUM_ITEM),
                 ("Rejected", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FilterType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FilterType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Exclude", ENUM_ITEM),
                 ("Include", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FinishRecordingOperation", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FinishRecordingOperation", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Append", ENUM_ITEM),
                 ("Cancel", ENUM_ITEM),
                 ("Commit", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FluidFidelity", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FluidFidelity", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("UseCollisionGeometry", ENUM_ITEM),
                 ("UsePreciseGeometry", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FluidForces", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FluidForces", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Experimental", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Font", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Font", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AmaticSC", ENUM_ITEM),
                 ("Antique", ENUM_ITEM),
                 ("Arcade", ENUM_ITEM),
@@ -1780,7 +1780,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Ubuntu", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FontSize", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FontSize", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Size10", ENUM_ITEM),
                 ("Size11", ENUM_ITEM),
                 ("Size12", ENUM_ITEM),
@@ -1797,11 +1797,11 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Size9", ENUM_ITEM),
                 ("Size96", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FontStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FontStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Italic", ENUM_ITEM),
                 ("Normal", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FontWeight", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FontWeight", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bold", ENUM_ITEM),
                 ("ExtraBold", ENUM_ITEM),
                 ("ExtraLight", ENUM_ITEM),
@@ -1812,17 +1812,17 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("SemiBold", ENUM_ITEM),
                 ("Thin", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ForceLimitMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ForceLimitMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Magnitude", ENUM_ITEM),
                 ("PerAxis", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FormFactor", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FormFactor", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Brick", ENUM_ITEM),
                 ("Custom", ENUM_ITEM),
                 ("Plate", ENUM_ITEM),
                 ("Symmetric", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FrameStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FrameStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ChatBlue", ENUM_ITEM),
                 ("ChatGreen", ENUM_ITEM),
                 ("ChatRed", ENUM_ITEM),
@@ -1831,45 +1831,45 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("RobloxRound", ENUM_ITEM),
                 ("RobloxSquare", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FramerateManagerMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FramerateManagerMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Off", ENUM_ITEM),
                 ("On", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FriendRequestEvent", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FriendRequestEvent", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Accept", ENUM_ITEM),
                 ("Deny", ENUM_ITEM),
                 ("Issue", ENUM_ITEM),
                 ("Revoke", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FriendStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FriendStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Friend", ENUM_ITEM),
                 ("FriendRequestReceived", ENUM_ITEM),
                 ("FriendRequestSent", ENUM_ITEM),
                 ("NotFriend", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("FunctionalTestResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("FunctionalTestResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Error", ENUM_ITEM),
                 ("Passed", ENUM_ITEM),
                 ("Warning", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("GameAvatarType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GameAvatarType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("PlayerChoice", ENUM_ITEM),
                 ("R15", ENUM_ITEM),
                 ("R6", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("GamepadType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GamepadType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("PS4", ENUM_ITEM),
                 ("PS5", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
                 ("XboxOne", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("GearGenreSetting", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GearGenreSetting", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AllGenres", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("MatchingGenreOnly", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
             ]), shape: Some("Enum"), deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum", replace_template: None }) })),
-            ("GearType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GearType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("BuildingTools", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Explosives", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("MeleeWeapons", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
@@ -1880,7 +1880,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("SocialItems", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Transport", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
             ]), shape: Some("Enum"), deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum", replace_template: None }) })),
-            ("Genre", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Genre", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Adventure", ENUM_ITEM),
                 ("All", ENUM_ITEM),
                 ("Fantasy", ENUM_ITEM),
@@ -1896,17 +1896,17 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("War", ENUM_ITEM),
                 ("WildWest", ENUM_ITEM),
             ]), shape: Some("Enum"), deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum", replace_template: None }) })),
-            ("GradientTileMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GradientTileMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Clamp", ENUM_ITEM),
                 ("Mirror", ENUM_ITEM),
                 ("Repeat", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("GradientType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GradientType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Conical", ENUM_ITEM),
                 ("Linear", ENUM_ITEM),
                 ("Radial", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("GraphicsMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GraphicsMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Direct3D11", ENUM_ITEM),
                 ("Metal", ENUM_ITEM),
@@ -1914,35 +1914,35 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("OpenGL", ENUM_ITEM),
                 ("Vulkan", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("GraphicsOptimizationMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GraphicsOptimizationMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Balanced", ENUM_ITEM),
                 ("Performance", ENUM_ITEM),
                 ("Quality", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("GroupMembershipStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GroupMembershipStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AlreadyMember", ENUM_ITEM),
                 ("JoinRequestPending", ENUM_ITEM),
                 ("Joined", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("GuiState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GuiState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Hover", ENUM_ITEM),
                 ("Idle", ENUM_ITEM),
                 ("NonInteractable", ENUM_ITEM),
                 ("Press", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("GuiType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("GuiType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Core", ENUM_ITEM),
                 ("CoreBillboards", ENUM_ITEM),
                 ("Custom", ENUM_ITEM),
                 ("CustomBillboards", ENUM_ITEM),
                 ("PlayerNameplates", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HandlesStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HandlesStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Movement", ENUM_ITEM),
                 ("Resize", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HapticEffectType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HapticEffectType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", ENUM_ITEM),
                 ("GameplayCollision", ENUM_ITEM),
                 ("GameplayExplosion", ENUM_ITEM),
@@ -1950,48 +1950,48 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("UIHover", ENUM_ITEM),
                 ("UINotification", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HashAlgorithm", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HashAlgorithm", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Blake2b", ENUM_ITEM),
                 ("Blake3", ENUM_ITEM),
                 ("Md5", ENUM_ITEM),
                 ("Sha1", ENUM_ITEM),
                 ("Sha256", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HighlightDepthMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HighlightDepthMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AlwaysOnTop", ENUM_ITEM),
                 ("Occluded", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HorizontalAlignment", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HorizontalAlignment", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Center", ENUM_ITEM),
                 ("Left", ENUM_ITEM),
                 ("Right", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HoverAnimateSpeed", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HoverAnimateSpeed", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Fast", ENUM_ITEM),
                 ("Medium", ENUM_ITEM),
                 ("Slow", ENUM_ITEM),
                 ("VeryFast", ENUM_ITEM),
                 ("VerySlow", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HttpCachePolicy", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HttpCachePolicy", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("DataOnly", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Full", ENUM_ITEM),
                 ("InternalRedirectRefresh", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HttpCompression", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HttpCompression", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Gzip", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HttpContentType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HttpContentType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ApplicationJson", ENUM_ITEM),
                 ("ApplicationUrlEncoded", ENUM_ITEM),
                 ("ApplicationXml", ENUM_ITEM),
                 ("TextPlain", ENUM_ITEM),
                 ("TextXml", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HttpError", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HttpError", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Aborted", ENUM_ITEM),
                 ("ConnectFail", ENUM_ITEM),
                 ("ConnectionClosed", ENUM_ITEM),
@@ -2012,7 +2012,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("TooManyRedirects", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HttpRequestType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HttpRequestType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Analytics", ENUM_ITEM),
                 ("Avatar", ENUM_ITEM),
                 ("Chat", ENUM_ITEM),
@@ -2021,25 +2021,25 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("MarketplaceService", ENUM_ITEM),
                 ("Players", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HumanoidCollisionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HumanoidCollisionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("InnerBox", ENUM_ITEM),
                 ("OuterBox", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HumanoidDisplayDistanceType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HumanoidDisplayDistanceType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("None", ENUM_ITEM),
                 ("Subject", ENUM_ITEM),
                 ("Viewer", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HumanoidHealthDisplayType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HumanoidHealthDisplayType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AlwaysOff", ENUM_ITEM),
                 ("AlwaysOn", ENUM_ITEM),
                 ("DisplayWhenDamaged", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HumanoidRigType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HumanoidRigType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("R15", ENUM_ITEM),
                 ("R6", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("HumanoidStateType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("HumanoidStateType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Climbing", ENUM_ITEM),
                 ("Dead", ENUM_ITEM),
                 ("FallingDown", ENUM_ITEM),
@@ -2058,23 +2058,23 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("StrafingNoPhysics", ENUM_ITEM),
                 ("Swimming", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("IKCollisionsMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("IKCollisionsMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("IncludeContactedMechanisms", ENUM_ITEM),
                 ("NoCollisions", ENUM_ITEM),
                 ("OtherMechanismsAnchored", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("IKControlConstraintSupport", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("IKControlConstraintSupport", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("IKControlType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("IKControlType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("LookAt", ENUM_ITEM),
                 ("Position", ENUM_ITEM),
                 ("Rotation", ENUM_ITEM),
                 ("Transform", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("IXPLoadingStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("IXPLoadingStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ErrorConnection", ENUM_ITEM),
                 ("ErrorInvalidUser", ENUM_ITEM),
                 ("ErrorJsonParse", ENUM_ITEM),
@@ -2083,12 +2083,12 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("None", ENUM_ITEM),
                 ("Pending", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ImageAlphaType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ImageAlphaType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("LockCanvasAlpha", ENUM_ITEM),
                 ("LockCanvasColor", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ImageCombineType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ImageCombineType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Add", ENUM_ITEM),
                 ("AlphaBlend", ENUM_ITEM),
                 ("BlendSourceOver", ENUM_ITEM),
@@ -2096,88 +2096,88 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("NormalMapBlend", ENUM_ITEM),
                 ("Overwrite", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InOut", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InOut", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Center", ENUM_ITEM),
                 ("Edge", ENUM_ITEM),
                 ("Inset", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InfoType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InfoType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Asset", ENUM_ITEM),
                 ("Bundle", ENUM_ITEM),
                 ("GamePass", ENUM_ITEM),
                 ("Product", ENUM_ITEM),
                 ("Subscription", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InitialDockState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InitialDockState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bottom", ENUM_ITEM),
                 ("Float", ENUM_ITEM),
                 ("Left", ENUM_ITEM),
                 ("Right", ENUM_ITEM),
                 ("Top", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InputActionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InputActionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bool", ENUM_ITEM),
                 ("Direction1D", ENUM_ITEM),
                 ("Direction2D", ENUM_ITEM),
                 ("Direction3D", ENUM_ITEM),
                 ("ViewportPosition", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InputBindingType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InputBindingType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Scriptable", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InputSink", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InputSink", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Activate", ENUM_ITEM),
                 ("All", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InputType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InputType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Constant", ENUM_ITEM),
                 ("NoInput", ENUM_ITEM),
                 ("Sin", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InstanceFileSyncStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InstanceFileSyncStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AncestorErrored", ENUM_ITEM),
                 ("Errored", ENUM_ITEM),
                 ("NotSynced", ENUM_ITEM),
                 ("SyncedAsDescendant", ENUM_ITEM),
                 ("SyncedAsRoot", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("IntermediateMeshGenerationResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("IntermediateMeshGenerationResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("HighQualityMesh", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InternalVideoUsage", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InternalVideoUsage", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("HomeCarousel", ENUM_ITEM),
                 ("WatchPage", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InterpolationThrottlingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InterpolationThrottlingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("InviteState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("InviteState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Accepted", ENUM_ITEM),
                 ("Declined", ENUM_ITEM),
                 ("Missed", ENUM_ITEM),
                 ("Placed", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ItemLineAlignment", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ItemLineAlignment", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Center", ENUM_ITEM),
                 ("End", ENUM_ITEM),
                 ("Start", ENUM_ITEM),
                 ("Stretch", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("JoinSource", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("JoinSource", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CreatedItemAttribution", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("JointCreationMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("JointCreationMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Surface", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("KeyCode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("KeyCode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("A", ENUM_ITEM),
                 ("Ampersand", ENUM_ITEM),
                 ("Asterisk", ENUM_ITEM),
@@ -2456,28 +2456,28 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Z", ENUM_ITEM),
                 ("Zero", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("KeyCodeStringFormat", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("KeyCodeStringFormat", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Abbreviated", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("KeyInterpolationMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("KeyInterpolationMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Constant", ENUM_ITEM),
                 ("Cubic", ENUM_ITEM),
                 ("Linear", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("KeywordFilterType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("KeywordFilterType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Exclude", ENUM_ITEM),
                 ("Include", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Language", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Language", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("LeftRight", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("LeftRight", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Center", ENUM_ITEM),
                 ("Left", ENUM_ITEM),
                 ("Right", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("LexemeType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("LexemeType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("And", ENUM_ITEM),
                 ("Colon", ENUM_ITEM),
                 ("Dot", ENUM_ITEM),
@@ -2498,11 +2498,11 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Star", ENUM_ITEM),
                 ("TildeEqual", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("LightingStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("LightingStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Realistic", ENUM_ITEM),
                 ("Soft", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Limb", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Limb", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Head", ENUM_ITEM),
                 ("LeftArm", ENUM_ITEM),
                 ("LeftLeg", ENUM_ITEM),
@@ -2511,74 +2511,74 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Torso", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("LineJoinMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("LineJoinMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bevel", ENUM_ITEM),
                 ("Miter", ENUM_ITEM),
                 ("Round", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ListDisplayMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ListDisplayMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Horizontal", ENUM_ITEM),
                 ("Vertical", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ListenerLocation", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ListenerLocation", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Camera", ENUM_ITEM),
                 ("Character", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ListenerPositionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ListenerPositionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Instance", ENUM_ITEM),
                 ("Parent", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ListenerType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ListenerType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CFrame", ENUM_ITEM),
                 ("Camera", ENUM_ITEM),
                 ("ObjectCFrame", ENUM_ITEM),
                 ("ObjectPosition", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("LiveEditingAtomicUpdateResponse", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("LiveEditingAtomicUpdateResponse", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FailureGuidNotFound", ENUM_ITEM),
                 ("FailureHashMismatch", ENUM_ITEM),
                 ("FailureOperationIllegal", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("LiveEditingBroadcastMessageType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("LiveEditingBroadcastMessageType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Error", ENUM_ITEM),
                 ("Normal", ENUM_ITEM),
                 ("Warning", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("LoadCharacterLayeredClothing", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("LoadCharacterLayeredClothing", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("LoadDynamicHeads", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("LoadDynamicHeads", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("LocationType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("LocationType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Camera", ENUM_ITEM),
                 ("Character", ENUM_ITEM),
                 ("ObjectPosition", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("LuauTypeCheckMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("LuauTypeCheckMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("NoCheck", ENUM_ITEM),
                 ("Nonstrict", ENUM_ITEM),
                 ("Strict", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MakeupType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MakeupType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Eye", ENUM_ITEM),
                 ("Face", ENUM_ITEM),
                 ("Lip", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MarketplaceBulkPurchasePromptStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MarketplaceBulkPurchasePromptStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Aborted", ENUM_ITEM),
                 ("Completed", ENUM_ITEM),
                 ("Error", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MarketplaceItemPurchaseStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MarketplaceItemPurchaseStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AlreadyOwned", ENUM_ITEM),
                 ("InsufficientMembership", ENUM_ITEM),
                 ("InsufficientRobux", ENUM_ITEM),
@@ -2593,20 +2593,20 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Success", ENUM_ITEM),
                 ("SystemError", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MarketplaceProductType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MarketplaceProductType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AvatarAsset", ENUM_ITEM),
                 ("AvatarBundle", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MarkupKind", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MarkupKind", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Markdown", ENUM_ITEM),
                 ("PlainText", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MatchmakingType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MatchmakingType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("PlayStationOnly", ENUM_ITEM),
                 ("XboxOnly", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Material", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Material", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Air", ENUM_ITEM),
                 ("Asphalt", ENUM_ITEM),
                 ("Basalt", ENUM_ITEM),
@@ -2653,18 +2653,18 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Wood", ENUM_ITEM),
                 ("WoodPlanks", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MaterialPattern", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MaterialPattern", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Organic", ENUM_ITEM),
                 ("Regular", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MembershipType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MembershipType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("BuildersClub", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("OutrageousBuildersClub", ENUM_ITEM),
                 ("Premium", ENUM_ITEM),
                 ("TurboBuildersClub", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MeshPartDetailLevel", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MeshPartDetailLevel", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("DistanceBased", ENUM_ITEM),
                 ("Level00", ENUM_ITEM),
                 ("Level01", ENUM_ITEM),
@@ -2677,12 +2677,12 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Level08", ENUM_ITEM),
                 ("Level09", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MeshPartHeadsAndAccessories", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MeshPartHeadsAndAccessories", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MeshScaleUnit", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MeshScaleUnit", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CM", ENUM_ITEM),
                 ("Foot", ENUM_ITEM),
                 ("Inch", ENUM_ITEM),
@@ -2690,7 +2690,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Meter", ENUM_ITEM),
                 ("Stud", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MeshType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MeshType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Brick", ENUM_ITEM),
                 ("CornerWedge", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Cylinder", ENUM_ITEM),
@@ -2704,36 +2704,36 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Torso", ENUM_ITEM),
                 ("Wedge", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MessageType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MessageType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("MessageError", ENUM_ITEM),
                 ("MessageInfo", ENUM_ITEM),
                 ("MessageOutput", ENUM_ITEM),
                 ("MessageWarning", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ModelLevelOfDetail", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ModelLevelOfDetail", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("SLIM", ENUM_ITEM),
                 ("StreamingMesh", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ModelStreamingBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ModelStreamingBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Improved", ENUM_ITEM),
                 ("Legacy", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ModelStreamingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ModelStreamingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Atomic", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Nonatomic", ENUM_ITEM),
                 ("Persistent", ENUM_ITEM),
                 ("PersistentPerPlayer", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ModerationResultCategory", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ModerationResultCategory", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Borderline", ENUM_ITEM),
                 ("NoViolationDetected", ENUM_ITEM),
                 ("ViolationDetected", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ModerationResultLabel", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ModerationResultLabel", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ChildExploitation", ENUM_ITEM),
                 ("DiscriminationSlursAndHateSpeech", ENUM_ITEM),
                 ("IllegalAndRegulatedGoodsAndActivities", ENUM_ITEM),
@@ -2746,59 +2746,59 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("ThreatsBullyingAndHarassment", ENUM_ITEM),
                 ("ViolentContentAndGore", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ModerationStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ModerationStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Invalid", ENUM_ITEM),
                 ("NotApplicable", ENUM_ITEM),
                 ("NotReviewed", ENUM_ITEM),
                 ("ReviewedApproved", ENUM_ITEM),
                 ("ReviewedRejected", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ModifierKey", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ModifierKey", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Alt", ENUM_ITEM),
                 ("Ctrl", ENUM_ITEM),
                 ("Meta", ENUM_ITEM),
                 ("Shift", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MouseBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MouseBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("LockCenter", ENUM_ITEM),
                 ("LockCurrentPosition", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MoveState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MoveState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AirFree", ENUM_ITEM),
                 ("Coasting", ENUM_ITEM),
                 ("Pushing", ENUM_ITEM),
                 ("Stopped", ENUM_ITEM),
                 ("Stopping", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("MuteState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("MuteState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Muted", ENUM_ITEM),
                 ("Unmuted", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("NameOcclusion", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("NameOcclusion", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("EnemyOcclusion", ENUM_ITEM),
                 ("NoOcclusion", ENUM_ITEM),
                 ("OccludeAll", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("NegateOperationHiddenHistory", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("NegateOperationHiddenHistory", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NegatedIntersection", ENUM_ITEM),
                 ("NegatedUnion", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("NetworkOwnership", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("NetworkOwnership", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Manual", ENUM_ITEM),
                 ("OnContact", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("NetworkStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("NetworkStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Connected", ENUM_ITEM),
                 ("Disconnected", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("NoiseType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("NoiseType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("SimplexGabor", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("NormalId", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("NormalId", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Back", ENUM_ITEM),
                 ("Bottom", ENUM_ITEM),
                 ("Front", ENUM_ITEM),
@@ -2806,43 +2806,43 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Right", ENUM_ITEM),
                 ("Top", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("NotificationButtonType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("NotificationButtonType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Primary", ENUM_ITEM),
                 ("Secondary", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("OperationType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("OperationType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Intersection", ENUM_ITEM),
                 ("Null", ENUM_ITEM),
                 ("Primitive", ENUM_ITEM),
                 ("Subtraction", ENUM_ITEM),
                 ("Union", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("OrientationAlignmentMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("OrientationAlignmentMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("OneAttachment", ENUM_ITEM),
                 ("TwoAttachment", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("OutfitSource", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("OutfitSource", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("Created", ENUM_ITEM),
                 ("Purchased", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("OutfitType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("OutfitType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("Avatar", ENUM_ITEM),
                 ("DynamicHead", ENUM_ITEM),
                 ("Makeup", ENUM_ITEM),
                 ("Shoes", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("OutputLayoutMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("OutputLayoutMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Horizontal", ENUM_ITEM),
                 ("Vertical", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("OverrideMouseIconBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("OverrideMouseIconBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ForceHide", ENUM_ITEM),
                 ("ForceShow", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PackagePermission", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PackagePermission", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Edit", ENUM_ITEM),
                 ("NoAccess", ENUM_ITEM),
                 ("None", ENUM_ITEM),
@@ -2850,53 +2850,53 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Revoked", ENUM_ITEM),
                 ("UseView", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PartType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PartType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Ball", ENUM_ITEM),
                 ("Block", ENUM_ITEM),
                 ("CornerWedge", ENUM_ITEM),
                 ("Cylinder", ENUM_ITEM),
                 ("Wedge", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ParticleEmitterShape", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ParticleEmitterShape", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Box", ENUM_ITEM),
                 ("Cylinder", ENUM_ITEM),
                 ("Disc", ENUM_ITEM),
                 ("Sphere", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ParticleEmitterShapeInOut", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ParticleEmitterShapeInOut", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("InAndOut", ENUM_ITEM),
                 ("Inward", ENUM_ITEM),
                 ("Outward", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ParticleEmitterShapeStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ParticleEmitterShapeStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Surface", ENUM_ITEM),
                 ("Volume", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ParticleFlipbookLayout", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ParticleFlipbookLayout", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", ENUM_ITEM),
                 ("Grid2x2", ENUM_ITEM),
                 ("Grid4x4", ENUM_ITEM),
                 ("Grid8x8", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ParticleFlipbookMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ParticleFlipbookMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Loop", ENUM_ITEM),
                 ("OneShot", ENUM_ITEM),
                 ("PingPong", ENUM_ITEM),
                 ("Random", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ParticleFlipbookTextureCompatible", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ParticleFlipbookTextureCompatible", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Compatible", ENUM_ITEM),
                 ("NotCompatible", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ParticleOrientation", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ParticleOrientation", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FacingCamera", ENUM_ITEM),
                 ("FacingCameraWorldUp", ENUM_ITEM),
                 ("VelocityParallel", ENUM_ITEM),
                 ("VelocityPerpendicular", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PathStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PathStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ClosestNoPath", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("ClosestOutOfRange", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("FailFinishNotEmpty", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
@@ -2904,59 +2904,59 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("NoPath", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PathWaypointAction", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PathWaypointAction", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", ENUM_ITEM),
                 ("Jump", ENUM_ITEM),
                 ("Walk", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PathfindingUseImprovedSearch", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PathfindingUseImprovedSearch", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PeoplePageLayout", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PeoplePageLayout", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Card", ENUM_ITEM),
                 ("List", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PerformanceOverlayMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PerformanceOverlayMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Decals", ENUM_ITEM),
                 ("Lights", ENUM_ITEM),
                 ("Overdraw", ENUM_ITEM),
                 ("Transparent", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PermissionLevelShown", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PermissionLevelShown", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Game", ENUM_ITEM),
                 ("Roblox", ENUM_ITEM),
                 ("RobloxGame", ENUM_ITEM),
                 ("RobloxScript", ENUM_ITEM),
                 ("Studio", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PhysicalConstraintType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PhysicalConstraintType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AnimationConstraint", ENUM_ITEM),
                 ("Motor6D", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PhysicsSimulationRate", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PhysicsSimulationRate", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Fixed120Hz", ENUM_ITEM),
                 ("Fixed240Hz", ENUM_ITEM),
                 ("Fixed60Hz", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PhysicsSteppingMethod", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PhysicsSteppingMethod", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Adaptive", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Fixed", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlaceContentPreference", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlaceContentPreference", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("MentionsAndReplies", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlacePublishType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlacePublishType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("None", ENUM_ITEM),
                 ("Publish", ENUM_ITEM),
                 ("Save", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Platform", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Platform", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Android", ENUM_ITEM),
                 ("AndroidTV", ENUM_ITEM),
                 ("BeOS", ENUM_ITEM),
@@ -2981,7 +2981,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("XBox360", ENUM_ITEM),
                 ("XBoxOne", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlaybackState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlaybackState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Begin", ENUM_ITEM),
                 ("Cancelled", ENUM_ITEM),
                 ("Completed", ENUM_ITEM),
@@ -2989,61 +2989,61 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Paused", ENUM_ITEM),
                 ("Playing", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlayerActions", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlayerActions", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CharacterBackward", ENUM_ITEM),
                 ("CharacterForward", ENUM_ITEM),
                 ("CharacterJump", ENUM_ITEM),
                 ("CharacterLeft", ENUM_ITEM),
                 ("CharacterRight", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlayerCharacterDestroyBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlayerCharacterDestroyBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlayerChatType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlayerChatType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("Team", ENUM_ITEM),
                 ("Whisper", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlayerDataErrorState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlayerDataErrorState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FlushFailed", ENUM_ITEM),
                 ("LoadFailed", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("ReleaseFailed", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlayerDataLoadFailureBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlayerDataLoadFailureBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Failure", ENUM_ITEM),
                 ("FallbackToDefault", ENUM_ITEM),
                 ("Kick", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlayerExitReason", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlayerExitReason", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CreatorKick", ENUM_ITEM),
                 ("PlatformKick", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlayerPlatformActivationStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlayerPlatformActivationStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Active", ENUM_ITEM),
                 ("Lapsed", ENUM_ITEM),
                 ("New", ENUM_ITEM),
                 ("Reactivated", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PlayerPlatformSpenderStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PlayerPlatformSpenderStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Active", ENUM_ITEM),
                 ("OtherPayer", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PluginConnectionTargetType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PluginConnectionTargetType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Edit", ENUM_ITEM),
                 ("Test", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PoseEasingDirection", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PoseEasingDirection", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("In", ENUM_ITEM),
                 ("InOut", ENUM_ITEM),
                 ("Out", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PoseEasingStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PoseEasingStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bounce", ENUM_ITEM),
                 ("Constant", ENUM_ITEM),
                 ("Cubic", ENUM_ITEM),
@@ -3051,48 +3051,48 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Elastic", ENUM_ITEM),
                 ("Linear", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PositionAlignmentMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PositionAlignmentMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("OneAttachment", ENUM_ITEM),
                 ("TwoAttachment", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PredictionMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PredictionMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Off", ENUM_ITEM),
                 ("On", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PredictionStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PredictionStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Authoritative", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Predicted", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PredictiveStreamingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PredictiveStreamingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PreferredInput", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PreferredInput", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Gamepad", ENUM_ITEM),
                 ("KeyboardAndMouse", ENUM_ITEM),
                 ("Touch", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PreferredTextSize", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PreferredTextSize", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Large", ENUM_ITEM),
                 ("Larger", ENUM_ITEM),
                 ("Largest", ENUM_ITEM),
                 ("Medium", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PrefetchDownloadStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PrefetchDownloadStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Completed", ENUM_ITEM),
                 ("Failed", ENUM_ITEM),
                 ("InProgress", ENUM_ITEM),
                 ("NotStarted", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PrimalPhysicsSolver", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PrimalPhysicsSolver", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Experimental", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PrimitiveType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PrimitiveType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Ball", ENUM_ITEM),
                 ("Block", ENUM_ITEM),
                 ("CornerWedge", ENUM_ITEM),
@@ -3100,29 +3100,29 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Null", ENUM_ITEM),
                 ("Wedge", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PrivilegeType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PrivilegeType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Admin", ENUM_ITEM),
                 ("Banned", ENUM_ITEM),
                 ("Member", ENUM_ITEM),
                 ("Owner", ENUM_ITEM),
                 ("Visitor", ENUM_ITEM),
             ]), shape: Some("Enum"), deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum", replace_template: None }) })),
-            ("ProductLocationRestriction", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ProductLocationRestriction", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AllGames", ENUM_ITEM),
                 ("AllowedGames", ENUM_ITEM),
                 ("AvatarShop", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ProductPurchaseChannel", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ProductPurchaseChannel", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AdReward", ENUM_ITEM),
                 ("CommerceProduct", ENUM_ITEM),
                 ("ExperienceDetailsPage", ENUM_ITEM),
                 ("InExperience", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ProductPurchaseDecision", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ProductPurchaseDecision", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NotProcessedYet", ENUM_ITEM),
                 ("PurchaseGranted", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PromptCreateAssetResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PromptCreateAssetResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ModeratedName", ENUM_ITEM),
                 ("NoUserInput", ENUM_ITEM),
                 ("PermissionDenied", ENUM_ITEM),
@@ -3134,7 +3134,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("UnknownFailure", ENUM_ITEM),
                 ("UploadFailed", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PromptCreateAvatarResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PromptCreateAvatarResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("InvalidHumanoidDescription", ENUM_ITEM),
                 ("MaxOutfits", ENUM_ITEM),
                 ("ModeratedName", ENUM_ITEM),
@@ -3148,7 +3148,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("UnknownFailure", ENUM_ITEM),
                 ("UploadFailed", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PromptCreateOutfitResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PromptCreateOutfitResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CreationFailure", ENUM_ITEM),
                 ("NoUserInput", ENUM_ITEM),
                 ("PartialSuccess", ENUM_ITEM),
@@ -3157,16 +3157,16 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Timeout", ENUM_ITEM),
                 ("UnknownFailure", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PromptExperienceDetailsResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PromptExperienceDetailsResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("PromptClosed", ENUM_ITEM),
                 ("TeleportAttempted", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PromptLinkSharingResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PromptLinkSharingResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("InvalidLaunchData", ENUM_ITEM),
                 ("PlayerLeft", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PromptPublishAssetResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PromptPublishAssetResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NoUserInput", ENUM_ITEM),
                 ("PermissionDenied", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
@@ -3174,30 +3174,30 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("UnknownFailure", ENUM_ITEM),
                 ("UploadFailed", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PropertyStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PropertyStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Error", ENUM_ITEM),
                 ("Ok", ENUM_ITEM),
                 ("Warning", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ProximityPromptExclusivity", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ProximityPromptExclusivity", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AlwaysShow", ENUM_ITEM),
                 ("OneGlobally", ENUM_ITEM),
                 ("OnePerButton", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ProximityPromptInputType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ProximityPromptInputType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Gamepad", ENUM_ITEM),
                 ("Keyboard", ENUM_ITEM),
                 ("Touch", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ProximityPromptStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ProximityPromptStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("PurchaseOption", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("PurchaseOption", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Permanent", ENUM_ITEM),
                 ("TimedOption", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("QualityLevel", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("QualityLevel", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Level01", ENUM_ITEM),
                 ("Level02", ENUM_ITEM),
@@ -3221,28 +3221,28 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Level20", ENUM_ITEM),
                 ("Level21", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("R15CollisionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("R15CollisionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("InnerBox", ENUM_ITEM),
                 ("OuterBox", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RaycastFilterType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RaycastFilterType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Exclude", ENUM_ITEM),
                 ("Include", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ReadCapturesFromGalleryResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ReadCapturesFromGalleryResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NeedPermission", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ReceiptDecision", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ReceiptDecision", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NotProcessedYet", ENUM_ITEM),
                 ("Processed", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ReceiptType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ReceiptType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("DeveloperProduct", ENUM_ITEM),
                 ("RobuxTransferReceiver", ENUM_ITEM),
                 ("RobuxTransferSender", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RecommendationActionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RecommendationActionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AddReaction", ENUM_ITEM),
                 ("Comment", ENUM_ITEM),
                 ("Play", ENUM_ITEM),
@@ -3251,89 +3251,89 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Report", ENUM_ITEM),
                 ("Share", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RecommendationDepartureIntent", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RecommendationDepartureIntent", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Negative", ENUM_ITEM),
                 ("Neutral", ENUM_ITEM),
                 ("Positive", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RecommendationImpressionType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RecommendationImpressionType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NotViewable", ENUM_ITEM),
                 ("View", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RecommendationItemContentType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RecommendationItemContentType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Dynamic", ENUM_ITEM),
                 ("Interactive", ENUM_ITEM),
                 ("Static", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RecommendationItemVisibility", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RecommendationItemVisibility", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Private", ENUM_ITEM),
                 ("Public", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RecommendationPreferenceTargetType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RecommendationPreferenceTargetType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomTag", ENUM_ITEM),
                 ("Universe", ENUM_ITEM),
                 ("User", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RecommendationPreferenceType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RecommendationPreferenceType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AddFollow", ENUM_ITEM),
                 ("AddMute", ENUM_ITEM),
                 ("RemoveFollow", ENUM_ITEM),
                 ("RemoveMute", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RejectCharacterDeletions", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RejectCharacterDeletions", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RenderFidelity", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RenderFidelity", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Performance", ENUM_ITEM),
                 ("Precise", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RenderPriority", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RenderPriority", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Camera", ENUM_ITEM),
                 ("Character", ENUM_ITEM),
                 ("First", ENUM_ITEM),
                 ("Input", ENUM_ITEM),
                 ("Last", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RenderingCacheOptimizationMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RenderingCacheOptimizationMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RenderingTestComparisonMethod", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RenderingTestComparisonMethod", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("diff", ENUM_ITEM),
                 ("psnr", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ReplicateInstanceDestroySetting", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ReplicateInstanceDestroySetting", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ResamplerMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ResamplerMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Pixelated", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ReservedHighlightId", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ReservedHighlightId", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Active", ENUM_ITEM),
                 ("Hover", ENUM_ITEM),
                 ("NegatedPart", ENUM_ITEM),
                 ("Selection", ENUM_ITEM),
                 ("Standard", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RestPose", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RestPose", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("RotationsReset", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RestPoseModel", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RestPoseModel", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FromCustomClip", ENUM_ITEM),
                 ("FromRigInACE", ENUM_ITEM),
                 ("FromRigInFile", ENUM_ITEM),
                 ("FromRigInFileZeroedRotations", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ReturnKeyType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ReturnKeyType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Done", ENUM_ITEM),
                 ("Go", ENUM_ITEM),
@@ -3341,7 +3341,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Search", ENUM_ITEM),
                 ("Send", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ReverbType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ReverbType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Alley", ENUM_ITEM),
                 ("Arena", ENUM_ITEM),
                 ("Auditorium", ENUM_ITEM),
@@ -3367,12 +3367,12 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("StoneRoom", ENUM_ITEM),
                 ("UnderWater", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ReviewableContentState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ReviewableContentState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Completed", ENUM_ITEM),
                 ("Failed", ENUM_ITEM),
                 ("Pending", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RibbonTool", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RibbonTool", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ColorPicker", ENUM_ITEM),
                 ("Group", ENUM_ITEM),
                 ("MaterialPicker", ENUM_ITEM),
@@ -3385,7 +3385,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Transform", ENUM_ITEM),
                 ("Ungroup", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RigLabel", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RigLabel", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Chest", ENUM_ITEM),
                 ("HeadBase", ENUM_ITEM),
                 ("Index1", ENUM_ITEM),
@@ -3425,29 +3425,29 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Thumb3", ENUM_ITEM),
                 ("Waist", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RigScale", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RigScale", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Rthro", ENUM_ITEM),
                 ("RthroNarrow", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RigType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RigType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", ENUM_ITEM),
                 ("CustomHumanoid", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("R15", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RollOffMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RollOffMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Inverse", ENUM_ITEM),
                 ("InverseTapered", ENUM_ITEM),
                 ("Linear", ENUM_ITEM),
                 ("LinearSquare", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RolloutState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RolloutState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RotationOrder", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RotationOrder", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("XYZ", ENUM_ITEM),
                 ("XZY", ENUM_ITEM),
                 ("YXZ", ENUM_ITEM),
@@ -3455,51 +3455,51 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("ZXY", ENUM_ITEM),
                 ("ZYX", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RotationType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RotationType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CameraRelative", ENUM_ITEM),
                 ("MovementRelative", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RsvpStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RsvpStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Going", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("NotGoing", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RtlTextSupport", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RtlTextSupport", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RunContext", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RunContext", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Client", ENUM_ITEM),
                 ("Legacy", ENUM_ITEM),
                 ("Plugin", ENUM_ITEM),
                 ("Server", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RunState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RunState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Paused", ENUM_ITEM),
                 ("Running", ENUM_ITEM),
                 ("Stopped", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("RuntimeUndoBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("RuntimeUndoBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Aggregate", ENUM_ITEM),
                 ("Hybrid", ENUM_ITEM),
                 ("Snapshot", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SafeAreaCompatibility", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SafeAreaCompatibility", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FullscreenExtension", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SalesTypeFilter", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SalesTypeFilter", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("Collectibles", ENUM_ITEM),
                 ("Premium", ENUM_ITEM),
                 ("TimedOptions", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SandboxedInstanceMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SandboxedInstanceMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Experimental", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SaveAvatarThumbnailCustomizationFailure", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SaveAvatarThumbnailCustomizationFailure", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("BadDistanceScale", ENUM_ITEM),
                 ("BadFieldOfViewDeg", ENUM_ITEM),
                 ("BadThumbnailType", ENUM_ITEM),
@@ -3507,12 +3507,12 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Other", ENUM_ITEM),
                 ("Throttled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SaveFilter", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SaveFilter", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("SaveAll", ENUM_ITEM),
                 ("SaveGame", ENUM_ITEM),
                 ("SaveWorld", ENUM_ITEM),
             ]), shape: Some("Enum"), deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum", replace_template: None }) })),
-            ("SavedQualitySetting", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SavedQualitySetting", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("QualityLevel1", ENUM_ITEM),
                 ("QualityLevel10", ENUM_ITEM),
@@ -3525,14 +3525,14 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("QualityLevel8", ENUM_ITEM),
                 ("QualityLevel9", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ScaleType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ScaleType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Crop", ENUM_ITEM),
                 ("Fit", ENUM_ITEM),
                 ("Slice", ENUM_ITEM),
                 ("Stretch", ENUM_ITEM),
                 ("Tile", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ScopeCheckResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ScopeCheckResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("BackendError", ENUM_ITEM),
                 ("ConsentAccepted", ENUM_ITEM),
                 ("ConsentDenied", ENUM_ITEM),
@@ -3542,48 +3542,48 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Timeout", ENUM_ITEM),
                 ("UnexpectedError", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ScreenInsets", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ScreenInsets", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CoreUISafeInsets", ENUM_ITEM),
                 ("DeviceSafeInsets", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("TopbarSafeInsets", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ScreenOrientation", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ScreenOrientation", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("LandscapeLeft", ENUM_ITEM),
                 ("LandscapeRight", ENUM_ITEM),
                 ("LandscapeSensor", ENUM_ITEM),
                 ("Portrait", ENUM_ITEM),
                 ("Sensor", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ScreenshotCaptureResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ScreenshotCaptureResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NoDeviceSupport", ENUM_ITEM),
                 ("NoSpaceOnDevice", ENUM_ITEM),
                 ("OtherError", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ScriptStoppedReason", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ScriptStoppedReason", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Breakpoint", ENUM_ITEM),
                 ("Entry", ENUM_ITEM),
                 ("Exception", ENUM_ITEM),
                 ("Pause", ENUM_ITEM),
                 ("Step", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ScriptVariableScope", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ScriptVariableScope", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Global", ENUM_ITEM),
                 ("Local", ENUM_ITEM),
                 ("Upvalue", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ScrollBarInset", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ScrollBarInset", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Always", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("ScrollBar", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ScrollingDirection", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ScrollingDirection", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("X", ENUM_ITEM),
                 ("XY", ENUM_ITEM),
                 ("Y", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SecurityCapability", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SecurityCapability", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AccessOutsideWrite", ENUM_ITEM),
                 ("Animation", ENUM_ITEM),
                 ("AssetCreateUpdate", ENUM_ITEM),
@@ -3638,49 +3638,49 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Unassigned", ENUM_ITEM),
                 ("WritePlayer", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SelectionBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SelectionBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Escape", ENUM_ITEM),
                 ("Stop", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SelectionRenderMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SelectionRenderMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Both", ENUM_ITEM),
                 ("BoundingBoxes", ENUM_ITEM),
                 ("Outlines", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SelfViewPosition", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SelfViewPosition", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("BottomLeft", ENUM_ITEM),
                 ("BottomRight", ENUM_ITEM),
                 ("LastPosition", ENUM_ITEM),
                 ("TopLeft", ENUM_ITEM),
                 ("TopRight", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SensorMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SensorMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ClassicFloor", ENUM_ITEM),
                 ("ClassicLadder", ENUM_ITEM),
                 ("Floor", ENUM_ITEM),
                 ("Ladder", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SensorUpdateType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SensorUpdateType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Manual", ENUM_ITEM),
                 ("OnRead", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ServerLiveEditingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ServerLiveEditingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
                 ("Uninitialized", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ServiceVisibility", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ServiceVisibility", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Always", ENUM_ITEM),
                 ("Off", ENUM_ITEM),
                 ("WithChildren", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Severity", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Severity", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Error", ENUM_ITEM),
                 ("Hint", ENUM_ITEM),
                 ("Information", ENUM_ITEM),
                 ("Warning", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ShowAdResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ShowAdResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AdAlreadyShowing", ENUM_ITEM),
                 ("AdNotReady", ENUM_ITEM),
                 ("InsufficientMemory", ENUM_ITEM),
@@ -3688,52 +3688,52 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("ShowCompleted", ENUM_ITEM),
                 ("ShowInterrupted", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SignalBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SignalBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AncestryDeferred", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Deferred", ENUM_ITEM),
                 ("Immediate", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SimulationMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SimulationMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SizeConstraint", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SizeConstraint", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("RelativeXX", ENUM_ITEM),
                 ("RelativeXY", ENUM_ITEM),
                 ("RelativeYY", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SlimTintMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SlimTintMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("LOD", ENUM_ITEM),
                 ("Meshes", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Zone", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SolidPrimitiveType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SolidPrimitiveType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Capsule", ENUM_ITEM),
                 ("Cone", ENUM_ITEM),
                 ("RoundedBox", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SolverConvergenceMetricType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SolverConvergenceMetricType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AlgorithmAgnostic", ENUM_ITEM),
                 ("IterationBased", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SolverConvergenceVisualizationMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SolverConvergenceVisualizationMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Disabled", ENUM_ITEM),
                 ("PerEdge", ENUM_ITEM),
                 ("PerIsland", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SortDirection", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SortDirection", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Ascending", ENUM_ITEM),
                 ("Descending", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SortOrder", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SortOrder", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("LayoutOrder", ENUM_ITEM),
                 ("Name", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SpecialKey", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SpecialKey", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ChatHotkey", ENUM_ITEM),
                 ("End", ENUM_ITEM),
                 ("Home", ENUM_ITEM),
@@ -3741,13 +3741,13 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("PageDown", ENUM_ITEM),
                 ("PageUp", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StartCorner", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StartCorner", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("BottomLeft", ENUM_ITEM),
                 ("BottomRight", ENUM_ITEM),
                 ("TopLeft", ENUM_ITEM),
                 ("TopRight", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StateObjectFieldType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StateObjectFieldType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Boolean", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("CFrame", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Color3", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
@@ -3758,11 +3758,11 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Vector2", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Vector3", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Status", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Status", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Confusion", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Poison", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
             ]), shape: Some("Enum"), deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum", replace_template: None }) })),
-            ("StepFrequency", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StepFrequency", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Hz1", ENUM_ITEM),
                 ("Hz10", ENUM_ITEM),
                 ("Hz15", ENUM_ITEM),
@@ -3770,27 +3770,27 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Hz5", ENUM_ITEM),
                 ("Hz60", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StreamOutBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StreamOutBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("LowMemory", ENUM_ITEM),
                 ("Opportunistic", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StreamingIntegrityMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StreamingIntegrityMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("MinimumRadiusPause", ENUM_ITEM),
                 ("PauseOutsideLoadedArea", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StreamingPauseMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StreamingPauseMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ClientPhysicsPause", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Default", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Disabled", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StrokeSizingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StrokeSizingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FixedSize", ENUM_ITEM),
                 ("ScaledSize", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StudioAction", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StudioAction", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ClearSelection", ENUM_ITEM),
                 ("Copy", ENUM_ITEM),
                 ("Cut", ENUM_ITEM),
@@ -3802,34 +3802,34 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Undo", ENUM_ITEM),
                 ("ZoomExtents", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StudioCaptureBufferStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StudioCaptureBufferStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Error", ENUM_ITEM),
                 ("NotStarted", ENUM_ITEM),
                 ("Pending", ENUM_ITEM),
                 ("Ready", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StudioCaptureScreenshotFormat", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StudioCaptureScreenshotFormat", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("PNG", ENUM_ITEM),
                 ("RGBA8", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StudioCloseMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StudioCloseMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CloseDoc", ENUM_ITEM),
                 ("CloseStudio", ENUM_ITEM),
                 ("LogOut", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StudioDataModelType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StudioDataModelType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Edit", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("PlayClient", ENUM_ITEM),
                 ("PlayServer", ENUM_ITEM),
                 ("Standalone", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StudioPlaceUpdateFailureReason", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StudioPlaceUpdateFailureReason", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Other", ENUM_ITEM),
                 ("TeamCreateConflict", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StudioScriptEditorColorCategories", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StudioScriptEditorColorCategories", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AICOOverlayButtonBackground", ENUM_ITEM),
                 ("AICOOverlayButtonBackgroundHover", ENUM_ITEM),
                 ("AICOOverlayButtonBackgroundPressed", ENUM_ITEM),
@@ -3878,13 +3878,13 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Warning", ENUM_ITEM),
                 ("Whitespace", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StudioScriptEditorColorPresets", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StudioScriptEditorColorPresets", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", ENUM_ITEM),
                 ("Extra1", ENUM_ITEM),
                 ("Extra2", ENUM_ITEM),
                 ("RobloxDefault", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StudioStyleGuideColor", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StudioStyleGuideColor", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AICOOverlayButtonBackground", ENUM_ITEM),
                 ("AICOOverlayButtonBackgroundHover", ENUM_ITEM),
                 ("AICOOverlayButtonBackgroundPressed", ENUM_ITEM),
@@ -4016,54 +4016,54 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("ViewPortBackground", ENUM_ITEM),
                 ("WarningText", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("StudioStyleGuideModifier", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("StudioStyleGuideModifier", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Hover", ENUM_ITEM),
                 ("Pressed", ENUM_ITEM),
                 ("Selected", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Style", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Style", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AlternatingSupports", ENUM_ITEM),
                 ("BridgeStyleSupports", ENUM_ITEM),
                 ("NoSupports", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SubscriptionExpirationReason", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SubscriptionExpirationReason", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Lapsed", ENUM_ITEM),
                 ("ProductDeleted", ENUM_ITEM),
                 ("ProductInactive", ENUM_ITEM),
                 ("SubscriberCancelled", ENUM_ITEM),
                 ("SubscriberRefunded", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SubscriptionPaymentStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SubscriptionPaymentStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Paid", ENUM_ITEM),
                 ("Refunded", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SubscriptionPeriod", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SubscriptionPeriod", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Month", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SubscriptionState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SubscriptionState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Expired", ENUM_ITEM),
                 ("NeverSubscribed", ENUM_ITEM),
                 ("SubscribedRenewalPaymentPending", ENUM_ITEM),
                 ("SubscribedWillNotRenew", ENUM_ITEM),
                 ("SubscribedWillRenew", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SurfaceConstraint", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SurfaceConstraint", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Hinge", ENUM_ITEM),
                 ("Motor", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("SteppingMotor", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SurfaceGuiShape", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SurfaceGuiShape", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CurvedHorizontally", ENUM_ITEM),
                 ("Flat", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SurfaceGuiSizingMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SurfaceGuiSizingMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FixedSize", ENUM_ITEM),
                 ("PixelsPerStud", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SurfaceType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SurfaceType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Glue", ENUM_ITEM),
                 ("Hinge", ENUM_ITEM),
                 ("Inlet", ENUM_ITEM),
@@ -4075,32 +4075,32 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Universal", ENUM_ITEM),
                 ("Weld", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SwipeDirection", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SwipeDirection", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Down", ENUM_ITEM),
                 ("Left", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Right", ENUM_ITEM),
                 ("Up", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("SystemThemeValue", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("SystemThemeValue", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("dark", ENUM_ITEM),
                 ("error", ENUM_ITEM),
                 ("light", ENUM_ITEM),
                 ("systemDark", ENUM_ITEM),
                 ("systemLight", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TableMajorAxis", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TableMajorAxis", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ColumnMajor", ENUM_ITEM),
                 ("RowMajor", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TagReplicability", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TeamCreateErrorState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TagReplicability", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, []), shape: Some("Enum"), ..NAMESPACE })),
+            ("TeamCreateErrorState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NoError", ENUM_ITEM),
                 ("PlaceSizeApproachingLimit", ENUM_ITEM),
                 ("PlaceSizeTooLarge", ENUM_ITEM),
                 ("PlaceUploadFailing", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("Technology", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("Technology", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Compatibility", ENUM_ITEM),
                 ("Future", ENUM_ITEM),
                 ("Legacy", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
@@ -4108,7 +4108,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Unified", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Voxel", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TelemetryBackend", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TelemetryBackend", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Counter", ENUM_ITEM),
                 ("EphemeralCounter", ENUM_ITEM),
                 ("EphemeralStat", ENUM_ITEM),
@@ -4118,7 +4118,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Teletune", ENUM_ITEM),
                 ("UNSPECIFIED", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TelemetryStandardizedField", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TelemetryStandardizedField", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AddArchitectureInfo", ENUM_ITEM),
                 ("AddCpuInfo", ENUM_ITEM),
                 ("AddCurrentContextName", ENUM_ITEM),
@@ -4131,7 +4131,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("AddSessionInfo", ENUM_ITEM),
                 ("AddUniverseId", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TeleportMethod", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TeleportMethod", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("TeleportPartyAsync", ENUM_ITEM),
                 ("TeleportToInstanceBack", ENUM_ITEM),
                 ("TeleportToPlaceInstance", ENUM_ITEM),
@@ -4140,7 +4140,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("TeleportToVIPServer", ENUM_ITEM),
                 ("TeleportUnknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TeleportResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TeleportResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Failure", ENUM_ITEM),
                 ("Flooded", ENUM_ITEM),
                 ("GameEnded", ENUM_ITEM),
@@ -4150,21 +4150,21 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Success", ENUM_ITEM),
                 ("Unauthorized", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TeleportState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TeleportState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Failed", ENUM_ITEM),
                 ("InProgress", ENUM_ITEM),
                 ("RequestedFromServer", ENUM_ITEM),
                 ("Started", ENUM_ITEM),
                 ("WaitingForServer", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TeleportType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TeleportType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ToInstance", ENUM_ITEM),
                 ("ToInstanceBack", ENUM_ITEM),
                 ("ToPlace", ENUM_ITEM),
                 ("ToReservedServer", ENUM_ITEM),
                 ("ToVIPServer", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TerrainAcquisitionMethod", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TerrainAcquisitionMethod", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Convert", ENUM_ITEM),
                 ("EditAddTool", ENUM_ITEM),
                 ("EditReplaceTool", ENUM_ITEM),
@@ -4178,19 +4178,19 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("RegionPasteTool", ENUM_ITEM),
                 ("Template", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TerrainFace", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TerrainFace", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bottom", ENUM_ITEM),
                 ("Side", ENUM_ITEM),
                 ("Top", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TerrainLiquidMergeOperation", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TerrainLiquidMergeOperation", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Difference", ENUM_ITEM),
                 ("Intersect", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Source", ENUM_ITEM),
                 ("Union", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TerrainSolidMergeOperation", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TerrainSolidMergeOperation", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Cut", ENUM_ITEM),
                 ("Difference", ENUM_ITEM),
                 ("Dig", ENUM_ITEM),
@@ -4201,7 +4201,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Source", ENUM_ITEM),
                 ("Union", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TextChatMessageStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TextChatMessageStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Floodchecked", ENUM_ITEM),
                 ("InvalidPrivacySettings", ENUM_ITEM),
                 ("InvalidTextChannelPermissions", ENUM_ITEM),
@@ -4212,16 +4212,16 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("TextFilterFailed", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TextDirection", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TextDirection", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Auto", ENUM_ITEM),
                 ("LeftToRight", ENUM_ITEM),
                 ("RightToLeft", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TextFilterContext", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TextFilterContext", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("PrivateChat", ENUM_ITEM),
                 ("PublicChat", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TextInputType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TextInputType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Email", ENUM_ITEM),
                 ("NewPassword", ENUM_ITEM),
@@ -4234,33 +4234,33 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Phone", ENUM_ITEM),
                 ("Username", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TextTruncate", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TextTruncate", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AtEnd", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("SplitWord", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TextXAlignment", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TextXAlignment", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Center", ENUM_ITEM),
                 ("Left", ENUM_ITEM),
                 ("Right", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TextYAlignment", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TextYAlignment", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bottom", ENUM_ITEM),
                 ("Center", ENUM_ITEM),
                 ("Top", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TextureMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TextureMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Static", ENUM_ITEM),
                 ("Stretch", ENUM_ITEM),
                 ("Wrap", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TextureQueryType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TextureQueryType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Humanoid", ENUM_ITEM),
                 ("HumanoidOrphaned", ENUM_ITEM),
                 ("NonHumanoid", ENUM_ITEM),
                 ("NonHumanoidOrphaned", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ThreadPoolConfig", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ThreadPoolConfig", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Auto", ENUM_ITEM),
                 ("PerCore1", ENUM_ITEM),
                 ("PerCore2", ENUM_ITEM),
@@ -4273,12 +4273,12 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Threads4", ENUM_ITEM),
                 ("Threads8", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ThrottlingPriority", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ThrottlingPriority", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("ElevatedOnServer", ENUM_ITEM),
                 ("Extreme", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ThumbnailSize", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ThumbnailSize", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Size100x100", ENUM_ITEM),
                 ("Size150x150", ENUM_ITEM),
                 ("Size180x180", ENUM_ITEM),
@@ -4287,32 +4287,32 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Size48x48", ENUM_ITEM),
                 ("Size60x60", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ThumbnailType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ThumbnailType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AvatarBust", ENUM_ITEM),
                 ("AvatarThumbnail", ENUM_ITEM),
                 ("HeadShot", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TickCountSampleMethod", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TickCountSampleMethod", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Benchmark", ENUM_ITEM),
                 ("Fast", ENUM_ITEM),
                 ("Precise", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TonemapperPreset", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TonemapperPreset", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Retro", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TopBottom", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TopBottom", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bottom", ENUM_ITEM),
                 ("Center", ENUM_ITEM),
                 ("Top", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TouchCameraMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TouchCameraMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Classic", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
                 ("Follow", ENUM_ITEM),
                 ("Orbital", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TouchMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TouchMovementMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ClickToMove", ENUM_ITEM),
                 ("DPad", ENUM_ITEM),
                 ("Default", ENUM_ITEM),
@@ -4320,7 +4320,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Thumbpad", ENUM_ITEM),
                 ("Thumbstick", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TrackerError", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TrackerError", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AudioError", ENUM_ITEM),
                 ("AudioNoPermission", ENUM_ITEM),
                 ("InitFailed", ENUM_ITEM),
@@ -4333,13 +4333,13 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("VideoNoPermission", ENUM_ITEM),
                 ("VideoUnsupported", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TrackerExtrapolationFlagMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TrackerExtrapolationFlagMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Auto", ENUM_ITEM),
                 ("ExtrapolateFacsAndPose", ENUM_ITEM),
                 ("ExtrapolateFacsOnly", ENUM_ITEM),
                 ("ForceDisabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TrackerFaceTrackingStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TrackerFaceTrackingStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("FaceTrackingHasTrackingError", ENUM_ITEM),
                 ("FaceTrackingIsOccluded", ENUM_ITEM),
                 ("FaceTrackingLost", ENUM_ITEM),
@@ -4348,104 +4348,104 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("FaceTrackingUninitialized", ENUM_ITEM),
                 ("FaceTrackingUnknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TrackerLodFlagMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TrackerLodFlagMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Auto", ENUM_ITEM),
                 ("ForceFalse", ENUM_ITEM),
                 ("ForceTrue", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TrackerLodValueMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TrackerLodValueMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Auto", ENUM_ITEM),
                 ("Force0", ENUM_ITEM),
                 ("Force1", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TrackerMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TrackerMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Audio", ENUM_ITEM),
                 ("AudioVideo", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Video", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TrackerPromptEvent", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TrackerPromptEvent", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("LODCameraRecommendDisable", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TrackerType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TrackerType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Face", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("UpperBody", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TriStateBoolean", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TriStateBoolean", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("False", ENUM_ITEM),
                 ("True", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("TweenStatus", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("TweenStatus", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Canceled", ENUM_ITEM),
                 ("Completed", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UICaptureMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UICaptureMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UIDragDetectorBoundingBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UIDragDetectorBoundingBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("EntireObject", ENUM_ITEM),
                 ("HitPoint", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UIDragDetectorDragRelativity", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UIDragDetectorDragRelativity", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Absolute", ENUM_ITEM),
                 ("Relative", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UIDragDetectorDragSpace", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UIDragDetectorDragSpace", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("LayerCollector", ENUM_ITEM),
                 ("Parent", ENUM_ITEM),
                 ("Reference", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UIDragDetectorDragStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UIDragDetectorDragStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Rotate", ENUM_ITEM),
                 ("Scriptable", ENUM_ITEM),
                 ("TranslateLine", ENUM_ITEM),
                 ("TranslatePlane", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UIDragDetectorResponseStyle", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UIDragDetectorResponseStyle", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CustomOffset", ENUM_ITEM),
                 ("CustomScale", ENUM_ITEM),
                 ("Offset", ENUM_ITEM),
                 ("Scale", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UIDragSpeedAxisMapping", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UIDragSpeedAxisMapping", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("XX", ENUM_ITEM),
                 ("XY", ENUM_ITEM),
                 ("YY", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UIFlexAlignment", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UIFlexAlignment", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Fill", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("SpaceAround", ENUM_ITEM),
                 ("SpaceBetween", ENUM_ITEM),
                 ("SpaceEvenly", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UIFlexMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UIFlexMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Custom", ENUM_ITEM),
                 ("Fill", ENUM_ITEM),
                 ("Grow", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Shrink", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UITheme", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UITheme", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Dark", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
                 ("Light", StdlibEntry::Constant(StdlibValue { deprecated: Some(StdlibDeprecation { message: "deprecated Roblox enum item", replace_template: None }), shape: Some("EnumItem"), ..VALUE })),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UiMessageType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UiMessageType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("UiMessageError", ENUM_ITEM),
                 ("UiMessageInfo", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UpdateState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UpdateState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("UpdateAvailable", ENUM_ITEM),
                 ("UpdateFailed", ENUM_ITEM),
                 ("UpdateInProgress", ENUM_ITEM),
                 ("UpdateNotAvailable", ENUM_ITEM),
                 ("UpdateReady", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UploadCaptureResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UploadCaptureResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CaptureModerated", ENUM_ITEM),
                 ("CaptureNotInGallery", ENUM_ITEM),
                 ("IneligibleCapture", ENUM_ITEM),
@@ -4455,24 +4455,24 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("UploadPending", ENUM_ITEM),
                 ("UploadQuotaReached", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UsageContext", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UsageContext", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Preview", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UserCFrame", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UserCFrame", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Floor", ENUM_ITEM),
                 ("Head", ENUM_ITEM),
                 ("LeftHand", ENUM_ITEM),
                 ("RightHand", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UserInputState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UserInputState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Begin", ENUM_ITEM),
                 ("Cancel", ENUM_ITEM),
                 ("Change", ENUM_ITEM),
                 ("End", ENUM_ITEM),
                 ("None", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("UserInputType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("UserInputType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Accelerometer", ENUM_ITEM),
                 ("Focus", ENUM_ITEM),
                 ("Gamepad1", ENUM_ITEM),
@@ -4495,68 +4495,68 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("TextInput", ENUM_ITEM),
                 ("Touch", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VRComfortSetting", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VRComfortSetting", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Comfort", ENUM_ITEM),
                 ("Custom", ENUM_ITEM),
                 ("Expert", ENUM_ITEM),
                 ("Normal", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VRControllerModelMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VRControllerModelMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Disabled", ENUM_ITEM),
                 ("Transparent", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VRDeviceType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VRDeviceType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("HTCVive", ENUM_ITEM),
                 ("OculusQuest", ENUM_ITEM),
                 ("OculusRift", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
                 ("ValveIndex", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VRLaserPointerMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VRLaserPointerMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Disabled", ENUM_ITEM),
                 ("DualPointer", ENUM_ITEM),
                 ("Pointer", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VRSafetyBubbleMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VRSafetyBubbleMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Anyone", ENUM_ITEM),
                 ("NoOne", ENUM_ITEM),
                 ("OnlyFriends", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VRScaling", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VRScaling", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Off", ENUM_ITEM),
                 ("World", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VRSessionState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VRSessionState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Focused", ENUM_ITEM),
                 ("Idle", ENUM_ITEM),
                 ("Stopping", ENUM_ITEM),
                 ("Undefined", ENUM_ITEM),
                 ("Visible", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VRTouchpad", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VRTouchpad", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Left", ENUM_ITEM),
                 ("Right", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VRTouchpadMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VRTouchpadMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ABXY", ENUM_ITEM),
                 ("Touch", ENUM_ITEM),
                 ("VirtualThumbstick", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VelocityConstraintMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VelocityConstraintMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Line", ENUM_ITEM),
                 ("Plane", ENUM_ITEM),
                 ("Vector", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VerticalAlignment", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VerticalAlignment", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Bottom", ENUM_ITEM),
                 ("Center", ENUM_ITEM),
                 ("Top", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VerticalScrollBarPosition", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VerticalScrollBarPosition", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Left", ENUM_ITEM),
                 ("Right", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VibrationMotor", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VibrationMotor", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Large", ENUM_ITEM),
                 ("LeftHand", ENUM_ITEM),
                 ("LeftTrigger", ENUM_ITEM),
@@ -4564,26 +4564,26 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("RightTrigger", ENUM_ITEM),
                 ("Small", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VideoCaptureResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VideoCaptureResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("OtherError", ENUM_ITEM),
                 ("ScreenSizeChanged", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
                 ("TimeLimitReached", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VideoCaptureStartedResult", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VideoCaptureStartedResult", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("CapturingAlready", ENUM_ITEM),
                 ("NoDeviceSupport", ENUM_ITEM),
                 ("NoSpaceOnDevice", ENUM_ITEM),
                 ("OtherError", ENUM_ITEM),
                 ("Success", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VideoDeviceCaptureQuality", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VideoDeviceCaptureQuality", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("High", ENUM_ITEM),
                 ("Low", ENUM_ITEM),
                 ("Medium", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VideoError", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VideoError", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AllocFailed", ENUM_ITEM),
                 ("BadParameter", ENUM_ITEM),
                 ("CodecCloseFailed", ENUM_ITEM),
@@ -4604,33 +4604,33 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Unknown", ENUM_ITEM),
                 ("Unsupported", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VideoSampleSize", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VideoSampleSize", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Full", ENUM_ITEM),
                 ("Large", ENUM_ITEM),
                 ("Medium", ENUM_ITEM),
                 ("Small", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ViewMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ViewMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Decal", ENUM_ITEM),
                 ("GeometryComplexity", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Transparent", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VirtualCursorMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VirtualCursorMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Default", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VirtualInputMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VirtualInputMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("None", ENUM_ITEM),
                 ("Playing", ENUM_ITEM),
                 ("Recording", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VoiceChatDistanceAttenuationType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VoiceChatDistanceAttenuationType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Inverse", ENUM_ITEM),
                 ("Legacy", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VoiceChatState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VoiceChatState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Ended", ENUM_ITEM),
                 ("Failed", ENUM_ITEM),
                 ("Idle", ENUM_ITEM),
@@ -4639,7 +4639,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("JoiningRetry", ENUM_ITEM),
                 ("Leaving", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VoiceClientLeaveReasons", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VoiceClientLeaveReasons", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("ClientNetworkDisconnected", ENUM_ITEM),
                 ("ClientShutdown", ENUM_ITEM),
                 ("ImguiDebugLeave", ENUM_ITEM),
@@ -4650,24 +4650,24 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Unknown", ENUM_ITEM),
                 ("VoiceReboot", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VoiceControlPath", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VoiceControlPath", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Join", ENUM_ITEM),
                 ("Publish", ENUM_ITEM),
                 ("Subscribe", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VoiceRccReconnectReason", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VoiceRccReconnectReason", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("BlockListChanged", ENUM_ITEM),
                 ("CloseRoom", ENUM_ITEM),
                 ("FAEUpdate", ENUM_ITEM),
                 ("Migration", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("VolumetricAudio", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("VolumetricAudio", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Automatic", ENUM_ITEM),
                 ("Disabled", ENUM_ITEM),
                 ("Enabled", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WaterDirection", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WaterDirection", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("NegX", ENUM_ITEM),
                 ("NegY", ENUM_ITEM),
                 ("NegZ", ENUM_ITEM),
@@ -4675,36 +4675,36 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Y", ENUM_ITEM),
                 ("Z", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WaterForce", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WaterForce", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Max", ENUM_ITEM),
                 ("Medium", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Small", ENUM_ITEM),
                 ("Strong", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WebSocketState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WebSocketState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Closed", ENUM_ITEM),
                 ("Closing", ENUM_ITEM),
                 ("Connecting", ENUM_ITEM),
                 ("Open", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WebStreamClientState", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WebStreamClientState", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Closed", ENUM_ITEM),
                 ("Connecting", ENUM_ITEM),
                 ("Error", ENUM_ITEM),
                 ("Open", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WebStreamClientType", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WebStreamClientType", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("RawStream", ENUM_ITEM),
                 ("SSE", ENUM_ITEM),
                 ("WebSocket", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WeldConstraintPreserve", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WeldConstraintPreserve", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("All", ENUM_ITEM),
                 ("None", ENUM_ITEM),
                 ("Touching", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WhenUserFirstPlayed", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WhenUserFirstPlayed", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Days0To30", ENUM_ITEM),
                 ("Days181To365", ENUM_ITEM),
                 ("Days31To90", ENUM_ITEM),
@@ -4712,16 +4712,16 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("Days91To180", ENUM_ITEM),
                 ("Unknown", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WhisperChatPrivacyMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WhisperChatPrivacyMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("AllUsers", ENUM_ITEM),
                 ("NoOne", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WrapLayerAutoSkin", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WrapLayerAutoSkin", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Disabled", ENUM_ITEM),
                 ("EnabledOverride", ENUM_ITEM),
                 ("EnabledPreserve", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WrapLayerDebugMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WrapLayerDebugMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("BoundCage", ENUM_ITEM),
                 ("BoundCageAndLinks", ENUM_ITEM),
                 ("HSRInner", ENUM_ITEM),
@@ -4739,7 +4739,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("ReferenceMeshAfterMorph", ENUM_ITEM),
                 ("SkinningTransfer", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("WrapTargetDebugMode", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("WrapTargetDebugMode", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("None", ENUM_ITEM),
                 ("OuterCageDetail", ENUM_ITEM),
                 ("PreWrapDeformerCage", ENUM_ITEM),
@@ -4751,75 +4751,75 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
                 ("TargetLayerCageOriginal", ENUM_ITEM),
                 ("TargetLayerInterface", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
-            ("ZIndexBehavior", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+            ("ZIndexBehavior", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
                 ("Global", ENUM_ITEM),
                 ("Sibling", ENUM_ITEM),
             ]), shape: Some("Enum"), ..NAMESPACE })),
         ]), shape: Some("Enums"), ..NAMESPACE })),
-        ("Faces", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Faces", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("FloatCurveKey", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("FloatCurveKey", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Display("Enum.KeyInterpolationMode"))], 3, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Font", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Font", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("fromEnum", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("Enum.Font"))], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("fromId", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), optional(StdlibArgKind::Display("Enum.FontWeight")), optional(StdlibArgKind::Display("Enum.FontStyle"))], 1, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("fromName", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Display("Enum.FontWeight")), optional(StdlibArgKind::Display("Enum.FontStyle"))], 1, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Display("Enum.FontWeight")), optional(StdlibArgKind::Display("Enum.FontStyle"))], 1, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Instance", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Instance", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("fromExisting", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Constant(&ROBLOX_CREATABLE_CLASSES)), StdlibParam { kind: StdlibArgKind::Any, is_required: false, deprecated: Some(StdlibDeprecation { message: "performance: set Parent after configuring the instance instead of passing it here", replace_template: None }) }], 1, Some(2))], is_must_use: true, returns_shape: Some("Instance"), ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("NumberRange", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("NumberRange", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 1, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("NumberSequence", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("NumberSequence", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any)], 1, Some(1)), signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("NumberSequenceKeypoint", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("NumberSequenceKeypoint", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 2, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("OverlapParams", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("OverlapParams", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Path2DControlPoint", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Path2DControlPoint", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Display("UDim2"))], 0, Some(1)), signature(&[required(StdlibArgKind::Display("UDim2")), required(StdlibArgKind::Display("UDim2")), required(StdlibArgKind::Display("UDim2"))], 3, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("PathWaypoint", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("PathWaypoint", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("Vector3")), optional(StdlibArgKind::Display("Enum.PathWaypointAction")), optional(StdlibArgKind::String)], 1, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("PhysicalProperties", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("PhysicalProperties", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("Enum.Material"))], 1, Some(1)), signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 3, Some(3)), signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 5, Some(6))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
         ("PluginManager", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
-        ("Random", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Random", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number)], 0, Some(1))], is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Ray", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Ray", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any), required(StdlibArgKind::Any)], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("RaycastParams", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("RaycastParams", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Rect", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Rect", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0)), signature(&[required(StdlibArgKind::Display("Vector2")), required(StdlibArgKind::Display("Vector2"))], 2, Some(2)), signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 4, Some(4))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Region3", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Region3", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("Vector3")), required(StdlibArgKind::Display("Vector3"))], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Region3int16", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Region3int16", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("Vector3int16")), required(StdlibArgKind::Display("Vector3int16"))], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("RotationCurveKey", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("RotationCurveKey", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Display("CFrame")), required(StdlibArgKind::Display("Enum.KeyInterpolationMode"))], 3, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("SecurityCapabilities", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("SecurityCapabilities", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("fromCurrent", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("SharedTable", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("SharedTable", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("clear", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("SharedTable"))], 1, Some(1))], ..FUNCTION })),
             ("clone", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("SharedTable")), optional(StdlibArgKind::Bool)], 1, Some(2))], is_must_use: true, ..FUNCTION })),
             ("cloneAndFreeze", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("SharedTable")), optional(StdlibArgKind::Bool)], 1, Some(2))], is_must_use: true, ..FUNCTION })),
@@ -4829,29 +4829,29 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("size", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("SharedTable"))], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("update", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("SharedTable")), required(StdlibArgKind::Any), required(StdlibArgKind::Function)], 3, Some(3))], ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("TweenInfo", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("TweenInfo", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Any), optional(StdlibArgKind::Any), optional(StdlibArgKind::Number), optional(StdlibArgKind::Bool), optional(StdlibArgKind::Number)], 0, Some(6))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("UDim", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("UDim", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("UDim2", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("UDim2", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("fromOffset", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("fromScale", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(4)), signature(&[required(StdlibArgKind::Display("UDim")), required(StdlibArgKind::Display("UDim"))], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
         ("UserSettings", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, returns_shape: Some("UserSettings"), ..FUNCTION })),
-        ("Vector2", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Vector2", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("one", StdlibEntry::Property(VALUE)),
             ("xAxis", StdlibEntry::Property(VALUE)),
             ("yAxis", StdlibEntry::Property(VALUE)),
             ("zero", StdlibEntry::Property(VALUE)),
         ]), ..NAMESPACE })),
-        ("Vector2int16", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Vector2int16", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("Vector3", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Vector3", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("FromAxis", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("Enum.Axis"))], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("FromNormalId", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("Enum.NormalId"))], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -4861,13 +4861,13 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("zAxis", StdlibEntry::Property(VALUE)),
             ("zero", StdlibEntry::Property(VALUE)),
         ]), ..NAMESPACE })),
-        ("Vector3int16", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("Vector3int16", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
         ("_G", StdlibEntry::Property(StdlibValue { is_read_only: false, ..VALUE })),
         ("_VERSION", StdlibEntry::Property(VALUE)),
         ("assert", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any), optional(StdlibArgKind::String), optional(StdlibArgKind::Vararg)], 1, None)], ..FUNCTION })),
-        ("bit32", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("bit32", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("arshift", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("band", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("bnot", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -4884,7 +4884,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("rrotate", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("rshift", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("buffer", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("buffer", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("copy", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("buffer")), required(StdlibArgKind::Number), required(StdlibArgKind::Display("buffer")), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 3, Some(5))], ..FUNCTION })),
             ("create", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("fill", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("buffer")), required(StdlibArgKind::Number), required(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 3, Some(4))], ..FUNCTION })),
@@ -4915,7 +4915,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("writeu8", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("buffer")), required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 3, Some(3))], ..FUNCTION })),
         ]), ..NAMESPACE })),
         ("collectgarbage", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Constant(&[constant("count")]))], 0, Some(1))], is_must_use: true, deprecated: Some(StdlibDeprecation { message: "deprecated on Roblox; use gcinfo() instead", replace_template: Some("gcinfo()") }), ..FUNCTION })),
-        ("coroutine", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("coroutine", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("close", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("thread"))], 1, Some(1))], ..FUNCTION })),
             ("create", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("finally", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("thread")), required(StdlibArgKind::Any)], 2, Some(2))], ..FUNCTION })),
@@ -4926,7 +4926,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("wrap", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("yield", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("debug", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("debug", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("dumpcodesize", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], ..FUNCTION })),
             ("getmemorycategory", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
             ("info", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any), required(StdlibArgKind::Any), optional(StdlibArgKind::String)], 2, Some(3))], is_must_use: true, ..FUNCTION })),
@@ -4943,7 +4943,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ("gcinfo", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
         ("getfenv", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Any)], 0, Some(1))], is_must_use: true, deprecated: Some(StdlibDeprecation { message: "deprecated on Roblox; environment manipulation disables Luau optimizations", replace_template: None }), ..FUNCTION })),
         ("getmetatable", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
-        ("integer", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("integer", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("add", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("integer")), required(StdlibArgKind::Display("integer"))], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("arshift", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("integer")), required(StdlibArgKind::Display("integer"))], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("band", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -4988,7 +4988,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ]), ..NAMESPACE })),
         ("ipairs", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ("loadstring", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::String)], 1, Some(2))], ..FUNCTION })),
-        ("math", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("math", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("abs", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("acos", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("asin", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -5036,7 +5036,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ]), ..NAMESPACE })),
         ("newproxy", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Bool)], 0, Some(1))], is_must_use: true, ..FUNCTION })),
         ("next", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), optional(StdlibArgKind::Any)], 1, Some(2))], ..FUNCTION })),
-        ("os", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("os", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("clock", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, ..FUNCTION })),
             ("date", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::String), optional(StdlibArgKind::Number)], 0, Some(2))], is_must_use: true, ..FUNCTION })),
             ("difftime", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Number)], 2, Some(2))], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -5060,7 +5060,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ("shared", StdlibEntry::Property(StdlibValue { is_read_only: false, ..VALUE })),
         ("spawn", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any), optional(StdlibArgKind::Vararg)], 1, None)], deprecated: Some(StdlibDeprecation { message: "use task.spawn", replace_template: Some("task.spawn(%1)") }), ..FUNCTION })),
         ("stats", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, deprecated: Some(StdlibDeprecation { message: "use game:GetService(\"Stats\") instead", replace_template: Some("game:GetService(\"Stats\")") }), ..FUNCTION })),
-        ("string", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("string", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("byte", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 1, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("char", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Vararg)], 0, None)], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("find", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), required(StdlibArgKind::String), optional(StdlibArgKind::Number), optional(StdlibArgKind::Bool)], 2, Some(4))], is_must_use: true, ..FUNCTION })),
@@ -5079,7 +5079,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("unpack", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), required(StdlibArgKind::String), optional(StdlibArgKind::Number)], 2, Some(3))], is_must_use: true, ..FUNCTION })),
             ("upper", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("table", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("table", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("clear", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table)], 1, Some(1))], ..FUNCTION })),
             ("clone", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("concat", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), optional(StdlibArgKind::String), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 1, Some(4))], is_must_use: true, ..FUNCTION })),
@@ -5098,7 +5098,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("sort", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), optional(StdlibArgKind::Function)], 1, Some(2))], ..FUNCTION })),
             ("unpack", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 1, Some(3))], is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("task", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("task", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("cancel", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("thread"))], 1, Some(1))], ..FUNCTION })),
             ("defer", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any), optional(StdlibArgKind::Vararg)], 1, None)], ..FUNCTION })),
             ("delay", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number), required(StdlibArgKind::Any), optional(StdlibArgKind::Vararg)], 2, None)], ..FUNCTION })),
@@ -5114,7 +5114,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ("type", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ("typeof", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Any)], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ("unpack", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Table), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 1, Some(3))], is_must_use: true, ..FUNCTION })),
-        ("utf8", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("utf8", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("char", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Vararg)], 0, None)], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("charpattern", StdlibEntry::Constant(VALUE)),
             ("codepoint", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 1, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -5125,7 +5125,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("nfdnormalize", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String)], 1, Some(1))], is_must_use: true, ..FUNCTION })),
             ("offset", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), required(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 2, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
         ]), ..NAMESPACE })),
-        ("vector", StdlibEntry::Namespace(StdlibNamespace { members: StdlibMap::new(&[
+        ("vector", StdlibEntry::Namespace(StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("abs", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("vector"))], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("angle", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("vector")), required(StdlibArgKind::Display("vector")), optional(StdlibArgKind::Display("vector"))], 2, Some(3))], is_pure: true, is_must_use: true, ..FUNCTION })),
             ("ceil", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("vector"))], 1, Some(1))], is_pure: true, is_must_use: true, ..FUNCTION })),
@@ -5150,8 +5150,8 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
         ("xpcall", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function), required(StdlibArgKind::Function), optional(StdlibArgKind::Vararg)], 2, None)], is_must_use: true, ..FUNCTION })),
         ("ypcall", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function), optional(StdlibArgKind::Vararg)], 1, None)], is_must_use: true, deprecated: Some(StdlibDeprecation { message: "pcall has supported yielding since 2014; use it directly", replace_template: Some("pcall(%1)") }), ..FUNCTION })),
     ]),
-    shapes: StdlibMap::new(&[
-        ("DataModel", StdlibShape { members: StdlibMap::new(&[
+    shapes: stdlib_map!(StdlibShape, [
+        ("DataModel", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("BindToClose", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Function)], 1, Some(1))], is_method: true, ..FUNCTION })),
             ("Clone", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, is_method: true, returns_shape: Some("Instance"), ..FUNCTION })),
             ("Destroy", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_method: true, ..FUNCTION })),
@@ -5178,23 +5178,23 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("WaitForChild", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Number)], 1, Some(2))], is_must_use: true, is_method: true, returns_shape: Some("Instance"), ..FUNCTION })),
             ("Workspace", StdlibEntry::Property(StdlibValue { shape: Some("Workspace"), ..VALUE })),
         ]) }),
-        ("Enum", StdlibShape { members: StdlibMap::new(&[
+        ("Enum", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("FromName", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String)], 1, Some(1))], is_must_use: true, is_method: true, returns_shape: Some("EnumItem"), ..FUNCTION })),
             ("FromValue", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Number)], 1, Some(1))], is_must_use: true, is_method: true, returns_shape: Some("EnumItem"), ..FUNCTION })),
             ("GetEnumItems", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, is_method: true, ..FUNCTION })),
         ]) }),
-        ("EnumItem", StdlibShape { members: StdlibMap::new(&[
+        ("EnumItem", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("EnumType", StdlibEntry::Property(StdlibValue { shape: Some("Enum"), ..VALUE })),
             ("Name", StdlibEntry::Property(StdlibValue { shape: Some("string"), ..VALUE })),
             ("Value", StdlibEntry::Property(VALUE)),
         ]) }),
-        ("Enums", StdlibShape { members: StdlibMap::new(&[
+        ("Enums", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("GetEnums", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, is_method: true, ..FUNCTION })),
         ]) }),
-        ("GlobalSettings", StdlibShape { members: StdlibMap::new(&[
+        ("GlobalSettings", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("GetService", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Constant(&[constant("DebugSettings"), constant("GameSettings"), constant("LuaSettings"), constant("NetworkSettings"), constant("PhysicsSettings"), constant("RenderSettings"), constant("Studio")]))], 1, Some(1))], is_must_use: true, is_method: true, returns_shape: Some("Instance"), ..FUNCTION })),
         ]) }),
-        ("Instance", StdlibShape { members: StdlibMap::new(&[
+        ("Instance", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("Clone", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, is_method: true, returns_shape: Some("Instance"), ..FUNCTION })),
             ("Destroy", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_method: true, ..FUNCTION })),
             ("FindFirstAncestor", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String)], 1, Some(1))], is_must_use: true, is_method: true, returns_shape: Some("Instance"), ..FUNCTION })),
@@ -5216,10 +5216,10 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("SetAttribute", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), required(StdlibArgKind::Any)], 2, Some(2))], is_method: true, ..FUNCTION })),
             ("WaitForChild", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Number)], 1, Some(2))], is_must_use: true, is_method: true, returns_shape: Some("Instance"), ..FUNCTION })),
         ]) }),
-        ("UserSettings", StdlibShape { members: StdlibMap::new(&[
+        ("UserSettings", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("GetService", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Constant(&[constant("UserGameSettings")]))], 1, Some(1))], is_must_use: true, is_method: true, returns_shape: Some("Instance"), ..FUNCTION })),
         ]) }),
-        ("Workspace", StdlibShape { members: StdlibMap::new(&[
+        ("Workspace", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("Blockcast", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::Display("CFrame")), required(StdlibArgKind::Display("Vector3")), required(StdlibArgKind::Display("Vector3")), optional(StdlibArgKind::Display("RaycastParams"))], 3, Some(4))], is_must_use: true, is_method: true, ..FUNCTION })),
             ("Clone", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[], 0, Some(0))], is_must_use: true, is_method: true, returns_shape: Some("Instance"), ..FUNCTION })),
             ("CurrentCamera", StdlibEntry::Property(StdlibValue { is_read_only: false, shape: Some("Instance"), ..VALUE })),
@@ -5250,7 +5250,7 @@ pub(super) static LIBRARY: StdlibLibrary = StdlibLibrary {
             ("Terrain", StdlibEntry::Property(StdlibValue { shape: Some("Instance"), ..VALUE })),
             ("WaitForChild", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Number)], 1, Some(2))], is_must_use: true, is_method: true, returns_shape: Some("Instance"), ..FUNCTION })),
         ]) }),
-        ("string", StdlibShape { members: StdlibMap::new(&[
+        ("string", StdlibShape { members: stdlib_map!(StdlibEntry, [
             ("byte", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Number), optional(StdlibArgKind::Number)], 0, Some(2))], is_pure: true, is_must_use: true, is_method: true, ..FUNCTION })),
             ("find", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[required(StdlibArgKind::String), optional(StdlibArgKind::Number), optional(StdlibArgKind::Bool)], 1, Some(3))], is_must_use: true, is_method: true, ..FUNCTION })),
             ("format", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], is_must_use: true, is_method: true, returns_shape: Some("string"), ..FUNCTION })),

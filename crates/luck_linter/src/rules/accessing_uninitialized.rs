@@ -45,6 +45,8 @@ impl WholeRule for AccessingUninitialized {
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use luck_token::LuaVersion;
 
     use super::*;
@@ -62,6 +64,31 @@ local x
 print(x)");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));
+    }
+
+    /// `count` locals declared without a value, all active at once, then a
+    /// read of the first.
+    fn unassigned_locals(count: usize) -> String {
+        let mut source = String::new();
+        for i in 0..count {
+            let _unused = writeln!(source, "local a{i}");
+        }
+        source.push_str("print(a0)");
+        source
+    }
+
+    #[test]
+    fn flags_read_in_a_function_at_the_local_limit() {
+        let diags = run(&unassigned_locals(200));
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    /// No Lua compiles more locals active at once, and walking each one's
+    /// flow through all the others would be quadratic.
+    #[test]
+    fn ignores_a_function_past_the_local_limit() {
+        let diags = run(&unassigned_locals(201));
+        assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]

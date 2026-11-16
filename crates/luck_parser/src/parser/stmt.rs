@@ -190,18 +190,14 @@ impl Parser<'_> {
                 }
             }
 
-            if self.is_at_block_end() {
-                break;
-            }
-            if self.is_recovering {
-                if !self.is_at_reliable_stmt_start() {
-                    self.skip_to_statement();
-                    continue;
-                }
-                self.is_recovering = false;
+            if self.is_recovering() && !self.recover_at_statement() {
+                continue;
             }
 
+            // No closer begins a statement, so the block's end is checked for
+            // last.
             let last = match self.peek() {
+                TokenKind::Eof => break,
                 TokenKind::Return => self.parse_return_stmt(),
                 TokenKind::Break if self.version.has_last_stmt_break() => {
                     let span = self.advance_loop_exit("`break` outside a loop");
@@ -225,6 +221,7 @@ impl Parser<'_> {
                     can_take_separator = true;
                     continue;
                 }
+                _ if self.is_at_expected_closer() => break,
                 _ => {
                     stmts.push(self.report_unexpected_in_block());
                     can_take_separator = true;

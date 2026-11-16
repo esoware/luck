@@ -1,6 +1,6 @@
 use luck_semantic::SymbolKind;
 
-use crate::diagnostic::{Finding, line_column};
+use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -29,8 +29,7 @@ impl WholeRule for Shadowing {
                 continue;
             }
             let shadowed = semantic.scope_tree.symbol(shadowed_id);
-            let (line, column) =
-                line_column(context.source, shadowed.definition_span.start, semantic.version);
+            let (line, column) = context.line_index().line_column(shadowed.definition_span.start);
             findings.push(
                 Finding::new(
                     format!("variable `{}` shadows outer variable", symbol.name),

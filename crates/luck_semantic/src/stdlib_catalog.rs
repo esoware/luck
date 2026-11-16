@@ -6,8 +6,8 @@
 use luck_token::{LuaVersion, StdlibEnvironment};
 
 use crate::stdlib_model::{
-    StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, StdlibMap,
-    StdlibNamespace, StdlibParam, StdlibSignature, StdlibValue,
+    StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, StdlibNamespace,
+    StdlibParam, StdlibSignature, StdlibValue, stdlib_map,
 };
 
 #[rustfmt::skip]
@@ -56,7 +56,7 @@ pub(crate) const VALUE: StdlibValue =
     StdlibValue { is_read_only: true, deprecated: None, shape: None };
 
 pub(crate) const NAMESPACE: StdlibNamespace =
-    StdlibNamespace { members: StdlibMap::new(&[]), shape: None, deprecated: None };
+    StdlibNamespace { members: stdlib_map!(StdlibEntry, []), shape: None, deprecated: None };
 
 const ENUM_ITEM: StdlibEntry =
     StdlibEntry::Constant(StdlibValue { shape: Some("EnumItem"), ..VALUE });

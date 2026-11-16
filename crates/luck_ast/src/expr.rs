@@ -65,6 +65,8 @@ pub struct SuffixedExpression {
     pub suffixes: OneOrMore<Suffix>,
 }
 
+/// A method call and a Luau instantiation are boxed, so no suffix is larger
+/// than an index, and a chain of one suffix is one small allocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Suffix {
     /// A field, `.name`.
@@ -78,15 +80,21 @@ pub enum Suffix {
     /// Luau: `<<T>>`, where `span` covers the outer angle brackets.
     TypeInstantiation {
         span: Span,
-        type_args: TypeArgs,
+        type_args: Box<TypeArgs>,
     },
 }
 
-/// `(args)`, `{...}`, or `"..."`, or with `method`, `:name` before them.
+/// `(args)`, `{...}`, or `"..."`, or a method call, `:name` before them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CallSuffix {
-    pub method: Option<Token>,
-    /// Luau: explicit type arguments between a method name and its call
+pub enum CallSuffix {
+    Plain(FunctionArgs),
+    Method(Box<MethodCall>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MethodCall {
+    pub name: Token,
+    /// Luau: explicit type arguments between the method name and the call
     /// arguments (`receiver:method<<T>>()`). Non-method instantiation is a
     /// [`Suffix::TypeInstantiation`] instead.
     pub explicit_type_args: Option<Box<TypeArgs>>,

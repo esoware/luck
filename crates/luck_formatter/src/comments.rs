@@ -289,7 +289,9 @@ impl Comments {
     ) -> bool {
         match &self.store {
             Store::Sourced { comments, printed_count, source, version, .. } => {
-                let is_body_one_line = !has_line_break(body_stmt.text(source), *version);
+                // Only a comment inside the body needs this, and every `if` a
+                // nest of them holds would scan the same text again.
+                let mut is_body_one_line = None;
                 let mut gap_start = condition_end;
                 pending_comments(comments, *printed_count)
                     .iter()
@@ -305,8 +307,10 @@ impl Comments {
                     .take_while(|c| c.span.start < if_end)
                     .any(|comment| {
                         comment.kind != CommentKind::SingleLineBlock
-                            || !is_body_one_line
                             || !(body_stmt.start..body_stmt.end).contains(&comment.span.start)
+                            || !*is_body_one_line.get_or_insert_with(|| {
+                                !has_line_break(body_stmt.text(source), *version)
+                            })
                     })
             }
             Store::Synthetic { comments, .. } => comments.contains_key(&body_stmt.start),

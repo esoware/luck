@@ -1,8 +1,8 @@
 use luck_ast::{Block, Statement};
-use luck_token::{LuaVersion, Span, Token};
+use luck_token::{Span, Token};
 use rustc_hash::FxHashMap;
 
-use crate::diagnostic::{Finding, line_column};
+use crate::diagnostic::{Finding, LineIndex};
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags a local declared again in the same block (Luacheck 411), which
@@ -25,8 +25,7 @@ impl_rule!(
 impl WholeRule for RedefiningLocal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut checker = RedefineChecker {
-            source: context.source,
-            version: context.semantic.version,
+            lines: context.line_index(),
             declarations: FxHashMap::default(),
             findings: Vec::new(),
         };
@@ -38,8 +37,7 @@ impl WholeRule for RedefiningLocal {
 }
 
 struct RedefineChecker<'ast> {
-    source: &'ast str,
-    version: LuaVersion,
+    lines: &'ast LineIndex,
     /// The first declaration of each name in the block.
     declarations: FxHashMap<&'ast str, Span>,
     findings: Vec<Finding>,
@@ -91,7 +89,7 @@ impl<'ast> RedefineChecker<'ast> {
             self.declarations.insert(name, name_token.span);
             return;
         };
-        let (line, column) = line_column(self.source, first_span.start, self.version);
+        let (line, column) = self.lines.line_column(first_span.start);
         self.findings.push(
             Finding::new(
                 format!("local `{name}` is redeclared in the same block"),
@@ -105,6 +103,8 @@ impl<'ast> RedefineChecker<'ast> {
 #[cfg(test)]
 mod tests {
     use core::fmt::Write as _;
+
+    use luck_token::LuaVersion;
 
     use super::*;
     use crate::diagnostic::LintDiagnostic;

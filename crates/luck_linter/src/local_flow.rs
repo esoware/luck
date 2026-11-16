@@ -44,6 +44,9 @@ impl LocalFlow {
                 continue;
             }
             let graph = FlowGraph::of_block(function_block, context.semantic);
+            if exceeds_local_limit(graph.locals()) {
+                continue;
+            }
             let mut walk = GraphWalk::new(&graph);
             for local in graph.locals() {
                 if let Ok(index) = tracked.binary_search_by_key(&local.name_span.start, |symbol| {
@@ -118,6 +121,29 @@ impl LocalFlow {
             }
         }
     }
+}
+
+/// Locals active at once in one function: `MAXVARS` in PUC Lua and
+/// `kMaxLocalCount` in Luau.
+const MAX_ACTIVE_LOCALS: usize = 200;
+
+/// Whether more `local` names are active at once somewhere in the function
+/// than any Lua compiles.
+///
+/// Each local's walk covers the nodes where it's active, so under the limit
+/// the walks cost at most that many visits a node.
+///
+/// `locals` is in source order, and each one's scope holds those of the
+/// locals inside it, so the stack holds exactly those still active.
+fn exceeds_local_limit(locals: &[LocalDeclaration]) -> bool {
+    let mut active_scope_ends: Vec<u32> = Vec::new();
+    locals.iter().any(|local| {
+        while active_scope_ends.last().is_some_and(|&end| end <= local.name_span.start) {
+            active_scope_ends.pop();
+        }
+        active_scope_ends.push(local.scope_end);
+        active_scope_ends.len() > MAX_ACTIVE_LOCALS
+    })
 }
 
 #[derive(Debug, Clone, Copy)]

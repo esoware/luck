@@ -640,6 +640,7 @@ impl Inliner {
     }
 
     /// Luau: a chain of type instantiations, which evaluates to its prefix.
+    #[expect(clippy::unnecessary_box_returns, reason = "the chain goes back into its own box")]
     fn inline_instantiation(
         &mut self,
         mut chain: Box<SuffixedExpression>,

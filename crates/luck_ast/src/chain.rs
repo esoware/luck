@@ -81,7 +81,7 @@ pub struct Call<'ast> {
     /// The receiver, for a method call.
     pub callee: ChainHead<'ast>,
     pub method: Option<&'ast Token>,
-    /// See [`CallSuffix::explicit_type_args`].
+    /// See [`MethodCall::explicit_type_args`](crate::MethodCall::explicit_type_args).
     pub explicit_type_args: Option<&'ast TypeArgs>,
     pub args: &'ast FunctionArgs,
 }
@@ -89,17 +89,48 @@ pub struct Call<'ast> {
 impl<'ast> Call<'ast> {
     #[must_use]
     pub fn new(callee: ChainHead<'ast>, suffix: &'ast CallSuffix) -> Self {
-        Self {
-            callee,
-            method: suffix.method.as_ref(),
-            explicit_type_args: suffix.explicit_type_args.as_deref(),
-            args: &suffix.args,
+        match suffix {
+            CallSuffix::Plain(args) => {
+                Self { callee, method: None, explicit_type_args: None, args }
+            }
+            CallSuffix::Method(call) => Self {
+                callee,
+                method: Some(&call.name),
+                explicit_type_args: call.explicit_type_args.as_deref(),
+                args: &call.args,
+            },
         }
     }
 
     #[must_use]
     pub fn span(self) -> Span {
         self.callee.span().merge(self.args.span())
+    }
+}
+
+impl CallSuffix {
+    #[must_use]
+    pub fn method(&self) -> Option<&Token> {
+        match self {
+            Self::Plain(_) => None,
+            Self::Method(call) => Some(&call.name),
+        }
+    }
+
+    #[must_use]
+    pub fn explicit_type_args(&self) -> Option<&TypeArgs> {
+        match self {
+            Self::Plain(_) => None,
+            Self::Method(call) => call.explicit_type_args.as_deref(),
+        }
+    }
+
+    #[must_use]
+    pub fn args(&self) -> &FunctionArgs {
+        match self {
+            Self::Plain(args) => args,
+            Self::Method(call) => &call.args,
+        }
     }
 }
 

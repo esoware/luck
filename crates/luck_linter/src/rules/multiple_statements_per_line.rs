@@ -1,5 +1,5 @@
 use luck_ast::{LastStatement, Statement};
-use luck_token::{LuaVersion, Span, index_to_offset, line_breaks};
+use luck_token::Span;
 
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -23,7 +23,7 @@ impl_rule!(
 
 impl WholeRule for MultipleStatementsPerLine {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let lines = LineIndex::new(context.source, context.semantic.version);
+        let lines = context.line_index();
         let mut findings = Vec::new();
         let mut spans: Vec<Span> = Vec::new();
         for block in context.blocks {
@@ -39,8 +39,8 @@ impl WholeRule for MultipleStatementsPerLine {
             for [previous, next] in spans.array_windows() {
                 // `end` is exclusive, so step back one byte to stay on the
                 // line where `previous` ends.
-                let previous_line = lines.line_of(previous.end.saturating_sub(1));
-                if previous_line == lines.line_of(next.start) {
+                let previous_line = lines.line(previous.end.saturating_sub(1));
+                if previous_line == lines.line(next.start) {
                     findings.push(
                         Finding::new(
                             format!(
@@ -58,26 +58,10 @@ impl WholeRule for MultipleStatementsPerLine {
     }
 }
 
-struct LineIndex {
-    /// Byte offset where each line after the first starts, in source order.
-    line_starts: Vec<u32>,
-}
-
-impl LineIndex {
-    fn new(source: &str, version: LuaVersion) -> Self {
-        let line_starts = line_breaks(source, version)
-            .map(|line_break| index_to_offset(line_break.end))
-            .collect();
-        Self { line_starts }
-    }
-
-    fn line_of(&self, offset: u32) -> usize {
-        self.line_starts.partition_point(|&line_start| line_start <= offset).saturating_add(1)
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;

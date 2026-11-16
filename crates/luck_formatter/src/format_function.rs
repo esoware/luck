@@ -106,16 +106,16 @@ impl Format for FunctionAttribute {
 
 impl Format for CallSuffix {
     fn fmt(&self, f: &mut Formatter) {
-        let type_args = self.explicit_type_args.as_deref().map(ExplicitTypeArgs);
-        if let Some(name) = &self.method {
-            (token(":"), name).fmt(f);
-            // Luau rejects a method call whose `(` is on a later line than
-            // its name.
-            flat(type_args).fmt(f);
-        } else {
-            type_args.fmt(f);
+        match self {
+            Self::Plain(args) => args.fmt(f),
+            Self::Method(call) => {
+                (token(":"), &call.name).fmt(f);
+                // Luau rejects a method call whose `(` is on a later line
+                // than its name.
+                flat(call.explicit_type_args.as_deref().map(ExplicitTypeArgs)).fmt(f);
+                call.args.fmt(f);
+            }
         }
-        self.args.fmt(f);
     }
 }
 

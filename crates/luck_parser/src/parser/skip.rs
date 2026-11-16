@@ -238,8 +238,7 @@ impl Skip {
 
     fn push(&mut self, kind: FrameKind, context: Context) {
         for closer in kind.closers().into_iter().flatten() {
-            let count = self.open.count_mut(closer);
-            *count = count.saturating_add(1);
+            self.open.open(closer);
         }
         if !kind.is_bracket() {
             self.blocks.push(self.frames.len());
@@ -253,8 +252,7 @@ impl Skip {
         let closed = self.frames.get(index).map(|frame| frame.kind);
         for frame in self.frames.drain(index..) {
             for closer in frame.kind.closers().into_iter().flatten() {
-                let count = self.open.count_mut(closer);
-                *count = count.saturating_sub(1);
+                self.open.close(closer);
             }
         }
         while self.blocks.last().is_some_and(|&block| block >= index) {
