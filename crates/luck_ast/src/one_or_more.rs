@@ -1,56 +1,14 @@
 use core::ops::{Deref, DerefMut};
-use core::{fmt, iter, mem, slice};
+use core::{fmt, mem, slice};
 
 /// A list that is never empty. A lone item sits inline, so it costs no
-/// allocation of its own, and two or more share one slice of exactly their
-/// length.
-///
-/// Derefs to a slice of every item. A push onto two or more leaves room for
-/// the pushes after it, so a list built one item at a time takes time linear
-/// in its length. [`OneOrMore::from_vec`] gives the room back.
+/// allocation of its own. Derefs to a slice of every item.
 pub struct OneOrMore<T>(Repr<T>);
 
 enum Repr<T> {
     One(T),
-    Many(Many<T>),
-}
-
-/// At least two items. Its two shapes sit a level under [`Repr`], so telling
-/// one item from more costs what it would with one shape.
-enum Many<T> {
-    Exact(Box<[T]>),
-    /// The items and the room a push left: the spare capacity of `slots`
-    /// after them, and `start` fillers before them.
-    Grown {
-        slots: Vec<T>,
-        start: usize,
-    },
-}
-
-impl<T> Many<T> {
-    fn as_slice(&self) -> &[T] {
-        match self {
-            Self::Exact(items) => items,
-            Self::Grown { slots, start } => slots.get(*start..).unwrap_or_default(),
-        }
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [T] {
-        match self {
-            Self::Exact(items) => items,
-            Self::Grown { slots, start } => slots.get_mut(*start..).unwrap_or_default(),
-        }
-    }
-
-    fn into_vec(self) -> Vec<T> {
-        match self {
-            Self::Exact(items) => items.into_vec(),
-            Self::Grown { mut slots, start } => {
-                drop(slots.drain(..start));
-                slots
-            }
-        }
-    }
+    /// Never empty.
+    Many(Vec<T>),
 }
 
 impl<T> OneOrMore<T> {
@@ -73,14 +31,14 @@ impl<T> OneOrMore<T> {
         items.push(first);
         items.push(second);
         items.extend(others);
-        Self(Repr::Many(Many::Exact(items.into_boxed_slice())))
+        Self(Repr::Many(items))
     }
 
-    /// `None` when `items` is empty. Spare capacity is given back.
+    /// `None` when `items` is empty.
     #[must_use]
     pub fn from_vec(mut items: Vec<T>) -> Option<Self> {
         if items.len() > 1 {
-            return Some(Self(Repr::Many(Many::Exact(items.into_boxed_slice()))));
+            return Some(Self(Repr::Many(items)));
         }
         items.pop().map(Self::new)
     }
@@ -89,84 +47,34 @@ impl<T> OneOrMore<T> {
     pub fn into_vec(self) -> Vec<T> {
         match self.0 {
             Repr::One(item) => vec![item],
-            Repr::Many(many) => many.into_vec(),
+            Repr::Many(items) => items,
         }
-    }
-
-    /// An empty boxed slice owns no allocation, so it holds the place of a
-    /// list being rebuilt for free.
-    fn take_repr(&mut self) -> Repr<T> {
-        mem::replace(&mut self.0, Repr::Many(Many::Exact(Box::default())))
     }
 
     pub fn push(&mut self, item: T) {
-        if let Repr::Many(Many::Grown { slots, .. }) = &mut self.0 {
-            slots.push(item);
-            return;
-        }
-        self.0 = Repr::Many(match self.take_repr() {
-            Repr::One(first) => Many::Exact(Box::new([first, item])),
-            Repr::Many(many) => {
-                let mut slots = many.into_vec();
-                slots.push(item);
-                Many::Grown { slots, start: 0 }
-            }
-        });
-    }
-
-    /// Puts `item` before the others. `filler` makes the values that hold
-    /// the room left before it, which nothing reads.
-    pub(crate) fn push_front<Filler>(&mut self, item: T, filler: Filler)
-    where
-        Filler: FnMut() -> T,
-    {
-        if let Repr::Many(Many::Grown { slots, start }) = &mut self.0
-            && let Some(before) = start.checked_sub(1)
-            && let Some(slot) = slots.get_mut(before)
-        {
-            *slot = item;
-            *start = before;
-            return;
-        }
-        self.0 = Repr::Many(match self.take_repr() {
-            Repr::One(second) => Many::Exact(Box::new([item, second])),
-            Repr::Many(many) => {
-                let items = many.into_vec();
-                // As many fillers as items, so the room doubles each time it
-                // runs out.
-                let start = items.len();
-                let mut slots = Vec::with_capacity(start.saturating_mul(2).saturating_add(1));
-                slots.extend(iter::repeat_with(filler).take(start));
-                slots.push(item);
-                slots.extend(items);
-                Many::Grown { slots, start }
-            }
-        });
-    }
-
-    /// Puts `front`'s items before these, in one allocation.
-    pub fn prepend(&mut self, front: Self) {
-        let mut items = front.into_vec();
-        match self.take_repr() {
-            Repr::One(item) => {
-                items.reserve_exact(1);
+        self.0 = match mem::replace(&mut self.0, Repr::Many(Vec::new())) {
+            Repr::One(first) => Repr::Many(vec![first, item]),
+            Repr::Many(mut items) => {
                 items.push(item);
+                Repr::Many(items)
             }
-            Repr::Many(many) => {
-                let rest = many.into_vec();
-                items.reserve_exact(rest.len());
-                items.extend(rest);
-            }
+        };
+    }
+
+    /// Removes every item after the first and returns them in order.
+    pub fn split_off_rest(&mut self) -> Vec<T> {
+        match &mut self.0 {
+            Repr::One(_) => Vec::new(),
+            Repr::Many(items) => items.split_off(1),
         }
-        self.0 = Repr::Many(Many::Exact(items.into_boxed_slice()));
     }
 
     #[must_use]
     pub fn first(&self) -> &T {
         match &self.0 {
             Repr::One(item) => item,
-            #[expect(clippy::indexing_slicing, reason = "a `Many` holds at least two items")]
-            Repr::Many(many) => &many.as_slice()[0],
+            #[expect(clippy::indexing_slicing, reason = "a `Many` is never empty")]
+            Repr::Many(items) => &items[0],
         }
     }
 
@@ -174,11 +82,8 @@ impl<T> OneOrMore<T> {
     pub fn last(&self) -> &T {
         match &self.0 {
             Repr::One(item) => item,
-            #[expect(clippy::indexing_slicing, reason = "a `Many` holds at least two items")]
-            Repr::Many(many) => {
-                let items = many.as_slice();
-                &items[items.len().saturating_sub(1)]
-            }
+            #[expect(clippy::indexing_slicing, reason = "a `Many` is never empty")]
+            Repr::Many(items) => &items[items.len().saturating_sub(1)],
         }
     }
 
@@ -186,10 +91,10 @@ impl<T> OneOrMore<T> {
     pub fn last_mut(&mut self) -> &mut T {
         match &mut self.0 {
             Repr::One(item) => item,
-            #[expect(clippy::indexing_slicing, reason = "a `Many` holds at least two items")]
-            Repr::Many(many) => {
-                let items = many.as_mut_slice();
-                &mut items[items.len().saturating_sub(1)]
+            #[expect(clippy::indexing_slicing, reason = "a `Many` is never empty")]
+            Repr::Many(items) => {
+                let last = items.len().saturating_sub(1);
+                &mut items[last]
             }
         }
     }
@@ -201,7 +106,7 @@ impl<T> Deref for OneOrMore<T> {
     fn deref(&self) -> &[T] {
         match &self.0 {
             Repr::One(item) => slice::from_ref(item),
-            Repr::Many(many) => many.as_slice(),
+            Repr::Many(items) => items,
         }
     }
 }
@@ -210,17 +115,16 @@ impl<T> DerefMut for OneOrMore<T> {
     fn deref_mut(&mut self) -> &mut [T] {
         match &mut self.0 {
             Repr::One(item) => slice::from_mut(item),
-            Repr::Many(many) => many.as_mut_slice(),
+            Repr::Many(items) => items,
         }
     }
 }
 
-/// A clone holds no room.
 impl<T: Clone> Clone for OneOrMore<T> {
     fn clone(&self) -> Self {
         Self(match &self.0 {
             Repr::One(item) => Repr::One(item.clone()),
-            Repr::Many(many) => Repr::Many(Many::Exact(Box::from(many.as_slice()))),
+            Repr::Many(items) => Repr::Many(items.clone()),
         })
     }
 }
@@ -262,93 +166,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_one_item_inline_and_a_pair_in_an_exact_slice() {
+    fn keeps_one_item_inline_and_grows_past_it() {
         let mut list = OneOrMore::new(1u8);
         assert_eq!(*list, [1]);
         list.push(2);
-        assert_eq!(*list, [1, 2]);
-        assert_eq!((*list.first(), *list.last()), (1, 2));
-        assert_eq!(list.into_vec().capacity(), 2);
+        list.push(3);
+        assert_eq!(*list, [1, 2, 3]);
+        assert_eq!((*list.first(), *list.last()), (1, 3));
+        *list.last_mut() = 4;
+        assert_eq!(list.into_vec(), [1, 2, 4]);
     }
 
     #[test]
     fn builds_from_a_vec_of_any_nonzero_length() {
         assert!(OneOrMore::<u8>::from_vec(Vec::new()).is_none());
         assert_eq!(OneOrMore::from_vec(vec![7u8]), Some(OneOrMore::new(7)));
-        let mut spare = Vec::with_capacity(16);
-        spare.extend([1u8, 2]);
-        let list = OneOrMore::from_vec(spare).expect("two items");
-        assert_eq!(list.into_vec().capacity(), 2);
+        let list = OneOrMore::from_vec(vec![1u8, 2]).expect("two items");
+        assert_eq!(*list, [1, 2]);
     }
 
     #[test]
-    fn prepends_a_list_of_any_length() {
-        let mut single = OneOrMore::new(2u8);
-        single.prepend(OneOrMore::new(1));
-        assert_eq!(*single, [1, 2]);
-        let mut pair = OneOrMore::from_first(3u8, [4]);
-        pair.prepend(OneOrMore::from_first(1, [2]));
-        assert_eq!(*pair, [1, 2, 3, 4]);
-        assert_eq!(pair.into_vec().capacity(), 4);
-        let mut grown = OneOrMore::from_first(4u8, [5]);
-        grown.push_front(3, || 0);
-        grown.prepend(OneOrMore::from_first(1, [2]));
-        assert_eq!(*grown, [1, 2, 3, 4, 5]);
-        assert_eq!(grown.into_vec().capacity(), 5);
-    }
-
-    /// How often pushing `items` moves the list to a new allocation, which a
-    /// slice that starts and ends somewhere else shows.
-    fn moves_while_pushing<Items>(
-        list: &mut OneOrMore<u32>,
-        items: Items,
-        push: fn(&mut OneOrMore<u32>, u32),
-    ) -> usize
-    where
-        Items: IntoIterator<Item = u32>,
-    {
-        let mut moves = 0usize;
-        for item in items {
-            let (start, end) = (list.as_ptr(), list.as_ptr_range().end);
-            push(list, item);
-            if list.as_ptr() != start && list.as_ptr_range().end != end {
-                moves = moves.saturating_add(1);
-            }
-        }
-        moves
+    fn builds_from_a_first_item_in_one_exact_allocation() {
+        assert_eq!(OneOrMore::from_first(1u8, []), OneOrMore::new(1));
+        let list = OneOrMore::from_first(1u8, [2, 3]);
+        assert_eq!(*list, [1, 2, 3]);
+        assert_eq!(list.into_vec().capacity(), 3);
     }
 
     #[test]
-    fn pushes_at_either_end_move_the_items_a_logarithmic_number_of_times() {
-        let mut pushed = OneOrMore::new(0u32);
-        let push_moves = moves_while_pushing(&mut pushed, 1..=100_000, OneOrMore::push);
-        assert!(push_moves <= 20, "{push_moves} moves");
-        assert!(pushed.iter().copied().eq(0..=100_000));
-        assert_eq!((*pushed.first(), *pushed.last()), (0, 100_000));
-
-        let mut fronted = OneOrMore::new(100_000u32);
-        let push_front_moves =
-            moves_while_pushing(&mut fronted, (0..100_000).rev(), |list, item| {
-                list.push_front(item, || u32::MAX);
-            });
-        assert!(push_front_moves <= 20, "{push_front_moves} moves");
-        assert!(fronted.iter().copied().eq(0..=100_000));
-        assert_eq!((*fronted.first(), *fronted.last()), (0, 100_000));
-        *fronted.last_mut() = 7;
-        assert_eq!(fronted.into_vec().last(), Some(&7));
-    }
-
-    #[test]
-    fn pushes_at_both_ends_keep_every_item_in_order() {
-        let mut list = OneOrMore::new(0i32);
-        for (back, front) in (1i32..=500i32).zip((-500i32..0i32).rev()) {
-            list.push(back);
-            list.push_front(front, || i32::MAX);
-        }
-        assert!(list.iter().copied().eq(-500i32..=500i32));
-        let copy = list.clone();
-        assert_eq!(copy, list);
-        assert_eq!(copy.into_vec().capacity(), 1001);
-        assert!(list.into_vec().into_iter().eq(-500i32..=500i32));
+    fn splitting_off_the_rest_keeps_the_first() {
+        let mut single = OneOrMore::new(1u8);
+        assert_eq!(single.split_off_rest(), Vec::<u8>::new());
+        assert_eq!(*single, [1]);
+        let mut list = OneOrMore::from_first(1u8, [2, 3]);
+        assert_eq!(list.split_off_rest(), [2, 3]);
+        assert_eq!(*list, [1]);
+        assert_eq!((*list.first(), *list.last()), (1, 1));
+        list.push(4);
+        assert_eq!(list, OneOrMore::from_first(1, [4]));
     }
 }

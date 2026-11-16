@@ -196,10 +196,38 @@ pub struct LocalAssignment {
     pub span: Span,
     pub names: Punctuated<AttributedName>,
     pub exprs: Option<Punctuated<Expression>>,
-    /// Luau `const bindinglist = explist`. The emitter prints `const` in
-    /// place of `local`, and every name in the list is read-only.
-    pub is_const: bool,
-    pub is_exported: bool,
+    pub kind: LocalAssignmentKind,
+}
+
+/// The keywords a [`LocalAssignment`] is declared with, which fix whether its
+/// names are read-only and whether the module exports them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalAssignmentKind {
+    Local,
+    /// Luau: `const`, which makes every name in the list read-only.
+    Const,
+    /// Luau: `export local`.
+    ExportLocal,
+    /// Luau: `export const`.
+    ExportConst,
+}
+
+impl LocalAssignmentKind {
+    #[must_use]
+    pub const fn is_const(self) -> bool {
+        match self {
+            Self::Local | Self::ExportLocal => false,
+            Self::Const | Self::ExportConst => true,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_exported(self) -> bool {
+        match self {
+            Self::Local | Self::Const => false,
+            Self::ExportLocal | Self::ExportConst => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

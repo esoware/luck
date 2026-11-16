@@ -1,39 +1,13 @@
 use luck_ast::{
     Attribute, AttributedName, Expression, FunctionAttribute, FunctionDecl, FunctionName,
-    GlobalDeclaration, GlobalFunction, GlobalStar, LocalAssignment, LocalFunction,
-    LocalFunctionKind, Punctuated, Statement, TypeDeclaration, TypeDeclarationValue,
+    GlobalDeclaration, GlobalFunction, GlobalStar, LocalAssignment, LocalAssignmentKind,
+    LocalFunction, LocalFunctionKind, Punctuated, Statement, TypeDeclaration, TypeDeclarationValue,
     is_multi_value,
 };
 use luck_token::{Span, Token, TokenKind};
 
 use super::Parser;
 use super::types::GenericsOwner;
-
-/// The declaration that introduced a `local` binding list, which fixes its
-/// `is_const` and `is_exported` flags.
-#[derive(Clone, Copy)]
-enum LocalKind {
-    Local,
-    Const,
-    ExportedLocal,
-    ExportedConst,
-}
-
-impl LocalKind {
-    const fn is_const(self) -> bool {
-        match self {
-            Self::Const | Self::ExportedConst => true,
-            Self::Local | Self::ExportedLocal => false,
-        }
-    }
-
-    const fn is_exported(self) -> bool {
-        match self {
-            Self::ExportedLocal | Self::ExportedConst => true,
-            Self::Local | Self::Const => false,
-        }
-    }
-}
 
 /// The span of a `local` or `global` declaration, from `start_span` through
 /// its last value, or through its last name and that name's annotation and
@@ -69,9 +43,6 @@ fn declaration_span(
 impl Parser<'_> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_attributed_function(&mut self) -> Statement {
-        if !self.can_nest_function() {
-            return self.refuse_attributed_function();
-        }
         let attributes = self.parse_function_attributes();
         match self.peek() {
             TokenKind::Local => self.parse_local_stmt(attributes),
@@ -89,35 +60,13 @@ impl Parser<'_> {
         }
     }
 
-    /// Refuse a function statement at its first attribute, skipping the
-    /// attributes, the keywords that declare it, and the function.
-    #[cold]
-    #[inline(never)]
-    fn refuse_attributed_function(&mut self) -> Statement {
-        let start = self.current_span();
-        self.report_depth_limit(start);
-        self.skip_attributes();
-        while matches!(self.peek(), TokenKind::Local)
-            || matches!(self.peek(), TokenKind::Identifier(name) if name == "export" || name == "const")
-        {
-            self.advance();
-        }
-        if matches!(self.peek(), TokenKind::Function) {
-            self.skip_nested();
-        }
-        Statement::Error(start.merge(self.previous_span))
-    }
-
     pub(super) fn parse_function_decl(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
-        if !self.can_nest_function() {
-            let start =
-                attributes.first().map_or_else(|| self.current_span(), |attribute| attribute.span);
-            return Statement::Error(self.refuse_function(start));
-        }
         let function_span = self.advance_span();
         let name = self.parse_function_name();
-        let body = self.parse_function_body();
         let start_span = attributes.first().map_or(function_span, |attribute| attribute.span);
+        let Some(body) = self.parse_function_body() else {
+            return Statement::Error(start_span);
+        };
         let span = start_span.merge(body.span);
 
         Statement::FunctionDecl(Box::new(FunctionDecl { span, attributes, name, body }))
@@ -126,17 +75,12 @@ impl Parser<'_> {
     fn parse_function_name(&mut self) -> FunctionName {
         let first = self.expect_identifier_recover();
         let start_span = first.span;
-        let names = if matches!(self.peek(), TokenKind::Dot) {
-            let start = self.function_name_segments.len();
-            self.function_name_segments.push(first);
-            while self.eat(&TokenKind::Dot) {
-                let name = self.expect_identifier_recover();
-                self.function_name_segments.push(name);
-            }
-            self.function_name_segments.drain(start..).collect()
-        } else {
-            vec![first]
-        };
+        let mut names = vec![first];
+
+        while self.eat(&TokenKind::Dot) {
+            let name = self.expect_identifier_recover();
+            names.push(name);
+        }
 
         let method = self.eat(&TokenKind::Colon).then(|| self.expect_identifier_recover());
 
@@ -159,7 +103,7 @@ impl Parser<'_> {
         if let Some(attribute) = attributes.first() {
             self.error(attribute.span, "attributes are only allowed on function declarations");
         }
-        self.parse_local_assignment(local_span, LocalKind::Local)
+        self.parse_local_assignment(local_span, LocalAssignmentKind::Local)
     }
 
     pub(super) fn parse_const_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
@@ -170,7 +114,7 @@ impl Parser<'_> {
         if let Some(attribute) = attributes.first() {
             self.error(attribute.span, "attributes are only allowed on function declarations");
         }
-        self.parse_local_assignment(const_span, LocalKind::Const)
+        self.parse_local_assignment(const_span, LocalAssignmentKind::Const)
     }
 
     fn parse_local_function(
@@ -180,18 +124,17 @@ impl Parser<'_> {
         kind: LocalFunctionKind,
     ) -> Statement {
         let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
-        if !self.can_nest_function() {
-            return Statement::Error(self.refuse_function(start_span));
-        }
         self.advance_span(); // `function`
         let name = self.expect_identifier_recover();
-        let body = self.parse_function_body();
+        let Some(body) = self.parse_function_body() else {
+            return Statement::Error(start_span);
+        };
         let span = start_span.merge(body.span);
 
         Statement::LocalFunction(Box::new(LocalFunction { span, attributes, name, body, kind }))
     }
 
-    fn parse_local_assignment(&mut self, local_span: Span, kind: LocalKind) -> Statement {
+    fn parse_local_assignment(&mut self, local_span: Span, kind: LocalAssignmentKind) -> Statement {
         let names = self.parse_attname_list();
 
         // 5.4 manual section 3.3.7: "A list of variables can contain at most
@@ -220,13 +163,7 @@ impl Parser<'_> {
             self.error(span, "missing initializer in `const` declaration");
         }
 
-        Statement::LocalAssignment(Box::new(LocalAssignment {
-            span,
-            names,
-            exprs,
-            is_const: kind.is_const(),
-            is_exported: kind.is_exported(),
-        }))
+        Statement::LocalAssignment(Box::new(LocalAssignment { span, names, exprs, kind }))
     }
 
     /// The leading attribute is new in 5.5; in 5.4, attributes only follow
@@ -247,18 +184,16 @@ impl Parser<'_> {
         let Some(first) = self.parse_attributed_name(leading_attribute) else {
             return Punctuated::empty();
         };
-        if !matches!(self.peek(), TokenKind::Comma) {
-            return Punctuated::from_item(first);
-        }
-        let start = self.attributed_names.len();
-        self.attributed_names.push(first);
+        let mut names = vec![first];
+
         while self.eat(&TokenKind::Comma) {
             let Some(name) = self.parse_attributed_name(leading_attribute) else {
                 break;
             };
-            self.attributed_names.push(name);
+            names.push(name);
         }
-        Punctuated::from_items(self.attributed_names.drain(start..).collect())
+
+        Punctuated::from_items(names)
     }
 
     /// Parse `Name [: T] [attrib]`, or `None` after recording the error when
@@ -283,12 +218,11 @@ impl Parser<'_> {
 
         // `global function name(...) ... end`
         if matches!(self.peek(), TokenKind::Function) {
-            if !self.can_nest_function() {
-                return Statement::Error(self.refuse_function(global_span));
-            }
             self.advance_span();
             let name = self.expect_identifier_recover();
-            let body = self.parse_function_body();
+            let Some(body) = self.parse_function_body() else {
+                return Statement::Error(global_span);
+            };
             let span = global_span.merge(body.span);
             return Statement::GlobalFunction(Box::new(GlobalFunction { span, name, body }));
         }
@@ -361,13 +295,12 @@ impl Parser<'_> {
         // `type function Name funcbody` takes no `=`, and the body is
         // ordinary Luau.
         if matches!(self.peek(), TokenKind::Function) {
-            if !self.can_nest_function() {
-                return Statement::Error(self.refuse_function(start_span));
-            }
             self.advance_span();
             self.has_type_function = true;
             let name = self.expect_identifier_recover();
-            let body = self.parse_function_body();
+            let Some(body) = self.parse_function_body() else {
+                return Statement::Error(start_span);
+            };
             let span = start_span.merge(body.span);
             return Statement::TypeDeclaration(Box::new(TypeDeclaration {
                 span,
@@ -442,7 +375,7 @@ impl Parser<'_> {
                             "attributes are only allowed on exported functions",
                         );
                     }
-                    self.parse_local_assignment(export_span, LocalKind::ExportedLocal)
+                    self.parse_local_assignment(export_span, LocalAssignmentKind::ExportLocal)
                 }
             }
             TokenKind::Function => {
@@ -460,7 +393,7 @@ impl Parser<'_> {
                     );
                     self.parse_local_function(export_span, Vec::new(), LocalFunctionKind::Const)
                 } else {
-                    self.parse_local_assignment(export_span, LocalKind::ExportedConst)
+                    self.parse_local_assignment(export_span, LocalAssignmentKind::ExportConst)
                 }
             }
             _ => {
@@ -479,7 +412,7 @@ impl Parser<'_> {
 
     fn register_exported_names(&mut self, stmt: &Statement) {
         if let Statement::LocalAssignment(local) = stmt
-            && local.is_exported
+            && local.kind.is_exported()
         {
             for attributed in local.names.iter() {
                 self.register_exported_name(&attributed.name);

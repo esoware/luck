@@ -7,8 +7,8 @@ use crate::stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
     ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
     GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
-    LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement, Statement,
-    TypeDeclaration, TypeDeclarationValue, WhileLoop,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement,
+    Statement, TypeDeclaration, TypeDeclarationValue, WhileLoop,
 };
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{GenericTypeList, Type};
@@ -198,7 +198,7 @@ impl Synth {
 
     #[must_use]
     pub fn local_full(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
-        Statement::LocalAssignment(Box::new(self.local_assignment(names, exprs)))
+        self.local_assignment(names, exprs, LocalAssignmentKind::Local)
     }
 
     /// # Panics
@@ -207,18 +207,12 @@ impl Synth {
     #[must_use]
     pub fn const_local(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
         assert!(!exprs.is_empty(), "synth: const declarations require an initializer");
-        Statement::LocalAssignment(Box::new(LocalAssignment {
-            is_const: true,
-            ..self.local_assignment(names, exprs)
-        }))
+        self.local_assignment(names, exprs, LocalAssignmentKind::Const)
     }
 
     #[must_use]
     pub fn export_local(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
-        Statement::LocalAssignment(Box::new(LocalAssignment {
-            is_exported: true,
-            ..self.local_assignment(names, exprs)
-        }))
+        self.local_assignment(names, exprs, LocalAssignmentKind::ExportLocal)
     }
 
     /// # Panics
@@ -227,25 +221,21 @@ impl Synth {
     #[must_use]
     pub fn export_const(&self, names: Vec<AttributedName>, exprs: Vec<Expression>) -> Statement {
         assert!(!exprs.is_empty(), "synth: exported const declarations require an initializer");
-        Statement::LocalAssignment(Box::new(LocalAssignment {
-            is_const: true,
-            is_exported: true,
-            ..self.local_assignment(names, exprs)
-        }))
+        self.local_assignment(names, exprs, LocalAssignmentKind::ExportConst)
     }
 
     fn local_assignment(
         &self,
         names: Vec<AttributedName>,
         exprs: Vec<Expression>,
-    ) -> LocalAssignment {
-        LocalAssignment {
+        kind: LocalAssignmentKind,
+    ) -> Statement {
+        Statement::LocalAssignment(Box::new(LocalAssignment {
             span: self.next_span(),
             names: Punctuated::from_items(names),
             exprs: if exprs.is_empty() { None } else { Some(Punctuated::from_items(exprs)) },
-            is_const: false,
-            is_exported: false,
-        }
+            kind,
+        }))
     }
 
     /// One declared name for [`Synth::local_full`] / [`Synth::global_declaration`],
@@ -562,13 +552,13 @@ mod tests {
         let Statement::LocalAssignment(const_local) = &stmt else {
             panic!("expected local assignment");
         };
-        assert!(const_local.is_const);
+        assert_eq!(const_local.kind, LocalAssignmentKind::Const);
 
         let plain = synth.local(&["thawed"], vec![synth.number_i64(2)]);
         let Statement::LocalAssignment(plain_local) = &plain else {
             panic!("expected local assignment");
         };
-        assert!(!plain_local.is_const);
+        assert_eq!(plain_local.kind, LocalAssignmentKind::Local);
 
         let function_stmt = synth.const_function(
             "pinned",
@@ -742,7 +732,7 @@ mod tests {
         );
         assert!(matches!(
             exported,
-            Statement::LocalAssignment(local) if local.is_exported
+            Statement::LocalAssignment(local) if local.kind == LocalAssignmentKind::ExportLocal
         ));
     }
 }

@@ -44,7 +44,7 @@ pub use source_error::SourceError;
 pub use span::{Span, index_to_offset, offset_to_index};
 pub use string::{decode_string, encode_string, short_string_body, unicode_escape_codepoint};
 pub use token::{Token, TokenKind};
-pub use version::{LuaVersion, StdlibEnvironment};
+pub use version::{LuaVersion, MAX_ACTIVE_LOCALS, StdlibEnvironment};
 pub use whitespace::{
     chunk_start, ends_with_line_break, has_line_break, has_shebang, is_lua_whitespace, line_breaks,
     strip_line_break,

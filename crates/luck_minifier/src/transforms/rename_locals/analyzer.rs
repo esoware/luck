@@ -355,7 +355,7 @@ impl<'ast> Visitor<'ast> for Analyzer {
                     self.visit_annotation(attributed.type_annotation.as_ref());
                 }
                 for attributed in local.names.iter() {
-                    self.declare_local(identifier_name(&attributed.name), local.is_exported);
+                    self.declare_local(identifier_name(&attributed.name), local.kind.is_exported());
                 }
             }
             Statement::LocalFunction(local_function) => {

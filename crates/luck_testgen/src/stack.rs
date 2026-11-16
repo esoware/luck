@@ -1,6 +1,9 @@
 //! Input nested to the parser's cap, and runs and sibling lists far longer
 //! than it, which every stage has to get through on the smallest stack luck
-//! gets embedded on, in an unoptimized build too.
+//! gets embedded on.
+//!
+//! The test profile is optimized, so the frames measured are close to the
+//! ones that ship.
 
 use core::fmt::Write as _;
 use std::thread;
@@ -53,6 +56,7 @@ pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         format!("type X = {}", wrapped("(", 255, "T", ")")),
         format!("type X = {}", wrapped("A<", 255, "T", " >")),
         format!("type X = {}T", "() -> ".repeat(255)),
+        format!("type X = T{}", "?".repeat(255)),
         format!("type X = {}", wrapped("(A | ", 127, "T", ")")),
         format!("type X = {}", wrapped("typeof(x :: ", 127, "x", ")")),
         format!("local x: {} = 1", wrapped("{", 255, "T", "}")),
@@ -64,8 +68,7 @@ pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
 }
 
 /// One source per kind of run, each one level of nesting however long.
-#[must_use]
-pub fn long_runs() -> Vec<(LuaVersion, String)> {
+fn long_runs() -> Vec<(LuaVersion, String)> {
     const LINKS: usize = 20_000;
     let lua = [
         format!("return x{}", "+x".repeat(LINKS)),
@@ -81,11 +84,8 @@ pub fn long_runs() -> Vec<(LuaVersion, String)> {
         format!("a{} = 1", "[x]".repeat(LINKS)),
         format!("f{}", "()".repeat(LINKS)),
     ];
-    let luau = [
-        format!("return f{}", "<<T>>".repeat(LINKS)),
-        format!("a{} += 1", ".b".repeat(LINKS)),
-        format!("type X = T{}", "?".repeat(LINKS)),
-    ];
+    let luau =
+        [format!("return f{}", "<<T>>".repeat(LINKS)), format!("a{} += 1", ".b".repeat(LINKS))];
     lua.into_iter()
         .map(|source| (LuaVersion::Lua54, source))
         .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
@@ -94,8 +94,7 @@ pub fn long_runs() -> Vec<(LuaVersion, String)> {
 
 /// One source per kind of sibling list, each one level of nesting however
 /// long.
-#[must_use]
-pub fn long_lists() -> Vec<(LuaVersion, String)> {
+fn long_lists() -> Vec<(LuaVersion, String)> {
     const ITEMS: usize = 20_000;
     let numbered = |template: &str, separator: &str| {
         (0..ITEMS)
@@ -157,8 +156,8 @@ pub fn long_lists() -> Vec<(LuaVersion, String)> {
         .collect()
 }
 
-/// One source per construct, each nested far past the cap, which the parser
-/// skips without recursing.
+/// One source per construct, each nested far past the cap, where the parser
+/// stops.
 #[must_use]
 pub fn sources_past_the_nesting_cap() -> Vec<(LuaVersion, String)> {
     const LEVELS: usize = 100_000;

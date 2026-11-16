@@ -25,6 +25,33 @@ fn empty_interpolated_string_lexes_as_an_empty_begin_end_pair() {
     );
 }
 
+/// The parser reports a `{}` that holds no expression.
+#[test]
+fn an_empty_hole_lexes_as_the_segments_around_it() {
+    for (source, expected) in [
+        (
+            "`a{}b`",
+            vec![
+                TokenKind::InterpolatedStringBegin("a".into()),
+                TokenKind::InterpolatedStringEnd("b".into()),
+            ],
+        ),
+        (
+            "`{x}a{ --[[c]] }b`",
+            vec![
+                TokenKind::InterpolatedStringBegin(CompactString::default()),
+                TokenKind::Identifier("x".into()),
+                TokenKind::InterpolatedStringMiddle("a".into()),
+                TokenKind::InterpolatedStringEnd("b".into()),
+            ],
+        ),
+    ] {
+        let result = lex(source, LuaVersion::Luau);
+        assert_eq!(result.errors, Vec::<SourceError>::new(), "{source}");
+        assert_eq!(kinds_in(source, LuaVersion::Luau), expected, "{source}");
+    }
+}
+
 #[test]
 fn interpolated_string_begin_stops_at_the_open_brace() {
     let result = lex("`hello {", LuaVersion::Luau);
@@ -119,24 +146,6 @@ y",
                 name("y"),
             ],
             ("unterminated interpolated string", "`abc"),
-        ),
-        (
-            "`a{}b`",
-            vec![
-                TokenKind::InterpolatedStringBegin("a".into()),
-                TokenKind::InterpolatedStringEnd("b".into()),
-            ],
-            ("malformed interpolated string: expected expression inside `{}`", "{}"),
-        ),
-        (
-            "`{x}a{ --[[c]] }b`",
-            vec![
-                TokenKind::InterpolatedStringBegin(CompactString::default()),
-                name("x"),
-                TokenKind::InterpolatedStringMiddle("a".into()),
-                TokenKind::InterpolatedStringEnd("b".into()),
-            ],
-            ("malformed interpolated string: expected expression inside `{}`", "{ --[[c]] }"),
         ),
     ];
     for (source, expected, (message, text)) in cases {

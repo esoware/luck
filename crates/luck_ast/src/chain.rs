@@ -1,11 +1,11 @@
+use alloc::vec;
 use core::mem;
 
-use luck_token::{Associativity, BinOp, OperandSide, Span, Token, TokenKind};
+use luck_token::{Associativity, BinOp, OperandSide, Span, Token};
 
 use crate::expr::{
     BinaryLink, BinaryOp, CallSuffix, Expression, FunctionArgs, Suffix, SuffixedExpression,
 };
-use crate::one_or_more::OneOrMore;
 use crate::query::DottedPath;
 use crate::types::TypeArgs;
 
@@ -182,23 +182,20 @@ impl SuffixedExpression {
         if !matches!(self.prefix, Expression::Suffixed(_)) {
             return;
         }
-        let mut fronts = Vec::new();
+        // Each chain's suffixes swap in for the ones after them, which wait
+        // here, outermost first.
+        let mut later = Vec::new();
         let mut prefix = self.prefix.take();
         while let Expression::Suffixed(inner) = prefix {
             let Self { prefix: inner_prefix, suffixes, .. } = *inner;
-            fronts.push(suffixes);
+            later.push(mem::replace(&mut self.suffixes, suffixes));
             prefix = inner_prefix;
         }
         self.prefix = prefix;
-        let front_count = fronts.iter().map(|front| front.len()).sum::<usize>();
-        let mut suffixes = Vec::with_capacity(front_count.saturating_add(self.suffixes.len()));
-        for front in fronts.into_iter().rev() {
-            suffixes.extend(front.into_vec());
-        }
-        let placeholder = Suffix::Field(Token::new(TokenKind::Eof, Span::default()));
-        suffixes.extend(mem::replace(&mut self.suffixes, OneOrMore::new(placeholder)).into_vec());
-        if let Some(spliced) = OneOrMore::from_vec(suffixes) {
-            self.suffixes = spliced;
+        for suffixes in later.into_iter().rev() {
+            for suffix in suffixes.into_vec() {
+                self.suffixes.push(suffix);
+            }
         }
     }
 }
@@ -228,43 +225,62 @@ impl BinaryOp {
         if !is_bare_run(&self.first) && !self.links.iter().any(|link| is_bare_run(&link.operand)) {
             return;
         }
-        let placeholder = BinaryLink { op: BinOp::Or, operand: Expression::Error(Span::default()) };
-        let old_links = mem::replace(&mut self.links, OneOrMore::new(placeholder));
-        let mut links = Vec::with_capacity(old_links.len());
-        // The operands still to place, innermost run's on top, and the next
-        // one with the operator before it, which the first operand lacks.
-        let mut pending = vec![old_links.into_vec().into_iter()];
-        let mut next = Some((None, self.first.take()));
-        while let Some((leading_op, operand)) = next.take() {
-            if is_bare_run(&operand) {
-                if let Expression::BinaryOp(inner) = operand {
-                    let Self { first, links: inner_links, .. } = *inner;
-                    pending.push(inner_links.into_vec().into_iter());
-                    next = Some((leading_op, first));
-                }
-                continue;
+        // The links still to place, the innermost run's on top. A bare first
+        // operand's links swap in for the ones after them, which wait here.
+        let mut pending = Vec::new();
+        let mut first = self.first.take();
+        loop {
+            let Expression::BinaryOp(inner) = first else {
+                break;
+            };
+            if inner.precedence().0 != level {
+                first = Expression::BinaryOp(inner);
+                break;
             }
-            match leading_op {
-                None => self.first = operand,
-                Some(op) => links.push(BinaryLink { op, operand }),
-            }
-            while let Some(operands) = pending.last_mut() {
-                if let Some(link) = operands.next() {
-                    next = Some((Some(link.op), link.operand));
-                    break;
-                }
+            let Self { first: inner_first, links, .. } = *inner;
+            pending.push(mem::replace(&mut self.links, links).into_vec().into_iter());
+            first = inner_first;
+        }
+        self.first = first;
+        pending.push(self.links.split_off_rest().into_iter());
+        // The one link left.
+        let head = self.links.last_mut();
+        head.operand = leftmost_operand(head.operand.take(), level, &mut pending);
+        while let Some(links) = pending.last_mut() {
+            let Some(link) = links.next() else {
                 pending.pop();
-            }
+                continue;
+            };
+            let operand = leftmost_operand(link.operand, level, &mut pending);
+            self.links.push(BinaryLink { op: link.op, operand });
         }
-        if let Some(spliced) = OneOrMore::from_vec(links) {
-            self.links = spliced;
+    }
+}
+
+/// `operand` out of the bare runs at `level` it opens, whose links go on top
+/// of `pending`, to follow it.
+fn leftmost_operand(
+    mut operand: Expression,
+    level: u8,
+    pending: &mut Vec<vec::IntoIter<BinaryLink>>,
+) -> Expression {
+    loop {
+        let Expression::BinaryOp(inner) = operand else {
+            return operand;
+        };
+        if inner.precedence().0 != level {
+            return Expression::BinaryOp(inner);
         }
+        let BinaryOp { first, links, .. } = *inner;
+        pending.push(links.into_vec().into_iter());
+        operand = first;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::one_or_more::OneOrMore;
     use crate::synth::Synth;
 
     fn unspliced_chain(prefix: Expression, suffix: Suffix) -> Expression {

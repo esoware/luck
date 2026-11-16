@@ -2,8 +2,9 @@ use core::mem;
 
 use luck_ast::{
     Assignment, Block, CallSuffix, Expression, FunctionArgs, FunctionDecl, FunctionName,
-    FunctionSignature, Literal, LocalAssignment, LocalFunction, LocalFunctionKind, OneOrMore,
-    Punctuated, Statement, Suffix, SuffixedExpression, Synth, Transform, Var,
+    FunctionSignature, Literal, LocalAssignment, LocalAssignmentKind, LocalFunction,
+    LocalFunctionKind, OneOrMore, Punctuated, Statement, Suffix, SuffixedExpression, Synth,
+    Transform, Var,
 };
 use luck_core::Diagnostic;
 use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
@@ -298,9 +299,13 @@ impl ModuleRewriter<'_> {
                 type_declaration.is_exported = false;
                 Statement::TypeDeclaration(type_declaration)
             }
-            Statement::LocalAssignment(mut local) if local.is_exported => {
+            Statement::LocalAssignment(mut local) if local.kind.is_exported() => {
                 if !exports.is_table_statement(local.span) {
-                    local.is_exported = false;
+                    local.kind = if local.kind.is_const() {
+                        LocalAssignmentKind::Const
+                    } else {
+                        LocalAssignmentKind::Local
+                    };
                     return Statement::LocalAssignment(local);
                 }
                 let LocalAssignment { span, names, exprs, .. } = *local;

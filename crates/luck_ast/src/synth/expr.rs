@@ -1,6 +1,4 @@
-use core::mem;
-
-use luck_token::{BinOp, OperandSide, Span, UnOp, encode_string};
+use luck_token::{BinOp, OperandSide, UnOp, encode_string};
 
 use crate::expr::{
     BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
@@ -178,14 +176,14 @@ impl Synth {
                 run.links.push(BinaryLink { op, operand });
                 run
             }
-            (first, Expression::BinaryOp(mut run)) if run.precedence().0 == level => {
-                run.span = span;
-                let second = mem::replace(&mut run.first, first);
-                run.links.push_front(BinaryLink { op, operand: second }, || BinaryLink {
-                    op,
-                    operand: Expression::Error(Span::default()),
-                });
-                run
+            (first, Expression::BinaryOp(run)) if run.precedence().0 == level => {
+                let BinaryOp { first: second, links, .. } = *run;
+                let link = BinaryLink { op, operand: second };
+                Box::new(BinaryOp {
+                    span,
+                    first,
+                    links: OneOrMore::from_first(link, links.into_vec()),
+                })
             }
             (first, operand) => Box::new(BinaryOp {
                 span,

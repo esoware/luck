@@ -189,11 +189,11 @@ impl<'ast> ScopeChecker<'ast> {
         }
     }
 
-    fn open_block(&mut self) -> BlockStart {
+    fn open_block(&mut self) -> BlockStart<'ast> {
         self.gotos.open_block(self.bindings.len())
     }
 
-    fn close_block(&mut self, start: BlockStart) {
+    fn close_block(&mut self, start: BlockStart<'ast>) {
         self.bindings.truncate(start.active_vars());
         self.gotos.close_block(start);
     }
@@ -345,7 +345,7 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
                         self.visit_expr(expr);
                     }
                 }
-                self.declare_attributed_names(&local.names, local.is_const, false);
+                self.declare_attributed_names(&local.names, local.kind.is_const(), false);
             }
             // Lua 5.5
             Statement::GlobalDeclaration(global) => {

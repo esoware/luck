@@ -163,10 +163,10 @@ impl Format for LastStatement {
 
 impl Format for LocalAssignment {
     fn fmt(&self, f: &mut Formatter) {
-        if self.is_exported {
+        if self.kind.is_exported() {
             (token("export"), space()).fmt(f);
         }
-        let keyword = if self.is_const { "const" } else { "local" };
+        let keyword = if self.kind.is_const() { "const" } else { "local" };
         (
             token(keyword),
             space(),

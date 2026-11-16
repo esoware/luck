@@ -275,7 +275,7 @@ impl<'ast> ScopeTreeBuilder<'ast> {
                 if let Some(initializer) = initializers.and_then(|exprs| exprs.get(position)) {
                     self.initialized_locals.push((id, initializer));
                 }
-                if local.is_exported {
+                if local.kind.is_exported() {
                     self.mark_exported(id); // Luau
                 }
                 if attributed

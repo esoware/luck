@@ -2,16 +2,15 @@ use core::mem;
 
 use luck_ast::{
     Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, GenericFor,
-    IfStatement, LocalAssignment, LocalFunction, NumericFor, Punctuated, RepeatLoop, Statement,
-    Transform, Type, Var,
+    IfStatement, LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind,
+    NumericFor, Punctuated, RepeatLoop, Statement, Transform, Type, Var,
 };
-use luck_token::{CompactString, LuaVersion, Span};
+use luck_token::{CompactString, LuaVersion, MAX_ACTIVE_LOCALS, Span};
 use rustc_hash::FxHashSet;
 
 use crate::binding::{has_fixed_binding, identifier_name, identifier_token};
 use crate::limits::{
-    GENERIC_FOR_STATE_LOCALS, MAX_ACTIVE_LOCALS, MAX_REGISTERS, NUMERIC_FOR_STATE_LOCALS,
-    parameter_locals,
+    GENERIC_FOR_STATE_LOCALS, MAX_REGISTERS, NUMERIC_FOR_STATE_LOCALS, parameter_locals,
 };
 
 /// Runs after rename, which gives same-named bindings non-overlapping
@@ -400,8 +399,7 @@ impl LiftableCollector<'_> {
             Statement::LocalAssignment(local) => self.collect_local(local),
             Statement::LocalFunction(local_function) => {
                 let name = identifier_name(&local_function.name);
-                if !local_function.kind.is_const()
-                    && !local_function.kind.is_exported()
+                if local_function.kind == LocalFunctionKind::Local
                     && self.has_hoist_room(1)
                     && self.is_safe_to_lift(name)
                 {
@@ -550,8 +548,7 @@ impl LiftRewriter<'_> {
 
     fn rewrite_local_function(&mut self, local_function: Box<LocalFunction>) -> Statement {
         let name = identifier_name(&local_function.name);
-        let is_lifted = !local_function.kind.is_const()
-            && !local_function.kind.is_exported()
+        let is_lifted = local_function.kind == LocalFunctionKind::Local
             && self.liftable_names.contains(name)
             && !self.is_shadowed(name);
         if let Some(frame) = self.scope_names.last_mut() {
@@ -663,8 +660,7 @@ fn prepend_declaration(block: &mut Block, names: &[CompactString]) {
             span: Span::default(),
             names: Punctuated::from_items(attributed_names),
             exprs: None,
-            is_const: false,
-            is_exported: false,
+            kind: LocalAssignmentKind::Local,
         })),
     );
 }
@@ -965,8 +961,8 @@ return w
         let (names, _) = hoisted.split_once(' ').expect("names end at the next statement");
         let name_count = names.split(',').count();
         assert!(
-            name_count <= 200,
-            "a function may hold 200 locals at once, but {name_count} were hoisted"
+            name_count <= MAX_ACTIVE_LOCALS,
+            "a function may hold {MAX_ACTIVE_LOCALS} locals at once, but {name_count} were hoisted"
         );
     }
 

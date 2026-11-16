@@ -126,24 +126,16 @@ impl Parser<'_> {
     /// Grammar: `pars ::= '(' [litlist] ')' | littable | STRING`. A string or
     /// table argument becomes a one-element argument list, so every form
     /// nests its arguments one level, as the list it prints back as does.
-    /// Both that level and a table argument's fit, because the function's
-    /// body and block were checked to.
+    #[expect(clippy::wildcard_enum_match_arm, reason = "the guard leaves only a string")]
     fn parse_attribute_args(&mut self) -> Option<Punctuated<Expression>> {
         if !matches!(
             self.peek(),
             TokenKind::LeftParen | TokenKind::StringLiteral(_) | TokenKind::LeftBrace
-        ) {
+        ) || !self.enter_depth()
+        {
             return None;
         }
-        self.enter_depth();
-        let args = self.parse_attribute_arg_list();
-        self.exit_depth();
-        args
-    }
-
-    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    fn parse_attribute_arg_list(&mut self) -> Option<Punctuated<Expression>> {
-        match self.peek() {
+        let args = match self.peek() {
             TokenKind::LeftParen => {
                 self.advance_span();
                 self.open(Closer::Paren);
@@ -158,21 +150,23 @@ impl Parser<'_> {
                         self.error(expr.span(), "attribute arguments must be literals");
                     }
                 }
-                Some(args)
-            }
-            TokenKind::StringLiteral(_) => {
-                Some(Punctuated::from_item(Expression::StringLiteral(self.advance_literal())))
+                args
             }
             TokenKind::LeftBrace => {
-                let table = self.parse_table_constructor();
-                let expr = Expression::TableConstructor(Box::new(table));
+                let open = self.current_span();
+                let expr =
+                    self.parse_table_constructor().map_or(Expression::Error(open), |table| {
+                        Expression::TableConstructor(Box::new(table))
+                    });
                 if !is_attribute_literal(&expr) {
                     self.error(expr.span(), "attribute arguments must be literals");
                 }
-                Some(Punctuated::from_item(expr))
+                Punctuated::from_item(expr)
             }
-            _ => None,
-        }
+            _ => Punctuated::from_item(Expression::StringLiteral(self.advance_literal())),
+        };
+        self.exit_depth();
+        Some(args)
     }
 
     /// Luau validates attributes at parse time: only `checked`, `native`, and

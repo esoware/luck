@@ -1,6 +1,6 @@
 use luck_ast::{
-    ElseIfExprClause, Expression, LastStatement, LocalFunctionKind, Statement, Suffix,
-    TypeDeclarationValue, Var,
+    ElseIfExprClause, Expression, LastStatement, LocalAssignmentKind, LocalFunctionKind, Statement,
+    Suffix, TypeDeclarationValue, Var,
 };
 
 use crate::common::{
@@ -430,7 +430,7 @@ fn const_bindings() {
     let result = parse_luau("const x = 1");
     assert_no_errors(&result);
     if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
-        assert!(local.is_const);
+        assert_eq!(local.kind, LocalAssignmentKind::Const);
         assert!(local.exprs.is_some());
     } else {
         panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
@@ -501,12 +501,31 @@ fn attributes_on_function_exprs() {
 
 #[test]
 fn empty_interpolation_rejected() {
-    let result = parse_luau("return `a{}b`");
-    assert!(!result.errors.is_empty(), "empty interpolation must error");
+    for (source, hole) in [
+        ("local s = `a{}b`", "{}"),
+        ("local s = `{x}a{}b`", "{}"),
+        ("local s = `{}a{x}b`", "{}"),
+        ("local s = `{x}a{ --[[c]] }b`", "{ --[[c]] }"),
+    ] {
+        let result = parse_luau(source);
+        let [error] = result.errors.as_slice() else {
+            panic!("{source}: {:?}", result.errors);
+        };
+        assert_eq!(
+            (error.message.as_str(), error.span.text(source)),
+            ("malformed interpolated string: expected expression inside `{}`", hole),
+            "{source}"
+        );
+    }
     // Plain backtick strings still parse.
     assert_no_errors(&parse_luau("return `plain`"));
     assert_no_errors(&parse_luau("return ``"));
     assert_no_errors(&parse_luau("return `a{1}b`"));
+    let unterminated = parse_luau("local s = `plain");
+    assert_eq!(
+        unterminated.errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(),
+        ["unterminated interpolated string"]
+    );
 }
 
 #[test]
@@ -611,13 +630,11 @@ export function run() return mutable end",
     let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
         panic!("expected exported local");
     };
-    assert!(local.is_exported);
-    assert!(!local.is_const);
+    assert_eq!(local.kind, LocalAssignmentKind::ExportLocal);
     let Statement::LocalAssignment(constant) = &result.block.stmts[1] else {
         panic!("expected exported const");
     };
-    assert!(constant.is_exported);
-    assert!(constant.is_const);
+    assert_eq!(constant.kind, LocalAssignmentKind::ExportConst);
     let Statement::LocalFunction(function) = &result.block.stmts[2] else {
         panic!("expected exported function");
     };

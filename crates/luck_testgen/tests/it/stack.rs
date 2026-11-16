@@ -1,6 +1,6 @@
 //! Input nested to the parser's cap, and runs and sibling lists far longer
 //! than it, have to run through every stage on the smallest stack luck gets
-//! embedded on, in an unoptimized build too.
+//! embedded on.
 
 use luck_formatter::{FormatOptions, format};
 use luck_minifier::TransformConfig;

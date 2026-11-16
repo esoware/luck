@@ -434,7 +434,7 @@ fn has_default_step(numeric_for: &NumericFor) -> bool {
 /// `local x = nil` can become `local x`, since nil is the default. Const
 /// declarations keep their mandatory initializer.
 fn is_nil_initialized(local: &LocalAssignment) -> bool {
-    !local.is_const
+    !local.kind.is_const()
         && local.names.len() == 1
         && local
             .exprs
@@ -796,7 +796,7 @@ fn classify_dead_local(
 /// droppable before the round is droppable after it.
 fn unused_local_action(local: &LocalAssignment, version: LuaVersion) -> DeadLocalAction {
     // Exports, attributed names, and a 5.2+ `_ENV` are never dead.
-    if local.is_exported || has_attributed_or_env_name(local, version) {
+    if local.kind.is_exported() || has_attributed_or_env_name(local, version) {
         return DeadLocalAction::Keep;
     }
     let Some(exprs) = &local.exprs else {

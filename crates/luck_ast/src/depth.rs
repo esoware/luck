@@ -247,11 +247,13 @@ mod tests {
             assert_eq!(expr_nesting_depth(&run), 1);
             assert_eq!(return_depth(run), 2);
         }
-        let mut optional = synth.ty_named("T");
-        for _ in 0..300u32 {
-            optional = synth.ty_optional(optional);
-        }
-        assert_eq!(type_nesting_depth(&optional), 1);
+    }
+
+    #[test]
+    fn each_question_mark_is_one_level() {
+        let synth = Synth::new();
+        let twice = synth.ty_optional(synth.ty_optional(synth.ty_named("T")));
+        assert_eq!(type_nesting_depth(&twice), 2);
     }
 
     #[test]

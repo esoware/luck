@@ -129,9 +129,7 @@ impl CompactPrinter {
     fn emit_optional_type(&mut self, optional: &OptionalType) {
         if self.descend() {
             self.emit_type(&optional.type_value);
-            for _ in 0..optional.question_count.get() {
-                self.emit_fixed("?");
-            }
+            self.emit_fixed("?");
         }
         self.ascend();
     }

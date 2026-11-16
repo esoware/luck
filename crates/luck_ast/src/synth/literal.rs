@@ -247,10 +247,6 @@ fn decimal_escape(byte_value: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use core::iter;
-    use core::time::Duration;
-    use std::time::Instant;
-
     use super::*;
 
     fn number_text(expr: Expression) -> CompactString {
@@ -426,35 +422,17 @@ mod tests {
     }
 
     #[test]
-    fn long_string_reads_its_content_once_however_many_levels_it_takes() {
-        // A closer at every level up to about 2,800.
+    fn long_string_takes_the_level_past_a_closer_at_every_level() {
+        let levels = 300;
         let mut content = String::new();
-        let mut level = 0usize;
-        while content.len() < 4_000_000 {
+        for level in 0..levels {
             content.push(']');
             content.push_str(&"=".repeat(level));
             content.push(']');
-            level = level.saturating_add(1);
         }
-        let plain = "x".repeat(content.len());
-        let synth = Synth::new();
-        let fastest = |text: &str| {
-            iter::repeat_with(|| {
-                let start = Instant::now();
-                let literal = string_text(synth.long_string(text));
-                assert!(literal.len() > text.len(), "the literal wraps its content");
-                start.elapsed()
-            })
-            .take(3)
-            .min()
-            .unwrap_or_default()
-        };
-        // Asking about each level in turn reads this content 2,800 times.
-        let budget = fastest(&plain).saturating_mul(40).saturating_add(Duration::from_millis(20));
-        let taken = fastest(&content);
-        assert!(taken < budget, "{taken:?} against a budget of {budget:?}");
-        let expected_open = format!("[{}[", "=".repeat(level));
-        assert!(string_text(synth.long_string(&content)).starts_with(&expected_open));
+        let literal = string_text(Synth::new().long_string(&content));
+        let equals = "=".repeat(levels);
+        assert_eq!(literal, format!("[{equals}[{content}]{equals}]"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use luck_ast::{Attribute, LocalAssignment, Statement};
+use luck_ast::{Attribute, LocalAssignment, LocalAssignmentKind, Statement};
 use luck_semantic::{ScopeTree, SymbolId};
 use luck_token::Span;
 use rustc_hash::FxHashMap;
@@ -113,7 +113,7 @@ struct SimpleBinding<'ast> {
 
 fn simple_binding(local: &LocalAssignment) -> Option<SimpleBinding<'_>> {
     // `const` and `export` belong to the statement this rule rebuilds.
-    if local.is_const || local.is_exported {
+    if local.kind != LocalAssignmentKind::Local {
         return None;
     }
     let [attributed] = local.names.items.as_slice() else {

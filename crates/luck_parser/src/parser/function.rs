@@ -1,7 +1,7 @@
 use core::mem;
 
 use luck_ast::{FunctionBody, Parameter, Punctuated, Type, VarArgParam};
-use luck_token::{Span, Token, TokenKind};
+use luck_token::{Token, TokenKind};
 
 use super::types::GenericsOwner;
 use super::{Closer, FunctionScope, Parser};
@@ -11,11 +11,12 @@ use super::{Closer, FunctionScope, Parser};
     reason = "the parser is one type with its grammar split by file"
 )]
 impl Parser<'_> {
-    /// The caller has checked that the body and its block fit, before any
-    /// attributes on the function.
-    pub(super) fn parse_function_body(&mut self) -> FunctionBody {
-        self.enter_depth();
-        self.open(Closer::End);
+    /// `None` when the body or its block would pass the depth cap.
+    pub(super) fn parse_function_body(&mut self) -> Option<FunctionBody> {
+        if !self.enter_depth() {
+            return None;
+        }
+        self.open(Closer::BlockEnd);
 
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
         let generics = (self.version.has_type_syntax() && matches!(self.peek(), TokenKind::Less))
@@ -38,32 +39,17 @@ impl Parser<'_> {
             &mut self.function_scope,
             FunctionScope { is_chunk: false, is_vararg: vararg.is_some(), is_in_loop: false },
         );
-        let block = self.parse_block();
+        let parsed_block = self.parse_block();
         self.function_scope = outer_scope;
-
-        self.close(Closer::End);
-        let end_span = self.expect(&TokenKind::End);
-
         self.exit_depth();
+        let block = parsed_block?;
+
+        self.close(Closer::BlockEnd);
+        let end_span = self.expect(&TokenKind::End);
 
         let span = start_span.merge(end_span);
 
-        FunctionBody { span, generics, params, vararg, return_type, block }
-    }
-
-    /// Whether a function's body and block fit where the parser is.
-    pub(super) const fn can_nest_function(&self) -> bool {
-        self.can_nest(2)
-    }
-
-    /// Refuse the function whose `function` keyword is the current token,
-    /// skipping through its `end`, and return the span from `start`.
-    #[cold]
-    #[inline(never)]
-    pub(super) fn refuse_function(&mut self, start: Span) -> Span {
-        self.report_depth_limit(self.current_span());
-        self.skip_nested();
-        start.merge(self.previous_span)
+        Some(FunctionBody { span, generics, params, vararg, return_type, block })
     }
 
     /// Parse the parameter list between a function's parens, stopping before

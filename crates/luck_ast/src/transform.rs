@@ -1,18 +1,16 @@
+use core::mem;
+
+use luck_token::{Span, Token, TokenKind};
+
 use crate::expr::{
-    BinaryOp, CallSuffix, Expression, Field, FunctionArgs, FunctionDef, IfExpression,
-    InterpolatedString, ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor,
-    TypeCast, UnaryOp, Var,
+    CallSuffix, Expression, Field, FunctionArgs, Suffix, SuffixedExpression, TableConstructor, Var,
 };
 use crate::function::{FunctionBody, Parameter};
 use crate::punctuated::Punctuated;
 use crate::stmt::{
-    Assignment, AttributedName, Block, CompoundAssignment, DoBlock, FunctionDecl, GenericFor,
-    GlobalDeclaration, GlobalFunction, IfStatement, LastStatement, LocalAssignment, LocalFunction,
-    NumericFor, RepeatLoop, Statement, TypeDeclaration, TypeDeclarationValue, WhileLoop,
+    AttributedName, Block, IfStatement, LastStatement, Statement, TypeDeclarationValue,
 };
-use crate::types::{
-    FunctionType, GenericTypeList, NamedType, TableType, Type, TypeArgs, TypeField, TypeofType,
-};
+use crate::types::{GenericTypeList, Type, TypeField};
 
 /// Each `transform_*` hook defaults to its `walk_*`, which rebuilds the node
 /// from its transformed children.
@@ -78,38 +76,101 @@ pub trait Transform {
         block
     }
 
-    // Each arm rebuilds its node in a function of its own, so a level of
-    // nesting holds only that node's temporaries on the stack.
     fn walk_stmt(&mut self, stmt: Statement) -> Statement {
         match stmt {
-            Statement::Assignment(assignment) => walk_assignment(self, assignment),
+            Statement::Assignment(mut assignment) => {
+                for target in &mut assignment.targets.items {
+                    let placeholder = Var::Name(Token::new(TokenKind::Eof, Span::default()));
+                    *target = self.transform_assignment_target(mem::replace(target, placeholder));
+                }
+                walk_exprs(self, &mut assignment.values.items);
+                Statement::Assignment(assignment)
+            }
             Statement::FunctionCall(chain) => {
                 Statement::FunctionCall(self.transform_suffixed(chain))
             }
-            Statement::DoBlock(do_block) => walk_do_block(self, do_block),
-            Statement::WhileLoop(while_loop) => walk_while_loop(self, while_loop),
-            Statement::RepeatLoop(repeat_loop) => walk_repeat_loop(self, repeat_loop),
+            Statement::DoBlock(mut do_block) => {
+                do_block.block = self.transform_block(do_block.block);
+                Statement::DoBlock(do_block)
+            }
+            Statement::WhileLoop(mut while_loop) => {
+                while_loop.condition = self.transform_expr(while_loop.condition);
+                while_loop.block = self.transform_block(while_loop.block);
+                Statement::WhileLoop(while_loop)
+            }
+            Statement::RepeatLoop(mut repeat_loop) => {
+                repeat_loop.block = self.transform_block(repeat_loop.block);
+                repeat_loop.condition = self.transform_expr(repeat_loop.condition);
+                Statement::RepeatLoop(repeat_loop)
+            }
             Statement::IfStatement(if_stmt) => Statement::IfStatement(self.walk_if_stmt(if_stmt)),
-            Statement::NumericFor(numeric_for) => walk_numeric_for(self, numeric_for),
-            Statement::GenericFor(generic_for) => walk_generic_for(self, generic_for),
-            Statement::FunctionDecl(function_decl) => walk_function_decl(self, function_decl),
-            Statement::LocalFunction(local_function) => walk_local_function(self, local_function),
-            Statement::LocalAssignment(local_assignment) => {
-                walk_local_assignment(self, local_assignment)
+            Statement::NumericFor(mut numeric_for) => {
+                if let Some(loop_variable_type) = &mut numeric_for.type_annotation {
+                    *loop_variable_type = self.transform_type(loop_variable_type.take());
+                }
+                numeric_for.start = self.transform_expr(numeric_for.start);
+                numeric_for.limit = self.transform_expr(numeric_for.limit);
+                if let Some(step) = &mut numeric_for.step {
+                    *step = self.transform_expr(step.take());
+                }
+                numeric_for.block = self.transform_block(numeric_for.block);
+                Statement::NumericFor(numeric_for)
+            }
+            Statement::GenericFor(mut generic_for) => {
+                walk_params(self, &mut generic_for.names.items);
+                walk_exprs(self, &mut generic_for.exprs.items);
+                generic_for.block = self.transform_block(generic_for.block);
+                Statement::GenericFor(generic_for)
+            }
+            Statement::FunctionDecl(mut function_decl) => {
+                function_decl.body = self.transform_function_body(function_decl.body);
+                Statement::FunctionDecl(function_decl)
+            }
+            Statement::LocalFunction(mut local_function) => {
+                local_function.body = self.transform_function_body(local_function.body);
+                Statement::LocalFunction(local_function)
+            }
+            Statement::LocalAssignment(mut local_assignment) => {
+                walk_names(self, &mut local_assignment.names.items);
+                if let Some(exprs) = &mut local_assignment.exprs {
+                    walk_exprs(self, &mut exprs.items);
+                }
+                Statement::LocalAssignment(local_assignment)
             }
             // Luau
-            Statement::CompoundAssignment(compound) => walk_compound_assignment(self, compound),
-            // Lua 5.5
-            Statement::GlobalFunction(global_function) => {
-                walk_global_function(self, global_function)
+            Statement::CompoundAssignment(mut compound) => {
+                compound.var = self.transform_assignment_target(compound.var);
+                compound.expr = self.transform_expr(compound.expr);
+                Statement::CompoundAssignment(compound)
             }
             // Lua 5.5
-            Statement::GlobalDeclaration(global_declaration) => {
-                walk_global_declaration(self, global_declaration)
+            Statement::GlobalFunction(mut global_function) => {
+                global_function.body = self.transform_function_body(global_function.body);
+                Statement::GlobalFunction(global_function)
+            }
+            // Lua 5.5
+            Statement::GlobalDeclaration(mut global_declaration) => {
+                walk_names(self, &mut global_declaration.names.items);
+                if let Some(exprs) = &mut global_declaration.exprs {
+                    walk_exprs(self, &mut exprs.items);
+                }
+                Statement::GlobalDeclaration(global_declaration)
             }
             // Luau
-            Statement::TypeDeclaration(type_declaration) => {
-                walk_type_declaration(self, type_declaration)
+            Statement::TypeDeclaration(mut type_declaration) => {
+                if let Some(generics) = &mut type_declaration.generics {
+                    walk_generic_params(self, generics);
+                }
+                type_declaration.type_value = match type_declaration.type_value {
+                    TypeDeclarationValue::Alias(alias_type) => {
+                        TypeDeclarationValue::Alias(self.transform_type(alias_type))
+                    }
+                    TypeDeclarationValue::TypeFunction(mut body) => {
+                        *body = self.transform_function_body(*body);
+                        TypeDeclarationValue::TypeFunction(body)
+                    }
+                };
+                Statement::TypeDeclaration(type_declaration)
             }
             leaf @ (Statement::EmptyStatement(_)
             | Statement::Goto(_)
@@ -156,22 +217,67 @@ pub trait Transform {
             | Expression::VarArg(_)
             | Expression::Name(_)
             | Expression::Error(_)) => leaf,
-            Expression::FunctionDef(function_def) => walk_function_def(self, function_def),
+            Expression::FunctionDef(mut function_def) => {
+                function_def.body = self.transform_function_body(function_def.body);
+                Expression::FunctionDef(function_def)
+            }
             Expression::Suffixed(chain) => Expression::Suffixed(self.transform_suffixed(chain)),
-            Expression::Parenthesized(parenthesized) => walk_parenthesized(self, parenthesized),
+            Expression::Parenthesized(mut parenthesized) => {
+                self.descend();
+                parenthesized.expr = self.transform_expr(parenthesized.expr);
+                self.ascend();
+                Expression::Parenthesized(parenthesized)
+            }
             Expression::TableConstructor(table) => {
                 Expression::TableConstructor(walk_boxed_table(self, table))
             }
-            Expression::BinaryOp(binary_op) => walk_binary_op(self, binary_op),
-            Expression::UnaryOp(unary_op) => walk_unary_op(self, unary_op),
-            // Luau
-            Expression::IfExpression(if_expr) => walk_if_expr(self, if_expr),
-            // Luau
-            Expression::InterpolatedString(interpolated_string) => {
-                walk_interpolated_string(self, interpolated_string)
+            Expression::BinaryOp(mut binary_op) => {
+                self.descend();
+                binary_op.first = self.transform_expr(binary_op.first);
+                for link in &mut binary_op.links {
+                    link.operand = self.transform_expr(link.operand.take());
+                }
+                self.ascend();
+                Expression::BinaryOp(binary_op)
+            }
+            Expression::UnaryOp(mut unary_op) => {
+                self.descend();
+                unary_op.operand = self.transform_expr(unary_op.operand);
+                self.ascend();
+                Expression::UnaryOp(unary_op)
             }
             // Luau
-            Expression::TypeCast(cast) => walk_type_cast(self, cast),
+            Expression::IfExpression(mut if_expr) => {
+                self.descend();
+                if_expr.condition = self.transform_expr(if_expr.condition);
+                if_expr.then_expr = self.transform_expr(if_expr.then_expr);
+                for clause in &mut if_expr.elseif_clauses {
+                    clause.condition = self.transform_expr(clause.condition.take());
+                    clause.expr = self.transform_expr(clause.expr.take());
+                }
+                if_expr.else_expr = self.transform_expr(if_expr.else_expr);
+                self.ascend();
+                Expression::IfExpression(if_expr)
+            }
+            // Luau
+            Expression::InterpolatedString(mut interpolated_string) => {
+                self.descend();
+                for segment in &mut interpolated_string.segments {
+                    if let Some(interpolated) = &mut segment.expr {
+                        *interpolated = self.transform_expr(interpolated.take());
+                    }
+                }
+                self.ascend();
+                Expression::InterpolatedString(interpolated_string)
+            }
+            // Luau
+            Expression::TypeCast(mut cast) => {
+                self.descend();
+                cast.expr = self.transform_expr(cast.expr);
+                cast.type_annotation = self.transform_type(cast.type_annotation);
+                self.ascend();
+                Expression::TypeCast(cast)
+            }
         }
     }
 
@@ -267,11 +373,49 @@ pub trait Transform {
 
     fn walk_type(&mut self, type_value: Type) -> Type {
         match type_value {
-            Type::Named(named) => walk_named_type(self, named),
+            Type::Named(mut named) => {
+                self.descend();
+                if let Some(generics) = &mut named.generics {
+                    walk_types(self, &mut generics.args.items);
+                }
+                self.ascend();
+                Type::Named(named)
+            }
             // typeof embeds a real expression, so semantic passes must see it.
-            Type::Typeof(typeof_type) => walk_typeof_type(self, typeof_type),
-            Type::Table(table) => walk_table_type(self, table),
-            Type::Function(function_type) => walk_function_type(self, function_type),
+            Type::Typeof(mut typeof_type) => {
+                self.descend();
+                typeof_type.expr = self.transform_expr(typeof_type.expr);
+                self.ascend();
+                Type::Typeof(typeof_type)
+            }
+            Type::Table(mut table) => {
+                self.descend();
+                for field in &mut table.fields.items {
+                    match field {
+                        TypeField::Named { value, .. } | TypeField::Array { value, .. } => {
+                            *value = self.transform_type(value.take());
+                        }
+                        TypeField::Indexer { key, value, .. } => {
+                            *key = self.transform_type(key.take());
+                            *value = self.transform_type(value.take());
+                        }
+                    }
+                }
+                self.ascend();
+                Type::Table(table)
+            }
+            Type::Function(mut function_type) => {
+                self.descend();
+                if let Some(generics) = &mut function_type.generics {
+                    walk_generic_params(self, generics);
+                }
+                for param in &mut function_type.params.items {
+                    param.type_value = self.transform_type(param.type_value.take());
+                }
+                function_type.return_type = self.transform_type(function_type.return_type);
+                self.ascend();
+                Type::Function(function_type)
+            }
             Type::Optional(mut optional) => {
                 self.descend();
                 optional.type_value = self.transform_type(optional.type_value);
@@ -315,11 +459,6 @@ pub trait Transform {
         }
     }
 
-    fn walk_type_args(&mut self, mut type_args: TypeArgs) -> TypeArgs {
-        walk_types(self, &mut type_args.args.items);
-        type_args
-    }
-
     fn walk_generic_type_list(&mut self, mut generics: GenericTypeList) -> GenericTypeList {
         walk_generic_params(self, &mut generics);
         generics
@@ -339,23 +478,6 @@ pub trait Transform {
     ) -> Punctuated<Expression> {
         walk_exprs(self, &mut exprs.items);
         exprs
-    }
-
-    fn walk_assignment_targets(&mut self, targets: Punctuated<Var>) -> Punctuated<Var> {
-        targets.map_items(|target| self.transform_assignment_target(target))
-    }
-
-    fn walk_punctuated_params(
-        &mut self,
-        mut params: Punctuated<Parameter>,
-    ) -> Punctuated<Parameter> {
-        walk_params(self, &mut params.items);
-        params
-    }
-
-    fn walk_punctuated_types(&mut self, mut types: Punctuated<Type>) -> Punctuated<Type> {
-        walk_types(self, &mut types.items);
-        types
     }
 }
 
@@ -416,306 +538,6 @@ where
 {
     *table = transform.transform_table_constructor(*table);
     table
-}
-
-fn walk_assignment<T>(transform: &mut T, mut assignment: Box<Assignment>) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    assignment.targets = transform.walk_assignment_targets(assignment.targets);
-    walk_exprs(transform, &mut assignment.values.items);
-    Statement::Assignment(assignment)
-}
-
-fn walk_do_block<T>(transform: &mut T, mut do_block: Box<DoBlock>) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    do_block.block = transform.transform_block(do_block.block);
-    Statement::DoBlock(do_block)
-}
-
-fn walk_while_loop<T>(transform: &mut T, mut while_loop: Box<WhileLoop>) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    while_loop.condition = transform.transform_expr(while_loop.condition);
-    while_loop.block = transform.transform_block(while_loop.block);
-    Statement::WhileLoop(while_loop)
-}
-
-fn walk_repeat_loop<T>(transform: &mut T, mut repeat_loop: Box<RepeatLoop>) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    repeat_loop.block = transform.transform_block(repeat_loop.block);
-    repeat_loop.condition = transform.transform_expr(repeat_loop.condition);
-    Statement::RepeatLoop(repeat_loop)
-}
-
-fn walk_numeric_for<T>(transform: &mut T, mut numeric_for: Box<NumericFor>) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    if let Some(loop_variable_type) = &mut numeric_for.type_annotation {
-        *loop_variable_type = transform.transform_type(loop_variable_type.take());
-    }
-    numeric_for.start = transform.transform_expr(numeric_for.start);
-    numeric_for.limit = transform.transform_expr(numeric_for.limit);
-    if let Some(step) = &mut numeric_for.step {
-        *step = transform.transform_expr(step.take());
-    }
-    numeric_for.block = transform.transform_block(numeric_for.block);
-    Statement::NumericFor(numeric_for)
-}
-
-fn walk_generic_for<T>(transform: &mut T, mut generic_for: Box<GenericFor>) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    walk_params(transform, &mut generic_for.names.items);
-    walk_exprs(transform, &mut generic_for.exprs.items);
-    generic_for.block = transform.transform_block(generic_for.block);
-    Statement::GenericFor(generic_for)
-}
-
-fn walk_function_decl<T>(transform: &mut T, mut function_decl: Box<FunctionDecl>) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    function_decl.body = transform.transform_function_body(function_decl.body);
-    Statement::FunctionDecl(function_decl)
-}
-
-fn walk_local_function<T>(transform: &mut T, mut local_function: Box<LocalFunction>) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    local_function.body = transform.transform_function_body(local_function.body);
-    Statement::LocalFunction(local_function)
-}
-
-// Lua 5.5
-fn walk_global_function<T>(transform: &mut T, mut global_function: Box<GlobalFunction>) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    global_function.body = transform.transform_function_body(global_function.body);
-    Statement::GlobalFunction(global_function)
-}
-
-fn walk_local_assignment<T>(
-    transform: &mut T,
-    mut local_assignment: Box<LocalAssignment>,
-) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    walk_names(transform, &mut local_assignment.names.items);
-    if let Some(exprs) = &mut local_assignment.exprs {
-        walk_exprs(transform, &mut exprs.items);
-    }
-    Statement::LocalAssignment(local_assignment)
-}
-
-// Lua 5.5
-fn walk_global_declaration<T>(
-    transform: &mut T,
-    mut global_declaration: Box<GlobalDeclaration>,
-) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    walk_names(transform, &mut global_declaration.names.items);
-    if let Some(exprs) = &mut global_declaration.exprs {
-        walk_exprs(transform, &mut exprs.items);
-    }
-    Statement::GlobalDeclaration(global_declaration)
-}
-
-// Luau
-fn walk_compound_assignment<T>(
-    transform: &mut T,
-    mut compound: Box<CompoundAssignment>,
-) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    compound.var = transform.transform_assignment_target(compound.var);
-    compound.expr = transform.transform_expr(compound.expr);
-    Statement::CompoundAssignment(compound)
-}
-
-// Luau
-fn walk_type_declaration<T>(
-    transform: &mut T,
-    mut type_declaration: Box<TypeDeclaration>,
-) -> Statement
-where
-    T: Transform + ?Sized,
-{
-    if let Some(generics) = &mut type_declaration.generics {
-        walk_generic_params(transform, generics);
-    }
-    type_declaration.type_value = match type_declaration.type_value {
-        TypeDeclarationValue::Alias(alias_type) => {
-            TypeDeclarationValue::Alias(transform.transform_type(alias_type))
-        }
-        TypeDeclarationValue::TypeFunction(mut body) => {
-            *body = transform.transform_function_body(*body);
-            TypeDeclarationValue::TypeFunction(body)
-        }
-    };
-    Statement::TypeDeclaration(type_declaration)
-}
-
-fn walk_function_def<T>(transform: &mut T, mut function_def: Box<FunctionDef>) -> Expression
-where
-    T: Transform + ?Sized,
-{
-    function_def.body = transform.transform_function_body(function_def.body);
-    Expression::FunctionDef(function_def)
-}
-
-fn walk_parenthesized<T>(
-    transform: &mut T,
-    mut parenthesized: Box<ParenthesizedExpression>,
-) -> Expression
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    parenthesized.expr = transform.transform_expr(parenthesized.expr);
-    transform.ascend();
-    Expression::Parenthesized(parenthesized)
-}
-
-fn walk_binary_op<T>(transform: &mut T, mut binary_op: Box<BinaryOp>) -> Expression
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    binary_op.first = transform.transform_expr(binary_op.first);
-    for link in &mut binary_op.links {
-        link.operand = transform.transform_expr(link.operand.take());
-    }
-    transform.ascend();
-    Expression::BinaryOp(binary_op)
-}
-
-fn walk_unary_op<T>(transform: &mut T, mut unary_op: Box<UnaryOp>) -> Expression
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    unary_op.operand = transform.transform_expr(unary_op.operand);
-    transform.ascend();
-    Expression::UnaryOp(unary_op)
-}
-
-// Luau
-fn walk_if_expr<T>(transform: &mut T, mut if_expr: Box<IfExpression>) -> Expression
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    if_expr.condition = transform.transform_expr(if_expr.condition);
-    if_expr.then_expr = transform.transform_expr(if_expr.then_expr);
-    for clause in &mut if_expr.elseif_clauses {
-        clause.condition = transform.transform_expr(clause.condition.take());
-        clause.expr = transform.transform_expr(clause.expr.take());
-    }
-    if_expr.else_expr = transform.transform_expr(if_expr.else_expr);
-    transform.ascend();
-    Expression::IfExpression(if_expr)
-}
-
-// Luau
-fn walk_interpolated_string<T>(
-    transform: &mut T,
-    mut interpolated_string: Box<InterpolatedString>,
-) -> Expression
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    for segment in &mut interpolated_string.segments {
-        if let Some(interpolated) = &mut segment.expr {
-            *interpolated = transform.transform_expr(interpolated.take());
-        }
-    }
-    transform.ascend();
-    Expression::InterpolatedString(interpolated_string)
-}
-
-// Luau
-fn walk_type_cast<T>(transform: &mut T, mut cast: Box<TypeCast>) -> Expression
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    cast.expr = transform.transform_expr(cast.expr);
-    cast.type_annotation = transform.transform_type(cast.type_annotation);
-    transform.ascend();
-    Expression::TypeCast(cast)
-}
-
-fn walk_named_type<T>(transform: &mut T, mut named: Box<NamedType>) -> Type
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    if let Some(generics) = &mut named.generics {
-        walk_types(transform, &mut generics.args.items);
-    }
-    transform.ascend();
-    Type::Named(named)
-}
-
-fn walk_typeof_type<T>(transform: &mut T, mut typeof_type: Box<TypeofType>) -> Type
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    typeof_type.expr = transform.transform_expr(typeof_type.expr);
-    transform.ascend();
-    Type::Typeof(typeof_type)
-}
-
-fn walk_table_type<T>(transform: &mut T, mut table: Box<TableType>) -> Type
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    for field in &mut table.fields.items {
-        match field {
-            TypeField::Named { value, .. } | TypeField::Array { value, .. } => {
-                *value = transform.transform_type(value.take());
-            }
-            TypeField::Indexer { key, value, .. } => {
-                *key = transform.transform_type(key.take());
-                *value = transform.transform_type(value.take());
-            }
-        }
-    }
-    transform.ascend();
-    Type::Table(table)
-}
-
-fn walk_function_type<T>(transform: &mut T, mut function_type: Box<FunctionType>) -> Type
-where
-    T: Transform + ?Sized,
-{
-    transform.descend();
-    if let Some(generics) = &mut function_type.generics {
-        walk_generic_params(transform, generics);
-    }
-    for param in &mut function_type.params.items {
-        param.type_value = transform.transform_type(param.type_value.take());
-    }
-    function_type.return_type = transform.transform_type(function_type.return_type);
-    transform.ascend();
-    Type::Function(function_type)
 }
 
 #[cfg(test)]
@@ -822,10 +644,13 @@ mod tests {
         struct Identity;
         impl Transform for Identity {}
 
-        // local x = 1 + 2
+        // local x = 1 + 2; a.b, c = x, x
         let synth = Synth::new();
         let sum = synth.binary_op(synth.number("1"), luck_token::BinOp::Add, synth.number("2"));
-        let block = synth.block(vec![synth.local(&["x"], vec![sum])], None);
+        let targets = vec![synth.field_var(synth.name_expr("a"), "b"), synth.name_var("c")];
+        let values = vec![synth.name_expr("x"), synth.name_expr("x")];
+        let block =
+            synth.block(vec![synth.local(&["x"], vec![sum]), synth.assign(targets, values)], None);
         let original = block.clone();
         assert_eq!(Identity.transform_block(block), original);
     }

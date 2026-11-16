@@ -2,8 +2,8 @@ use core::iter::Peekable;
 use core::mem;
 
 use luck_ast::{
-    Assignment, Block, Expression, FunctionBody, LocalAssignment, Punctuated, Statement, Transform,
-    Var, Visitor,
+    Assignment, Block, Expression, FunctionBody, LocalAssignment, LocalAssignmentKind, Punctuated,
+    Statement, Transform, Var, Visitor,
 };
 use luck_token::{CompactString, LuaVersion, Span, Token};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -162,8 +162,7 @@ impl LocalMerger {
             span: Span::default(),
             names: Punctuated::from_items(names),
             exprs: Some(Punctuated::from_items(exprs)),
-            is_const: false,
-            is_exported: false,
+            kind: LocalAssignmentKind::Local,
         })))
     }
 
@@ -230,8 +229,7 @@ impl LocalMerger {
             span: Span::default(),
             names: Punctuated::from_items(names),
             exprs: None,
-            is_const: false,
-            is_exported: false,
+            kind: LocalAssignmentKind::Local,
         }))
     }
 }

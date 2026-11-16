@@ -21,12 +21,7 @@ impl Format for Type {
             Self::Typeof(typeof_type) => typeof_type.fmt(f),
             Self::Table(table) => table.fmt(f),
             Self::Function(function) => function.fmt(f),
-            Self::Optional(optional) => {
-                optional.type_value.fmt(f);
-                for _ in 0..optional.question_count.get() {
-                    token("?").fmt(f);
-                }
-            }
+            Self::Optional(optional) => (&optional.type_value, token("?")).fmt(f),
             Self::Union(union) => union.fmt(f),
             Self::Intersection(intersection) => intersection.fmt(f),
             Self::Parenthesized(parenthesized) => {

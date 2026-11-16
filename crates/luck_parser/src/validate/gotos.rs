@@ -6,12 +6,11 @@
 //! of a variable unless its label ends the block: only labels and `;` follow
 //! it, and the block isn't a repeat body, whose `until` still sees the locals.
 
-use alloc::collections::{BTreeMap, BTreeSet};
 use core::mem;
 
 use luck_ast::{GotoStatement, LabelStatement};
 use luck_token::{LuaVersion, Span};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ParseError;
 
@@ -22,40 +21,37 @@ struct PendingGoto {
     active_vars: usize,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct BlockStart {
-    active_vars: usize,
-}
-
-impl BlockStart {
-    pub(super) const fn active_vars(self) -> usize {
-        self.active_vars
-    }
-}
-
 /// Labels and gotos are looked up by name, so a block's cost follows the
 /// number of them and not the square of it.
 #[derive(Default)]
 struct BlockGotos<'ast> {
-    labels: BTreeSet<&'ast str>,
+    labels: FxHashSet<&'ast str>,
     /// Gotos no label has taken yet, each name's in source order.
-    pending_gotos: BTreeMap<&'ast str, Vec<PendingGoto>>,
+    pending_gotos: FxHashMap<&'ast str, Vec<PendingGoto>>,
+}
+
+/// The enclosing block's labels and gotos, which wait here while a block is
+/// open.
+pub(super) struct BlockStart<'ast> {
+    active_vars: usize,
+    enclosing: BlockGotos<'ast>,
+}
+
+impl BlockStart<'_> {
+    pub(super) const fn active_vars(&self) -> usize {
+        self.active_vars
+    }
 }
 
 /// One function body's labels and gotos, as `dyd->label` and `dyd->gt` hold
 /// them between `firstlabel` and `firstgoto`.
+#[derive(Default)]
 pub(super) struct FunctionGotos<'ast> {
-    /// The open blocks, innermost last, over one for the function itself,
-    /// where a goto that left every block waits to be reported.
-    blocks: Vec<BlockGotos<'ast>>,
+    /// The innermost open block's, or the function's own once every block
+    /// has closed, where a goto that left every block waits to be reported.
+    block: BlockGotos<'ast>,
     /// How many open blocks hold a label of each name.
     visible_labels: FxHashMap<&'ast str, usize>,
-}
-
-impl Default for FunctionGotos<'_> {
-    fn default() -> Self {
-        Self { blocks: vec![BlockGotos::default()], visible_labels: FxHashMap::default() }
-    }
 }
 
 pub(super) struct GotoTracker<'ast> {
@@ -69,22 +65,17 @@ impl<'ast> GotoTracker<'ast> {
         Self { version, function: FunctionGotos::default(), errors: Vec::new() }
     }
 
-    pub(super) fn open_block(&mut self, active_vars: usize) -> BlockStart {
-        self.function.blocks.push(BlockGotos::default());
-        BlockStart { active_vars }
+    pub(super) fn open_block(&mut self, active_vars: usize) -> BlockStart<'ast> {
+        BlockStart { active_vars, enclosing: mem::take(&mut self.function.block) }
     }
 
     /// Close the current block. A goto still pending leaves it: a label of the
     /// enclosing block already seen takes it as a backward jump, and otherwise
     /// it waits there with the enclosing block's variable count.
-    pub(super) fn close_block(&mut self, start: BlockStart) {
+    pub(super) fn close_block(&mut self, start: BlockStart<'ast>) {
         let function = &mut self.function;
-        if function.blocks.len() < 2 {
-            return;
-        }
-        let Some(closed) = function.blocks.pop() else {
-            return;
-        };
+        let closed = mem::replace(&mut function.block, start.enclosing);
+        #[expect(clippy::iter_over_hash_type, reason = "each name's count updates on its own")]
         for label in closed.labels {
             if let Some(count) = function.visible_labels.get_mut(label) {
                 *count = count.saturating_sub(1);
@@ -93,9 +84,8 @@ impl<'ast> GotoTracker<'ast> {
                 }
             }
         }
-        let Some(enclosing) = function.blocks.last_mut() else {
-            return;
-        };
+        let enclosing = &mut function.block;
+        #[expect(clippy::iter_over_hash_type, reason = "each name's gotos merge on their own")]
         for (name, gotos) in closed.pending_gotos {
             if enclosing.labels.contains(name) {
                 continue;
@@ -116,9 +106,7 @@ impl<'ast> GotoTracker<'ast> {
             return;
         };
         let function = &mut self.function;
-        let Some(block) = function.blocks.last_mut() else {
-            return;
-        };
+        let block = &mut function.block;
         let is_defined = if self.version.has_label_shadowing() {
             block.labels.contains(name)
         } else {
@@ -150,9 +138,7 @@ impl<'ast> GotoTracker<'ast> {
         let Some(name) = goto.name.identifier() else {
             return;
         };
-        let Some(block) = self.function.blocks.last_mut() else {
-            return;
-        };
+        let block = &mut self.function.block;
         if !block.labels.contains(name) {
             block
                 .pending_gotos
@@ -175,9 +161,9 @@ impl<'ast> GotoTracker<'ast> {
     pub(super) fn leave_function(&mut self, enclosing: FunctionGotos<'ast>) {
         let function = mem::replace(&mut self.function, enclosing);
         let mut unresolved: Vec<(Span, &str)> = function
-            .blocks
+            .block
+            .pending_gotos
             .iter()
-            .flat_map(|block| &block.pending_gotos)
             .flat_map(|(name, gotos)| gotos.iter().map(|goto| (goto.span, *name)))
             .collect();
         unresolved.sort_unstable_by_key(|(span, _)| span.start);

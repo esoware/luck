@@ -32,7 +32,7 @@ impl NodeRule for RedundantNilInit {
 
 fn check_local(local: &LocalAssignment, source: &str, comments: &[Comment]) -> Option<Finding> {
     // Luau requires a `const` to have an initializer.
-    if local.is_const {
+    if local.kind.is_const() {
         return None;
     }
     let exprs = local.exprs.as_ref()?;

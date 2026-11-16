@@ -51,7 +51,7 @@ luck lsp [--socket <port>]                   # Run the language server over stdi
 
 ### Stack
 
-Every command runs on the stack its thread starts with: the main thread's, which the OS sizes (1 MB on Windows, usually 8 MB on Linux and macOS), and the 2 MB Rust gives the rayon threads that `check`, `lint`, and `fmt` spread files across and the tokio threads `luck lsp` serves on. Every stage fits in 1 MB, however deep the source nests, which `luck_testgen`'s small-stack sources check for each stage crate, unoptimized, and this crate's own tests check through the binary.
+Every command runs on the stack its thread starts with: the main thread's, which the OS sizes (1 MB on Windows, usually 8 MB on Linux and macOS), and the 2 MB Rust gives the rayon threads that `check`, `lint`, and `fmt` spread files across and the tokio threads `luck lsp` serves on. Every stage fits in 1 MB, however deep the source nests, which `luck_testgen`'s small-stack sources check for each stage crate in the optimized test profile, and this crate's own tests check through the binary.
 
 ### Module layout
 

@@ -6,7 +6,6 @@ use luck_ast::{
 };
 use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
-use super::skip::{ExprTail, TypeExtent};
 use super::{Closer, Parser};
 
 #[expect(
@@ -29,11 +28,25 @@ impl Parser<'_> {
                 break;
             }
             if !self.enter_wrapper(level) {
-                lhs = self.refuse_binary_run(lhs.span(), precedence, level);
-                continue;
+                lhs = Expression::Error(lhs.span());
+                break;
             }
             self.advance_span();
-            lhs = self.parse_binary_run(lhs, op, precedence);
+            // The run's operands bind tighter, so a right-associative run
+            // loops like a left-associative one and only the grouping differs.
+            let operand_precedence = precedence.saturating_add(1);
+            let first_link = BinaryLink { op, operand: self.parse_expr(operand_precedence) };
+            let start = self.binary_links.len();
+            while let Some(next_op) =
+                self.peek_binary_op().filter(|next_op| next_op.precedence().0 == precedence)
+            {
+                self.advance_span();
+                let operand = self.parse_expr(operand_precedence);
+                self.binary_links.push(BinaryLink { op: next_op, operand });
+            }
+            let links = OneOrMore::from_first(first_link, self.binary_links.drain(start..));
+            let span = lhs.span().merge(links.last().operand.span());
+            lhs = Expression::BinaryOp(Box::new(BinaryOp { span, first: lhs, links }));
             self.nesting_depth = level;
         }
 
@@ -41,50 +54,11 @@ impl Parser<'_> {
         lhs
     }
 
-    /// Refuse the run at `precedence` that the current operator would start
-    /// over the operand from `start`.
-    #[cold]
-    #[inline(never)]
-    fn refuse_binary_run(&mut self, start: Span, precedence: u8, level: usize) -> Expression {
-        self.refuse_wrapper(level);
-        self.skip_expr_tail(ExprTail::Operators(precedence));
-        Expression::Error(start.merge(self.previous_span))
-    }
-
-    /// Refuse the expression at the current token, skipping it with `tail`.
-    #[cold]
-    #[inline(never)]
-    fn refuse_expr(&mut self, tail: ExprTail) -> Expression {
-        let start = self.current_span();
-        self.report_depth_limit(start);
-        self.skip_expr(tail);
-        Expression::Error(start.merge(self.previous_span))
-    }
-
-    pub(super) fn peek_binary_op(&self) -> Option<BinOp> {
+    fn peek_binary_op(&self) -> Option<BinOp> {
         let op = BinOp::from_token_kind(self.peek())?;
         // Luau's lexer emits `&` and `|` for the type grammar only; they
         // aren't binary operators there.
         (!op.is_bitwise() || self.version.has_bitwise_ops()).then_some(op)
-    }
-
-    /// The run of operators at `precedence` that `first` and the consumed
-    /// `op` start. Its operands bind tighter, so a right-associative run
-    /// loops like a left-associative one and only the grouping differs.
-    fn parse_binary_run(&mut self, first: Expression, op: BinOp, precedence: u8) -> Expression {
-        let operand_precedence = precedence.saturating_add(1);
-        let first_link = BinaryLink { op, operand: self.parse_expr(operand_precedence) };
-        let start = self.binary_links.len();
-        while let Some(next_op) =
-            self.peek_binary_op().filter(|next_op| next_op.precedence().0 == precedence)
-        {
-            self.advance_span();
-            let operand = self.parse_expr(operand_precedence);
-            self.binary_links.push(BinaryLink { op: next_op, operand });
-        }
-        let links = OneOrMore::from_first(first_link, self.binary_links.drain(start..));
-        let span = first.span().merge(links.last().operand.span());
-        Expression::BinaryOp(Box::new(BinaryOp { span, first, links }))
     }
 
     pub(super) fn parse_expr_list(&mut self) -> Punctuated<Expression> {
@@ -106,12 +80,19 @@ impl Parser<'_> {
         self.exprs.drain(start..).collect()
     }
 
-    // The recursive functions here each keep one construct's temporaries, so
-    // a level of nesting costs an unoptimized build only the frames of the
-    // construct it nests through.
     fn parse_prefix(&mut self) -> Expression {
         if let Some(op) = UnOp::from_token_kind(self.peek()) {
-            return self.parse_unary_op(op);
+            let op_span = self.current_span();
+            // Unary chains like `not not not x` recurse once per operator, so
+            // they count toward the depth limit too.
+            if !self.enter_depth() {
+                return Expression::Error(op_span);
+            }
+            self.advance_span();
+            let operand = self.parse_expr(UnOp::PRECEDENCE);
+            self.exit_depth();
+            let span = op_span.merge(operand.span());
+            return Expression::UnaryOp(Box::new(UnaryOp { span, op, operand }));
         }
         let level = self.nesting_depth;
         let primary = self.parse_primary_expr();
@@ -120,27 +101,13 @@ impl Parser<'_> {
         self.parse_type_cast(primary, level)
     }
 
-    fn parse_unary_op(&mut self, op: UnOp) -> Expression {
-        // Unary chains like `not not not x` recurse once per operator, so
-        // they count toward the depth limit too.
-        if !self.can_nest(1) {
-            return self.refuse_expr(ExprTail::Operators(UnOp::PRECEDENCE));
-        }
-        let op_span = self.advance_span();
-        self.enter_depth();
-        let operand = self.parse_expr(UnOp::PRECEDENCE);
-        self.exit_depth();
-        let span = op_span.merge(operand.span());
-        Expression::UnaryOp(Box::new(UnaryOp { span, op, operand }))
-    }
-
     /// Luau's grammar is `asexp ::= simpleexp ['::' Type]`, so `x :: A :: B`
     /// is a parse error there. A second `::` is left in place to fail as an
     /// unexpected token.
     fn parse_type_cast(&mut self, expr: Expression, level: usize) -> Expression {
         if self.version.has_type_syntax() && matches!(self.peek(), TokenKind::DoubleColon) {
             if !self.enter_wrapper(level) {
-                return self.refuse_type_cast(expr.span(), level);
+                return Expression::Error(expr.span());
             }
             self.advance_span();
             let type_annotation = self.parse_type();
@@ -149,15 +116,6 @@ impl Parser<'_> {
             return Expression::TypeCast(Box::new(TypeCast { span, expr, type_annotation }));
         }
         expr
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn refuse_type_cast(&mut self, start: Span, level: usize) -> Expression {
-        self.refuse_wrapper(level);
-        self.advance();
-        self.skip_type(TypeExtent::Full);
-        Expression::Error(start.merge(self.previous_span))
     }
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
@@ -170,58 +128,47 @@ impl Parser<'_> {
             // Luau
             TokenKind::Integer(_) => Expression::Integer(self.advance_literal()),
             TokenKind::StringLiteral(_) => Expression::StringLiteral(self.advance_literal()),
-            TokenKind::DotDotDot => self.parse_vararg(),
+            TokenKind::DotDotDot => {
+                let span = self.advance_span();
+                if !self.function_scope.is_vararg {
+                    self.error(span, "cannot use `...` outside a vararg function");
+                }
+                Expression::VarArg(span)
+            }
             TokenKind::Function => self.parse_function_def(),
             // Luau: `simpleexp ::= attributes 'function' funcbody`
             TokenKind::At if self.version.has_function_attributes() => self.parse_function_def(),
-            TokenKind::LeftBrace => self.parse_table_expr(),
+            TokenKind::LeftBrace => {
+                let open = self.current_span();
+                self.parse_table_constructor().map_or(Expression::Error(open), |table| {
+                    Expression::TableConstructor(Box::new(table))
+                })
+            }
             TokenKind::LeftParen => {
-                let parenthesized = self.parse_parenthesized();
-                self.parse_suffixes(parenthesized)
+                let open = self.current_span();
+                if !self.enter_depth() {
+                    return Expression::Error(open);
+                }
+                self.advance_span();
+                self.open(Closer::Paren);
+                let expr = self.parse_expr(0);
+                self.exit_depth();
+                let close = self.expect_closer(&TokenKind::RightParen, Closer::Paren);
+                let span = open.merge(close);
+                let paren_expr =
+                    Expression::Parenthesized(Box::new(ParenthesizedExpression { span, expr }));
+                self.parse_suffixes(paren_expr)
             }
             // Luau if-expression.
             TokenKind::If if self.version.has_if_exprs() => self.parse_if_expr(),
             // Luau interpolated string.
             TokenKind::InterpolatedStringBegin(_) => self.parse_interpolated_string(),
             TokenKind::Identifier(_) => {
-                let name = self.parse_name();
+                let name = Expression::Name(self.advance());
                 self.parse_suffixes(name)
             }
             _ => self.report_unexpected_in_expr(),
         }
-    }
-
-    fn parse_vararg(&mut self) -> Expression {
-        let span = self.advance_span();
-        if !self.function_scope.is_vararg {
-            self.error(span, "cannot use `...` outside a vararg function");
-        }
-        Expression::VarArg(span)
-    }
-
-    fn parse_table_expr(&mut self) -> Expression {
-        if !self.can_nest(1) {
-            return Expression::Error(self.refuse_group());
-        }
-        Expression::TableConstructor(Box::new(self.parse_table_constructor()))
-    }
-
-    fn parse_parenthesized(&mut self) -> Expression {
-        if !self.can_nest(1) {
-            return Expression::Error(self.refuse_group());
-        }
-        let open = self.advance_span();
-        self.open(Closer::Paren);
-        self.enter_depth();
-        let expr = self.parse_expr(0);
-        self.exit_depth();
-        let close = self.expect_closer(&TokenKind::RightParen, Closer::Paren);
-        let span = open.merge(close);
-        Expression::Parenthesized(Box::new(ParenthesizedExpression { span, expr }))
-    }
-
-    fn parse_name(&mut self) -> Expression {
-        Expression::Name(self.advance())
     }
 
     #[cold]
@@ -254,7 +201,7 @@ impl Parser<'_> {
             return prefix;
         }
         if !self.enter_wrapper(level) {
-            return self.refuse_suffixes(prefix.span(), level);
+            return Expression::Error(prefix.span());
         }
         let first = self.parse_suffix();
         let start = self.suffixes.len();
@@ -268,16 +215,8 @@ impl Parser<'_> {
         Expression::Suffixed(Box::new(SuffixedExpression { span, prefix, suffixes }))
     }
 
-    #[cold]
-    #[inline(never)]
-    fn refuse_suffixes(&mut self, start: Span, level: usize) -> Expression {
-        self.refuse_wrapper(level);
-        self.skip_suffixes();
-        Expression::Error(start.merge(self.previous_span))
-    }
-
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token ends the run")]
-    pub(super) const fn is_at_suffix(&self) -> bool {
+    const fn is_at_suffix(&self) -> bool {
         match self.peek() {
             TokenKind::Less => self.is_at_type_instantiation(),
             TokenKind::Dot
@@ -314,18 +253,18 @@ impl Parser<'_> {
                 let close = self.expect_closer(&TokenKind::RightBracket, Closer::Bracket);
                 Suffix::Index { span: open.merge(close), index }
             }
-            TokenKind::Colon => self.parse_method_suffix(),
+            TokenKind::Colon => {
+                self.advance_span();
+                let name = self.expect_identifier_recover();
+                let explicit_type_args = self
+                    .is_at_type_instantiation()
+                    .then(|| Box::new(self.parse_type_instantiation().0));
+                let args = self.parse_function_args();
+                let call = MethodCall { name, explicit_type_args, args };
+                Suffix::Call(CallSuffix::Method(Box::new(call)))
+            }
             _ => Suffix::Call(CallSuffix::Plain(self.parse_function_args())),
         }
-    }
-
-    fn parse_method_suffix(&mut self) -> Suffix {
-        self.advance_span();
-        let name = self.expect_identifier_recover();
-        let explicit_type_args =
-            self.is_at_type_instantiation().then(|| Box::new(self.parse_type_instantiation().0));
-        let args = self.parse_function_args();
-        Suffix::Call(CallSuffix::Method(Box::new(MethodCall { name, explicit_type_args, args })))
     }
 
     const fn is_at_type_instantiation(&self) -> bool {
@@ -344,11 +283,11 @@ impl Parser<'_> {
     }
 
     fn parse_if_expr(&mut self) -> Expression {
-        if !self.can_nest(1) {
-            return self.refuse_expr(ExprTail::Nothing);
+        let if_span = self.current_span();
+        if !self.enter_depth() {
+            return Expression::Error(if_span);
         }
-        let if_span = self.advance_span();
-        self.enter_depth();
+        self.advance_span();
         self.open(Closer::Else);
         let condition = self.parse_expr(0);
         self.expect(&TokenKind::Then);
@@ -356,7 +295,16 @@ impl Parser<'_> {
 
         let mut elseif_clauses = Vec::new();
         while matches!(self.peek(), TokenKind::ElseIf) {
-            elseif_clauses.push(self.parse_elseif_expr_clause());
+            let elseif_span = self.advance_span();
+            let elseif_condition = self.parse_expr(0);
+            self.expect(&TokenKind::Then);
+            let elseif_expr = self.parse_expr(0);
+            let span = elseif_span.merge(elseif_expr.span());
+            elseif_clauses.push(ElseIfExprClause {
+                span,
+                condition: elseif_condition,
+                expr: elseif_expr,
+            });
         }
 
         self.close(Closer::Else);
@@ -374,74 +322,63 @@ impl Parser<'_> {
         }))
     }
 
-    fn parse_elseif_expr_clause(&mut self) -> ElseIfExprClause {
-        let elseif_span = self.advance_span();
-        let condition = self.parse_expr(0);
-        self.expect(&TokenKind::Then);
-        let expr = self.parse_expr(0);
-        ElseIfExprClause { span: elseif_span.merge(expr.span()), condition, expr }
-    }
-
     fn parse_interpolated_string(&mut self) -> Expression {
-        if !self.can_nest(1) {
-            return Expression::Error(self.refuse_group());
+        let start_span = self.current_span();
+        if !self.enter_depth() {
+            return Expression::Error(start_span);
         }
         let begin_token = self.advance();
-        let start_span = begin_token.span;
         let mut segments = Vec::new();
-        self.enter_depth();
         self.open(Closer::StringSegment);
-        let interpolated = self.parse_interpolated_segments(begin_token, &mut segments);
+        // A plain string lexes as an empty `InterpolatedStringBegin` and an
+        // `InterpolatedStringEnd` that lies inside it, where a `{}` puts the
+        // end past it.
+        if matches!(self.peek(), TokenKind::InterpolatedStringEnd(_))
+            && self.current.span.end <= begin_token.span.end
+        {
+            segments.push(InterpolatedStringSegment { literal: begin_token, expr: None });
+        } else {
+            self.parse_interpolated_hole(begin_token, &mut segments);
+            while matches!(self.peek(), TokenKind::InterpolatedStringMiddle(_)) {
+                let middle_token = self.advance();
+                self.parse_interpolated_hole(middle_token, &mut segments);
+            }
+        }
+        let end_span = if matches!(self.peek(), TokenKind::InterpolatedStringEnd(_)) {
+            let end_token = self.advance();
+            let span = end_token.span;
+            segments.push(InterpolatedStringSegment { literal: end_token, expr: None });
+            span
+        } else {
+            self.report_unfinished_interpolated_string()
+        };
         self.close(Closer::StringSegment);
         self.exit_depth();
-        let span = start_span.merge(interpolated);
+        let span = start_span.merge(end_span);
         Expression::InterpolatedString(Box::new(InterpolatedString { span, segments }))
     }
 
-    /// Fills `segments` and returns the span of the last token read.
-    fn parse_interpolated_segments(
-        &mut self,
-        begin_token: Token,
-        segments: &mut Vec<InterpolatedStringSegment>,
-    ) -> Span {
-        if matches!(self.peek(), TokenKind::InterpolatedStringEnd(_)) {
-            return self.parse_holeless_interpolated_string(begin_token, segments);
-        }
-        self.parse_interpolated_hole(begin_token, segments);
-        while matches!(self.peek(), TokenKind::InterpolatedStringMiddle(_)) {
-            let middle_token = self.advance();
-            self.parse_interpolated_hole(middle_token, segments);
-        }
-        if !matches!(self.peek(), TokenKind::InterpolatedStringEnd(_)) {
-            return self.report_unfinished_interpolated_string();
-        }
-        let end_token = self.advance();
-        let span = end_token.span;
-        segments.push(InterpolatedStringSegment { literal: end_token, expr: None });
-        span
-    }
-
+    /// The expression after `literal`, whose last byte is the `{` that opens
+    /// it. A `{}` with none has its `}` at the current token.
     fn parse_interpolated_hole(
         &mut self,
         literal: Token,
         segments: &mut Vec<InterpolatedStringSegment>,
     ) {
-        let expr = Some(self.parse_expr(0));
-        segments.push(InterpolatedStringSegment { literal, expr });
-    }
-
-    fn parse_holeless_interpolated_string(
-        &mut self,
-        begin_token: Token,
-        segments: &mut Vec<InterpolatedStringSegment>,
-    ) -> Span {
-        // A plain string lexes as an empty `InterpolatedStringBegin` and an
-        // `InterpolatedStringEnd`, and so does `{}`, which the lexer reports.
-        let end_token = self.advance();
-        segments.push(InterpolatedStringSegment { literal: begin_token, expr: None });
-        let span = end_token.span;
-        segments.push(InterpolatedStringSegment { literal: end_token, expr: None });
-        span
+        let expr = if matches!(
+            self.peek(),
+            TokenKind::InterpolatedStringMiddle(_) | TokenKind::InterpolatedStringEnd(_)
+        ) {
+            let span = Span::new(
+                literal.span.end.saturating_sub(1),
+                self.current.span.start.saturating_add(1),
+            );
+            self.error(span, "malformed interpolated string: expected expression inside `{}`");
+            Expression::Error(span)
+        } else {
+            self.parse_expr(0)
+        };
+        segments.push(InterpolatedStringSegment { literal, expr: Some(expr) });
     }
 
     #[cold]
@@ -459,10 +396,34 @@ impl Parser<'_> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_function_args(&mut self) -> FunctionArgs {
         match self.peek() {
-            TokenKind::LeftParen => self.parse_parenthesized_args(),
-            TokenKind::LeftBrace if !self.can_nest(1) => FunctionArgs::Error(self.refuse_group()),
+            TokenKind::LeftParen => {
+                // 5.1 and Luau reject a call whose `(` starts on a new line
+                // ("ambiguous syntax: function call x new statement"); 5.2+
+                // dropped the restriction.
+                if self.version.has_ambiguous_call_newline_error()
+                    && self.has_newline_before_current()
+                {
+                    let span = self.current_span();
+                    self.error(
+                        span,
+                        "ambiguous syntax (function call x new statement): put `(` on the same line",
+                    );
+                }
+                let open = self.advance_span();
+                self.open(Closer::Paren);
+                let args = if matches!(self.peek(), TokenKind::RightParen) {
+                    Punctuated::empty()
+                } else {
+                    self.parse_expr_list()
+                };
+                let close = self.expect_closer(&TokenKind::RightParen, Closer::Paren);
+                FunctionArgs::Parenthesized { span: open.merge(close), args }
+            }
             TokenKind::LeftBrace => {
-                FunctionArgs::TableConstructor(Box::new(self.parse_table_constructor()))
+                let open = self.current_span();
+                self.parse_table_constructor().map_or(FunctionArgs::Error(open), |table| {
+                    FunctionArgs::TableConstructor(Box::new(table))
+                })
             }
             TokenKind::StringLiteral(_) => FunctionArgs::StringLiteral(self.advance_literal()),
             _ => {
@@ -473,32 +434,7 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_parenthesized_args(&mut self) -> FunctionArgs {
-        // 5.1 and Luau reject a call whose `(` starts on a new line
-        // ("ambiguous syntax: function call x new statement"); 5.2+
-        // dropped the restriction.
-        if self.version.has_ambiguous_call_newline_error() && self.has_newline_before_current() {
-            let span = self.current_span();
-            self.error(
-                span,
-                "ambiguous syntax (function call x new statement): put `(` on the same line",
-            );
-        }
-        let open = self.advance_span();
-        self.open(Closer::Paren);
-        let args = if matches!(self.peek(), TokenKind::RightParen) {
-            Punctuated::empty()
-        } else {
-            self.parse_expr_list()
-        };
-        let close = self.expect_closer(&TokenKind::RightParen, Closer::Paren);
-        FunctionArgs::Parenthesized { span: open.merge(close), args }
-    }
-
     fn parse_function_def(&mut self) -> Expression {
-        if !self.can_nest_function() {
-            return self.refuse_expr(ExprTail::Nothing);
-        }
         let attributes = self.parse_function_attributes();
         let start_span =
             attributes.first().map_or_else(|| self.current_span(), |attribute| attribute.span);
@@ -508,15 +444,19 @@ impl Parser<'_> {
             return Expression::Error(span);
         }
         self.advance_span(); // `function`
-        let body = self.parse_function_body();
+        let Some(body) = self.parse_function_body() else {
+            return Expression::Error(start_span);
+        };
         let span = start_span.merge(body.span);
         Expression::FunctionDef(Box::new(FunctionDef { span, attributes, body }))
     }
 
-    /// The caller has checked that the table fits.
-    pub(super) fn parse_table_constructor(&mut self) -> TableConstructor {
+    /// `None` when the table would pass the depth cap.
+    pub(super) fn parse_table_constructor(&mut self) -> Option<TableConstructor> {
+        if !self.enter_depth() {
+            return None;
+        }
         let start_span = self.advance_span(); // `{`
-        self.enter_depth();
         self.open(Closer::Brace);
 
         let mut fields = Punctuated::empty();
@@ -551,41 +491,33 @@ impl Parser<'_> {
         let close = self.expect_closer(&TokenKind::RightBrace, Closer::Brace);
         let span = start_span.merge(close);
 
-        TableConstructor { span, fields }
+        Some(TableConstructor { span, fields })
     }
 
     fn parse_field(&mut self) -> Field {
         // `[expr] = expr`
         if matches!(self.peek(), TokenKind::LeftBracket) {
-            return self.parse_bracketed_field();
+            let open = self.advance_span();
+            self.open(Closer::Bracket);
+            let key = self.parse_expr(0);
+            self.expect_closer(&TokenKind::RightBracket, Closer::Bracket);
+            self.expect(&TokenKind::Equal);
+            let value = self.parse_expr(0);
+            let span = open.merge(value.span());
+            return Field::Bracketed { span, key, value };
         }
 
         // `Name = expr`, which needs one token of lookahead for the `=`.
         if self.is_at_identifier() && matches!(self.peek_next(), TokenKind::Equal) {
-            return self.parse_named_field();
+            let name = self.advance();
+            self.advance_span();
+            let value = self.parse_expr(0);
+            let span = name.span.merge(value.span());
+            return Field::Named { span, name, value };
         }
 
         let value = self.parse_expr(0);
         let span = value.span();
         Field::Positional { span, value }
-    }
-
-    fn parse_bracketed_field(&mut self) -> Field {
-        let open = self.advance_span();
-        self.open(Closer::Bracket);
-        let key = self.parse_expr(0);
-        self.expect_closer(&TokenKind::RightBracket, Closer::Bracket);
-        self.expect(&TokenKind::Equal);
-        let value = self.parse_expr(0);
-        let span = open.merge(value.span());
-        Field::Bracketed { span, key, value }
-    }
-
-    fn parse_named_field(&mut self) -> Field {
-        let name = self.advance();
-        self.advance_span();
-        let value = self.parse_expr(0);
-        let span = name.span.merge(value.span());
-        Field::Named { span, name, value }
     }
 }

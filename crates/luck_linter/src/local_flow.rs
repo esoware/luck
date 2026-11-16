@@ -1,7 +1,7 @@
 use core::mem;
 
 use luck_semantic::{ReferenceId, ReferenceKind, Symbol, SymbolId, SymbolKind};
-use luck_token::Span;
+use luck_token::{MAX_ACTIVE_LOCALS, Span};
 
 use crate::cfg::{FlowGraph, LocalDeclaration};
 use crate::rule::LintContext;
@@ -122,10 +122,6 @@ impl LocalFlow {
         }
     }
 }
-
-/// Locals active at once in one function: `MAXVARS` in PUC Lua and
-/// `kMaxLocalCount` in Luau.
-const MAX_ACTIVE_LOCALS: usize = 200;
 
 /// Whether more `local` names are active at once somewhere in the function
 /// than any Lua compiles.

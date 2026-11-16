@@ -394,7 +394,7 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
                         self.insert(name.name.span, TYPE_FUNCTION);
                     }
                     // Lua 5.4+: a to-be-closed local can't be assigned either.
-                    let is_read_only = assignment.is_const
+                    let is_read_only = assignment.kind.is_const()
                         || name.attribute.as_ref().is_some_and(|attribute| {
                             matches!(attribute.name.identifier(), Some("const" | "close"))
                         });

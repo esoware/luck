@@ -38,10 +38,10 @@ impl CompactPrinter {
     }
 
     pub(super) fn emit_local_assignment(&mut self, local_assignment: &LocalAssignment) {
-        if local_assignment.is_exported {
+        if local_assignment.kind.is_exported() {
             self.emit_fixed("export");
         }
-        self.emit_fixed(if local_assignment.is_const { "const" } else { "local" });
+        self.emit_fixed(if local_assignment.kind.is_const() { "const" } else { "local" });
         self.emit_punctuated(&local_assignment.names, ",", Self::emit_attributed_name);
         if let Some(exprs) = &local_assignment.exprs {
             self.emit_fixed("=");

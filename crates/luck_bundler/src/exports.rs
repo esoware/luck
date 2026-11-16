@@ -50,7 +50,7 @@ impl ExportPlan {
         let mut table_exports: Vec<&Symbol> = Vec::new();
         for stmt in &block.stmts {
             let (span, symbols): (Span, Vec<&Symbol>) = match stmt {
-                Statement::LocalAssignment(local) if local.is_exported => (
+                Statement::LocalAssignment(local) if local.kind.is_exported() => (
                     local.span,
                     local
                         .names
@@ -114,7 +114,7 @@ impl ExportPlan {
 /// export table.
 pub(crate) fn has_value_exports(block: &Block) -> bool {
     block.stmts.iter().any(|stmt| match stmt {
-        Statement::LocalAssignment(local) => local.is_exported,
+        Statement::LocalAssignment(local) => local.kind.is_exported(),
         Statement::LocalFunction(function) => function.kind.is_exported(),
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
@@ -165,7 +165,7 @@ pub(crate) fn lower_exports_in_text(
             Statement::TypeDeclaration(type_declaration) if type_declaration.is_exported => {
                 edits.push((export_keyword_span(type_declaration.span), String::new()));
             }
-            Statement::LocalAssignment(local) if local.is_exported => {
+            Statement::LocalAssignment(local) if local.kind.is_exported() => {
                 edits.push(lowering.local_edit(local, plan.is_table_statement(local.span)));
             }
             Statement::LocalFunction(function) if function.kind.is_exported() => {

@@ -110,7 +110,8 @@ pub enum FunctionArgs {
     },
     TableConstructor(Box<TableConstructor>),
     StringLiteral(Literal),
-    /// Arguments the parser found missing or refused at the depth cap.
+    /// Arguments the parser found missing, or a table argument the depth cap
+    /// stopped.
     Error(Span),
 }
 
