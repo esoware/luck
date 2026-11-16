@@ -247,6 +247,11 @@ mod tests {
             assert_eq!(expr_nesting_depth(&run), 1);
             assert_eq!(return_depth(run), 2);
         }
+        let mut optional = synth.ty_named("T");
+        for _ in 0..300u32 {
+            optional = synth.ty_optional(optional);
+        }
+        assert_eq!(type_nesting_depth(&optional), 1);
     }
 
     #[test]

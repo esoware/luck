@@ -6,7 +6,6 @@ use core::mem;
 use luck_token::Span;
 
 use crate::expr::{Expression, Field, FunctionArgs, Suffix, Var};
-use crate::punctuated::Punctuated;
 use crate::stmt::{Block, LastStatement, Statement};
 use crate::types::{Type, TypeField};
 
@@ -143,17 +142,17 @@ impl FunctionArgs {
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::Parenthesized { span, .. } => *span,
+            Self::Parenthesized { span, .. } | Self::Error(span) => *span,
             Self::TableConstructor(table) => table.span,
             Self::StringLiteral(literal) => literal.span,
         }
     }
 
-    /// Moves the value out of a `&mut` and leaves an empty list behind, as
-    /// [`Expression::take`] does.
+    /// Moves the value out of a `&mut` and leaves an error placeholder
+    /// behind, as [`Expression::take`] does.
     #[must_use]
     pub fn take(&mut self) -> Self {
-        mem::replace(self, Self::Parenthesized { span: Span::default(), args: Punctuated::empty() })
+        mem::replace(self, Self::Error(Span::default()))
     }
 }
 

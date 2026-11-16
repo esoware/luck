@@ -1,3 +1,5 @@
+use core::num::NonZeroU32;
+
 use luck_token::{Token, TokenKind, encode_string};
 
 use crate::expr::Expression;
@@ -89,11 +91,18 @@ impl Synth {
         }
     }
 
+    /// An `inner` that is already optional gains one more `?`, as `T??`
+    /// reads back.
     #[must_use]
     pub fn ty_optional(&self, inner: Type) -> Type {
+        if let Type::Optional(mut optional) = inner {
+            optional.question_count = optional.question_count.saturating_add(1);
+            return Type::Optional(optional);
+        }
         Type::Optional(Box::new(OptionalType {
             span: self.next_span(),
             type_value: self.parenthesize_if_composite(inner),
+            question_count: NonZeroU32::MIN,
         }))
     }
 
@@ -385,6 +394,20 @@ mod tests {
         assert!(function.generics.is_some());
         assert!(function.params.first().unwrap().name.is_some());
         assert!(matches!(function.return_type, Type::Pack(_)));
+    }
+
+    #[test]
+    fn ty_optional_joins_the_run_of_an_optional() {
+        let synth = Synth::new();
+        let Type::Optional(once) = synth.ty_optional(synth.ty_named("T")) else {
+            panic!("expected an optional");
+        };
+        assert_eq!(once.question_count.get(), 1);
+        let Type::Optional(twice) = synth.ty_optional(Type::Optional(once)) else {
+            panic!("expected an optional");
+        };
+        assert_eq!(twice.question_count.get(), 2);
+        assert!(matches!(twice.type_value, Type::Name { .. }));
     }
 
     #[test]

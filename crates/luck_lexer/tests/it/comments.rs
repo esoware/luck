@@ -38,12 +38,56 @@ fn block_comment_closes_at_its_own_level() {
     assert_eq!(result.comments[0].span, Span::new(2, 20));
 }
 
+/// A block comment with no closer is an error and still a comment, through
+/// the end of the source, and is listed as cut off.
 #[test]
-fn unterminated_block_comment_is_error() {
-    let result = lex_lua51("--[[ oops");
-    assert_ne!(result.errors, Vec::<SourceError>::new());
-    assert!(result.errors[0].message.contains("unterminated"));
-    assert_eq!(result.comments, Vec::<Comment>::new());
+fn unterminated_block_comment_is_a_comment_to_the_end_of_the_source() {
+    for (source, start, kind, position) in [
+        ("--[[ oops", 0, CommentKind::SingleLineBlock, CommentPosition::Leading),
+        ("x = 1 --[==[ oops ]]", 6, CommentKind::SingleLineBlock, CommentPosition::Trailing),
+        (
+            "\
+x = 1
+--[[ oops
+y = 2
+",
+            6,
+            CommentKind::MultiLineBlock,
+            CommentPosition::Leading,
+        ),
+    ] {
+        let result = lex_lua51(source);
+        let span = Span::from_indices(start, source.len());
+        let eof = result.tokens.last().expect("an EOF token");
+        let attached_to = match position {
+            CommentPosition::Leading => eof.span.start,
+            CommentPosition::Trailing => 4,
+        };
+        assert_eq!(
+            result.errors,
+            [SourceError { span, message: "unterminated block comment".to_owned() }],
+            "{source:?}"
+        );
+        assert_eq!(
+            result.comments,
+            [Comment {
+                span,
+                attached_to,
+                kind,
+                position,
+                is_preceded_by_newline: position == CommentPosition::Leading,
+                is_followed_by_newline: true,
+            }],
+            "{source:?}"
+        );
+        assert_eq!(result.unterminated, [span], "{source:?}");
+    }
+}
+
+#[test]
+fn terminated_block_comment_is_not_listed_as_cut_off() {
+    let result = lex_lua51("x = [[a]] --[[ b ]]");
+    assert_eq!(result.unterminated, Vec::<Span>::new());
 }
 
 #[test]

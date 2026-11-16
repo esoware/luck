@@ -451,15 +451,7 @@ impl Parser<'_> {
     fn parse_function_args(&mut self) -> FunctionArgs {
         match self.peek() {
             TokenKind::LeftParen => self.parse_parenthesized_args(),
-            // `FunctionArgs` has no error node of its own, so a refused table
-            // stands as an error argument.
-            TokenKind::LeftBrace if !self.can_nest(1) => {
-                let span = self.refuse_group();
-                FunctionArgs::Parenthesized {
-                    span,
-                    args: Punctuated::from_item(Expression::Error(span)),
-                }
-            }
+            TokenKind::LeftBrace if !self.can_nest(1) => FunctionArgs::Error(self.refuse_group()),
             TokenKind::LeftBrace => {
                 FunctionArgs::TableConstructor(Box::new(self.parse_table_constructor()))
             }
@@ -467,7 +459,7 @@ impl Parser<'_> {
             _ => {
                 let span = self.current_span();
                 self.syntax_error(span, "expected function arguments");
-                FunctionArgs::Parenthesized { span, args: Punctuated::empty() }
+                FunctionArgs::Error(span)
             }
         }
     }

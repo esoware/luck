@@ -19,7 +19,7 @@ Each AST node's emitter is an `impl Format`, composing combinators (`group`, `in
 - **Fill mode.** A table of positional literals and variables packs entries greedily onto lines instead of one per line.
 - **Blank lines in tables.** A blank line between two fields is kept, as one between statements is, and breaks the table. A packed list stays packed on either side of it. The lines right inside the braces take none.
 - **Range formatting.** `format_range` formats only the statements overlapping a byte range, or those of the innermost nested block holding the whole range, and copies every other byte as it was, line endings included. This is what an editor's "format selection" calls.
-- **Luau type annotations.** Luau type syntax formats from the `Type` AST, with group-based line breaking. A union or intersection that opens an array field with no access modifier keeps its leading `|` or `&` even when flat if its first member starts with `read` or `write`, which would otherwise read back as the field's access modifier.
+- **Luau type annotations.** Luau type syntax formats from the `Type` AST, with group-based line breaking. A union or intersection that breaks gives each member a line and a leading `|` or `&`: one indent deeper on the lines after the text it follows, such as `type T =` or `name:`, or, as an array field or an unnamed item of a type list, on the line the table or the list opens for it. A union or intersection that opens an array field with no access modifier keeps its leading `|` or `&` even when flat if its first member starts with `read` or `write`, which would otherwise read back as the field's access modifier.
 
 ## Architecture
 

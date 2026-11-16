@@ -238,6 +238,7 @@ fn arg_texts<'source>(function_args: &FunctionArgs, source: &'source str) -> Vec
         }
         FunctionArgs::StringLiteral(literal) => vec![literal.span.text(source)],
         FunctionArgs::TableConstructor(table) => vec![table.span.text(source)],
+        FunctionArgs::Error(_) => Vec::new(),
     }
 }
 

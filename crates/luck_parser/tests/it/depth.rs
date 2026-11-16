@@ -1,9 +1,9 @@
 use core::ops::Range;
 
-use luck_ast::{MAX_NESTING_DEPTH, Statement, Visitor, block_nesting_depth};
+use luck_ast::{Call, FunctionArgs, MAX_NESTING_DEPTH, Statement, Visitor, block_nesting_depth};
 use luck_parser::parse;
 use luck_testgen::generate_full_embeddable;
-use luck_token::LuaVersion;
+use luck_token::{LuaVersion, Span};
 
 #[test]
 fn depth_cap_is_the_same_in_every_dialect() {
@@ -33,9 +33,10 @@ fn parens_past_the_depth_cap_are_an_error() {
     assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
 }
 
-/// Stock Lua loops over left-associative operators and suffixes, so a run of
-/// them is valid there however long it gets. Here each run is one level of
-/// nesting, and so is a right-associative one.
+/// Stock Lua loops over left-associative operators and suffixes, and Luau
+/// over a type's `?`s, so a run of them is valid there however long it gets.
+///
+/// Here each run is one level of nesting, and so is a right-associative one.
 #[test]
 fn a_run_of_any_length_is_one_level() {
     for (version, source) in [
@@ -54,6 +55,7 @@ fn a_run_of_any_length_is_one_level() {
         (LuaVersion::Lua54, format!("f{}", "()".repeat(200_000))),
         (LuaVersion::Luau, format!("return f{}", "<<T>>".repeat(200_000))),
         (LuaVersion::Luau, format!("a{} += 1", "[1]".repeat(200_000))),
+        (LuaVersion::Luau, format!("type X = T{}", "?".repeat(200_000))),
     ] {
         let result = parse(&source, version);
         assert!(result.errors.is_empty(), "{:?}: {:?}", source.get(..20), result.errors.first());
@@ -115,13 +117,6 @@ fn nested_attribute_arguments_count_toward_the_depth_cap() {
     let source = format!("return {}1{}", "@[deprecated(".repeat(300), ")]".repeat(300));
     let result = parse(&source, LuaVersion::Luau);
     assert!(has_depth_limit_error(&result), "attribute nesting past the cap must report the limit");
-}
-
-#[test]
-fn long_optional_type_chain_reports_the_depth_cap() {
-    let source = format!("type X = number{}", "?".repeat(200_000));
-    let result = parse(&source, LuaVersion::Luau);
-    assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
 }
 
 /// A construct nested `wraps` times, and how deep that makes the tree.
@@ -207,7 +202,6 @@ fn shapes() -> Vec<Shape> {
         luau("instantiations over parentheses", 2, 1, |n| {
             format!("return {}f{}{}", "(".repeat(n), ")".repeat(n), "<<T>>".repeat(300))
         }),
-        luau("optional types", 1, 1, |n| format!("type X = T{}", "?".repeat(n))),
         luau("table types", 1, 1, |n| format!("type X = {}T{}", "{".repeat(n), "}".repeat(n))),
         luau("parenthesized types", 1, 1, |n| {
             format!("type X = {}T{}", "(".repeat(n), ")".repeat(n))
@@ -227,8 +221,8 @@ fn shapes() -> Vec<Shape> {
             format!("type X = {}T{}", "(A & ".repeat(n), ")".repeat(n))
         }),
         luau("variadic return types", 1, 2, |n| format!("type X = {}T", "() -> ...".repeat(n))),
-        luau("optional over a table type", 101, 1, |n| {
-            format!("type X = {}T{}{}", "{".repeat(100), "}".repeat(100), "?".repeat(n))
+        luau("optionals over table types", 2, 1, |n| {
+            format!("type X = {}T{}{}", "{".repeat(n), "}".repeat(n), "?".repeat(300))
         }),
         luau("table type beside a shallower union member", 2, 1, |n| {
             format!(
@@ -298,7 +292,7 @@ fn a_run_counts_once_from_its_first_operand() {
         let result = parse(source, LuaVersion::Lua54);
         assert!(has_depth_limit_error(&result), "{label}: {:?}", result.errors.first());
     }
-    let optionals = format!("type X = {}T{}{}", "{".repeat(254), "}".repeat(254), "?".repeat(255));
+    let optionals = format!("type X = {}T{}{}", "{".repeat(255), "}".repeat(255), "?".repeat(255));
     assert!(has_depth_limit_error(&parse(optionals, LuaVersion::Luau)));
 
     let later_operand =
@@ -345,7 +339,7 @@ fn a_tree_with_errors_stays_within_the_cap() {
         format!("type X = {}", "{".repeat(5000)),
         format!("type X = {}T", "() -> ".repeat(5000)),
         format!("type X = {}T", "A<".repeat(5000)),
-        format!("type X = T{}", "?".repeat(5000)),
+        format!("type X = {}T{}{}", "{".repeat(255), "}".repeat(255), "?".repeat(5000)),
     ];
     let sources = lua.into_iter().map(|source| (LuaVersion::Lua54, source));
     for (version, source) in
@@ -532,6 +526,37 @@ fn a_construct_past_the_cap_is_one_error_at_its_opener() {
         (over_a_type_at_the_cap, luau, " & U | V", "&"),
     ];
     assert_one_error_at_the_opener(cases);
+}
+
+struct ErrorArgs(Vec<Span>);
+
+impl<'ast> Visitor<'ast> for ErrorArgs {
+    fn visit_call(&mut self, call: Call<'ast>) {
+        if let FunctionArgs::Error(span) = call.args {
+            self.0.push(*span);
+        }
+        self.walk_call(call);
+    }
+}
+
+/// The call fits and its table doesn't, so the arguments are an error node
+/// over the table, not a list luck made up.
+#[test]
+fn a_table_argument_past_the_cap_is_an_error_argument() {
+    for construct in ["f{a = {1}}", "a:m{a = {1}}"] {
+        let (prefix, source) = under_the_cap_in_an_expression(construct);
+        let result = parse(source.as_str(), LuaVersion::Lua54);
+        let [error] = result.errors.as_slice() else {
+            panic!("{construct}: {:?}", result.errors);
+        };
+        assert!(error.message.contains("luck parser resource limit"), "{construct}: {error:?}");
+        let table_start = prefix.len() + construct.find('{').expect("the table opens");
+        let table = Span::from_indices(table_start, prefix.len() + construct.len());
+        assert_eq!(error.span.text(&source), "{", "{construct}");
+        let mut error_args = ErrorArgs(Vec::new());
+        error_args.visit_block(&result.block);
+        assert_eq!(error_args.0, [table], "{construct}");
+    }
 }
 
 /// A skipped construct ends where parsing it would have, broken or not.

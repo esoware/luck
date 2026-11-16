@@ -1,6 +1,6 @@
 use core::ops::Range;
 
-use luck_ast::{LastStatement, Statement};
+use luck_ast::{Expression, FunctionArgs, LastStatement, Statement};
 use luck_parser::ParseResult;
 use luck_token::LuaVersion;
 
@@ -220,6 +220,63 @@ end",
         (luau, "local x: A<B = 1", "expected `>` to close generics, found `=`", "="),
         (luau, "type X = {a: number", "expected `}`, found `local`", "local"),
     ]);
+}
+
+/// A block comment with no closer takes the rest of the source, closers
+/// included, so it's the one error and the comment the tree keeps.
+#[test]
+fn an_unterminated_block_comment_is_its_one_error() {
+    for source in [
+        "\
+local t = {
+  1, --[[ note
+}",
+        "\
+if x then --[[ note
+end",
+        "local x = --[[ note",
+        "\
+f(a, --[==[ note ]]
+)",
+        "\
+do
+  --[[ note
+end",
+    ] {
+        let result = parse(source);
+        let cut_off =
+            source.find("--").and_then(|start| source.get(start..)).expect("a comment opener");
+        let errors: Vec<(&str, &str)> =
+            result.errors.iter().map(|e| (e.message.as_str(), e.span.text(source))).collect();
+        assert_eq!(errors, [("unterminated block comment", cut_off)], "{source:?}");
+        let comments: Vec<&str> =
+            result.comments.iter().map(|comment| comment.span.text(source)).collect();
+        assert_eq!(comments, [cut_off], "{source:?}");
+    }
+}
+
+/// A method call with nothing to call it with has error arguments, at the
+/// token found in their place.
+#[test]
+fn a_method_call_without_arguments_has_error_arguments() {
+    let source = "\
+x = a:b
+local after = 1";
+    let result = parse(source);
+    let errors: Vec<(&str, &str)> =
+        result.errors.iter().map(|e| (e.message.as_str(), e.span.text(source))).collect();
+    assert_eq!(errors, [("expected function arguments", "local")]);
+    let Some(Statement::Assignment(assignment)) = result.block.stmts.first() else {
+        panic!("{:?}", result.block.stmts);
+    };
+    let Some(Expression::Suffixed(chain)) = assignment.values.first() else {
+        panic!("{:?}", assignment.values);
+    };
+    let call = chain.last_call().expect("the chain ends in the call");
+    let FunctionArgs::Error(span) = call.args else {
+        panic!("{:?}", call.args);
+    };
+    assert_eq!(span.text(source), "local");
 }
 
 /// Each construct left open at the end of the file is the one error there.

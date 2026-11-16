@@ -118,7 +118,7 @@ impl Transform for ParenSimplifier {
                 *table = self.walk_table_constructor(*table);
                 FunctionArgs::TableConstructor(table)
             }
-            literal @ FunctionArgs::StringLiteral(_) => literal,
+            leaf @ (FunctionArgs::StringLiteral(_) | FunctionArgs::Error(_)) => leaf,
         }
     }
 

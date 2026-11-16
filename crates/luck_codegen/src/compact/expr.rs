@@ -114,6 +114,7 @@ impl CompactPrinter {
             FunctionArgs::StringLiteral(literal) => {
                 self.emit_piece(&literal.text, PieceClass::Other);
             }
+            FunctionArgs::Error(_) => {}
         }
     }
 

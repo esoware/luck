@@ -219,6 +219,6 @@ fn is_single_string_arg(call_args: &FunctionArgs) -> bool {
             args.len() == 1 && matches!(args.first(), Some(Expression::StringLiteral(_)))
         }
         FunctionArgs::StringLiteral(_) => true,
-        FunctionArgs::TableConstructor(_) => false,
+        FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => false,
     }
 }

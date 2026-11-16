@@ -46,7 +46,7 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
             literal
         }
         FunctionArgs::StringLiteral(literal) => literal,
-        FunctionArgs::TableConstructor(_) => return None,
+        FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => return None,
     };
     // Escapes stay as written. Long-bracket strings give `None`; module paths
     // rarely use them.

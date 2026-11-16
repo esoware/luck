@@ -724,3 +724,46 @@ fn multiline_require_keeps_its_lone_cr_line_breaks() {
         result.output
     );
 }
+
+/// A module that holds the default prefix moves every generated name to
+/// another, in the tree as in the text.
+#[test]
+fn a_module_holding_the_default_prefix_moves_the_loader_in_both_forms() {
+    let lua = bundle_files(
+        &[
+            (
+                "main.lua",
+                b"\
+local __luck_require = 1
+local util = require(\"util\")
+local name = \"util\"
+print(__luck_require, util, require(name))
+",
+            ),
+            ("util.lua", RETURN_ONE),
+        ],
+        "main.lua",
+        LuaVersion::Lua51,
+    );
+    for loader_function in ["require", "dynamic"] {
+        let declaration = format!("local function __luck1_{loader_function}(name)");
+        assert!(lua.output.contains(&declaration), "{}", lua.output);
+    }
+
+    let luau = bundle_files(
+        &[
+            (
+                "main.luau",
+                b"\
+local __luck_modules = 1
+local util = require(\"./util\")
+print(__luck_modules, util.value)
+",
+            ),
+            ("util.luau", b"export local value = 1\n"),
+        ],
+        "main.luau",
+        LuaVersion::Luau,
+    );
+    assert!(luau.output.contains("local function __luck1_exporting(id,body)"), "{}", luau.output);
+}

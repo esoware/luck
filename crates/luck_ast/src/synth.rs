@@ -116,9 +116,9 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 /// - **Nesting depth.** No constructor counts it. Every traversal, drop and
 ///   clone included, recurses once per level of nesting, so keep the tree
 ///   within [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH), the deepest
-///   `luck_parser` builds. A run of suffixes, or of binary operators at one
-///   level, is one level however long it gets, and the constructors join a
-///   run they extend rather than nest it.
+///   `luck_parser` builds. A run of suffixes, of binary operators at one
+///   level, or of `?`s on a type is one level however long it gets, and the
+///   constructors join a run they extend rather than nest it.
 ///   [`block_nesting_depth`](crate::block_nesting_depth) and
 ///   [`expr_nesting_depth`](crate::expr_nesting_depth) measure a tree of any
 ///   depth without recursing past the cap. Both printers return an error for

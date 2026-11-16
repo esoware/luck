@@ -30,6 +30,7 @@ pub(crate) const fn positional_args(function_args: &FunctionArgs) -> (&[Expressi
     match function_args {
         FunctionArgs::Parenthesized { args, .. } => (args.items.as_slice(), args.len()),
         FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => (&[], 1),
+        FunctionArgs::Error(_) => (&[], 0),
     }
 }
 

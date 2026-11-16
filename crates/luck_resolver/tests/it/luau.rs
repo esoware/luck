@@ -411,6 +411,37 @@ fn requiring_file_with_same_named_directory_is_ambiguous() {
     assert_eq!(error.code, "E007");
 }
 
+// `VfsNavigator::resetToPath` drops the requiring file's extension, so
+// `main.luau` beside `main.lua` is as ambiguous as either required by name.
+#[test]
+fn requiring_file_with_both_extensions_is_ambiguous() {
+    let project = luau_project();
+    write_files(
+        project.path(),
+        &[("src/main.lua", "return {}"), ("src/.luaurc", r#"{"aliases":{"here":"."}}"#)],
+    );
+    let expected_help = format!(
+        "ambiguity: both `{}` and `{}` exist, so remove one of the conflicting files",
+        normalized(&project, "src/main.luau"),
+        normalized(&project, "src/main.lua")
+    );
+    for module in ["./utils", "@here/utils", "@self/utils"] {
+        let error = resolve_luau(&project, "src/main.luau", module)
+            .expect_err("a requiring file with both extensions must be ambiguous");
+        assert_eq!(error.code, "E007", "{module}");
+        assert_eq!(error.help.as_deref(), Some(expected_help.as_str()), "{module}");
+    }
+}
+
+// `navigateImpl` rejects the prefix before it resets to the requiring module.
+#[test]
+fn unprefixed_require_from_an_ambiguous_file_reports_the_prefix() {
+    let project = luau_project();
+    write_files(project.path(), &[("src/main.lua", "return {}")]);
+    let error = resolve_luau(&project, "src/main.luau", "utils").expect_err("unprefixed");
+    assert_eq!(error.code, "E004");
+}
+
 #[test]
 fn relative_require_accepts_backslash_separators() {
     let project = luau_project();

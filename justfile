@@ -15,7 +15,7 @@ init:
   npm ci --prefix editors/vscode
   cargo install --locked cargo-nextest@0.9.151 cargo-insta@1.49.0 cargo-deny@0.20.2 cargo-shear@1.14.0 zizmor@1.32.0
 
-# Run fmt, clippy, rustdoc, the fuzz crate's check, cargo-shear, zizmor, the extension's type check and oxlint, the tests, the doctests, and cargo-deny
+# Run fmt, clippy, rustdoc, the fuzz crate's check, cargo-shear, zizmor, the extension's type check and oxlint, the tests with the unreferenced-snapshot check, the doctests, and cargo-deny
 ready:
   just fmt
   just lint
@@ -25,7 +25,7 @@ ready:
   zizmor --offline --pedantic .github
   npm run --prefix editors/vscode check
   npm run --prefix editors/vscode lint
-  just test
+  just snapshots
   just doctest
   just deny
   git status
@@ -33,6 +33,10 @@ ready:
 # Run all tests, or narrow them with nextest args like -p luck_parser goto_stmt
 test *args:
   cargo nextest run {{args}}
+
+# Run all tests and fail on an insta snapshot none of them asserts, such as a deleted fixture's
+snapshots:
+  cargo insta test --check --fail-fast --unreferenced reject --test-runner nextest --disable-nextest-doctest
 
 # Run the doctests, which nextest skips
 doctest:

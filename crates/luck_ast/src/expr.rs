@@ -110,6 +110,8 @@ pub enum FunctionArgs {
     },
     TableConstructor(Box<TableConstructor>),
     StringLiteral(Literal),
+    /// Arguments the parser found missing or refused at the depth cap.
+    Error(Span),
 }
 
 /// A run of binary operators that share one precedence level, as one node

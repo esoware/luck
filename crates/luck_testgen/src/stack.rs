@@ -81,8 +81,11 @@ pub fn long_runs() -> Vec<(LuaVersion, String)> {
         format!("a{} = 1", "[x]".repeat(LINKS)),
         format!("f{}", "()".repeat(LINKS)),
     ];
-    let luau =
-        [format!("return f{}", "<<T>>".repeat(LINKS)), format!("a{} += 1", ".b".repeat(LINKS))];
+    let luau = [
+        format!("return f{}", "<<T>>".repeat(LINKS)),
+        format!("a{} += 1", ".b".repeat(LINKS)),
+        format!("type X = T{}", "?".repeat(LINKS)),
+    ];
     lua.into_iter()
         .map(|source| (LuaVersion::Lua54, source))
         .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
@@ -183,7 +186,6 @@ pub fn sources_past_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         format!("type X = {}", wrapped("A<", LEVELS, "T", ">")),
         format!("type X = {}T", "() -> ".repeat(LEVELS)),
         format!("type X = {}T", "() -> ...".repeat(LEVELS)),
-        format!("type X = T{}", "?".repeat(LEVELS)),
         format!("type X = {}", wrapped("typeof(", LEVELS, "x", ")")),
     ];
     lua.into_iter()

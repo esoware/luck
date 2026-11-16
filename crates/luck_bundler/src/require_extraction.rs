@@ -360,7 +360,7 @@ fn literal_require_string(call: Call<'_>, version: LuaVersion) -> Option<String>
             literal
         }
         FunctionArgs::StringLiteral(literal) => literal,
-        FunctionArgs::TableConstructor(_) => return None,
+        FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => return None,
     };
     String::from_utf8(decode_string(&literal.text, version)?.into_owned()).ok()
 }

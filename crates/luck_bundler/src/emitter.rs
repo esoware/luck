@@ -10,7 +10,7 @@ use rustc_hash::FxHashSet;
 use crate::block_emitter::rewrite_module;
 use crate::exports::{ExportPlan, TextLowering, has_value_exports, lower_exports_in_text};
 use crate::graph::DependencyGraph;
-use crate::loader::{dynamic_entry_text, export_runtime_text, loader_text};
+use crate::loader::{DEFAULT_PREFIX, LoaderShape, prelude_text};
 use crate::module::{Dependency, ModuleId, ModuleInfo};
 
 /// `LUAI_MAXUPVALUES` in Lua 5.1.
@@ -66,13 +66,7 @@ pub struct LineMapEntry {
 /// module gains is its own wrapper's.
 pub(crate) struct Plan {
     pub prefix: String,
-    /// True only for a 5.1 bundle with a function that has no upvalue left
-    /// for a local loader.
-    pub is_loader_global: bool,
-    /// Only Lua targets record dynamic callees, so only a Lua loader gets the
-    /// entry point they're retargeted at.
-    pub has_dynamic_entry: bool,
-    pub has_export_runtime: bool,
+    pub loader: LoaderShape,
     /// Luau: each module's numeric slot, by `ModuleId`. `None` on Lua, whose
     /// cache is keyed by require string.
     pub slots: Option<Vec<Option<usize>>>,
@@ -212,12 +206,16 @@ impl Plan {
         let modules = &graph.modules;
         let mut plan = Self {
             prefix: choose_prefix(modules),
-            is_loader_global: modules.iter().any(|module| {
-                module.max_function_upvalues.saturating_add(LOADER_UPVALUES) > LUA51_MAX_UPVALUES
-            }),
-            has_dynamic_entry: modules.iter().any(|module| !module.dynamic_callees.is_empty()),
-            has_export_runtime: version.has_value_exports()
-                && modules.iter().any(|module| has_value_exports(&module.block)),
+            loader: LoaderShape {
+                version,
+                is_loader_global: modules.iter().any(|module| {
+                    module.max_function_upvalues.saturating_add(LOADER_UPVALUES)
+                        > LUA51_MAX_UPVALUES
+                }),
+                has_dynamic_entry: modules.iter().any(|module| !module.dynamic_callees.is_empty()),
+                has_export_runtime: version.has_value_exports()
+                    && modules.iter().any(|module| has_value_exports(&module.block)),
+            },
             slots: None,
             items: Vec::new(),
         };
@@ -458,13 +456,7 @@ pub(crate) fn emit(
         writer.push("\n");
     }
 
-    writer.push(&loader_text(prefix, version, plan.is_loader_global));
-    if plan.has_dynamic_entry {
-        writer.push(&dynamic_entry_text(prefix, plan.is_loader_global));
-    }
-    if plan.has_export_runtime {
-        writer.push(&export_runtime_text(prefix));
-    }
+    writer.push(&prelude_text(prefix, plan.loader));
 
     for item in &plan.items {
         match item {
@@ -637,7 +629,7 @@ fn non_entry_modules(graph: &DependencyGraph) -> impl Iterator<Item = (ModuleId,
 }
 
 fn choose_prefix(modules: &[ModuleInfo]) -> String {
-    let mut candidate = "__luck_".to_owned();
+    let mut candidate = DEFAULT_PREFIX.to_owned();
     let mut counter = 0usize;
     while modules.iter().any(|module| module.source.contains(&candidate)) {
         counter = counter.saturating_add(1);

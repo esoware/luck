@@ -28,21 +28,15 @@ pub(crate) enum TextKind {
 pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
     let comments = &document.parsed.comments;
     let at_offset = comments.get(comments.partition_point(|comment| comment.span.end < offset));
-    let is_in_comment = at_offset.is_some_and(|comment| {
-        let has_room = match comment.kind {
-            CommentKind::Line | CommentKind::Shebang => offset <= comment.span.end,
-            CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => offset < comment.span.end,
-        };
-        comment.span.start < offset && has_room
+    let is_in_comment = at_offset.is_some_and(|comment| match comment.kind {
+        CommentKind::Line | CommentKind::Shebang => {
+            comment.span.start < offset && offset <= comment.span.end
+        }
+        CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => {
+            is_inside(document, comment.span, offset)
+        }
     });
-    // An unterminated block comment is a lex error over its text rather than
-    // a comment, and no other error's text opens with `--`.
-    let is_in_unterminated_comment = document.parsed.errors.iter().any(|e| {
-        e.span.start < offset
-            && offset <= e.span.end
-            && e.span.text(document.text()).starts_with("--")
-    });
-    if is_in_comment || is_in_unterminated_comment {
+    if is_in_comment {
         return TextKind::Comment;
     }
     let tokens = document.tokens();
@@ -59,13 +53,12 @@ pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
     if is_in_string { TextKind::String } else { TextKind::Code }
 }
 
-/// Whether `offset` is inside the string token at `span`: past its first
-/// byte, and before its end unless a line break or the end of the text cut it
-/// off there.
+/// Whether `offset` is inside the string token or block comment at `span`:
+/// past its first byte, and before its end unless a line break or the end of
+/// the text cut it off there.
 fn is_inside(document: &DocumentState, span: Span, offset: u32) -> bool {
     span.start < offset
-        && (offset < span.end
-            || (offset == span.end && document.unterminated_strings().contains(&span)))
+        && (offset < span.end || (offset == span.end && document.unterminated().contains(&span)))
 }
 
 /// The plain-name path `head` ends with (`a.b.c`), root first, and the
@@ -365,7 +358,9 @@ impl<'ast> StringArgFinder<'ast> {
             FunctionArgs::StringLiteral(literal) if self.contains(literal.span) => {
                 Some((0, literal))
             }
-            FunctionArgs::StringLiteral(_) | FunctionArgs::TableConstructor(_) => None,
+            FunctionArgs::StringLiteral(_)
+            | FunctionArgs::TableConstructor(_)
+            | FunctionArgs::Error(_) => None,
         };
         let Some((arg_index, literal)) = site else {
             return;
@@ -440,6 +435,16 @@ y = 1|"#,
             ("x = [[a]]|", LuaTarget::Lua54, vec![Code]),
             ("--[[ a|", LuaTarget::Lua54, vec![Comment]),
             ("--[[ a ]]|", LuaTarget::Lua54, vec![Code]),
+            ("x = 1 |--[==[ a ]]|", LuaTarget::Lua54, vec![Code, Comment]),
+            (
+                "\
+--[[ a
+x = \"b|\"
+|",
+                LuaTarget::Lua54,
+                vec![Comment, Comment],
+            ),
+            ("--[[ a [[ b ]]|", LuaTarget::Lua51, vec![Code]),
         ] {
             assert_eq!(kinds_at_marks(marked, target), expected, "{marked:?}");
         }

@@ -364,6 +364,7 @@ fn luau_types_compact_to_minimal_whitespace() {
         // Type annotations live in the AST and must survive round-tripping.
         ("local  x :  number  =  5", "local x:number=5"),
         ("local  x :  number ?  =  nil", "local x:number?=nil"),
+        ("local  x :  number ? ?  =  nil", "local x:number??=nil"),
         ("local  x :  | number | string  =  y", "local x:|number|string=y"),
         ("local  x :  A & B  =  y", "local x:A&B=y"),
         ("local  x :  typeof ( y )  =  y", "local x:typeof(y)=y"),

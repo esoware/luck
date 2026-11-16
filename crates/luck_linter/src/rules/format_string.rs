@@ -110,7 +110,9 @@ fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal, Option<&[Expre
         };
         let all_args = match call.args {
             FunctionArgs::Parenthesized { args, .. } => Some(args.items.as_slice()),
-            FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => None,
+            FunctionArgs::TableConstructor(_)
+            | FunctionArgs::StringLiteral(_)
+            | FunctionArgs::Error(_) => None,
         };
         return Some((receiver, all_args));
     }
@@ -123,7 +125,9 @@ fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal, Option<&[Expre
             Some((literal, args.items.get(literal_index.saturating_add(1)..)))
         }
         FunctionArgs::StringLiteral(literal) if literal_index == 0 => Some((literal, None)),
-        FunctionArgs::StringLiteral(_) | FunctionArgs::TableConstructor(_) => None,
+        FunctionArgs::StringLiteral(_)
+        | FunctionArgs::TableConstructor(_)
+        | FunctionArgs::Error(_) => None,
     }
 }
 

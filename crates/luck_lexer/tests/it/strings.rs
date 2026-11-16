@@ -139,7 +139,7 @@ y",
             "[[a [[b]] y",
             vec![string("[[a [[b]]"), name("y")],
             "nesting of `[[...]]` is deprecated",
-            "[[a [[b]]",
+            "[[",
             false,
         ),
     ];
@@ -322,20 +322,27 @@ fn unicode_escape_above_10ffff_is_error_on_lua53_and_luau() {
     }
 }
 
+/// The error is at the first nested opener, where Lua 5.1's
+/// `read_long_string` raises it, not over the whole string or comment.
 #[test]
-fn lua51_level_zero_long_bracket_rejects_a_nested_opener() {
-    for source in [
-        "return [[ a [[ b ]]",
-        "\
+fn lua51_level_zero_long_bracket_rejects_a_nested_opener_where_it_is() {
+    for (source, nested_open) in [
+        ("return [[ a [[ b ]]", 12),
+        ("return [[ a [[ b [[ c ]]", 12),
+        ("return [[[[]]", 9),
+        (
+            "\
 --[[ a [[ b ]]
 return 1",
+            7,
+        ),
     ] {
         let result = lex(source, LuaVersion::Lua51);
-        assert!(
-            !result.errors.is_empty(),
-            "{source:?} should fail with Lua 5.1's `nesting of [[...]] is deprecated`: {:?}",
-            result.tokens
-        );
+        let [error] = result.errors.as_slice() else {
+            panic!("{source:?}: {:?}", result.errors);
+        };
+        assert_eq!(error.message, "nesting of `[[...]]` is deprecated", "{source:?}");
+        assert_eq!(error.span, Span::new(nested_open, nested_open + 2), "{source:?}");
     }
 }
 

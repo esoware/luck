@@ -158,9 +158,10 @@ impl<'source> Lexer<'source> {
         (self.comments, self.errors)
     }
 
-    /// The spans of the string tokens lexed so far that a line break or the
-    /// end of the source cut off before their closing delimiter, in source
-    /// order. A string with no expressions lists both of its tokens.
+    /// The spans of the string tokens and block comments lexed so far that a
+    /// line break or the end of the source cut off before their closing
+    /// delimiter, in source order. A string with no expressions lists both of
+    /// its tokens.
     #[must_use]
     pub fn unterminated(&self) -> &[Span] {
         &self.unterminated
@@ -286,6 +287,8 @@ impl<'source> Lexer<'source> {
         });
     }
 
+    /// A block comment cut off before its closer is still a comment, through
+    /// the end of the source.
     fn lex_comment(&mut self) {
         let start = self.cursor.position();
         self.cursor.advance_by(2); // `--`
@@ -300,7 +303,7 @@ impl<'source> Lexer<'source> {
                 &mut self.errors,
             );
             if !is_terminated {
-                return;
+                self.unterminated.push(self.cursor.span_since(start));
             }
             // The delimiters (`--[=*[` and `]=*]`) never hold a line break,
             // so scanning the whole comment is equivalent to scanning only

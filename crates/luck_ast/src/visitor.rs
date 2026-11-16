@@ -318,7 +318,7 @@ pub trait Visitor<'ast> {
             FunctionArgs::TableConstructor(table) => {
                 self.visit_table_constructor(table);
             }
-            FunctionArgs::StringLiteral(_) => {}
+            FunctionArgs::StringLiteral(_) | FunctionArgs::Error(_) => {}
         }
     }
 

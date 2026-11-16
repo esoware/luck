@@ -5,6 +5,8 @@ authors.workspace      = true
 categories.workspace   = true
 description            = "Scope and symbol analysis with stdlib definitions for Lua and Luau"
 edition.workspace      = true
+# Only the tests read the catalog's TOML. The crate ships what they generate from it.
+exclude                = ["/stdlib_data"]
 homepage.workspace     = true
 keywords.workspace     = true
 license.workspace      = true

@@ -137,7 +137,7 @@ fn constant_value_completions(
     let allowed_sets = function.allowed_constants(site.arg_index, call_arg_count(site.call))?;
     // Replace the literal's interior, so the client filters on whatever is
     // typed inside the delimiters.
-    let is_unterminated = document.unterminated_strings().contains(&site.literal.span);
+    let is_unterminated = document.unterminated().contains(&site.literal.span);
     let interior = document.range(string_interior(site.literal, is_unterminated));
     let mut seen_values: FxHashSet<&str> = FxHashSet::default();
     let mut items: Vec<CompletionItem> = Vec::new();
@@ -181,6 +181,7 @@ const fn call_arg_count(call: Call<'_>) -> usize {
     match call.args {
         FunctionArgs::Parenthesized { args, .. } => args.len(),
         FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => 1,
+        FunctionArgs::Error(_) => 0,
     }
 }
 

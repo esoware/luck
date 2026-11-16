@@ -225,7 +225,7 @@ pub trait Transform {
             FunctionArgs::TableConstructor(table) => {
                 FunctionArgs::TableConstructor(walk_boxed_table(self, table))
             }
-            FunctionArgs::StringLiteral(_) => args,
+            FunctionArgs::StringLiteral(_) | FunctionArgs::Error(_) => args,
         }
     }
 

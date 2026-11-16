@@ -101,6 +101,41 @@ fn optional_type() {
     assert!(matches!(alias_type("type X = number?"), Type::Optional(_)));
 }
 
+/// Luau reads a run of `?`s in a loop, so the run is one node over the type,
+/// spanning all of it.
+#[test]
+fn a_run_of_question_marks_is_one_optional() {
+    for (source, question_count) in
+        [("type X = number?", 1), ("type X = number??", 2), ("type X = number? ? ?", 3)]
+    {
+        let Type::Optional(optional) = alias_type(source) else {
+            panic!("expected Optional");
+        };
+        assert!(matches!(optional.type_value, Type::Name { .. }), "{source}");
+        assert_eq!(optional.question_count.get(), question_count, "{source}");
+        assert_eq!(source.get(Range::<usize>::from(optional.span)), source.get(9..), "{source}");
+    }
+}
+
+/// `parseReturnType` folds a suffix after `(T, ...U)` onto `T`, where it
+/// joins a run `T` already has.
+#[test]
+fn a_question_mark_folded_into_a_return_pack_joins_its_run() {
+    let result = parse_luau("local function f(): (T?, ...U)?? end");
+    assert_no_errors(&result);
+    let Statement::LocalFunction(function) = &result.block.stmts[0] else {
+        panic!("expected a local function");
+    };
+    let Some(Type::Pack(pack)) = &function.body.return_type else {
+        panic!("expected a pack");
+    };
+    let Some(Type::Optional(optional)) = pack.types.first() else {
+        panic!("expected Optional");
+    };
+    assert!(matches!(optional.type_value, Type::Name { .. }));
+    assert_eq!(optional.question_count.get(), 3);
+}
+
 #[test]
 fn negation_syntax_is_an_error_in_luau() {
     for source in [

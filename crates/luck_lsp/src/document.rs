@@ -62,9 +62,9 @@ impl DocumentState {
         &self.lexed().tokens
     }
 
-    /// The spans of the string tokens the line or the text ended before they
-    /// closed.
-    pub(crate) fn unterminated_strings(&self) -> &[Span] {
+    /// The spans of the string tokens and block comments the line or the text
+    /// ended before they closed.
+    pub(crate) fn unterminated(&self) -> &[Span] {
         &self.lexed().unterminated
     }
 

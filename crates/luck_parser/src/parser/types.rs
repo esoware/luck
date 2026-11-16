@@ -2,6 +2,8 @@
 //! without parentheses. A `->` after the closing paren is what makes
 //! `(params) -> R` a function type, and its return type may be a pack.
 
+use core::num::NonZeroU32;
+
 use luck_ast::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
     IntersectionType, NamedType, OptionalType, ParenthesizedType, Punctuated, TableType, Type,
@@ -255,26 +257,39 @@ impl Parser<'_> {
         Punctuated::from_items(members)
     }
 
-    /// Each `?` nests the type one level deeper, so each one counts toward
+    /// The `?`s after a type loop into one node, as `parseTypeSuffix` reads
+    /// them, so a run of any length is one level of nesting, counted toward
     /// the depth cap from the type's deepest level.
     fn parse_postfix_type(&mut self, primary: Type) -> Type {
-        let level = self.nesting_depth;
-        let mut result = primary;
-        // `?` stacks (`T??`), which Luau also accepts.
-        while matches!(self.peek(), TokenKind::Question) {
+        if !matches!(self.peek(), TokenKind::Question) {
+            return primary;
+        }
+        // A return pack's first element takes its suffix once it's built, so
+        // it may be a run already, which the `?` joins.
+        let mut optional = if let Type::Optional(run) = primary {
+            run
+        } else {
+            let level = self.nesting_depth;
             if !self.enter_wrapper(level) {
                 return self.refuse_type_wrapper(
-                    result.span(),
+                    primary.span(),
                     level,
                     TypeExtent::IntersectionMember,
                 );
             }
             self.nesting_depth = level;
             let question = self.advance_span();
-            let span = result.span().merge(question);
-            result = Type::Optional(Box::new(OptionalType { span, type_value: result }));
+            Box::new(OptionalType {
+                span: primary.span().merge(question),
+                type_value: primary,
+                question_count: NonZeroU32::MIN,
+            })
+        };
+        while matches!(self.peek(), TokenKind::Question) {
+            optional.span = optional.span.merge(self.advance_span());
+            optional.question_count = optional.question_count.saturating_add(1);
         }
-        result
+        Type::Optional(optional)
     }
 
     /// Refuse a `?`, intersection, or union wrapping the type from `start` at

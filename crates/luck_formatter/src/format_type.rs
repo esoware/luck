@@ -22,14 +22,17 @@ impl Format for Type {
             Self::Table(table) => table.fmt(f),
             Self::Function(function) => function.fmt(f),
             Self::Optional(optional) => {
-                (&optional.type_value, token("?")).fmt(f);
+                optional.type_value.fmt(f);
+                for _ in 0..optional.question_count.get() {
+                    token("?").fmt(f);
+                }
             }
             Self::Union(union) => union.fmt(f),
             Self::Intersection(intersection) => intersection.fmt(f),
             Self::Parenthesized(parenthesized) => {
                 (token("("), &parenthesized.type_value, token(")")).fmt(f);
             }
-            Self::Pack(pack) => write_delimited(f, "(", ")", &pack.types.items),
+            Self::Pack(pack) => write_delimited(f, "(", ")", &pack.types.items, write_list_type),
             Self::Singleton(literal) => {
                 if let TokenKind::StringLiteral(text) = &literal.kind {
                     let quote_style = f.options().quote_style;
@@ -97,21 +100,34 @@ impl Format for TableType {
 impl Format for FunctionType {
     fn fmt(&self, f: &mut Formatter) {
         self.generics.fmt(f);
-        write_delimited(f, "(", ")", &self.params.items);
+        write_delimited(f, "(", ")", &self.params.items, |param_f, param| param.fmt(param_f));
         (space(), token("->"), space(), &self.return_type).fmt(f);
     }
 }
 
 impl Format for UnionType {
     fn fmt(&self, f: &mut Formatter) {
-        write_alternation(f, &self.types.items, "|", false);
+        write_alternation(f, &self.types.items, "|", Placement::AfterText);
     }
 }
 
 impl Format for IntersectionType {
     fn fmt(&self, f: &mut Formatter) {
-        write_alternation(f, &self.types.items, "&", false);
+        write_alternation(f, &self.types.items, "&", Placement::AfterText);
     }
+}
+
+/// Where an alternation stands, which decides the lines its members take
+/// when it breaks.
+#[derive(Clone, Copy)]
+enum Placement {
+    /// After other text on its line, such as `type T =` or `name:`. The
+    /// members move to the lines after it, one indent deeper.
+    AfterText,
+    /// Where a list or a table that breaks opens a line for it. The members
+    /// start on that line, at its indent, and `should_lead` keeps the leading
+    /// operator when flat too.
+    LineStart { should_lead: bool },
 }
 
 /// Flat reads `A | B | C`.
@@ -119,19 +135,40 @@ impl Format for IntersectionType {
 /// Broken, each member gets its own line and a leading
 /// `| ` (or `& `), as Prettier does for TypeScript unions. The break decision
 /// alone places the leading operator, so the AST's `has_leading_pipe` and
-/// `has_leading_ampersand` are ignored, except that `should_lead` keeps it
-/// when flat too.
-fn write_alternation(f: &mut Formatter, items: &[Type], op: &'static str, should_lead: bool) {
+/// `has_leading_ampersand` are ignored.
+fn write_alternation(f: &mut Formatter, items: &[Type], op: &'static str, placement: Placement) {
     let group_id = f.group_id();
     let separator = (soft_line_or_space(), token(op), space());
-    let lead = format_with(|lead_f| {
-        if should_lead {
-            (if_group_breaks(group_id, soft_line_or_space()), token(op), space()).fmt(lead_f);
-        } else {
-            if_group_breaks(group_id, &separator).fmt(lead_f);
+    let members = separated(items, &separator);
+    match placement {
+        Placement::AfterText => {
+            group_with_id(group_id, indent((if_group_breaks(group_id, &separator), members)))
+                .fmt(f);
         }
-    });
-    group_with_id(group_id, indent((lead, separated(items, &separator)))).fmt(f);
+        Placement::LineStart { should_lead: true } => {
+            group_with_id(group_id, (token(op), space(), members)).fmt(f);
+        }
+        Placement::LineStart { should_lead: false } => {
+            let lead = if_group_breaks(group_id, (token(op), space()));
+            group_with_id(group_id, (lead, members)).fmt(f);
+        }
+    }
+}
+
+/// `ty` where a list or a table that breaks opens a line for it.
+fn write_at_line_start(f: &mut Formatter, ty: &Type, should_lead: bool) {
+    let placement = Placement::LineStart { should_lead };
+    if let Type::Union(union) = ty {
+        write_alternation(f, &union.types.items, "|", placement);
+    } else if let Type::Intersection(intersection) = ty {
+        write_alternation(f, &intersection.types.items, "&", placement);
+    } else {
+        ty.fmt(f);
+    }
+}
+
+fn write_list_type(f: &mut Formatter, ty: &Type) {
+    write_at_line_start(f, ty, false);
 }
 
 /// The name `ty` prints first when flat, where an alternation drops its
@@ -174,23 +211,16 @@ impl Format for TypeField {
                 }
                 (token("["), key, token("]"), token(":"), space(), value).fmt(f);
             }
-            Self::Array { access, value, .. } => {
-                if let Some(modifier) = access {
-                    (modifier, space()).fmt(f);
-                }
+            Self::Array { access: Some(modifier), value, .. } => {
+                (modifier, space(), value).fmt(f);
+            }
+            Self::Array { access: None, value, .. } => {
                 // A `read` or `write` that opens the field would read back
                 // as its access modifier, so the leading operator that keeps
                 // it from opening the field stays.
-                let should_lead = access.is_none()
-                    && flat_leading_name(value)
-                        .is_some_and(|name| matches!(name, "read" | "write"));
-                if should_lead && let Type::Union(union) = value {
-                    write_alternation(f, &union.types.items, "|", true);
-                } else if should_lead && let Type::Intersection(intersection) = value {
-                    write_alternation(f, &intersection.types.items, "&", true);
-                } else {
-                    value.fmt(f);
-                }
+                let should_lead =
+                    flat_leading_name(value).is_some_and(|name| matches!(name, "read" | "write"));
+                write_at_line_start(f, value, should_lead);
             }
         }
     }
@@ -198,7 +228,7 @@ impl Format for TypeField {
 
 impl Format for TypeArgs {
     fn fmt(&self, f: &mut Formatter) {
-        write_delimited(f, "<", ">", &self.args.items);
+        write_delimited(f, "<", ">", &self.args.items, write_list_type);
     }
 }
 
@@ -207,13 +237,13 @@ pub(crate) struct ExplicitTypeArgs<'args>(pub &'args TypeArgs);
 
 impl Format for ExplicitTypeArgs<'_> {
     fn fmt(&self, f: &mut Formatter) {
-        write_delimited(f, "<<", ">>", &self.0.args.items);
+        write_delimited(f, "<<", ">>", &self.0.args.items, write_list_type);
     }
 }
 
 impl Format for GenericTypeList {
     fn fmt(&self, f: &mut Formatter) {
-        write_delimited(f, "<", ">", &self.params.items);
+        write_delimited(f, "<", ">", &self.params.items, |param_f, param| param.fmt(param_f));
     }
 }
 
@@ -234,29 +264,37 @@ impl Format for GenericTypeParam {
 impl Format for FunctionTypeParam {
     fn fmt(&self, f: &mut Formatter) {
         if let Some(name) = &self.name {
-            (name, token(":"), space()).fmt(f);
+            (name, token(":"), space(), &self.type_value).fmt(f);
+        } else {
+            write_list_type(f, &self.type_value);
         }
-        self.type_value.fmt(f);
     }
 }
 
+/// A broken list opens a line for each item, where `write_item` writes it.
+///
 /// Nested angle brackets close with adjacent `>` tokens. The lexer reads them
 /// as one `>>`, which the parser splits again.
-fn write_delimited<T>(f: &mut Formatter, open: &'static str, close: &'static str, items: &[T])
-where
-    T: Format,
-{
+fn write_delimited<T>(
+    f: &mut Formatter,
+    open: &'static str,
+    close: &'static str,
+    items: &[T],
+    write_item: impl Fn(&mut Formatter, &T),
+) {
     if items.is_empty() {
         (token(open), token(close)).fmt(f);
         return;
     }
-    group((
-        token(open),
-        indent((soft_line(), separated(items, (token(","), soft_line_or_space())))),
-        soft_line(),
-        token(close),
-    ))
-    .fmt(f);
+    let list = format_with(|list_f| {
+        for (i, item) in items.iter().enumerate() {
+            if i > 0 {
+                (token(","), soft_line_or_space()).fmt(list_f);
+            }
+            write_item(list_f, item);
+        }
+    });
+    group((token(open), indent((soft_line(), list)), soft_line(), token(close))).fmt(f);
 }
 
 #[cfg(test)]

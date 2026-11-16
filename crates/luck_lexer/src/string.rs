@@ -319,8 +319,8 @@ pub(crate) fn eat_long_bracket_open(cursor: &mut Cursor<'_>) -> Option<usize> {
 /// `unterminated`.
 ///
 /// A missing closer leaves the cursor at the end of the source and goes to
-/// `errors`, spanning from `start`, as does a level-0 body holding a `[[` that
-/// `version` rejects.
+/// `errors`, spanning from `start`. A level-0 body holding a `[[` that
+/// `version` rejects goes there too, at its first `[[`, where Lua 5.1 stops.
 pub(crate) fn advance_past_long_bracket_close(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
@@ -346,10 +346,11 @@ pub(crate) fn advance_past_long_bracket_close(
             cursor.advance();
             if level == 0
                 && version.has_long_bracket_nesting_error()
-                && memmem::find(cursor.text_since(body_start).as_bytes(), b"[[").is_some()
+                && let Some(offset) = memmem::find(cursor.text_since(body_start).as_bytes(), b"[[")
             {
+                let nested_open = body_start.saturating_add(offset);
                 errors.push(lex_error(
-                    cursor.span_since(start),
+                    Span::from_indices(nested_open, nested_open.saturating_add(2)),
                     "nesting of `[[...]]` is deprecated",
                 ));
             }

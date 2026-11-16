@@ -1,11 +1,115 @@
-use luck_token::LuaVersion;
+use std::sync::OnceLock;
 
-/// `is_loader_global` is true only for a 5.1 bundle with a function that has
-/// no upvalue left for a local loader.
+use luck_ast::{Expression, Statement, Transform};
+use luck_token::{CompactString, LuaVersion, Token, TokenKind};
+
+/// What every generated name starts with, unless a module's source holds it.
+pub(crate) const DEFAULT_PREFIX: &str = "__luck_";
+
+/// What decides the code a bundle opens with, apart from its prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LoaderShape {
+    pub version: LuaVersion,
+    /// True only for a 5.1 bundle with a function that has no upvalue left
+    /// for a local loader.
+    ///
+    /// A global read costs none, but two bundles in one Lua state then
+    /// overwrite each other's loader.
+    pub is_loader_global: bool,
+    /// Only Lua targets record dynamic callees, so only a Lua loader gets the
+    /// entry point they're retargeted at.
+    pub has_dynamic_entry: bool,
+    pub has_export_runtime: bool,
+}
+
+/// A version, and whether each of a shape's three options is on.
+const SHAPE_COUNT: usize = LuaVersion::ALL.len() * 8;
+
+/// Each shape's prelude as it parses with [`DEFAULT_PREFIX`], in the order
+/// the process first bundled them. A shape takes the first free slot, and
+/// there's one for each.
+static PRELUDES: [OnceLock<(LoaderShape, Vec<Statement>)>; SHAPE_COUNT] =
+    [const { OnceLock::new() }; SHAPE_COUNT];
+
+/// The loader a bundle opens with, then the entry point and the runtime its
+/// modules call for.
+pub(crate) fn prelude_text(prefix: &str, shape: LoaderShape) -> String {
+    let mut text = loader_text(prefix, shape.version, shape.is_loader_global);
+    if shape.has_dynamic_entry {
+        text.push_str(&dynamic_entry_text(prefix, shape.is_loader_global));
+    }
+    if shape.has_export_runtime {
+        text.push_str(&export_runtime_text(prefix));
+    }
+    text
+}
+
+/// The statements [`prelude_text`] parses to.
 ///
-/// A global read costs none, but two bundles in one Lua state then overwrite
-/// each other's loader.
-pub(crate) fn loader_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -> String {
+/// That text is the one place the loader's code is spelled out, so the tree
+/// comes from parsing it, once per shape for the whole process. Each bundle
+/// takes a copy, and gives it its own prefix when it isn't the default.
+pub(crate) fn prelude_stmts(prefix: &str, shape: LoaderShape) -> Vec<Statement> {
+    let parse =
+        || luck_parser::parse(prelude_text(DEFAULT_PREFIX, shape), shape.version).block.stmts;
+    let stmts = PRELUDES
+        .iter()
+        .find_map(|slot| {
+            let (cached_shape, stmts) = slot.get_or_init(|| (shape, parse()));
+            (*cached_shape == shape).then(|| stmts.clone())
+        })
+        .unwrap_or_else(parse);
+    if prefix == DEFAULT_PREFIX {
+        return stmts;
+    }
+    let mut reprefix = Reprefix { prefix };
+    stmts.into_iter().map(|stmt| reprefix.transform_stmt(stmt)).collect()
+}
+
+/// Gives a prelude parsed with [`DEFAULT_PREFIX`] a bundle's own prefix.
+struct Reprefix<'bundle> {
+    prefix: &'bundle str,
+}
+
+impl Reprefix<'_> {
+    fn rename(&self, name: &mut Token) {
+        if let TokenKind::Identifier(text) = &mut name.kind
+            && let Some(rest) = text.strip_prefix(DEFAULT_PREFIX)
+        {
+            *text = CompactString::from([self.prefix, rest].concat());
+        }
+    }
+}
+
+impl Transform for Reprefix<'_> {
+    /// A prelude declares its names with `local`, `local function`, and
+    /// `function`.
+    fn transform_stmt(&mut self, mut stmt: Statement) -> Statement {
+        if let Statement::LocalAssignment(local) = &mut stmt {
+            for declared in &mut local.names.items {
+                self.rename(&mut declared.name);
+            }
+        }
+        if let Statement::LocalFunction(function) = &mut stmt {
+            self.rename(&mut function.name);
+        }
+        if let Statement::FunctionDecl(function) = &mut stmt {
+            for name in &mut function.name.names {
+                self.rename(name);
+            }
+        }
+        self.walk_stmt(stmt)
+    }
+
+    fn transform_expr(&mut self, mut expr: Expression) -> Expression {
+        if let Expression::Name(name) = &mut expr {
+            self.rename(name);
+        }
+        self.walk_expr(expr)
+    }
+}
+
+fn loader_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -> String {
     if version.is_luau() {
         return luau_loader_text(prefix);
     }
@@ -67,7 +171,7 @@ fn luau_loader_text(prefix: &str) -> String {
 /// `{prefix}exporting` hands a cyclic requirer a placeholder whose field
 /// accesses error until the module finishes, then fills and freezes it
 /// (`populatePlaceholder` in `Require/src/RequireImpl.cpp`).
-pub(crate) fn export_runtime_text(prefix: &str) -> String {
+fn export_runtime_text(prefix: &str) -> String {
     format!(
         "local {prefix}freeze=table.freeze\n\
          local {prefix}lock={{\n\
@@ -171,7 +275,7 @@ fn lua_require_text(prefix: &str, version: LuaVersion, is_loader_global: bool) -
 ///
 /// Anything else goes to the host's own `require`, looked up at call time so
 /// one the host installs later still counts.
-pub(crate) fn dynamic_entry_text(prefix: &str, is_loader_global: bool) -> String {
+fn dynamic_entry_text(prefix: &str, is_loader_global: bool) -> String {
     let (opening, closing) = entry_point(is_loader_global);
     format!(
         "{opening} {prefix}dynamic(name)\n\
@@ -180,4 +284,46 @@ pub(crate) fn dynamic_entry_text(prefix: &str, is_loader_global: bool) -> String
          error(\"luck bundle: dynamic require of '\"..tostring(name)..\"' is not in the bundle and this runtime has no require\",2)\n\
          end{closing}\n"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn every_shape() -> impl Iterator<Item = LoaderShape> {
+        LuaVersion::ALL.into_iter().flat_map(|version| {
+            (0..8u8).map(move |options| LoaderShape {
+                version,
+                is_loader_global: options & 1 != 0,
+                has_dynamic_entry: options & 2 != 0,
+                has_export_runtime: options & 4 != 0,
+            })
+        })
+    }
+
+    /// A prefix as long as the default leaves every span where it was, so
+    /// the trees compare whole.
+    #[test]
+    fn every_shape_under_any_prefix_is_the_tree_its_text_parses_to() {
+        for shape in every_shape() {
+            for prefix in [DEFAULT_PREFIX, "__duck_"] {
+                let parsed = luck_parser::parse(prelude_text(prefix, shape), shape.version);
+                assert!(parsed.errors.is_empty(), "{shape:?}: {:?}", parsed.errors);
+                assert_eq!(prelude_stmts(prefix, shape), parsed.block.stmts, "{shape:?} {prefix}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_shape_has_a_slot() {
+        assert_eq!(every_shape().count(), SHAPE_COUNT);
+        for shape in every_shape() {
+            drop(prelude_stmts(DEFAULT_PREFIX, shape));
+        }
+        let cached: Vec<LoaderShape> =
+            PRELUDES.iter().filter_map(|slot| slot.get().map(|(shape, _)| *shape)).collect();
+        for shape in every_shape() {
+            assert_eq!(cached.iter().filter(|cached_shape| **cached_shape == shape).count(), 1);
+        }
+    }
 }

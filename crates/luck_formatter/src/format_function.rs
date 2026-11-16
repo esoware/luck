@@ -198,6 +198,8 @@ impl Format for FunctionArgs {
                     .fmt(f);
                 }
             }
+            // A parse-recovery placeholder has no text to print.
+            Self::Error(_) => {}
         }
     }
 }

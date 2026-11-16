@@ -12,7 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::emitter::{Binding, Item, Key, Plan, Registration, WrappedModule};
 use crate::exports::ExportPlan;
 use crate::graph::DependencyGraph;
-use crate::loader::{dynamic_entry_text, export_runtime_text, loader_text};
+use crate::loader::prelude_stmts;
 use crate::module::ModuleInfo;
 
 /// The bundle as a tree, for a caller that minifies it rather than reading
@@ -45,16 +45,7 @@ pub(crate) fn emit_block(
 
     let mut plan = Plan::new(&graph, version)?;
     let prefix = plan.prefix.clone();
-    let mut prelude = loader_text(&prefix, version, plan.is_loader_global);
-    if plan.has_dynamic_entry {
-        prelude.push_str(&dynamic_entry_text(&prefix, plan.is_loader_global));
-    }
-    if plan.has_export_runtime {
-        prelude.push_str(&export_runtime_text(&prefix));
-    }
-    // The loader is a fixed template, and its text, which the plain bundle
-    // writes, is the one place its code is spelled out.
-    let mut stmts = luck_parser::parse(prelude, version).block.stmts;
+    let mut stmts = prelude_stmts(&prefix, plan.loader);
 
     let synth = Synth::new().with_version(version);
     let names = GlueNames::new(&prefix);

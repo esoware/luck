@@ -186,6 +186,16 @@ end
 }
 
 #[test]
+fn a_run_of_question_marks_keeps_every_one() {
+    assert_luau(
+        "type T = { number ? ? } ?? ?
+",
+        "type T = { number?? }???
+",
+    );
+}
+
+#[test]
 fn type_declaration_qualified() {
     assert_luau("type Alias = module.Type\n", "type Alias = module.Type\n");
 }
@@ -316,4 +326,135 @@ fn an_array_field_keeps_the_leading_operator_that_keeps_read_from_opening_it() {
     ] {
         assert_luau(input, expected);
     }
+}
+
+/// A table that breaks opens a line for its array field, so a union or an
+/// intersection that breaks there starts on that line, at its indent, where
+/// one after an access modifier moves to the next line.
+#[test]
+fn a_union_breaks_on_the_line_its_table_opens_for_it() {
+    let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
+    for (input, expected) in [
+        (
+            "type T = { \"aaaaaaaaaa\" | \"bbbbbbbbbb\" | \"cccccccccc\" }\n",
+            "\
+type T = {
+\t| \"aaaaaaaaaa\"
+\t| \"bbbbbbbbbb\"
+\t| \"cccccccccc\"
+}
+",
+        ),
+        (
+            "type T = { Aaaaaaaaaaaa & Bbbbbbbbbbbb & Cccccccccccc }\n",
+            "\
+type T = {
+\t& Aaaaaaaaaaaa
+\t& Bbbbbbbbbbbb
+\t& Cccccccccccc
+}
+",
+        ),
+        (
+            "type T = { \"aaaaaaaa\" | \"bbbbbbbb\" }\n",
+            "\
+type T = {
+\t\"aaaaaaaa\" | \"bbbbbbbb\"
+}
+",
+        ),
+        (
+            "type T = { | read | \"aaaaaaaaaa\" | \"bbbbbbbbbb\" }\n",
+            "\
+type T = {
+\t| read
+\t| \"aaaaaaaaaa\"
+\t| \"bbbbbbbbbb\"
+}
+",
+        ),
+        (
+            "type T = { read \"aaaaaaaaaa\" | \"bbbbbbbbbb\" }\n",
+            "\
+type T = {
+\tread
+\t\t| \"aaaaaaaaaa\"
+\t\t| \"bbbbbbbbbb\"
+}
+",
+        ),
+    ] {
+        assert_format_with(input, expected, LuaVersion::Luau, &options);
+    }
+}
+
+/// A type list that breaks opens a line for each item, so a union that
+/// breaks as an unnamed item starts on that line, at its indent, where one
+/// after `name:` moves to the next line.
+#[test]
+fn a_union_breaks_on_the_line_its_list_opens_for_it() {
+    let options = FormatOptions { line_width: 30, ..FormatOptions::default() };
+    for (input, expected) in [
+        (
+            "type T = Map<\"aaaaaaaaaa\" | \"bbbbbbbbbb\" | \"cccccccccc\", number>\n",
+            "\
+type T = Map<
+\t| \"aaaaaaaaaa\"
+\t| \"bbbbbbbbbb\"
+\t| \"cccccccccc\",
+\tnumber
+>
+",
+        ),
+        (
+            "type T = (\"aaaaaaaaaa\" | \"bbbbbbbbbb\", n: \"aaaaaaaaaa\" | \"bbbbbbbbbb\") -> ()\n",
+            "\
+type T = (
+\t| \"aaaaaaaaaa\"
+\t| \"bbbbbbbbbb\",
+\tn:
+\t\t| \"aaaaaaaaaa\"
+\t\t| \"bbbbbbbbbb\"
+) -> ()
+",
+        ),
+        (
+            "local function f(): (\"aaaaaaaaaa\" | \"bbbbbbbbbb\", ...Cccccccc) end\n",
+            "\
+local function f(): (
+\t| \"aaaaaaaaaa\"
+\t| \"bbbbbbbbbb\",
+\t...Cccccccc
+) end
+",
+        ),
+        (
+            "local v = f<<\"aaaaaaaaaa\" | \"bbbbbbbbbb\" | \"cccccccccc\">>()\n",
+            "\
+local v = f<<
+\t| \"aaaaaaaaaa\"
+\t| \"bbbbbbbbbb\"
+\t| \"cccccccccc\"
+>>()
+",
+        ),
+    ] {
+        assert_format_with(input, expected, LuaVersion::Luau, &options);
+    }
+    let narrowest = FormatOptions { line_width: 1, ..FormatOptions::default() };
+    assert_format_with(
+        "type T = Map<\"a\" | \"b\", { A & B }>\n",
+        "\
+type T = Map<
+\t| \"a\"
+\t| \"b\",
+\t{
+\t\t& A
+\t\t& B
+\t}
+>
+",
+        LuaVersion::Luau,
+        &narrowest,
+    );
 }

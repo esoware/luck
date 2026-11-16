@@ -98,7 +98,7 @@ impl LinkCollector<'_> {
                 literal
             }
             FunctionArgs::StringLiteral(literal) => literal,
-            FunctionArgs::TableConstructor(_) => return,
+            FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => return,
         };
 
         let range = self.document.range(literal.span);

@@ -76,8 +76,8 @@ struct Parser<'source> {
     /// Whether a syntax error has been reported since the last statement
     /// began where one reliably does.
     has_syntax_error: bool,
-    /// How many of the lexer's unterminated strings come before that
-    /// statement.
+    /// How many of the lexer's unterminated strings and block comments come
+    /// before that statement.
     settled_unterminated: usize,
     errors: Vec<ParseError>,
 }
@@ -292,10 +292,11 @@ impl<'source> Parser<'source> {
         mem::replace(&mut self.current, mem::replace(&mut self.next, self.lexer.next_token()))
     }
 
-    /// Whether a syntax error was reported, or a string cut off at its line
-    /// break consumed, since the last statement began where one reliably
-    /// does. Errors that follow either in the statement would only echo it: a
-    /// cut-off string took the rest of its line, often the closer of what
+    /// Whether a syntax error was reported, or a string or block comment cut
+    /// off before its closer passed, since the last statement began where
+    /// one reliably does. Errors that follow either in the statement would
+    /// only echo it: a cut-off string took the rest of its line, and a
+    /// cut-off comment the rest of the source, often with the closer of what
     /// holds it.
     ///
     /// Worked out when asked rather than as each token is consumed.
