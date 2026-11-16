@@ -49,4 +49,7 @@ pub struct ModuleInfo {
     pub max_function_upvalues: usize,
     /// The AST from graph construction, kept so the emitter doesn't reparse.
     pub block: Block,
+    /// `block`'s depth as its parse counted it, never below what
+    /// [`luck_ast::block_nesting_depth`] finds.
+    pub nesting_depth: usize,
 }

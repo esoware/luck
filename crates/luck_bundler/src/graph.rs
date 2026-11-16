@@ -204,6 +204,7 @@ impl GraphBuilder<'_> {
             has_env_rebinding,
             max_function_upvalues,
             block: parsed.block,
+            nesting_depth: parsed.nesting_depth,
         };
         if let Some(slot) = self.modules.get_mut(id.0) {
             *slot = Some(module);

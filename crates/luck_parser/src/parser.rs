@@ -27,15 +27,17 @@ where
 }
 
 fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
-    let (block, comments, errors) = match Parser::new(&source, version) {
+    let (block, comments, errors, nesting_depth) = match Parser::new(&source, version) {
         Ok(parser) => parser.parse_chunk(),
         Err(error) => (
             Block { span: Span::new(0, 0), stmts: Vec::new(), last_stmt: None },
             Vec::new(),
             vec![error],
+            // The empty block's own level.
+            1,
         ),
     };
-    ParseResult { block, comments, errors, source }
+    ParseResult { block, comments, errors, source, nesting_depth }
 }
 
 /// Lua needs only one token of lookahead, so `current` and `next` stand in
@@ -213,7 +215,7 @@ impl<'source> Parser<'source> {
 
     /// Nothing is open around the chunk's block, so it reads to the end of
     /// the source, and the lexer is drained by then.
-    fn parse_chunk(mut self) -> (Block, Vec<Comment>, Vec<ParseError>) {
+    fn parse_chunk(mut self) -> (Block, Vec<Comment>, Vec<ParseError>, usize) {
         let start_span = self.current_span();
         let block = self.parse_block().unwrap_or(Block {
             span: start_span,
@@ -226,7 +228,7 @@ impl<'source> Parser<'source> {
             errors = check_type_functions(&block, self.version);
         }
         errors.sort_by_key(|e| e.span.start);
-        (block, comments, errors)
+        (block, comments, errors, self.deepest_level)
     }
 
     /// Whether the source between the previous token and the current one

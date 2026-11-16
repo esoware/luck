@@ -1,6 +1,6 @@
 use core::ops::Range;
 
-use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth, spans_past_nesting_cap};
+use luck_ast::{MAX_NESTING_DEPTH, spans_past_nesting_cap};
 use luck_core::Diagnostic;
 use luck_token::{
     CompactString, LuaVersion, Span, chunk_start, encode_string, ends_with_line_break, line_breaks,
@@ -375,7 +375,8 @@ impl Plan {
                 continue;
             };
             let levels = wrapped.wrapper.levels();
-            let most_levels = block_nesting_depth(&module.block)
+            let most_levels = module
+                .nesting_depth
                 .saturating_add(levels)
                 .saturating_add(usize::from(wrapped.exports.has_table()));
             if most_levels <= MAX_NESTING_DEPTH {
@@ -733,6 +734,7 @@ mod tests {
             has_env_rebinding: extracted.has_env_rebinding,
             max_function_upvalues: extracted.max_function_upvalues,
             block: parsed.block,
+            nesting_depth: parsed.nesting_depth,
         };
         ModuleFixture { info, resolved_paths }
     }

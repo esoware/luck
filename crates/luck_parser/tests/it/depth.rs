@@ -258,6 +258,7 @@ fn the_cap_bounds_the_depth_of_the_tree_exactly() {
                     result.errors.first()
                 );
                 assert_eq!(block_nesting_depth(&result.block), depth, "{}", shape.name);
+                assert_eq!(result.nesting_depth, depth, "{}", shape.name);
             } else {
                 let [error] = result.errors.as_slice() else {
                     panic!("{} at depth {depth}: {:?}", shape.name, result.errors);
