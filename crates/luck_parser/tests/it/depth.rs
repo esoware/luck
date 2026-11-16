@@ -152,6 +152,12 @@ const fn luau(
 /// A `return` or `type` and its value are the first two levels of most
 /// shapes, and a statement nested in a block is a level of its own.
 fn shapes() -> Vec<Shape> {
+    let mut shapes = lua_shapes();
+    shapes.extend(luau_shapes());
+    shapes
+}
+
+fn lua_shapes() -> Vec<Shape> {
     vec![
         lua("parentheses", 2, 1, |n| format!("return {}x{}", "(".repeat(n), ")".repeat(n))),
         lua("tables", 1, 1, |n| format!("return {}{}", "{".repeat(n), "}".repeat(n))),
@@ -204,6 +210,11 @@ fn shapes() -> Vec<Shape> {
         lua("assignment target over parentheses", 1, 1, |n| {
             format!("{}x{}{} = 1", "(".repeat(n), ")".repeat(n), ".b".repeat(300))
         }),
+    ]
+}
+
+fn luau_shapes() -> Vec<Shape> {
+    vec![
         luau("if expressions", 2, 1, |n| format!("return {}x", "if a then b else ".repeat(n))),
         luau("interpolated strings", 2, 1, |n| {
             format!("return {}x{}", "`{".repeat(n), "}`".repeat(n))
@@ -412,7 +423,7 @@ fn a_misplaced_last_statement_is_wrapped_only_within_the_cap() {
 /// `construct` as an expression nested at `version`'s limit, so anything but
 /// a name or a literal there is too deep.
 fn at_the_limit_in_an_expression(construct: &str, version: LuaVersion) -> String {
-    let depth = version.max_nesting_depth() - 2;
+    let depth = version.max_nesting_depth().saturating_sub(2);
     format!("local v = {}{construct}{}", "(".repeat(depth), ")".repeat(depth))
 }
 

@@ -73,10 +73,10 @@ pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         format!("{head}{}", wrapped(open, count, innermost, close))
     };
     both.into_iter()
-        .flat_map(|(head, open, innermost, close, lua, luau)| {
+        .flat_map(|(head, open, innermost, close, lua_count, luau_count)| {
             [
-                (LuaVersion::Lua54, source(head, open, lua, innermost, close)),
-                (LuaVersion::Luau, source(head, open, luau, innermost, close)),
+                (LuaVersion::Lua54, source(head, open, lua_count, innermost, close)),
+                (LuaVersion::Luau, source(head, open, luau_count, innermost, close)),
             ]
         })
         .chain(luau.into_iter().map(|(head, open, innermost, close, count)| {

@@ -235,12 +235,12 @@ impl Parser<'_> {
     /// many there are, joining the run of a `T?` folded out of a return pack.
     fn parse_postfix_type(&mut self, primary: Type) -> Type {
         let mut span = primary.span();
-        let mut question_marks = 0_u32;
+        let mut count = 0u32;
         while matches!(self.peek(), TokenKind::Question) {
             span = span.merge(self.advance_span());
-            question_marks = question_marks.saturating_add(1);
+            count = count.saturating_add(1);
         }
-        let Some(question_marks) = NonZeroU32::new(question_marks) else {
+        let Some(question_marks) = NonZeroU32::new(count) else {
             return primary;
         };
         if let Type::Optional(mut optional) = primary {

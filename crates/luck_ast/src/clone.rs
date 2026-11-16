@@ -10,7 +10,10 @@ use crate::stmt::Statement;
     clippy::borrowed_box,
     reason = "`Box::clone` writes the node straight into its allocation"
 )]
-fn clone_box<T: Clone>(node: &Box<T>) -> Box<T> {
+fn clone_box<T>(node: &Box<T>) -> Box<T>
+where
+    T: Clone,
+{
     Box::clone(node)
 }
 

@@ -46,9 +46,11 @@ fn print_block(
     output
 }
 
-/// `options`, unless the parentheses they put around a bare table or string
-/// argument, a level each, would nest the output of `block`, `depth` levels
-/// deep, past `limit`. Then every call keeps its arguments as they are.
+/// `options`, or ones that keep every call's arguments as they are.
+///
+/// The parentheses `options` put around a bare table or string argument are
+/// a level each, which can nest the output of `block`, `depth` levels deep,
+/// past `limit`.
 fn fitting_options(
     block: &Block,
     depth: usize,
@@ -152,8 +154,8 @@ pub fn format_block(
             message: format!("maximum nesting depth exceeded (limit: {MAX_NESTING_DEPTH})"),
         });
     }
-    let options = fitting_options(block, depth, MAX_NESTING_DEPTH, options);
-    Ok(print_block(block, comments, &options, false))
+    let fitting = fitting_options(block, depth, MAX_NESTING_DEPTH, options);
+    Ok(print_block(block, comments, &fitting, false))
 }
 
 /// Input that fails to parse returns empty output with its parse errors in
@@ -178,8 +180,8 @@ pub fn format_parsed(
     }
     let comments = Comments::from_source(&parse.comments, &parse.source, version);
     let limit = version.max_nesting_depth();
-    let options = fitting_options(&parse.block, parse.nesting_depth, limit, options);
-    let output = print_block(&parse.block, comments, &options, options.sort_requires);
+    let fitting = fitting_options(&parse.block, parse.nesting_depth, limit, options);
+    let output = print_block(&parse.block, comments, &fitting, fitting.sort_requires);
     FormatResult { output, errors: Vec::new() }
 }
 
@@ -204,8 +206,8 @@ pub fn format_range(
     let offsets = index_to_offset(range.start)..index_to_offset(range.end);
     let comments = Comments::from_source(&parsed.comments, source, version);
     let limit = version.max_nesting_depth();
-    let options = fitting_options(&parsed.block, parsed.nesting_depth, limit, options);
-    let output = format_selection(&parsed.block, comments, &options, &offsets).map_or_else(
+    let fitting = fitting_options(&parsed.block, parsed.nesting_depth, limit, options);
+    let output = format_selection(&parsed.block, comments, &fitting, &offsets).map_or_else(
         || source.to_owned(),
         |(span, selected)| {
             let text = if options.line_endings == LineEndings::Windows {

@@ -445,14 +445,12 @@ impl Parser<'_> {
             });
         }
 
-        let else_clause = if matches!(self.peek(), TokenKind::Else) {
+        let else_clause = matches!(self.peek(), TokenKind::Else).then(|| {
             let else_span = self.advance_span();
             let else_block = self.parse_block();
             let span = else_span.merge(else_block.span);
-            Some(ElseClause { span, block: else_block })
-        } else {
-            None
-        };
+            ElseClause { span, block: else_block }
+        });
 
         self.close(Closer::Else);
         self.close(Closer::BlockEnd);

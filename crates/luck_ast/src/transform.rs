@@ -218,8 +218,8 @@ pub trait Transform {
                 Expression::TableConstructor(walk_boxed_table(self, table))
             }
             Expression::BinaryOp(mut run) => {
-                let needs_parens = first_operand_needs_parens(&run);
-                run.first = transform_operand(self, run.first, needs_parens);
+                let first_needs_parens = first_operand_needs_parens(&run);
+                run.first = transform_operand(self, run.first, first_needs_parens);
                 let precedence = run.precedence().0;
                 let last = run.links.len().saturating_sub(1);
                 for (i, link) in run.links.iter_mut().enumerate() {
@@ -460,9 +460,9 @@ where
         return transform.transform_expr(expr);
     }
     transform.descend();
-    let expr = transform.transform_expr(expr);
+    let transformed = transform.transform_expr(expr);
     transform.ascend();
-    expr
+    transformed
 }
 
 /// Rewrite `expr` on its parent's level, or a level down where it needs
@@ -491,9 +491,9 @@ where
         return transform_nested_expr(transform, expr);
     }
     transform.descend();
-    let expr = transform_nested_expr(transform, expr);
+    let transformed = transform_nested_expr(transform, expr);
     transform.ascend();
-    expr
+    transformed
 }
 
 /// As [`transform_nested_expr`], for a type.
@@ -505,9 +505,9 @@ where
         return transform.transform_type(type_value);
     }
     transform.descend();
-    let type_value = transform.transform_type(type_value);
+    let transformed = transform.transform_type(type_value);
     transform.ascend();
-    type_value
+    transformed
 }
 
 /// As [`transform_operand`], for a type.

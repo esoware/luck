@@ -217,11 +217,11 @@ impl Parser<'_> {
     /// under everything nested in the suffixes.
     #[inline(never)]
     fn finish_suffixes(&mut self, prefix: Expression, start: usize) -> Expression {
-        let mut suffixes = self.suffixes.drain(start..);
-        let Some(first) = suffixes.next() else {
+        let mut rest = self.suffixes.drain(start..);
+        let Some(first) = rest.next() else {
             return prefix;
         };
-        let suffixes = OneOrMore::from_first(first, suffixes);
+        let suffixes = OneOrMore::from_first(first, rest);
         let span = prefix.span().merge(suffixes.last().span());
         Expression::Suffixed(Box::new(SuffixedExpression { span, prefix, suffixes }))
     }

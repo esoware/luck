@@ -1,6 +1,8 @@
+//! Every command has to get through input nested as deep as Lua 5.4 and Luau
+//! take it.
+//!
 //! The binary runs each command on the stack its thread starts with, which is
-//! 1 MB for a Windows main thread, so every command has to get through input
-//! nested as deep as Lua 5.4 and Luau take it on that stack.
+//! 1 MB for a Windows main thread.
 
 use assert_cmd::assert::Assert;
 use luck_testgen::sources_at_the_nesting_cap;
