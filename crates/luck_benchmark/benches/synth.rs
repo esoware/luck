@@ -1,5 +1,10 @@
 //! Programmatic AST construction (`luck_ast::Synth`).
 
+#![expect(
+    clippy::missing_panics_doc,
+    reason = "a test panics to fail, so a Panics section says nothing"
+)]
+
 use luck_ast::{Block, Statement, Synth};
 use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use luck_formatter::{Comments, FormatOptions, format_block};
@@ -134,7 +139,8 @@ fn bench_synth(criterion: &mut Criterion) {
     group.bench_function(BenchmarkId::from_parameter("format"), |bencher| {
         bencher.iter_with_setup_wrapper(|runner| {
             let comments = Comments::none();
-            let _unused = runner.run(|| format_block(black_box(&block), comments, &options));
+            let formatted = runner.run(|| format_block(black_box(&block), comments, &options));
+            assert!(formatted.is_ok(), "{:?}", formatted.err());
         });
     });
 

@@ -1,7 +1,13 @@
+#![expect(
+    clippy::missing_panics_doc,
+    reason = "a test panics to fail, so a Panics section says nothing"
+)]
+
 use luck_benchmark::{
-    BenchmarkId, Criterion, black_box, criterion_group, criterion_main, test_files, test_projects,
+    BenchmarkId, Criterion, ProjectFile, black_box, criterion_group, criterion_main, test_files,
+    test_projects,
 };
-use luck_formatter::{Comments, FormatOptions, format_block};
+use luck_formatter::{FormatOptions, format};
 
 fn bench_formatter(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("formatter");
@@ -11,14 +17,10 @@ fn bench_formatter(criterion: &mut Criterion) {
         let source_text = file.source_text.as_str();
         let version = file.target.lua_version();
         let options = FormatOptions::default();
-        let parse_result = file.parse();
+        let formatted = format(source_text, version, &options);
+        assert!(formatted.errors.is_empty(), "{:?}", formatted.errors);
         group.bench_function(id, |bencher| {
-            // `format_block` consumes its `Comments`, so rebuild them in
-            // setup each iteration; the measured section is formatting only.
-            bencher.iter_with_setup_wrapper(|runner| {
-                let comments = Comments::from_source(&parse_result.comments, source_text, version);
-                let _unused = runner.run(|| format_block(&parse_result.block, comments, &options));
-            });
+            bencher.iter(|| format(black_box(source_text), version, &options));
         });
     }
 
@@ -26,21 +28,16 @@ fn bench_formatter(criterion: &mut Criterion) {
         let id = BenchmarkId::from_parameter(project.name);
         let version = project.target.lua_version();
         let options = FormatOptions::default();
-        let parse_results = project.parse_files();
+        let files = project.files;
+        for ProjectFile { relative_path, source_text } in &files {
+            let formatted = format(source_text, version, &options);
+            assert!(formatted.errors.is_empty(), "{relative_path}: {:?}", formatted.errors);
+        }
         group.bench_function(id, |bencher| {
-            bencher.iter_with_setup_wrapper(|runner| {
-                let per_file_comments: Vec<Comments> = parse_results
-                    .iter()
-                    .map(|parse_result| {
-                        Comments::from_source(&parse_result.comments, &parse_result.source, version)
-                    })
-                    .collect();
-                runner.run(|| {
-                    for (parse_result, comments) in parse_results.iter().zip(per_file_comments) {
-                        let _unused =
-                            black_box(format_block(&parse_result.block, comments, &options));
-                    }
-                });
+            bencher.iter(|| {
+                for ProjectFile { source_text, .. } in &files {
+                    black_box(format(black_box(source_text), version, &options));
+                }
             });
         });
     }

@@ -2,15 +2,14 @@
 //! synthetic ASTs stay printable.
 
 use luck_ast::{
-    BinaryOp, CallSuffix, Expression, IfExpression, InterpolatedString, ParenthesizedExpression,
-    Suffix, SuffixedExpression, UnaryOp, Var, expr_starts_with_brace,
+    BinaryOp, CallSuffix, Expression, FunctionDef, IfExpression, InterpolatedString,
+    ParenthesizedExpression, Suffix, SuffixedExpression, UnaryOp, Var, expr_starts_with_brace,
 };
 use luck_token::{CompactString, TokenKind, UnOp};
 
 use crate::format_type::ExplicitTypeArgs;
 use crate::ir::{
-    Format, Formatter, format_with, group, indent, nested_groups, soft_line, soft_line_or_space,
-    space, token,
+    Format, Formatter, format_with, group, indent, soft_line, soft_line_or_space, space, token,
 };
 use crate::numbers::normalize_number;
 use crate::quotes::normalize_quote;
@@ -40,11 +39,7 @@ impl Format for Expression {
             Self::TableConstructor(table) => table.fmt(f),
 
             Self::FunctionDef(function_def) => {
-                // Luau attributes stay on the same line as `function` here.
-                for attribute in &function_def.attributes {
-                    (attribute, space()).fmt(f);
-                }
-                (token("function"), &function_def.body).fmt(f);
+                f.write_without_sorting_requires(FunctionDefinition(function_def));
             }
 
             Self::IfExpression(if_expr) => if_expr.fmt(f), // Luau
@@ -57,6 +52,20 @@ impl Format for Expression {
             // A parse-recovery placeholder has no text to print.
             Self::Error(_) => {}
         }
+    }
+}
+
+/// A function expression. Only one a statement assigns, which prints this
+/// directly, keeps the require sorting of the block around it.
+pub(crate) struct FunctionDefinition<'def>(pub &'def FunctionDef);
+
+impl Format for FunctionDefinition<'_> {
+    fn fmt(&self, f: &mut Formatter) {
+        // Luau attributes stay on the same line as `function` here.
+        for attribute in &self.0.attributes {
+            (attribute, space()).fmt(f);
+        }
+        (token("function"), &self.0.body).fmt(f);
     }
 }
 
@@ -113,46 +122,41 @@ fn starts_with_bracket(expr: &Expression) -> bool {
 /// A chain lays out run by run, where a run is calls in a row, fields in a
 /// row, or a lone index or instantiation.
 ///
-/// Calls with two or more `:` methods among them break before each method
-/// when the chain doesn't fit, in a group that starts at the chain's prefix.
-/// Three or more fields break before each `.`, in a group of their own, so a
-/// break before them, as in a callback passed earlier, doesn't break them.
+/// Calls with two or more `:` methods among them break before each method,
+/// and three or more fields before each `.`, when the run doesn't fit. Each
+/// run breaks in a group of its own, so a break before it, as in a callback
+/// passed earlier, doesn't break it.
 impl Format for SuffixedExpression {
     fn fmt(&self, f: &mut Formatter) {
-        let method_chains = runs(&self.suffixes).filter(|run| is_method_chain(run)).count();
-        nested_groups(method_chains, |chained, groups| {
-            self.prefix.fmt(chained);
-            for run in runs(&self.suffixes) {
-                match run {
-                    [Suffix::Call(_), ..] if is_method_chain(run) => {
-                        indent(format_with(|indented| {
-                            for call in calls(run) {
-                                if call.method().is_some() {
-                                    soft_line().fmt(indented);
-                                }
-                                call.fmt(indented);
+        self.prefix.fmt(f);
+        for run in runs(&self.suffixes) {
+            match run {
+                [Suffix::Call(_), ..] if is_method_chain(run) => {
+                    group(indent(format_with(|indented| {
+                        for call in calls(run) {
+                            if call.method().is_some() {
+                                soft_line().fmt(indented);
                             }
-                        }))
-                        .fmt(chained);
-                        groups.end_innermost(chained);
-                    }
-                    [Suffix::Field(_), _, _, ..] => group(indent(format_with(|indented| {
-                        for suffix in run {
-                            if let Suffix::Field(name) = suffix {
-                                (soft_line(), token("."), name).fmt(indented);
-                            }
+                            call.fmt(indented);
                         }
                     })))
-                    .fmt(chained),
-                    _ => {
-                        for suffix in run {
-                            write_suffix(chained, suffix);
+                    .fmt(f);
+                }
+                [Suffix::Field(_), _, _, ..] => group(indent(format_with(|indented| {
+                    for suffix in run {
+                        if let Suffix::Field(name) = suffix {
+                            (soft_line(), token("."), name).fmt(indented);
                         }
+                    }
+                })))
+                .fmt(f),
+                _ => {
+                    for suffix in run {
+                        write_suffix(f, suffix);
                     }
                 }
             }
-        })
-        .fmt(f);
+        }
     }
 }
 

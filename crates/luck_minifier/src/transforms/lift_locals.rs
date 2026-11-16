@@ -461,20 +461,16 @@ fn can_lift_assignment(local: &LocalAssignment, version: LuaVersion) -> bool {
         && has_distinct_names(&local.names.items)
 }
 
-/// Compares every pair in a list as short as real code writes, and hashes a
-/// longer one so it stays linear.
+/// Past [`MAX_ACTIVE_LOCALS`] names, more than one function holds, none count
+/// as distinct.
 fn has_distinct_names(names: &[AttributedName]) -> bool {
-    const MAX_PAIRWISE_NAMES: usize = 8;
-    if names.len() <= MAX_PAIRWISE_NAMES {
-        return names.iter().enumerate().all(|(i, attributed)| {
+    names.len() <= MAX_ACTIVE_LOCALS
+        && names.iter().enumerate().all(|(i, attributed)| {
             names
                 .iter()
                 .take(i)
                 .all(|earlier| identifier_name(&earlier.name) != identifier_name(&attributed.name))
-        });
-    }
-    let mut earlier_names = FxHashSet::default();
-    names.iter().all(|attributed| earlier_names.insert(identifier_name(&attributed.name)))
+        })
 }
 
 /// A Lua 5.5 `...name` vararg is one too, and a hoisted declaration sharing its name would
@@ -642,9 +638,6 @@ impl LiftRewriter<'_> {
 }
 
 fn prepend_declaration(block: &mut Block, names: &[CompactString]) {
-    if names.is_empty() {
-        return;
-    }
     let attributed_names: Vec<AttributedName> = names
         .iter()
         .map(|name| AttributedName {

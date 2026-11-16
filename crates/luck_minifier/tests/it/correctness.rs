@@ -1,6 +1,8 @@
 use core::fmt::Write as _;
 
-use luck_token::LuaVersion;
+use luck_ast::{Block, MAX_NESTING_DEPTH, Synth, block_nesting_depth};
+use luck_minifier::TransformConfig;
+use luck_token::{LuaVersion, UnOp};
 
 use crate::common::{minify_lua54, reparses};
 
@@ -218,7 +220,7 @@ fn assert_minifies_within_the_depth_cap(source: &str) -> String {
     let output = minify_lua54(source);
     assert!(reparses(&output), "output must reparse");
     let input = luck_parser::parse(source, LuaVersion::Lua54).block;
-    let compact_input = luck_codegen::compact(&input).expect("the input prints");
+    let compact_input = luck_codegen::compact(&input);
     assert!(output.len() <= compact_input.len(), "output must be no longer than the compact input");
     assert!(minify_lua54(&output) == output, "output must be a fixpoint");
     output
@@ -306,4 +308,30 @@ fn an_empty_then_branch_is_not_negated_where_the_condition_would_nest_past_the_c
 
     let shallow = "if a == b then else x() end\n";
     assert_eq!(assert_minifies_within_the_depth_cap(shallow), "if not(a==b)then x()end");
+}
+
+fn nested_negations(wraps: usize) -> Block {
+    let synth = Synth::new();
+    let mut expr = synth.name_expr("x");
+    for _ in 0..wraps {
+        expr = synth.unary_op(UnOp::Not, expr);
+    }
+    synth.block(Vec::new(), Some(synth.return_(vec![expr])))
+}
+
+#[test]
+fn a_tree_at_the_nesting_cap_minifies() {
+    let wraps = MAX_NESTING_DEPTH - 1;
+    let block = nested_negations(wraps);
+    assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
+    let output = luck_minifier::minify_block(block, LuaVersion::Lua54, &TransformConfig::default());
+    assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps))));
+}
+
+#[test]
+fn a_tree_past_the_nesting_cap_is_an_error() {
+    let block = nested_negations(MAX_NESTING_DEPTH);
+    let error = luck_minifier::minify_block(block, LuaVersion::Lua54, &TransformConfig::default())
+        .expect_err("the tree nests one level too deep");
+    assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
 }

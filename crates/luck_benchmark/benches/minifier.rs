@@ -20,8 +20,8 @@ fn bench_minifier(criterion: &mut Criterion) {
         let minify = || luck_minifier::minify(black_box(source_text), version, &config);
         let minified = minify();
         assert!(minified.is_ok(), "{:?}", minified.err());
-        // `minify` has no parsed-AST entry point, so the measured section
-        // includes the initial parse; the transform fixpoint dominates.
+        // The measured section includes the parse, as `luck minify` does; the
+        // transform fixpoint dominates.
         group.bench_function(id, |bencher| {
             bencher.iter(minify);
         });

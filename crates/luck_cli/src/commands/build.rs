@@ -50,10 +50,10 @@ pub(crate) struct BuildArgs {
 }
 
 enum BuildFailure {
-    /// Bundling or minifying failed and the diagnostics are already rendered.
-    /// Watch mode keeps going and watches `source_files`, since an edit to one
-    /// of them may fix the build.
-    Failed { message: &'static str, source_files: Vec<String> },
+    /// Bundling failed and the diagnostics are already rendered. Watch mode
+    /// keeps going and watches `source_files`, since an edit to one of them
+    /// may fix the build.
+    Failed { source_files: Vec<String> },
     /// The output can't be written. The run ends with this exit code, even in
     /// watch mode.
     Fatal(Exit),
@@ -111,8 +111,8 @@ impl BuildArgs {
         for config in &configs {
             match self.build_one(config, verbosity) {
                 Ok(_) => {}
-                Err(BuildFailure::Failed { message, .. }) => {
-                    eprintln!("\n  \x1b[31merror:\x1b[0m {message}");
+                Err(BuildFailure::Failed { .. }) => {
+                    eprintln!("\n  \x1b[31merror:\x1b[0m build failed");
                     return Err(Exit::Failure);
                 }
                 Err(BuildFailure::Fatal(exit)) => return Err(exit),
@@ -201,7 +201,7 @@ impl BuildArgs {
         let mut all_source_files = Vec::new();
         for config in &configs {
             match self.build_one(config, verbosity) {
-                Ok(source_files) | Err(BuildFailure::Failed { source_files, .. }) => {
+                Ok(source_files) | Err(BuildFailure::Failed { source_files }) => {
                     all_source_files.extend(source_files);
                 }
                 Err(BuildFailure::Fatal(exit)) => return Err(exit),
@@ -213,9 +213,10 @@ impl BuildArgs {
 
     /// # Errors
     ///
-    /// Returns [`BuildFailure::Failed`] after rendering bundle or minify
-    /// diagnostics, and [`BuildFailure::Fatal`] when the output can't be
-    /// written or would replace a bundled file.
+    /// Returns [`BuildFailure::Failed`] after rendering bundle diagnostics,
+    /// and [`BuildFailure::Fatal`] when the output can't be written or would
+    /// replace a bundled file.
+    #[expect(clippy::missing_panics_doc, reason = "the bundler refuses a tree past the cap")]
     fn build_one(
         &self,
         config: &BuildConfig,
@@ -236,7 +237,7 @@ impl BuildArgs {
                 .map(|diag| diag.file_path.clone())
                 .chain([normalize_path(&config.entry)])
                 .collect();
-            BuildFailure::Failed { message: "build failed", source_files }
+            BuildFailure::Failed { source_files }
         };
         let check_output = |source_files: &[String]| {
             check_output_paths(source_files, [&config.output])
@@ -251,14 +252,13 @@ impl BuildArgs {
             if verbosity != Verbosity::Quiet {
                 print_diags(&bundled.warnings, version);
             }
+            #[expect(
+                clippy::expect_used,
+                clippy::unwrap_in_result,
+                reason = "the bundler refuses a tree past the cap"
+            )]
             let code = luck_minifier::minify_block(bundled.block, version, &config.transforms)
-                .map_err(|error| {
-                    eprintln!("error: cannot minify the bundle: {}", error.message);
-                    BuildFailure::Failed {
-                        message: "minification failed",
-                        source_files: bundled.source_files.clone(),
-                    }
-                })?;
+                .expect("a bundle nests within the cap");
             let mut minified = bundled.header;
             minified.push_str(&code);
             (minified, bundled.source_files, Some(bundled.source_byte_count))

@@ -7,11 +7,10 @@
 //! module, and `Formatter`'s `write_*` methods. Only this module pushes raw
 //! elements, which is what keeps every tag paired.
 
+use core::mem;
 use core::ops::Range;
 
-use luck_ast::Block;
-use luck_token::{CompactString, Span};
-use rustc_hash::FxHashSet;
+use luck_token::CompactString;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::comments::{Comments, CommentsCheckpoint};
@@ -176,9 +175,10 @@ pub(crate) struct Formatter {
     next_group_id: usize,
     options: FormatOptions,
     comments: Comments,
-    /// The spans of the blocks whose runs of requires print sorted, which
-    /// only [`crate::format()`] asks for.
-    sorting_blocks: FxHashSet<Span>,
+    /// Whether a block printed here sorts its runs of requires. Only
+    /// [`crate::format()`] starts with it on, and a block inherits it from
+    /// the one around it.
+    sorts_requires: bool,
 }
 
 impl Formatter {
@@ -192,17 +192,25 @@ impl Formatter {
             next_group_id: 0,
             options,
             comments,
-            sorting_blocks: FxHashSet::default(),
+            sorts_requires: false,
         }
     }
 
-    pub(crate) fn sorting_requires_in(mut self, blocks: FxHashSet<Span>) -> Self {
-        self.sorting_blocks = blocks;
+    pub(crate) const fn sorting_requires(mut self) -> Self {
+        self.sorts_requires = true;
         self
     }
 
-    pub(crate) fn sorts_requires_in(&self, block: &Block) -> bool {
-        self.sorting_blocks.contains(&block.span)
+    pub(crate) const fn sorts_requires(&self) -> bool {
+        self.sorts_requires
+    }
+
+    /// Writes a function whose block is no statement's own, so no block in
+    /// it sorts its requires.
+    pub(crate) fn write_without_sorting_requires(&mut self, content: impl Format) {
+        let sorts_requires = mem::replace(&mut self.sorts_requires, false);
+        content.fmt(self);
+        self.sorts_requires = sorts_requires;
     }
 
     /// Where the next element goes, which an emitter notes to find what it
@@ -376,46 +384,6 @@ where
         content.fmt(f);
         f.push(FormatElement::Tag(Tag::EndGroup));
     })
-}
-
-/// `count` groups, each inside the one before, all opened before `content`.
-/// It ends them innermost first through the [`OpenGroups`] it gets, and any it
-/// leaves open end after it.
-///
-/// Laid out this way, the groups wrap what they share at the front, as a
-/// method chain does its receiver, without nesting a call per group.
-pub(crate) fn nested_groups<Content>(count: usize, content: Content) -> impl Format
-where
-    Content: Fn(&mut Formatter, &mut OpenGroups),
-{
-    format_with(move |f| {
-        for _ in 0..count {
-            let id = f.group_id();
-            f.push(FormatElement::Tag(Tag::StartGroup(id)));
-        }
-        let mut groups = OpenGroups { open: count };
-        content(f, &mut groups);
-        for _ in 0..groups.open {
-            f.push(FormatElement::Tag(Tag::EndGroup));
-        }
-    })
-}
-
-/// The groups of a [`nested_groups`] still open.
-#[derive(Debug)]
-pub(crate) struct OpenGroups {
-    open: usize,
-}
-
-impl OpenGroups {
-    /// Ends the innermost group still open. Content between ends has to
-    /// close every group of its own first.
-    pub(crate) fn end_innermost(&mut self, f: &mut Formatter) {
-        if let Some(remaining) = self.open.checked_sub(1) {
-            self.open = remaining;
-            f.push(FormatElement::Tag(Tag::EndGroup));
-        }
-    }
 }
 
 /// Group with a caller-allocated id, so other elements can reference its

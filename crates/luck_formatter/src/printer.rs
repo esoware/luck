@@ -67,7 +67,6 @@ pub(crate) fn print(
         suffixes: Vec::new(),
         is_pending_space: false,
         is_pending_indent: !base_indent.is_empty(),
-        group_start_run: None,
     };
     printer.print_elements(elements);
     printer.flush_suffixes();
@@ -150,9 +149,6 @@ struct Printer {
     suffixes: Vec<FormatElement>,
     is_pending_space: bool,
     is_pending_indent: bool,
-    /// The last group measured: how many elements followed its start tag,
-    /// and how many group start tags came first among them.
-    group_start_run: Option<(usize, usize)>,
 }
 
 /// A forced break marks every group on the stack of enclosing groups.
@@ -382,17 +378,7 @@ impl Printer {
     fn decide_mode(&mut self, id: GroupId, rest: &[FormatElement]) -> PrintMode {
         // An enclosing flat group already measured this content;
         // re-measuring can't change the answer.
-        if self.current_mode() == PrintMode::Flat {
-            return PrintMode::Flat;
-        }
-        let inner_starts = self.inner_group_starts(rest);
-        let content = rest.get(inner_starts..).unwrap_or_default();
-        if self.fits_from(
-            content,
-            Region::Group,
-            self.occupied_width(),
-            inner_starts.wrapping_add(1),
-        ) {
+        if self.current_mode() == PrintMode::Flat || self.fits(rest, Region::Group, 0) {
             return PrintMode::Flat;
         }
         let hugs = self.hugs.get(id.index()).map_or(&[][..], Vec::as_slice);
@@ -416,28 +402,6 @@ impl Printer {
             return PrintMode::Flat;
         }
         PrintMode::Expanded
-    }
-
-    /// How many group start tags `rest` opens with, which measuring the group
-    /// before them skips, as they take no width.
-    ///
-    /// A chain's runs open that many groups at once, each measured in turn, so
-    /// the count carries over from the group a tag earlier rather than being
-    /// taken again for each.
-    fn inner_group_starts(&mut self, rest: &[FormatElement]) -> usize {
-        let count = match self.group_start_run {
-            Some((rest_length, count))
-                if rest_length == rest.len().wrapping_add(1) && count > 0 =>
-            {
-                count.wrapping_sub(1)
-            }
-            Some(_) | None => rest
-                .iter()
-                .take_while(|element| matches!(element, FormatElement::Tag(Tag::StartGroup(_))))
-                .count(),
-        };
-        self.group_start_run = Some((rest.len(), count));
-        count
     }
 
     fn print_line(&mut self, mode: LineMode) {

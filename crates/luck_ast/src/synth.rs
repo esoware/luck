@@ -121,13 +121,13 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   constructors join a run they extend rather than nest it.
 ///   [`block_nesting_depth`](crate::block_nesting_depth) and
 ///   [`expr_nesting_depth`](crate::expr_nesting_depth) measure a tree of any
-///   depth without recursing past the cap. Both printers return an error for
-///   a deeper tree, but dropping or cloning one can still overflow the stack.
+///   depth without recursing past the cap.
 ///
 /// To format the result, pass it to `luck_formatter::format_block`, with any
 /// [`SyntheticComment`]s wrapped in `Comments::synthetic`. For compact
 /// output, call `luck_codegen::compact`. Both print each leaf as the tree
-/// holds it and return an error only for a tree nested past the cap.
+/// holds it. `format_block` returns an error for a tree nested past the cap,
+/// and `compact` prints it as it is, output the parser refuses.
 ///
 /// # Usage
 ///

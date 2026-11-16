@@ -5,7 +5,7 @@ use luck_token::{BinOp, OperandSide};
 
 use crate::expr::{
     binds_looser_than_unary, can_unwrap_in_binop_lhs, can_unwrap_in_binop_rhs, ends_in_if_expr,
-    inner_operand_side, parenthesize,
+    inner_operand_side,
 };
 
 pub(crate) fn simplify(block: Block) -> Block {
@@ -18,10 +18,7 @@ struct ParenSimplifier;
 // not these temporaries.
 fn strip_parens(walked: Expression) -> Expression {
     match walked {
-        Expression::Parenthesized(paren) => {
-            let inner = paren.expr;
-            if can_remove_parens(&inner) { inner } else { parenthesize(inner) }
-        }
+        Expression::Parenthesized(paren) if can_remove_parens(&paren.expr) => paren.expr,
         Expression::BinaryOp(mut binary_op) => {
             let op = binary_op.links.first().op;
             let inner_side = inner_operand_side(&binary_op);
@@ -40,10 +37,10 @@ fn strip_parens(walked: Expression) -> Expression {
             Expression::BinaryOp(binary_op)
         }
         Expression::UnaryOp(mut unop) => {
-            if let Expression::Parenthesized(paren) = &mut unop.operand {
-                let inner = paren.expr.take();
-                unop.operand =
-                    if can_unwrap_in_unary(&inner) { inner } else { parenthesize(inner) };
+            if let Expression::Parenthesized(paren) = &mut unop.operand
+                && can_unwrap_in_unary(&paren.expr)
+            {
+                unop.operand = paren.expr.take();
             }
             Expression::UnaryOp(unop)
         }
@@ -57,6 +54,7 @@ fn strip_parens(walked: Expression) -> Expression {
         | Expression::FunctionDef(_)
         | Expression::Name(_)
         | Expression::Suffixed(_)
+        | Expression::Parenthesized(_)
         | Expression::TableConstructor(_)
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
@@ -71,15 +69,15 @@ fn strip_operand_parens(operand: &mut Expression, op: BinOp, side: OperandSide) 
     let Expression::Parenthesized(paren) = operand else {
         return false;
     };
-    let inner = paren.expr.take();
     let can_unwrap = match side {
-        OperandSide::Left => can_unwrap_in_binop_lhs(&inner, op),
-        OperandSide::Right => can_unwrap_in_binop_rhs(&inner, op),
+        OperandSide::Left => can_unwrap_in_binop_lhs(&paren.expr, op),
+        OperandSide::Right => can_unwrap_in_binop_rhs(&paren.expr, op),
     };
-    let is_bare_run = can_unwrap
-        && matches!(&inner, Expression::BinaryOp(run) if run.precedence().0 == op.precedence().0);
-    *operand = if can_unwrap { inner } else { parenthesize(inner) };
-    is_bare_run
+    if !can_unwrap {
+        return false;
+    }
+    *operand = paren.expr.take();
+    matches!(operand, Expression::BinaryOp(run) if run.precedence().0 == op.precedence().0)
 }
 
 impl Transform for ParenSimplifier {
@@ -143,12 +141,12 @@ impl Transform for ParenSimplifier {
         // Out of the walk, which would strip the prefix's own parens.
         let prefix = chain.prefix.take();
         let mut walked = self.walk_suffixed(chain);
-        walked.prefix = if let Expression::Parenthesized(paren) = prefix {
-            let inner = self.transform_expr(paren.expr);
-            if is_instantiated && is_prefix_expr(&inner) && can_remove_parens(&inner) {
-                inner
+        walked.prefix = if let Expression::Parenthesized(mut paren) = prefix {
+            paren.expr = self.transform_expr(paren.expr);
+            if is_instantiated && is_prefix_expr(&paren.expr) && can_remove_parens(&paren.expr) {
+                paren.expr
             } else {
-                parenthesize(inner)
+                Expression::Parenthesized(paren)
             }
         } else {
             self.transform_expr(prefix)

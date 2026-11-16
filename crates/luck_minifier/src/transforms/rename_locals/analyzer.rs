@@ -5,7 +5,6 @@ use luck_token::{CompactString, LuaVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::candidate_pool::CandidatePool;
-use super::renamer::RenamedBinding;
 use super::scope_claims::ScopeClaims;
 use crate::binding::{
     IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, has_implicit_arg, identifier_name,
@@ -83,18 +82,18 @@ impl Analyzer {
         }
     }
 
-    pub(super) fn renamed_bindings(mut self) -> Vec<RenamedBinding> {
+    /// Each binding's new name, in the order the walk declared them.
+    pub(super) fn binding_names(mut self) -> Vec<CompactString> {
         self.propagate_globals();
         let live_scopes_by_slot = self.assign_slots();
         let slot_names = self.generate_names(&live_scopes_by_slot);
         self.bindings
             .into_iter()
             .map(|binding| {
-                let new_name = binding
+                binding
                     .slot
                     .and_then(|slot| slot_names.get(slot).cloned())
-                    .unwrap_or_else(|| binding.original_name.clone());
-                RenamedBinding::new(binding.original_name, new_name)
+                    .unwrap_or(binding.original_name)
             })
             .collect()
     }

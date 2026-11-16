@@ -4,19 +4,15 @@ mod function;
 mod stmt;
 mod types;
 
-use luck_ast::{Block, MAX_NESTING_DEPTH, Punctuated};
-use luck_token::{CodeBuffer, SourceError, Token, TokenKind};
+use luck_ast::{Block, Punctuated};
+use luck_token::{CodeBuffer, Token, TokenKind};
 
 use crate::separator::{PieceClass, needs_space};
 
 /// The output starts with no reserved capacity. Use
 /// [`compact_with_capacity`] when there's a useful size estimate.
-///
-/// # Errors
-///
-/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
-/// which `luck_parser` never builds and would refuse to read back.
-pub fn compact(block: &Block) -> Result<String, SourceError> {
+#[must_use]
+pub fn compact(block: &Block) -> String {
     compact_with_capacity(block, 0)
 }
 
@@ -25,54 +21,20 @@ pub fn compact(block: &Block) -> Result<String, SourceError> {
 ///
 /// A previous output's length makes a good one. Source length over-reserves for comment-heavy
 /// input, and a transformed AST can print longer than its source.
-///
-/// # Errors
-///
-/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
-/// which `luck_parser` never builds and would refuse to read back.
-pub fn compact_with_capacity(block: &Block, capacity: usize) -> Result<String, SourceError> {
-    let mut printer = CompactPrinter {
-        output: CodeBuffer::with_capacity(capacity),
-        previous: PieceClass::Other,
-        depth: 0,
-        is_too_deep: false,
-    };
+#[must_use]
+pub fn compact_with_capacity(block: &Block, capacity: usize) -> String {
+    let mut printer =
+        CompactPrinter { output: CodeBuffer::with_capacity(capacity), previous: PieceClass::Other };
     printer.emit_block(block);
-    if printer.is_too_deep {
-        return Err(SourceError {
-            span: block.span,
-            message: format!(
-                "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
-            ),
-        });
-    }
-    Ok(printer.output.into_string())
+    printer.output.into_string()
 }
 
 struct CompactPrinter {
     output: CodeBuffer,
     previous: PieceClass,
-    /// Levels open where the printer is, as [`MAX_NESTING_DEPTH`] counts them.
-    depth: usize,
-    is_too_deep: bool,
 }
 
 impl CompactPrinter {
-    /// Enter a level of nesting, the levels `luck_ast::Visitor::descend`
-    /// counts. Past the cap nothing more prints, so the printer's own stack
-    /// stays bounded on a tree of any depth.
-    const fn descend(&mut self) -> bool {
-        self.depth = self.depth.saturating_add(1);
-        if self.depth > MAX_NESTING_DEPTH {
-            self.is_too_deep = true;
-        }
-        !self.is_too_deep
-    }
-
-    const fn ascend(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
-    }
-
     /// Print one piece, preceded by a space if it would otherwise merge with
     /// the previous one.
     #[expect(

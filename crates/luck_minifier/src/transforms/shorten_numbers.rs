@@ -160,18 +160,10 @@ fn shorten_number(text: &str, subtypes: NumberSubtypes) -> Option<String> {
         let decimal = format_shortest_decimal(value, has_int_subtype && is_float_formed);
         candidates.push(decimal);
 
-        // Scientific spelling is tried for exponents <= -2 or >= 3, which are
-        // exactly the magnitudes outside this range.
-        if !(0.1f64..1000.0f64).contains(&value.abs())
-            && let Some(exponent) = decimal_exponent(value)
-            && let Ok(power_of_ten) = format!("1e{exponent}").parse::<f64>()
-        {
-            #[expect(
-                clippy::float_arithmetic,
-                reason = "computes the mantissa of a candidate literal"
-            )]
-            let mantissa = value / power_of_ten;
-            candidates.push(format!("{}e{exponent}", format_shortest_decimal(mantissa, false)));
+        // Rust prints the shortest digits that round-trip, the same on every
+        // host. Within this range a decimal spelling is never longer.
+        if !(0.1f64..100.0f64).contains(&value.abs()) {
+            candidates.push(format!("{value:e}"));
         }
         // `0.5` -> `.5`, but never `0.` -> `.` (not a number literal).
         if let Some(stripped) = text.strip_prefix("0.")
@@ -186,20 +178,6 @@ fn shorten_number(text: &str, subtypes: NumberSubtypes) -> Option<String> {
         .filter(|candidate| roundtrips(candidate, value))
         .min_by_key(String::len)
         .filter(|candidate| candidate.len() < text.len())
-}
-
-/// The power of ten `value`'s first digit stands at, or `None` for zero.
-///
-/// Read off the shortest digits that round-trip, which Rust formats the same
-/// on every host. A platform's `log10` may land a hair under a whole number
-/// at an exact power of ten, and the spelling would follow it.
-fn decimal_exponent(value: f64) -> Option<i32> {
-    if value == 0.0f64 {
-        return None;
-    }
-    let scientific = format!("{value:e}");
-    let (_, exponent) = scientific.split_once('e')?;
-    exponent.parse().ok()
 }
 
 fn format_shortest_decimal(value: f64, should_stay_float_formed: bool) -> String {
@@ -266,16 +244,13 @@ mod tests {
     }
 
     #[test]
-    fn a_power_of_ten_reads_its_exponent_off_its_digits() {
-        // `log10` isn't exact on every host, and one that lands just under a
-        // whole number would spell `1000` as `10e2`.
+    fn scientific_spelling_keeps_the_shortest_digits() {
         for exponent in -307i32..=308i32 {
-            let value: f64 = format!("1e{exponent}").parse().unwrap();
-            assert_eq!(decimal_exponent(value), Some(exponent));
+            let literal = format!("1.0e{exponent}");
+            let shortest = shorten_number(&literal, NumberSubtypes::IntFloat).unwrap_or_default();
+            assert!(shortest.len() <= format!("1e{exponent}").len(), "{literal}: {shortest}");
+            assert_eq!(shortest.parse::<f64>(), literal.parse::<f64>(), "{literal}");
         }
-        assert_eq!(decimal_exponent(999.999_999_999_999_9), Some(2i32));
-        assert_eq!(decimal_exponent(0.000_15), Some(-4i32));
-        assert_eq!(decimal_exponent(0.0), None);
         for zeros in 3usize..=15 {
             let literal = format!("1{}", "0".repeat(zeros));
             let shortened = shorten_number(&literal, NumberSubtypes::Unified);
@@ -283,6 +258,14 @@ mod tests {
         }
         assert_eq!(shorten_number("0.0001", NumberSubtypes::IntFloat).as_deref(), Some("1e-4"));
         assert_eq!(shorten_number("1500000.0", NumberSubtypes::IntFloat).as_deref(), Some("1.5e6"));
+        assert_eq!(
+            shorten_number("0.000010012", NumberSubtypes::IntFloat).as_deref(),
+            Some("1.0012e-5")
+        );
+        assert_eq!(shorten_number("999.9999999999999", NumberSubtypes::IntFloat), None);
+        // A float-formed `100.` is one byte longer than `1e2`.
+        assert_eq!(shorten_number("100.0", NumberSubtypes::IntFloat).as_deref(), Some("1e2"));
+        assert_eq!(shorten_number("100.0", NumberSubtypes::Unified).as_deref(), Some("100"));
     }
 
     #[test]

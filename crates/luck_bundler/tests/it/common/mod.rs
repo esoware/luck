@@ -52,8 +52,8 @@ fn assert_tree_is_the_parse(output: &str, tree: BlockBundle, version: LuaVersion
     let expected = WithoutEmptyStatements.transform_block(parsed.block);
     let actual = WithoutEmptyStatements.transform_block(tree.block);
     assert_eq!(
-        luck_codegen::compact(&actual).expect("the tree prints"),
-        luck_codegen::compact(&expected).expect("the parse prints"),
+        luck_codegen::compact(&actual),
+        luck_codegen::compact(&expected),
         "the tree prints apart from the bundle's parse:\n{output}"
     );
     // What the minifier keeps on top of the text it reads.

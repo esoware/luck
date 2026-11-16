@@ -14,13 +14,14 @@ use crate::expr::{
     is_same_pure_expr, parenthesize, truncate_multi_value,
 };
 
-pub(crate) fn remove(mut block: Block, version: LuaVersion, liveness: &mut Liveness) -> Block {
+pub(crate) fn remove(mut block: Block, version: LuaVersion) -> Block {
+    let mut liveness = Liveness::default();
     loop {
-        if !scan(&block, version, liveness) {
+        if !scan(&block, version, &mut liveness) {
             return block;
         }
         let mut remover =
-            DeadCodeRemover { live_names: liveness, version, has_changed: false, depth: 0 };
+            DeadCodeRemover { live_names: &liveness, version, has_changed: false, depth: 0 };
         block = remover.transform_block(block);
         if !remover.has_changed {
             return block;
@@ -87,10 +88,10 @@ fn scan(block: &Block, version: LuaVersion, liveness: &mut Liveness) -> bool {
     scanner.has_rewrite || scanner.liveness.nodes.iter().any(|node| node.is_local && !node.is_live)
 }
 
-/// The use graph a scan builds. The pipeline keeps one for all its rounds, so
+/// The use graph a scan builds. `remove` keeps one for all its rounds, so
 /// each scan reuses the last one's allocations.
 #[derive(Default)]
-pub(crate) struct Liveness {
+struct Liveness {
     nodes_by_name: FxHashMap<CompactString, usize>,
     nodes: Vec<UseNode>,
     edges: Vec<UseEdge>,
@@ -189,9 +190,7 @@ struct UseScanner<'liveness> {
     liveness: &'liveness mut Liveness,
     /// The innermost droppable `local` whose dropped parts the walk is in.
     owner: Option<usize>,
-    /// Whether the walk has met a rewrite other than an unused `local`. Every
-    /// rewrite `DeadCodeRemover` makes has to set it, or a round with nothing
-    /// else to do skips that rewrite.
+    /// Whether the walk has met a rewrite other than an unused `local`.
     has_rewrite: bool,
 }
 
@@ -256,7 +255,7 @@ impl<'ast> Visitor<'ast> for UseScanner<'_> {
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Statement) {
-        self.has_rewrite = self.has_rewrite || is_rewritten(stmt);
+        self.has_rewrite = self.has_rewrite || stmt_rewrite(stmt).is_some();
         match stmt {
             Statement::LocalAssignment(local)
                 if !matches!(unused_local_action(local, self.version), DeadLocalAction::Keep) =>
@@ -330,37 +329,70 @@ fn constant_truthiness(expr: &Expression) -> Option<bool> {
     None
 }
 
-/// A branch that never runs or does nothing, or a Lua 5.2+ `;`.
+/// What a round does to a statement itself, besides dropping an unused `local`.
 ///
+/// The scan predicts a round's work with [`stmt_rewrite`] and the remover
+/// rewrites by it, so a rewrite can't be in one and not the other.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StmtRewrite {
+    /// A branch that never runs or does nothing, an empty `do`, or a Lua 5.2+
+    /// `;` goes.
+    Drop,
+    /// An arm under a literal condition goes, or an `if` with one `else`
+    /// trades its branches.
+    SimplifyIf,
+    /// `repeat ... until true` becomes a `do` block.
+    Unroll,
+    /// A numeric `for` drops its step of 1.
+    DropStep,
+    /// `local x = nil` becomes `local x`.
+    DropNil,
+}
+
 /// A `;` never decides whether a label ends its block, since every Lua skips
 /// past it to see, and the printer puts one back before a statement that
 /// starts with `(`.
-fn is_dead_stmt(stmt: &Statement) -> bool {
+///
+/// It may claim an `if` that `simplify_if` then finds too deep to negate,
+/// which costs only a round that changes nothing.
+fn stmt_rewrite(stmt: &Statement) -> Option<StmtRewrite> {
     match stmt {
-        Statement::EmptyStatement(_) => true,
+        Statement::EmptyStatement(_) => Some(StmtRewrite::Drop),
         Statement::WhileLoop(while_loop) => {
-            constant_truthiness(&while_loop.condition) == Some(false)
+            (constant_truthiness(&while_loop.condition) == Some(false)).then_some(StmtRewrite::Drop)
+        }
+        Statement::DoBlock(do_block) => {
+            is_empty_block(&do_block.block).then_some(StmtRewrite::Drop)
         }
         Statement::IfStatement(if_stmt) => {
             // An empty-body `if` can only go when evaluating the condition is
             // side-effect free: `if f() then end` calls f.
             let has_no_effect = is_empty_block(&if_stmt.block) && is_pure_expr(&if_stmt.condition);
-            if_stmt.elseif_clauses.is_empty()
+            let is_dead = if_stmt.elseif_clauses.is_empty()
                 && if_stmt.else_clause.is_none()
-                && (constant_truthiness(&if_stmt.condition) == Some(false) || has_no_effect)
+                && (constant_truthiness(&if_stmt.condition) == Some(false) || has_no_effect);
+            if is_dead {
+                Some(StmtRewrite::Drop)
+            } else {
+                (has_literal_arm(if_stmt) || is_swappable(if_stmt))
+                    .then_some(StmtRewrite::SimplifyIf)
+            }
+        }
+        Statement::RepeatLoop(repeat_loop) => runs_once(repeat_loop).then_some(StmtRewrite::Unroll),
+        Statement::NumericFor(numeric_for) => {
+            has_default_step(numeric_for).then_some(StmtRewrite::DropStep)
+        }
+        Statement::LocalAssignment(local) => {
+            is_nil_initialized(local).then_some(StmtRewrite::DropNil)
         }
         // `x = x` stays. Without binding resolution this pass can't prove `x`
         // is a local, and on a global under a metatabled environment it fires
         // __index and __newindex.
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
-        | Statement::DoBlock(_)
-        | Statement::RepeatLoop(_)
-        | Statement::NumericFor(_)
         | Statement::GenericFor(_)
         | Statement::FunctionDecl(_)
         | Statement::LocalFunction(_)
-        | Statement::LocalAssignment(_)
         | Statement::Goto(_)
         | Statement::Label(_)
         | Statement::GlobalDeclaration(_)
@@ -369,46 +401,21 @@ fn is_dead_stmt(stmt: &Statement) -> bool {
         | Statement::Break(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
-        | Statement::Error(_) => false,
+        | Statement::Error(_) => None,
     }
 }
 
-/// Whether the round rewrites `stmt` itself, other than to drop an unused
-/// `local`.
-///
-/// It may claim an `if` that `simplify_if` then finds too deep to negate,
-/// which costs only a round that changes nothing.
-fn is_rewritten(stmt: &Statement) -> bool {
-    match stmt {
-        Statement::IfStatement(if_stmt) => {
-            iter::once(&if_stmt.condition)
-                .chain(if_stmt.elseif_clauses.iter().map(|clause| &clause.condition))
-                .any(|condition| constant_truthiness(condition).is_some())
-                || (if_stmt.elseif_clauses.is_empty()
-                    && if_stmt.else_clause.is_some()
-                    && (is_empty_block(&if_stmt.block) || is_negation(&if_stmt.condition)))
-                || is_dead_stmt(stmt)
-        }
-        Statement::WhileLoop(_) | Statement::EmptyStatement(_) => is_dead_stmt(stmt),
-        Statement::RepeatLoop(repeat_loop) => runs_once(repeat_loop),
-        Statement::NumericFor(numeric_for) => has_default_step(numeric_for),
-        Statement::LocalAssignment(local) => is_nil_initialized(local),
-        Statement::DoBlock(do_block) => is_empty_block(&do_block.block),
-        Statement::Assignment(_)
-        | Statement::FunctionCall(_)
-        | Statement::GenericFor(_)
-        | Statement::FunctionDecl(_)
-        | Statement::LocalFunction(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalDeclaration(_)
-        | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_)
-        | Statement::Break(_)
-        | Statement::CompoundAssignment(_)
-        | Statement::TypeDeclaration(_)
-        | Statement::Error(_) => false,
-    }
+fn has_literal_arm(if_stmt: &IfStatement) -> bool {
+    iter::once(&if_stmt.condition)
+        .chain(if_stmt.elseif_clauses.iter().map(|clause| &clause.condition))
+        .any(|condition| constant_truthiness(condition).is_some())
+}
+
+/// An `if` whose one `else` can trade places with an empty or negated `then`.
+fn is_swappable(if_stmt: &IfStatement) -> bool {
+    if_stmt.elseif_clauses.is_empty()
+        && if_stmt.else_clause.is_some()
+        && (is_empty_block(&if_stmt.block) || is_negation(&if_stmt.condition))
 }
 
 const fn is_empty_block(block: &Block) -> bool {
@@ -526,18 +533,18 @@ impl DeadCodeRemover<'_> {
         if !has_head {
             return match else_clause.take() {
                 Some(clause) => do_block(clause.block),
-                // `if false then ... end`, which `is_dead_stmt` drops.
+                // `if false then ... end`, which `stmt_rewrite` drops.
                 None => Statement::IfStatement(if_stmt),
             };
         }
 
-        if elseif_clauses.is_empty() && else_clause.is_some() {
+        if is_swappable(&if_stmt) {
             // The `not` and its parentheses nest the condition two levels
             // deeper.
-            if is_empty_block(block) && fits_at_depth(self.depth, 2, condition) {
+            if is_empty_block(&if_stmt.block) && fits_at_depth(self.depth, 2, &if_stmt.condition) {
                 return self.negate_into_else(if_stmt);
             }
-            if is_negation(condition) {
+            if is_negation(&if_stmt.condition) {
                 return self.swap_negated_branches(if_stmt);
             }
         }
@@ -633,7 +640,7 @@ impl Transform for DeadCodeRemover<'_> {
             // never reaches the branch checks below.
             match classify_dead_local(&transformed, self.live_names, self.version) {
                 DeadLocalAction::Keep => {
-                    if is_dead_stmt(&transformed) {
+                    if stmt_rewrite(&transformed) == Some(StmtRewrite::Drop) {
                         self.has_changed = true;
                     } else {
                         new_stmts.push(transformed);
@@ -641,6 +648,7 @@ impl Transform for DeadCodeRemover<'_> {
                 }
                 DeadLocalAction::Remove => self.has_changed = true,
                 DeadLocalAction::ExtractCalls => {
+                    self.has_changed = true;
                     if let Statement::LocalAssignment(local) = transformed {
                         new_stmts.extend(call_stmts(*local));
                     }
@@ -669,32 +677,30 @@ impl Transform for DeadCodeRemover<'_> {
     }
 
     fn transform_stmt(&mut self, stmt: Statement) -> Statement {
+        let rewrite = stmt_rewrite(&stmt);
         match stmt {
             Statement::IfStatement(if_stmt) => self.simplify_if(if_stmt),
-            Statement::RepeatLoop(repeat_loop) if runs_once(&repeat_loop) => {
+            Statement::RepeatLoop(repeat_loop) if rewrite == Some(StmtRewrite::Unroll) => {
                 self.keep_only_block(repeat_loop.block)
             }
-            Statement::NumericFor(mut numeric_for) => {
-                if has_default_step(&numeric_for) {
-                    self.has_changed = true;
-                    numeric_for.step = None;
-                }
+            Statement::NumericFor(mut numeric_for) if rewrite == Some(StmtRewrite::DropStep) => {
+                self.has_changed = true;
+                numeric_for.step = None;
                 self.walk_stmt(Statement::NumericFor(numeric_for))
             }
-            Statement::LocalAssignment(mut local) => {
-                if is_nil_initialized(&local) {
-                    self.has_changed = true;
-                    local.span = Span::default();
-                    local.exprs = None;
-                    return Statement::LocalAssignment(local);
-                }
-                self.walk_stmt(Statement::LocalAssignment(local))
+            Statement::LocalAssignment(mut local) if rewrite == Some(StmtRewrite::DropNil) => {
+                self.has_changed = true;
+                local.span = Span::default();
+                local.exprs = None;
+                Statement::LocalAssignment(local)
             }
             other @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::DoBlock(_)
             | Statement::WhileLoop(_)
             | Statement::RepeatLoop(_)
+            | Statement::NumericFor(_)
+            | Statement::LocalAssignment(_)
             | Statement::GenericFor(_)
             | Statement::FunctionDecl(_)
             | Statement::LocalFunction(_)
@@ -762,15 +768,9 @@ fn classify_dead_local(
                 DeadLocalAction::Keep
             }
         }
-        Statement::DoBlock(do_block) => {
-            if is_empty_block(&do_block.block) {
-                DeadLocalAction::Remove
-            } else {
-                DeadLocalAction::Keep
-            }
-        }
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
+        | Statement::DoBlock(_)
         | Statement::WhileLoop(_)
         | Statement::RepeatLoop(_)
         | Statement::IfStatement(_)
@@ -840,9 +840,7 @@ mod tests {
     use crate::fixtures::{parse, run_pass};
 
     fn apply(source: &str) -> String {
-        run_pass(source, LuaVersion::Lua54, |block| {
-            remove(block, LuaVersion::Lua54, &mut Liveness::default())
-        })
+        run_pass(source, LuaVersion::Lua54, |block| remove(block, LuaVersion::Lua54))
     }
 
     #[test]
@@ -868,8 +866,7 @@ return 1
         assert!(kept.contains("_ENV"), "5.4 must pin _ENV: {kept}");
 
         for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-            let removed =
-                run_pass(source, version, |block| remove(block, version, &mut Liveness::default()));
+            let removed = run_pass(source, version, |block| remove(block, version));
             assert!(
                 !removed.contains("_ENV"),
                 "{version:?} binds _ENV like any other local: {removed}"
@@ -1009,9 +1006,26 @@ local x = g(y)
             ("do end", ""),
             ("local x = f()", "f()"),
             ("f(); g()", "f()g()"),
+            ("return 1 < 2 and \"x\" or \"x\"", "return\"x\""),
         ] {
             assert_eq!(apply(source), expected, "source: {source}");
         }
+    }
+
+    #[test]
+    fn extracting_the_calls_of_an_unused_local_is_a_change() {
+        let block = parse("local x = f()", LuaVersion::Lua54);
+        let mut liveness = Liveness::default();
+        assert!(scan(&block, LuaVersion::Lua54, &mut liveness));
+        let mut remover = DeadCodeRemover {
+            live_names: &liveness,
+            version: LuaVersion::Lua54,
+            has_changed: false,
+            depth: 0,
+        };
+        let output = remover.transform_block(block);
+        assert!(remover.has_changed);
+        assert_eq!(luck_codegen::compact(&output), "f()");
     }
 
     #[test]

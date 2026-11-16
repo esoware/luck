@@ -792,7 +792,7 @@ fn disabled_region_limit(
 
 /// The first of `regions` that ends past `position`. `format off` regions are
 /// sorted and apart, so their ends are in order too.
-pub(crate) fn region_ending_after(regions: &[Range<u32>], position: u32) -> Option<&Range<u32>> {
+fn region_ending_after(regions: &[Range<u32>], position: u32) -> Option<&Range<u32>> {
     regions.get(regions.partition_point(|region| region.end <= position))
 }
 

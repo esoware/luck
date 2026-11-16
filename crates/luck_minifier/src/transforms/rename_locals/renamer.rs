@@ -11,22 +11,10 @@ use crate::binding::{
     identifier_token,
 };
 
-/// A binding as the analyzer declared it, and the name it gets.
-pub(super) struct RenamedBinding {
-    original_name: CompactString,
-    new_name: CompactString,
-}
-
-impl RenamedBinding {
-    pub(super) const fn new(original_name: CompactString, new_name: CompactString) -> Self {
-        Self { original_name, new_name }
-    }
-}
-
 /// Declares bindings in the order the analyzer did, so binding ids line up,
 /// and rewrites every declaration and reference to its binding's new name.
 pub(super) struct Renamer {
-    bindings: Vec<RenamedBinding>,
+    binding_new_names: Vec<CompactString>,
     next_binding_id: usize,
     name_stacks: FxHashMap<CompactString, Vec<CompactString>>,
     scope_binding_names: Vec<Vec<CompactString>>,
@@ -34,19 +22,14 @@ pub(super) struct Renamer {
 }
 
 impl Renamer {
-    pub(super) fn new(bindings: Vec<RenamedBinding>, version: LuaVersion) -> Self {
+    pub(super) fn new(binding_new_names: Vec<CompactString>, version: LuaVersion) -> Self {
         Self {
-            bindings,
+            binding_new_names,
             next_binding_id: 0,
             name_stacks: FxHashMap::default(),
             scope_binding_names: vec![Vec::new()],
             version,
         }
-    }
-
-    /// Whether the walk has declared every binding the analyzer did.
-    pub(super) const fn has_declared_every_binding(&self) -> bool {
-        self.next_binding_id == self.bindings.len()
     }
 
     pub(super) fn declare_root_globals(&mut self, names: &[&str]) {
@@ -56,14 +39,11 @@ impl Renamer {
     }
 
     fn declare_binding(&mut self, original: &str) -> CompactString {
-        let binding = self.bindings.get(self.next_binding_id);
-        debug_assert!(
-            binding.is_some_and(|declared| declared.original_name == original),
-            "the renamer declared `{original}` where its analyzer declared {:?}",
-            binding.map(|declared| declared.original_name.as_str())
-        );
-        let new_name =
-            binding.map_or_else(|| original.into(), |declared| declared.new_name.clone());
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "out-of-step walks must panic; a fallback would emit wrong Lua"
+        )]
+        let new_name = self.binding_new_names[self.next_binding_id].clone();
         self.next_binding_id = self.next_binding_id.saturating_add(1);
         let original_name = CompactString::from(original);
         if let Some(scope_names) = self.scope_binding_names.last_mut() {
@@ -347,15 +327,10 @@ mod tests {
 
     #[test]
     fn a_walk_gives_each_binding_the_name_the_analyzer_chose() {
-        let bindings = vec![
-            RenamedBinding::new("first".into(), "l".into()),
-            RenamedBinding::new("second".into(), "u".into()),
-        ];
-        let mut renamer = Renamer::new(bindings, LuaVersion::Lua54);
+        let mut renamer = Renamer::new(vec!["l".into(), "u".into()], LuaVersion::Lua54);
         let source = "local first = 1 local second = first";
         let tree = renamer.transform_block(parse(source, LuaVersion::Lua54));
-        assert!(renamer.has_declared_every_binding());
-        let output = luck_codegen::compact(&tree).expect("the tree prints");
+        let output = luck_codegen::compact(&tree);
         assert_eq!(output, "local l=1 local u=l");
     }
 }

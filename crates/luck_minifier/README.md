@@ -4,7 +4,7 @@ AST-level minification for Lua and Luau.
 
 ## Overview
 
-`luck_minifier` runs a sequence of AST transforms on a parsed program and emits the result through `luck_codegen` in compact mode. Each pass takes and returns a `Block` and shares no state with the others, so passes compose and can be tested on their own. `minify` parses source, and `minify_block` takes a tree, such as the bundle `luck_bundler::bundle_block` builds.
+`luck_minifier` runs a sequence of AST transforms on a parsed program and emits the result through `luck_codegen` in compact mode. Each pass takes and returns a `Block` and shares no state with the others, so passes compose and can be tested on their own. `minify` parses source, and `minify_block` takes a tree, such as the bundle `luck_bundler::bundle_block` builds, and refuses one nested past `luck_ast::MAX_NESTING_DEPTH`.
 
 ## Key features
 
@@ -26,7 +26,7 @@ Core passes, one round, in order:
 1. `remove_dead_code` drops unused locals, resolves branches with constant conditions, and trims redundant code such as `local x = nil`, a `for` step of `1`, or a trailing bare `return`.
 2. `simplify_statements` merges nested `if`s into one `and` condition and turns trailing `if c then return X end` guards into an `and`/`or` return.
 3. `fold_constants` evaluates constant expressions at compile time.
-4. `inline_locals` replaces a single-use local whose initializer is a literal expression with that expression. It decides each local where it's declared, with the values declared before it already in its initializer, so a chain of locals inlines whole in one walk, and each value moves to its read once.
+4. `inline_locals` replaces a single-use local whose initializer is a literal expression with that expression. It decides each local where it's declared, with the values declared before it already in its initializer, so a chain of locals inlines whole in one walk, up to the `luck_token::MAX_ACTIVE_LOCALS` one function can hold.
 5. `fold_constants` runs a second time, because inlining exposes new folds.
 6. `remove_dead_code` runs a second time, because the newly exposed folds, such as `local DEBUG = false` inlined into `if DEBUG then`, expose new dead branches.
 7. `merge_locals` combines adjacent single-name `local` declarations, or adjacent assignments to proven locals, into one statement. A merged assignment stores right to left, so a global or field store, which can run `__newindex`, stays on its own.

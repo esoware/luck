@@ -6,7 +6,6 @@ use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 use crate::comments::{Comments, write_remaining_comments, write_shebang};
 use crate::format_block::{first_item_start, format_selection};
 use crate::ir::{Format as _, Formatter};
-use crate::sort_requires::sorting_blocks;
 use crate::{FormatOptions, LineEndings};
 
 #[derive(Debug, Clone)]
@@ -27,7 +26,7 @@ fn print_block(
 ) -> String {
     let mut f = Formatter::new(*options, comments);
     if should_sort_requires {
-        f = f.sorting_requires_in(sorting_blocks(block));
+        f = f.sorting_requires();
     }
     write_shebang(&mut f);
     block.fmt(&mut f);

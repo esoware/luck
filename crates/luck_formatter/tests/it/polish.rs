@@ -358,6 +358,89 @@ end
 }
 
 #[test]
+fn sort_requires_orders_only_blocks_a_statement_opens() {
+    let input = "\
+local assigned = function()
+\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"alpha\")
+end
+reassigned = function()
+\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"alpha\")
+end
+describe(\"x\", function()
+\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"alpha\")
+\tdo
+\t\tlocal zeta = require(\"zeta\")
+\t\tlocal alpha = require(\"alpha\")
+\tend
+end)
+local t = {
+\tf = function()
+\t\tlocal zeta = require(\"zeta\")
+\t\tlocal alpha = require(\"alpha\")
+\tend,
+}
+return function()
+\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"alpha\")
+end
+";
+    let expected = "\
+local assigned = function()
+\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"zeta\")
+end
+reassigned = function()
+\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"zeta\")
+end
+describe(\"x\", function()
+\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"alpha\")
+\tdo
+\t\tlocal zeta = require(\"zeta\")
+\t\tlocal alpha = require(\"alpha\")
+\tend
+end)
+local t = {
+\tf = function()
+\t\tlocal zeta = require(\"zeta\")
+\t\tlocal alpha = require(\"alpha\")
+\tend,
+}
+return function()
+\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"alpha\")
+end
+";
+    assert_format(input, expected);
+
+    let luau_input = "\
+type function f()
+\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"alpha\")
+end
+x += function()
+\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"alpha\")
+end
+";
+    let luau_expected = "\
+type function f()
+\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"alpha\")
+end
+x += function()
+\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"zeta\")
+end
+";
+    assert_format_with(luau_input, luau_expected, LuaVersion::Luau, &FormatOptions::default());
+}
+
+#[test]
 fn sort_requires_moves_trailing_comments_with_their_stmts() {
     assert_format(
         "\
@@ -814,18 +897,18 @@ fn a_long_run_of_requires_sorts_without_comparing_every_pair() {
 
 #[test]
 fn a_long_string_heading_a_long_chain_formats_without_remeasuring_it() {
-    // Each `:` run opens a group at the string. Measured again by every group,
-    // the string takes minutes.
+    // A group around the string, measured again for every `:` run, would take
+    // minutes. Each run breaks only where it doesn't fit the line so far.
     let head = format!("local x = (\"{}\")", "a".repeat(4_000_000));
+    let wrapped_line = format!(
+        "
+\t:b()
+\t:c().d{}",
+        ":b():c().d".repeat(9)
+    );
     assert_format(
         &format!("{head}{}\n", ":b():c().d".repeat(8_000)),
-        &format!(
-            "{head}{}\n",
-            "
-\t:b()
-\t:c().d"
-                .repeat(8_000)
-        ),
+        &format!("{head}{}\n", wrapped_line.repeat(800)),
     );
 }
 

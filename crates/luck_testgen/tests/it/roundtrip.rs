@@ -63,7 +63,7 @@ fn generated_programs_parse_cleanly() {
 fn compact_output_reparses() {
     for program in programs() {
         let parsed = parse_cleanly(&program, "generator", &program.source);
-        let compacted = luck_codegen::compact(&parsed.block).unwrap();
+        let compacted = luck_codegen::compact(&parsed.block);
         parse_cleanly(&program, "compact", &compacted);
     }
 }

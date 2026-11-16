@@ -15,7 +15,7 @@ use luck_ast::{
 use crate::CollapseSimpleStatement;
 use crate::comments::write_inline_comments_after;
 use crate::format_block::{IndentedBlock, first_item_span};
-use crate::format_expr::LevelChain;
+use crate::format_expr::{FunctionDefinition, LevelChain};
 use crate::ir::{
     Format, Formatter, format_with, group, hard_line, indent, line_suffix_boundary,
     next_line_group, separated, soft_line_or_space, space, token,
@@ -55,6 +55,43 @@ struct ExprList<'list>(&'list Punctuated<Expression>);
 impl Format for ExprList<'_> {
     fn fmt(&self, f: &mut Formatter) {
         let list = punctuated(self.0, (token(","), soft_line_or_space()));
+        if self.0.len() > 1 {
+            group(indent(list)).fmt(f);
+        } else {
+            list.fmt(f);
+        }
+    }
+}
+
+/// A value a statement assigns.
+struct AssignedValue<'expr>(&'expr Expression);
+
+impl Format for AssignedValue<'_> {
+    fn fmt(&self, f: &mut Formatter) {
+        if let Expression::FunctionDef(function_def) = self.0 {
+            FunctionDefinition(function_def).fmt(f);
+        } else {
+            self.0.fmt(f);
+        }
+    }
+}
+
+/// The values a statement assigns, which print as an [`ExprList`] does.
+struct AssignedValues<'list>(&'list Punctuated<Expression>);
+
+impl Format for AssignedValues<'_> {
+    fn fmt(&self, f: &mut Formatter) {
+        let list = (
+            format_with(|list| {
+                for (i, value) in self.0.iter().enumerate() {
+                    if i > 0 {
+                        (token(","), soft_line_or_space()).fmt(list);
+                    }
+                    AssignedValue(value).fmt(list);
+                }
+            }),
+            self.0.has_trailing_separator.then_some(token(",")),
+        );
         if self.0.len() > 1 {
             group(indent(list)).fmt(f);
         } else {
@@ -177,7 +214,7 @@ impl Format for LocalAssignment {
             .fmt(f);
 
         if let Some(exprs) = &self.exprs {
-            (space(), token("="), space(), assigned(ExprList(exprs), &exprs.items)).fmt(f);
+            (space(), token("="), space(), assigned(AssignedValues(exprs), &exprs.items)).fmt(f);
         }
     }
 }
@@ -202,7 +239,7 @@ impl Format for Assignment {
             space(),
             token("="),
             space(),
-            assigned(ExprList(&self.values), &self.values.items),
+            assigned(AssignedValues(&self.values), &self.values.items),
         ))
         .fmt(f);
     }
@@ -210,7 +247,7 @@ impl Format for Assignment {
 
 impl Format for CompoundAssignment {
     fn fmt(&self, f: &mut Formatter) {
-        let value = assigned(&self.expr, slice::from_ref(&self.expr));
+        let value = assigned(AssignedValue(&self.expr), slice::from_ref(&self.expr));
         group((&self.var, space(), token(self.op.static_text()), space(), value)).fmt(f);
     }
 }
@@ -384,7 +421,7 @@ impl Format for GlobalDeclaration {
     fn fmt(&self, f: &mut Formatter) {
         (token("global"), space(), punctuated(&self.names, (token(","), space()))).fmt(f);
         if let Some(exprs) = &self.exprs {
-            (space(), token("="), space(), assigned(ExprList(exprs), &exprs.items)).fmt(f);
+            (space(), token("="), space(), assigned(AssignedValues(exprs), &exprs.items)).fmt(f);
         }
     }
 }
@@ -457,7 +494,8 @@ impl Format for TypeDeclaration {
             )
                 .fmt(f),
             TypeDeclarationValue::TypeFunction(body) => {
-                (space(), token("function"), space(), &self.name, &**body).fmt(f);
+                (space(), token("function"), space(), &self.name).fmt(f);
+                f.write_without_sorting_requires(&**body);
             }
         }
     }

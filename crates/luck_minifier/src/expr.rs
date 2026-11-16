@@ -2,7 +2,7 @@ use core::iter;
 
 use luck_ast::{
     BinaryOp, Expression, Field, Literal, MAX_NESTING_DEPTH, ParenthesizedExpression, Suffix,
-    SuffixedExpression, expr_nesting_depth, is_multi_value, unwrap_parentheses,
+    expr_nesting_depth, is_multi_value, unwrap_parentheses,
 };
 use luck_token::{
     Associativity, BinOp, LuaNumber, NumberSubtypes, OperandSide, Span, UnOp, parse_lua_number,
@@ -95,12 +95,12 @@ pub(crate) fn literal_kind(expr: &Expression) -> Option<LiteralKind> {
             unary_literal_kind(unop.op, operand)
         }
         Expression::BinaryOp(binary_op) => run_literal_kind(binary_op),
-        // Luau: casts and type arguments are erased before evaluation.
+        // Luau: a cast is erased before evaluation.
         Expression::TypeCast(cast) => literal_kind(&cast.expr),
-        Expression::Suffixed(chain) => literal_kind(instantiated_expr(chain)?),
         Expression::VarArg(_)
         | Expression::FunctionDef(_)
         | Expression::Name(_)
+        | Expression::Suffixed(_)
         | Expression::TableConstructor(_)
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
@@ -117,7 +117,7 @@ fn number_literal_kind(literal: &Literal) -> LiteralKind {
     }
 }
 
-pub(crate) const fn unary_literal_kind(op: UnOp, operand: LiteralKind) -> Option<LiteralKind> {
+const fn unary_literal_kind(op: UnOp, operand: LiteralKind) -> Option<LiteralKind> {
     match op {
         UnOp::Not => Some(LiteralKind::Other),
         UnOp::Neg => {
@@ -142,16 +142,6 @@ pub(crate) const fn unary_literal_kind(op: UnOp, operand: LiteralKind) -> Option
             }
         }
     }
-}
-
-/// Luau: the prefix a chain of nothing but instantiations gives its type
-/// arguments to, which evaluation sees through.
-fn instantiated_expr(chain: &SuffixedExpression) -> Option<&Expression> {
-    chain
-        .suffixes
-        .iter()
-        .all(|suffix| matches!(suffix, Suffix::TypeInstantiation { .. }))
-        .then_some(&chain.prefix)
 }
 
 /// Each operator applies in the order the level groups them.
@@ -183,7 +173,7 @@ fn run_literal_kind(run: &BinaryOp) -> Option<LiteralKind> {
 /// `is_rhs_nonzero` says whether the right operand as written, which for a
 /// right-associative operator is the start of the rest of its run, is a
 /// nonzero number literal.
-pub(crate) fn binary_literal_kind(
+fn binary_literal_kind(
     left: LiteralKind,
     op: BinOp,
     right: LiteralKind,
@@ -212,7 +202,7 @@ pub(crate) fn binary_literal_kind(
     }
 }
 
-pub(crate) fn is_nonzero_number_literal(expr: &Expression) -> bool {
+fn is_nonzero_number_literal(expr: &Expression) -> bool {
     let Expression::Number(literal) = unwrap_parentheses(expr) else {
         return false;
     };
@@ -278,7 +268,8 @@ fn is_effect_free(expr: &Expression, can_read_names: bool) -> bool {
         // `__index`, and a call can do anything. Luau's explicit type
         // arguments aren't evaluated at runtime.
         Expression::Suffixed(chain) => {
-            instantiated_expr(chain).is_some_and(|instantiated| is_effect_free(instantiated, can_read_names))
+            chain.suffixes.iter().all(|suffix| matches!(suffix, Suffix::TypeInstantiation { .. }))
+                && is_effect_free(&chain.prefix, can_read_names)
         }
         // Luau type casts are transparent wrappers, so purity is the inner
         // expression's.

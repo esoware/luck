@@ -22,14 +22,9 @@ pub(crate) fn rename(block: Block, version: LuaVersion, rename_globals: bool) ->
     analyzer.declare_root_globals(&root_globals);
     analyzer.visit_block(&block);
 
-    let mut renamer = Renamer::new(analyzer.renamed_bindings(), version);
+    let mut renamer = Renamer::new(analyzer.binding_names(), version);
     renamer.declare_root_globals(&root_globals);
-    let output = renamer.transform_block(block);
-    debug_assert!(
-        renamer.has_declared_every_binding(),
-        "the renamer's walk declared fewer bindings than its analyzer's"
-    );
-    output
+    renamer.transform_block(block)
 }
 
 #[cfg(test)]

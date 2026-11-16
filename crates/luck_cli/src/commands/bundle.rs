@@ -58,7 +58,8 @@ impl BundleArgs {
     ///
     /// Returns [`Exit::Usage`] on a bad config, a bad entry path, or an output
     /// that would replace a bundled file or another output, and
-    /// [`Exit::Failure`] when bundling, minifying, or writing fails.
+    /// [`Exit::Failure`] when bundling or writing fails.
+    #[expect(clippy::missing_panics_doc, reason = "the bundler refuses a tree past the cap")]
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let config = config_for_one_shot(self.config.as_deref(), &self.entry)?;
         let target = resolve_configured_target(&config, self.target, &self.entry)?;
@@ -81,10 +82,13 @@ impl BundleArgs {
             if verbosity != Verbosity::Quiet {
                 print_diags(&tree.warnings, version);
             }
-            let code =
-                luck_minifier::minify_block(tree.block, version, &transforms).map_err(|error| {
-                    operation_error(format!("cannot minify the bundle: {}", error.message))
-                })?;
+            #[expect(
+                clippy::expect_used,
+                clippy::unwrap_in_result,
+                reason = "the bundler refuses a tree past the cap"
+            )]
+            let code = luck_minifier::minify_block(tree.block, version, &transforms)
+                .expect("a bundle nests within the cap");
             let mut minified = tree.header;
             minified.push_str(&code);
             return write_output(self.output.as_deref(), &minified);

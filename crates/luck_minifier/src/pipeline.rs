@@ -1,9 +1,8 @@
-use luck_ast::Block;
+use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_token::{CommentKind, LuaVersion, SourceError, leading_hot_comments};
 
 use crate::transform_config::TransformConfig;
 use crate::transforms;
-use crate::transforms::remove_dead_code::Liveness;
 
 /// Measured corpora settle in two or three rounds, so the cap only bounds a
 /// pass that never stops changing the tree, which the fixpoint tests catch.
@@ -44,7 +43,7 @@ pub fn minify(
             output.push('\n');
         }
     }
-    let code = minify_block(result.block, version, config).map_err(|error| vec![error])?;
+    let code = minify_tree(result.block, version, config);
     if output.is_empty() {
         return Ok(code);
     }
@@ -63,37 +62,42 @@ pub fn minify(
 ///
 /// # Errors
 ///
-/// Returns an error for a tree nested deeper than
-/// [`MAX_NESTING_DEPTH`](luck_ast::MAX_NESTING_DEPTH), which `luck_parser`
-/// never builds.
+/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
+/// which `luck_parser` never builds.
 pub fn minify_block(
-    mut block: Block,
+    block: Block,
     version: LuaVersion,
     config: &TransformConfig,
 ) -> Result<String, SourceError> {
-    let mut output = luck_codegen::compact(&block)?;
-    let mut liveness = Liveness::default();
+    if block_nesting_depth(&block) > MAX_NESTING_DEPTH {
+        return Err(SourceError {
+            span: block.span,
+            message: format!(
+                "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
+            ),
+        });
+    }
+    Ok(minify_tree(block, version, config))
+}
+
+fn minify_tree(mut block: Block, version: LuaVersion, config: &TransformConfig) -> String {
+    let mut output = luck_codegen::compact(&block);
     for _ in 0..MAX_PIPELINE_ROUNDS {
-        block = apply_core_transforms(block, config, version, &mut liveness);
+        block = apply_core_transforms(block, config, version);
         let (tail_block, round_output) =
-            apply_tail_transforms(block, config, version, output.len())?;
+            apply_tail_transforms(block, config, version, output.len());
         block = tail_block;
         if round_output == output {
             break;
         }
         output = round_output;
     }
-    Ok(output)
+    output
 }
 
-fn apply_core_transforms(
-    mut block: Block,
-    config: &TransformConfig,
-    version: LuaVersion,
-    liveness: &mut Liveness,
-) -> Block {
+fn apply_core_transforms(mut block: Block, config: &TransformConfig, version: LuaVersion) -> Block {
     if config.remove_dead_code {
-        block = transforms::remove_dead_code::remove(block, version, liveness);
+        block = transforms::remove_dead_code::remove(block, version);
     }
     if config.simplify_statements {
         block = transforms::simplify_statements::simplify(block);
@@ -111,7 +115,7 @@ fn apply_core_transforms(
     // Folding those (`local DEBUG = false` inlined into `if DEBUG then`)
     // exposes new dead branches within the same round.
     if config.remove_dead_code {
-        block = transforms::remove_dead_code::remove(block, version, liveness);
+        block = transforms::remove_dead_code::remove(block, version);
     }
     if config.merge_locals {
         block = transforms::merge_locals::merge(block, version);
@@ -137,23 +141,19 @@ fn apply_core_transforms(
 /// The loop runs that cascade to its own fixpoint here, so the outer loop
 /// never reruns the core passes for tail-only work. Returns the tree and its
 /// compact output.
-///
-/// # Errors
-///
-/// Returns the error [`luck_codegen::compact`] does.
 fn apply_tail_transforms(
     mut block: Block,
     config: &TransformConfig,
     version: LuaVersion,
     output_capacity: usize,
-) -> Result<(Block, String), SourceError> {
+) -> (Block, String) {
     // Explicit self goes before rename so the renamer can shorten the parameter.
     if config.rename_locals {
         block = transforms::explicit_self::rewrite(block);
     }
-    let mut output = luck_codegen::compact_with_capacity(&block, output_capacity)?;
+    let mut output = luck_codegen::compact_with_capacity(&block, output_capacity);
     if !config.rename_locals && !config.lift_locals {
-        return Ok((block, output));
+        return (block, output);
     }
     for _ in 0..MAX_PIPELINE_ROUNDS {
         if config.rename_locals {
@@ -166,11 +166,11 @@ fn apply_tail_transforms(
         if config.rename_locals && config.merge_locals {
             block = transforms::merge_locals::merge(block, version);
         }
-        let next_output = luck_codegen::compact_with_capacity(&block, output.len())?;
+        let next_output = luck_codegen::compact_with_capacity(&block, output.len());
         if next_output == output {
             break;
         }
         output = next_output;
     }
-    Ok((block, output))
+    (block, output)
 }

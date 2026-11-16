@@ -19,7 +19,7 @@ CI runs the same binaries under [CodSpeed](https://codspeed.io) with the `codspe
 | `semantic` | `luck_semantic::analyze` (parse excluded) |
 | `linter` | `luck_linter::lint_parsed` (parse excluded) |
 | `codegen` | `luck_codegen::compact_with_capacity` (parse excluded) |
-| `formatter` | `luck_formatter::format_block` (parse and comment build excluded) |
+| `formatter` | `luck_formatter::format` (parse and require sorting included) |
 | `minifier` | `luck_minifier::minify` (parse included, fixpoint dominates) |
 | `bundler` | `luck_bundler::bundle` over a 40-module diamond DAG |
 | `synth` | `luck_ast::Synth` build + source-less emit + format |

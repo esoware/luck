@@ -42,7 +42,7 @@ fn parsing_validating_and_dropping_fit_the_smallest_stack() {
 fn compact_printing_fits_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
         let parsed = luck_parser::parse(source, version);
-        let output = luck_codegen::compact(&parsed.block).expect("a parsed tree prints");
+        let output = luck_codegen::compact(&parsed.block);
         assert!(luck_parser::parse(output, version).errors.is_empty(), "the output reparses");
     });
 }

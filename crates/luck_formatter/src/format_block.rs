@@ -142,7 +142,7 @@ impl Format for Block {
             }
         }
 
-        let should_sort_requires = f.sorts_requires_in(self);
+        let should_sort_requires = f.sorts_requires();
         let Some(last_end) = write_items(f, printed_items(self), should_sort_requires) else {
             write_dangling_comments(f, self.span.start);
             return;
