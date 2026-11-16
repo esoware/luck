@@ -88,13 +88,22 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_expr_list(&mut self) -> Punctuated<Expression> {
-        let mut exprs = vec![self.parse_expr(0)];
+        let first = self.parse_expr(0);
+        Punctuated::from_items(self.parse_exprs_after(first))
+    }
 
-        while self.eat(&TokenKind::Comma) {
-            exprs.push(self.parse_expr(0));
+    /// `first` and the expression after each comma that follows it.
+    pub(super) fn parse_exprs_after(&mut self, first: Expression) -> Vec<Expression> {
+        if !matches!(self.peek(), TokenKind::Comma) {
+            return vec![first];
         }
-
-        Punctuated::from_items(exprs)
+        let start = self.exprs.len();
+        self.exprs.push(first);
+        while self.eat(&TokenKind::Comma) {
+            let expr = self.parse_expr(0);
+            self.exprs.push(expr);
+        }
+        self.exprs.drain(start..).collect()
     }
 
     // The recursive functions here each keep one construct's temporaries, so

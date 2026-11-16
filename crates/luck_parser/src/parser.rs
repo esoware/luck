@@ -9,7 +9,10 @@ mod types;
 use core::mem;
 use core::ops::Range;
 
-use luck_ast::{BinaryLink, Block, Literal, MAX_NESTING_DEPTH, Suffix};
+use luck_ast::{
+    AttributedName, BinaryLink, Block, Expression, Literal, MAX_NESTING_DEPTH, Parameter, Suffix,
+    Type,
+};
 use luck_lexer::Lexer;
 use luck_token::{Comment, CompactString, LuaVersion, Span, Token, TokenKind, has_line_break};
 use rustc_hash::FxHashSet;
@@ -65,6 +68,13 @@ struct Parser<'source> {
     binary_links: Vec<BinaryLink>,
     /// The suffix runs being parsed, kept like `binary_links`.
     suffixes: Vec<Suffix>,
+    /// The lists of two or more being parsed, a stack for each kind of item,
+    /// kept like `binary_links`.
+    exprs: Vec<Expression>,
+    attributed_names: Vec<AttributedName>,
+    params: Vec<Parameter>,
+    types: Vec<Type>,
+    function_name_segments: Vec<Token>,
     function_scope: FunctionScope,
     has_module_return: bool,
     has_value_exports: bool,
@@ -211,6 +221,11 @@ impl<'source> Parser<'source> {
             block_depth: 0,
             binary_links: Vec::new(),
             suffixes: Vec::new(),
+            exprs: Vec::new(),
+            attributed_names: Vec::new(),
+            params: Vec::new(),
+            types: Vec::new(),
+            function_name_segments: Vec::new(),
             function_scope: FunctionScope { is_chunk: true, is_vararg: true, is_in_loop: false },
             has_module_return: false,
             has_value_exports: false,

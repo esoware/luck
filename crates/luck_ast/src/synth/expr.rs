@@ -1,4 +1,6 @@
-use luck_token::{BinOp, OperandSide, UnOp, encode_string};
+use core::mem;
+
+use luck_token::{BinOp, OperandSide, Span, UnOp, encode_string};
 
 use crate::expr::{
     BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
@@ -128,7 +130,7 @@ impl Synth {
     }
 
     /// `prefix` and then `suffix`, which joins `prefix`'s own run when it has
-    /// one, so the run stays one node. Joining copies the suffixes before it.
+    /// one, so the run stays one node.
     #[expect(clippy::unnecessary_box_returns, reason = "joining a run hands back the run's box")]
     fn suffixed(&self, prefix: Expression, suffix: Suffix) -> Box<SuffixedExpression> {
         let wrapped = self.wrap_prefix(prefix);
@@ -161,7 +163,7 @@ impl Synth {
     /// `<`, `&`, or `|` would otherwise change the parse.
     ///
     /// An operand left bare at `op`'s level joins the run, as it would read
-    /// back. Joining copies the links of the operand's run.
+    /// back.
     #[must_use]
     pub fn binary_op(&self, lhs: Expression, op: BinOp, rhs: Expression) -> Expression {
         let operands = (
@@ -176,11 +178,14 @@ impl Synth {
                 run.links.push(BinaryLink { op, operand });
                 run
             }
-            (first, Expression::BinaryOp(run)) if run.precedence().0 == level => {
-                let BinaryOp { first: second, links, .. } = *run;
-                let joined_links =
-                    OneOrMore::from_first(BinaryLink { op, operand: second }, links.into_vec());
-                Box::new(BinaryOp { span, first, links: joined_links })
+            (first, Expression::BinaryOp(mut run)) if run.precedence().0 == level => {
+                run.span = span;
+                let second = mem::replace(&mut run.first, first);
+                run.links.push_front(BinaryLink { op, operand: second }, || BinaryLink {
+                    op,
+                    operand: Expression::Error(Span::default()),
+                });
+                run
             }
             (first, operand) => Box::new(BinaryOp {
                 span,
@@ -772,6 +777,56 @@ mod tests {
         // a - (b - c) keeps its parentheses, and with them a run of its own.
         let difference = synth.binary_op(synth.name_expr("b"), BinOp::Sub, synth.name_expr("c"));
         assert_eq!(run_len(&synth.binary_op(synth.name_expr("a"), BinOp::Sub, difference)), 1);
+    }
+
+    #[test]
+    fn a_run_extended_a_link_at_a_time_keeps_its_order() {
+        let synth = Synth::new();
+        let names: Vec<String> = (0..2_000u32).map(|i| format!("v{i}")).collect();
+        let name_of = |expr: &Expression| {
+            let Expression::Name(name) = expr else {
+                panic!("expected a name, got {expr:?}");
+            };
+            name.identifier().unwrap_or_default().to_owned()
+        };
+        let operand_names = |expr: &Expression| {
+            let Expression::BinaryOp(run) = expr else {
+                panic!("expected binop");
+            };
+            let mut operands = vec![name_of(&run.first)];
+            operands.extend(run.links.iter().map(|link| name_of(&link.operand)));
+            operands
+        };
+        let (first, rest) = names.split_first().expect("names");
+        let (last, before_last) = names.split_last().expect("names");
+
+        let mut sum = synth.name_expr(first);
+        for name in rest {
+            sum = synth.binary_op(sum, BinOp::Add, synth.name_expr(name));
+        }
+        assert_eq!(operand_names(&sum), names);
+
+        let mut concat = synth.name_expr(last);
+        for name in before_last.iter().rev() {
+            concat = synth.binary_op(synth.name_expr(name), BinOp::Concat, concat);
+        }
+        assert_eq!(operand_names(&concat), names);
+
+        let mut path = synth.name_expr("t");
+        for name in &names {
+            path = synth.field(path, name);
+        }
+        let fields: Vec<&str> = chain(&path)
+            .suffixes
+            .iter()
+            .map(|suffix| {
+                let Suffix::Field(name) = suffix else {
+                    panic!("expected a field, got {suffix:?}");
+                };
+                name.identifier().unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(fields, names);
     }
 
     #[test]

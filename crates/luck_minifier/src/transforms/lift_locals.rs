@@ -1,6 +1,9 @@
+use core::mem;
+
 use luck_ast::{
-    Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, IfStatement,
-    LocalAssignment, LocalFunction, Punctuated, Statement, Transform, Type, Var, Visitor,
+    Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, GenericFor,
+    IfStatement, LocalAssignment, LocalFunction, NumericFor, Punctuated, RepeatLoop, Statement,
+    Transform, Type, Var,
 };
 use luck_token::{CompactString, LuaVersion, Span};
 use rustc_hash::FxHashSet;
@@ -22,55 +25,311 @@ use crate::limits::{
 /// benchmarked hundreds of bytes worse across the corpus than lifting
 /// everything.
 pub(crate) fn lift(block: Block, version: LuaVersion) -> Block {
-    let mut lifter = Lifter { version };
+    let mut lifter =
+        Lifter { version, frames: Vec::new(), scans: Vec::new(), hidden_scan_count: 0 };
     lifter.transform_block(block)
 }
 
+/// Scans every function body the walk is in, and lifts each as it leaves.
+///
+/// By then the body's scan has seen all of it, its closures included. A
+/// closure is lifted before the body around it, whose own lift reads nothing
+/// that changes.
 struct Lifter {
     version: LuaVersion,
+    /// One name set per live scope, innermost last.
+    frames: Vec<FxHashSet<CompactString>>,
+    /// The scan of each function body the walk is in, innermost last.
+    scans: Vec<BodyScan>,
+    /// How many of `scans`, outermost first, are of bodies around a type the
+    /// walk is in. Types never run, so those bodies capture no name in one
+    /// and count no expression of it, and a function in a `typeof` is no
+    /// closure of theirs.
+    hidden_scan_count: usize,
+}
+
+/// What a body's walk learns for its lift: the names a declaration hoisted
+/// to the top of the body must never wear, and the body's peak locals and
+/// registers, which bound what that declaration can add.
+///
+/// The names are found by resolving scopes over the body:
+///
+/// - names free in the body (globals and upvalues), since the hoisted `local`
+///   would capture every reference to them;
+/// - names bound in the body but captured by a nested closure, since lifting
+///   merges same-named bindings into one function-scope local that the
+///   closure would then share;
+/// - `_ENV` on targets where it's an upvalue.
+///
+/// A name a closure binds itself resolves inside that closure, so merely
+/// mentioning a name in a closure doesn't block its lift.
+struct BodyScan {
+    /// The body's parameter frame in `Lifter::frames`, where its scopes
+    /// start.
+    first_frame: usize,
+    ineligible_names: FxHashSet<CompactString>,
+    /// Locals the walk has active in the body. A closure's don't count: it
+    /// has its own 200.
+    active_locals: usize,
+    peak_active_locals: usize,
+    /// Expressions seen in the body's current statement, each at most one
+    /// register beyond the locals.
+    statement_expr_nodes: usize,
+    peak_registers: usize,
+}
+
+impl Lifter {
+    /// The scan of the body the walk is directly in, unless a type hides it.
+    fn scan(&mut self) -> Option<&mut BodyScan> {
+        if self.scans.len() > self.hidden_scan_count { self.scans.last_mut() } else { None }
+    }
+
+    fn declare(&mut self, name: &str) {
+        if self.scan().is_none() {
+            return;
+        }
+        if let Some(frame) = self.frames.last_mut() {
+            frame.insert(name.into());
+        }
+        self.add_active_locals(1);
+    }
+
+    fn add_active_locals(&mut self, count: usize) {
+        if let Some(scan) = self.scan() {
+            scan.active_locals = scan.active_locals.saturating_add(count);
+            scan.peak_active_locals = scan.peak_active_locals.max(scan.active_locals);
+        }
+    }
+
+    fn in_new_frame<Walked>(&mut self, walk: impl FnOnce(&mut Self) -> Walked) -> Walked {
+        let outer_active_locals = self.scan().map(|scan| scan.active_locals);
+        self.frames.push(FxHashSet::default());
+        let walked = walk(self);
+        self.frames.pop();
+        if let Some(scan) = self.scan()
+            && let Some(active_locals) = outer_active_locals
+        {
+            scan.active_locals = active_locals;
+        }
+        walked
+    }
+
+    /// Resolves `name` once for every body that can see the read: the one
+    /// that binds it, and each closure between that body and the read.
+    fn reference(&mut self, name: &str) {
+        let scans = self.scans.get_mut(self.hidden_scan_count..).unwrap_or_default();
+        let Some(outermost) = scans.first() else {
+            return;
+        };
+        let first_frame = outermost.first_frame;
+        let binding_frame = self
+            .frames
+            .get(first_frame..)
+            .unwrap_or_default()
+            .iter()
+            .rposition(|frame| frame.contains(name))
+            .map(|frame| frame.saturating_add(first_frame));
+        let mut is_read_in_closure = false;
+        for scan in scans.iter_mut().rev() {
+            let is_bound_here = binding_frame.is_some_and(|frame| frame >= scan.first_frame);
+            // Free in this body, or bound in it and captured.
+            if !is_bound_here || is_read_in_closure {
+                scan.ineligible_names.insert(name.into());
+            }
+            if is_bound_here {
+                break;
+            }
+            is_read_in_closure = true;
+        }
+    }
+
+    fn scan_repeat_loop(&mut self, mut repeat_loop: Box<RepeatLoop>) -> Statement {
+        // The condition sees the block's locals.
+        self.in_new_frame(|lifter| {
+            repeat_loop.block = lifter.walk_block(repeat_loop.block.take());
+            repeat_loop.condition = lifter.transform_expr(repeat_loop.condition.take());
+        });
+        Statement::RepeatLoop(repeat_loop)
+    }
+
+    fn scan_numeric_for(&mut self, mut numeric_for: Box<NumericFor>) -> Statement {
+        if let Some(loop_variable_type) = &mut numeric_for.type_annotation {
+            *loop_variable_type = self.transform_type(loop_variable_type.take());
+        }
+        numeric_for.start = self.transform_expr(numeric_for.start.take());
+        numeric_for.limit = self.transform_expr(numeric_for.limit.take());
+        if let Some(step) = &mut numeric_for.step {
+            *step = self.transform_expr(step.take());
+        }
+        self.in_new_frame(|lifter| {
+            lifter.add_active_locals(NUMERIC_FOR_STATE_LOCALS);
+            lifter.declare(identifier_name(&numeric_for.name));
+            numeric_for.block = lifter.walk_block(numeric_for.block.take());
+        });
+        Statement::NumericFor(numeric_for)
+    }
+
+    fn scan_generic_for(&mut self, mut generic_for: Box<GenericFor>) -> Statement {
+        let GenericFor { names, exprs, block, .. } = &mut *generic_for;
+        for param in &mut names.items {
+            if let Some(param_type) = &mut param.type_annotation {
+                *param_type = self.transform_type(param_type.take());
+            }
+        }
+        for expr in &mut exprs.items {
+            *expr = self.transform_expr(expr.take());
+        }
+        self.in_new_frame(|lifter| {
+            lifter.add_active_locals(GENERIC_FOR_STATE_LOCALS);
+            for param in names.iter() {
+                lifter.declare(identifier_name(&param.name));
+            }
+            *block = lifter.walk_block(block.take());
+        });
+        Statement::GenericFor(generic_for)
+    }
 }
 
 impl Transform for Lifter {
-    fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
-        let scan = collect_ineligible_names(&body, self.version);
+    fn transform_block(&mut self, block: Block) -> Block {
+        self.in_new_frame(|lifter| lifter.walk_block(block))
+    }
 
-        let mut collector = LiftableCollector {
-            scope_names: vec![param_names(&body)],
-            ineligible_names: &scan.ineligible_names,
-            liftable_names: FxHashSet::default(),
-            ordered_liftable_names: Vec::new(),
-            // Each hoisted name adds at most one local and one register
-            // anywhere in the body, so the body's own peaks bound what fits.
-            hoist_capacity: MAX_ACTIVE_LOCALS
-                .saturating_sub(scan.peak_active_locals)
-                .min(MAX_REGISTERS.saturating_sub(scan.peak_registers)),
-            version: self.version,
-        };
-        collector.collect_block(&body.block);
-        let LiftableCollector { liftable_names, ordered_liftable_names, .. } = collector;
-
-        if liftable_names.is_empty() {
-            body.block = self.transform_block(body.block);
-            return body;
+    // Each loop is scanned in a function of its own, so a level of nesting
+    // holds only that loop's temporaries on the stack.
+    fn transform_stmt(&mut self, stmt: Statement) -> Statement {
+        if let Some(scan) = self.scan() {
+            scan.statement_expr_nodes = 0;
         }
+        match stmt {
+            Statement::LocalAssignment(_) => {
+                // RHS before LHS: `local x = x` reads the outer x.
+                let walked = self.walk_stmt(stmt);
+                if let Statement::LocalAssignment(local) = &walked {
+                    for attributed in local.names.iter() {
+                        self.declare(identifier_name(&attributed.name));
+                    }
+                }
+                walked
+            }
+            Statement::LocalFunction(local_function) => {
+                self.declare(identifier_name(&local_function.name));
+                self.walk_stmt(Statement::LocalFunction(local_function))
+            }
+            Statement::FunctionDecl(_) => {
+                let walked = self.walk_stmt(stmt);
+                if let Statement::FunctionDecl(function_decl) = &walked
+                    && let Some(root_name) = function_decl.name.names.first()
+                {
+                    self.reference(identifier_name(root_name));
+                }
+                walked
+            }
+            Statement::RepeatLoop(repeat_loop) => self.scan_repeat_loop(repeat_loop),
+            Statement::NumericFor(numeric_for) => self.scan_numeric_for(numeric_for),
+            Statement::GenericFor(generic_for) => self.scan_generic_for(generic_for),
+            // These bind nothing themselves, and a block of theirs opens its
+            // scope in `transform_block`. A `global function` or `type
+            // function` body is reached as a closure.
+            other @ (Statement::Assignment(_)
+            | Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalStar(_)
+            | Statement::Break(_)
+            | Statement::Error(_)) => self.walk_stmt(other),
+        }
+    }
 
-        let mut rewriter = LiftRewriter {
-            liftable_names: &liftable_names,
-            scope_names: Vec::new(),
-            version: self.version,
-        };
-        body.block = rewriter.rewrite_block_in_frame(body.block, FxHashSet::default());
-        body.block = self.transform_block(body.block);
+    fn transform_expr(&mut self, expr: Expression) -> Expression {
+        if let Some(scan) = self.scan() {
+            scan.statement_expr_nodes = scan.statement_expr_nodes.saturating_add(1);
+            let registers = scan.active_locals.saturating_add(scan.statement_expr_nodes);
+            scan.peak_registers = scan.peak_registers.max(registers);
+        }
+        if let Expression::Name(name) = &expr {
+            self.reference(identifier_name(name));
+        }
+        self.walk_expr(expr)
+    }
 
-        prepend_declaration(&mut body.block, &ordered_liftable_names);
+    fn transform_assignment_target(&mut self, target: Var) -> Var {
+        if let Var::Name(name) = &target {
+            self.reference(identifier_name(name));
+        }
+        self.walk_assignment_target(target)
+    }
 
+    /// The bodies the walk is already in see this one's bindings as a
+    /// closure's.
+    fn transform_function_body(&mut self, mut body: FunctionBody) -> FunctionBody {
+        let parameter_count = parameter_locals(&body);
+        self.scans.push(BodyScan {
+            first_frame: self.frames.len(),
+            ineligible_names: if self.version.has_env_upvalue() {
+                FxHashSet::from_iter([CompactString::from("_ENV")])
+            } else {
+                FxHashSet::default()
+            },
+            active_locals: parameter_count,
+            peak_active_locals: parameter_count,
+            statement_expr_nodes: 0,
+            peak_registers: parameter_count,
+        });
+        self.frames.push(param_names(&body));
+        body.block = self.walk_block(body.block);
+        self.frames.pop();
+        if let Some(scan) = self.scans.pop() {
+            lift_body(&mut body, &scan, self.version);
+        }
         body
     }
+
+    fn transform_type(&mut self, type_value: Type) -> Type {
+        let outer_hidden_scan_count = mem::replace(&mut self.hidden_scan_count, self.scans.len());
+        let walked = self.walk_type(type_value);
+        self.hidden_scan_count = outer_hidden_scan_count;
+        walked
+    }
+}
+
+/// Hoists the declarations nested in `body` that its finished scan allows.
+fn lift_body(body: &mut FunctionBody, scan: &BodyScan, version: LuaVersion) {
+    let mut collector = LiftableCollector {
+        scope_names: vec![param_names(body)],
+        ineligible_names: &scan.ineligible_names,
+        liftable_names: FxHashSet::default(),
+        ordered_liftable_names: Vec::new(),
+        // Each hoisted name adds at most one local and one register
+        // anywhere in the body, so the body's own peaks bound what fits.
+        hoist_capacity: MAX_ACTIVE_LOCALS
+            .saturating_sub(scan.peak_active_locals)
+            .min(MAX_REGISTERS.saturating_sub(scan.peak_registers)),
+        version,
+    };
+    collector.collect_block(&body.block);
+    let LiftableCollector { liftable_names, ordered_liftable_names, .. } = collector;
+    if liftable_names.is_empty() {
+        return;
+    }
+
+    let mut rewriter =
+        LiftRewriter { liftable_names: &liftable_names, scope_names: Vec::new(), version };
+    body.block = rewriter.rewrite_block_in_frame(body.block.take(), FxHashSet::default());
+    prepend_declaration(&mut body.block, &ordered_liftable_names);
 }
 
 /// A name qualifies when it isn't already bound in this or an enclosing scope
 /// of the body (rename can give a child local its parent's name) and isn't
-/// ineligible (see `collect_ineligible_names`).
+/// ineligible (see [`BodyScan`]).
 ///
 /// A `local` statement also has to pass `can_lift_assignment`, which rules out attributes such as
 /// `<const>` and `<close>`.
@@ -231,224 +490,6 @@ fn param_names(body: &FunctionBody) -> FxHashSet<CompactString> {
         names.insert(identifier_name(name).into());
     }
     names
-}
-
-/// Names a declaration hoisted to the top of `body` must never wear, found by
-/// resolving scopes over the body:
-///
-/// - names free in the body (globals and upvalues), since the hoisted `local`
-///   would capture every reference to them;
-/// - names bound in the body but captured by a nested closure, since lifting
-///   merges same-named bindings into one function-scope local that the
-///   closure would then share;
-/// - `_ENV` on targets where it's an upvalue.
-///
-/// A name a closure binds itself resolves inside that closure, so merely
-/// mentioning a name in a closure doesn't block its lift.
-///
-/// The scan also records the body's peak locals and registers, which bound
-/// what the hoisted declaration can add.
-fn collect_ineligible_names(body: &FunctionBody, version: LuaVersion) -> IneligibleScanner {
-    let parameter_count = parameter_locals(body);
-    let mut scanner = IneligibleScanner {
-        frames: vec![param_names(body)],
-        closure_floors: Vec::new(),
-        ineligible_names: if version.has_env_upvalue() {
-            FxHashSet::from_iter([CompactString::from("_ENV")])
-        } else {
-            FxHashSet::default()
-        },
-        active_locals: parameter_count,
-        peak_active_locals: parameter_count,
-        statement_expr_nodes: 0,
-        peak_registers: parameter_count,
-    };
-    scanner.visit_block(&body.block);
-    scanner
-}
-
-struct IneligibleScanner {
-    /// One name set per live scope, innermost last.
-    frames: Vec<FxHashSet<CompactString>>,
-    /// Frame count at each enclosing nested-closure entry.
-    closure_floors: Vec<usize>,
-    ineligible_names: FxHashSet<CompactString>,
-    /// Locals the walk has active in the function being lifted.
-    active_locals: usize,
-    peak_active_locals: usize,
-    /// Expressions seen in the current statement, each at most one register
-    /// beyond the locals.
-    statement_expr_nodes: usize,
-    peak_registers: usize,
-}
-
-impl IneligibleScanner {
-    fn declare(&mut self, name: &str) {
-        if let Some(frame) = self.frames.last_mut() {
-            frame.insert(name.into());
-        }
-        self.add_active_locals(1);
-    }
-
-    /// A closure's locals don't count: it has its own 200.
-    fn add_active_locals(&mut self, count: usize) {
-        if self.closure_floors.is_empty() {
-            self.active_locals = self.active_locals.saturating_add(count);
-            self.peak_active_locals = self.peak_active_locals.max(self.active_locals);
-        }
-    }
-
-    fn in_new_frame(&mut self, scan: impl FnOnce(&mut Self)) {
-        let outer_active_locals = self.active_locals;
-        self.frames.push(FxHashSet::default());
-        scan(self);
-        self.frames.pop();
-        self.active_locals = outer_active_locals;
-    }
-
-    fn reference(&mut self, name: &str) {
-        match self.frames.iter().rposition(|frame| frame.contains(name)) {
-            None => {
-                self.ineligible_names.insert(name.into());
-            }
-            Some(frame_index) => {
-                // Bound in the body itself but referenced from inside a
-                // closure, so it's captured.
-                if let Some(&floor) = self.closure_floors.first()
-                    && frame_index < floor
-                {
-                    self.ineligible_names.insert(name.into());
-                }
-            }
-        }
-    }
-
-    fn scan_scoped_block(&mut self, block: &Block) {
-        self.in_new_frame(|scanner| scanner.visit_block(block));
-    }
-}
-
-impl<'ast> Visitor<'ast> for IneligibleScanner {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
-        if self.closure_floors.is_empty() {
-            self.statement_expr_nodes = 0;
-        }
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                // RHS before LHS: `local x = x` reads the outer x.
-                if let Some(exprs) = &local.exprs {
-                    for expr in exprs.iter() {
-                        self.visit_expr(expr);
-                    }
-                }
-                for attributed in local.names.iter() {
-                    self.declare(identifier_name(&attributed.name));
-                }
-            }
-            Statement::LocalFunction(local_function) => {
-                self.declare(identifier_name(&local_function.name));
-                self.visit_function_body(&local_function.body);
-            }
-            Statement::FunctionDecl(function_declaration) => {
-                self.visit_function_body(&function_declaration.body);
-                if let Some(root_name) = function_declaration.name.names.first() {
-                    self.reference(identifier_name(root_name));
-                }
-            }
-            Statement::DoBlock(do_block) => self.scan_scoped_block(&do_block.block),
-            Statement::WhileLoop(while_loop) => {
-                self.visit_expr(&while_loop.condition);
-                self.scan_scoped_block(&while_loop.block);
-            }
-            Statement::RepeatLoop(repeat_loop) => {
-                // The condition sees the block's locals.
-                self.in_new_frame(|scanner| {
-                    scanner.visit_block(&repeat_loop.block);
-                    scanner.visit_expr(&repeat_loop.condition);
-                });
-            }
-            Statement::IfStatement(if_stmt) => {
-                self.visit_expr(&if_stmt.condition);
-                self.scan_scoped_block(&if_stmt.block);
-                for clause in &if_stmt.elseif_clauses {
-                    self.visit_expr(&clause.condition);
-                    self.scan_scoped_block(&clause.block);
-                }
-                if let Some(else_clause) = &if_stmt.else_clause {
-                    self.scan_scoped_block(&else_clause.block);
-                }
-            }
-            Statement::NumericFor(numeric_for) => {
-                self.visit_expr(&numeric_for.start);
-                self.visit_expr(&numeric_for.limit);
-                if let Some(step) = &numeric_for.step {
-                    self.visit_expr(step);
-                }
-                self.in_new_frame(|scanner| {
-                    scanner.add_active_locals(NUMERIC_FOR_STATE_LOCALS);
-                    scanner.declare(identifier_name(&numeric_for.name));
-                    scanner.visit_block(&numeric_for.block);
-                });
-            }
-            Statement::GenericFor(generic_for) => {
-                for expr in generic_for.exprs.iter() {
-                    self.visit_expr(expr);
-                }
-                self.in_new_frame(|scanner| {
-                    scanner.add_active_locals(GENERIC_FOR_STATE_LOCALS);
-                    for param in generic_for.names.iter() {
-                        scanner.declare(identifier_name(&param.name));
-                    }
-                    scanner.visit_block(&generic_for.block);
-                });
-            }
-            // These bind nothing in the body's scopes. A `global function`
-            // or `type function` body is reached as a closure.
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::Error(_) => self.walk_stmt(stmt),
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &'ast Expression) {
-        if self.closure_floors.is_empty() {
-            self.statement_expr_nodes = self.statement_expr_nodes.saturating_add(1);
-            let registers = self.active_locals.saturating_add(self.statement_expr_nodes);
-            self.peak_registers = self.peak_registers.max(registers);
-        }
-        if let Expression::Name(name) = expr {
-            self.reference(identifier_name(name));
-        }
-        self.walk_expr(expr);
-    }
-
-    fn visit_assignment_target(&mut self, target: &'ast Var) {
-        if let Var::Name(name) = target {
-            self.reference(identifier_name(name));
-        }
-        self.walk_assignment_target(target);
-    }
-
-    /// A nested closure, which sees the body's bindings as upvalues.
-    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
-        self.closure_floors.push(self.frames.len());
-        self.frames.push(param_names(body));
-        self.visit_block(&body.block);
-        self.frames.pop();
-        self.closure_floors.pop();
-    }
-
-    // Types never run, so a name inside one is never captured.
-    fn visit_type(&mut self, _ty: &'ast Type) {}
 }
 
 /// Matching is by name, so it tracks every declaration in scope, lifted or
@@ -926,6 +967,178 @@ return w
         assert!(
             name_count <= 200,
             "a function may hold 200 locals at once, but {name_count} were hoisted"
+        );
+    }
+
+    fn apply_luau(source: &str) -> String {
+        let output = run_pass(source, LuaVersion::Luau, |block| lift(block, LuaVersion::Luau));
+        assert_reparses(&output, LuaVersion::Luau);
+        output
+    }
+
+    #[test]
+    fn a_read_two_closures_down_is_resolved_for_each_body_around_it() {
+        let result = apply(
+            "\
+local function f()
+  do
+    local x = 1
+    g = function()
+      do
+        local y = 2
+        print(y)
+      end
+      return function()
+        do
+          local z = 3
+          print(z)
+        end
+        return x
+      end
+    end
+  end
+end
+return f
+",
+        );
+        assert_eq!(
+            result,
+            "local function f()do local x=1 g=function()local y do y=2 print(y)end \
+             return function()local z do z=3 print(z)end return x end end end end return f"
+        );
+    }
+
+    #[test]
+    fn lifts_a_function_in_a_typeof_wherever_the_walk_reaches_one() {
+        let function = "function() do local b = g() print(b) end end";
+        let lifted = "typeof(function()local b do b=g()print(b)end end)";
+        for source in [
+            format!("local v = 1 :: typeof({function})"),
+            format!("local v: typeof({function}) = 1"),
+            format!("type T = typeof({function})"),
+            format!("type T<U = typeof({function})> = U"),
+            format!("for i: typeof({function}) = 1, 2 do end"),
+            format!("for k: typeof({function}) in p do end"),
+            format!("f<<typeof({function})>>()"),
+            format!("a:m<<typeof({function})>>()"),
+            format!("local function f() local v = 1 :: typeof({function}) return v end"),
+            format!("local function f(a) for i: typeof({function}) = a, 2 do end end"),
+            format!("local function f(a) for k: typeof({function}) in a do end end"),
+        ] {
+            let result = apply_luau(&source);
+            assert!(result.contains(lifted), "{source}\n{result}");
+        }
+        // The walk skips a signature, so a function in one keeps its `local`.
+        for source in [
+            format!("local function f(p: typeof({function})) end"),
+            format!("local function f(): typeof({function}) end"),
+        ] {
+            let result = apply_luau(&source);
+            assert!(result.contains("do local b=g()"), "{source}\n{result}");
+        }
+    }
+
+    #[test]
+    fn a_name_read_in_a_type_is_never_captured() {
+        for (source, expected) in [
+            (
+                "\
+local function f()
+  do
+    local x = 1
+    local y = g() :: typeof(function() return x end)
+    print(x, y)
+  end
+end
+",
+                "local function f()local x,y do x=1 y=g()::typeof(function()return x end)\
+                 print(x,y)end end",
+            ),
+            (
+                "\
+local function f()
+  do
+    local x = 1
+    print(x, function()
+      local z = 1 :: typeof(function() return x end)
+      return z
+    end)
+  end
+end
+",
+                "local function f()local x do x=1 print(x,function()local z z=1::\
+                 typeof(function()return x end)return z end)end end",
+            ),
+            (
+                "\
+local function f()
+  do
+    local x = 1
+    print(x)
+  end
+  local y = g() :: typeof(function() x = 2 end)
+  return y
+end
+",
+                "local function f()local x,y do x=1 print(x)end y=g()::\
+                 typeof(function()x=2 end)return y end",
+            ),
+        ] {
+            assert_eq!(apply_luau(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn a_function_in_a_typeof_resolves_its_own_closures() {
+        let result = apply_luau(
+            "\
+local function f()
+  do
+    local x = 1
+    print(x :: typeof(function()
+      do
+        local n = 1
+        h = function() return n end
+      end
+      do
+        local m = 2
+        print(m)
+      end
+    end))
+  end
+end
+",
+        );
+        assert_eq!(
+            result,
+            "local function f()local x do x=1 print(x::typeof(function()local m \
+             do local n=1 h=function()return n end end do m=2 print(m)end end))end end"
+        );
+    }
+
+    #[test]
+    fn a_type_function_captures_like_a_closure() {
+        let result = apply_luau(
+            "\
+local function f()
+  do
+    local x = 1
+    print(x)
+  end
+  type function tf(y)
+    do
+      local c = y
+      print(c, x)
+    end
+    return y
+  end
+end
+",
+        );
+        assert_eq!(
+            result,
+            "local function f()do local x=1 print(x)end type function tf(y)local c \
+             do c=y print(c,x)end return y end end"
         );
     }
 }

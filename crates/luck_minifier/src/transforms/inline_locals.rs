@@ -43,6 +43,7 @@ pub(crate) fn inline(block: Block, version: LuaVersion) -> Block {
         candidates,
         values: FxHashMap::default(),
         is_in_value: false,
+        has_bare_operand: false,
         facts: Facts::OPAQUE,
     };
     let rewritten = inliner.transform_block(block);
@@ -301,6 +302,9 @@ struct Inliner {
     /// There a value inlined bare into a run or a chain at its level stays
     /// unspliced until the value lands, so a chain of them splices once.
     is_in_value: bool,
+    /// Whether a value has landed bare as an operand since the run being
+    /// rebuilt began, so the run may hold one to splice.
+    has_bare_operand: bool,
     /// The facts of what `transform_expr` returned last, when `is_in_value`.
     facts: Facts,
 }
@@ -589,6 +593,7 @@ impl Inliner {
         {
             let expr = self.land(value);
             if keeps_grouping(&expr, position) {
+                self.has_bare_operand = true;
                 return expr;
             }
             self.facts.depth = self.facts.depth.saturating_add(1);
@@ -617,6 +622,7 @@ impl Inliner {
         if self.is_in_value {
             operand_facts.reserve(run.links.len().saturating_add(1));
         }
+        let outer_has_bare_operand = mem::replace(&mut self.has_bare_operand, false);
         run.first = self.inline_operand(run.first.take(), OperandPosition::Left(op));
         if self.is_in_value {
             operand_facts.push(self.facts);
@@ -630,10 +636,13 @@ impl Inliner {
                 operand_facts.push(self.facts);
             }
         }
+        let has_bare_operand = mem::replace(&mut self.has_bare_operand, outer_has_bare_operand);
         if self.is_in_value {
             self.facts = run_facts(&run, &operand_facts);
         } else {
-            run.splice_operands();
+            if has_bare_operand {
+                run.splice_operands();
+            }
             self.facts = Facts::OPAQUE;
         }
         Expression::BinaryOp(run)
@@ -745,8 +754,10 @@ fn run_kind(run: &BinaryOp, operands: &[Facts]) -> Option<LiteralKind> {
 mod tests {
     use core::fmt::Write as _;
 
+    use luck_ast::LastStatement;
+
     use super::*;
-    use crate::fixtures::{assert_reparses, run_pass};
+    use crate::fixtures::{assert_reparses, parse, run_pass};
 
     fn apply(source: &str) -> String {
         apply_version(source, LuaVersion::Lua54)
@@ -1571,6 +1582,25 @@ return y
         let result = apply(&source);
         assert_reparses(&result, LuaVersion::Lua54);
         assert_eq!(result, format!("return 1{}", "+1".repeat(299)));
+    }
+
+    #[test]
+    fn a_run_inlined_bare_joins_the_run_it_lands_in() {
+        // `1 + 2` lands on the left of `a - x`, and `3 .. 4` on the right of
+        // `y .. b`.
+        let source = "\
+local a = 1 + 2
+local b = 3 .. 4
+return a - x, y .. b
+";
+        let block = inline(parse(source, LuaVersion::Lua54), LuaVersion::Lua54);
+        let Some(LastStatement::Return(return_stmt)) = block.last_stmt.as_deref() else {
+            panic!("expected a return, got {block:?}");
+        };
+        assert_eq!(return_stmt.exprs.len(), 2);
+        for run in return_stmt.exprs.iter() {
+            assert_eq!(expr_nesting_depth(run), 1, "{run:?}");
+        }
     }
 
     #[test]

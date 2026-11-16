@@ -126,12 +126,17 @@ impl Parser<'_> {
     fn parse_function_name(&mut self) -> FunctionName {
         let first = self.expect_identifier_recover();
         let start_span = first.span;
-        let mut names = vec![first];
-
-        while self.eat(&TokenKind::Dot) {
-            let name = self.expect_identifier_recover();
-            names.push(name);
-        }
+        let names = if matches!(self.peek(), TokenKind::Dot) {
+            let start = self.function_name_segments.len();
+            self.function_name_segments.push(first);
+            while self.eat(&TokenKind::Dot) {
+                let name = self.expect_identifier_recover();
+                self.function_name_segments.push(name);
+            }
+            self.function_name_segments.drain(start..).collect()
+        } else {
+            vec![first]
+        };
 
         let method = self.eat(&TokenKind::Colon).then(|| self.expect_identifier_recover());
 
@@ -242,16 +247,18 @@ impl Parser<'_> {
         let Some(first) = self.parse_attributed_name(leading_attribute) else {
             return Punctuated::empty();
         };
-        let mut names = vec![first];
-
+        if !matches!(self.peek(), TokenKind::Comma) {
+            return Punctuated::from_item(first);
+        }
+        let start = self.attributed_names.len();
+        self.attributed_names.push(first);
         while self.eat(&TokenKind::Comma) {
             let Some(name) = self.parse_attributed_name(leading_attribute) else {
                 break;
             };
-            names.push(name);
+            self.attributed_names.push(name);
         }
-
-        Punctuated::from_items(names)
+        Punctuated::from_items(self.attributed_names.drain(start..).collect())
     }
 
     /// Parse `Name [: T] [attrib]`, or `None` after recording the error when

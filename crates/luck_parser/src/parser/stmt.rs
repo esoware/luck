@@ -550,13 +550,18 @@ impl Parser<'_> {
     }
 
     fn parse_generic_for(&mut self, for_span: Span, first: Parameter) -> Statement {
-        let mut params = vec![first];
-
-        while self.eat(&TokenKind::Comma) {
-            let name = self.expect_identifier_recover();
-            params.push(self.parse_parameter(name));
-        }
-
+        let params = if matches!(self.peek(), TokenKind::Comma) {
+            let start = self.params.len();
+            self.params.push(first);
+            while self.eat(&TokenKind::Comma) {
+                let name = self.expect_identifier_recover();
+                let param = self.parse_parameter(name);
+                self.params.push(param);
+            }
+            self.params.drain(start..).collect()
+        } else {
+            vec![first]
+        };
         let names = Punctuated::from_items(params);
 
         self.expect_keyword(&TokenKind::In, Construct::ForLoop);
@@ -632,10 +637,7 @@ impl Parser<'_> {
     }
 
     fn parse_assignment(&mut self, first_target: Expression) -> Statement {
-        let mut target_exprs = vec![first_target];
-        while self.eat(&TokenKind::Comma) {
-            target_exprs.push(self.parse_expr(0));
-        }
+        let target_exprs = self.parse_exprs_after(first_target);
 
         let equal = self.expect(&TokenKind::Equal);
 

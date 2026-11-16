@@ -25,15 +25,18 @@ fn strip_parens(walked: Expression) -> Expression {
         Expression::BinaryOp(mut binary_op) => {
             let op = binary_op.links.first().op;
             let inner_side = inner_operand_side(&binary_op);
-            strip_operand_parens(&mut binary_op.first, op, OperandSide::Left);
+            let mut has_bare_run =
+                strip_operand_parens(&mut binary_op.first, op, OperandSide::Left);
             if let Some((last, inner)) = binary_op.links.split_last_mut() {
                 for link in inner {
-                    strip_operand_parens(&mut link.operand, op, inner_side);
+                    has_bare_run |= strip_operand_parens(&mut link.operand, op, inner_side);
                 }
-                strip_operand_parens(&mut last.operand, op, OperandSide::Right);
+                has_bare_run |= strip_operand_parens(&mut last.operand, op, OperandSide::Right);
             }
             // A run the parens held at this level now prints as part of it.
-            binary_op.splice_operands();
+            if has_bare_run {
+                binary_op.splice_operands();
+            }
             Expression::BinaryOp(binary_op)
         }
         Expression::UnaryOp(mut unop) => {
@@ -62,15 +65,21 @@ fn strip_parens(walked: Expression) -> Expression {
     }
 }
 
-fn strip_operand_parens(operand: &mut Expression, op: BinOp, side: OperandSide) {
-    if let Expression::Parenthesized(paren) = operand {
-        let inner = paren.expr.take();
-        let can_unwrap = match side {
-            OperandSide::Left => can_unwrap_in_binop_lhs(&inner, op),
-            OperandSide::Right => can_unwrap_in_binop_rhs(&inner, op),
-        };
-        *operand = if can_unwrap { inner } else { parenthesize(inner) };
-    }
+/// Whether the parens came off a run at `op`'s level, which the run around
+/// it has to splice.
+fn strip_operand_parens(operand: &mut Expression, op: BinOp, side: OperandSide) -> bool {
+    let Expression::Parenthesized(paren) = operand else {
+        return false;
+    };
+    let inner = paren.expr.take();
+    let can_unwrap = match side {
+        OperandSide::Left => can_unwrap_in_binop_lhs(&inner, op),
+        OperandSide::Right => can_unwrap_in_binop_rhs(&inner, op),
+    };
+    let is_bare_run = can_unwrap
+        && matches!(&inner, Expression::BinaryOp(run) if run.precedence().0 == op.precedence().0);
+    *operand = if can_unwrap { inner } else { parenthesize(inner) };
+    is_bare_run
 }
 
 impl Transform for ParenSimplifier {
@@ -202,10 +211,11 @@ fn can_unwrap_in_unary(inner: &Expression) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use luck_ast::{LastStatement, expr_nesting_depth};
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::fixtures::{assert_reparses, run_pass};
+    use crate::fixtures::{assert_reparses, parse, run_pass};
 
     fn apply(source: &str) -> String {
         run_pass(source, LuaVersion::Lua54, simplify)
@@ -289,6 +299,18 @@ mod tests {
         // Concat is right-associative, so a .. (b .. c) is a .. b .. c.
         let result = apply("return a .. (b .. c)\n");
         assert!(!result.contains('('), "Right-associative concat parens are redundant: {result}");
+    }
+
+    #[test]
+    fn a_run_freed_of_its_parens_joins_the_run_around_it() {
+        let source = "return (a + b) - c, x .. (y .. z), (a * b) + c";
+        let block = simplify(parse(source, LuaVersion::Lua54));
+        let Some(LastStatement::Return(return_stmt)) = block.last_stmt.as_deref() else {
+            panic!("expected a return, got {block:?}");
+        };
+        let depths: Vec<usize> = return_stmt.exprs.iter().map(expr_nesting_depth).collect();
+        // `a * b` binds tighter than `+`, so it stays a run of its own.
+        assert_eq!(depths, [1, 1, 2]);
     }
 
     #[test]

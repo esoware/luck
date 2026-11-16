@@ -204,15 +204,19 @@ impl Parser<'_> {
         if matches!(first, Type::Intersection(_)) {
             self.error(first.span(), MIXED_TYPE_MESSAGE);
         }
-        let mut members = vec![first];
+        if !matches!(self.peek(), TokenKind::Pipe) {
+            return Punctuated::from_item(first);
+        }
+        let start = self.types.len();
+        self.types.push(first);
         while self.eat(&TokenKind::Pipe) {
             let next = self.parse_union_member();
             if matches!(next, Type::Intersection(_)) {
                 self.error(next.span(), MIXED_TYPE_MESSAGE);
             }
-            members.push(next);
+            self.types.push(next);
         }
-        Punctuated::from_items(members)
+        Punctuated::from_items(self.types.drain(start..).collect())
     }
 
     fn parse_intersection_level(&mut self, primary: Type) -> Type {
@@ -246,15 +250,19 @@ impl Parser<'_> {
         if matches!(first, Type::Optional(_)) {
             self.error(first.span(), MIXED_TYPE_MESSAGE);
         }
-        let mut members = vec![first];
+        if !matches!(self.peek(), TokenKind::Ampersand) {
+            return Punctuated::from_item(first);
+        }
+        let start = self.types.len();
+        self.types.push(first);
         while self.eat(&TokenKind::Ampersand) {
             let next = self.parse_intersection_member();
             if matches!(next, Type::Optional(_)) {
                 self.error(next.span(), MIXED_TYPE_MESSAGE);
             }
-            members.push(next);
+            self.types.push(next);
         }
-        Punctuated::from_items(members)
+        Punctuated::from_items(self.types.drain(start..).collect())
     }
 
     /// The `?`s after a type loop into one node, as `parseTypeSuffix` reads
