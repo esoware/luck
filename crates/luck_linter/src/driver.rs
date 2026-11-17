@@ -105,14 +105,17 @@ pub fn analyze<'ast>(
 ) -> Analysis<'ast> {
     let (version, environment) = (target.lua_version(), target.stdlib_environment());
     let block = &parse.block;
-    let (mut semantic, nodes) =
-        if RULES.iter().any(|entry| rule_severity(entry.rule(), config).is_some()) {
-            let mut collector = NodeCollector::new(block);
-            let semantic = luck_semantic::analyze_with(block, version, environment, &mut collector);
-            (semantic, collector.finish())
-        } else {
-            (luck_semantic::analyze(block, version, environment), Nodes::default())
-        };
+    let (mut semantic, nodes) = if RULES
+        .iter()
+        .any(|entry| rule_severity(entry.rule(), config).is_some())
+    {
+        let mut collector = NodeCollector::new(block);
+        let semantic =
+            luck_semantic::analyze_with(block, parse.counts, version, environment, &mut collector);
+        (semantic, collector.finish())
+    } else {
+        (luck_semantic::analyze(block, parse.counts, version, environment), Nodes::default())
+    };
     semantic.add_extra_globals(config.extra_globals.iter().map(String::as_str));
     Analysis { semantic, nodes }
 }

@@ -24,7 +24,8 @@
 //! let allocator = Allocator::new();
 //! let parsed = luck_parser::parse(&allocator, "local greeting = 1 print(greeting)", LuaVersion::Lua54);
 //! let block = allocator.alloc(parsed.block);
-//! let analysis = luck_semantic::analyze(block, LuaVersion::Lua54, StdlibEnvironment::Standalone);
+//! let analysis =
+//!     luck_semantic::analyze(block, parsed.counts, LuaVersion::Lua54, StdlibEnvironment::Standalone);
 //! let tree = analysis.scope_tree();
 //! let greeting = tree.symbols()[0].id;
 //! assert_eq!(tree.resolved_references(greeting).len(), 1);

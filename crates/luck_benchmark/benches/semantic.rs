@@ -16,7 +16,12 @@ fn bench_semantic(criterion: &mut Criterion) {
         let parse_result = file.parse(&allocator);
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                luck_semantic::analyze(black_box(&parse_result.block), version, environment)
+                luck_semantic::analyze(
+                    black_box(&parse_result.block),
+                    parse_result.counts,
+                    version,
+                    environment,
+                )
             });
         });
     }
@@ -32,6 +37,7 @@ fn bench_semantic(criterion: &mut Criterion) {
                 for parse_result in &parse_results {
                     black_box(luck_semantic::analyze(
                         black_box(&parse_result.block),
+                        parse_result.counts,
                         version,
                         environment,
                     ));

@@ -284,6 +284,7 @@ impl<'chain> ChainCallees<'chain> {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
+    use luck_ast::TreeCounts;
     use luck_token::{LuaVersion, StdlibEnvironment};
 
     use super::*;
@@ -443,7 +444,8 @@ mod tests {
     fn shape_of(source: &str, name: &str) -> Option<&'static str> {
         let allocator = Allocator::new();
         let block = parse(&allocator, source, LuaVersion::Lua54);
-        let (tree, initialized_locals) = build_with_initializers(block, LuaVersion::Lua54, &mut ());
+        let (tree, initialized_locals) =
+            build_with_initializers(block, TreeCounts::default(), LuaVersion::Lua54, &mut ());
         let shapes = symbol_shapes(&tree, &SHAPED_LIBRARY, &initialized_locals);
         let symbol = tree.symbols().iter().find(|symbol| tree.name(symbol.name) == name)?;
         shapes.get(symbol.id.index()).copied().flatten()

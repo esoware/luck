@@ -68,7 +68,7 @@ fn scope_tree_of<'ast>(
 ) -> ScopeTree<'ast> {
     let parsed = luck_parser::parse(allocator, output, version);
     assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
-    ScopeTree::build(allocator.alloc(parsed.block), version)
+    ScopeTree::build(allocator.alloc(parsed.block), parsed.counts, version)
 }
 
 fn assert_reparses(output: &str, version: LuaVersion) {

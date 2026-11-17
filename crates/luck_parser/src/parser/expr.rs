@@ -133,6 +133,7 @@ impl<'ast> Parser<'ast> {
         match self.peek() {
             TokenKind::Identifier => {
                 let name = self.advance_name();
+                self.counts.name_uses = self.counts.name_uses.wrapping_add(1);
                 let prefix = Expression::Name(self.alloc(name));
                 self.parse_suffixes(prefix)
             }

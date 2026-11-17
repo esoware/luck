@@ -81,6 +81,7 @@ impl<'ast> Parser<'ast> {
 
     fn parse_function_name(&mut self) -> FunctionName<'ast> {
         let first = self.expect_identifier_recover();
+        self.counts.name_uses = self.counts.name_uses.wrapping_add(1);
         let names = if self.is_at(TokenKind::Dot) {
             let start = self.scratch.names.len();
             self.scratch.names.push(first);
@@ -92,7 +93,11 @@ impl<'ast> Parser<'ast> {
         } else {
             List::from_array_in([first], self.allocator)
         };
-        let method = self.eat(TokenKind::Colon).then(|| self.expect_identifier_recover());
+        // A method declares `self`.
+        let method = self.eat(TokenKind::Colon).then(|| {
+            self.counts.declarations = self.counts.declarations.wrapping_add(1);
+            self.expect_identifier_recover()
+        });
         let end_span = method
             .map_or_else(|| names.last().map_or(first.span, |name| name.span), |name| name.span);
         FunctionName { span: first.span.merge(end_span), names, method }
@@ -135,6 +140,7 @@ impl<'ast> Parser<'ast> {
         let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
         self.advance(); // `function`
         let name = self.expect_identifier_recover();
+        self.counts.declarations = self.counts.declarations.wrapping_add(1);
         let Some(body) = self.parse_function_body() else {
             return Statement::Error(start_span);
         };
@@ -217,6 +223,7 @@ impl<'ast> Parser<'ast> {
         leading_attribute: Option<Attribute<'ast>>,
     ) -> Option<AttributedName<'ast>> {
         let name = self.expect_identifier()?;
+        self.counts.declarations = self.counts.declarations.wrapping_add(1);
         // Luau: type annotation after the name.
         let type_annotation = self.try_parse_type_annotation();
         let attribute =

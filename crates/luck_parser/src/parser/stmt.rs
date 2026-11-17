@@ -167,6 +167,7 @@ impl<'ast> Parser<'ast> {
             return None;
         }
         self.block_depth = self.block_depth.wrapping_add(1);
+        self.counts.blocks = self.counts.blocks.wrapping_add(1);
 
         let start = self.scratch.stmts.len();
         // 5.1 and Luau have no empty statement (block ::= {stat [';']}), so

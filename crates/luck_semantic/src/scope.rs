@@ -1,6 +1,6 @@
 mod builder;
 
-use luck_ast::{Block, Name};
+use luck_ast::{Block, Name, TreeCounts};
 use luck_token::{LuaVersion, Span, offset_to_index};
 use rustc_hash::FxHashMap;
 
@@ -189,19 +189,25 @@ impl ReferenceKind {
 }
 
 impl<'ast> ScopeTree<'ast> {
-    /// One walk over `block`, which recurses once per level of nesting.
+    /// One walk over `block`, which recurses once per level of nesting, into
+    /// tables sized from `counts`, the parse's or the default.
     #[must_use]
-    pub fn build(block: &'ast Block<'ast>, version: LuaVersion) -> Self {
-        Self::build_with(block, version, &mut ())
+    pub fn build(block: &'ast Block<'ast>, counts: TreeCounts, version: LuaVersion) -> Self {
+        Self::build_with(block, counts, version, &mut ())
     }
 
     /// [`Self::build`], showing `sink` each node the walk reaches.
     #[must_use]
-    pub fn build_with<Sink>(block: &'ast Block<'ast>, version: LuaVersion, sink: &mut Sink) -> Self
+    pub fn build_with<Sink>(
+        block: &'ast Block<'ast>,
+        counts: TreeCounts,
+        version: LuaVersion,
+        sink: &mut Sink,
+    ) -> Self
     where
         Sink: NodeSink<'ast>,
     {
-        build_with_initializers(block, version, sink).0
+        build_with_initializers(block, counts, version, sink).0
     }
 
     #[must_use]
@@ -416,8 +422,11 @@ mod tests {
     fn reference_at_finds_the_name_an_offset_touches() {
         let allocator = Allocator::new();
         let source = "local ab = 1 print(ab)";
-        let tree =
-            ScopeTree::build(parse(&allocator, source, LuaVersion::Lua54), LuaVersion::Lua54);
+        let tree = ScopeTree::build(
+            parse(&allocator, source, LuaVersion::Lua54),
+            TreeCounts::default(),
+            LuaVersion::Lua54,
+        );
         let name_at = |offset| tree.reference_at(offset).map(|id| tree.reference(id).span);
         // `print` is 13..18 and `ab` 19..21.
         assert_eq!(name_at(13), Some(Span::new(13, 18)));

@@ -11,7 +11,7 @@ use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
     AttributedName, BinaryLink, Block, ElseIfClause, ElseIfExprClause, Expression, Field,
     FunctionAttribute, FunctionTypeParam, GenericTypeParam, InterpolatedSegment, Literal,
-    MAX_NESTING_DEPTH, Name, Parameter, Statement, Suffix, Type, TypeField, Var,
+    MAX_NESTING_DEPTH, Name, Parameter, Statement, Suffix, TreeCounts, Type, TypeField, Var,
 };
 use luck_lexer::Lexer;
 use luck_token::{LuaVersion, Span, Token, TokenKind};
@@ -62,8 +62,14 @@ fn parse_recording<'ast>(
             let block = Block { span: Span::new(0, 0), stmts: List::new(), last_stmt: None };
             // The empty block's own level.
             let errors = vec![error];
-            let parse =
-                ParseResult { source, block, comments: Vec::new(), errors, nesting_depth: 1 };
+            let parse = ParseResult {
+                source,
+                block,
+                comments: Vec::new(),
+                errors,
+                nesting_depth: 1,
+                counts: TreeCounts::default(),
+            };
             return (parse, is_recording.then(Vec::new));
         }
     };
@@ -96,6 +102,7 @@ fn parse_recording<'ast>(
         settled_unterminated: 0,
         errors: Vec::new(),
         tokens,
+        counts: TreeCounts::default(),
     };
     // `advance` is the lexer's one caller, so it's inlined there alone.
     parser.advance();
@@ -141,6 +148,7 @@ struct Parser<'ast> {
     errors: Vec<ParseError>,
     /// Every token lexed so far, for `parse_with_tokens`.
     tokens: Option<Vec<Token>>,
+    counts: TreeCounts,
 }
 
 /// The items of every list being parsed, innermost list last.
@@ -287,6 +295,7 @@ impl<'ast> Parser<'ast> {
             comments,
             errors,
             nesting_depth: self.deepest_level,
+            counts: self.counts,
         };
         (parse, self.tokens)
     }

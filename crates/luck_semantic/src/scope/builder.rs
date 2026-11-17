@@ -4,10 +4,10 @@ use std::collections::hash_map::Entry;
 use luck_ast::{
     Assignment, Block, CompoundAssignment, Expression, FunctionBody, FunctionDecl, GenericFor,
     GlobalDeclaration, IfStatement, LastStatement, LocalAssignment, Name, NumericFor, Statement,
-    SuffixedExpression, TableConstructor, TypeDeclarationValue, Var, Visitor,
+    SuffixedExpression, TableConstructor, TreeCounts, TypeDeclarationValue, Var, Visitor,
 };
 use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use super::{
     BUCKET_SHIFT, MAX_BUCKETS_PER_REFERENCE, NameEntry, NameId, Position, Reference, ReferenceId,
@@ -24,6 +24,7 @@ type InitializedLocals<'ast> = Vec<(SymbolId, &'ast Expression<'ast>)>;
 /// A local comes before any initializer that can read it.
 pub(crate) fn build_with_initializers<'ast, Sink>(
     block: &'ast Block<'ast>,
+    counts: TreeCounts,
     version: LuaVersion,
     sink: &mut Sink,
 ) -> (ScopeTree<'ast>, InitializedLocals<'ast>)
@@ -31,21 +32,30 @@ where
     Sink: NodeSink<'ast>,
 {
     let module = ScopeId::from_index(0);
+    let declarations = offset_to_index(counts.declarations);
+    let name_uses = offset_to_index(counts.name_uses);
+    // No chunk has more distinct names than declarations and uses together,
+    // and a name table that loose probes less than an exact one.
+    let names = declarations.saturating_add(name_uses);
+    let mut scopes = Vec::with_capacity(offset_to_index(counts.blocks));
+    scopes.push(Scope { parent: None, kind: ScopeKind::Module, function: module });
+    let mut resolved_offsets = Vec::with_capacity(declarations.saturating_add(1));
+    resolved_offsets.push(0);
     let mut builder = Builder {
         tree: ScopeTree {
             version,
-            scopes: vec![Scope { parent: None, kind: ScopeKind::Module, function: module }],
-            symbols: Vec::new(),
-            references: Vec::new(),
+            scopes,
+            symbols: Vec::with_capacity(declarations),
+            references: Vec::with_capacity(name_uses),
             resolved: Vec::new(),
-            resolved_offsets: vec![0],
-            positions: Vec::new(),
+            resolved_offsets,
+            positions: Vec::with_capacity(name_uses),
             buckets: Vec::new(),
-            names: Vec::new(),
-            name_ids: FxHashMap::default(),
+            names: Vec::with_capacity(names),
+            name_ids: FxHashMap::with_capacity_and_hasher(names, FxBuildHasher),
             is_env_assigned: false,
         },
-        bindings: Vec::new(),
+        bindings: Vec::with_capacity(names),
         current_scope: module,
         current_function: module,
         outer_scopes: Vec::new(),
@@ -644,7 +654,7 @@ mod tests {
         source: &'ast str,
         version: LuaVersion,
     ) -> ScopeTree<'ast> {
-        ScopeTree::build(parse(allocator, source, version), version)
+        ScopeTree::build(parse(allocator, source, version), TreeCounts::default(), version)
     }
 
     fn scope_tree<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ScopeTree<'ast> {

@@ -1,4 +1,4 @@
-use luck_ast::Block;
+use luck_ast::{Block, TreeCounts};
 use luck_token::Comment;
 
 pub type ParseError = luck_token::SourceError;
@@ -16,4 +16,7 @@ pub struct ParseResult<'ast> {
     /// [`luck_ast::MAX_NESTING_DEPTH`]. With no errors, that's never fewer
     /// than [`luck_ast::block_nesting_depth`] finds.
     pub nesting_depth: usize,
+    /// What `block` holds, for `luck_semantic::analyze` to size its tables
+    /// from.
+    pub counts: TreeCounts,
 }

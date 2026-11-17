@@ -10,6 +10,7 @@ extern crate alloc;
 
 mod common;
 
+mod counts;
 mod drift;
 mod roblox_api;
 mod stack;

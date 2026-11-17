@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
 use luck_ast::{
     Block, Call, Expression, FunctionArgs, FunctionBody, Name, Statement, Suffix,
-    SuffixedExpression, Var,
+    SuffixedExpression, TreeCounts, Var,
 };
 use luck_core::Diagnostic;
 use luck_semantic::{NodeSink, ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
@@ -68,7 +68,7 @@ pub(crate) fn extract_requires<'ast>(
         package_loaded_writes: Vec::new(),
         has_vararg_read: false,
     };
-    let tree = ScopeTree::build_with(block, version, &mut uses);
+    let tree = ScopeTree::build_with(block, TreeCounts::default(), version, &mut uses);
     // The walk reaches an assignment's values before its targets, and the
     // diagnostics follow the source.
     uses.requires.sort_by_key(RequireUse::start);

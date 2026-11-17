@@ -85,6 +85,7 @@ impl<'ast> Parser<'ast> {
     /// Finish a function parameter or a for-loop variable whose `name` was
     /// just consumed, taking a Luau `: T` annotation if one follows.
     pub(super) fn parse_parameter(&mut self, name: Name<'ast>) -> Parameter<'ast> {
+        self.counts.declarations = self.counts.declarations.wrapping_add(1);
         Parameter { name, type_annotation: self.try_parse_type_annotation() }
     }
 
@@ -92,8 +93,10 @@ impl<'ast> Parser<'ast> {
     fn parse_vararg_param(&mut self) -> Box<'ast, VarArgParam<'ast>> {
         let dots = self.advance();
         // Lua 5.5: named varargs `...name`.
-        let name = (self.version.has_named_varargs() && self.is_at_identifier())
-            .then(|| self.advance_name());
+        let name = (self.version.has_named_varargs() && self.is_at_identifier()).then(|| {
+            self.counts.declarations = self.counts.declarations.wrapping_add(1);
+            self.advance_name()
+        });
         // Luau: vararg type annotation `...: type` or `...: T...`.
         let type_annotation = (self.version.has_type_syntax() && self.eat(TokenKind::Colon))
             .then(|| self.parse_vararg_type());

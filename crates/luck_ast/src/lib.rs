@@ -50,6 +50,7 @@
 extern crate alloc;
 
 mod chain;
+mod counts;
 mod depth;
 mod expr;
 #[cfg(test)]
@@ -68,6 +69,7 @@ mod visitor;
 mod visitor_mut;
 
 pub use chain::{Call, ChainHead, DottedPath};
+pub use counts::TreeCounts;
 pub use depth::{
     MAX_NESTING_DEPTH, block_nesting_depth, expr_nesting_depth, spans_past_nesting_cap,
     type_nesting_depth,

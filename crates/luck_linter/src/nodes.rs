@@ -207,6 +207,7 @@ impl<'ast> NodeSink<'ast> for NodeCollector<'ast> {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
+    use luck_ast::TreeCounts;
     use luck_token::{LuaVersion, StdlibEnvironment};
 
     use super::*;
@@ -215,6 +216,7 @@ mod tests {
         let mut collector = NodeCollector::new(block);
         let _semantic = luck_semantic::analyze_with(
             block,
+            TreeCounts::default(),
             LuaVersion::Lua54,
             StdlibEnvironment::Standalone,
             &mut collector,
