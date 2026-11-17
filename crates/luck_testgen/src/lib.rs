@@ -29,7 +29,7 @@ mod runtime;
 mod stack;
 
 pub use fixtures::{collect_fixture_files, detect_version, is_error_fixture};
-pub use full::{generate_full, generate_full_embeddable};
+pub use full::generate_full;
 pub use runtime::generate_runtime_safe;
 pub use stack::{
     SMALLEST_STACK_BYTES, broken_sources, deep_and_long_sources, on_the_smallest_stack,

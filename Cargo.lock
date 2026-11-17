@@ -1094,7 +1094,7 @@ dependencies = [
 name = "luck_testgen"
 version = "0.0.0"
 dependencies = [
- "luck_codegen",
+ "luck_allocator",
  "luck_formatter",
  "luck_minifier",
  "luck_parser",
