@@ -33,6 +33,7 @@ linter    = ["luck_linter", "semantic"]
 config    = ["luck_config", "bundler", "minifier", "formatter", "linter"]
 
 [dependencies]
+luck_allocator = { workspace = true }
 luck_ast       = { workspace = true }
 luck_bundler   = { workspace = true, optional = true }
 luck_codegen   = { workspace = true, optional = true }

@@ -1017,6 +1017,7 @@ dependencies = [
 name = "luck_lua"
 version = "0.6.0"
 dependencies = [
+ "luck_allocator",
  "luck_ast",
  "luck_bundler",
  "luck_codegen",
