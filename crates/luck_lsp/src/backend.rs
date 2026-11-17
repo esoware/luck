@@ -5,6 +5,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::future::ready;
 
+use luck_allocator::Allocator;
 use luck_linter::LintDiagnostic;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::{spawn_blocking, yield_now};
@@ -102,7 +103,11 @@ pub struct Backend<N: Notifier = Client> {
     /// lock queues them in arrival order: an edit can't overtake the open it
     /// follows, and a publish can't land after what replaced or closed its
     /// document.
-    sync: Mutex<()>,
+    ///
+    /// It also keeps the emptied arena of the last version replaced, so the
+    /// next version parses into memory that's already mapped. A close frees
+    /// it.
+    sync: Mutex<Option<Allocator>>,
     settings_cache: SettingsCache,
 }
 
@@ -111,17 +116,26 @@ impl<N: Notifier> Backend<N> {
         Self {
             notifier,
             documents: RwLock::new(BTreeMap::new()),
-            sync: Mutex::new(()),
+            sync: Mutex::new(None),
             settings_cache: SettingsCache::default(),
         }
     }
 
     /// Makes `state` what's open at `uri`, which leaves any lint still
-    /// running on what it replaces with nothing to publish.
-    async fn store(&self, uri: &Uri, state: DocumentState) -> Arc<DocumentState> {
+    /// running on what it replaces with nothing to publish. What it replaces
+    /// leaves its arena in `spare` when nothing else holds it.
+    async fn store(
+        &self,
+        uri: &Uri,
+        state: DocumentState,
+        spare: &mut Option<Allocator>,
+    ) -> Arc<DocumentState> {
         let shared = Arc::new(state);
         let open = OpenDocument { state: Arc::clone(&shared), published_lints: None };
-        self.documents.write().await.insert(uri.clone(), open);
+        let replaced = self.documents.write().await.insert(uri.clone(), open);
+        if let Some(Ok(version)) = replaced.map(|previous| Arc::try_unwrap(previous.state)) {
+            *spare = Some(version.into_arena());
+        }
         shared
     }
 
@@ -246,6 +260,7 @@ impl<N: Notifier> Backend<N> {
     async fn apply_change(
         &self,
         params: DidChangeTextDocumentParams,
+        spare: &mut Option<Allocator>,
     ) -> Option<Arc<DocumentState>> {
         let uri = &params.text_document.uri;
         let current = self.snapshot(uri).await?;
@@ -262,7 +277,10 @@ impl<N: Notifier> Backend<N> {
             self.documents.write().await.remove(uri);
             return None;
         };
-        Some(self.store(uri, current.with_text(&text, version)).await)
+        let state = current.with_text(&text, version, spare.take().unwrap_or_default());
+        // Unheld, the version it replaces can lend the next one its arena.
+        drop(current);
+        Some(self.store(uri, state, spare).await)
     }
 }
 
@@ -403,12 +421,16 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         for uri in uris {
             let settings = self.document_settings(&uri).await;
             let document = {
-                let _ordered = self.sync.lock().await;
+                let mut spare = self.sync.lock().await;
                 let Some(current) = self.snapshot(&uri).await else {
                     continue;
                 };
-                self.store(&uri, DocumentState::new(current.text(), current.version(), settings))
-                    .await
+                let arena = spare.take().unwrap_or_default();
+                let state = DocumentState::new(current.text(), current.version(), settings, arena);
+                drop(current);
+                let document = self.store(&uri, state, &mut spare).await;
+                drop(spare);
+                document
             };
             self.lint_and_publish(uri, document).await;
         }
@@ -423,10 +445,14 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         let document = {
             // Held across settings discovery, so a change arriving during the
             // open waits for the document it edits.
-            let _ordered = self.sync.lock().await;
+            let mut spare = self.sync.lock().await;
             let settings = self.document_settings(&uri).await;
             let (text, version) = (&params.text_document.text, params.text_document.version);
-            self.store(&uri, DocumentState::new(text, version, settings)).await
+            let state =
+                DocumentState::new(text, version, settings, spare.take().unwrap_or_default());
+            let document = self.store(&uri, state, &mut spare).await;
+            drop(spare);
+            document
         };
         self.lint_and_publish(uri, document).await;
     }
@@ -434,8 +460,10 @@ impl<N: Notifier> LanguageServer for Backend<N> {
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.clone();
         let updated = {
-            let _ordered = self.sync.lock().await;
-            self.apply_change(params).await
+            let mut spare = self.sync.lock().await;
+            let updated = self.apply_change(params, &mut spare).await;
+            drop(spare);
+            updated
         };
         if let Some(document) = updated {
             self.lint_and_publish(uri, document).await;
@@ -445,7 +473,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
         let document = {
-            let _ordered = self.sync.lock().await;
+            let mut spare = self.sync.lock().await;
             let Some(current) = self.snapshot(&uri).await else {
                 return;
             };
@@ -455,7 +483,12 @@ impl<N: Notifier> LanguageServer for Backend<N> {
             if let Some(text) = params.text
                 && current.text() != text
             {
-                self.store(&uri, current.with_text(&text, current.version())).await
+                let arena = spare.take().unwrap_or_default();
+                let state = current.with_text(&text, current.version(), arena);
+                drop(current);
+                let document = self.store(&uri, state, &mut spare).await;
+                drop(spare);
+                document
             } else {
                 current
             }
@@ -465,10 +498,12 @@ impl<N: Notifier> LanguageServer for Backend<N> {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
-        let _ordered = self.sync.lock().await;
+        let mut ordered = self.sync.lock().await;
         self.documents.write().await.remove(&uri);
+        *ordered = None;
         // Per LSP spec, clear diagnostics for closed files.
         self.notifier.publish_diagnostics(uri, Vec::new(), None).await;
+        drop(ordered);
     }
 
     async fn formatting(
@@ -665,5 +700,66 @@ impl<N: Notifier> LanguageServer for Backend<N> {
             .await
             .unwrap_or_default();
         Ok(Some(links))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tower_lsp_server::ls_types::{
+        TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+        VersionedTextDocumentIdentifier,
+    };
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct Silent;
+
+    impl Notifier for Silent {
+        async fn publish_diagnostics(&self, _uri: Uri, _diags: Vec<Diagnostic>, _: Option<i32>) {}
+
+        async fn show_message(&self, _message_type: MessageType, _message: String) {}
+
+        async fn log_message(&self, _message_type: MessageType, _message: String) {}
+
+        async fn register_capability(&self, _registrations: Vec<Registration>) {}
+    }
+
+    fn replace_all(uri: &Uri, version: i32, text: &str) -> DidChangeTextDocumentParams {
+        DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: text.to_owned(),
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn a_replaced_version_lends_its_arena_to_the_next_and_a_close_frees_it() {
+        let server = Backend::new(Silent);
+        let uri: Uri = "untitled:Untitled-1".parse().expect("valid URI");
+        server
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "lua".to_owned(),
+                    version: 1,
+                    text: "local one = 1\n".to_owned(),
+                },
+            })
+            .await;
+        assert!(server.sync.lock().await.is_none(), "nothing was replaced yet");
+        server.did_change(replace_all(&uri, 2, "local two = 2\n")).await;
+        assert!(server.sync.lock().await.is_some(), "version 1 left its arena");
+        server.did_change(replace_all(&uri, 3, "local three = 3\n")).await;
+        let document = server.snapshot(&uri).await.expect("the document is open");
+        assert_eq!(document.text(), "local three = 3\n");
+        assert!(server.sync.lock().await.is_some(), "version 2 left its arena");
+        server
+            .did_close(DidCloseTextDocumentParams { text_document: TextDocumentIdentifier { uri } })
+            .await;
+        assert!(server.sync.lock().await.is_none(), "a close frees the spare arena");
     }
 }

@@ -47,15 +47,26 @@ pub(crate) struct DocumentState {
 }
 
 impl DocumentState {
-    pub(crate) fn new(text: &str, version: i32, settings: Arc<DocumentSettings>) -> Self {
+    /// Parses and analyzes `text` in `arena`, which this version then owns.
+    pub(crate) fn new(
+        text: &str,
+        version: i32,
+        settings: Arc<DocumentSettings>,
+        arena: Allocator,
+    ) -> Self {
         let (analyzed, tokens) =
-            Analyzed::new(text, settings.target, &settings.project.lint_config);
+            Analyzed::new(text, settings.target, &settings.project.lint_config, arena);
         let line_index = LineIndex::new(text);
         Self { version, settings, analyzed, line_index, tokens, highlights: OnceLock::new() }
     }
 
-    pub(crate) fn with_text(&self, text: &str, version: i32) -> Self {
-        Self::new(text, version, Arc::clone(&self.settings))
+    pub(crate) fn with_text(&self, text: &str, version: i32, arena: Allocator) -> Self {
+        Self::new(text, version, Arc::clone(&self.settings), arena)
+    }
+
+    /// This version's arena, emptied, for the next to parse into.
+    pub(crate) fn into_arena(self) -> Allocator {
+        self.analyzed.into_arena()
     }
 
     pub(crate) const fn version(&self) -> i32 {

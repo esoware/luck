@@ -22,7 +22,6 @@ use luck_token::Token;
 pub(crate) struct Analyzed {
     analysis: Analysis<'static>,
     parse: ArenaParse,
-    #[expect(dead_code, reason = "held only so the arena drops after what lives in it")]
     allocator: Allocator,
 }
 
@@ -65,11 +64,15 @@ const _: () = {
 unsafe impl Sync for Analyzed {}
 
 impl Analyzed {
-    /// Copies `text` into a new arena, then parses and analyzes it there for
+    /// Copies `text` into `allocator`, then parses and analyzes it there for
     /// `target`, with `config`'s extra globals defined. The tokens the parse
     /// read come back beside it.
-    pub(crate) fn new(text: &str, target: LuaTarget, config: &LintConfig) -> (Self, Vec<Token>) {
-        let allocator = Allocator::new();
+    pub(crate) fn new(
+        text: &str,
+        target: LuaTarget,
+        config: &LintConfig,
+        allocator: Allocator,
+    ) -> (Self, Vec<Token>) {
         // SAFETY: What's built here lives in the arena's chunks, which stay
         // where they are when `allocator` moves into `Self`, and which drop
         // only after the parse and the analysis do. Nothing built keeps this
@@ -91,6 +94,15 @@ impl Analyzed {
 
     pub(crate) const fn analysis(&self) -> &Analysis<'_> {
         &self.analysis
+    }
+
+    /// The arena, emptied for another text once what lived in it is gone.
+    pub(crate) fn into_arena(self) -> Allocator {
+        let Self { analysis, parse, mut allocator } = self;
+        drop(analysis);
+        drop(parse);
+        allocator.reset();
+        allocator
     }
 }
 
