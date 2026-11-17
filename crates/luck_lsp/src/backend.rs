@@ -34,7 +34,7 @@ use tower_lsp_server::ls_types::{
 };
 use tower_lsp_server::{Client, LanguageServer};
 
-use crate::document::{DocumentSettings, DocumentState, file_path};
+use crate::document::{DocumentSettings, DocumentState, OpenDocument, file_path};
 use crate::providers::{
     code_action, completion, definition, diagnostics, document_highlight, document_link,
     document_symbol, folding_range, hover, references, rename, selection_range, semantic_tokens,
@@ -83,15 +83,6 @@ impl Notifier for Client {
     async fn register_capability(&self, registrations: Vec<Registration>) {
         let _unused = Self::register_capability(self, registrations).await;
     }
-}
-
-#[derive(Debug)]
-struct OpenDocument {
-    state: Arc<DocumentState>,
-    /// The lints last published for `state`. VS Code asks for code actions
-    /// on nearly every cursor move, and without this each request would
-    /// rerun every rule.
-    published_lints: Option<Arc<[LintDiagnostic]>>,
 }
 
 #[derive(Debug)]
@@ -250,7 +241,13 @@ impl<N: Notifier> Backend<N> {
         &self,
         _params: serde_json::Value,
     ) -> JsonRpcResult<WorkspaceEdit> {
-        let documents = self.open_documents().await;
+        let documents: Vec<(Uri, OpenDocument)> = self
+            .documents
+            .read()
+            .await
+            .iter()
+            .map(|(uri, open)| (uri.clone(), open.clone()))
+            .collect();
         Ok(spawn_blocking(move || code_action::fix_all_open(&documents)).await.unwrap_or_default())
     }
 

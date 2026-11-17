@@ -1,4 +1,3 @@
-use alloc::sync::Arc;
 use core::ops;
 
 use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
@@ -9,7 +8,7 @@ use tower_lsp_server::ls_types::{
     CodeActionResponse, Diagnostic, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
 };
 
-use crate::document::DocumentState;
+use crate::document::{DocumentState, OpenDocument};
 
 /// A client drops an action that isn't inside the kind it asked for, and this
 /// most specific kind is inside `source`, `source.fixAll`, and itself.
@@ -271,14 +270,21 @@ fn should_offer_fix_all(context: &CodeActionContext) -> bool {
     })
 }
 
-/// Every included document's fixes. A document the project leaves out, like
-/// the lints the opt-in gate holds back, publishes nothing to fix.
-pub(crate) fn fix_all_open(documents: &[(Uri, Arc<DocumentState>)]) -> WorkspaceEdit {
+/// Every included document's fixes, from the lints it last published, or
+/// from a lint where it has published none yet.
+///
+/// A document the project leaves out, like the lints the opt-in gate holds
+/// back, publishes nothing to fix.
+pub(crate) fn fix_all_open(documents: &[(Uri, OpenDocument)]) -> WorkspaceEdit {
     let changes = documents
         .iter()
-        .filter(|(_, document)| document.settings().is_included)
-        .filter_map(|(uri, document)| {
-            let edits = all_fix_edits(document, &document.lint());
+        .filter(|(_, open)| open.state.settings().is_included)
+        .filter_map(|(uri, open)| {
+            let document = &open.state;
+            let edits = open.published_lints.as_ref().map_or_else(
+                || all_fix_edits(document, &document.lint()),
+                |lints| all_fix_edits(document, lints),
+            );
             (!edits.is_empty()).then(|| (uri.clone(), edits))
         })
         .collect();

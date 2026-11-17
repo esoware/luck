@@ -30,6 +30,15 @@ pub(crate) struct DocumentSettings {
     pub is_included: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct OpenDocument {
+    pub state: Arc<DocumentState>,
+    /// The lints last published for `state`. VS Code asks for code actions
+    /// on nearly every cursor move, and without this each request would
+    /// rerun every rule.
+    pub published_lints: Option<Arc<[LintDiagnostic]>>,
+}
+
 /// One version of an open document, parsed and analyzed once, which the
 /// backend shares through an `Arc`, so no request parses or copies the text.
 #[derive(Debug)]

@@ -39,6 +39,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::document::OpenDocument;
     use crate::fixtures::document_under;
     use crate::settings::ProjectSettings;
 
@@ -109,9 +110,11 @@ mod tests {
         let _links = document_link::document_links(&document, &uri);
         let _formatted = document.format(None);
         let _range_formatted = document.format(Some(0..source.len()));
-        let documents = [(uri, Arc::new(document))];
-        let _workspace_symbols = workspace_symbol::workspace_symbols(&documents, "a");
-        let _fixed = code_action::fix_all_open(&documents);
+        let shared = Arc::new(document);
+        let _workspace_symbols =
+            workspace_symbol::workspace_symbols(&[(uri.clone(), Arc::clone(&shared))], "a");
+        let open = OpenDocument { state: shared, published_lints: None };
+        let _fixed = code_action::fix_all_open(&[(uri, open)]);
     }
 
     #[test]
