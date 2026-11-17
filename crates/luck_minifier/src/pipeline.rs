@@ -5,8 +5,9 @@ use luck_token::{
 };
 
 use crate::compress::Compressor;
+use crate::lift_locals;
+use crate::rename::Renamer;
 use crate::transform_config::TransformConfig;
-use crate::{explicit_self, lift_locals, rename};
 
 /// Two or three rounds settle every measured input, so the cap only bounds
 /// a phase that never stops changing the tree, which the fixpoint tests
@@ -84,6 +85,7 @@ fn minify_tree<'ast>(
     config: &TransformConfig,
 ) {
     let mut compressor = Compressor::new(allocator, version, *config);
+    let mut renamer = Renamer::new(allocator, version);
     let should_rename = config.rename_locals;
     let should_lift = config.lift_locals;
     let mut has_lifted = false;
@@ -97,13 +99,9 @@ fn minify_tree<'ast>(
         if !should_rename && !should_lift {
             break;
         }
-        // Explicit self goes before rename so the renamer can shorten the
-        // parameter.
-        if should_rename && round == 0 {
-            explicit_self::rewrite(allocator, block);
-        }
-        let has_renamed =
-            should_rename && rename::rename(allocator, block, version, config.rename_globals);
+        // Methods take an explicit self on the first rename, so the renamer
+        // can shorten the parameter.
+        let has_renamed = should_rename && renamer.rename(block, config.rename_globals, round == 0);
         // Lift decides by name, and rename's slot reuse gives distinct
         // bindings the same name, so each round can unblock more lifts.
         has_lifted = should_lift && lift_locals::lift(allocator, block, version);

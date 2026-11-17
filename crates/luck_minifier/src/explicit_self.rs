@@ -1,40 +1,28 @@
 //! `function t:m(x)` becomes `function t.m(self, x)` where its body reads
 //! `self` often enough that renaming the parameter pays for the comma.
+//!
+//! The renamer makes the rewrite as its first walk reaches each method, so
+//! the parameter is a binding of its own from the start.
 
 use luck_allocator::Allocator;
-use luck_ast::{
-    Block, Expression, FunctionBody, Name, Parameter, Statement, Var, Visitor, VisitorMut,
-};
+use luck_ast::{Expression, FunctionBody, FunctionDecl, Name, Parameter, Var, Visitor};
 
 use crate::binding::METHOD_RECEIVER_NAME;
 
-pub(crate) fn rewrite<'ast>(allocator: &'ast Allocator, block: &mut Block<'ast>) -> bool {
-    let mut rewriter = ExplicitSelf { allocator, has_changed: false };
-    rewriter.visit_block(block);
-    rewriter.has_changed
-}
-
-struct ExplicitSelf<'ast> {
+pub(crate) fn rewrite<'ast>(
     allocator: &'ast Allocator,
-    has_changed: bool,
-}
-
-impl<'ast> VisitorMut<'ast> for ExplicitSelf<'ast> {
-    fn visit_stmt(&mut self, stmt: &mut Statement<'ast>) {
-        if let Statement::FunctionDecl(function_declaration) = stmt
-            && function_declaration.name.method.is_some()
-            // The new `X,` parameter costs 2 bytes, and each `self` saves 3
-            // once renamed to a single character.
-            && count_self_references(&function_declaration.body) >= 2
-            && let Some(method) = function_declaration.name.method.take()
-        {
-            function_declaration.name.names.push(method, self.allocator);
-            let name = Name { text: METHOD_RECEIVER_NAME, span: method.span };
-            let receiver = Parameter { name, type_annotation: None };
-            function_declaration.body.params.insert(0, receiver, self.allocator);
-            self.has_changed = true;
-        }
-        self.walk_stmt(stmt);
+    function_declaration: &mut FunctionDecl<'ast>,
+) {
+    if function_declaration.name.method.is_some()
+        // The new `X,` parameter costs 2 bytes, and each `self` saves 3
+        // once renamed to a single character.
+        && count_self_references(&function_declaration.body) >= 2
+        && let Some(method) = function_declaration.name.method.take()
+    {
+        function_declaration.name.names.push(method, allocator);
+        let name = Name { text: METHOD_RECEIVER_NAME, span: method.span };
+        let receiver = Parameter { name, type_annotation: None };
+        function_declaration.body.params.insert(0, receiver, allocator);
     }
 }
 
