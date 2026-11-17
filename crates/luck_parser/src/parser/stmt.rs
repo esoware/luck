@@ -8,7 +8,7 @@ use luck_ast::{
 };
 use luck_token::{CompoundOp, Span, TokenKind};
 
-use super::{Closer, Parser};
+use super::{Closer, Parser, empty_block};
 
 /// A compound statement, as its missing-keyword errors name it.
 #[derive(Clone, Copy)]
@@ -159,23 +159,26 @@ const fn continues_a_name(kind: TokenKind) -> bool {
 impl<'ast> Parser<'ast> {
     /// The block runs to a closer something open expects, or to the end of
     /// the source, so a stray closer is an error inside it rather than the
-    /// end of it. `None` when it would pass the depth cap.
+    /// end of it. False, leaving `block` as it was, when it would pass the
+    /// depth cap.
+    ///
+    /// It parses into a block the caller already holds, as every node with
+    /// a block does, so no recursive frame holds a block or a node.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    pub(super) fn parse_block(&mut self) -> Option<Block<'ast>> {
+    pub(super) fn parse_block(&mut self, block: &mut Block<'ast>) -> bool {
         let start_span = self.token.span;
         if !self.enter_depth() {
-            return None;
+            return false;
         }
         self.block_depth = self.block_depth.wrapping_add(1);
 
         let start = self.scratch.stmts.len();
-        let mut last_stmt = None;
         // 5.1 and Luau have no empty statement (block ::= {stat [';']}), so
         // a `;` may only follow a statement. 5.2+ treats a lone `;` as a
         // statement.
         let mut can_take_separator = false;
 
-        loop {
+        let last_stmt = loop {
             if self.is_at(TokenKind::Semicolon) {
                 self.parse_semicolons(can_take_separator);
                 can_take_separator = false;
@@ -188,7 +191,7 @@ impl<'ast> Parser<'ast> {
             // No closer begins a statement, so the block's end is checked for
             // last. A last statement comes with the deepest level it reaches.
             let (last, deepest) = match self.peek() {
-                TokenKind::Eof => break,
+                TokenKind::Eof => break None,
                 TokenKind::Return => {
                     let outer = self.begin_operand();
                     let last = self.parse_return_stmt();
@@ -215,7 +218,7 @@ impl<'ast> Parser<'ast> {
                     can_take_separator = true;
                     continue;
                 }
-                _ if self.is_at_expected_closer() => break,
+                _ if self.is_at_expected_closer() => break None,
                 _ => {
                     let stmt = self.report_unexpected_in_block();
                     self.scratch.stmts.push(stmt);
@@ -224,33 +227,45 @@ impl<'ast> Parser<'ast> {
                 }
             };
             if self.is_at_block_end() {
-                last_stmt = Some(last);
-                break;
+                break Some(last);
             }
             let stmt = self.misplaced_last_stmt(last, deepest);
             self.scratch.stmts.push(stmt);
             can_take_separator = true;
-        }
+        };
 
         self.exit_depth();
         self.block_depth = self.block_depth.wrapping_sub(1);
+        self.finish_block(block, start_span, start, last_stmt);
+        true
+    }
 
+    /// Out of line, so the block's recursive frame holds none of this.
+    #[inline(never)]
+    fn finish_block(
+        &mut self,
+        block: &mut Block<'ast>,
+        start_span: Span,
+        start: usize,
+        last_stmt: Option<LastStatement<'ast>>,
+    ) {
         let stmts = List::split_off_in(&mut self.scratch.stmts, start, self.allocator);
         let end_span =
             if stmts.is_empty() && last_stmt.is_none() { start_span } else { self.previous_span };
-        Some(Block { span: start_span.merge(end_span), stmts, last_stmt })
+        *block = Block { span: start_span.merge(end_span), stmts, last_stmt };
     }
 
     /// A run of `;`, each an empty statement in 5.2+, and in 5.1 and Luau an
     /// error unless it follows a statement.
+    #[inline(never)]
     fn parse_semicolons(&mut self, can_take_separator: bool) {
         let mut can_take = can_take_separator;
         while self.is_at(TokenKind::Semicolon) {
             if self.version.has_empty_stmt() {
-                let span = self.advance_span();
+                let span = self.advance();
                 self.scratch.stmts.push(Statement::EmptyStatement(span));
             } else {
-                let span = self.advance_span();
+                let span = self.advance();
                 if !can_take {
                     self.error(span, "unexpected token `;`");
                 }
@@ -318,16 +333,16 @@ impl<'ast> Parser<'ast> {
         Statement::DoBlock(self.alloc(DoBlock { span, block }))
     }
 
-    fn parse_loop_block(&mut self) -> Option<Block<'ast>> {
+    fn parse_loop_block(&mut self, block: &mut Block<'ast>) -> bool {
         let was_in_loop = mem::replace(&mut self.function_scope.is_in_loop, true);
-        let block = self.parse_block();
+        let is_parsed = self.parse_block(block);
         self.function_scope.is_in_loop = was_in_loop;
-        block
+        is_parsed
     }
 
     /// Consume a `break` or `continue`, which is an error outside a loop.
     fn advance_loop_exit(&mut self, outside_loop_message: &'static str) -> Span {
-        let span = self.advance_span();
+        let span = self.advance();
         if !self.function_scope.is_in_loop {
             self.error(span, outside_loop_message);
         }
@@ -368,6 +383,7 @@ impl<'ast> Parser<'ast> {
     /// contextual keywords: each starts a declaration only when the next
     /// token continues one, so in `const = 1`, `const()`, and `const.x`,
     /// `const` is an ordinary name.
+    #[inline(never)]
     fn parse_identifier_stmt(&mut self) -> Statement<'ast> {
         let next = self.peek_next();
         match self.current_text() {
@@ -412,7 +428,7 @@ impl<'ast> Parser<'ast> {
     }
 
     fn parse_return_stmt(&mut self) -> LastStatement<'ast> {
-        let return_span = self.advance_span();
+        let return_span = self.advance();
 
         if self.function_scope.is_chunk {
             self.has_module_return = true;
@@ -424,103 +440,116 @@ impl<'ast> Parser<'ast> {
             }
         }
 
-        let exprs = if can_follow_last_stmt(self.peek()) || self.is_at_expected_closer() {
-            List::new()
-        } else {
-            self.parse_expr_list()
-        };
-
-        let semicolon = self.is_at(TokenKind::Semicolon).then(|| self.advance_span());
-
+        let mut node = self.alloc(ReturnStatement { span: return_span, exprs: List::new() });
+        if !can_follow_last_stmt(self.peek()) && !self.is_at_expected_closer() {
+            node.exprs = self.parse_expr_list();
+        }
+        let semicolon = self.is_at(TokenKind::Semicolon).then(|| self.advance());
         let end_span =
-            semicolon.or_else(|| exprs.last().map(Expression::span)).unwrap_or(return_span);
-
-        let span = return_span.merge(end_span);
-        LastStatement::Return(self.alloc(ReturnStatement { span, exprs }))
+            semicolon.or_else(|| node.exprs.last().map(Expression::span)).unwrap_or(return_span);
+        node.span = return_span.merge(end_span);
+        LastStatement::Return(node)
     }
 
     #[inline(never)]
     fn parse_if_stmt(&mut self) -> Statement<'ast> {
-        let if_span = self.advance_span();
+        let if_span = self.advance();
         self.open(Closer::BlockEnd);
         self.open(Closer::Else);
-        let condition = self.parse_expr(0);
+        let mut node = self.alloc(IfStatement {
+            span: if_span,
+            condition: Expression::Error(if_span),
+            block: empty_block(if_span),
+            elseif_clauses: List::new(),
+            else_clause: None,
+        });
+        node.condition = self.parse_expr(0);
         self.expect_keyword(TokenKind::Then, Construct::IfStatement);
-        let Some(block) = self.parse_block() else {
+        if !self.parse_block(&mut node.block)
+            || (self.is_at(TokenKind::ElseIf) && !self.parse_elseif_clauses(&mut node))
+        {
             return Statement::Error(if_span);
-        };
-
-        let start = self.scratch.elseif_clauses.len();
-        while self.is_at(TokenKind::ElseIf) {
-            let elseif_span = self.advance_span();
-            let clause_condition = self.parse_expr(0);
-            self.expect_keyword(TokenKind::Then, Construct::IfStatement);
-            let Some(clause_block) = self.parse_block() else {
-                return Statement::Error(if_span);
-            };
-            let span = elseif_span.merge(clause_block.span);
-            let clause = ElseIfClause { span, condition: clause_condition, block: clause_block };
-            self.scratch.elseif_clauses.push(clause);
         }
-        let elseif_clauses =
-            List::split_off_in(&mut self.scratch.elseif_clauses, start, self.allocator);
-
-        let else_clause = if self.is_at(TokenKind::Else) {
-            let else_span = self.advance_span();
-            let Some(else_block) = self.parse_block() else {
+        if self.is_at(TokenKind::Else) {
+            let else_span = self.advance();
+            let clause = node
+                .else_clause
+                .insert(ElseClause { span: else_span, block: empty_block(else_span) });
+            if !self.parse_block(&mut clause.block) {
                 return Statement::Error(if_span);
-            };
-            let span = else_span.merge(else_block.span);
-            Some(ElseClause { span, block: else_block })
-        } else {
-            None
-        };
-
+            }
+            clause.span = else_span.merge(clause.block.span);
+        }
         self.close(Closer::Else);
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(TokenKind::End, Construct::IfStatement);
-        let span = if_span.merge(end_span);
+        node.span = if_span.merge(end_span);
+        Statement::IfStatement(node)
+    }
 
-        Statement::IfStatement(self.alloc(IfStatement {
-            span,
-            condition,
-            block,
-            elseif_clauses,
-            else_clause,
-        }))
+    /// Each clause is pushed onto `node`'s own list in the arena, where
+    /// nothing moves it, and parsed in place, so no clause is ever on the
+    /// stack. False when a block would pass the depth cap.
+    #[inline(never)]
+    fn parse_elseif_clauses(&mut self, node: &mut IfStatement<'ast>) -> bool {
+        while self.is_at(TokenKind::ElseIf) {
+            let elseif_span = self.advance();
+            let empty_clause = ElseIfClause {
+                span: elseif_span,
+                condition: Expression::Error(elseif_span),
+                block: empty_block(elseif_span),
+            };
+            node.elseif_clauses.push(empty_clause, self.allocator);
+            let Some(clause) = node.elseif_clauses.last_mut() else {
+                return false;
+            };
+            clause.condition = self.parse_expr(0);
+            self.expect_keyword(TokenKind::Then, Construct::IfStatement);
+            if !self.parse_block(&mut clause.block) {
+                return false;
+            }
+            clause.span = elseif_span.merge(clause.block.span);
+        }
+        true
     }
 
     #[inline(never)]
     fn parse_while_loop(&mut self) -> Statement<'ast> {
-        let while_span = self.advance_span();
+        let while_span = self.advance();
         self.open(Closer::BlockEnd);
-        let condition = self.parse_expr(0);
+        let mut node = self.alloc(WhileLoop {
+            span: while_span,
+            condition: Expression::Error(while_span),
+            block: empty_block(while_span),
+        });
+        node.condition = self.parse_expr(0);
         self.expect_keyword(TokenKind::Do, Construct::WhileLoop);
-        let Some(block) = self.parse_loop_block() else {
+        if !self.parse_loop_block(&mut node.block) {
             return Statement::Error(while_span);
-        };
+        }
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(TokenKind::End, Construct::WhileLoop);
-        let span = while_span.merge(end_span);
-        Statement::WhileLoop(self.alloc(WhileLoop { span, condition, block }))
+        node.span = while_span.merge(end_span);
+        Statement::WhileLoop(node)
     }
 
     #[inline(never)]
     fn parse_do_block(&mut self) -> Statement<'ast> {
-        let do_span = self.advance_span();
+        let do_span = self.advance();
         self.open(Closer::BlockEnd);
-        let Some(block) = self.parse_block() else {
+        let mut node = self.alloc(DoBlock { span: do_span, block: empty_block(do_span) });
+        if !self.parse_block(&mut node.block) {
             return Statement::Error(do_span);
-        };
+        }
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(TokenKind::End, Construct::DoBlock);
-        let span = do_span.merge(end_span);
-        Statement::DoBlock(self.alloc(DoBlock { span, block }))
+        node.span = do_span.merge(end_span);
+        Statement::DoBlock(node)
     }
 
     #[inline(never)]
     fn parse_for_stmt(&mut self) -> Statement<'ast> {
-        let for_span = self.advance_span();
+        let for_span = self.advance();
         self.open(Closer::BlockEnd);
         let name = self.expect_identifier_recover();
         let first = self.parse_parameter(name);
@@ -533,31 +562,36 @@ impl<'ast> Parser<'ast> {
         }
     }
 
+    #[inline]
     fn parse_numeric_for(&mut self, for_span: Span, control: Parameter<'ast>) -> Statement<'ast> {
         let Parameter { name, type_annotation } = control;
-        self.advance(); // `=`
-        let start = self.parse_expr(0);
-        self.expect_keyword(TokenKind::Comma, Construct::ForLoop);
-        let limit = self.parse_expr(0);
-        let step = self.eat(TokenKind::Comma).then(|| self.parse_expr(0));
-        self.expect_keyword(TokenKind::Do, Construct::ForLoop);
-        let Some(block) = self.parse_loop_block() else {
-            return Statement::Error(for_span);
-        };
-        self.close(Closer::BlockEnd);
-        let end_span = self.expect_keyword(TokenKind::End, Construct::ForLoop);
-        let span = for_span.merge(end_span);
-        Statement::NumericFor(self.alloc(NumericFor {
-            span,
+        let mut node = self.alloc(NumericFor {
+            span: for_span,
             name,
             type_annotation,
-            start,
-            limit,
-            step,
-            block,
-        }))
+            start: Expression::Error(for_span),
+            limit: Expression::Error(for_span),
+            step: None,
+            block: empty_block(for_span),
+        });
+        self.advance(); // `=`
+        node.start = self.parse_expr(0);
+        self.expect_keyword(TokenKind::Comma, Construct::ForLoop);
+        node.limit = self.parse_expr(0);
+        if self.eat(TokenKind::Comma) {
+            node.step = Some(self.parse_expr(0));
+        }
+        self.expect_keyword(TokenKind::Do, Construct::ForLoop);
+        if !self.parse_loop_block(&mut node.block) {
+            return Statement::Error(for_span);
+        }
+        self.close(Closer::BlockEnd);
+        let end_span = self.expect_keyword(TokenKind::End, Construct::ForLoop);
+        node.span = for_span.merge(end_span);
+        Statement::NumericFor(node)
     }
 
+    #[inline]
     fn parse_generic_for(&mut self, for_span: Span, first: Parameter<'ast>) -> Statement<'ast> {
         let start = self.scratch.params.len();
         self.scratch.params.push(first);
@@ -567,42 +601,52 @@ impl<'ast> Parser<'ast> {
             self.scratch.params.push(param);
         }
         let names = List::split_off_in(&mut self.scratch.params, start, self.allocator);
-
+        let mut node = self.alloc(GenericFor {
+            span: for_span,
+            names,
+            exprs: List::new(),
+            block: empty_block(for_span),
+        });
         self.expect_keyword(TokenKind::In, Construct::ForLoop);
-        let exprs = self.parse_expr_list();
+        node.exprs = self.parse_expr_list();
         self.expect_keyword(TokenKind::Do, Construct::ForLoop);
-        let Some(block) = self.parse_loop_block() else {
+        if !self.parse_loop_block(&mut node.block) {
             return Statement::Error(for_span);
-        };
+        }
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(TokenKind::End, Construct::ForLoop);
-        let span = for_span.merge(end_span);
-        Statement::GenericFor(self.alloc(GenericFor { span, names, exprs, block }))
+        node.span = for_span.merge(end_span);
+        Statement::GenericFor(node)
     }
 
     #[inline(never)]
     fn parse_repeat_loop(&mut self) -> Statement<'ast> {
-        let repeat_span = self.advance_span();
+        let repeat_span = self.advance();
         self.open(Closer::BlockEnd);
-        let Some(block) = self.parse_loop_block() else {
+        let mut node = self.alloc(RepeatLoop {
+            span: repeat_span,
+            block: empty_block(repeat_span),
+            condition: Expression::Error(repeat_span),
+        });
+        if !self.parse_loop_block(&mut node.block) {
             return Statement::Error(repeat_span);
-        };
+        }
         self.close(Closer::BlockEnd);
         self.expect_keyword(TokenKind::Until, Construct::RepeatLoop);
-        let condition = self.parse_expr(0);
-        let span = repeat_span.merge(condition.span());
-        Statement::RepeatLoop(self.alloc(RepeatLoop { span, block, condition }))
+        node.condition = self.parse_expr(0);
+        node.span = repeat_span.merge(node.condition.span());
+        Statement::RepeatLoop(node)
     }
 
     fn parse_goto_stmt(&mut self) -> Statement<'ast> {
-        let goto_span = self.advance_span();
+        let goto_span = self.advance();
         let name = self.expect_identifier_recover();
         let span = goto_span.merge(name.span);
         Statement::Goto(self.alloc(GotoStatement { span, name }))
     }
 
     fn parse_label_stmt(&mut self) -> Statement<'ast> {
-        let colons_open = self.advance_span();
+        let colons_open = self.advance();
         let name = self.expect_identifier_recover();
         let colons_close = self.expect(TokenKind::DoubleColon);
         let span = colons_open.merge(colons_close);
@@ -731,7 +775,7 @@ impl<'ast> Parser<'ast> {
     #[inline]
     fn expect_keyword(&mut self, kind: TokenKind, construct: Construct) -> Span {
         if self.is_at(kind) {
-            return self.advance_span();
+            return self.advance();
         }
         self.report_missing_keyword(kind, construct)
     }

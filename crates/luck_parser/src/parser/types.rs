@@ -62,7 +62,7 @@ impl<'ast> Parser<'ast> {
 
     fn parse_generic_pack(&mut self) -> Type<'ast> {
         let name = self.advance_name();
-        let dots = self.advance_span();
+        let dots = self.advance();
         let span = name.span.merge(dots);
         Type::GenericPack(self.alloc(GenericPackType { span, name }))
     }
@@ -271,7 +271,7 @@ impl<'ast> Parser<'ast> {
                 return Type::Error(result.span());
             }
             self.nesting_depth = level;
-            let question = self.advance_span();
+            let question = self.advance();
             let span = result.span().merge(question);
             result = Type::Optional(self.alloc(OptionalType { span, ty: result }));
         }
@@ -289,9 +289,9 @@ impl<'ast> Parser<'ast> {
                 let name = self.advance_name();
                 self.parse_named_type(name)
             }
-            TokenKind::Nil => Type::Nil(self.advance_span()),
-            TokenKind::True => Type::True(self.advance_span()),
-            TokenKind::False => Type::False(self.advance_span()),
+            TokenKind::Nil => Type::Nil(self.advance()),
+            TokenKind::True => Type::True(self.advance()),
+            TokenKind::False => Type::False(self.advance()),
             TokenKind::StringLiteral => Type::StringLiteral(self.advance_literal()),
             // Luau has no number singleton, but accepting one keeps sources
             // that carry it round-tripping.
@@ -299,18 +299,21 @@ impl<'ast> Parser<'ast> {
             TokenKind::LeftBrace => self.parse_table_type(),
             TokenKind::LeftParen => self.parse_paren_or_function_type(false),
             // `<T>(...) -> R` is a generic function type.
-            TokenKind::Less => {
-                let open = self.token.span;
-                if !self.enter_depth() {
-                    return Type::Error(open);
-                }
-                let generics = self.parse_generic_type_list(GenericsOwner::Function);
-                let parsed = self.parse_function_type(generics);
-                self.exit_depth();
-                parsed
-            }
+            TokenKind::Less => self.parse_generic_function_type(),
             _ => self.report_expected_type(),
         }
+    }
+
+    #[inline(never)]
+    fn parse_generic_function_type(&mut self) -> Type<'ast> {
+        let open = self.token.span;
+        if !self.enter_depth() {
+            return Type::Error(open);
+        }
+        let generics = self.parse_generic_type_list(GenericsOwner::Function);
+        let parsed = self.parse_function_type(generics);
+        self.exit_depth();
+        parsed
     }
 
     /// The token stays in place; it may close an enclosing construct or
@@ -326,7 +329,7 @@ impl<'ast> Parser<'ast> {
 
     #[inline(never)]
     fn parse_typeof_type(&mut self) -> Type<'ast> {
-        let typeof_span = self.advance_span();
+        let typeof_span = self.advance();
         if !self.is_at(TokenKind::LeftParen) {
             self.report_expected(TokenKind::LeftParen);
             return Type::Error(typeof_span);
@@ -343,10 +346,17 @@ impl<'ast> Parser<'ast> {
         Type::Typeof(self.alloc(TypeofType { span, expr }))
     }
 
+    #[inline]
     fn parse_named_type(&mut self, first_name: Name<'ast>) -> Type<'ast> {
         if !matches!(self.peek(), TokenKind::Dot | TokenKind::Less) {
             return Type::Name(self.alloc(first_name));
         }
+        self.parse_qualified_type(first_name)
+    }
+
+    /// A name with a module prefix or generic arguments.
+    #[inline(never)]
+    fn parse_qualified_type(&mut self, first_name: Name<'ast>) -> Type<'ast> {
         if !self.enter_depth() {
             return Type::Error(first_name.span);
         }
@@ -364,7 +374,7 @@ impl<'ast> Parser<'ast> {
     }
 
     pub(super) fn parse_type_args(&mut self) -> TypeArgs<'ast> {
-        let open = self.advance_span(); // `<`
+        let open = self.advance(); // `<`
         let start = self.scratch.types.len();
         if !matches!(self.peek(), TokenKind::Greater | TokenKind::GreaterEqual | TokenKind::Eof) {
             loop {
@@ -385,13 +395,13 @@ impl<'ast> Parser<'ast> {
         &mut self,
         owner: GenericsOwner,
     ) -> GenericTypeList<'ast> {
-        let open = self.advance_span(); // `<`
+        let open = self.advance(); // `<`
         let start = self.scratch.generic_params.len();
         let mut has_seen_pack = false;
         let mut has_seen_default = false;
 
         while let Some(name) = self.expect_identifier() {
-            let dots = self.is_at(TokenKind::DotDotDot).then(|| self.advance_span());
+            let dots = self.is_at(TokenKind::DotDotDot).then(|| self.advance());
             let default = self.eat(TokenKind::Equal).then(|| {
                 if dots.is_some() { self.parse_type_or_pack() } else { self.parse_type() }
             });
@@ -464,7 +474,7 @@ impl<'ast> Parser<'ast> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn consume_type_close_angle(&mut self) -> Span {
         match self.peek() {
-            TokenKind::Greater => self.advance_span(),
+            TokenKind::Greater => self.advance(),
             TokenKind::GreaterEqual => {
                 let span = self.token.span;
                 let split_at = span.start.saturating_add(1);
@@ -576,10 +586,10 @@ impl<'ast> Parser<'ast> {
         } else {
             None
         };
-        let access_span = access.map(|_| self.advance_span());
+        let access_span = access.map(|_| self.advance());
 
         let field = if self.is_at(TokenKind::LeftBracket) {
-            let open = self.advance_span();
+            let open = self.advance();
             self.open(Closer::Bracket);
             let key = self.parse_type();
             self.expect_closer(TokenKind::RightBracket, Closer::Bracket);
@@ -617,7 +627,7 @@ impl<'ast> Parser<'ast> {
 
     /// The caller has counted the level all three forms take.
     fn parse_paren_or_function_members(&mut self, is_pack_allowed: bool) -> Type<'ast> {
-        let open = self.advance_span(); // `(`
+        let open = self.advance(); // `(`
         self.open(Closer::Paren);
         let start = self.scratch.function_type_params.len();
 

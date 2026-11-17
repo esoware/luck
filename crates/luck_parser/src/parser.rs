@@ -9,8 +9,8 @@ use core::mem;
 
 use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
-    AttributedName, BinaryLink, Block, ElseIfClause, ElseIfExprClause, Expression, Field,
-    FunctionAttribute, FunctionTypeParam, GenericTypeParam, InterpolatedSegment, Literal,
+    AttributedName, BinaryLink, Block, ElseIfExprClause, Expression, Field, FunctionAttribute,
+    FunctionBody, FunctionTypeParam, GenericTypeParam, InterpolatedSegment, Literal,
     MAX_NESTING_DEPTH, Name, Parameter, Statement, Suffix, Type, TypeField, Var,
 };
 use luck_lexer::Lexer;
@@ -72,6 +72,23 @@ pub fn parse<'ast>(
     parser.parse_chunk()
 }
 
+/// What a node's block holds until it's parsed into.
+const fn empty_block<'ast>(span: Span) -> Block<'ast> {
+    Block { span, stmts: List::new(), last_stmt: None }
+}
+
+/// What a node's function body holds until it's parsed into.
+const fn empty_body<'ast>(span: Span) -> FunctionBody<'ast> {
+    FunctionBody {
+        span,
+        generics: None,
+        params: List::new(),
+        vararg: None,
+        return_type: None,
+        block: empty_block(span),
+    }
+}
+
 /// Lua needs only one token of lookahead, so `token` and `next` stand in for
 /// a materialized token stream, which measured slower to write and read back.
 #[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the parse")]
@@ -126,7 +143,6 @@ struct Scratch<'ast> {
     params: Vec<Parameter<'ast>>,
     attributed_names: Vec<AttributedName<'ast>>,
     attributes: Vec<FunctionAttribute<'ast>>,
-    elseif_clauses: Vec<ElseIfClause<'ast>>,
     elseif_exprs: Vec<ElseIfExprClause<'ast>>,
     segments: Vec<InterpolatedSegment<'ast>>,
     types: Vec<Type<'ast>>,
@@ -235,12 +251,8 @@ impl<'ast> Parser<'ast> {
     /// Nothing is open around the chunk's block, so it reads to the end of
     /// the source, and the lexer is drained by then.
     fn parse_chunk(mut self) -> ParseResult<'ast> {
-        let start_span = self.token.span;
-        let block = self.parse_block().unwrap_or(Block {
-            span: start_span,
-            stmts: List::new(),
-            last_stmt: None,
-        });
+        let mut block = empty_block(self.token.span);
+        self.parse_block(&mut block);
         let (comments, mut errors) = self.lexer.finish();
         errors.append(&mut self.errors);
         if self.has_type_function && errors.is_empty() {
@@ -298,19 +310,16 @@ impl<'ast> Parser<'ast> {
         self.is_at_identifier() && self.current_text() == text
     }
 
-    /// Out of line, so the lexer it inlines is inlined once.
+    /// Consume the current token and return its span. Out of line, so the
+    /// lexer it inlines is inlined once, and a span comes back in a register
+    /// where a token wouldn't.
     #[inline(never)]
-    fn advance(&mut self) -> Token {
-        let token = self.token;
-        self.previous_span = token.span;
+    fn advance(&mut self) -> Span {
+        let span = self.token.span;
+        self.previous_span = span;
         self.token = self.next;
         self.next = self.lexer.next_token();
-        token
-    }
-
-    #[inline]
-    fn advance_span(&mut self) -> Span {
-        self.advance().span
+        span
     }
 
     /// Consume the current token if it is a `kind`.
@@ -327,11 +336,12 @@ impl<'ast> Parser<'ast> {
     /// caller has already matched its kind.
     #[inline]
     fn advance_leaf(&mut self) -> Literal<'ast> {
-        let token = self.advance();
-        Literal { text: token.span.text(self.source), span: token.span }
+        let span = self.advance();
+        Literal { text: span.text(self.source), span }
     }
 
-    #[inline]
+    /// Out of line, so a leaf costs its caller's frame only the box.
+    #[inline(never)]
     fn advance_literal(&mut self) -> Box<'ast, Literal<'ast>> {
         let literal = self.advance_leaf();
         Box::new_in(literal, self.allocator)
@@ -341,8 +351,15 @@ impl<'ast> Parser<'ast> {
     /// matched its kind.
     #[inline]
     fn advance_name(&mut self) -> Name<'ast> {
-        let token = self.advance();
-        Name { text: token.span.text(self.source), span: token.span }
+        let span = self.advance();
+        Name { text: span.text(self.source), span }
+    }
+
+    /// Out of line, so a name costs its caller's frame only the box.
+    #[inline(never)]
+    fn advance_boxed_name(&mut self) -> Box<'ast, Name<'ast>> {
+        let name = self.advance_name();
+        self.alloc(name)
     }
 
     #[inline]
@@ -371,7 +388,7 @@ impl<'ast> Parser<'ast> {
     /// its span so parsing can go on.
     #[inline]
     fn expect(&mut self, kind: TokenKind) -> Span {
-        if self.is_at(kind) { self.advance_span() } else { self.report_expected(kind) }
+        if self.is_at(kind) { self.advance() } else { self.report_expected(kind) }
     }
 
     /// Count a construct `closer` closes as open from here.
@@ -389,7 +406,7 @@ impl<'ast> Parser<'ast> {
     #[inline]
     fn expect_closer(&mut self, kind: TokenKind, opened: Closer) -> Span {
         self.close(opened);
-        if self.is_at(kind) { self.advance_span() } else { self.report_missing_closer(kind) }
+        if self.is_at(kind) { self.advance() } else { self.report_missing_closer(kind) }
     }
 
     /// A closing bracket of another kind that nothing open expects is a typo

@@ -80,7 +80,7 @@ impl<'ast> Parser<'ast> {
 
     /// Parse a `< Name >` attribute; `<` must be the current token.
     pub(super) fn parse_attribute(&mut self) -> Attribute<'ast> {
-        let open = self.advance_span(); // `<`
+        let open = self.advance(); // `<`
         let name = self.expect_identifier_recover();
         // 5.4 manual section 3.3.7: "There are two possible attributes"; Lua
         // rejects any other name at parse time.
@@ -104,7 +104,7 @@ impl<'ast> Parser<'ast> {
     fn parse_attribute_list(&mut self) -> List<'ast, FunctionAttribute<'ast>> {
         let start = self.scratch.attributes.len();
         while self.is_at(TokenKind::At) {
-            let at_span = self.advance_span();
+            let at_span = self.advance();
             // Luau lexes `@name` and `@[` as single tokens.
             if self.token.span.start != at_span.end {
                 self.error(at_span, "attribute name must directly follow `@`");
@@ -167,10 +167,7 @@ impl<'ast> Parser<'ast> {
                 args
             }
             TokenKind::LeftBrace => {
-                let open = self.token.span;
-                let expr = self
-                    .parse_table_constructor()
-                    .map_or(Expression::Error(open), Expression::TableConstructor);
+                let expr = self.parse_table_constructor();
                 if !is_attribute_literal(&expr) {
                     self.error(expr.span(), "attribute arguments must be literals");
                 }

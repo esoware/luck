@@ -7,8 +7,8 @@ use luck_ast::{
 };
 use luck_token::{Span, TokenKind};
 
-use super::Parser;
 use super::types::GenericsOwner;
+use super::{Parser, empty_body};
 
 /// The span of a `local` or `global` declaration, from `start_span` through
 /// its last value, or through its last name and that name's annotation and
@@ -70,17 +70,20 @@ impl<'ast> Parser<'ast> {
         &mut self,
         attributes: List<'ast, FunctionAttribute<'ast>>,
     ) -> Statement<'ast> {
-        let function_span = self.advance_span();
-        let name = self.parse_function_name();
+        let function_span = self.advance();
         let start_span = attributes.first().map_or(function_span, |attribute| attribute.span);
-        let Some(body) = self.parse_function_body() else {
+        let name = FunctionName { span: function_span, names: List::new(), method: None };
+        let body = empty_body(start_span);
+        let mut node = self.alloc(FunctionDecl { span: start_span, attributes, name, body });
+        self.parse_function_name(&mut node.name);
+        if !self.parse_function_body(&mut node.body) {
             return Statement::Error(start_span);
-        };
-        let span = start_span.merge(body.span);
-        Statement::FunctionDecl(self.alloc(FunctionDecl { span, attributes, name, body }))
+        }
+        node.span = start_span.merge(node.body.span);
+        Statement::FunctionDecl(node)
     }
 
-    fn parse_function_name(&mut self) -> FunctionName<'ast> {
+    fn parse_function_name(&mut self, function_name: &mut FunctionName<'ast>) {
         let first = self.expect_identifier_recover();
         let names = if self.is_at(TokenKind::Dot) {
             let start = self.scratch.names.len();
@@ -96,14 +99,14 @@ impl<'ast> Parser<'ast> {
         let method = self.eat(TokenKind::Colon).then(|| self.expect_identifier_recover());
         let end_span = method
             .map_or_else(|| names.last().map_or(first.span, |name| name.span), |name| name.span);
-        FunctionName { span: first.span.merge(end_span), names, method }
+        *function_name = FunctionName { span: first.span.merge(end_span), names, method };
     }
 
     pub(super) fn parse_local_stmt(
         &mut self,
         attributes: List<'ast, FunctionAttribute<'ast>>,
     ) -> Statement<'ast> {
-        let local_span = self.advance_span();
+        let local_span = self.advance();
         if self.is_at(TokenKind::Function) {
             return self.parse_local_function(local_span, attributes, LocalFunctionKind::Local);
         }
@@ -117,7 +120,7 @@ impl<'ast> Parser<'ast> {
         &mut self,
         attributes: List<'ast, FunctionAttribute<'ast>>,
     ) -> Statement<'ast> {
-        let const_span = self.advance_span(); // contextual `const`
+        let const_span = self.advance(); // contextual `const`
         if self.is_at(TokenKind::Function) {
             return self.parse_local_function(const_span, attributes, LocalFunctionKind::Const);
         }
@@ -137,11 +140,13 @@ impl<'ast> Parser<'ast> {
         let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
         self.advance(); // `function`
         let name = self.expect_identifier_recover();
-        let Some(body) = self.parse_function_body() else {
+        let body = empty_body(start_span);
+        let mut node = self.alloc(LocalFunction { span: start_span, attributes, name, body, kind });
+        if !self.parse_function_body(&mut node.body) {
             return Statement::Error(start_span);
-        };
-        let span = start_span.merge(body.span);
-        Statement::LocalFunction(self.alloc(LocalFunction { span, attributes, name, body, kind }))
+        }
+        node.span = start_span.merge(node.body.span);
+        Statement::LocalFunction(node)
     }
 
     fn parse_local_assignment(
@@ -228,22 +233,24 @@ impl<'ast> Parser<'ast> {
 
     #[inline(never)]
     pub(super) fn parse_global_stmt(&mut self) -> Statement<'ast> {
-        let global_span = self.advance_span();
+        let global_span = self.advance();
 
         // `global function name(...) ... end`
         if self.is_at(TokenKind::Function) {
             self.advance();
             let name = self.expect_identifier_recover();
-            let Some(body) = self.parse_function_body() else {
+            let body = empty_body(global_span);
+            let mut node = self.alloc(GlobalFunction { span: global_span, name, body });
+            if !self.parse_function_body(&mut node.body) {
                 return Statement::Error(global_span);
-            };
-            let span = global_span.merge(body.span);
-            return Statement::GlobalFunction(self.alloc(GlobalFunction { span, name, body }));
+            }
+            node.span = global_span.merge(node.body.span);
+            return Statement::GlobalFunction(node);
         }
 
         // `global *`
         if self.is_at(TokenKind::Star) {
-            let star = self.advance_span();
+            let star = self.advance();
             let span = global_span.merge(star);
             return Statement::GlobalStar(self.alloc(GlobalStar { span, attribute: None }));
         }
@@ -254,7 +261,7 @@ impl<'ast> Parser<'ast> {
             let attribute = self.parse_attribute();
             self.reject_global_close(attribute);
             if self.is_at(TokenKind::Star) {
-                let star = self.advance_span();
+                let star = self.advance();
                 let span = global_span.merge(star);
                 let global_star = GlobalStar { span, attribute: Some(attribute) };
                 return Statement::GlobalStar(self.alloc(global_star));
@@ -300,7 +307,7 @@ impl<'ast> Parser<'ast> {
 
     #[inline(never)]
     pub(super) fn parse_type_declaration(&mut self, export_span: Option<Span>) -> Statement<'ast> {
-        let type_span = self.advance_span(); // `type` identifier
+        let type_span = self.advance(); // `type` identifier
         let start_span = export_span.unwrap_or(type_span);
         let is_exported = export_span.is_some();
 
@@ -310,11 +317,12 @@ impl<'ast> Parser<'ast> {
             self.advance();
             self.has_type_function = true;
             let name = self.expect_identifier_recover();
-            let Some(body) = self.parse_function_body() else {
+            let mut body = self.alloc(empty_body(start_span));
+            if !self.parse_function_body(&mut body) {
                 return Statement::Error(start_span);
-            };
+            }
             let span = start_span.merge(body.span);
-            let value = TypeDeclarationValue::TypeFunction(self.alloc(body));
+            let value = TypeDeclarationValue::TypeFunction(body);
             return Statement::TypeDeclaration(self.alloc(TypeDeclaration {
                 span,
                 is_exported,
@@ -347,7 +355,7 @@ impl<'ast> Parser<'ast> {
         &mut self,
         attributes: List<'ast, FunctionAttribute<'ast>>,
     ) -> Statement<'ast> {
-        let export_span = self.advance_span(); // contextual `export`
+        let export_span = self.advance(); // contextual `export`
 
         if self.is_at_name("type") {
             if !attributes.is_empty() {
@@ -374,7 +382,7 @@ impl<'ast> Parser<'ast> {
 
         let stmt = match self.peek() {
             TokenKind::Local => {
-                let local_span = self.advance_span();
+                let local_span = self.advance();
                 if self.is_at(TokenKind::Function) {
                     self.error(
                         export_span,

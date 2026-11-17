@@ -12,75 +12,78 @@ use super::{Closer, FunctionScope, Parser};
     reason = "the parser is one type with its grammar split by file"
 )]
 impl<'ast> Parser<'ast> {
-    /// `None` when the body or its block would pass the depth cap.
+    /// False when the body or its block would pass the depth cap. It parses
+    /// into a body the caller's node already holds, so no recursive frame
+    /// holds one.
     #[inline(never)]
-    pub(super) fn parse_function_body(&mut self) -> Option<FunctionBody<'ast>> {
+    pub(super) fn parse_function_body(&mut self, body: &mut FunctionBody<'ast>) -> bool {
         if !self.enter_depth() {
-            return None;
+            return false;
         }
         self.open(Closer::BlockEnd);
 
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
-        let generics = (self.is_at(TokenKind::Less) && self.version.has_type_syntax()).then(|| {
+        if self.is_at(TokenKind::Less) && self.version.has_type_syntax() {
             let generics = self.parse_generic_type_list(GenericsOwner::Function);
-            self.alloc(generics)
-        });
+            body.generics = Some(self.alloc(generics));
+        }
 
         let open = self.expect(TokenKind::LeftParen);
-        let start_span = generics.as_ref().map_or(open, |list| list.span);
+        let start_span = body.generics.as_ref().map_or(open, |list| list.span);
 
         self.open(Closer::Paren);
-        let (params, vararg) = self.parse_params();
+        self.parse_params(body);
         self.expect_closer(TokenKind::RightParen, Closer::Paren);
 
         // Luau: optional return type annotation after `)`.
-        let return_type = (self.version.has_type_syntax() && self.eat(TokenKind::Colon))
-            .then(|| self.parse_return_type());
+        if self.version.has_type_syntax() && self.eat(TokenKind::Colon) {
+            body.return_type = Some(self.parse_return_type());
+        }
 
         // A loop around the function doesn't make `break` or `continue` valid
         // inside it, and `...` needs this function's own vararg parameter.
         let outer_scope = mem::replace(
             &mut self.function_scope,
-            FunctionScope { is_chunk: false, is_vararg: vararg.is_some(), is_in_loop: false },
+            FunctionScope { is_chunk: false, is_vararg: body.vararg.is_some(), is_in_loop: false },
         );
-        let parsed_block = self.parse_block();
+        let is_parsed = self.parse_block(&mut body.block);
         self.function_scope = outer_scope;
         self.exit_depth();
-        let block = parsed_block?;
+        if !is_parsed {
+            return false;
+        }
 
         self.close(Closer::BlockEnd);
         let end_span = self.expect(TokenKind::End);
-        let span = start_span.merge(end_span);
-        Some(FunctionBody { span, generics, params, vararg, return_type, block })
+        body.span = start_span.merge(end_span);
+        true
     }
 
-    /// Parse the parameter list between a function's parens, stopping before
-    /// the closing `)`.
-    fn parse_params(
-        &mut self,
-    ) -> (List<'ast, Parameter<'ast>>, Option<Box<'ast, VarArgParam<'ast>>>) {
+    /// Parse the parameter list between a function's parens into `body`,
+    /// stopping before the closing `)`.
+    fn parse_params(&mut self, body: &mut FunctionBody<'ast>) {
         if self.is_at(TokenKind::DotDotDot) {
-            return (List::new(), Some(self.parse_vararg_param()));
+            body.vararg = Some(self.parse_vararg_param());
+            return;
         }
         if !self.is_at_identifier() {
-            return (List::new(), None);
+            return;
         }
         let start = self.scratch.params.len();
         let first_name = self.advance_name();
         let first = self.parse_parameter(first_name);
         self.scratch.params.push(first);
-        let mut vararg = None;
         while self.eat(TokenKind::Comma) {
             if self.is_at(TokenKind::DotDotDot) {
                 // Vararg after the last named parameter.
-                vararg = Some(self.parse_vararg_param());
+                body.vararg = Some(self.parse_vararg_param());
                 break;
             }
             let name = self.expect_identifier_recover();
             let param = self.parse_parameter(name);
             self.scratch.params.push(param);
         }
-        (List::split_off_in(&mut self.scratch.params, start, self.allocator), vararg)
+        body.params = List::split_off_in(&mut self.scratch.params, start, self.allocator);
     }
 
     /// Finish a function parameter or a for-loop variable whose `name` was
@@ -91,7 +94,7 @@ impl<'ast> Parser<'ast> {
 
     /// Parse `... [name] [: type]`; `...` must be the current token.
     fn parse_vararg_param(&mut self) -> Box<'ast, VarArgParam<'ast>> {
-        let dots = self.advance_span();
+        let dots = self.advance();
         // Lua 5.5: named varargs `...name`.
         let name = (self.version.has_named_varargs() && self.is_at_identifier())
             .then(|| self.advance_name());
