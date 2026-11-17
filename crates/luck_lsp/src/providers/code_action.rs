@@ -127,10 +127,11 @@ fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
 /// LSP forbids overlapping edits in one change list, and a dropped fix
 /// reappears on the next pass.
 fn all_fix_edits(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<TextEdit> {
+    let mut positions = document.positions();
     luck_linter::non_overlapping_edits(lints)
         .into_iter()
         .map(|edit| TextEdit {
-            range: document.range(edit.span),
+            range: positions.range(edit.span),
             new_text: edit.replacement.clone(),
         })
         .collect()

@@ -264,6 +264,10 @@ impl Positions<'_> {
         };
         Position { line: index_to_offset(cursor.line), character }
     }
+
+    pub(crate) fn range(&mut self, span: Span) -> Range {
+        Range { start: self.position(span.start), end: self.position(span.end) }
+    }
 }
 
 #[cfg(test)]

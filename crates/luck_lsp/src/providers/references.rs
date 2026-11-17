@@ -30,9 +30,10 @@ pub(crate) fn references(document: &DocumentState, params: &ReferenceParams) -> 
     spans.sort_by_key(|span| span.start);
     spans.dedup();
 
+    let mut positions = document.positions();
     spans
         .into_iter()
-        .map(|span| Location { uri: uri.clone(), range: document.range(span) })
+        .map(|span| Location { uri: uri.clone(), range: positions.range(span) })
         .collect()
 }
 

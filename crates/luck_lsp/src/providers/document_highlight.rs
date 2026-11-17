@@ -18,11 +18,13 @@ pub(crate) fn document_highlights(
     let Some(name) = node.path().last().and_then(|&name| tree.name_id(name)) else {
         return Vec::new();
     };
+    // References come in evaluation order, which is mostly source order.
+    let mut positions = document.positions();
     tree.references()
         .iter()
         .filter(|reference| reference.name == name)
         .map(|reference| DocumentHighlight {
-            range: document.range(reference.span),
+            range: positions.range(reference.span),
             kind: Some(if reference.kind.is_write() {
                 DocumentHighlightKind::WRITE
             } else {

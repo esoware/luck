@@ -6,11 +6,13 @@ use crate::document::DocumentState;
 /// The source string in `Diagnostic.source`; VS Code shows it in tooltips.
 const DIAGNOSTIC_SOURCE: &str = "luck";
 
+/// `lints` come sorted by where they start, as the linter returns them.
 pub(crate) fn to_lsp(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<Diagnostic> {
+    let mut positions = document.positions();
     lints
         .iter()
         .map(|lint| Diagnostic {
-            range: document.range(lint.span),
+            range: positions.range(lint.span),
             severity: Some(match lint.severity {
                 Severity::Error => DiagnosticSeverity::ERROR,
                 Severity::Warning => DiagnosticSeverity::WARNING,

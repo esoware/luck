@@ -88,9 +88,10 @@ pub(crate) fn rename(
     spans.sort_by_key(|span| span.start);
     spans.dedup();
 
+    let mut positions = document.positions();
     let edits: Vec<TextEdit> = spans
         .into_iter()
-        .map(|span| TextEdit { range: document.range(span), new_text: new_name.to_owned() })
+        .map(|span| TextEdit { range: positions.range(span), new_text: new_name.to_owned() })
         .collect();
     let changes = [(text_document_position.text_document.uri.clone(), edits)].into();
     Ok(Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }))
