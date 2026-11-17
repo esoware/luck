@@ -848,6 +848,7 @@ dependencies = [
  "luck_semantic",
  "luck_testgen",
  "luck_token",
+ "parking_lot",
  "petgraph",
  "rustc-hash",
  "schemars",

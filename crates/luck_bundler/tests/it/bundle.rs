@@ -817,11 +817,12 @@ require(\"b\")
     assert_eq!(codes(&errors), ["E012"], "{errors:?}");
 }
 
-/// Eight directories of twelve modules, so threads race to resolve into the
+/// Eight directories of twenty modules, so threads race to resolve into the
 /// same directories.
 ///
 /// Each module requires every module of its own directory, the first of the
-/// next, and, when `has_missing_requires`, one that doesn't exist.
+/// next, and, when `has_missing_requires`, one that doesn't exist, which is
+/// more than one task resolves, while the entry requires few.
 ///
 /// # Errors
 ///
@@ -839,13 +840,13 @@ fn wide_project(version: LuaVersion, has_missing_requires: bool) -> io::Result<T
         }
     };
     let packages = ["a", "b", "c", "d", "e", "f", "g", "h"];
-    let modules = ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"];
+    let modules: Vec<String> = (0u8..20).map(|module| format!("m{module}")).collect();
     let main: String = packages.iter().map(|package| require(".", package, "m0")).collect();
     fs::write(directory.path().join(format!("main.{extension}")), main)?;
     for (package, next_package) in packages.iter().zip(packages.iter().cycle().skip(1)) {
         let package_directory = directory.path().join(package);
         fs::create_dir_all(&package_directory)?;
-        for module in modules {
+        for module in &modules {
             let mut source: String =
                 modules.iter().map(|sibling| require("..", package, sibling)).collect();
             source.push_str(&require("..", next_package, "m0"));
@@ -874,8 +875,8 @@ fn threads_sharing_one_resolver_find_what_one_thread_does() {
             };
             let one_thread = luck_bundler::bundle(&mut arenas(1), &entry, &options);
             match &one_thread {
-                Ok(bundled) => assert_eq!(bundled.source_files.len(), 97, "{version:?}"),
-                Err(errors) => assert_eq!(codes(errors), ["E004"; 96], "{version:?}"),
+                Ok(bundled) => assert_eq!(bundled.source_files.len(), 161, "{version:?}"),
+                Err(errors) => assert_eq!(codes(errors), ["E004"; 160], "{version:?}"),
             }
             assert_eq!(one_thread.is_err(), has_missing_requires, "{version:?}");
             for _ in 0u8..4 {

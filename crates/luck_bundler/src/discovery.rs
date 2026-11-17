@@ -1,13 +1,15 @@
 use alloc::collections::VecDeque;
+use core::any::Any;
 use core::panic::AssertUnwindSafe;
+use core::slice::IterMut;
 use std::panic;
-use std::sync::mpsc::{self, Sender};
 use std::thread::{self, Scope};
 
 use luck_allocator::Allocator;
 use luck_core::Diagnostic;
 use luck_resolver::{ResolveRequest, ResolvedModule, Resolver, native_path, read_source_file};
 use luck_token::{CommentKind, LuaVersion, Span, leading_hot_comments};
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::dynamic_require::DynamicRequire;
@@ -19,8 +21,8 @@ use crate::require_extraction::{ExtractedRequires, RequireSite, extract_requires
 
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
 
-/// The most requires one thread is handed at once, so the threads that free up
-/// meanwhile still find some left.
+/// The most requires one task resolves, so a module that makes more hands
+/// them to every thread that frees up meanwhile.
 const MAX_RESOLVE_BATCH: usize = 16;
 
 /// Everything one module's discovery finds, which depends on no other
@@ -214,13 +216,15 @@ impl<'input> Reader<'input> {
         path: &str,
     ) -> Discovered<'ast> {
         match self.read(allocator, path) {
-            Ok(module) => {
-                let resolutions: Vec<_> =
-                    module.sites.iter().map(|site| self.resolve(site, module.path)).collect();
-                module.resolved(resolutions)
-            }
+            Ok(module) => self.resolve_all(*module),
             Err(error) => Discovered { errors: vec![error], warnings: Vec::new(), module: None },
         }
+    }
+
+    fn resolve_all<'ast>(&self, module: ParsedModule<'ast>) -> Discovered<'ast> {
+        let resolutions: Vec<_> =
+            module.sites.iter().map(|site| self.resolve(site, module.path)).collect();
+        module.resolved(resolutions)
     }
 }
 
@@ -232,9 +236,6 @@ struct Request<'ast> {
     site: usize,
     require: RequireSite<'ast>,
     from_file: &'ast str,
-    /// Lua: the first request for its require string, whose resolution the
-    /// other sites making it share.
-    is_shared: bool,
 }
 
 enum Task<'ast> {
@@ -243,17 +244,24 @@ enum Task<'ast> {
 }
 
 enum Done<'ast> {
-    Read(String, Read<'ast>),
+    Discovered(String, Box<Discovered<'ast>>),
+    /// A module that makes more requires than one task resolves.
+    Parsed(Box<ParsedModule<'ast>>),
     Resolved(Vec<(Request<'ast>, Result<ResolvedModule, Diagnostic>)>),
 }
 
 impl<'ast> Task<'ast> {
     fn run(self, reader: Reader<'_>, allocator: &'ast Allocator) -> Done<'ast> {
         match self {
-            Self::Read(path) => {
-                let module = reader.read(allocator, &path);
-                Done::Read(path, module)
-            }
+            Self::Read(path) => match reader.read(allocator, &path) {
+                Ok(module) if module.sites.len() > MAX_RESOLVE_BATCH => Done::Parsed(module),
+                Ok(module) => Done::Discovered(path, Box::new(reader.resolve_all(*module))),
+                Err(error) => {
+                    let unreadable =
+                        Discovered { errors: vec![error], warnings: Vec::new(), module: None };
+                    Done::Discovered(path, Box::new(unreadable))
+                }
+            },
             Self::Resolve(requests) => Done::Resolved(
                 requests
                     .into_iter()
@@ -264,18 +272,6 @@ impl<'ast> Task<'ast> {
     }
 }
 
-/// What a thread that reads modules sends back: its index, and what its task
-/// found or the panic that stopped it.
-type WorkerResult<'ast> = (usize, thread::Result<Done<'ast>>);
-
-/// Lua: where a require string stands, since only the string decides what it
-/// names.
-enum LuaPath {
-    /// Its first request hasn't come back, and these sites wait on it.
-    Resolving(Vec<(usize, usize)>),
-    Resolved(String),
-}
-
 /// A module whose requires are resolving.
 struct Resolving<'ast> {
     module: ParsedModule<'ast>,
@@ -283,11 +279,9 @@ struct Resolving<'ast> {
     remaining: usize,
 }
 
-/// Every module the entry reaches, read and resolved as separate tasks on as
-/// many threads as there are arenas, with each Lua require string resolved
-/// once however many modules make it.
+/// Every module the entry reaches, read and resolved as separate tasks by one
+/// thread per arena, which share this behind one lock.
 struct Discovery<'ast> {
-    version: LuaVersion,
     found: FxHashMap<String, Discovered<'ast>>,
     /// Every path found, being read, or queued to be, which stops growing once
     /// more are known than a graph may hold.
@@ -296,39 +290,117 @@ struct Discovery<'ast> {
     requests: VecDeque<Request<'ast>>,
     /// By slot, `None` once resolved.
     resolving: Vec<Option<Resolving<'ast>>>,
-    lua_paths: FxHashMap<&'ast str, LuaPath>,
+    /// The arenas no thread has taken.
+    spare_arenas: IterMut<'ast, Allocator>,
+    /// Tasks a thread is running.
+    running: usize,
+    /// Threads waiting for a task that nothing has woken yet.
+    idle: usize,
+    /// What the first task to panic panicked with, which stops discovery.
+    panic: Option<Box<dyn Any + Send>>,
 }
 
-/// Discovers every module `entry` reaches, by canonical path, reading the
-/// entry into `allocator` on this thread, as [`Discovery::run`] runs tasks.
+struct Shared<'ast> {
+    discovery: Mutex<Discovery<'ast>>,
+    task_queued: Condvar,
+}
+
+/// Discovers every module `entry` reaches, by canonical path.
+///
+/// This thread reads the entry into `allocator`, and another thread starts
+/// with one of `spare_arenas` whenever more tasks are queued than the running
+/// threads can take.
 pub(crate) fn discover_reachable<'ast>(
     allocator: &'ast Allocator,
     spare_arenas: &'ast mut [Allocator],
     reader: Reader<'_>,
     entry: &str,
 ) -> FxHashMap<String, Discovered<'ast>> {
-    let mut discovery = Discovery {
-        version: reader.version,
-        found: FxHashMap::default(),
-        seen: FxHashSet::default(),
-        reads: VecDeque::new(),
-        requests: VecDeque::new(),
-        resolving: Vec::new(),
-        lua_paths: FxHashMap::default(),
+    let shared = Shared {
+        discovery: Mutex::new(Discovery {
+            found: FxHashMap::default(),
+            seen: FxHashSet::from_iter([entry.to_owned()]),
+            reads: VecDeque::from([entry.to_owned()]),
+            requests: VecDeque::new(),
+            resolving: Vec::new(),
+            spare_arenas: spare_arenas.iter_mut(),
+            running: 0,
+            idle: 0,
+            panic: None,
+        }),
+        task_queued: Condvar::new(),
     };
-    discovery.seen.insert(entry.to_owned());
-    discovery.reads.push_back(entry.to_owned());
-    thread::scope(|scope| {
-        discovery.run(scope, reader, allocator, spare_arenas);
-    });
-    discovery.found
+    thread::scope(|scope| work(&shared, scope, reader, allocator));
+    let Discovery { found, panic: first_panic, .. } = shared.discovery.into_inner();
+    if let Some(payload) = first_panic {
+        panic::resume_unwind(payload);
+    }
+    found
+}
+
+/// Runs queued tasks, reading into `allocator`, until none is left or one
+/// panics. Each task's queued successors wake waiting threads, and start a
+/// thread for each one left over while an arena is spare.
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the lock is let go only while a task runs or a thread starts"
+)]
+fn work<'scope, 'ast>(
+    shared: &'scope Shared<'ast>,
+    scope: &'scope Scope<'scope, '_>,
+    reader: Reader<'scope>,
+    allocator: &'ast Allocator,
+) where
+    'ast: 'scope,
+{
+    let mut discovery = shared.discovery.lock();
+    while discovery.panic.is_none() {
+        let Some(task) = discovery.next_task() else {
+            if discovery.running == 0 {
+                shared.task_queued.notify_all();
+                return;
+            }
+            discovery.idle = discovery.idle.saturating_add(1);
+            shared.task_queued.wait(&mut discovery);
+            continue;
+        };
+        discovery.running = discovery.running.saturating_add(1);
+        let outcome = MutexGuard::unlocked(&mut discovery, || {
+            panic::catch_unwind(AssertUnwindSafe(|| task.run(reader, allocator)))
+        });
+        discovery.running = discovery.running.saturating_sub(1);
+        match outcome {
+            Ok(done) => discovery.finish(done),
+            Err(payload) => {
+                discovery.panic = Some(payload);
+                shared.task_queued.notify_all();
+                return;
+            }
+        }
+        let batches = discovery.requests.len().div_ceil(MAX_RESOLVE_BATCH);
+        // This thread takes the next task itself.
+        let unclaimed = discovery.reads.len().saturating_add(batches).saturating_sub(1);
+        let woken = unclaimed.min(discovery.idle);
+        discovery.idle = discovery.idle.saturating_sub(woken);
+        for _ in 0..woken {
+            shared.task_queued.notify_one();
+        }
+        let arenas: Vec<&'ast mut Allocator> =
+            discovery.spare_arenas.by_ref().take(unclaimed.saturating_sub(woken)).collect();
+        if !arenas.is_empty() {
+            MutexGuard::unlocked(&mut discovery, || {
+                for arena in arenas {
+                    scope.spawn(move || work(shared, scope, reader, arena));
+                }
+            });
+        }
+    }
 }
 
 impl<'ast> Discovery<'ast> {
-    /// The next task, with at most `batch` requires to resolve.
-    fn next_task(&mut self, batch: usize) -> Option<Task<'ast>> {
+    fn next_task(&mut self) -> Option<Task<'ast>> {
         if !self.requests.is_empty() {
-            let count = batch.min(self.requests.len());
+            let count = self.requests.len().min(MAX_RESOLVE_BATCH);
             return Some(Task::Resolve(self.requests.drain(..count).collect()));
         }
         self.reads.pop_front().map(Task::Read)
@@ -336,213 +408,63 @@ impl<'ast> Discovery<'ast> {
 
     fn finish(&mut self, done: Done<'ast>) {
         match done {
-            Done::Read(path, Err(error)) => {
-                let unreadable =
-                    Discovered { errors: vec![error], warnings: Vec::new(), module: None };
-                self.found.insert(path, unreadable);
-            }
-            Done::Read(_, Ok(module)) => self.resolve(*module),
-            Done::Resolved(resolved) => {
-                for (request, resolution) in resolved {
-                    self.settle(request, resolution);
+            Done::Discovered(path, discovered) => {
+                for target in discovered
+                    .module
+                    .iter()
+                    .flat_map(|info| &info.requires)
+                    .filter_map(|(_, target)| target.as_ref())
+                {
+                    self.queue_read(target);
                 }
+                self.found.insert(path, *discovered);
             }
-        }
-    }
-
-    /// Queues a request for each of `module`'s requires that no other
-    /// module's has asked for.
-    fn resolve(&mut self, module: ParsedModule<'ast>) {
-        let slot = self.resolving.len();
-        let resolutions = module.sites.iter().map(|_| None).collect();
-        let remaining = module.sites.len();
-        let mut resolving = Resolving { module, resolutions, remaining };
-        for (site, &require) in resolving.module.sites.iter().enumerate() {
-            let from_file = resolving.module.path;
-            let request = Request { slot, site, require, from_file, is_shared: false };
-            if self.version.is_luau() {
-                self.requests.push_back(request);
-                continue;
+            Done::Parsed(module) => {
+                let slot = self.resolving.len();
+                let from_file = module.path;
+                self.requests.extend(
+                    module.sites.iter().enumerate().map(|(site, &require)| Request {
+                        slot,
+                        site,
+                        require,
+                        from_file,
+                    }),
+                );
+                let resolutions = module.sites.iter().map(|_| None).collect();
+                let remaining = module.sites.len();
+                self.resolving.push(Some(Resolving { module: *module, resolutions, remaining }));
             }
-            match self.lua_paths.get_mut(require.require_string) {
-                Some(LuaPath::Resolved(path)) => {
-                    if let Some(resolution) = resolving.resolutions.get_mut(site) {
-                        *resolution =
-                            Some(Ok(ResolvedModule { path: path.clone(), warnings: Vec::new() }));
+            // Each target is read as soon as its require resolves, not once the
+            // module's last one does.
+            Done::Resolved(resolved) => {
+                for (Request { slot, site, .. }, resolution) in resolved {
+                    if let Ok(target) = &resolution {
+                        self.queue_read(&target.path);
+                    }
+                    let Some(Some(resolving)) = self.resolving.get_mut(slot) else {
+                        continue;
+                    };
+                    if let Some(entry) = resolving.resolutions.get_mut(site) {
+                        *entry = Some(resolution);
                     }
                     resolving.remaining = resolving.remaining.saturating_sub(1);
-                }
-                Some(LuaPath::Resolving(waiting)) => waiting.push((slot, site)),
-                None => {
-                    self.lua_paths.insert(require.require_string, LuaPath::Resolving(Vec::new()));
-                    self.requests.push_back(Request { is_shared: true, ..request });
-                }
-            }
-        }
-        let is_resolved = resolving.remaining == 0;
-        self.resolving.push(Some(resolving));
-        if is_resolved {
-            self.complete(slot);
-        }
-    }
-
-    /// Records what `request` resolved to, for the sites waiting on its Lua
-    /// require string too. Each of those asks again on its own after a
-    /// failure, since the error names the site.
-    fn settle(&mut self, request: Request<'ast>, resolution: Result<ResolvedModule, Diagnostic>) {
-        if request.is_shared {
-            let string = request.require.require_string;
-            let previous = match &resolution {
-                Ok(resolved) => {
-                    self.lua_paths.insert(string, LuaPath::Resolved(resolved.path.clone()))
-                }
-                Err(_) => self.lua_paths.remove(string),
-            };
-            if let Some(LuaPath::Resolving(waiting)) = previous {
-                for (slot, site) in waiting {
-                    match &resolution {
-                        Ok(resolved) => {
-                            let shared = ResolvedModule {
-                                path: resolved.path.clone(),
-                                warnings: Vec::new(),
-                            };
-                            self.record(slot, site, Ok(shared));
-                        }
-                        Err(_) => self.requeue(slot, site),
+                    if resolving.remaining == 0
+                        && let Some(Resolving { module, resolutions, .. }) =
+                            self.resolving.get_mut(slot).and_then(Option::take)
+                    {
+                        let path = module.info.path.clone();
+                        self.found.insert(path, module.resolved(resolutions.into_iter().flatten()));
                     }
                 }
             }
         }
-        self.record(request.slot, request.site, resolution);
     }
 
-    fn requeue(&mut self, slot: usize, site: usize) {
-        if let Some(Some(resolving)) = self.resolving.get(slot)
-            && let Some(&require) = resolving.module.sites.get(site)
-        {
-            let from_file = resolving.module.path;
-            self.requests.push_back(Request { slot, site, require, from_file, is_shared: false });
+    /// Queues `target` unless it's been seen.
+    fn queue_read(&mut self, target: &str) {
+        if self.seen.len() <= MAX_MODULE_COUNT && !self.seen.contains(target) {
+            self.seen.insert(target.to_owned());
+            self.reads.push_back(target.to_owned());
         }
     }
-
-    fn record(&mut self, slot: usize, site: usize, resolution: Result<ResolvedModule, Diagnostic>) {
-        let Some(Some(resolving)) = self.resolving.get_mut(slot) else {
-            return;
-        };
-        if let Some(entry) = resolving.resolutions.get_mut(site) {
-            *entry = Some(resolution);
-        }
-        resolving.remaining = resolving.remaining.saturating_sub(1);
-        if resolving.remaining == 0 {
-            self.complete(slot);
-        }
-    }
-
-    /// Files the module in `slot`, every require resolved, and queues each
-    /// module it reaches that no other has.
-    fn complete(&mut self, slot: usize) {
-        let Some(Resolving { module, resolutions, .. }) =
-            self.resolving.get_mut(slot).and_then(Option::take)
-        else {
-            return;
-        };
-        let path = module.info.path.clone();
-        let discovered = module.resolved(resolutions.into_iter().flatten());
-        for target in discovered
-            .module
-            .iter()
-            .flat_map(|info| &info.requires)
-            .filter_map(|(_, target)| target.as_ref())
-        {
-            if self.seen.len() <= MAX_MODULE_COUNT && !self.seen.contains(target) {
-                self.seen.insert(target.clone());
-                self.reads.push_back(target.clone());
-            }
-        }
-        self.found.insert(path, discovered);
-    }
-
-    /// Runs every task, each on a thread with one of `spare_arenas`, which
-    /// starts only when every other is busy. A task runs on this thread, with
-    /// `reader` and `allocator`, while no other thread is busy and it's the
-    /// only one or no thread can take it.
-    fn run<'scope>(
-        &mut self,
-        scope: &'scope Scope<'scope, '_>,
-        reader: Reader<'scope>,
-        allocator: &'ast Allocator,
-        spare_arenas: &'ast mut [Allocator],
-    ) where
-        'ast: 'scope,
-    {
-        let (result_sender, results) = mpsc::channel::<WorkerResult<'ast>>();
-        let mut unused_arenas = spare_arenas.iter_mut();
-        let mut workers: Vec<Sender<Task<'ast>>> = Vec::new();
-        let mut idle_workers: Vec<usize> = Vec::new();
-        let mut busy = 0usize;
-        loop {
-            let available = idle_workers.len().saturating_add(unused_arenas.len());
-            if busy == 0
-                && (available == 0 || self.reads.len().saturating_add(self.requests.len()) <= 1)
-            {
-                let Some(task) = self.next_task(usize::MAX) else {
-                    return;
-                };
-                self.finish(task.run(reader, allocator));
-                continue;
-            }
-            for _ in 0..available {
-                let batch = self.requests.len().div_ceil(available).clamp(1, MAX_RESOLVE_BATCH);
-                let Some(task) = self.next_task(batch) else {
-                    break;
-                };
-                let worker = if let Some(worker) = idle_workers.pop() {
-                    worker
-                } else if let Some(arena) = unused_arenas.next() {
-                    let index = workers.len();
-                    let sender = result_sender.clone();
-                    workers.push(spawn_worker(scope, arena, index, sender, reader));
-                    index
-                } else {
-                    break;
-                };
-                // A thread stops taking tasks only once it panics, which
-                // stops discovery too.
-                if workers.get(worker).is_some_and(|tasks| tasks.send(task).is_ok()) {
-                    busy = busy.saturating_add(1);
-                }
-            }
-            let Ok((worker, done)) = results.recv() else {
-                return;
-            };
-            busy = busy.saturating_sub(1);
-            idle_workers.push(worker);
-            self.finish(done.unwrap_or_else(|payload| panic::resume_unwind(payload)));
-        }
-    }
-}
-
-/// Starts a thread that runs each task it's sent, reading into `arena`, and
-/// sends back what it found.
-fn spawn_worker<'scope, 'ast>(
-    scope: &'scope Scope<'scope, '_>,
-    arena: &'ast mut Allocator,
-    index: usize,
-    results: Sender<WorkerResult<'ast>>,
-    reader: Reader<'scope>,
-) -> Sender<Task<'ast>>
-where
-    'ast: 'scope,
-{
-    let (task_sender, tasks) = mpsc::channel::<Task<'ast>>();
-    scope.spawn(move || {
-        let allocator: &'ast Allocator = arena;
-        for task in tasks {
-            let done = panic::catch_unwind(AssertUnwindSafe(|| task.run(reader, allocator)));
-            if results.send((index, done)).is_err() {
-                return;
-            }
-        }
-    });
-    task_sender
 }

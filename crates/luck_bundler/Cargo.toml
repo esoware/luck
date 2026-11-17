@@ -31,10 +31,11 @@ luck_resolver  = { workspace = true }
 luck_semantic  = { workspace = true }
 luck_token     = { workspace = true }
 
-petgraph   = { workspace = true }
-rustc-hash = { workspace = true }
-schemars   = { workspace = true, optional = true }
-serde      = { workspace = true, optional = true }
+parking_lot = { workspace = true }
+petgraph    = { workspace = true }
+rustc-hash  = { workspace = true }
+schemars    = { workspace = true, optional = true }
+serde       = { workspace = true, optional = true }
 
 [dev-dependencies]
 luck_testgen = { workspace = true }

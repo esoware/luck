@@ -42,12 +42,12 @@ impl<'ast> DependencyGraph<'ast> {
     /// Reads and parses every module the entry reaches, each into the arena
     /// of the thread that reads it.
     ///
-    /// Each arena after the first backs a thread that reads modules and
-    /// resolves requires as the calling thread hands them out. The calling
-    /// thread reads the entry into the first arena, and takes a task itself
-    /// only while no other thread is busy, so it does all the work when
-    /// there's one arena or one task at a time. The graph and its diagnostics
-    /// are the same however many arenas there are.
+    /// Each arena backs a thread that reads modules and resolves requires,
+    /// the first the calling thread, which reads the entry. Another thread
+    /// starts only when more tasks are queued than the running threads can
+    /// take, so the calling thread does all the work when there's one arena
+    /// or one task at a time. The graph and its diagnostics are the same
+    /// however many arenas there are.
     ///
     /// # Errors
     ///
