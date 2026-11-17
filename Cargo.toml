@@ -35,7 +35,6 @@ luck_token     = { version = "0.6.0", path = "crates/luck_token" }
 ariadne               = "0.6"
 assert_cmd            = "2"
 clap                  = { version = "4", features = ["derive"] }
-compact_str           = "0.10"
 criterion2            = { version = "3", default-features = false }
 flate2                = "1"
 globset               = { version = "0.4", default-features = false }

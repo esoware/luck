@@ -46,7 +46,7 @@ enum Store<'ast> {
     Synthetic {
         /// Keyed by anchor and drained as each anchor is formatted. Whatever
         /// is left flushes at end of file in anchor order.
-        comments: BTreeMap<u32, Vec<SyntheticComment>>,
+        comments: BTreeMap<u32, Vec<SyntheticComment<'ast>>>,
         blank_before_anchors: FxHashSet<u32>,
     },
     Empty,
@@ -92,9 +92,9 @@ impl<'ast> Comments<'ast> {
     #[must_use]
     pub fn synthetic<Synthetic>(comments: Synthetic) -> Self
     where
-        Synthetic: IntoIterator<Item = SyntheticComment>,
+        Synthetic: IntoIterator<Item = SyntheticComment<'ast>>,
     {
-        let mut comments_by_anchor: BTreeMap<u32, Vec<SyntheticComment>> = BTreeMap::new();
+        let mut comments_by_anchor: BTreeMap<u32, Vec<SyntheticComment<'ast>>> = BTreeMap::new();
         for comment in comments {
             comments_by_anchor.entry(comment.attached_to).or_default().push(comment);
         }
@@ -453,7 +453,7 @@ impl<'ast> Formatter<'ast> {
     fn take_synthetic(
         &mut self,
         anchor: u32,
-        filter: impl Fn(&SyntheticComment) -> bool,
+        filter: impl Fn(&SyntheticComment<'_>) -> bool,
     ) -> Vec<&'ast str> {
         let allocator = self.allocator();
         let Store::Synthetic { comments, .. } = &mut self.comments_mut().store else {
@@ -463,7 +463,7 @@ impl<'ast> Formatter<'ast> {
         if let Some(anchored_comments) = comments.get_mut(&anchor) {
             anchored_comments.retain(|comment| {
                 if filter(comment) {
-                    synthetic_comment_lines(&comment.text, allocator, &mut taken);
+                    synthetic_comment_lines(comment.text, allocator, &mut taken);
                     false
                 } else {
                     true
@@ -779,7 +779,7 @@ impl<'ast> Formatter<'ast> {
             Store::Synthetic { comments, .. } => {
                 let mut lines = Vec::new();
                 for comment in take(comments).into_values().flatten() {
-                    synthetic_comment_lines(&comment.text, allocator, &mut lines);
+                    synthetic_comment_lines(comment.text, allocator, &mut lines);
                 }
                 lines
             }
@@ -890,7 +890,7 @@ fn after_line_break(source: &str, offset: u32, version: LuaVersion) -> u32 {
 /// Synthetic text may leave out the `--` marker, so each line gets one when
 /// missing. A long comment carries its line breaks as content and stays whole.
 fn synthetic_comment_lines<'ast>(
-    text: &str,
+    text: &'ast str,
     allocator: &'ast Allocator,
     lines: &mut Vec<&'ast str>,
 ) {
@@ -899,12 +899,12 @@ fn synthetic_comment_lines<'ast>(
         .strip_prefix("--[")
         .is_some_and(|rest| rest.trim_start_matches('=').starts_with('['));
     if is_long_comment {
-        lines.push(allocator.alloc_str(text));
+        lines.push(text);
         return;
     }
     for line in text.lines().flat_map(|line| line.split('\r')) {
         lines.push(if line.trim_start().starts_with("--") {
-            allocator.alloc_str(line)
+            line
         } else if line.is_empty() {
             "--"
         } else {
@@ -947,8 +947,12 @@ mod tests {
             .collect()
     }
 
-    fn synthetic(attached_to: u32, text: &str, position: CommentPosition) -> SyntheticComment {
-        SyntheticComment { attached_to, text: text.into(), position }
+    fn synthetic(
+        attached_to: u32,
+        text: &'static str,
+        position: CommentPosition,
+    ) -> SyntheticComment<'static> {
+        SyntheticComment { attached_to, text, position }
     }
 
     #[test]

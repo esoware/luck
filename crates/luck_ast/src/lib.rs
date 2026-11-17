@@ -47,6 +47,8 @@
     )
 )]
 
+extern crate alloc;
+
 mod chain;
 mod depth;
 mod expr;

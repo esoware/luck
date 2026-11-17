@@ -1,4 +1,6 @@
-use luck_token::{CompactString, LuaVersion, TokenKind};
+use alloc::borrow::Cow;
+
+use luck_token::{LuaVersion, TokenKind};
 
 /// Whether generated code must not use `name` as an identifier under
 /// `version`: a keyword, or Lua 5.5's `global`, which builds without
@@ -32,11 +34,11 @@ pub fn is_valid_identifier_in(name: &str, version: LuaVersion) -> bool {
 /// Each invalid byte becomes `_`, and a `_` prefix goes on when the result
 /// would be empty, start with a digit, or be reserved in any dialect
 /// (`goto` and `global` included). Names already valid everywhere come back
-/// unchanged, so the function is idempotent. Distinct inputs can collide
-/// (`"a b"` and `"a-b"` both become `a_b`), so deduplication is up to the
-/// caller. For a single-dialect form, use [`sanitize_identifier_in`].
+/// unchanged and borrowed, so the function is idempotent. Distinct inputs can
+/// collide (`"a b"` and `"a-b"` both become `a_b`), so deduplication is up to
+/// the caller. For a single-dialect form, use [`sanitize_identifier_in`].
 #[must_use]
-pub fn sanitize_identifier(name: &str) -> CompactString {
+pub fn sanitize_identifier(name: &str) -> Cow<'_, str> {
     sanitize_with(name, |candidate| {
         LuaVersion::ALL.iter().any(|&version| is_unavailable(candidate, version))
     })
@@ -47,11 +49,14 @@ pub fn sanitize_identifier(name: &str) -> CompactString {
 /// Uses the same scheme and collision caveat as [`sanitize_identifier`].
 /// Words the dialect treats as identifiers pass through (`goto` on Luau).
 #[must_use]
-pub fn sanitize_identifier_in(name: &str, version: LuaVersion) -> CompactString {
+pub fn sanitize_identifier_in(name: &str, version: LuaVersion) -> Cow<'_, str> {
     sanitize_with(name, |candidate| is_unavailable(candidate, version))
 }
 
-fn sanitize_with(name: &str, is_reserved: impl Fn(&str) -> bool) -> CompactString {
+fn sanitize_with(name: &str, is_reserved: impl Fn(&str) -> bool) -> Cow<'_, str> {
+    if TokenKind::is_identifier_shaped(name) && !is_reserved(name) {
+        return Cow::Borrowed(name);
+    }
     let mut sanitized = String::with_capacity(name.len().saturating_add(1));
     for b in name.bytes() {
         if b.is_ascii_alphanumeric() || b == b'_' {
@@ -67,7 +72,7 @@ fn sanitize_with(name: &str, is_reserved: impl Fn(&str) -> bool) -> CompactStrin
     if should_prefix {
         sanitized.insert(0, '_');
     }
-    CompactString::from(sanitized)
+    Cow::Owned(sanitized)
 }
 
 #[cfg(test)]
@@ -131,7 +136,7 @@ mod tests {
     #[test]
     fn sanitize_keeps_valid_names_and_is_idempotent() {
         for name in ["x", "_private", "snake_case2", "type", "continue"] {
-            assert_eq!(sanitize_identifier(name).as_str(), name);
+            assert!(matches!(sanitize_identifier(name), Cow::Borrowed(kept) if kept == name));
         }
         for name in ["", "1st", "a b", "end", "goto", "\u{dc}nicode"] {
             let once = sanitize_identifier(name);
@@ -141,19 +146,19 @@ mod tests {
 
     #[test]
     fn sanitize_forms() {
-        assert_eq!(sanitize_identifier("").as_str(), "_");
-        assert_eq!(sanitize_identifier("1st").as_str(), "_1st");
-        assert_eq!(sanitize_identifier("a b").as_str(), "a_b");
-        assert_eq!(sanitize_identifier("end").as_str(), "_end");
-        assert_eq!(sanitize_identifier("goto").as_str(), "_goto");
+        assert_eq!(sanitize_identifier(""), "_");
+        assert_eq!(sanitize_identifier("1st"), "_1st");
+        assert_eq!(sanitize_identifier("a b"), "a_b");
+        assert_eq!(sanitize_identifier("end"), "_end");
+        assert_eq!(sanitize_identifier("goto"), "_goto");
     }
 
     #[test]
     fn sanitize_respects_pinned_version() {
-        assert_eq!(sanitize_identifier_in("goto", LuaVersion::Luau).as_str(), "goto");
-        assert_eq!(sanitize_identifier_in("goto", LuaVersion::Lua54).as_str(), "_goto");
-        assert_eq!(sanitize_identifier_in("global", LuaVersion::Lua54).as_str(), "global");
-        assert_eq!(sanitize_identifier_in("global", LuaVersion::Lua55).as_str(), "_global");
+        assert_eq!(sanitize_identifier_in("goto", LuaVersion::Luau), "goto");
+        assert_eq!(sanitize_identifier_in("goto", LuaVersion::Lua54), "_goto");
+        assert_eq!(sanitize_identifier_in("global", LuaVersion::Lua54), "global");
+        assert_eq!(sanitize_identifier_in("global", LuaVersion::Lua55), "_global");
 
         // The sanitized form feeds `name` without tripping its assert.
         let fixture = Fixture::default();

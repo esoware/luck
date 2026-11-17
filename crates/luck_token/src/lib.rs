@@ -44,8 +44,6 @@ mod token;
 mod version;
 mod whitespace;
 
-pub use compact_str::CompactString;
-
 pub use code_buffer::CodeBuffer;
 pub use comment::{Comment, CommentKind, CommentPosition, chunk_header, leading_hot_comments};
 pub use number::{LuaNumber, NumberSubtypes, parse_lua_number};
