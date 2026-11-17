@@ -259,7 +259,7 @@ fn later_alias_replaces_an_equal_name_unless_already_lowercase() {
 fn one_resolver_sees_the_files_it_first_probed() {
     let project = luau_project();
     let from_file = normalized(&project, "src/main.luau");
-    let mut resolver = Resolver::new(LuaVersion::Luau, &[], project.path());
+    let resolver = Resolver::new(LuaVersion::Luau, &[], project.path());
     let first =
         resolver.resolve(&request("./utils", &from_file)).expect("resolve before the change");
     fs::remove_file(project.path().join("src/utils.luau")).expect("remove utils");

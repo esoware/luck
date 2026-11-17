@@ -817,6 +817,75 @@ require(\"b\")
     assert_eq!(codes(&errors), ["E012"], "{errors:?}");
 }
 
+/// Eight directories of twelve modules, so threads race to resolve into the
+/// same directories.
+///
+/// Each module requires every module of its own directory, the first of the
+/// next, and, when `has_missing_requires`, one that doesn't exist.
+///
+/// # Errors
+///
+/// Returns the I/O error that stopped a file from being written.
+fn wide_project(version: LuaVersion, has_missing_requires: bool) -> io::Result<TempDir> {
+    let directory = tempfile::tempdir()?;
+    let extension = if version.is_luau() { "luau" } else { "lua" };
+    // Luau's `./` is the requiring module's directory, which is the root only
+    // for `main`.
+    let require = |up: &str, package: &str, module: &str| {
+        if version.is_luau() {
+            format!("require(\"{up}/{package}/{module}\")\n")
+        } else {
+            format!("require(\"{package}.{module}\")\n")
+        }
+    };
+    let packages = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    let modules = ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"];
+    let main: String = packages.iter().map(|package| require(".", package, "m0")).collect();
+    fs::write(directory.path().join(format!("main.{extension}")), main)?;
+    for (package, next_package) in packages.iter().zip(packages.iter().cycle().skip(1)) {
+        let package_directory = directory.path().join(package);
+        fs::create_dir_all(&package_directory)?;
+        for module in modules {
+            let mut source: String =
+                modules.iter().map(|sibling| require("..", package, sibling)).collect();
+            source.push_str(&require("..", next_package, "m0"));
+            if has_missing_requires {
+                source.push_str(&require("..", package, "missing"));
+            }
+            source.push_str("return {}\n");
+            fs::write(package_directory.join(format!("{module}.{extension}")), source)?;
+        }
+    }
+    Ok(directory)
+}
+
+#[test]
+fn threads_sharing_one_resolver_find_what_one_thread_does() {
+    for version in [LuaVersion::Lua54, LuaVersion::Luau] {
+        for has_missing_requires in [false, true] {
+            let directory = wide_project(version, has_missing_requires).expect("project");
+            let entry_name = if version.is_luau() { "main.luau" } else { "main.lua" };
+            let entry = directory.path().join(entry_name);
+            let options = BundleOptions {
+                version,
+                search_paths: &[],
+                project_root: directory.path(),
+                dynamic_require: DynamicRequire::default(),
+            };
+            let one_thread = luck_bundler::bundle(&mut arenas(1), &entry, &options);
+            match &one_thread {
+                Ok(bundled) => assert_eq!(bundled.source_files.len(), 97, "{version:?}"),
+                Err(errors) => assert_eq!(codes(errors), ["E004"; 96], "{version:?}"),
+            }
+            assert_eq!(one_thread.is_err(), has_missing_requires, "{version:?}");
+            for _ in 0u8..4 {
+                let threaded = luck_bundler::bundle(&mut arenas(16), &entry, &options);
+                assert_eq!(format!("{threaded:?}"), format!("{one_thread:?}"), "{version:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn dependency_targets_index_the_modules_they_resolve_to() {
     let directory = temp_project(&[

@@ -18,8 +18,9 @@ workspace = true
 luck_core  = { workspace = true }
 luck_token = { workspace = true }
 
-rustc-hash = { workspace = true }
-simdutf8   = { workspace = true }
+parking_lot = { workspace = true }
+rustc-hash  = { workspace = true }
+simdutf8    = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -1045,6 +1045,7 @@ version = "0.6.0"
 dependencies = [
  "luck_core",
  "luck_token",
+ "parking_lot",
  "rustc-hash",
  "serde_json",
  "simdutf8",

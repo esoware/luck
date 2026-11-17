@@ -2,7 +2,7 @@ use std::path::Path;
 
 use luck_allocator::Allocator;
 use luck_core::Diagnostic;
-use luck_resolver::normalize_path;
+use luck_resolver::{Resolver, normalize_path};
 use luck_token::{LuaVersion, Span};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -85,10 +85,10 @@ pub(crate) fn build_graph<'ast>(
     // normalized. `luck bundle main.lua` passes the entry's parent, which is
     // empty for a bare file name.
     let root = absolute_project_root(options.project_root);
-    let mut reader = Reader::new(options, &root);
+    let resolver = Resolver::new(options.version, options.search_paths, Path::new(&root));
+    let reader = Reader::new(options, &root, &resolver);
     let entry = normalize_path(entry_path);
-    let mut found =
-        discover_reachable(allocator, spare_arenas, &mut reader, &entry, options, &root);
+    let mut found = discover_reachable(allocator, spare_arenas, reader, &entry);
     let graph = number_modules(entry, &mut found, |path| reader.discover(allocator, path));
     (allocator, graph)
 }

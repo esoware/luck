@@ -1,7 +1,6 @@
 use alloc::collections::VecDeque;
 use core::panic::AssertUnwindSafe;
 use std::panic;
-use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, Scope};
 
@@ -141,25 +140,30 @@ pub(crate) fn parse_module<'ast>(
     ParsedModule { info, path: arena_path, sites, errors, warnings }
 }
 
-/// What reading and resolving modules takes on one thread.
+/// What reading and resolving modules takes, which every thread shares.
+#[derive(Clone, Copy)]
 pub(crate) struct Reader<'input> {
     version: LuaVersion,
     dynamic_require: DynamicRequire,
     /// From [`absolute_project_root`](crate::relative_path::absolute_project_root).
     project_root: &'input str,
-    resolver: Resolver<'input>,
+    resolver: &'input Resolver<'input>,
 }
 
 /// Reading a module either parses it or fails with E010 or E012.
 type Read<'ast> = Result<Box<ParsedModule<'ast>>, Diagnostic>;
 
 impl<'input> Reader<'input> {
-    pub(crate) fn new(options: &BundleOptions<'input>, project_root: &'input str) -> Self {
+    pub(crate) const fn new(
+        options: &BundleOptions<'_>,
+        project_root: &'input str,
+        resolver: &'input Resolver<'input>,
+    ) -> Self {
         Self {
             version: options.version,
             dynamic_require: options.dynamic_require,
             project_root,
-            resolver: Resolver::new(options.version, options.search_paths, Path::new(project_root)),
+            resolver,
         }
     }
 
@@ -192,7 +196,7 @@ impl<'input> Reader<'input> {
     /// Returns the resolver's diagnostic for a require that names no module,
     /// or more than one.
     fn resolve(
-        &mut self,
+        &self,
         require: &RequireSite<'_>,
         from_file: &str,
     ) -> Result<ResolvedModule, Diagnostic> {
@@ -205,7 +209,7 @@ impl<'input> Reader<'input> {
 
     /// Reads the module at `path` and resolves its requires on this thread.
     pub(crate) fn discover<'ast>(
-        &mut self,
+        &self,
         allocator: &'ast Allocator,
         path: &str,
     ) -> Discovered<'ast> {
@@ -244,7 +248,7 @@ enum Done<'ast> {
 }
 
 impl<'ast> Task<'ast> {
-    fn run(self, reader: &mut Reader<'_>, allocator: &'ast Allocator) -> Done<'ast> {
+    fn run(self, reader: Reader<'_>, allocator: &'ast Allocator) -> Done<'ast> {
         match self {
             Self::Read(path) => {
                 let module = reader.read(allocator, &path);
@@ -300,13 +304,11 @@ struct Discovery<'ast> {
 pub(crate) fn discover_reachable<'ast>(
     allocator: &'ast Allocator,
     spare_arenas: &'ast mut [Allocator],
-    reader: &mut Reader<'_>,
+    reader: Reader<'_>,
     entry: &str,
-    options: &BundleOptions<'_>,
-    project_root: &str,
 ) -> FxHashMap<String, Discovered<'ast>> {
     let mut discovery = Discovery {
-        version: options.version,
+        version: reader.version,
         found: FxHashMap::default(),
         seen: FxHashSet::default(),
         reads: VecDeque::new(),
@@ -317,7 +319,7 @@ pub(crate) fn discover_reachable<'ast>(
     discovery.seen.insert(entry.to_owned());
     discovery.reads.push_back(entry.to_owned());
     thread::scope(|scope| {
-        discovery.run(scope, reader, allocator, spare_arenas, options, project_root);
+        discovery.run(scope, reader, allocator, spare_arenas);
     });
     discovery.found
 }
@@ -467,11 +469,9 @@ impl<'ast> Discovery<'ast> {
     fn run<'scope>(
         &mut self,
         scope: &'scope Scope<'scope, '_>,
-        reader: &mut Reader<'_>,
+        reader: Reader<'scope>,
         allocator: &'ast Allocator,
         spare_arenas: &'ast mut [Allocator],
-        options: &'scope BundleOptions<'_>,
-        project_root: &'scope str,
     ) where
         'ast: 'scope,
     {
@@ -501,7 +501,7 @@ impl<'ast> Discovery<'ast> {
                 } else if let Some(arena) = unused_arenas.next() {
                     let index = workers.len();
                     let sender = result_sender.clone();
-                    workers.push(spawn_worker(scope, arena, index, sender, options, project_root));
+                    workers.push(spawn_worker(scope, arena, index, sender, reader));
                     index
                 } else {
                     break;
@@ -529,8 +529,7 @@ fn spawn_worker<'scope, 'ast>(
     arena: &'ast mut Allocator,
     index: usize,
     results: Sender<WorkerResult<'ast>>,
-    options: &'scope BundleOptions<'_>,
-    project_root: &'scope str,
+    reader: Reader<'scope>,
 ) -> Sender<Task<'ast>>
 where
     'ast: 'scope,
@@ -538,9 +537,8 @@ where
     let (task_sender, tasks) = mpsc::channel::<Task<'ast>>();
     scope.spawn(move || {
         let allocator: &'ast Allocator = arena;
-        let mut reader = Reader::new(options, project_root);
         for task in tasks {
-            let done = panic::catch_unwind(AssertUnwindSafe(|| task.run(&mut reader, allocator)));
+            let done = panic::catch_unwind(AssertUnwindSafe(|| task.run(reader, allocator)));
             if results.send((index, done)).is_err() {
                 return;
             }
