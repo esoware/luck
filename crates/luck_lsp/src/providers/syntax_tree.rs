@@ -11,7 +11,7 @@ pub(crate) fn syntax_tree(document: &DocumentState) -> String {
     let mut dump = BoundedDump { text: String::new() };
     #[expect(clippy::use_debug, reason = "this dump's format is the AST's `Debug` output")]
     // The only error is the limit, which ends the dump with its marker.
-    let _unused = write!(dump, "{:#?}", document.parsed.block);
+    let _unused = write!(dump, "{:#?}", document.parse().block);
     dump.text
 }
 
@@ -36,9 +36,9 @@ mod tests {
     use luck_core::LuaTarget;
     use luck_testgen::on_the_smallest_stack;
     use luck_token::LuaVersion;
-    use rustc_hash::FxHashSet;
 
     use super::*;
+    use crate::fixtures::document;
 
     /// One tree at the cap, which nests statements and function bodies.
     ///
@@ -54,9 +54,8 @@ mod tests {
             " end".repeat(levels)
         );
         on_the_smallest_stack([(LuaVersion::Lua54, source)], |text, _| {
-            let document =
-                DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
-            assert!(document.parsed.errors.is_empty(), "{:?}", document.parsed.errors);
+            let document = document(text, LuaTarget::Lua54);
+            assert!(document.parse().errors.is_empty(), "{:?}", document.parse().errors);
             assert!(syntax_tree(&document).contains("innermost"), "the dump got to the bottom");
         });
     }
@@ -65,7 +64,7 @@ mod tests {
     fn large_files_dump_within_the_bound() {
         let chain = vec!["1"; 2000].join("+");
         let text = format!("local x = {chain}\n").repeat(40);
-        let document = DocumentState::new(text, 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document(&text, LuaTarget::Lua54);
         let dump = syntax_tree(&document);
         assert!(dump.len() <= MAX_DUMP_BYTES.saturating_add(64), "{}", dump.len());
         assert!(dump.ends_with("cut off here"), "the dump says it stopped early");

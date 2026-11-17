@@ -36,34 +36,46 @@ impl WideChar {
     }
 }
 
+/// The run of bytes the wide-character scan skips at once when it's all
+/// ASCII, which most of a Lua source is.
+const ASCII_RUN: usize = 64;
+
 impl LineIndex {
     pub(crate) fn new(source: &str) -> Self {
+        let bytes = source.as_bytes();
         let mut line_starts = Vec::with_capacity(source.len().div_ceil(40));
         line_starts.push(0);
+        for i in memchr::memchr2_iter(b'\n', b'\r', bytes) {
+            // LSP's EOLs, the client's for every dialect, are LF, CRLF, and CR.
+            let next = i.saturating_add(1);
+            if bytes.get(i) == Some(&b'\n') || bytes.get(next) != Some(&b'\n') {
+                line_starts.push(index_to_offset(next));
+            }
+        }
         let mut wide_chars = Vec::new();
         let mut extra_bytes = 0u32;
-        let bytes = source.as_bytes();
-        for (i, b) in bytes.iter().enumerate() {
-            // LSP's EOLs, the client's for every dialect, are LF, CRLF, and CR.
-            let is_line_end =
-                *b == b'\n' || (*b == b'\r' && bytes.get(i.saturating_add(1)) != Some(&b'\n'));
-            if is_line_end {
-                line_starts.push(index_to_offset(i).saturating_add(1));
+        for (run_index, run) in bytes.chunks(ASCII_RUN).enumerate() {
+            if run.is_ascii() {
+                continue;
             }
-            // A lead byte gives its character's length, and only a 4-byte one
-            // takes two UTF-16 units.
-            let (length, extra) = match *b {
-                0xC0..=0xDF => (2, 1),
-                0xE0..=0xEF => (3, 2),
-                0xF0..=0xFF => (4, 2),
-                _ => continue,
-            };
-            extra_bytes = extra_bytes.saturating_add(extra);
-            wide_chars.push(WideChar {
-                start: index_to_offset(i),
-                end: index_to_offset(i.saturating_add(length)),
-                extra_through: extra_bytes,
-            });
+            let run_start = run_index.saturating_mul(ASCII_RUN);
+            for (i, b) in run.iter().enumerate() {
+                // A lead byte gives its character's length, and only a 4-byte
+                // one takes two UTF-16 units.
+                let (length, extra) = match *b {
+                    0xC0..=0xDF => (2, 1),
+                    0xE0..=0xEF => (3, 2),
+                    0xF0..=0xFF => (4, 2),
+                    _ => continue,
+                };
+                let start = run_start.saturating_add(i);
+                extra_bytes = extra_bytes.saturating_add(extra);
+                wide_chars.push(WideChar {
+                    start: index_to_offset(start),
+                    end: index_to_offset(start.saturating_add(length)),
+                    extra_through: extra_bytes,
+                });
+            }
         }
         Self { line_starts, wide_chars, source_length: index_to_offset(source.len()) }
     }

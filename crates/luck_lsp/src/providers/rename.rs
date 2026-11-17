@@ -37,7 +37,7 @@ fn rename_target(
     document: &DocumentState,
     offset: u32,
 ) -> Result<Option<(SymbolId, Span)>, String> {
-    let tree = &document.semantic.scope_tree;
+    let tree = document.tree();
     let Some((symbol_id, span)) = local_at(tree, offset) else {
         return Ok(None);
     };
@@ -54,7 +54,8 @@ fn rename_target(
         );
     }
     if symbol.is_exported {
-        return Err(format!("`{}` is exported, so its name is the module's API", symbol.name));
+        let name = tree.name(symbol.name);
+        return Err(format!("`{name}` is exported, so its name is the module's API"));
     }
     Ok(Some((symbol_id, span)))
 }
@@ -77,14 +78,13 @@ pub(crate) fn rename(
     let new_name = params.new_name.as_str();
     validate_new_name(document, new_name).map_err(JsonRpcError::invalid_params)?;
 
-    let tree = &document.semantic.scope_tree;
-    let symbol = tree.symbol(symbol_id);
-    let mut spans: Vec<Span> = symbol
-        .reference_ids
+    let tree = document.tree();
+    let mut spans: Vec<Span> = tree
+        .resolved_references(symbol_id)
         .iter()
         .map(|&reference_id| tree.reference(reference_id).span)
         .collect();
-    spans.push(symbol.definition_span);
+    spans.push(tree.symbol(symbol_id).definition_span);
     spans.sort_by_key(|span| span.start);
     spans.dedup();
 
@@ -99,20 +99,22 @@ pub(crate) fn rename(
 /// # Errors
 ///
 /// Returns the refusal to show the user when it isn't an identifier, shadows
-/// a built-in global, or is already used in the document.
+/// a built-in or configured global, or is already used in the document.
 fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), String> {
     // Checked under the document's Lua version, so keywords are rejected
     // version-accurately (`goto` is an identifier in 5.1).
-    if !is_valid_identifier_in(new_name, document.lua_version) {
+    if !is_valid_identifier_in(new_name, document.lua_version()) {
         return Err(format!("`{new_name}` isn't a valid identifier"));
     }
-    if document.semantic.is_known_global(new_name) {
+    // The analysis knows only the configured globals the document names.
+    let extra_globals = &document.settings().project.lint_config.extra_globals;
+    if document.semantic().is_known_global(new_name)
+        || extra_globals.iter().any(|global| global == new_name)
+    {
         return Err(format!("`{new_name}` would shadow a built-in global"));
     }
-    let tree = &document.semantic.scope_tree;
-    let is_in_use = tree.symbols.iter().any(|symbol| symbol.name == new_name)
-        || tree.references.iter().any(|reference| reference.name == new_name);
-    if is_in_use {
+    // Every name a local or a reference uses is one of the chunk's names.
+    if document.tree().name_id(new_name).is_some() {
         return Err(format!(
             "`{new_name}` is already used in this file, so renaming could capture it"
         ));
@@ -123,19 +125,15 @@ fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
-    use rustc_hash::FxHashSet;
     use tower_lsp_server::ls_types::{
         Range, TextDocumentIdentifier, TextDocumentPositionParams, Uri, WorkDoneProgressParams,
     };
 
     use super::*;
+    use crate::fixtures::document;
 
     fn uri() -> Uri {
         "file:///main.lua".parse().expect("valid URI")
-    }
-
-    fn document(text: &str, target: LuaTarget) -> DocumentState {
-        DocumentState::new(text.to_owned(), 1, target, FxHashSet::default())
     }
 
     /// # Errors
@@ -267,7 +265,7 @@ print(version)
 ",
             LuaTarget::Luau,
         );
-        assert!(document.parsed.errors.is_empty(), "{:?}", document.parsed.errors);
+        assert!(document.parse().errors.is_empty(), "{:?}", document.parse().errors);
         let result = rename_at(&document, 0, 15, "release");
         assert!(
             result.is_err(),

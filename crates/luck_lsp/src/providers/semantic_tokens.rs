@@ -8,15 +8,15 @@ use luck_ast::{
     Call, ChainHead, Expression, Field, GenericTypeList, Statement, Suffix, TableConstructor, Type,
     TypeDeclarationValue, TypeField, Visitor,
 };
-use luck_semantic::{StdlibEntry, SymbolKind};
+use luck_semantic::{SemanticAnalysis, StdlibEntry, SymbolKind};
 use luck_token::{Span, Token, TokenKind, index_to_offset, offset_to_index};
-use rustc_hash::FxHashMap;
 use tower_lsp_server::ls_types::{
     Position, Range, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
     SemanticTokensLegend, SemanticTokensRangeResult, SemanticTokensResult,
 };
 
 use crate::document::DocumentState;
+use crate::providers::cursor::identifier;
 
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
@@ -49,7 +49,7 @@ const MODIFIER_READONLY: u32 = 1 << 1;
 const MODIFIER_DEFAULT_LIBRARY: u32 = 1 << 2;
 
 #[derive(Debug, Clone, Copy)]
-struct Classification {
+pub(crate) struct Classification {
     token_type: u32,
     modifiers: u32,
 }
@@ -60,9 +60,8 @@ impl Classification {
     }
 }
 
-/// Classified tokens keyed by start offset. A later pass over the same
-/// offset overwrites an earlier one.
-type RawTokens = BTreeMap<u32, (Span, Classification)>;
+/// A document's classified names, by where they start, none empty.
+pub(crate) type Highlights = Vec<(Span, Classification)>;
 
 pub(crate) fn legend() -> SemanticTokensLegend {
     SemanticTokensLegend {
@@ -88,19 +87,20 @@ enum ValueShape {
     Plain,
 }
 
-const fn is_call_opener(kind: &TokenKind) -> bool {
+const fn is_call_opener(kind: TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::LeftParen
             | TokenKind::LeftBrace
-            | TokenKind::StringLiteral(_)
-            | TokenKind::InterpolatedStringBegin(_)
+            | TokenKind::StringLiteral
+            | TokenKind::InterpolatedStringBegin
+            | TokenKind::InterpolatedStringSimple
     )
 }
 
 fn value_shape(tokens: &[Token], index: usize) -> ValueShape {
     match tokens.get(index..) {
-        Some([_, next, ..]) if is_call_opener(&next.kind) => ValueShape::Called,
+        Some([_, next, ..]) if is_call_opener(next.kind) => ValueShape::Called,
         Some(
             [_, Token { kind: TokenKind::Equal, .. }, Token { kind: TokenKind::Function, .. }, ..],
         ) => ValueShape::AssignedFunction,
@@ -115,14 +115,59 @@ fn is_screaming_case(name: &str) -> bool {
         && chars.all(|rest| rest.is_ascii_uppercase() || rest.is_ascii_digit() || rest == '_')
 }
 
-fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> SemanticTokens {
-    let mut classifier =
-        Classifier { document, tokens: document.tokens(), raw_tokens: RawTokens::new() };
+/// Runs the classification passes over `document`, in order, each later one
+/// overwriting what an earlier one gave the same start.
+pub(crate) fn classify(document: &DocumentState) -> Highlights {
+    let tokens = document.tokens();
+    let mut classifier = Classifier {
+        source: document.text(),
+        tokens,
+        semantic: document.semantic(),
+        slots: vec![None; tokens.len()],
+        strays: BTreeMap::new(),
+        symbol_keys: Vec::new(),
+        reference_keys: Vec::new(),
+    };
     classifier.classify_scope_names();
     classifier.classify_members();
-    classifier.visit_block(&document.parsed.block);
+    classifier.visit_block(&document.parse().block);
     classifier.propagate_to_references();
-    classifier.delta_encode(byte_range)
+    classifier.finish()
+}
+
+fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> SemanticTokens {
+    let highlights = document.highlights();
+    let mut data: Vec<SemanticToken> = Vec::with_capacity(highlights.len());
+    let mut previous = Position { line: 0, character: 0 };
+    for &(span, classification) in highlights {
+        if byte_range.is_some_and(|Span { start, end }| {
+            start >= end || span.end <= start || span.start >= end
+        }) {
+            continue;
+        }
+        let Position { line, character } = document.position(span.start);
+        let delta_line = line.saturating_sub(previous.line);
+        let delta_start =
+            if delta_line == 0 { character.saturating_sub(previous.character) } else { character };
+        data.push(SemanticToken {
+            delta_line,
+            delta_start,
+            length: utf16_length(document.text(), span),
+            token_type: classification.token_type,
+            token_modifiers_bitset: classification.modifiers,
+        });
+        previous = Position { line, character };
+    }
+    SemanticTokens { result_id: None, data }
+}
+
+/// Where a classification is kept: the slot of the token that starts there,
+/// or, where none does, which only a name parse recovery made up can reach,
+/// the strays.
+#[derive(Debug, Clone, Copy)]
+enum Key {
+    Token(usize),
+    Stray(u32),
 }
 
 /// Where a name stands in the `Name(.Name)*` chain it ends.
@@ -133,73 +178,138 @@ enum ChainLink {
     Member(Option<&'static StdlibEntry>),
 }
 
-/// The classification passes, run in order over one token map.
+/// The classification passes, run in order over one table of
+/// classifications.
 struct Classifier<'document> {
-    document: &'document DocumentState,
+    source: &'document str,
     tokens: &'document [Token],
-    raw_tokens: RawTokens,
+    semantic: &'document SemanticAnalysis<'document>,
+    /// Each token's classification, by token index, with the span it was
+    /// given.
+    slots: Vec<Option<(Span, Classification)>>,
+    strays: BTreeMap<u32, (Span, Classification)>,
+    /// Where each symbol's declaration and each reference is kept, found
+    /// once in the first pass for the last.
+    symbol_keys: Vec<Key>,
+    reference_keys: Vec<Key>,
 }
 
 impl Classifier<'_> {
-    fn classify_scope_names(&mut self) {
-        let Self { document, tokens, raw_tokens } = self;
-        let stdlib = document.semantic.stdlib();
-        let tree = &document.semantic.scope_tree;
+    fn key(&self, start: u32) -> Key {
+        self.tokens
+            .binary_search_by_key(&start, |token| token.span.start)
+            .map_or(Key::Stray(start), Key::Token)
+    }
 
-        let mut identifier_indexes_by_offset: FxHashMap<u32, usize> = FxHashMap::default();
-        for (i, token) in tokens.iter().enumerate() {
-            if matches!(token.kind, TokenKind::Identifier(_)) {
-                identifier_indexes_by_offset.insert(token.span.start, i);
+    fn get(&self, key: Key) -> Option<&(Span, Classification)> {
+        match key {
+            Key::Token(index) => self.slots.get(index)?.as_ref(),
+            Key::Stray(start) => self.strays.get(&start),
+        }
+    }
+
+    fn get_mut(&mut self, key: Key) -> Option<&mut (Span, Classification)> {
+        match key {
+            Key::Token(index) => self.slots.get_mut(index)?.as_mut(),
+            Key::Stray(start) => self.strays.get_mut(&start),
+        }
+    }
+
+    fn set(&mut self, key: Key, span: Span, classification: Classification) {
+        match key {
+            Key::Token(index) => {
+                if let Some(slot) = self.slots.get_mut(index) {
+                    *slot = Some((span, classification));
+                }
+            }
+            Key::Stray(start) => {
+                self.strays.insert(start, (span, classification));
             }
         }
+    }
 
-        let classify_bare = |name: &str, span: Span, base: Classification| -> Classification {
-            let mut classification = base;
-            if classification.token_type == TYPE_VARIABLE
-                && let Some(&index) = identifier_indexes_by_offset.get(&span.start)
-            {
-                match value_shape(tokens, index) {
-                    ValueShape::Called | ValueShape::AssignedFunction => {
-                        classification.token_type = TYPE_FUNCTION;
-                    }
-                    ValueShape::Plain => {
-                        if is_screaming_case(name) {
-                            classification.modifiers |= MODIFIER_READONLY;
-                        }
+    fn remove(&mut self, span: Span) {
+        match self.key(span.start) {
+            Key::Token(index) => {
+                if let Some(slot) = self.slots.get_mut(index) {
+                    *slot = None;
+                }
+            }
+            Key::Stray(start) => {
+                self.strays.remove(&start);
+            }
+        }
+    }
+
+    fn insert(&mut self, span: Span, token_type: u32) {
+        self.set(self.key(span.start), span, Classification::plain(token_type));
+    }
+
+    fn retype(&mut self, span: Span, token_type: u32) {
+        if let Some((_, classification)) = self.get_mut(self.key(span.start)) {
+            classification.token_type = token_type;
+        }
+    }
+
+    /// A plain variable becomes a function where it's called or assigned
+    /// one, and reads as read-only where it's spelled like a constant.
+    fn classify_bare(&self, name: &str, key: Key, base: Classification) -> Classification {
+        let mut classification = base;
+        if classification.token_type == TYPE_VARIABLE
+            && let Key::Token(index) = key
+            && self.tokens.get(index).is_some_and(|token| token.kind == TokenKind::Identifier)
+        {
+            match value_shape(self.tokens, index) {
+                ValueShape::Called | ValueShape::AssignedFunction => {
+                    classification.token_type = TYPE_FUNCTION;
+                }
+                ValueShape::Plain => {
+                    if is_screaming_case(name) {
+                        classification.modifiers |= MODIFIER_READONLY;
                     }
                 }
             }
-            classification
-        };
+        }
+        classification
+    }
 
-        for symbol in &tree.symbols {
-            if symbol.name == "self"
-                || !symbol.name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-            {
+    fn classify_scope_names(&mut self) {
+        let semantic = self.semantic;
+        let tree = semantic.scope_tree();
+        let stdlib = semantic.stdlib();
+
+        self.symbol_keys.reserve_exact(tree.symbols().len());
+        for symbol in tree.symbols() {
+            let span = symbol.definition_span;
+            let key = self.key(span.start);
+            self.symbol_keys.push(key);
+            let name = tree.name(symbol.name);
+            if name == "self" || !name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
                 continue;
             }
-            let span = symbol.definition_span;
-            let classification = classify_bare(&symbol.name, span, symbol_classify(symbol.kind));
-            raw_tokens.insert(span.start, (span, classification));
+            let classification = self.classify_bare(name, key, symbol_classify(symbol.kind));
+            self.set(key, span, classification);
         }
 
-        for reference in &tree.references {
-            // An empty name is a placeholder for what parse recovery dropped,
-            // and it can span tokens of its own.
-            if reference.name == "self" || reference.name.is_empty() {
+        self.reference_keys.reserve_exact(tree.references().len());
+        for reference in tree.references() {
+            let key = self.key(reference.span.start);
+            self.reference_keys.push(key);
+            let name = tree.name(reference.name);
+            if name == "self" {
                 continue;
             }
             let base = reference.resolved.map_or_else(
                 || {
                     stdlib
                         .globals
-                        .get(reference.name.as_str())
+                        .get(name)
                         .map_or(Classification::plain(TYPE_VARIABLE), stdlib_classify)
                 },
                 |symbol_id| symbol_classify(tree.symbol(symbol_id).kind),
             );
-            let classification = classify_bare(&reference.name, reference.span, base);
-            raw_tokens.insert(reference.span.start, (reference.span, classification));
+            let classification = self.classify_bare(name, key, base);
+            self.set(key, reference.span, classification);
         }
     }
 
@@ -209,18 +319,19 @@ impl Classifier<'_> {
     /// `math.floor`. A path resolves one member at a time, so each name
     /// resolves from the one before it rather than walking its chain again.
     fn classify_members(&mut self) {
-        let Self { document, tokens, raw_tokens } = self;
-        let library = document.semantic.stdlib();
+        let Self { source, tokens, semantic, .. } = *self;
+        let library = semantic.stdlib();
         // A name's path continues the one two tokens back, past the separator.
         let (mut link_two_back, mut link_one_back): (Option<ChainLink>, Option<ChainLink>) =
             (None, None);
         for (index, token) in tokens.iter().enumerate() {
             let link_before = link_two_back;
             link_two_back = link_one_back;
-            let TokenKind::Identifier(name) = &token.kind else {
+            if token.kind != TokenKind::Identifier {
                 link_one_back = None;
                 continue;
-            };
+            }
+            let name = token.text(source);
             let separator = index.checked_sub(1).and_then(|before| tokens.get(before));
             let is_after_dot = separator.is_some_and(|before| before.kind == TokenKind::Dot);
             let is_member =
@@ -229,8 +340,8 @@ impl Classifier<'_> {
                 link_before.and_then(|link| Some((tokens.get(index.checked_sub(2)?)?, link)));
             let entry = chain_before.and_then(|(before, link)| match link {
                 ChainLink::Root => {
-                    let root = before.identifier()?;
-                    document.semantic.resolve_stdlib_path(&[root, name.as_str()], before.span)
+                    let root = before.text(source);
+                    semantic.resolve_stdlib_path(&[root, name], before.span)
                 }
                 ChainLink::Member(entry) => library.child(entry?, name),
             });
@@ -254,20 +365,22 @@ impl Classifier<'_> {
                 },
                 member_classify,
             );
-            raw_tokens.insert(token.span.start, (token.span, classification));
+            self.set(Key::Token(index), token.span, classification);
         }
     }
 
     fn propagate_to_references(&mut self) {
-        let Self { document, raw_tokens, .. } = self;
-        let tree = &document.semantic.scope_tree;
-        for symbol in &tree.symbols {
-            let Some(&(_, declared)) = raw_tokens.get(&symbol.definition_span.start) else {
+        let tree = self.semantic.scope_tree();
+        for symbol in tree.symbols() {
+            let declared_key = self.symbol_keys.get(symbol.id.index()).copied();
+            let Some(&(_, declared)) = declared_key.and_then(|key| self.get(key)) else {
                 continue;
             };
-            for reference_id in &symbol.reference_ids {
-                let reference = tree.reference(*reference_id);
-                if let Some((_, classification)) = raw_tokens.get_mut(&reference.span.start) {
+            for reference_id in tree.resolved_references(symbol.id) {
+                let Some(&key) = self.reference_keys.get(reference_id.index()) else {
+                    continue;
+                };
+                if let Some((_, classification)) = self.get_mut(key) {
                     if !symbol.is_modified && declared.token_type == TYPE_FUNCTION {
                         classification.token_type = TYPE_FUNCTION;
                     }
@@ -277,46 +390,19 @@ impl Classifier<'_> {
         }
     }
 
-    fn delta_encode(self, byte_range: Option<Span>) -> SemanticTokens {
-        let Self { document, raw_tokens, .. } = self;
-        let mut data: Vec<SemanticToken> = Vec::with_capacity(raw_tokens.len());
-        let mut previous = Position { line: 0, character: 0 };
-        for (span, classification) in raw_tokens.into_values() {
-            if span.is_empty()
-                || byte_range.is_some_and(|Span { start, end }| {
-                    start >= end || span.end <= start || span.start >= end
-                })
-            {
-                continue;
+    /// Every classification by where it starts, those with no text dropped.
+    fn finish(self) -> Highlights {
+        let mut highlights = Vec::with_capacity(self.slots.len().div_ceil(2));
+        let mut strays = self.strays.into_values().peekable();
+        for slot in self.slots.into_iter().flatten() {
+            while let Some(stray) = strays.next_if(|(span, _)| span.start < slot.0.start) {
+                highlights.push(stray);
             }
-            let Position { line, character } = document.position(span.start);
-            let delta_line = line.saturating_sub(previous.line);
-            let delta_start = if delta_line == 0 {
-                character.saturating_sub(previous.character)
-            } else {
-                character
-            };
-            data.push(SemanticToken {
-                delta_line,
-                delta_start,
-                length: utf16_length(document.text(), span),
-                token_type: classification.token_type,
-                token_modifiers_bitset: classification.modifiers,
-            });
-            previous = Position { line, character };
+            highlights.push(slot);
         }
-
-        SemanticTokens { result_id: None, data }
-    }
-
-    fn insert(&mut self, span: Span, token_type: u32) {
-        self.raw_tokens.insert(span.start, (span, Classification::plain(token_type)));
-    }
-
-    fn retype(&mut self, span: Span, token_type: u32) {
-        if let Some((_, classification)) = self.raw_tokens.get_mut(&span.start) {
-            classification.token_type = token_type;
-        }
+        highlights.extend(strays);
+        highlights.retain(|(span, _)| !span.is_empty());
+        highlights
     }
 
     /// The name a call calls, through parentheses, casts, and Luau type
@@ -330,7 +416,9 @@ impl Classifier<'_> {
                     return;
                 }
                 Some((before, Suffix::TypeInstantiation { .. })) => before, // Luau
-                Some((_, Suffix::Index { .. } | Suffix::Call(_))) => return,
+                Some((_, Suffix::Index { .. } | Suffix::Call(_) | Suffix::MethodCall(_))) => {
+                    return;
+                }
                 None => match current.prefix {
                     Expression::Name(name) => {
                         self.retype(name.span, TYPE_FUNCTION);
@@ -362,56 +450,42 @@ impl Classifier<'_> {
 }
 
 impl<'ast> Visitor<'ast> for Classifier<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             // Luau
             Statement::TypeDeclaration(declaration) => {
-                let token_type = match &declaration.type_value {
+                let token_type = match &declaration.value {
                     TypeDeclarationValue::Alias(_) => TYPE_TYPE,
                     TypeDeclarationValue::TypeFunction(_) => TYPE_FUNCTION,
                 };
                 self.insert(declaration.name.span, token_type);
             }
             Statement::FunctionDecl(declaration) => {
-                if let Some(name) =
-                    declaration.name.method.as_ref().or_else(|| declaration.name.names.last())
-                {
-                    self.insert(
-                        name.span,
-                        if declaration.name.method.is_some() || declaration.name.names.len() > 1 {
-                            TYPE_METHOD
-                        } else {
-                            TYPE_FUNCTION
-                        },
-                    );
+                let name = &declaration.name;
+                if let Some(last) = name.method.as_ref().or_else(|| name.names.last()) {
+                    let is_method = name.method.is_some() || name.names.len() > 1;
+                    self.insert(last.span, if is_method { TYPE_METHOD } else { TYPE_FUNCTION });
                 }
             }
             Statement::LocalAssignment(assignment) => {
-                for (index, name) in assignment.names.iter().enumerate() {
-                    if assignment
-                        .exprs
-                        .as_ref()
-                        .and_then(|exprs| exprs.get(index))
-                        .is_some_and(|expr| matches!(expr, Expression::FunctionDef(_)))
-                    {
-                        self.insert(name.name.span, TYPE_FUNCTION);
+                for (index, attributed) in assignment.names.iter().enumerate() {
+                    if matches!(assignment.exprs.get(index), Some(Expression::FunctionDef(_))) {
+                        self.insert(attributed.name.span, TYPE_FUNCTION);
                     }
                     // Lua 5.4+: a to-be-closed local can't be assigned either.
                     let is_read_only = assignment.kind.is_const()
-                        || name.attribute.as_ref().is_some_and(|attribute| {
-                            matches!(attribute.name.identifier(), Some("const" | "close"))
+                        || attributed.attribute.as_ref().is_some_and(|attribute| {
+                            matches!(identifier(&attribute.name), Some("const" | "close"))
                         });
-                    if is_read_only
-                        && let Some((_, classification)) =
-                            self.raw_tokens.get_mut(&name.name.span.start)
-                    {
+                    let key = self.key(attributed.name.span.start);
+                    if is_read_only && let Some((_, classification)) = self.get_mut(key) {
                         classification.modifiers |= MODIFIER_READONLY;
                     }
                 }
             }
             // Lua 5.5
             Statement::GlobalFunction(global_function) => {
-                if global_function.name.identifier().is_some() {
+                if identifier(&global_function.name).is_some() {
                     self.insert(global_function.name.span, TYPE_FUNCTION);
                 }
             }
@@ -444,31 +518,25 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
         self.walk_call(call);
     }
 
-    fn visit_table_constructor(&mut self, table: &'ast TableConstructor) {
-        for field in table.fields.iter() {
+    fn visit_table_constructor(&mut self, table: &'ast TableConstructor<'ast>) {
+        for field in &table.fields {
             match field {
-                Field::Named { name, value, .. } => {
-                    self.insert(
-                        name.span,
-                        if matches!(value, Expression::FunctionDef(_)) {
-                            TYPE_METHOD
-                        } else {
-                            TYPE_PROPERTY
-                        },
-                    );
+                Field::Named { name, value } => {
+                    let is_method = matches!(value, Expression::FunctionDef(_));
+                    self.insert(name.span, if is_method { TYPE_METHOD } else { TYPE_PROPERTY });
                     self.visit_expr(value);
                 }
                 Field::Bracketed { key, value, .. } => {
                     self.visit_expr(key);
                     self.visit_expr(value);
                 }
-                Field::Positional { value, .. } => self.visit_expr(value),
+                Field::Positional(value) => self.visit_expr(value),
             }
         }
     }
 
-    fn visit_generic_type_list(&mut self, generics: &'ast GenericTypeList) {
-        for param in generics.params.iter() {
+    fn visit_generic_type_list(&mut self, generics: &'ast GenericTypeList<'ast>) {
+        for param in &generics.params {
             self.insert(param.name.span, TYPE_TYPE);
             if let Some(default) = &param.default {
                 self.visit_type(default);
@@ -476,11 +544,11 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
         }
     }
 
-    fn visit_type(&mut self, type_value: &'ast Type) {
-        match type_value {
-            Type::Name { name, span } => {
+    fn visit_type(&mut self, ty: &'ast Type<'ast>) {
+        match ty {
+            Type::Name(name) => {
                 if matches!(
-                    name.as_str(),
+                    name.text,
                     "any"
                         | "unknown"
                         | "never"
@@ -493,14 +561,12 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
                         | "buffer"
                         | "vector"
                 ) {
-                    self.raw_tokens.remove(&span.start);
+                    self.remove(name.span);
                 } else {
-                    self.insert(*span, TYPE_TYPE);
+                    self.insert(name.span, TYPE_TYPE);
                 }
             }
-            Type::Typeof(query) => {
-                self.raw_tokens.remove(&query.span.start);
-            }
+            Type::Typeof(query) => self.remove(query.span),
             Type::Named(named) => {
                 if let Some(prefix) = &named.prefix {
                     self.insert(prefix.span, TYPE_VARIABLE);
@@ -509,7 +575,7 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
             }
             Type::GenericPack(pack) => self.insert(pack.name.span, TYPE_TYPE),
             Type::Table(table) => {
-                for field in table.fields.iter() {
+                for field in &table.fields {
                     match field {
                         TypeField::Named { name, .. } => self.insert(name.span, TYPE_PROPERTY),
                         TypeField::Indexer { .. } | TypeField::Array { .. } => {}
@@ -517,7 +583,7 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
                 }
             }
             Type::Function(function_type) => {
-                for param in function_type.params.iter() {
+                for param in &function_type.params {
                     if let Some(name) = &param.name {
                         self.insert(name.span, TYPE_PARAMETER);
                     }
@@ -529,10 +595,14 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
             | Type::Parenthesized(_)
             | Type::Pack(_)
             | Type::Variadic(_)
-            | Type::Singleton(_)
+            | Type::Nil(_)
+            | Type::True(_)
+            | Type::False(_)
+            | Type::StringLiteral(_)
+            | Type::Number(_)
             | Type::Error(_) => {}
         }
-        self.walk_type(type_value);
+        self.walk_type(ty);
     }
 }
 
@@ -574,21 +644,25 @@ const fn member_classify(entry: &StdlibEntry) -> Classification {
 
 fn utf16_length(source: &str, span: Span) -> u32 {
     let end = offset_to_index(span.end).min(source.len());
-    source
-        .get(offset_to_index(span.start)..end)
-        .map_or(0, |text| index_to_offset(text.encode_utf16().count()))
+    source.get(offset_to_index(span.start)..end).map_or(0, |text| {
+        if text.is_ascii() {
+            index_to_offset(text.len())
+        } else {
+            index_to_offset(text.encode_utf16().count())
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
-    use rustc_hash::FxHashSet;
 
     use super::*;
+    use crate::fixtures::document;
 
     fn parse_document(source: &str, target: LuaTarget) -> DocumentState {
-        let document = DocumentState::new(source.to_owned(), 1, target, FxHashSet::default());
-        assert!(document.parsed.errors.is_empty(), "{:?}", document.parsed.errors);
+        let document = document(source, target);
+        assert!(document.parse().errors.is_empty(), "{:?}", document.parse().errors);
         document
     }
 
@@ -946,13 +1020,8 @@ end
         // `a.b(c)` can't be assigned, so recovery names it with an empty
         // identifier spanning the whole call. `highlights` asserts that no
         // two tokens overlap and that each has a length.
-        let document = DocumentState::new(
-            "a.b(c), d = 1\n".to_owned(),
-            1,
-            LuaTarget::Lua54,
-            FxHashSet::default(),
-        );
-        assert!(!document.parsed.errors.is_empty(), "the target must be invalid");
+        let document = document("a.b(c), d = 1\n", LuaTarget::Lua54);
+        assert!(!document.parse().errors.is_empty(), "the target must be invalid");
         let tokens = highlights(&document);
         assert!(
             tokens.iter().all(|token| !token.text.contains('(')),

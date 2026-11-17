@@ -1,75 +1,107 @@
 use alloc::borrow::Cow;
+use alloc::sync::Arc;
 use core::ops;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use luck_allocator::Allocator;
 use luck_core::LuaTarget;
-use luck_lexer::LexResult;
-use luck_linter::{LintConfig, LintDiagnostic};
+use luck_formatter::FormatResult;
+use luck_linter::{Analysis, LintDiagnostic};
 use luck_parser::ParseResult;
-use luck_semantic::SemanticAnalysis;
+use luck_semantic::{ScopeTree, SemanticAnalysis};
 use luck_token::{LuaVersion, Span, Token};
-use rustc_hash::FxHashSet;
 use tower_lsp_server::ls_types::{Position, Range, TextDocumentContentChangeEvent, Uri};
 
+use crate::analyzed::Analyzed;
 use crate::line_index::LineIndex;
+use crate::providers::semantic_tokens::{self, Highlights};
+use crate::settings::ProjectSettings;
 
-/// Both are built once per change, and the backend shares the whole state
-/// through an `Arc`, so no request reparses or copies the text.
+/// What a document's URI and the project around it fix, which every version
+/// of the document shares until the settings change.
+#[derive(Debug)]
+pub(crate) struct DocumentSettings {
+    pub path: Option<PathBuf>,
+    pub project: Arc<ProjectSettings>,
+    pub target: LuaTarget,
+    /// Whether the project's `include` and `exclude` take the document in.
+    /// One they leave out gets no diagnostics and no fixes.
+    pub is_included: bool,
+}
+
+/// One version of an open document, parsed and analyzed once, which the
+/// backend shares through an `Arc`, so no request parses or copies the text.
 #[derive(Debug)]
 pub(crate) struct DocumentState {
-    pub version: i32,
-    pub target: LuaTarget,
-    pub lua_version: LuaVersion,
-    pub parsed: ParseResult,
-    pub semantic: SemanticAnalysis,
-    pub line_index: LineIndex,
-    pub lexed: OnceLock<LexResult>,
+    version: i32,
+    settings: Arc<DocumentSettings>,
+    analyzed: Analyzed,
+    line_index: LineIndex,
+    /// Lexed on first use: the parse keeps no tokens, and only highlighting
+    /// and the cursor's surroundings need them.
+    tokens: OnceLock<Vec<Token>>,
+    /// Classified on first use, so a client asking for a range and then the
+    /// whole of a version classifies it once.
+    highlights: OnceLock<Highlights>,
 }
 
 impl DocumentState {
-    /// Parses and analyzes `text`, seeding the project's `extra_globals` so
-    /// the linter and rename read one analysis.
-    pub(crate) fn new(
-        text: String,
-        version: i32,
-        target: LuaTarget,
-        extra_globals: FxHashSet<String>,
-    ) -> Self {
-        let lua_version = target.lua_version();
-        let line_index = LineIndex::new(&text);
-        let parsed = luck_parser::parse(text, lua_version);
-        let mut semantic = luck_semantic::analyze_with_environment(
-            &parsed.block,
-            lua_version,
-            target.stdlib_environment(),
-        );
-        semantic.extra_globals = extra_globals;
-        Self { version, target, lua_version, parsed, semantic, line_index, lexed: OnceLock::new() }
+    pub(crate) fn new(text: &str, version: i32, settings: Arc<DocumentSettings>) -> Self {
+        let analyzed = Analyzed::new(text, settings.target, &settings.project.lint_config);
+        let line_index = LineIndex::new(text);
+        Self {
+            version,
+            settings,
+            analyzed,
+            line_index,
+            tokens: OnceLock::new(),
+            highlights: OnceLock::new(),
+        }
     }
 
-    pub(crate) fn with_text(&self, text: String, version: i32) -> Self {
-        Self::new(text, version, self.target, self.semantic.extra_globals.clone())
+    pub(crate) fn with_text(&self, text: &str, version: i32) -> Self {
+        Self::new(text, version, Arc::clone(&self.settings))
     }
 
-    pub(crate) fn text(&self) -> &str {
-        &self.parsed.source
+    pub(crate) const fn version(&self) -> i32 {
+        self.version
     }
 
-    /// This state's tokens, lexed on first use: most keystrokes serve no
-    /// request that needs them.
+    pub(crate) fn settings(&self) -> &DocumentSettings {
+        &self.settings
+    }
+
+    pub(crate) const fn text(&self) -> &str {
+        self.parse().source
+    }
+
+    pub(crate) const fn parse(&self) -> &ParseResult<'_> {
+        self.analyzed.parse()
+    }
+
+    pub(crate) const fn analysis(&self) -> &Analysis<'_> {
+        self.analyzed.analysis()
+    }
+
+    pub(crate) const fn semantic(&self) -> &SemanticAnalysis<'_> {
+        self.analysis().semantic()
+    }
+
+    pub(crate) const fn tree(&self) -> &ScopeTree<'_> {
+        self.semantic().scope_tree()
+    }
+
+    pub(crate) fn lua_version(&self) -> LuaVersion {
+        self.settings.target.lua_version()
+    }
+
     pub(crate) fn tokens(&self) -> &[Token] {
-        &self.lexed().tokens
+        self.tokens.get_or_init(|| luck_lexer::lex(self.text(), self.lua_version()).tokens)
     }
 
-    /// The spans of the string tokens and block comments the line or the text
-    /// ended before they closed.
-    pub(crate) fn unterminated(&self) -> &[Span] {
-        &self.lexed().unterminated
-    }
-
-    fn lexed(&self) -> &LexResult {
-        self.lexed.get_or_init(|| luck_lexer::lex(self.text(), self.lua_version))
+    pub(crate) fn highlights(&self) -> &Highlights {
+        self.highlights.get_or_init(|| semantic_tokens::classify(self))
     }
 
     pub(crate) fn position(&self, offset: u32) -> Position {
@@ -92,8 +124,24 @@ impl DocumentState {
         self.line_index.full_document_range(self.text())
     }
 
-    pub(crate) fn lint(&self, config: &LintConfig) -> Vec<LintDiagnostic> {
-        luck_linter::lint_analyzed(&self.parsed, &self.semantic, config)
+    /// Lints with the config the analysis was built under.
+    pub(crate) fn lint(&self) -> Vec<LintDiagnostic> {
+        let config = &self.settings.project.lint_config;
+        luck_linter::lint_analyzed(self.parse(), self.analysis(), config)
+    }
+
+    /// Formats the whole text, or with `range`, the statements it touches.
+    /// Reads the `.editorconfig` chain, which touches the disk.
+    pub(crate) fn format(&self, range: Option<ops::Range<usize>>) -> FormatResult {
+        let DocumentSettings { path, project, .. } = &*self.settings;
+        let options = project.format_options(path.as_deref());
+        // A scratch arena, so the formatting is freed as soon as it's done.
+        let allocator = Allocator::new();
+        let (parse, version) = (self.parse(), self.lua_version());
+        range.map_or_else(
+            || luck_formatter::format_parsed(&allocator, parse, version, &options),
+            |bytes| luck_formatter::format_range(&allocator, parse, version, &options, bytes),
+        )
     }
 
     /// The text once `changes` are applied in order, or `None` when a range
@@ -136,8 +184,10 @@ pub(crate) fn file_path(uri: &Uri) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use core::str::FromStr as _;
+    use std::thread;
 
     use super::*;
+    use crate::fixtures::document;
 
     #[test]
     fn only_a_file_uri_has_a_file_path() {
@@ -157,15 +207,12 @@ mod tests {
 
     #[test]
     fn changed_text_applies_each_range_to_the_previous_result() {
-        let document = DocumentState::new(
+        let document = document(
             "\
 local a = 1
 local b = 2
-local c = 3"
-                .to_owned(),
-            1,
+local c = 3",
             LuaTarget::Lua54,
-            FxHashSet::default(),
         );
         // The first edit inserts a line, and the second edit's range is
         // expressed against the text the first one produced, so the line
@@ -194,10 +241,26 @@ local c = 30"
 
     #[test]
     fn changed_text_refuses_an_inverted_range() {
-        let document =
-            DocumentState::new("local a = 1".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document("local a = 1", LuaTarget::Lua54);
         let text = document
             .changed_text(vec![replace(Range::new(Position::new(0, 5), Position::new(0, 2)), "x")]);
         assert_eq!(text, None);
+    }
+
+    #[test]
+    fn a_document_moved_to_another_thread_keeps_its_tree() {
+        let document = Arc::new(document("local answer = 42", LuaTarget::Lua54));
+        let shared = Arc::clone(&document);
+        let names = thread::spawn(move || {
+            let tree = shared.tree();
+            tree.symbols()
+                .iter()
+                .map(|symbol| tree.name(symbol.name).to_owned())
+                .collect::<Vec<_>>()
+        })
+        .join()
+        .expect("the reader thread finishes");
+        assert_eq!(names, ["answer"]);
+        assert_eq!(document.text(), "local answer = 42");
     }
 }

@@ -991,6 +991,7 @@ dependencies = [
 name = "luck_lsp"
 version = "0.6.0"
 dependencies = [
+ "luck_allocator",
  "luck_ast",
  "luck_config",
  "luck_core",
@@ -1002,6 +1003,7 @@ dependencies = [
  "luck_semantic",
  "luck_testgen",
  "luck_token",
+ "memchr",
  "rustc-hash",
  "serde_json",
  "tempfile",

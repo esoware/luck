@@ -13,6 +13,10 @@
 //!   document links
 //! - custom requests: `luck/syntaxTree`, `luck/fixAllWorkspace`
 //!
+//! Each open document is parsed and analyzed once per version, in an arena
+//! of its own that is freed when the version is replaced or closed, and
+//! every request reads that version's tree and analysis.
+//!
 //! `luck lsp` serves it over stdio, or over TCP with `--socket <port>` for
 //! debugging.
 //!
@@ -34,8 +38,11 @@
 
 extern crate alloc;
 
+mod analyzed;
 mod backend;
 mod document;
+#[cfg(test)]
+mod fixtures;
 mod line_index;
 mod providers;
 mod settings;

@@ -124,7 +124,7 @@ unit_bindings = "deny"
 unnameable_types = "deny"
 unreachable_pub = "deny"
 # Deny, not forbid, so the justified sites in luck_token, luck_lexer,
-# luck_resolver, and luck_benchmark can #[expect] it.
+# luck_resolver, luck_lsp, and luck_benchmark can #[expect] it.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 unused_extern_crates = "deny"

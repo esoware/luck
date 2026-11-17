@@ -19,7 +19,7 @@ pub(crate) fn to_lsp(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<
             code_description: None,
             source: Some(DIAGNOSTIC_SOURCE.to_owned()),
             message: lint.help.as_ref().map_or_else(
-                || lint.message.clone(),
+                || lint.message.clone().into_owned(),
                 |help| format!("{}\n\nhelp: {help}", lint.message),
             ),
             related_information: None,
@@ -34,13 +34,12 @@ mod tests {
     use luck_core::LuaTarget;
     use luck_linter::Category;
     use luck_token::Span;
-    use rustc_hash::FxHashSet;
 
     use super::*;
+    use crate::fixtures::document;
 
     fn convert(lint: LintDiagnostic) -> Diagnostic {
-        let document =
-            DocumentState::new("local x = 1".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document("local x = 1", LuaTarget::Lua54);
         let mut diags = to_lsp(&document, &[lint]);
         assert_eq!(diags.len(), 1, "{diags:?}");
         diags.remove(0)
@@ -52,7 +51,7 @@ mod tests {
             rule: "test_rule",
             category: Category::Correctness,
             severity: Severity::Error,
-            message: "bad".to_owned(),
+            message: "bad".into(),
             span: Span::new(6, 7),
             help: None,
             fix: None,
@@ -68,9 +67,9 @@ mod tests {
             rule: "warn_rule",
             category: Category::Style,
             severity: Severity::Warning,
-            message: "stylistic issue".to_owned(),
+            message: "stylistic issue".into(),
             span: Span::new(0, 5),
-            help: Some("rename it".to_owned()),
+            help: Some("rename it".into()),
             fix: None,
         });
         assert_eq!(diag.severity, Some(DiagnosticSeverity::WARNING));

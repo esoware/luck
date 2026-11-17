@@ -27,13 +27,11 @@ mod tests {
     use alloc::sync::Arc;
 
     use luck_core::LuaTarget;
-    use luck_formatter::FormatOptions;
     use luck_linter::LintConfig;
     use luck_testgen::{
         broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
     };
     use luck_token::LuaVersion;
-    use rustc_hash::FxHashSet;
     use tower_lsp_server::ls_types::{
         CodeActionContext, CodeActionParams, GotoDefinitionParams, PartialResultParams,
         ReferenceContext, ReferenceParams, RenameParams, TextDocumentIdentifier,
@@ -41,15 +39,17 @@ mod tests {
     };
 
     use super::*;
-    use crate::document::DocumentState;
+    use crate::fixtures::document_under;
     use crate::settings::ProjectSettings;
 
     fn serve_every_request(source: &str, version: LuaVersion) {
         let target = if version.is_luau() { LuaTarget::LuauRoblox } else { LuaTarget::Lua54 };
         let uri: Uri = "file:///main.lua".parse().expect("a valid URI");
-        let document = DocumentState::new(source.to_owned(), 1, target, FxHashSet::default());
-        let settings = ProjectSettings::default();
-        let lints = document.lint(&LintConfig::default());
+        // Every correctness rule, which the server's own default turns off.
+        let project =
+            ProjectSettings { lint_config: LintConfig::default(), ..ProjectSettings::default() };
+        let document = document_under(source, target, project);
+        let lints = document.lint();
         let diagnostics = diagnostics::to_lsp(&document, &lints);
         let full_range = document.full_range();
         let text_document = TextDocumentIdentifier { uri: uri.clone() };
@@ -94,7 +94,6 @@ mod tests {
             );
             let _definition = definition::goto(
                 &document,
-                &settings,
                 &GotoDefinitionParams {
                     text_document_position_params: at,
                     work_done_progress_params: WorkDoneProgressParams::default(),
@@ -107,15 +106,12 @@ mod tests {
         let _symbols = document_symbol::document_symbols(&document);
         let _tokens = semantic_tokens::semantic_tokens(&document);
         let _ranged_tokens = semantic_tokens::in_range(&document, full_range);
-        let _links = document_link::document_links(&document, &uri, &settings);
+        let _links = document_link::document_links(&document, &uri);
+        let _formatted = document.format(None);
+        let _range_formatted = document.format(Some(0..source.len()));
         let documents = [(uri, Arc::new(document))];
         let _workspace_symbols = workspace_symbol::workspace_symbols(&documents, "a");
-        let _range_formatted = luck_formatter::format_range(
-            source,
-            version,
-            &FormatOptions::default(),
-            0..source.len(),
-        );
+        let _fixed = code_action::fix_all_open(&documents);
     }
 
     #[test]
