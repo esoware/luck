@@ -29,6 +29,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use self::literals::Literals;
 use self::locals::{OperandPosition, Value};
 use crate::expr::{constant_truthiness, inner_operand_side, parenthesize};
+use crate::lift_locals::Lifter;
 use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
 use crate::name_table::NameTable;
 use crate::scan::{Scan, is_droppable_function};
@@ -139,8 +140,33 @@ impl<'ast> Compressor<'ast> {
             return block_nesting_depth(block) <= MAX_NESTING_DEPTH;
         }
         self.is_scanned = true;
-        self.scan.run(block, &mut self.names, self.version, should_find_dead, should_find_inlinable)
-            <= MAX_NESTING_DEPTH
+        self.scan.run(
+            block,
+            &mut self.names,
+            self.version,
+            should_find_dead,
+            should_find_inlinable,
+            None,
+        ) <= MAX_NESTING_DEPTH
+    }
+
+    /// Lifts the declarations nested in each function body with `lifter`,
+    /// in the scan that finds the next walk's facts, and says whether it
+    /// lifted any.
+    pub(crate) fn lift(&mut self, block: &mut Block<'ast>, lifter: &mut Lifter<'ast>) -> bool {
+        let should_find_dead = self.config.remove_dead_code;
+        let should_find_inlinable = self.config.inline_locals;
+        lifter.begin();
+        self.scan.run(
+            block,
+            &mut self.names,
+            self.version,
+            should_find_dead,
+            should_find_inlinable,
+            Some(lifter),
+        );
+        self.is_scanned = should_find_dead || should_find_inlinable;
+        lifter.has_changed()
     }
 
     fn walk(&mut self, block: &mut Block<'ast>) -> bool {
@@ -153,6 +179,7 @@ impl<'ast> Compressor<'ast> {
                 self.version,
                 should_find_dead,
                 should_find_inlinable,
+                None,
             );
         }
         self.has_changed = false;

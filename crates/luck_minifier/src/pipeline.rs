@@ -108,7 +108,7 @@ fn minify_tree<'ast>(
             && renamer.rename(block, compressor.names(), config.rename_globals, round == 0);
         // Lift decides by name, and rename's slot reuse gives distinct
         // bindings the same name, so each round can unblock more lifts.
-        has_lifted = should_lift && lifter.lift(block, compressor.names());
+        has_lifted = should_lift && compressor.lift(block, &mut lifter);
         if !has_renamed && !has_lifted {
             break;
         }

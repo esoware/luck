@@ -6,6 +6,9 @@
 //! lifetimes. Slot reuse can still give a child local its parent's name, so a
 //! name already bound in an enclosing scope is left alone.
 //!
+//! The scan for the next round's first compression walk drives this through
+//! the tree, and the walk lifts each body as it leaves it.
+//!
 //! There's deliberately no per-lift size check, even though a lone lift can
 //! cost a few bytes for the hoisted declaration. Each lift reshapes scopes,
 //! the next rename redistributes names, and that unblocks further lifts.
@@ -13,21 +16,18 @@
 //! benchmarked hundreds of bytes worse across the corpus than lifting
 //! everything.
 
-use core::{iter, mem};
+use core::mem;
 
 use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
     Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, LocalAssignment,
-    LocalAssignmentKind, LocalFunction, LocalFunctionKind, Name, Statement, Type, Var, VisitorMut,
+    LocalAssignmentKind, LocalFunction, Name, Statement, Var,
 };
 use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::binding::has_fixed_binding;
-use crate::limits::{
-    GENERIC_FOR_STATE_LOCALS, MAX_REGISTERS, NUMERIC_FOR_STATE_LOCALS, parameter_locals,
-};
-use crate::name_table::NameTable;
+use crate::limits::{MAX_REGISTERS, parameter_locals};
 
 /// No frame: a name declared nowhere in the open scopes.
 const NO_FRAME: usize = usize::MAX;
@@ -91,7 +91,8 @@ impl Frames {
     }
 }
 
-/// Scans every function body the walk is in, and lifts each as it leaves.
+/// What lifting tracks of every function body a walk is in, and the lift of
+/// each as the walk leaves it.
 ///
 /// By then the body's scan has seen all of it, its closures included. A
 /// closure is lifted before the body around it, whose own lift reads nothing
@@ -99,11 +100,12 @@ impl Frames {
 pub(crate) struct Lifter<'ast> {
     allocator: &'ast Allocator,
     version: LuaVersion,
-    /// The pipeline's names, held while a lift runs.
-    names: NameTable<'ast>,
     frames: Frames,
     /// The scan of each function body the walk is in, innermost last.
     scans: Vec<BodyScan>,
+    /// The active locals of the body each open frame's scope is in, if it's
+    /// one a scan counts, as the frame opened.
+    frame_locals: Vec<Option<usize>>,
     /// How many of `scans`, outermost first, are of bodies around a type the
     /// walk is in. Types never run, so those bodies capture no name in one
     /// and count no expression of it, and a function in a `typeof` is no
@@ -116,6 +118,8 @@ pub(crate) struct Lifter<'ast> {
     candidate_names: Vec<(usize, &'ast str)>,
     /// Emptied name maps and lists, for the next body's scan.
     spare_names: Vec<(FxHashMap<usize, bool>, Vec<usize>)>,
+    /// The ids of the names the body just left hoisted, and their texts in
+    /// order.
     liftable_names: FxHashSet<usize>,
     ordered_liftable_names: Vec<&'ast str>,
     has_changed: bool,
@@ -145,9 +149,8 @@ struct BodyScan {
     ineligible_names: FxHashMap<usize, bool>,
     /// The free ones, in the order the walk met them.
     free_names: Vec<usize>,
-    /// Where the body's own candidates and their names start.
+    /// Where the body's own candidates start.
     first_candidate: usize,
-    first_candidate_name: usize,
     /// Locals the walk has active in the body. A closure's don't count: it
     /// has its own 200.
     active_locals: usize,
@@ -162,6 +165,7 @@ struct BodyScan {
 #[derive(Clone, Copy)]
 struct Candidate {
     /// Its names in `candidate_names`.
+    names_start: usize,
     names_end: usize,
     /// Its own shape allows a lift: initialized `local` names with no
     /// attribute or annotation, all distinct, or a plain `local function`.
@@ -170,14 +174,20 @@ struct Candidate {
     is_shadowing: bool,
 }
 
+impl Candidate {
+    const fn may_lift(self) -> bool {
+        self.is_liftable_shape && !self.is_shadowing
+    }
+}
+
 impl<'ast> Lifter<'ast> {
     pub(crate) fn new(allocator: &'ast Allocator, version: LuaVersion) -> Self {
         Self {
             allocator,
             version,
-            names: NameTable::default(),
             frames: Frames::default(),
             scans: Vec::new(),
+            frame_locals: Vec::new(),
             hidden_scan_count: 0,
             candidates: Vec::new(),
             candidate_names: Vec::new(),
@@ -188,17 +198,19 @@ impl<'ast> Lifter<'ast> {
         }
     }
 
-    /// Says whether it lifted anything.
-    pub(crate) fn lift(&mut self, block: &mut Block<'ast>, names: &mut NameTable<'ast>) -> bool {
-        self.names = mem::take(names);
+    /// Readies the lifter for a walk of a whole tree.
+    pub(crate) fn begin(&mut self) {
         self.frames.clear();
         self.scans.clear();
+        self.frame_locals.clear();
         self.hidden_scan_count = 0;
         self.candidates.clear();
         self.candidate_names.clear();
         self.has_changed = false;
-        self.visit_block(block);
-        *names = mem::take(&mut self.names);
+    }
+
+    /// Whether the walk since [`Self::begin`] lifted anything.
+    pub(crate) const fn has_changed(&self) -> bool {
         self.has_changed
     }
 
@@ -207,30 +219,47 @@ impl<'ast> Lifter<'ast> {
         if self.scans.len() > self.hidden_scan_count { self.scans.last_mut() } else { None }
     }
 
-    fn declare(&mut self, name: &mut &'ast str) {
+    /// Each statement counts its expressions from zero.
+    pub(crate) fn start_stmt(&mut self) {
+        if let Some(scan) = self.scan() {
+            scan.statement_expr_nodes = 0;
+        }
+    }
+
+    pub(crate) fn count_expr(&mut self) {
+        if let Some(scan) = self.scan() {
+            scan.statement_expr_nodes = scan.statement_expr_nodes.saturating_add(1);
+            let registers = scan.active_locals.saturating_add(scan.statement_expr_nodes);
+            scan.peak_registers = scan.peak_registers.max(registers);
+        }
+    }
+
+    /// Declares the name with id `name` where the walk is.
+    pub(crate) fn declare(&mut self, name: usize) {
         if self.scan().is_none() {
             return;
         }
-        let id = self.names.intern(name);
-        self.frames.declare(id);
+        self.frames.declare(name);
         self.add_active_locals(1);
     }
 
-    fn add_active_locals(&mut self, count: usize) {
+    pub(crate) fn add_active_locals(&mut self, count: usize) {
         if let Some(scan) = self.scan() {
             scan.active_locals = scan.active_locals.saturating_add(count);
             scan.peak_active_locals = scan.peak_active_locals.max(scan.active_locals);
         }
     }
 
-    fn push_frame(&mut self) -> Option<usize> {
+    /// Opens a scope, which ends its locals at [`Self::pop_frame`].
+    pub(crate) fn push_frame(&mut self) {
         self.frames.push();
-        self.scan().map(|scan| scan.active_locals)
+        let active_locals = self.scan().map(|scan| scan.active_locals);
+        self.frame_locals.push(active_locals);
     }
 
-    fn pop_frame(&mut self, outer_active_locals: Option<usize>) {
+    pub(crate) fn pop_frame(&mut self) {
         self.frames.pop();
-        if let Some(active_locals) = outer_active_locals
+        if let Some(active_locals) = self.frame_locals.pop().flatten()
             && let Some(scan) = self.scan()
         {
             scan.active_locals = active_locals;
@@ -239,50 +268,133 @@ impl<'ast> Lifter<'ast> {
 
     /// A read the body binds is its own. Any other is free in it, and the
     /// body passes it on to the one around it as it leaves.
-    fn reference(&mut self, name: &mut &'ast str) {
+    pub(crate) fn reference(&mut self, name: usize) {
         if self.scans.len() <= self.hidden_scan_count {
             return;
         }
-        let id = self.names.intern(name);
         let frames = &self.frames;
         let Some(scan) = self.scans.last_mut() else {
             return;
         };
-        if frames.innermost(id).is_some_and(|frame| frame >= scan.first_frame) {
+        if frames.innermost(name).is_some_and(|frame| frame >= scan.first_frame) {
             return;
         }
-        let is_free = scan.ineligible_names.entry(id).or_insert(false);
+        let is_free = scan.ineligible_names.entry(name).or_insert(false);
         if !*is_free {
             *is_free = true;
-            scan.free_names.push(id);
+            scan.free_names.push(name);
         }
     }
 
+    /// Hides the bodies the walk is in while it's in a type, and returns
+    /// what [`Self::exit_type`] restores.
+    pub(crate) const fn enter_type(&mut self) -> usize {
+        mem::replace(&mut self.hidden_scan_count, self.scans.len())
+    }
+
+    pub(crate) const fn exit_type(&mut self, outer_hidden_scan_count: usize) {
+        self.hidden_scan_count = outer_hidden_scan_count;
+    }
+
     /// Records a `local` or `local function` of the body the walk is in,
-    /// before its names are declared.
-    fn record_candidate<'name>(
+    /// before its names are declared, and returns its index, which lasts
+    /// until the body's [`Self::finish_body`], if it may lift.
+    pub(crate) fn record_candidate(
         &mut self,
-        names: impl Iterator<Item = &'name mut &'ast str>,
+        names: impl Iterator<Item = (usize, &'ast str)>,
         is_liftable_shape: bool,
-    ) where
-        'ast: 'name,
-    {
-        let Some(scan) = self.scans.last().filter(|_| self.scans.len() > self.hidden_scan_count)
-        else {
-            return;
-        };
-        let first_frame = scan.first_frame;
+    ) -> Option<usize> {
+        let first_frame =
+            self.scans.last().filter(|_| self.scans.len() > self.hidden_scan_count)?.first_frame;
+        let names_start = self.candidate_names.len();
         let mut is_shadowing = false;
-        for name in names {
-            let id = self.names.intern(name);
+        for (id, name) in names {
             is_shadowing |= self.frames.innermost(id).is_some_and(|frame| frame >= first_frame);
-            self.candidate_names.push((id, *name));
+            self.candidate_names.push((id, name));
         }
-        self.candidates.push(Candidate {
-            names_end: self.candidate_names.len(),
-            is_liftable_shape,
-            is_shadowing,
+        let names_end = self.candidate_names.len();
+        let candidate = Candidate { names_start, names_end, is_liftable_shape, is_shadowing };
+        let index = self.candidates.len();
+        self.candidates.push(candidate);
+        candidate.may_lift().then_some(index)
+    }
+
+    /// Opens the scan of a function body whose parameters, a Lua 5.5
+    /// `...name` among them, have the ids `parameters`, and where `env` is
+    /// `_ENV`'s. The bodies the walk is already in see this one's bindings as
+    /// a closure's.
+    pub(crate) fn enter_body(
+        &mut self,
+        body: &FunctionBody<'_>,
+        parameters: impl Iterator<Item = usize>,
+        env: usize,
+    ) {
+        let parameter_count = parameter_locals(body);
+        let (mut ineligible_names, free_names) = self.spare_names.pop().unwrap_or_default();
+        if self.version.has_env_upvalue() {
+            ineligible_names.insert(env, false);
+        }
+        self.frames.push();
+        self.scans.push(BodyScan {
+            first_frame: self.frames.len().saturating_sub(1),
+            ineligible_names,
+            free_names,
+            first_candidate: self.candidates.len(),
+            active_locals: parameter_count,
+            peak_active_locals: parameter_count,
+            statement_expr_nodes: 0,
+            peak_registers: parameter_count,
         });
+        for name in parameters {
+            self.frames.declare(name);
+        }
+    }
+
+    /// Closes the scan of `body` and lifts it, and returns where its
+    /// candidates start. [`Self::is_lifted`] answers for them until
+    /// [`Self::finish_body`].
+    pub(crate) fn exit_body(&mut self, body: &mut FunctionBody<'ast>) -> usize {
+        self.frames.pop();
+        let Some(mut scan) = self.scans.pop() else {
+            return self.candidates.len();
+        };
+        self.pass_free_names(&scan);
+        if self.lift_body(body, &scan) {
+            self.has_changed = true;
+        } else {
+            self.liftable_names.clear();
+        }
+        scan.ineligible_names.clear();
+        scan.free_names.clear();
+        self.spare_names.push((scan.ineligible_names, scan.free_names));
+        scan.first_candidate
+    }
+
+    /// Whether the candidate at `index` in the body just lifted went to the
+    /// top of it.
+    pub(crate) fn is_lifted(&self, index: usize) -> bool {
+        self.candidates.get(index).is_some_and(|candidate| {
+            candidate.may_lift()
+                && self.names_of(index).iter().all(|(id, _)| self.liftable_names.contains(id))
+        })
+    }
+
+    /// The names of the candidate at `index`, with their ids.
+    pub(crate) fn names_of(&self, index: usize) -> &[(usize, &'ast str)] {
+        self.candidates
+            .get(index)
+            .and_then(|candidate| {
+                self.candidate_names.get(candidate.names_start..candidate.names_end)
+            })
+            .unwrap_or_default()
+    }
+
+    /// Forgets the candidates of the body just lifted, `first_candidate` on.
+    pub(crate) fn finish_body(&mut self, first_candidate: usize) {
+        if let Some(first) = self.candidates.get(first_candidate) {
+            self.candidate_names.truncate(first.names_start);
+        }
+        self.candidates.truncate(first_candidate);
     }
 
     /// Hoists the declarations nested in `body` that its finished scan
@@ -301,16 +413,15 @@ impl<'ast> Lifter<'ast> {
         self.liftable_names.clear();
         self.ordered_liftable_names.clear();
         let candidates = self.candidates.get(scan.first_candidate..).unwrap_or_default();
-        let mut names_start = scan.first_candidate_name;
         for candidate in candidates {
-            let names =
-                self.candidate_names.get(names_start..candidate.names_end).unwrap_or_default();
-            names_start = candidate.names_end;
+            let names = self
+                .candidate_names
+                .get(candidate.names_start..candidate.names_end)
+                .unwrap_or_default();
             let has_room =
                 self.ordered_liftable_names.len().saturating_add(names.len()) <= hoist_capacity;
-            if candidate.is_liftable_shape
+            if candidate.may_lift()
                 && has_room
-                && !candidate.is_shadowing
                 && names.iter().all(|(id, _)| !scan.ineligible_names.contains_key(id))
             {
                 for &(id, name) in names {
@@ -363,7 +474,6 @@ impl<'ast> Lifter<'ast> {
             candidates,
             names: &self.candidate_names,
             next_candidate: 0,
-            names_start: scan.first_candidate_name,
         };
         rewriter.rewrite_block(&mut body.block);
         let allocator = self.allocator;
@@ -408,184 +518,9 @@ impl<'ast> Lifter<'ast> {
     }
 }
 
-impl<'ast> VisitorMut<'ast> for Lifter<'ast> {
-    fn visit_block(&mut self, block: &mut Block<'ast>) {
-        let outer = self.push_frame();
-        self.walk_block(block);
-        self.pop_frame(outer);
-    }
-
-    fn visit_stmt(&mut self, stmt: &mut Statement<'ast>) {
-        if let Some(scan) = self.scan() {
-            scan.statement_expr_nodes = 0;
-        }
-        match stmt {
-            Statement::LocalAssignment(_) => {
-                // Values before names: `local x = x` reads the outer x.
-                self.walk_stmt(stmt);
-                if let Statement::LocalAssignment(local) = stmt {
-                    let is_liftable_shape = can_lift_assignment(local, self.version);
-                    let names = local.names.iter_mut().map(|attributed| &mut attributed.name.text);
-                    self.record_candidate(names, is_liftable_shape);
-                    for attributed in &mut local.names {
-                        self.declare(&mut attributed.name.text);
-                    }
-                }
-            }
-            Statement::LocalFunction(local_function) => {
-                let is_liftable_shape = local_function.kind == LocalFunctionKind::Local;
-                self.record_candidate(iter::once(&mut local_function.name.text), is_liftable_shape);
-                self.declare(&mut local_function.name.text);
-                self.walk_stmt(stmt);
-            }
-            Statement::FunctionDecl(_) => {
-                self.walk_stmt(stmt);
-                if let Statement::FunctionDecl(function_decl) = stmt
-                    && let Some(root) = function_decl.name.names.first_mut()
-                {
-                    self.reference(&mut root.text);
-                }
-            }
-            Statement::RepeatLoop(repeat_loop) => {
-                // The condition sees the block's locals.
-                let outer = self.push_frame();
-                self.walk_block(&mut repeat_loop.block);
-                self.visit_expr(&mut repeat_loop.condition);
-                self.pop_frame(outer);
-            }
-            Statement::NumericFor(numeric_for) => {
-                if let Some(ty) = &mut numeric_for.type_annotation {
-                    self.visit_type(ty);
-                }
-                self.visit_expr(&mut numeric_for.start);
-                self.visit_expr(&mut numeric_for.limit);
-                if let Some(step) = &mut numeric_for.step {
-                    self.visit_expr(step);
-                }
-                let outer = self.push_frame();
-                self.add_active_locals(NUMERIC_FOR_STATE_LOCALS);
-                self.declare(&mut numeric_for.name.text);
-                self.walk_block(&mut numeric_for.block);
-                self.pop_frame(outer);
-            }
-            Statement::GenericFor(generic_for) => {
-                for param in &mut generic_for.names {
-                    if let Some(ty) = &mut param.type_annotation {
-                        self.visit_type(ty);
-                    }
-                }
-                for expr in &mut generic_for.exprs {
-                    self.visit_expr(expr);
-                }
-                let outer = self.push_frame();
-                self.add_active_locals(GENERIC_FOR_STATE_LOCALS);
-                for param in &mut generic_for.names {
-                    self.declare(&mut param.name.text);
-                }
-                self.walk_block(&mut generic_for.block);
-                self.pop_frame(outer);
-            }
-            // These bind nothing themselves, and a block of theirs opens its
-            // scope in `visit_block`. A `global function` or `type function`
-            // body is reached as a closure.
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::Error(_) => self.walk_stmt(stmt),
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
-        if let Some(scan) = self.scan() {
-            scan.statement_expr_nodes = scan.statement_expr_nodes.saturating_add(1);
-            let registers = scan.active_locals.saturating_add(scan.statement_expr_nodes);
-            scan.peak_registers = scan.peak_registers.max(registers);
-        }
-        if let Expression::Name(name) = expr {
-            self.reference(&mut name.text);
-            return;
-        }
-        self.walk_expr(expr);
-    }
-
-    fn visit_assignment_target(&mut self, target: &mut Var<'ast>) {
-        if let Var::Name(name) = target {
-            self.reference(&mut name.text);
-            return;
-        }
-        self.walk_assignment_target(target);
-    }
-
-    /// The bodies the walk is already in see this one's bindings as a
-    /// closure's. The signature isn't walked, so a function in one keeps
-    /// its declarations.
-    fn visit_function_body(&mut self, body: &mut FunctionBody<'ast>) {
-        let parameter_count = parameter_locals(body);
-        let (mut ineligible_names, free_names) = self.spare_names.pop().unwrap_or_default();
-        if self.version.has_env_upvalue() {
-            ineligible_names.insert(self.names.intern_text("_ENV"), false);
-        }
-        self.frames.push();
-        self.scans.push(BodyScan {
-            first_frame: self.frames.len().saturating_sub(1),
-            ineligible_names,
-            free_names,
-            first_candidate: self.candidates.len(),
-            first_candidate_name: self.candidate_names.len(),
-            active_locals: parameter_count,
-            peak_active_locals: parameter_count,
-            statement_expr_nodes: 0,
-            peak_registers: parameter_count,
-        });
-        for name in parameter_names(body) {
-            let id = self.names.intern(name);
-            self.frames.declare(id);
-        }
-        self.walk_block(&mut body.block);
-        self.frames.pop();
-        let Some(mut scan) = self.scans.pop() else {
-            return;
-        };
-        self.pass_free_names(&scan);
-        if self.lift_body(body, &scan) {
-            self.has_changed = true;
-        }
-        self.candidates.truncate(scan.first_candidate);
-        self.candidate_names.truncate(scan.first_candidate_name);
-        scan.ineligible_names.clear();
-        scan.free_names.clear();
-        self.spare_names.push((scan.ineligible_names, scan.free_names));
-    }
-
-    fn visit_type(&mut self, ty: &mut Type<'ast>) {
-        let outer_hidden_scan_count = mem::replace(&mut self.hidden_scan_count, self.scans.len());
-        self.walk_type(ty);
-        self.hidden_scan_count = outer_hidden_scan_count;
-    }
-}
-
-/// A Lua 5.5 `...name` vararg is one too, and a hoisted declaration sharing
-/// its name would capture its references.
-fn parameter_names<'body, 'ast>(
-    body: &'body mut FunctionBody<'ast>,
-) -> impl Iterator<Item = &'body mut &'ast str> {
-    let vararg =
-        body.vararg.as_mut().and_then(|vararg| vararg.name.as_mut()).map(|name| &mut name.text);
-    body.params.iter_mut().map(|param| &mut param.name.text).chain(vararg)
-}
-
-fn can_lift_assignment(local: &LocalAssignment<'_>, version: LuaVersion) -> bool {
+/// Whether a `local` is a shape a lift can take: initialized names with no
+/// attribute or annotation, all distinct.
+pub(crate) fn can_lift_assignment(local: &LocalAssignment<'_>, version: LuaVersion) -> bool {
     // A bare `local x` resets x to nil, which a lifted one wouldn't once a
     // sibling has used the shared slot. A type annotation would be lost,
     // since the hoisted declaration is a bare `local x`.
@@ -612,7 +547,6 @@ struct LiftRewriter<'lifter, 'ast> {
     candidates: &'lifter [Candidate],
     names: &'lifter [(usize, &'ast str)],
     next_candidate: usize,
-    names_start: usize,
 }
 
 impl<'ast> LiftRewriter<'_, 'ast> {
@@ -622,12 +556,9 @@ impl<'ast> LiftRewriter<'_, 'ast> {
         let Some(candidate) = self.candidates.get(self.next_candidate) else {
             return false;
         };
-        let names = self.names.get(self.names_start..candidate.names_end).unwrap_or_default();
         self.next_candidate = self.next_candidate.saturating_add(1);
-        self.names_start = candidate.names_end;
-        candidate.is_liftable_shape
-            && !candidate.is_shadowing
-            && names.iter().all(|(id, _)| self.liftable_names.contains(id))
+        let names = self.names.get(candidate.names_start..candidate.names_end).unwrap_or_default();
+        candidate.may_lift() && names.iter().all(|(id, _)| self.liftable_names.contains(id))
     }
 
     fn rewrite_block(&mut self, block: &mut Block<'ast>) {

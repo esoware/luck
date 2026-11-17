@@ -12,10 +12,11 @@
 //!   each node, repeated until a walk changes nothing: constant folding,
 //!   dead-code and dead-local removal, inlining single-use locals, merging
 //!   neighboring locals, `if` and `return` simplification, and shorter
-//!   literals, indexes, and parentheses. One read-only scan before each walk
-//!   finds the dead and inlinable locals.
+//!   literals, indexes, and parentheses. One scan before each walk finds the
+//!   dead and inlinable locals.
 //! - **Renaming**, which gives locals the shortest names their scopes allow,
-//!   then lifts nested declarations to the top of their function.
+//!   and then lifting, which hoists nested declarations to the top of their
+//!   function in the walk of the next scan.
 //!
 //! [`TransformConfig`] turns each rewrite on or off.
 //!
