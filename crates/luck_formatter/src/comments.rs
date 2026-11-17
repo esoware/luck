@@ -398,7 +398,8 @@ impl<'ast> Formatter<'ast> {
             // trailing one would pair with the line break written after it.
             return text.trim_end_matches('\r');
         }
-        if !text.contains('\r') || !has_line_break(text, version) {
+        // Only a block comment the lexer saw a line break in holds one.
+        if comment.kind != CommentKind::MultiLineBlock || !text.contains('\r') {
             return text;
         }
         let (normalized, allocator) = self.scratch();

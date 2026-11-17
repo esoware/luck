@@ -11,12 +11,12 @@ pub(crate) enum Directive {
 
 impl Directive {
     pub(crate) fn parse(comment_text: &str) -> Option<Self> {
-        let body = comment_text.trim_start_matches('-').trim();
-        if opens_with_words(body, "luck: ignore") || opens_with_words(body, "luck: format ignore") {
+        let words = comment_text.trim_start_matches('-').trim().strip_prefix("luck: ")?;
+        if opens_with_words(words, "ignore") || opens_with_words(words, "format ignore") {
             Some(Self::Ignore)
-        } else if opens_with_words(body, "luck: format off") {
+        } else if opens_with_words(words, "format off") {
             Some(Self::FormatOff)
-        } else if opens_with_words(body, "luck: format on") {
+        } else if opens_with_words(words, "format on") {
             Some(Self::FormatOn)
         } else {
             None
