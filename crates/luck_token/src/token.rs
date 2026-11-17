@@ -341,7 +341,15 @@ impl Token {
     #[inline]
     #[must_use]
     pub fn text(self, source: &str) -> &str {
-        let span = if matches!(
+        self.text_span().text(source)
+    }
+
+    /// Where [`Self::text`] lies: the whole token, or for an interpolated
+    /// string piece, what lies between its delimiters.
+    #[inline]
+    #[must_use]
+    pub const fn text_span(self) -> Span {
+        if matches!(
             self.kind,
             TokenKind::InterpolatedStringBegin
                 | TokenKind::InterpolatedStringMiddle
@@ -352,11 +360,10 @@ impl Token {
             let start = self.span.start.saturating_add(1);
             let end =
                 if self.is_unterminated { self.span.end } else { self.span.end.saturating_sub(1) };
-            Span::new(start, end.max(start))
+            Span::new(start, if end > start { end } else { start })
         } else {
             self.span
-        };
-        span.text(source)
+        }
     }
 
     /// How an error message names this token: its kind, followed by its text
