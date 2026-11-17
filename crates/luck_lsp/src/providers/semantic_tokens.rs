@@ -127,6 +127,7 @@ pub(crate) fn classify(document: &DocumentState) -> Highlights {
         strays: BTreeMap::new(),
         symbol_keys: Vec::new(),
         reference_keys: Vec::new(),
+        last_found: 0,
     };
     classifier.classify_scope_names();
     classifier.classify_members();
@@ -138,6 +139,7 @@ pub(crate) fn classify(document: &DocumentState) -> Highlights {
 fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> SemanticTokens {
     let highlights = document.highlights();
     let mut data: Vec<SemanticToken> = Vec::with_capacity(highlights.len());
+    let mut positions = document.positions();
     let mut previous = Position { line: 0, character: 0 };
     for &(span, classification) in highlights {
         if byte_range.is_some_and(|Span { start, end }| {
@@ -145,7 +147,7 @@ fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> Semantic
         }) {
             continue;
         }
-        let Position { line, character } = document.position(span.start);
+        let Position { line, character } = positions.position(span.start);
         let delta_line = line.saturating_sub(previous.line);
         let delta_start =
             if delta_line == 0 { character.saturating_sub(previous.character) } else { character };
@@ -160,6 +162,10 @@ fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> Semantic
     }
     SemanticTokens { result_id: None, data }
 }
+
+/// How many tokens past the last one found a lookup tries before it
+/// searches.
+const NEARBY_TOKENS: usize = 8;
 
 /// Where a classification is kept: the slot of the token that starts there,
 /// or, where none does, which only a name parse recovery made up can reach,
@@ -192,13 +198,24 @@ struct Classifier<'document> {
     /// once in the first pass for the last.
     symbol_keys: Vec<Key>,
     reference_keys: Vec<Key>,
+    /// The token the last lookup found. The passes mostly walk the source
+    /// forward, so the tokens after it are tried before a search.
+    last_found: usize,
 }
 
 impl Classifier<'_> {
-    fn key(&self, start: u32) -> Key {
-        self.tokens
-            .binary_search_by_key(&start, |token| token.span.start)
-            .map_or(Key::Stray(start), Key::Token)
+    fn key(&mut self, start: u32) -> Key {
+        let ahead = self.tokens.get(self.last_found..).unwrap_or_default();
+        let nearby = ahead.iter().take(NEARBY_TOKENS).position(|token| token.span.start == start);
+        let found = nearby.map(|i| self.last_found.saturating_add(i)).map_or_else(
+            || self.tokens.binary_search_by_key(&start, |token| token.span.start).ok(),
+            Some,
+        );
+        let Some(index) = found else {
+            return Key::Stray(start);
+        };
+        self.last_found = index;
+        Key::Token(index)
     }
 
     fn get(&self, key: Key) -> Option<&(Span, Classification)> {
@@ -242,11 +259,13 @@ impl Classifier<'_> {
     }
 
     fn insert(&mut self, span: Span, token_type: u32) {
-        self.set(self.key(span.start), span, Classification::plain(token_type));
+        let key = self.key(span.start);
+        self.set(key, span, Classification::plain(token_type));
     }
 
     fn retype(&mut self, span: Span, token_type: u32) {
-        if let Some((_, classification)) = self.get_mut(self.key(span.start)) {
+        let key = self.key(span.start);
+        if let Some((_, classification)) = self.get_mut(key) {
             classification.token_type = token_type;
         }
     }
@@ -291,20 +310,30 @@ impl Classifier<'_> {
             self.set(key, span, classification);
         }
 
+        let self_name = tree.name_id("self");
+        // Each name's classification as a global, so a name read many times
+        // is looked up once.
+        let globals: Vec<Classification> = tree
+            .names()
+            .map(|(_, name)| {
+                stdlib
+                    .globals
+                    .get(name)
+                    .map_or(Classification::plain(TYPE_VARIABLE), stdlib_classify)
+            })
+            .collect();
         self.reference_keys.reserve_exact(tree.references().len());
         for reference in tree.references() {
             let key = self.key(reference.span.start);
             self.reference_keys.push(key);
-            let name = tree.name(reference.name);
-            if name == "self" {
+            if Some(reference.name) == self_name {
                 continue;
             }
+            let name = tree.name(reference.name);
             let base = reference.resolved.map_or_else(
                 || {
-                    stdlib
-                        .globals
-                        .get(name)
-                        .map_or(Classification::plain(TYPE_VARIABLE), stdlib_classify)
+                    let global = globals.get(reference.name.index()).copied();
+                    global.unwrap_or(Classification::plain(TYPE_VARIABLE))
                 },
                 |symbol_id| symbol_classify(tree.symbol(symbol_id).kind),
             );
@@ -336,6 +365,10 @@ impl Classifier<'_> {
             let is_after_dot = separator.is_some_and(|before| before.kind == TokenKind::Dot);
             let is_member =
                 is_after_dot || separator.is_some_and(|before| before.kind == TokenKind::Colon);
+            if !is_member {
+                link_one_back = Some(ChainLink::Root);
+                continue;
+            }
             let chain_before =
                 link_before.and_then(|link| Some((tokens.get(index.checked_sub(2)?)?, link)));
             let entry = chain_before.and_then(|(before, link)| match link {
@@ -350,9 +383,6 @@ impl Classifier<'_> {
             } else {
                 Some(ChainLink::Root)
             };
-            if !is_member {
-                continue;
-            }
             let classification = entry.map_or_else(
                 || match value_shape(tokens, index) {
                     ValueShape::Called | ValueShape::AssignedFunction => {
@@ -393,15 +423,14 @@ impl Classifier<'_> {
     /// Every classification by where it starts, those with no text dropped.
     fn finish(self) -> Highlights {
         let mut highlights = Vec::with_capacity(self.slots.len().div_ceil(2));
-        let mut strays = self.strays.into_values().peekable();
-        for slot in self.slots.into_iter().flatten() {
+        let mut strays = self.strays.into_values().filter(|(span, _)| !span.is_empty()).peekable();
+        for slot in self.slots.into_iter().flatten().filter(|(span, _)| !span.is_empty()) {
             while let Some(stray) = strays.next_if(|(span, _)| span.start < slot.0.start) {
                 highlights.push(stray);
             }
             highlights.push(slot);
         }
         highlights.extend(strays);
-        highlights.retain(|(span, _)| !span.is_empty());
         highlights
     }
 

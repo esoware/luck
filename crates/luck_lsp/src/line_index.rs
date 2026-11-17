@@ -97,24 +97,59 @@ impl LineIndex {
     }
 
     pub(crate) fn position(&self, source: &str, offset: u32) -> Position {
-        let clamped = offset.min(self.source_length);
-        let line = match self.line_starts.binary_search(&clamped) {
+        self.positions(source).position(offset)
+    }
+
+    /// A cursor that finds each offset's position from the last one's, for a
+    /// run of offsets in order.
+    pub(crate) const fn positions<'index>(&'index self, source: &'index str) -> Positions<'index> {
+        Positions { index: self, source, last: None }
+    }
+
+    fn search(&self, offset: u32) -> Cursor {
+        let line = match self.line_starts.binary_search(&offset) {
             Ok(exact) => exact,
-            // `Err(insert)` returns the index where `clamped` *would* go; the
-            // line containing `clamped` is therefore `insert - 1`.
+            // `Err(insert)` returns the index where `offset` *would* go; the
+            // line containing `offset` is therefore `insert - 1`.
             Err(insert) => insert.saturating_sub(1),
         };
-        let (line_start, line_end) = self.line_bounds(line);
-        let upper = clamped.min(line_end);
-        // An offset inside a multi-byte character maps to column 0.
-        let character = if source.is_char_boundary(offset_to_index(upper)) {
-            let extra =
-                self.extra_bytes_before(upper).saturating_sub(self.extra_bytes_before(line_start));
-            upper.saturating_sub(line_start).saturating_sub(extra)
-        } else {
-            0
-        };
-        Position { line: index_to_offset(line), character }
+        let wide_before = self.wide_chars.partition_point(|wide| wide.end <= offset);
+        Cursor { line, line_extra: self.extra_bytes_before(self.line_bounds(line).0), wide_before }
+    }
+
+    /// `cursor` moved on to `offset`, or `None` when `offset` is behind it
+    /// or too far ahead to step to.
+    fn step(&self, cursor: Cursor, offset: u32) -> Option<Cursor> {
+        let Cursor { mut line, mut line_extra, mut wide_before } = cursor;
+        let is_behind = offset < self.line_bounds(line).0
+            || self.wide_before(wide_before).is_some_and(|wide| wide.end > offset);
+        let is_far = self
+            .line_starts
+            .get(line.saturating_add(STEP_LIMIT))
+            .is_some_and(|&start| start <= offset)
+            || self
+                .wide_chars
+                .get(wide_before.saturating_add(STEP_LIMIT))
+                .is_some_and(|wide| wide.end <= offset);
+        if is_behind || is_far {
+            return None;
+        }
+        let first_line = line;
+        while self.line_starts.get(line.saturating_add(1)).is_some_and(|&next| next <= offset) {
+            line = line.saturating_add(1);
+        }
+        while self.wide_chars.get(wide_before).is_some_and(|wide| wide.end <= offset) {
+            wide_before = wide_before.saturating_add(1);
+        }
+        if line != first_line {
+            line_extra = self.extra_bytes_before(self.line_bounds(line).0);
+        }
+        Some(Cursor { line, line_extra, wide_before })
+    }
+
+    /// The last of the first `count` wide characters.
+    fn wide_before(&self, count: usize) -> Option<&WideChar> {
+        self.wide_chars.get(count.checked_sub(1)?)
     }
 
     /// A line past the end clamps to the last line, and a character past the
@@ -183,9 +218,75 @@ impl LineIndex {
     }
 }
 
+/// The most lines or wide characters a cursor steps over before it searches
+/// instead.
+const STEP_LIMIT: usize = 16;
+
+/// Finds each offset's position by stepping on from the last one's.
+///
+/// A run of offsets in order, a few lines apart, costs one pass over the
+/// lines and wide characters between them rather than a search each.
+pub(crate) struct Positions<'index> {
+    index: &'index LineIndex,
+    source: &'index str,
+    last: Option<Cursor>,
+}
+
+/// Where an offset fell.
+#[derive(Debug, Clone, Copy)]
+struct Cursor {
+    line: usize,
+    /// How many more bytes than units the text before `line` takes.
+    line_extra: u32,
+    /// How many wide characters end by the offset.
+    wide_before: usize,
+}
+
+impl Positions<'_> {
+    pub(crate) fn position(&mut self, offset: u32) -> Position {
+        let index = self.index;
+        let clamped = offset.min(index.source_length);
+        let cursor = self
+            .last
+            .and_then(|last| index.step(last, clamped))
+            .unwrap_or_else(|| index.search(clamped));
+        self.last = Some(cursor);
+        let (line_start, line_end) = index.line_bounds(cursor.line);
+        let upper = clamped.min(line_end);
+        // An offset inside a multi-byte character maps to column 0.
+        let character = if self.source.is_char_boundary(offset_to_index(upper)) {
+            let extra_before =
+                index.wide_before(cursor.wide_before).map_or(0, |wide| wide.extra_through);
+            let extra = extra_before.saturating_sub(cursor.line_extra);
+            upper.saturating_sub(line_start).saturating_sub(extra)
+        } else {
+            0
+        };
+        Position { line: index_to_offset(cursor.line), character }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Stepping and searching land on one position, whichever way and
+    /// however far the offsets move.
+    #[test]
+    fn a_cursor_agrees_with_a_search_in_any_order() {
+        let line = "a\u{e4}\u{6f22}\u{1F600}b\r\n\u{e4}x\ry\u{6f22}\n\n";
+        let source = format!("{}zz", line.repeat(12));
+        let index = LineIndex::new(&source);
+        let offsets: Vec<u32> = (0..=index_to_offset(source.len()).saturating_add(2)).collect();
+        let every_seventh: Vec<u32> = offsets.iter().copied().step_by(7).collect();
+        let reversed: Vec<u32> = offsets.iter().rev().copied().collect();
+        for run in [&offsets, &every_seventh, &reversed] {
+            let mut cursor = index.positions(&source);
+            for &offset in run {
+                assert_eq!(cursor.position(offset), index.position(&source, offset), "{offset}");
+            }
+        }
+    }
 
     #[test]
     fn position_offset_roundtrip_ascii() {

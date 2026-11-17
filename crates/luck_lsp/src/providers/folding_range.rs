@@ -3,21 +3,25 @@ use luck_token::Span;
 use tower_lsp_server::ls_types::FoldingRange;
 
 use crate::document::DocumentState;
+use crate::line_index::Positions;
 
 pub(crate) fn folding_ranges(document: &DocumentState) -> Vec<FoldingRange> {
-    let mut folder = Folder { document, ranges: Vec::new() };
+    let mut folder = Folder { document, starts: document.positions(), ranges: Vec::new() };
     folder.visit_block(&document.parse().block);
     folder.ranges
 }
 
 struct Folder<'document> {
     document: &'document DocumentState,
+    /// The walk meets each fold before those inside it, so their starts come
+    /// in order.
+    starts: Positions<'document>,
     ranges: Vec<FoldingRange>,
 }
 
 impl Folder<'_> {
     fn push(&mut self, span: Span) {
-        let start = self.document.position(span.start);
+        let start = self.starts.position(span.start);
         let end = self.document.position(span.end);
         if end.line <= start.line {
             return;

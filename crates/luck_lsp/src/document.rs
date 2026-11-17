@@ -14,7 +14,7 @@ use luck_token::{LuaVersion, Span, Token};
 use tower_lsp_server::ls_types::{Position, Range, TextDocumentContentChangeEvent, Uri};
 
 use crate::analyzed::Analyzed;
-use crate::line_index::LineIndex;
+use crate::line_index::{LineIndex, Positions};
 use crate::providers::semantic_tokens::{self, Highlights};
 use crate::settings::ProjectSettings;
 
@@ -111,6 +111,11 @@ impl DocumentState {
 
     pub(crate) fn position(&self, offset: u32) -> Position {
         self.line_index.position(self.text(), offset)
+    }
+
+    /// A cursor for the positions of offsets taken in order.
+    pub(crate) const fn positions(&self) -> Positions<'_> {
+        self.line_index.positions(self.text())
     }
 
     pub(crate) fn offset(&self, position: Position) -> u32 {
