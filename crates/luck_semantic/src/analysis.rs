@@ -1,85 +1,113 @@
-use luck_ast::{Block, Call, SuffixedExpression};
+use luck_ast::{Block, Call, Name, SuffixedExpression};
 use luck_token::{LuaVersion, Span, StdlibEnvironment};
-use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::builder;
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
-use crate::scope::{Reference, ScopeTree, Symbol, SymbolId};
+use crate::scope::{NameId, Reference, ScopeTree, Symbol, SymbolId, build_with_initializers};
 use crate::stdlib_catalog::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
+/// A chunk's scope tree, read against the stdlib of one environment.
 #[derive(Debug)]
-pub struct SemanticAnalysis {
-    pub scope_tree: ScopeTree,
-    /// Globals beyond the stdlib, such as `vim`, filled by the linter and the
-    /// language server from the `extra_globals` config. Stdlib names aren't
-    /// copied in, so use `is_known_global` to check both.
-    pub extra_globals: FxHashSet<String>,
-    pub version: LuaVersion,
-    /// Which stdlib answers queries. Only matters for Luau, where `Roblox`
-    /// selects the Roblox runtime and `Standalone` open-source Luau.
-    pub environment: StdlibEnvironment,
-    /// Shapes of never-reassigned locals initialized from a value of known
-    /// shape, such as `local f = io.open(...)`.
-    pub symbol_shapes: FxHashMap<SymbolId, &'static str>,
+pub struct SemanticAnalysis<'ast> {
+    scope_tree: ScopeTree<'ast>,
+    stdlib: &'static StdlibLibrary,
+    /// Each symbol's shape, by symbol index: a never-reassigned local
+    /// initialized from a value of known shape, such as
+    /// `local f = io.open(...)`.
+    symbol_shapes: Vec<Option<&'static str>>,
+    /// Each name's standing as a global the host defines, by name index.
+    host_globals: Vec<HostGlobal>,
 }
 
-/// Uses the [`StdlibEnvironment::Standalone`] stdlib, which is right for
-/// plain Lua and standalone Luau. Roblox callers need
-/// [`analyze_with_environment`] with [`StdlibEnvironment::Roblox`].
-#[must_use]
-pub fn analyze(block: &Block, version: LuaVersion) -> SemanticAnalysis {
-    analyze_with_environment(block, version, StdlibEnvironment::Standalone)
+#[derive(Debug, Clone, Copy)]
+struct HostGlobal {
+    is_stdlib: bool,
+    is_extra: bool,
 }
 
-/// Like [`analyze`], with an explicit stdlib environment. The scope tree is
-/// the same either way.
+/// The environment only matters for Luau, where `Roblox` selects the
+/// Roblox runtime's stdlib and `Standalone` open-source Luau's. The scope
+/// tree is the same either way.
 #[must_use]
-pub fn analyze_with_environment(
-    block: &Block,
+pub fn analyze<'ast>(
+    block: &'ast Block<'ast>,
     version: LuaVersion,
     environment: StdlibEnvironment,
-) -> SemanticAnalysis {
-    let (scope_tree, initialized_locals) = builder::build_with_initializers(block, version);
-    let symbol_shapes =
-        symbol_shapes(&scope_tree, library_for(version, environment), &initialized_locals);
-    SemanticAnalysis {
-        scope_tree,
-        extra_globals: FxHashSet::default(),
-        version,
-        environment,
-        symbol_shapes,
-    }
+) -> SemanticAnalysis<'ast> {
+    let (scope_tree, initialized_locals) = build_with_initializers(block, version);
+    let stdlib = library_for(version, environment);
+    let symbol_shapes = symbol_shapes(&scope_tree, stdlib, &initialized_locals);
+    let host_globals = scope_tree
+        .names()
+        .map(|(_, name)| HostGlobal {
+            is_stdlib: stdlib.globals.contains_key(name),
+            is_extra: false,
+        })
+        .collect();
+    SemanticAnalysis { scope_tree, stdlib, symbol_shapes, host_globals }
 }
 
-impl SemanticAnalysis {
+impl<'ast> SemanticAnalysis<'ast> {
     #[must_use]
-    pub fn stdlib(&self) -> &'static StdlibLibrary {
-        library_for(self.version, self.environment)
+    pub const fn scope_tree(&self) -> &ScopeTree<'ast> {
+        &self.scope_tree
     }
 
-    /// Code that matches stdlib paths (`table.insert`, `require(...)`,
-    /// `error(...)`) must bail when the base name is shadowed
-    /// (`local table = {}`), or it reports stdlib diagnostics on user values.
     #[must_use]
-    pub fn resolves_to_local(&self, name: &str, span: Span) -> bool {
-        self.scope_tree.resolves_to_local(name, span)
+    pub const fn stdlib(&self) -> &'static StdlibLibrary {
+        self.stdlib
     }
 
-    /// See [`ScopeTree::reaches_host_global`].
     #[must_use]
-    pub fn reaches_host_global(&self, name: &str, span: Span) -> bool {
-        self.scope_tree.reaches_host_global(name, span)
+    pub const fn version(&self) -> LuaVersion {
+        self.stdlib.version
+    }
+
+    #[must_use]
+    pub const fn environment(&self) -> StdlibEnvironment {
+        self.stdlib.environment
+    }
+
+    /// Marks `names` as globals the host defines beyond the stdlib, such as
+    /// `vim`, from the `extra_globals` config. Only the chunk's own names
+    /// are kept, since no other name can reach a query.
+    pub fn add_extra_globals<'name, Names>(&mut self, names: Names)
+    where
+        Names: IntoIterator<Item = &'name str>,
+    {
+        for name in names {
+            if let Some(global) =
+                self.scope_tree.name_id(name).and_then(|id| self.host_globals.get_mut(id.index()))
+            {
+                global.is_extra = true;
+            }
+        }
     }
 
     /// Whether `name` is recognized as a global: a stdlib entry for this
-    /// environment, an entry in `extra_globals`, or a name a `global` statement
-    /// in this chunk declares.
+    /// environment, an extra global, or a name a `global` statement in this
+    /// chunk declares.
     #[must_use]
     pub fn is_known_global(&self, name: &str) -> bool {
-        self.stdlib().globals.contains_key(name)
-            || self.extra_globals.contains(name)
-            || self.scope_tree.declared_globals.contains(name)
+        self.scope_tree.name_id(name).map_or_else(
+            || self.stdlib.globals.contains_key(name),
+            |id| self.is_known_global_name(id),
+        )
+    }
+
+    /// [`Self::is_known_global`] for one of the chunk's names.
+    #[must_use]
+    pub fn is_known_global_name(&self, name: NameId) -> bool {
+        self.host_globals
+            .get(name.index())
+            .is_some_and(|global| global.is_stdlib || global.is_extra)
+            || self.scope_tree.is_declared_global(name)
+    }
+
+    /// Whether [`Self::add_extra_globals`] marked `name`.
+    #[must_use]
+    pub fn is_extra_global(&self, name: NameId) -> bool {
+        self.host_globals.get(name.index()).is_some_and(|global| global.is_extra)
     }
 
     /// Whether a global's name is defined where `reference` uses it: known
@@ -87,14 +115,21 @@ impl SemanticAnalysis {
     /// statement in scope there, `global *` included.
     #[must_use]
     pub fn is_defined_global(&self, reference: &Reference) -> bool {
-        reference.is_declared_global || self.is_known_global(&reference.name)
+        reference.is_declared_global || self.is_known_global_name(reference.name)
     }
 
     /// Whether the stdlib marks the global `name` read-only, so code
     /// shouldn't reassign it. Namespaces always are.
     #[must_use]
     pub fn is_read_only_global(&self, name: &str) -> bool {
-        self.stdlib().globals.get(name).is_some_and(StdlibEntry::is_read_only)
+        self.stdlib.globals.get(name).is_some_and(StdlibEntry::is_read_only)
+    }
+
+    /// `symbol`'s shape: a never-reassigned local initialized from a value
+    /// of known shape, such as `local f = io.open(...)`.
+    #[must_use]
+    pub fn symbol_shape(&self, symbol: SymbolId) -> Option<&'static str> {
+        self.symbol_shapes.get(symbol.index()).copied().flatten()
     }
 
     /// Returns `None` for shadowed bases, unknown names, values of unknown
@@ -105,7 +140,7 @@ impl SemanticAnalysis {
     /// [`Self::chain_callees`] costs less.
     #[must_use]
     pub fn resolve_callee<'call>(&'call self, call: Call<'call>) -> Option<ResolvedCallee<'call>> {
-        self.shape_resolver().head_callee(call.callee, call.method)
+        self.shape_resolver().call_callee(call)
     }
 
     /// Resolves the calls of `chain`, asked for front to back, in one pass
@@ -113,13 +148,13 @@ impl SemanticAnalysis {
     #[must_use]
     pub fn chain_callees<'chain>(
         &'chain self,
-        chain: &'chain SuffixedExpression,
+        chain: &'chain SuffixedExpression<'chain>,
     ) -> ChainCallees<'chain> {
         ChainCallees::new(self.shape_resolver(), chain)
     }
 
     fn shape_resolver(&self) -> ShapeResolver<'_> {
-        ShapeResolver::new(&self.scope_tree, self.stdlib(), &self.symbol_shapes)
+        ShapeResolver::new(&self.scope_tree, self.stdlib, &self.symbol_shapes)
     }
 
     /// With `local f = io.open(...)`, `["f", "read"]` resolves through the
@@ -133,20 +168,19 @@ impl SemanticAnalysis {
         segments: &[&str],
         root_span: Span,
     ) -> Option<&'static StdlibEntry> {
-        let library = self.stdlib();
-        let first = segments.first()?;
-        match self.scope_tree.resolved_symbol(first, root_span) {
-            Some(symbol_id) => {
-                let shape = self.symbol_shapes.get(&symbol_id)?;
-                let mut current = library.shape_member(shape, segments.get(1)?)?;
-                for segment in segments.iter().skip(2) {
-                    current = library.child(current, segment)?;
+        let (&text, members) = segments.split_first()?;
+        let tree = &self.scope_tree;
+        let reference = tree.reference(tree.reference_of(&Name { text, span: root_span })?);
+        match reference.resolved {
+            Some(symbol) => {
+                let (first, rest) = members.split_first()?;
+                let mut current = self.stdlib.shape_member(self.symbol_shape(symbol)?, first)?;
+                for segment in rest {
+                    current = self.stdlib.child(current, segment)?;
                 }
                 Some(current)
             }
-            None if self.scope_tree.reaches_host_global(first, root_span) => {
-                library.lookup(segments)
-            }
+            None if tree.is_host_global(reference) => self.stdlib.lookup(segments),
             None => None,
         }
     }
@@ -158,50 +192,51 @@ impl SemanticAnalysis {
     /// still match.
     #[must_use]
     pub fn nearest_local(&self, name: &str, offset: u32) -> Option<&Symbol> {
+        let name_id = self.scope_tree.name_id(name)?;
         self.scope_tree
-            .symbols
+            .symbols()
             .iter()
-            .filter(|symbol| symbol.name == name && symbol.definition_span.end <= offset)
+            .filter(|symbol| symbol.name == name_id && symbol.definition_span.end <= offset)
             .max_by_key(|symbol| symbol.definition_span.start)
-    }
-
-    #[must_use]
-    pub fn shape_of_nearest_local(&self, name: &str, offset: u32) -> Option<&'static str> {
-        self.symbol_shapes.get(&self.nearest_local(name, offset)?.id).copied()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_allocator::Allocator;
     use luck_ast::Statement;
 
     use super::*;
+    use crate::fixtures::parse;
 
-    fn analyze_lua54(source: &str) -> SemanticAnalysis {
-        let parsed = luck_parser::parse(source, LuaVersion::Lua54);
-        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
-        analyze(&parsed.block, LuaVersion::Lua54)
+    fn analyze_source<'ast>(
+        allocator: &'ast Allocator,
+        source: &'ast str,
+        version: LuaVersion,
+    ) -> SemanticAnalysis<'ast> {
+        analyze(parse(allocator, source, version), version, StdlibEnvironment::Standalone)
     }
 
     #[test]
     fn is_known_global_hits_stdlib() {
-        let analysis = analyze_lua54("local x = 1");
+        let allocator = Allocator::new();
+        let analysis = analyze_source(&allocator, "local x = print", LuaVersion::Lua54);
         assert!(analysis.is_known_global("print"));
         assert!(analysis.is_known_global("table"));
         assert!(!analysis.is_known_global("not_a_real_name"));
+        assert!(!analysis.is_known_global("x"));
     }
 
     fn reaches_host_print(source: &str, version: LuaVersion) -> bool {
-        let parsed = luck_parser::parse(source, version);
-        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
-        let analysis = analyze(&parsed.block, version);
-        let print = analysis
-            .scope_tree
-            .references
+        let allocator = Allocator::new();
+        let analysis = analyze_source(&allocator, source, version);
+        let tree = &analysis.scope_tree;
+        let print = tree
+            .references()
             .iter()
-            .rfind(|reference| reference.name == "print")
+            .rfind(|reference| tree.name(reference.name) == "print")
             .expect("the source references print");
-        analysis.reaches_host_global("print", print.span)
+        tree.reaches_host_global(&Name { text: "print", span: print.span })
     }
 
     #[test]
@@ -271,84 +306,82 @@ print(1)",
 
     #[test]
     fn is_defined_global_counts_a_global_star_in_scope() {
-        let parsed = luck_parser::parse(
+        let allocator = Allocator::new();
+        let analysis = analyze_source(
+            &allocator,
             "\
 global *
 return y",
             LuaVersion::Lua55,
         );
-        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
-        let analysis = analyze(&parsed.block, LuaVersion::Lua55);
-        let y = &analysis.scope_tree.references[0];
+        let y = &analysis.scope_tree.references()[0];
         assert!(analysis.is_defined_global(y));
         assert!(!analysis.is_known_global("y"), "rename still treats `y` as a free name");
     }
 
     #[test]
-    fn is_known_global_honors_extra_globals() {
-        let mut analysis = analyze_lua54("local x = 1");
+    fn extra_globals_are_known_globals() {
+        let allocator = Allocator::new();
+        let mut analysis = analyze_source(&allocator, "vim.cmd('x')", LuaVersion::Lua54);
+        let vim = analysis.scope_tree.name_id("vim").expect("the chunk names vim");
         assert!(!analysis.is_known_global("vim"));
-        analysis.extra_globals.insert("vim".to_owned());
+        analysis.add_extra_globals(["vim", "absent"]);
         assert!(analysis.is_known_global("vim"));
+        assert!(analysis.is_extra_global(vim));
+        assert!(analysis.is_defined_global(&analysis.scope_tree.references()[0]));
     }
 
     #[test]
     fn roblox_globals_known_only_in_roblox_environment() {
-        let parsed = luck_parser::parse("print(game)", LuaVersion::Luau);
-        let standalone = analyze_with_environment(
-            &parsed.block,
-            LuaVersion::Luau,
-            StdlibEnvironment::Standalone,
-        );
-        let roblox =
-            analyze_with_environment(&parsed.block, LuaVersion::Luau, StdlibEnvironment::Roblox);
+        let allocator = Allocator::new();
+        let block = parse(&allocator, "print(game, bit32)", LuaVersion::Luau);
+        let standalone = analyze(block, LuaVersion::Luau, StdlibEnvironment::Standalone);
+        let roblox = analyze(block, LuaVersion::Luau, StdlibEnvironment::Roblox);
         assert!(!standalone.is_known_global("game"));
         assert!(roblox.is_known_global("game"));
         assert!(standalone.is_known_global("bit32"));
         assert!(roblox.is_known_global("bit32"));
     }
 
-    fn env_symbol(analysis: &SemanticAnalysis) -> &Symbol {
-        analysis
-            .scope_tree
-            .symbols
-            .iter()
-            .find(|symbol| symbol.name == "_ENV")
-            .expect("_ENV must be declared")
-    }
-
     fn resolve_last_statement_call(source: &str, version: LuaVersion) -> Option<String> {
-        let parsed = luck_parser::parse(source, version);
-        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
-        let analysis = analyze(&parsed.block, version);
-        let Some(Statement::FunctionCall(chain)) = parsed.block.stmts.last() else {
+        let allocator = Allocator::new();
+        let block = parse(&allocator, source, version);
+        let analysis = analyze(block, version, StdlibEnvironment::Standalone);
+        let Some(Statement::FunctionCall(chain)) = block.stmts.last() else {
             panic!("the last statement must be a call");
         };
         analysis.resolve_callee(chain.last_call()?).map(|callee| callee.name())
     }
 
     fn unknown_globals(source: &str) -> Vec<String> {
-        let parsed = luck_parser::parse(source, LuaVersion::Luau);
-        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
-        let analysis = analyze(&parsed.block, LuaVersion::Luau);
-        analysis
-            .scope_tree
-            .unresolved_references()
-            .filter(|reference| !analysis.is_known_global(&reference.name))
-            .map(|reference| reference.name.to_string())
+        let allocator = Allocator::new();
+        let analysis = analyze_source(&allocator, source, LuaVersion::Luau);
+        let tree = &analysis.scope_tree;
+        tree.global_references()
+            .filter(|reference| !analysis.is_defined_global(reference))
+            .map(|reference| tree.name(reference.name).to_owned())
             .collect()
     }
 
     #[test]
     fn free_name_in_nested_function_captures_local_env() {
-        let analysis = analyze_lua54(
+        let allocator = Allocator::new();
+        let analysis = analyze_source(
+            &allocator,
             "\
 local _ENV = {}
 local function f() return missing end
 return f",
+            LuaVersion::Lua54,
         );
+        let tree = &analysis.scope_tree;
+        let env = tree
+            .symbols()
+            .iter()
+            .find(|symbol| tree.name(symbol.name) == "_ENV")
+            .expect("_ENV must be declared");
         assert!(
-            env_symbol(&analysis).is_upvalue,
+            env.is_upvalue,
             "a free name inside a nested function reads _ENV as an upvalue of that function"
         );
     }
@@ -375,6 +408,48 @@ tostring(1, 2)";
             None,
             "the chunk replaced the global tostring, so the call must not match the stdlib entry"
         );
+    }
+
+    #[test]
+    fn resolve_stdlib_path_reads_a_shaped_local_or_the_host_global() {
+        let allocator = Allocator::new();
+        let analysis = analyze_source(
+            &allocator,
+            "\
+local f = io.open('x')
+f:read()
+local table = {}
+table.insert(f)",
+            LuaVersion::Lua54,
+        );
+        let tree = &analysis.scope_tree;
+        let span_of = |name: &str| {
+            tree.references()
+                .iter()
+                .find(|reference| tree.name(reference.name) == name)
+                .map(|reference| reference.span)
+                .expect("the source references the name")
+        };
+        assert!(analysis.resolve_stdlib_path(&["f", "read"], span_of("f")).is_some());
+        assert!(analysis.resolve_stdlib_path(&["io", "open"], span_of("io")).is_some());
+        assert!(analysis.resolve_stdlib_path(&["table", "insert"], span_of("table")).is_none());
+    }
+
+    #[test]
+    fn nearest_local_takes_the_last_declaration_before_the_offset() {
+        let allocator = Allocator::new();
+        let analysis = analyze_source(
+            &allocator,
+            "\
+local f = 1
+local f = 2
+",
+            LuaVersion::Lua54,
+        );
+        let second = analysis.nearest_local("f", 24).map(|symbol| symbol.definition_span.start);
+        assert_eq!(second, Some(18));
+        assert!(analysis.nearest_local("f", 6).is_none());
+        assert!(analysis.nearest_local("g", 24).is_none());
     }
 
     #[test]

@@ -3,20 +3,31 @@
 //! Scope analysis, symbol resolution, and stdlib definitions for Lua and
 //! Luau.
 //!
-//! [`analyze`] builds a [`ScopeTree`] of declarations, references,
-//! shadowing, and upvalue captures. The stdlib catalog is a
-//! [`StdlibLibrary`] per environment. Rules read its entries through
-//! [`SemanticAnalysis::stdlib`] and ask
-//! [`SemanticAnalysis::is_known_global`] whether a name is a stdlib or
-//! configured global.
+//! [`ScopeTree::build`] walks a tree once into flat tables of scopes,
+//! symbols, and references, indexed by typed ids, and the chunk's distinct
+//! names, which it borrows from the tree. A name in the tree finds its
+//! reference with [`ScopeTree::reference_of`], a reference its symbol with
+//! [`Reference::resolved`], and a symbol its references with
+//! [`ScopeTree::resolved_references`].
+//!
+//! [`analyze`] reads that tree against one environment's [`StdlibLibrary`],
+//! a static catalog, so rules can ask [`SemanticAnalysis::is_known_global`]
+//! whether a name is a stdlib or configured global and resolve calls to
+//! stdlib entries.
 //!
 //! # Usage
 //!
 //! ```
-//! use luck_token::LuaVersion;
+//! use luck_allocator::Allocator;
+//! use luck_token::{LuaVersion, StdlibEnvironment};
 //!
-//! let parsed = luck_parser::parse("local greeting = 1", LuaVersion::Lua54);
-//! let analysis = luck_semantic::analyze(&parsed.block, LuaVersion::Lua54);
+//! let allocator = Allocator::new();
+//! let parsed = luck_parser::parse(&allocator, "local greeting = 1 print(greeting)", LuaVersion::Lua54);
+//! let block = allocator.alloc(parsed.block);
+//! let analysis = luck_semantic::analyze(block, LuaVersion::Lua54, StdlibEnvironment::Standalone);
+//! let tree = analysis.scope_tree();
+//! let greeting = tree.symbols()[0].id;
+//! assert_eq!(tree.resolved_references(greeting).len(), 1);
 //! assert!(analysis.is_known_global("print"));
 //! ```
 
@@ -29,18 +40,18 @@
 )]
 
 mod analysis;
-mod builder;
+#[cfg(test)]
+mod fixtures;
 mod resolve;
 mod scope;
 mod stdlib_catalog;
 mod stdlib_model;
 
-pub use analysis::{SemanticAnalysis, analyze, analyze_with_environment};
-pub use builder::build as build_scope_tree;
+pub use analysis::{SemanticAnalysis, analyze};
 pub use resolve::{ChainCallees, ResolvedCallee};
 pub use scope::{
-    Reference, ReferenceId, ReferenceKind, Scope, ScopeId, ScopeKind, ScopeTree, Symbol, SymbolId,
-    SymbolKind,
+    NameId, Reference, ReferenceId, ReferenceKind, Scope, ScopeId, ScopeKind, ScopeTree, Symbol,
+    SymbolId, SymbolKind,
 };
 pub use stdlib_catalog::library_for;
 pub use stdlib_model::{

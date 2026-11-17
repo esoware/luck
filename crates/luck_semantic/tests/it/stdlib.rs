@@ -1,13 +1,14 @@
 use core::ptr;
 
-use luck_ast::{Expression, LastStatement, Statement, Suffix};
+use luck_allocator::Allocator;
+use luck_ast::{Call, Expression, LastStatement, Statement, unwrap_parentheses};
 use luck_semantic::{
-    StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary,
+    StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, analyze,
     expand_replace_template, library_for,
 };
 use luck_token::{BinOp, LuaVersion, StdlibEnvironment};
 
-use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, roblox, standalone_library};
+use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, parse, roblox, standalone_library};
 
 #[test]
 #[cfg(target_pointer_width = "64")]
@@ -1044,18 +1045,14 @@ fn settings_provider_shapes() {
 /// statement or the last initializer of a local assignment. Yields the
 /// display path.
 fn resolve_last_call(source: &str) -> Option<String> {
-    let parsed = luck_parser::parse(source, LuaVersion::Luau);
-    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-    let analysis = luck_semantic::analyze_with_environment(
-        &parsed.block,
-        LuaVersion::Luau,
-        StdlibEnvironment::Roblox,
-    );
-    let last_stmt = parsed.block.stmts.last()?;
+    let allocator = Allocator::new();
+    let block = parse(&allocator, source, LuaVersion::Luau);
+    let analysis = analyze(block, LuaVersion::Luau, StdlibEnvironment::Roblox);
+    let last_stmt = block.stmts.last()?;
     let chain = if let Statement::FunctionCall(chain) = last_stmt {
         chain
     } else if let Statement::LocalAssignment(local) = last_stmt
-        && let Some(Expression::Suffixed(chain)) = local.exprs.as_ref()?.iter().last()
+        && let Some(Expression::Suffixed(chain)) = local.exprs.last()
     {
         chain
     } else {
@@ -1068,17 +1065,17 @@ fn resolve_last_call(source: &str) -> Option<String> {
 /// `chain_callees`. Each must match what `resolve_callee` gives the call
 /// alone.
 fn chain_callee_names(source: &str) -> Vec<Option<String>> {
-    let parsed = luck_parser::parse(source, LuaVersion::Lua54);
-    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-    let analysis = luck_semantic::analyze(&parsed.block, LuaVersion::Lua54);
-    let Some(Statement::FunctionCall(chain)) = parsed.block.stmts.last() else {
+    let allocator = Allocator::new();
+    let block = parse(&allocator, source, LuaVersion::Lua54);
+    let analysis = analyze(block, LuaVersion::Lua54, StdlibEnvironment::Standalone);
+    let Some(Statement::FunctionCall(chain)) = block.stmts.last() else {
         panic!("the last statement must be a call");
     };
     let call_indexes = chain
         .suffixes
         .iter()
         .enumerate()
-        .filter(|(_, suffix)| matches!(suffix, Suffix::Call(_)))
+        .filter(|&(index, suffix)| Call::new(chain.head(index), suffix).is_some())
         .map(|(index, _)| index);
     let mut callees = analysis.chain_callees(chain);
     let mut names = Vec::new();
@@ -1478,17 +1475,19 @@ fn fix_template<'library>(
     function_at(library, path).deprecated.as_ref()?.replace_template
 }
 
-fn returned_expr(text: &str, version: LuaVersion) -> Expression {
-    let parsed = luck_parser::parse(format!("return {text}"), version);
-    assert!(parsed.errors.is_empty(), "{text}: {:?}", parsed.errors);
-    let Some(LastStatement::Return(return_stmt)) = parsed.block.last_stmt.as_deref() else {
+/// Whether `text`, read as a returned value, is out of its parentheses what
+/// `is_expected` says.
+fn returns<F>(text: &str, version: LuaVersion, is_expected: F) -> bool
+where
+    F: FnOnce(&Expression<'_>) -> bool,
+{
+    let source = format!("return {text}");
+    let allocator = Allocator::new();
+    let block = parse(&allocator, &source, version);
+    let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
         panic!("{text} must parse as a return");
     };
-    let mut expr = return_stmt.exprs.first().expect("one returned value").clone();
-    while let Expression::Parenthesized(mut parenthesized) = expr {
-        expr = parenthesized.expr.take();
-    }
-    expr
+    is_expected(unwrap_parentheses(return_stmt.exprs.first().expect("one returned value")))
 }
 
 #[test]
@@ -1499,10 +1498,10 @@ fn math_pow_fix_groups_a_compound_base() {
     };
     let replacement = expand_replace_template(template, &["a + 1", "2"]);
     assert!(
-        matches!(
-            returned_expr(&replacement, version),
+        returns(&replacement, version, |expr| matches!(
+            expr,
             Expression::BinaryOp(binary_op) if binary_op.links.first().op == BinOp::Pow
-        ),
+        )),
         "with a = 2, math.pow(a + 1, 2) is 9.0, so the fix must raise the whole base, but \
          `{replacement}` is 3.0"
     );
@@ -1516,7 +1515,7 @@ fn table_getn_fix_groups_a_compound_operand() {
     };
     let replacement = expand_replace_template(template, &["a or b"]);
     assert!(
-        matches!(returned_expr(&replacement, version), Expression::UnaryOp(_)),
+        returns(&replacement, version, |expr| matches!(expr, Expression::UnaryOp(_))),
         "table.getn(a or b) takes the length of `a or b`, but `{replacement}` takes the length \
          of a alone"
     );
