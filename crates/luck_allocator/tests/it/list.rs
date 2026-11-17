@@ -49,6 +49,18 @@ fn split_off_in_moves_the_tail_and_leaves_the_head() {
 }
 
 #[test]
+fn split_off_in_moves_a_long_tail_in_one_copy() {
+    let allocator = Allocator::new();
+    let mut scratch: Vec<u64> = (0..200).collect();
+    let capacity = scratch.capacity();
+    let list = List::split_off_in(&mut scratch, 100, &allocator);
+    assert!(list.iter().copied().eq(100..200));
+    assert!(scratch.iter().copied().eq(0..100));
+    assert_eq!(scratch.capacity(), capacity);
+    assert_eq!(allocator.used_bytes(), size_of::<u64>() * 100);
+}
+
+#[test]
 fn split_off_in_from_the_start_takes_everything() {
     let allocator = Allocator::new();
     let mut scratch = vec![1_u32, 2, 3];

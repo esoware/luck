@@ -60,8 +60,8 @@ impl<'alloc, T> List<'alloc, T> {
         Self(unsafe { Box::from_non_null(NonNull::slice_from_raw_parts(array.cast::<T>(), N)) })
     }
 
-    /// Moves `items[at..]` into the arena with one copy, leaving `items[..at]` behind, as
-    /// [`Vec::split_off`] does.
+    /// Moves `items[at..]` into the arena, leaving `items[..at]` behind, as [`Vec::split_off`]
+    /// does.
     ///
     /// # Panics
     ///
@@ -69,8 +69,9 @@ impl<'alloc, T> List<'alloc, T> {
     pub fn split_off_in(items: &mut Vec<T>, at: usize, allocator: &'alloc Allocator) -> Self {
         let tail = &items[at..];
         let count = tail.len();
-        if count == 0 {
-            return Self::new();
+        // A `memcpy` call only beats moving item by item from about 512 bytes.
+        if size_of_val(tail) < 512 {
+            return Self::from_iter_in(items.drain(at..), allocator);
         }
         let destination = allocator.alloc_layout(Layout::for_value(tail)).cast::<T>();
         // SAFETY: `destination` is a fresh arena allocation with room for `count` items, so it
