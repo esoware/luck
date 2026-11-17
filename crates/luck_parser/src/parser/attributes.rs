@@ -95,13 +95,7 @@ impl<'ast> Parser<'ast> {
     /// with `parattr ::= NAME [pars]` and literal-only arguments. The AST
     /// keeps them because `@native` and friends change how Luau compiles the
     /// function.
-    #[inline]
     pub(super) fn parse_function_attributes(&mut self) -> List<'ast, FunctionAttribute<'ast>> {
-        if self.is_at(TokenKind::At) { self.parse_attribute_list() } else { List::new() }
-    }
-
-    #[inline(never)]
-    fn parse_attribute_list(&mut self) -> List<'ast, FunctionAttribute<'ast>> {
         let start = self.scratch.attributes.len();
         while self.is_at(TokenKind::At) {
             let at_span = self.advance();
@@ -167,7 +161,10 @@ impl<'ast> Parser<'ast> {
                 args
             }
             TokenKind::LeftBrace => {
-                let expr = self.parse_table_constructor();
+                let open = self.token.span;
+                let expr = self
+                    .parse_table_constructor()
+                    .map_or(Expression::Error(open), Expression::TableConstructor);
                 if !is_attribute_literal(&expr) {
                     self.error(expr.span(), "attribute arguments must be literals");
                 }

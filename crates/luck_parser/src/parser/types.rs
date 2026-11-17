@@ -140,7 +140,6 @@ impl<'ast> Parser<'ast> {
     }
 
     /// A union after a leading `|`, or an intersection after a leading `&`.
-    #[inline(never)]
     fn parse_leading_separator_type(&mut self, is_union: bool) -> Type<'ast> {
         let leading = self.token.span;
         if !self.enter_depth() {
@@ -257,13 +256,7 @@ impl<'ast> Parser<'ast> {
     }
 
     /// `?` stacks (`T??`), which Luau also accepts, each one a level.
-    #[inline]
     fn parse_postfix_type(&mut self, primary: Type<'ast>) -> Type<'ast> {
-        if self.is_at(TokenKind::Question) { self.parse_optionals(primary) } else { primary }
-    }
-
-    #[inline(never)]
-    fn parse_optionals(&mut self, primary: Type<'ast>) -> Type<'ast> {
         let level = self.nesting_depth;
         let mut result = primary;
         while self.is_at(TokenKind::Question) {
@@ -299,21 +292,18 @@ impl<'ast> Parser<'ast> {
             TokenKind::LeftBrace => self.parse_table_type(),
             TokenKind::LeftParen => self.parse_paren_or_function_type(false),
             // `<T>(...) -> R` is a generic function type.
-            TokenKind::Less => self.parse_generic_function_type(),
+            TokenKind::Less => {
+                let open = self.token.span;
+                if !self.enter_depth() {
+                    return Type::Error(open);
+                }
+                let generics = self.parse_generic_type_list(GenericsOwner::Function);
+                let parsed = self.parse_function_type(generics);
+                self.exit_depth();
+                parsed
+            }
             _ => self.report_expected_type(),
         }
-    }
-
-    #[inline(never)]
-    fn parse_generic_function_type(&mut self) -> Type<'ast> {
-        let open = self.token.span;
-        if !self.enter_depth() {
-            return Type::Error(open);
-        }
-        let generics = self.parse_generic_type_list(GenericsOwner::Function);
-        let parsed = self.parse_function_type(generics);
-        self.exit_depth();
-        parsed
     }
 
     /// The token stays in place; it may close an enclosing construct or
@@ -327,7 +317,6 @@ impl<'ast> Parser<'ast> {
         Type::Error(span)
     }
 
-    #[inline(never)]
     fn parse_typeof_type(&mut self) -> Type<'ast> {
         let typeof_span = self.advance();
         if !self.is_at(TokenKind::LeftParen) {
@@ -346,17 +335,10 @@ impl<'ast> Parser<'ast> {
         Type::Typeof(self.alloc(TypeofType { span, expr }))
     }
 
-    #[inline]
     fn parse_named_type(&mut self, first_name: Name<'ast>) -> Type<'ast> {
         if !matches!(self.peek(), TokenKind::Dot | TokenKind::Less) {
             return Type::Name(self.alloc(first_name));
         }
-        self.parse_qualified_type(first_name)
-    }
-
-    /// A name with a module prefix or generic arguments.
-    #[inline(never)]
-    fn parse_qualified_type(&mut self, first_name: Name<'ast>) -> Type<'ast> {
         if !self.enter_depth() {
             return Type::Error(first_name.span);
         }
@@ -365,15 +347,12 @@ impl<'ast> Parser<'ast> {
         } else {
             (None, first_name)
         };
-        let start_span = prefix.map_or(name.span, |module| module.span);
-        let span = start_span.merge(name.span);
-        let mut node = self.alloc(NamedType { span, prefix, name, generics: None });
-        if self.is_at(TokenKind::Less) {
-            let generics = node.generics.insert(self.parse_type_args());
-            node.span = start_span.merge(generics.span);
-        }
+        let generics = self.is_at(TokenKind::Less).then(|| self.parse_type_args());
         self.exit_depth();
-        Type::Named(node)
+        let start_span = prefix.map_or(name.span, |module| module.span);
+        let end_span = generics.as_ref().map_or(name.span, |args| args.span);
+        let span = start_span.merge(end_span);
+        Type::Named(self.alloc(NamedType { span, prefix, name, generics }))
     }
 
     pub(super) fn parse_type_args(&mut self) -> TypeArgs<'ast> {
@@ -504,7 +483,6 @@ impl<'ast> Parser<'ast> {
         span
     }
 
-    #[inline(never)]
     fn parse_table_type(&mut self) -> Type<'ast> {
         let open = self.token.span;
         if !self.enter_depth() {
@@ -617,7 +595,6 @@ impl<'ast> Parser<'ast> {
     /// Parse a parenthesized type `(T)`, a function type `(a: T, ...U) -> R`,
     /// or, when `is_pack_allowed`, a pack such as `()` or `(T, ...U)`. A `->`
     /// after the `)` decides which.
-    #[inline(never)]
     fn parse_paren_or_function_type(&mut self, is_pack_allowed: bool) -> Type<'ast> {
         let open = self.token.span;
         if !self.enter_depth() {
@@ -663,20 +640,20 @@ impl<'ast> Parser<'ast> {
         if self.eat(TokenKind::Arrow) {
             let params =
                 List::split_off_in(&mut self.scratch.function_type_params, start, self.allocator);
-            let return_type = Type::Error(open);
-            let mut node =
-                self.alloc(FunctionType { span: open, generics: None, params, return_type });
-            node.return_type = self.parse_return_type();
-            node.span = open.merge(node.return_type.span());
-            return Type::Function(node);
+            let return_type = self.parse_return_type();
+            let span = open.merge(return_type.span());
+            return Type::Function(self.alloc(FunctionType {
+                span,
+                generics: None,
+                params,
+                return_type,
+            }));
         }
         self.finish_paren_or_pack(open.merge(close), start, is_pack_allowed)
     }
 
     /// No arrow followed the members from `start`, so they're a
-    /// parenthesized type or a pack, and neither takes parameter names. Out of
-    /// line, so the members' recursive frame holds none of this.
-    #[inline(never)]
+    /// parenthesized type or a pack, and neither takes parameter names.
     fn finish_paren_or_pack(
         &mut self,
         span: Span,

@@ -12,78 +12,74 @@ use super::{Closer, FunctionScope, Parser};
     reason = "the parser is one type with its grammar split by file"
 )]
 impl<'ast> Parser<'ast> {
-    /// False when the body or its block would pass the depth cap. It parses
-    /// into a body the caller's node already holds, so no recursive frame
-    /// holds one.
-    #[inline(never)]
-    pub(super) fn parse_function_body(&mut self, body: &mut FunctionBody<'ast>) -> bool {
+    /// `None` when the body or its block would pass the depth cap.
+    pub(super) fn parse_function_body(&mut self) -> Option<FunctionBody<'ast>> {
         if !self.enter_depth() {
-            return false;
+            return None;
         }
         self.open(Closer::BlockEnd);
 
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
-        if self.is_at(TokenKind::Less) && self.version.has_type_syntax() {
+        let generics = (self.is_at(TokenKind::Less) && self.version.has_type_syntax()).then(|| {
             let generics = self.parse_generic_type_list(GenericsOwner::Function);
-            body.generics = Some(self.alloc(generics));
-        }
+            self.alloc(generics)
+        });
 
         let open = self.expect(TokenKind::LeftParen);
-        let start_span = body.generics.as_ref().map_or(open, |list| list.span);
+        let start_span = generics.as_ref().map_or(open, |list| list.span);
 
         self.open(Closer::Paren);
-        self.parse_params(body);
+        let (params, vararg) = self.parse_params();
         self.expect_closer(TokenKind::RightParen, Closer::Paren);
 
         // Luau: optional return type annotation after `)`.
-        if self.version.has_type_syntax() && self.eat(TokenKind::Colon) {
-            body.return_type = Some(self.parse_return_type());
-        }
+        let return_type = (self.version.has_type_syntax() && self.eat(TokenKind::Colon))
+            .then(|| self.parse_return_type());
 
         // A loop around the function doesn't make `break` or `continue` valid
         // inside it, and `...` needs this function's own vararg parameter.
         let outer_scope = mem::replace(
             &mut self.function_scope,
-            FunctionScope { is_chunk: false, is_vararg: body.vararg.is_some(), is_in_loop: false },
+            FunctionScope { is_chunk: false, is_vararg: vararg.is_some(), is_in_loop: false },
         );
-        let is_parsed = self.parse_block(&mut body.block);
+        let parsed_block = self.parse_block();
         self.function_scope = outer_scope;
         self.exit_depth();
-        if !is_parsed {
-            return false;
-        }
+        let block = parsed_block?;
 
         self.close(Closer::BlockEnd);
         let end_span = self.expect(TokenKind::End);
-        body.span = start_span.merge(end_span);
-        true
+        let span = start_span.merge(end_span);
+        Some(FunctionBody { span, generics, params, vararg, return_type, block })
     }
 
-    /// Parse the parameter list between a function's parens into `body`,
-    /// stopping before the closing `)`.
-    fn parse_params(&mut self, body: &mut FunctionBody<'ast>) {
+    /// Parse the parameter list between a function's parens, stopping before
+    /// the closing `)`.
+    fn parse_params(
+        &mut self,
+    ) -> (List<'ast, Parameter<'ast>>, Option<Box<'ast, VarArgParam<'ast>>>) {
         if self.is_at(TokenKind::DotDotDot) {
-            body.vararg = Some(self.parse_vararg_param());
-            return;
+            return (List::new(), Some(self.parse_vararg_param()));
         }
         if !self.is_at_identifier() {
-            return;
+            return (List::new(), None);
         }
         let start = self.scratch.params.len();
         let first_name = self.advance_name();
         let first = self.parse_parameter(first_name);
         self.scratch.params.push(first);
+        let mut vararg = None;
         while self.eat(TokenKind::Comma) {
             if self.is_at(TokenKind::DotDotDot) {
                 // Vararg after the last named parameter.
-                body.vararg = Some(self.parse_vararg_param());
+                vararg = Some(self.parse_vararg_param());
                 break;
             }
             let name = self.expect_identifier_recover();
             let param = self.parse_parameter(name);
             self.scratch.params.push(param);
         }
-        body.params = List::split_off_in(&mut self.scratch.params, start, self.allocator);
+        (List::split_off_in(&mut self.scratch.params, start, self.allocator), vararg)
     }
 
     /// Finish a function parameter or a for-loop variable whose `name` was
