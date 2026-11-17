@@ -428,23 +428,54 @@ impl<'ast> Renamer<'ast> {
         }));
     }
 
-    /// Sorts and dedups the global reads, and finds each name's run of them.
+    /// Groups the global reads by name, each name's scopes ascending and
+    /// once each.
     fn group_global_reads(&mut self) {
         let Self { global_reads, choice, name_states, .. } = self;
-        global_reads.sort_unstable();
-        global_reads.dedup();
-        choice.read_ranges.clear();
-        choice.read_ranges.resize(name_states.len(), (0, 0));
-        choice.read_scopes.clear();
-        for &(name_id, scope) in &*global_reads {
-            let index = choice.read_scopes.len();
-            choice.read_scopes.push(scope);
-            if let Some(range) = choice.read_ranges.get_mut(name_id) {
-                if range.1 == 0 {
-                    range.0 = index;
-                }
-                range.1 = index.saturating_add(1);
+        let ranges = &mut choice.read_ranges;
+        ranges.clear();
+        ranges.resize(name_states.len(), (0, 0));
+        for &(name_id, _) in &*global_reads {
+            if let Some(range) = ranges.get_mut(name_id) {
+                range.1 = range.1.saturating_add(1);
             }
+        }
+        // Each range starts where the last ends, and its end moves up from
+        // its start as its reads go in.
+        let mut total = 0usize;
+        for range in ranges.iter_mut() {
+            let count = range.1;
+            *range = (total, total);
+            total = total.saturating_add(count);
+        }
+        choice.read_scopes.clear();
+        choice.read_scopes.resize(total, 0);
+        for &(name_id, scope) in &*global_reads {
+            if let Some(range) = ranges.get_mut(name_id) {
+                if let Some(slot) = choice.read_scopes.get_mut(range.1) {
+                    *slot = scope;
+                }
+                range.1 = range.1.saturating_add(1);
+            }
+        }
+        for range in ranges.iter_mut() {
+            let Some(group) = choice.read_scopes.get_mut(range.0..range.1) else {
+                continue;
+            };
+            group.sort_unstable();
+            let mut kept = 0usize;
+            for index in 0..group.len() {
+                let Some(&scope) = group.get(index) else {
+                    break;
+                };
+                if kept == 0 || group.get(kept.saturating_sub(1)) != Some(&scope) {
+                    if let Some(slot) = group.get_mut(kept) {
+                        *slot = scope;
+                    }
+                    kept = kept.saturating_add(1);
+                }
+            }
+            range.1 = range.0.saturating_add(kept);
         }
     }
 
@@ -514,12 +545,31 @@ impl<'ast> Renamer<'ast> {
         // Scope ids come from one depth-first walk, so they're in preorder:
         // parents before their children. Within a scope, bindings stay in
         // declaration order.
+        let starts = &mut choice.group_starts;
+        starts.clear();
+        starts.resize(scopes.len(), 0);
+        for binding in &*bindings {
+            if let Some(count) = starts.get_mut(binding.scope) {
+                *count = count.saturating_add(1);
+            }
+        }
+        let mut total = 0usize;
+        for start in starts.iter_mut() {
+            let count = *start;
+            *start = total;
+            total = total.saturating_add(count);
+        }
         let order = &mut choice.order;
         order.clear();
-        order.extend(0..bindings.len());
-        order.sort_unstable_by_key(|&id| {
-            bindings.get(id).map_or((0, id), |binding| (binding.scope, id))
-        });
+        order.resize(bindings.len(), 0);
+        for (id, binding) in bindings.iter().enumerate() {
+            if let Some(start) = starts.get_mut(binding.scope) {
+                if let Some(slot) = order.get_mut(*start) {
+                    *slot = id;
+                }
+                *start = start.saturating_add(1);
+            }
+        }
         choice.slot_of.clear();
         choice.slot_of.resize(bindings.len(), None);
         choice.claims.reset(scopes.len());

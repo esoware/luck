@@ -12,8 +12,8 @@ use crate::binding::{IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME};
 
 #[derive(Default)]
 pub(crate) struct NameTable<'ast> {
-    /// Each id's text, by where it lives and how long it is.
-    by_address: FxHashMap<(usize, usize), usize>,
+    /// Each id and its text's length, by where its text lives.
+    by_address: FxHashMap<usize, (usize, usize)>,
     by_text: FxHashMap<&'ast str, usize>,
     texts: Vec<&'ast str>,
 }
@@ -35,7 +35,7 @@ impl<'ast> NameTable<'ast> {
 
     /// The id of `text`, which then holds the table's copy.
     pub(crate) fn intern(&mut self, text: &mut &'ast str) -> usize {
-        if let Some(&id) = self.by_address.get(&(text.as_ptr().addr(), text.len())) {
+        if let Some(id) = self.find_copy(text) {
             return id;
         }
         let next_id = self.texts.len();
@@ -44,9 +44,17 @@ impl<'ast> NameTable<'ast> {
             *text = copy;
         } else {
             self.texts.push(*text);
-            self.by_address.insert((text.as_ptr().addr(), text.len()), id);
+            self.by_address.insert(text.as_ptr().addr(), (text.len(), id));
         }
         id
+    }
+
+    /// The id of `text` if it holds the table's copy.
+    fn find_copy(&self, text: &str) -> Option<usize> {
+        self.by_address
+            .get(&text.as_ptr().addr())
+            .filter(|&&(length, _)| length == text.len())
+            .map(|&(_, id)| id)
     }
 
     /// The id of `text`, which keeps its own copy.
@@ -56,10 +64,7 @@ impl<'ast> NameTable<'ast> {
 
     /// The id of `text`, if the table holds it.
     pub(crate) fn find(&self, text: &str) -> Option<usize> {
-        self.by_address
-            .get(&(text.as_ptr().addr(), text.len()))
-            .or_else(|| self.by_text.get(text))
-            .copied()
+        self.find_copy(text).or_else(|| self.by_text.get(text).copied())
     }
 }
 
