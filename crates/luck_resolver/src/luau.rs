@@ -8,9 +8,22 @@ use crate::luaurc::{AliasCache, AliasTarget};
 use crate::path::{native_path, normalize_path};
 use crate::{ResolveRequest, ResolvedModule};
 
-/// What's on disk at each module path a build has walked through, since many
-/// requires pass through the same directories.
-pub(crate) type ModuleProbes = FxHashMap<PathBuf, ModuleFiles>;
+/// What a build has found on disk.
+///
+/// Many requires pass through the same directories and reach the same
+/// modules, so it keeps what each module path holds and the canonical path of
+/// each module file.
+#[derive(Debug, Default)]
+pub(crate) struct ModuleProbes {
+    files: FxHashMap<PathBuf, ModuleFiles>,
+    canonical_paths: FxHashMap<PathBuf, String>,
+}
+
+impl ModuleProbes {
+    fn canonical_path(&mut self, file: PathBuf) -> String {
+        self.canonical_paths.entry(file).or_insert_with_key(|found| normalize_path(found)).clone()
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct ExtensionFiles {
@@ -265,7 +278,7 @@ fn navigate(
     }
     match probed_position.map_or_else(|| probe(probes, &position, request), Ok)? {
         Probed::Module(found) => {
-            Ok(ResolvedModule { path: normalize_path(&found), warnings: Vec::new() })
+            Ok(ResolvedModule { path: probes.canonical_path(found), warnings: Vec::new() })
         }
         Probed::Directory | Probed::Missing => Err(module_not_found(start, sub_path, request)),
     }
@@ -304,9 +317,9 @@ fn probe(
     module_path: &Path,
     request: &ResolveRequest<'_>,
 ) -> Result<Probed, Diagnostic> {
-    let files = probes.get(module_path).copied().unwrap_or_else(|| {
+    let files = probes.files.get(module_path).copied().unwrap_or_else(|| {
         let files = ModuleFiles::read(module_path);
-        probes.insert(module_path.to_path_buf(), files);
+        probes.files.insert(module_path.to_path_buf(), files);
         files
     });
     // Append the extension to the full name: `with_extension` replaces
