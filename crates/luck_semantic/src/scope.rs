@@ -210,6 +210,23 @@ impl<'ast> ScopeTree<'ast> {
         build_with_initializers(block, counts, version, sink).0
     }
 
+    /// [`Self::build_with`], recording only the symbols and references of
+    /// `names` and of `_ENV`, which decides what every free name reaches, for
+    /// a caller that asks about a few names. Every other name makes no
+    /// reference in this tree.
+    #[must_use]
+    pub fn build_for_names<Sink>(
+        block: &'ast Block<'ast>,
+        version: LuaVersion,
+        names: &[&str],
+        sink: &mut Sink,
+    ) -> Self
+    where
+        Sink: NodeSink<'ast>,
+    {
+        builder::build_for_names(block, version, names, sink)
+    }
+
     #[must_use]
     pub const fn version(&self) -> LuaVersion {
         self.version

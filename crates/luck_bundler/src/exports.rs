@@ -34,11 +34,8 @@ pub struct Exports<'ast> {
 
 impl<'ast> Exports<'ast> {
     /// The plan for `block`, whose names `source` holds and `tree` resolves,
-    /// on a target with value exports.
+    /// when it exports a value.
     pub(crate) fn new(block: &Block<'_>, tree: &ScopeTree<'_>, source: &'ast str) -> Self {
-        if !has_value_exports(block) {
-            return Self::default();
-        }
         let exported: Vec<&Symbol> =
             tree.symbols().iter().filter(|symbol| symbol.is_exported).collect();
         let exported_symbol = |definition: Span| {

@@ -103,7 +103,15 @@ pub(crate) fn parse_module<'ast>(
         has_env_rebinding,
         max_function_upvalues,
         exports,
-    } = extract_requires(allocator, &parsed.block, source, &path, version, dynamic_require);
+    } = extract_requires(
+        allocator,
+        &parsed.block,
+        parsed.counts,
+        source,
+        &path,
+        version,
+        dynamic_require,
+    );
     for diag in diags {
         if diag.is_error() {
             errors.push(diag);

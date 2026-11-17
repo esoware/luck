@@ -31,6 +31,76 @@ pub(crate) fn build_with_initializers<'ast, Sink>(
 where
     Sink: NodeSink<'ast>,
 {
+    build(block, counts, version, AllNames, sink)
+}
+
+/// [`ScopeTree::build_for_names`].
+pub(crate) fn build_for_names<'ast, Sink>(
+    block: &'ast Block<'ast>,
+    version: LuaVersion,
+    names: &[&str],
+    sink: &mut Sink,
+) -> ScopeTree<'ast>
+where
+    Sink: NodeSink<'ast>,
+{
+    build(block, TreeCounts::default(), version, NameSet::new(names), sink).0
+}
+
+/// Which names a build records.
+trait NameFilter {
+    fn keeps(&self, text: &str) -> bool;
+}
+
+struct AllNames;
+
+impl NameFilter for AllNames {
+    fn keeps(&self, _text: &str) -> bool {
+        true
+    }
+}
+
+/// Some names and `_ENV`, which decides what every free name reaches, with
+/// each one's [`name_bit`] set, so one test turns most other names away.
+struct NameSet<'names> {
+    names: &'names [&'names str],
+    bits: u64,
+}
+
+impl<'names> NameSet<'names> {
+    fn new(names: &'names [&'names str]) -> Self {
+        let bits = names.iter().fold(name_bit("_ENV"), |bits, name| bits | name_bit(name));
+        Self { names, bits }
+    }
+}
+
+impl NameFilter for NameSet<'_> {
+    fn keeps(&self, text: &str) -> bool {
+        self.bits & name_bit(text) != 0 && (text == "_ENV" || self.names.contains(&text))
+    }
+}
+
+/// A bit picked by `text`'s first and last bytes and its length.
+fn name_bit(text: &str) -> u64 {
+    let bytes = text.as_bytes();
+    let first = u32::from(bytes.first().copied().unwrap_or_default());
+    let last = u32::from(bytes.last().copied().unwrap_or_default());
+    1u64.wrapping_shl(
+        first.wrapping_mul(3).wrapping_add(last).wrapping_add(index_to_offset(bytes.len())),
+    )
+}
+
+fn build<'ast, Sink, Filter>(
+    block: &'ast Block<'ast>,
+    counts: TreeCounts,
+    version: LuaVersion,
+    filter: Filter,
+    sink: &mut Sink,
+) -> (ScopeTree<'ast>, InitializedLocals<'ast>)
+where
+    Sink: NodeSink<'ast>,
+    Filter: NameFilter,
+{
     let module = ScopeId::from_index(0);
     let declarations = offset_to_index(counts.declarations);
     let name_uses = offset_to_index(counts.name_uses);
@@ -65,6 +135,7 @@ where
         is_in_type_function: false,
         type_names: FxHashSet::default(),
         initialized_locals: Vec::new(),
+        filter,
         sink,
     };
     builder.visit_block(block);
@@ -99,7 +170,7 @@ struct OuterScope {
     is_global_star: bool,
 }
 
-struct Builder<'ast, 'sink, Sink> {
+struct Builder<'ast, 'sink, Sink, Filter> {
     tree: ScopeTree<'ast>,
     /// Each name's innermost live declaration, by name. Resolving a name is
     /// one hash of it, and leaving a scope hashes nothing.
@@ -120,12 +191,14 @@ struct Builder<'ast, 'sink, Sink> {
     /// Luau: every type declared by a block entered so far.
     type_names: FxHashSet<&'ast str>,
     initialized_locals: InitializedLocals<'ast>,
+    filter: Filter,
     sink: &'sink mut Sink,
 }
 
-impl<'ast, Sink> Builder<'ast, '_, Sink>
+impl<'ast, Sink, Filter> Builder<'ast, '_, Sink, Filter>
 where
     Sink: NodeSink<'ast>,
+    Filter: NameFilter,
 {
     fn finish(mut self) -> (ScopeTree<'ast>, InitializedLocals<'ast>) {
         let ScopeTree { references, resolved, resolved_offsets, positions, buckets, .. } =
@@ -171,8 +244,12 @@ where
         (self.tree, self.initialized_locals)
     }
 
-    fn intern(&mut self, text: &'ast str) -> NameId {
-        match self.tree.name_ids.entry(text) {
+    /// `None` for a name the build doesn't record.
+    fn intern(&mut self, text: &'ast str) -> Option<NameId> {
+        if !self.filter.keeps(text) {
+            return None;
+        }
+        Some(match self.tree.name_ids.entry(text) {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
                 let id = NameId::from_index(self.tree.names.len());
@@ -185,7 +262,7 @@ where
                 self.bindings.push(Binding::Free);
                 id
             }
-        }
+        })
     }
 
     fn binding(&self, name: NameId) -> Binding {
@@ -232,8 +309,8 @@ where
         self.pop_scope();
     }
 
-    fn declare_local(&mut self, text: &'ast str, span: Span, kind: SymbolKind) -> SymbolId {
-        let name = self.intern(text);
+    fn declare_local(&mut self, text: &'ast str, span: Span, kind: SymbolKind) -> Option<SymbolId> {
+        let name = self.intern(text)?;
         let id = SymbolId::from_index(self.tree.symbols.len());
         self.tree.symbols.push(Symbol {
             id,
@@ -252,7 +329,7 @@ where
         if self.tree.version.has_env_upvalue() && text == "_ENV" {
             self.env_name = Some(name);
         }
-        id
+        Some(id)
     }
 
     /// `None` for a name the parser found missing.
@@ -260,7 +337,7 @@ where
         if name.text.is_empty() {
             return None;
         }
-        Some(self.declare_local(name.text, name.span, kind))
+        self.declare_local(name.text, name.span, kind)
     }
 
     fn symbol_mut(&mut self, id: SymbolId) -> Option<&mut Symbol> {
@@ -273,7 +350,9 @@ where
         if name.text.is_empty() {
             return;
         }
-        let id = self.intern(name.text);
+        let Some(id) = self.intern(name.text) else {
+            return;
+        };
         if let Some(entry) = self.tree.names.get_mut(id.index()) {
             entry.is_declared_global = true;
             entry.is_assigned_global |= is_assigned;
@@ -289,7 +368,9 @@ where
         if name.text.is_empty() {
             return;
         }
-        let name_id = self.intern(name.text);
+        let Some(name_id) = self.intern(name.text) else {
+            return;
+        };
         let binding = self.binding(name_id);
         let resolved = binding.local();
         // Luau: `types` and the types in scope belong to the type runtime, so
@@ -346,7 +427,9 @@ where
     /// Luau: a type function sees every type of its block, earlier or later.
     fn record_type_names(&mut self, block: &'ast Block<'ast>) {
         for stmt in &block.stmts {
-            if let Statement::TypeDeclaration(declaration) = stmt {
+            if let Statement::TypeDeclaration(declaration) = stmt
+                && self.filter.keeps(declaration.name.text)
+            {
                 self.type_names.insert(declaration.name.text);
             }
         }
@@ -535,9 +618,10 @@ where
     }
 }
 
-impl<'ast, Sink> Visitor<'ast> for Builder<'ast, '_, Sink>
+impl<'ast, Sink, Filter> Visitor<'ast> for Builder<'ast, '_, Sink, Filter>
 where
     Sink: NodeSink<'ast>,
+    Filter: NameFilter,
 {
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
         self.sink.block(block);

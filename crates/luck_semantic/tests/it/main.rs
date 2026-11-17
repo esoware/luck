@@ -12,6 +12,7 @@ mod common;
 
 mod counts;
 mod drift;
+mod names;
 mod roblox_api;
 mod stack;
 mod stdlib;
