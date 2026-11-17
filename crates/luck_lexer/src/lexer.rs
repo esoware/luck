@@ -14,8 +14,10 @@ use crate::number::scan_number;
 use crate::search::{ByteMatchTable, byte_match_table, find_match};
 use string::{advance_past_long_bracket_close, eat_long_bracket_level};
 
-/// The median file in the bench corpus runs about this many bytes per token.
-const BYTES_PER_TOKEN: usize = 5;
+/// The densest real file in the bench corpus runs about this many bytes per
+/// token, so most sources fit the first reservation, and pages a sparser one
+/// leaves untouched cost nothing.
+const BYTES_PER_TOKEN: usize = 4;
 
 /// Keeps a huge comment-only file from reserving gigabytes it never touches.
 const MAX_RESERVED_TOKENS: usize = 1 << 20;
@@ -41,7 +43,7 @@ pub fn lex(source: &str, version: LuaVersion) -> LexResult {
     let capacity = lexer.cursor.rest().len().div_ceil(BYTES_PER_TOKEN);
     let mut tokens = Vec::with_capacity(capacity.min(MAX_RESERVED_TOKENS));
     loop {
-        let token = lexer.next_token();
+        let token = lexer.lex_token();
         tokens.push(token);
         if token.kind == TokenKind::Eof {
             break;
@@ -126,6 +128,13 @@ impl<'source> Lexer<'source> {
     /// them with [`Lexer::finish`] once the caller has drained to EOF.
     /// Returns the same EOF token forever once the source is exhausted.
     pub fn next_token(&mut self) -> Token {
+        self.lex_token()
+    }
+
+    /// Always inlined, so `lex` runs its loop without a call per token.
+    #[expect(clippy::inline_always, reason = "measured: the call per token costs 10-15%")]
+    #[inline(always)]
+    fn lex_token(&mut self) -> Token {
         loop {
             self.skip_whitespace();
             let start = self.cursor.position();
@@ -354,7 +363,7 @@ impl<'source> Lexer<'source> {
     /// The cursor is past the name's first byte.
     #[inline]
     fn lex_name(&mut self, start: usize) -> TokenKind {
-        self.cursor.advance_by(find_match(self.cursor.rest(), &NOT_NAME_CONTINUE));
+        self.cursor.advance_by(name_length(self.cursor.rest()));
         TokenKind::keyword(self.cursor.text_since(start), self.version)
             .unwrap_or(TokenKind::Identifier)
     }
@@ -469,5 +478,95 @@ impl<'source> Lexer<'source> {
     fn reject_unexpected_character(&mut self, start: usize, byte: u8) {
         let unexpected = self.cursor.eat_rest_of_char(start).unwrap_or_else(|| char::from(byte));
         self.reject(start, format!("unexpected character `{unexpected}`"));
+    }
+}
+
+const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+const LOW_BITS: u64 = 0x7F7F_7F7F_7F7F_7F7F;
+
+/// The high bit of each byte of `ascii` that lies in `low..=high`.
+///
+/// Each bound repeats in every byte, and every byte of `ascii` is under 0x80,
+/// so setting its high bit keeps each subtraction from borrowing across bytes.
+#[inline]
+const fn bytes_in_range(ascii: u64, low: u64, high: u64) -> u64 {
+    ((ascii | HIGH_BITS).wrapping_sub(low)) & (high.wrapping_add(HIGH_BITS).wrapping_sub(ascii))
+}
+
+/// The high bit of each byte of `word` that continues a name: an ASCII letter,
+/// digit, or `_`.
+#[inline]
+const fn name_bytes(word: u64) -> u64 {
+    let ascii = word & LOW_BITS;
+    let digits = bytes_in_range(ascii, 0x3030_3030_3030_3030, 0x3939_3939_3939_3939);
+    let folded = ascii | 0x2020_2020_2020_2020;
+    let letters = bytes_in_range(folded, 0x6161_6161_6161_6161, 0x7A7A_7A7A_7A7A_7A7A);
+    // Adding 0x7F to a byte under 0x80 sets its high bit unless the byte is 0,
+    // and never carries into the next one.
+    let underscores = !(ascii ^ 0x5F5F_5F5F_5F5F_5F5F).wrapping_add(LOW_BITS);
+    (digits | letters | underscores) & !word & HIGH_BITS
+}
+
+/// How many bytes of name open `bytes`, tested 8 at a time, so a name shorter
+/// than 8 ends without a loop exit to mispredict.
+#[inline]
+#[expect(clippy::little_endian_bytes, reason = "the first byte must be the lowest")]
+fn name_length(bytes: &[u8]) -> usize {
+    let mut length = 0usize;
+    while let Some(chunk) = bytes.get(length..).and_then(<[u8]>::first_chunk::<8>) {
+        let stops = !name_bytes(u64::from_le_bytes(*chunk)) & HIGH_BITS;
+        if stops != 0 {
+            let stop_index = usize::try_from(stops.trailing_zeros() >> 3u32).unwrap_or_default();
+            return length.wrapping_add(stop_index);
+        }
+        length = length.wrapping_add(8);
+    }
+    let tail = bytes.get(length..).unwrap_or_default();
+    length.wrapping_add(find_match(tail, &NOT_NAME_CONTINUE))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_name_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+
+    /// A borrow or carry between bytes would let one byte change its
+    /// neighbor's answer, so every pair of bytes is tried side by side.
+    #[test]
+    #[expect(clippy::little_endian_bytes, reason = "name_bytes reads the first byte lowest")]
+    fn name_bytes_classifies_each_byte_whatever_its_neighbor() {
+        for low in 0..=u8::MAX {
+            for high in 0..=u8::MAX {
+                for position in 0..7 {
+                    let mut bytes = [b'a'; 8];
+                    bytes[position] = low;
+                    bytes[position + 1] = high;
+                    let mask = name_bytes(u64::from_le_bytes(bytes));
+                    for (i, &b) in bytes.iter().enumerate() {
+                        let is_set = mask & (0x80 << (8 * i)) != 0;
+                        assert_eq!(is_set, is_name_byte(b), "{bytes:?} at {i}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn name_length_stops_at_the_first_byte_no_name_continues_with() {
+        for length in 0..=40 {
+            let name = vec![b'x'; length];
+            assert_eq!(name_length(&name), length, "no stop in {length}");
+            for stop in 0..length {
+                for stop_byte in [b' ', b'.', b'(', 0x80, b'^', b'`', b'@', b'[', b'{', b'/', b':']
+                {
+                    let mut bytes = name.clone();
+                    bytes[stop] = stop_byte;
+                    assert_eq!(name_length(&bytes), stop, "{stop_byte} at {stop} of {length}");
+                }
+            }
+        }
     }
 }
