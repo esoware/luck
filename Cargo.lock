@@ -998,7 +998,6 @@ dependencies = [
  "luck_config",
  "luck_core",
  "luck_formatter",
- "luck_lexer",
  "luck_linter",
  "luck_parser",
  "luck_resolver",

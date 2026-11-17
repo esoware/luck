@@ -38,9 +38,9 @@ pub(crate) struct DocumentState {
     settings: Arc<DocumentSettings>,
     analyzed: Analyzed,
     line_index: LineIndex,
-    /// Lexed on first use: the parse keeps no tokens, and only highlighting
-    /// and the cursor's surroundings need them.
-    tokens: OnceLock<Vec<Token>>,
+    /// What the parse read, which highlighting and the cursor's surroundings
+    /// look at where the tree may have none.
+    tokens: Vec<Token>,
     /// Classified on first use, so a client asking for a range and then the
     /// whole of a version classifies it once.
     highlights: OnceLock<Highlights>,
@@ -48,16 +48,10 @@ pub(crate) struct DocumentState {
 
 impl DocumentState {
     pub(crate) fn new(text: &str, version: i32, settings: Arc<DocumentSettings>) -> Self {
-        let analyzed = Analyzed::new(text, settings.target, &settings.project.lint_config);
+        let (analyzed, tokens) =
+            Analyzed::new(text, settings.target, &settings.project.lint_config);
         let line_index = LineIndex::new(text);
-        Self {
-            version,
-            settings,
-            analyzed,
-            line_index,
-            tokens: OnceLock::new(),
-            highlights: OnceLock::new(),
-        }
+        Self { version, settings, analyzed, line_index, tokens, highlights: OnceLock::new() }
     }
 
     pub(crate) fn with_text(&self, text: &str, version: i32) -> Self {
@@ -97,7 +91,7 @@ impl DocumentState {
     }
 
     pub(crate) fn tokens(&self) -> &[Token] {
-        self.tokens.get_or_init(|| luck_lexer::lex(self.text(), self.lua_version()).tokens)
+        &self.tokens
     }
 
     pub(crate) fn highlights(&self) -> &Highlights {
