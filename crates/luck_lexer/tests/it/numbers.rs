@@ -1,14 +1,14 @@
 use luck_lexer::lex;
 use luck_token::{LuaVersion, SourceError, Span, TokenKind};
 
-use crate::common::{first_kind, first_kind_in, kinds_in};
+use crate::common::{tokens, tokens_in};
 
 #[test]
 fn numerals_keep_their_spelling() {
     for source in
         ["42", "3.14", ".5", "1e10", "3.14e-2", "1E+5", "0xFF", "0XAB", "1.", "1.e5", "0."]
     {
-        assert_eq!(first_kind(source), TokenKind::Number(source.into()));
+        assert_eq!(tokens(source), [(TokenKind::Number, source)]);
     }
 }
 
@@ -23,9 +23,7 @@ fn decimal_float_lexes_in_every_version() {
 #[test]
 fn hex_integer_lexes_in_every_version() {
     for version in LuaVersion::ALL {
-        let result = lex("0xFF", version);
-        assert!(result.errors.is_empty(), "0xFF should work in {version:?}");
-        assert_eq!(result.tokens[0].kind, TokenKind::Number("0xFF".into()));
+        assert_eq!(tokens_in("0xFF", version), [(TokenKind::Number, "0xFF")], "{version:?}");
     }
 }
 
@@ -85,8 +83,8 @@ fn hex_floats_lex_in_lua52_plus() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         for source in ["0x1.Fp10", "0xAp4", "0xA23p-4", "0x1.0p+3"] {
             assert_eq!(
-                first_kind_in(source, version),
-                TokenKind::Number(source.into()),
+                tokens_in(source, version),
+                [(TokenKind::Number, source)],
                 "failed for: {source} in {version:?}"
             );
         }
@@ -105,9 +103,7 @@ fn hex_float_is_error_in_lua51_and_luau() {
 fn hex_float_exponent_is_optional() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         for source in ["0x.1", "0X0.41", "0xA.8", "0x1.F", "0x1.", "0x1.p2", "0x.1p-2"] {
-            let result = lex(source, version);
-            assert!(result.errors.is_empty(), "{version:?} {source}: {:?}", result.errors);
-            assert_eq!(result.tokens[0].kind, TokenKind::Number(source.into()));
+            assert_eq!(tokens_in(source, version), [(TokenKind::Number, source)], "{version:?}");
         }
         for source in ["0x.", "0xp2", "0x1.p", "0x.1p+", "0x1..2"] {
             let result = lex(source, version);
@@ -139,8 +135,8 @@ fn hex_numeral_touching_a_letter_is_error_on_strict_versions() {
             ("0x1_2", "0x1", "_2"),
         ] {
             assert_eq!(
-                kinds_in(source, version),
-                vec![TokenKind::Number(numeral.into()), TokenKind::Identifier(name.into())],
+                tokens_in(source, version),
+                vec![(TokenKind::Number, numeral), (TokenKind::Identifier, name)],
                 "{version:?} {source}"
             );
         }
@@ -152,8 +148,8 @@ fn hex_numeral_touching_a_letter_is_error_on_strict_versions() {
 
 #[test]
 fn binary_literal_lexes_only_in_luau() {
-    assert_eq!(first_kind_in("0b1010", LuaVersion::Luau), TokenKind::Number("0b1010".into()));
-    assert_eq!(first_kind_in("0B11", LuaVersion::Luau), TokenKind::Number("0B11".into()));
+    assert_eq!(tokens_in("0b1010", LuaVersion::Luau), [(TokenKind::Number, "0b1010")]);
+    assert_eq!(tokens_in("0B11", LuaVersion::Luau), [(TokenKind::Number, "0B11")]);
     for version in [
         LuaVersion::Lua51,
         LuaVersion::Lua52,
@@ -176,8 +172,8 @@ fn binary_literal_without_digits_is_error() {
 fn underscore_separators_lex_only_in_luau() {
     for source in ["1_000_000", "0xFF_FF", "0b1010_0101", "0b1111_0000", "1_0e1_0", "0xDEAD_BEEF"] {
         assert_eq!(
-            first_kind_in(source, LuaVersion::Luau),
-            TokenKind::Number(source.into()),
+            tokens_in(source, LuaVersion::Luau),
+            [(TokenKind::Number, source)],
             "failed for: {source}"
         );
     }
@@ -196,8 +192,8 @@ fn underscore_separators_lex_only_in_luau() {
     // 5.2 and 5.3 stop at a non-hex byte, leaving a number and a name.
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         assert_eq!(
-            kinds_in("1_000", version),
-            vec![TokenKind::Number("1".into()), TokenKind::Identifier("_000".into()),]
+            tokens_in("1_000", version),
+            vec![(TokenKind::Number, "1"), (TokenKind::Identifier, "_000"),]
         );
     }
 }
@@ -213,9 +209,7 @@ fn integer_suffix_lexes_only_on_luau_integers_within_64_bits() {
         "0xffffffffffffffffi",
         "0b1111111111111111111111111111111111111111111111111111111111111111i",
     ] {
-        let result = lex(source, LuaVersion::Luau);
-        assert!(result.errors.is_empty(), "{source}: {:?}", result.errors);
-        assert_eq!(result.tokens[0].kind, TokenKind::Integer(source.into()));
+        assert_eq!(tokens_in(source, LuaVersion::Luau), [(TokenKind::Integer, source)]);
     }
 
     // Decimal overflow applies even under a direct unary minus;
@@ -238,9 +232,10 @@ fn integer_suffix_lexes_only_on_luau_integers_within_64_bits() {
     assert_malformed_number("1i", LuaVersion::Lua54);
     assert_malformed_number("1ix", LuaVersion::Luau);
 
-    let lua53 = lex("1i", LuaVersion::Lua53);
-    assert_eq!(lua53.tokens[0].kind, TokenKind::Number("1".into()));
-    assert_eq!(lua53.tokens[1].kind, TokenKind::Identifier("i".into()));
+    assert_eq!(
+        tokens_in("1i", LuaVersion::Lua53),
+        [(TokenKind::Number, "1"), (TokenKind::Identifier, "i")]
+    );
 }
 
 fn assert_malformed_number(source: &str, version: LuaVersion) {
@@ -274,20 +269,20 @@ fn decimal_numeral_touching_a_hex_digit_is_malformed_on_lua52_and_lua53() {
 fn decimal_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         assert_eq!(
-            kinds_in("1then", version),
-            vec![TokenKind::Number("1".into()), TokenKind::Then]
+            tokens_in("1then", version),
+            vec![(TokenKind::Number, "1"), (TokenKind::Then, "then")]
         );
         assert_eq!(
-            kinds_in("1.then", version),
-            vec![TokenKind::Number("1.".into()), TokenKind::Then]
+            tokens_in("1.then", version),
+            vec![(TokenKind::Number, "1."), (TokenKind::Then, "then")]
         );
         assert_eq!(
-            kinds_in("1.5g", version),
-            vec![TokenKind::Number("1.5".into()), TokenKind::Identifier("g".into())]
+            tokens_in("1.5g", version),
+            vec![(TokenKind::Number, "1.5"), (TokenKind::Identifier, "g")]
         );
         assert_eq!(
-            kinds_in("1e5x", version),
-            vec![TokenKind::Number("1e5".into()), TokenKind::Identifier("x".into())]
+            tokens_in("1e5x", version),
+            vec![(TokenKind::Number, "1e5"), (TokenKind::Identifier, "x")]
         );
     }
 }
@@ -302,8 +297,8 @@ fn malformed_decimal_numeral_error_spans_the_numeral_and_the_letter() {
 fn decimal_numeral_before_a_separated_word_lexes_on_every_version() {
     for version in LuaVersion::ALL {
         assert_eq!(
-            kinds_in("1 then", version),
-            vec![TokenKind::Number("1".into()), TokenKind::Then],
+            tokens_in("1 then", version),
+            vec![(TokenKind::Number, "1"), (TokenKind::Then, "then")],
             "{version:?}"
         );
     }
@@ -327,7 +322,11 @@ fn integer_range_normalization_preserves_boundaries_and_spans() {
             assert_eq!(result.errors.is_empty(), is_valid, "{source}: {:?}", result.errors);
             let span = Span::from_indices(2, source.len());
             if is_valid {
-                assert_eq!(result.tokens[0].kind, TokenKind::Integer(literal.into()));
+                let token = result.tokens[0];
+                assert_eq!(
+                    (token.kind, token.text(&source)),
+                    (TokenKind::Integer, literal.as_str())
+                );
                 assert_eq!(result.tokens[0].span, span);
             } else {
                 assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
@@ -365,14 +364,20 @@ fn luau_hex_and_binary_numerals_directly_before_concat_lex() {
 #[test]
 fn hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
-        let result = lex("x=0x1g=2", version);
+        let source = "x=0x1g=2";
+        let result = lex(source, version);
         assert_eq!(
             result.errors,
             Vec::<SourceError>::new(),
             "`0x1g` should split into `0x1` and `g` under {version:?}, as `x=0x1g=2` compiles there"
         );
-        assert_eq!(result.tokens[2].kind, TokenKind::Number("0x1".into()));
-        assert_eq!(result.tokens[3].kind, TokenKind::Identifier("g".into()));
+        let [_, _, number, name, ..] = result.tokens.as_slice() else {
+            panic!("{:?}", result.tokens);
+        };
+        assert_eq!(
+            [(number.kind, number.text(source)), (name.kind, name.text(source))],
+            [(TokenKind::Number, "0x1"), (TokenKind::Identifier, "g")]
+        );
     }
 }
 
@@ -422,13 +427,11 @@ fn luau_exponent_of_only_underscores_is_error() {
 
 #[test]
 fn luau_underscore_after_integer_suffix_lexes() {
-    let result = lex("return 1i_", LuaVersion::Luau);
     assert_eq!(
-        result.errors,
-        Vec::<SourceError>::new(),
+        tokens_in("return 1i_", LuaVersion::Luau),
+        [(TokenKind::Return, "return"), (TokenKind::Integer, "1i_")],
         "Luau strips every `_` before conversion, so `1i_` should be the integer `1i`"
     );
-    assert_eq!(result.tokens[1].kind, TokenKind::Integer("1i_".into()));
 }
 
 #[test]

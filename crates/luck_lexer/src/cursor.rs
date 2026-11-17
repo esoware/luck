@@ -23,14 +23,7 @@ impl<'source> Cursor<'source> {
 
     #[inline]
     pub(crate) fn peek_next(&self) -> Option<u8> {
-        self.source.as_bytes().get(self.position.saturating_add(1)).copied()
-    }
-
-    #[inline]
-    pub(crate) fn advance(&mut self) -> Option<u8> {
-        let b = self.peek()?;
-        self.advance_by(1);
-        Some(b)
+        self.source.as_bytes().get(self.position.wrapping_add(1)).copied()
     }
 
     #[inline]
@@ -70,10 +63,10 @@ impl<'source> Cursor<'source> {
         self.advance_by(memchr::memchr2(b'\n', b'\r', rest).unwrap_or(rest.len()));
     }
 
+    #[inline]
     pub(crate) fn eat_while(&mut self, predicate: impl Fn(u8) -> bool) {
-        while self.peek().is_some_and(&predicate) {
-            self.advance_by(1);
-        }
+        let length = self.rest().iter().take_while(|&&b| predicate(b)).count();
+        self.advance_by(length);
     }
 
     /// Consume the rest of the UTF-8 sequence that begins at `start` and

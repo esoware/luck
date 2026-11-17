@@ -1,33 +1,38 @@
-use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
+use luck_token::{LuaVersion, Span, Token, TokenKind};
 
-// `lex` returns every token in one buffer, so a size regression costs
-// memory on every file. `CompactString` (24) plus tag padding puts
-// `TokenKind` at 32, and `Span` (8) brings `Token` to 40.
+const fn token(kind: TokenKind, start: u32, end: u32) -> Token {
+    Token {
+        span: Span::new(start, end),
+        kind,
+        has_line_break_before: false,
+        is_unterminated: false,
+    }
+}
+
+// The parser copies a token at every step and `lex` returns every token in
+// one buffer, so a size regression costs time and memory on every file.
 #[test]
-#[cfg(target_pointer_width = "64")]
 fn token_size_is_pinned() {
-    assert_eq!(size_of::<TokenKind>(), 32);
-    assert_eq!(size_of::<Token>(), 40);
-    assert_eq!(size_of::<Option<Token>>(), 40);
+    assert_eq!(size_of::<TokenKind>(), 1);
+    assert_eq!(size_of::<Token>(), 12);
+    assert_eq!(size_of::<Option<Token>>(), 12);
 }
 
 #[test]
-fn compact_string_keeps_short_identifiers_inline() {
-    // The README promises that short strings skip the heap.
-    assert!(!CompactString::from("short_ident").is_heap_allocated());
-    assert!(CompactString::from("x".repeat(64)).is_heap_allocated());
-}
-
-#[test]
-fn display_shows_identifier_and_number_text_but_not_string_text() {
-    assert_eq!(TokenKind::Identifier(CompactString::from("foo")).to_string(), "identifier `foo`");
-    assert_eq!(TokenKind::Number(CompactString::from("42")).to_string(), "number `42`");
-    // The string payload is deliberately not echoed.
-    assert_eq!(TokenKind::StringLiteral(CompactString::from("secret")).to_string(), "string");
-    assert_eq!(
-        TokenKind::InterpolatedStringMiddle(CompactString::from("secret")).to_string(),
-        "interpolated string middle"
-    );
+fn display_names_each_kind_without_its_text() {
+    for (kind, expected) in [
+        (TokenKind::Identifier, "identifier"),
+        (TokenKind::Number, "number"),
+        (TokenKind::Integer, "integer"),
+        (TokenKind::StringLiteral, "string"),
+        (TokenKind::InterpolatedStringBegin, "interpolated string start"),
+        (TokenKind::InterpolatedStringMiddle, "interpolated string middle"),
+        (TokenKind::InterpolatedStringEnd, "interpolated string end"),
+        (TokenKind::InterpolatedStringSimple, "interpolated string"),
+        (TokenKind::Eof, "end of file"),
+    ] {
+        assert_eq!(kind.to_string(), expected);
+    }
 }
 
 #[test]
@@ -37,16 +42,83 @@ fn display_quotes_symbols_and_keywords() {
     assert_eq!(TokenKind::LeftBrace.to_string(), "`{`");
     assert_eq!(TokenKind::RightBrace.to_string(), "`}`");
     assert_eq!(TokenKind::Arrow.to_string(), "`->`");
-    assert_eq!(TokenKind::Eof.to_string(), "end of file");
 }
 
 #[test]
-fn static_text_is_none_only_for_text_carrying_kinds_and_eof() {
+fn token_display_shows_name_and_numeral_text_but_not_string_text() {
+    let source = "foo 42 1i \"secret\" }secret{";
+    for (kind, start, end, expected) in [
+        (TokenKind::Identifier, 0, 3, "identifier `foo`"),
+        (TokenKind::Number, 4, 6, "number `42`"),
+        (TokenKind::Integer, 7, 9, "integer `1i`"),
+        (TokenKind::StringLiteral, 10, 18, "string"),
+        (TokenKind::InterpolatedStringMiddle, 19, 27, "interpolated string middle"),
+        (TokenKind::Eof, 27, 27, "end of file"),
+    ] {
+        assert_eq!(token(kind, start, end).display(source).to_string(), expected);
+    }
+}
+
+#[test]
+fn static_text_is_none_only_for_kinds_whose_text_varies_and_eof() {
     assert_eq!(TokenKind::Goto.static_text(), Some("goto"));
     assert_eq!(TokenKind::DoubleColon.static_text(), Some("::"));
-    assert_eq!(TokenKind::Eof.static_text(), None);
-    assert_eq!(TokenKind::Identifier(CompactString::from("end")).static_text(), None);
-    assert_eq!(TokenKind::InterpolatedStringBegin(CompactString::from("x")).static_text(), None);
+    for kind in [
+        TokenKind::Identifier,
+        TokenKind::Number,
+        TokenKind::Integer,
+        TokenKind::StringLiteral,
+        TokenKind::InterpolatedStringBegin,
+        TokenKind::InterpolatedStringMiddle,
+        TokenKind::InterpolatedStringEnd,
+        TokenKind::InterpolatedStringSimple,
+        TokenKind::Eof,
+    ] {
+        assert_eq!(kind.static_text(), None, "{kind:?}");
+    }
+}
+
+#[test]
+fn text_is_the_whole_spelling_of_a_name_numeral_string_or_symbol() {
+    let source = "name 0x1F \"a\\n\" [[b]] ...";
+    for (kind, start, end, expected) in [
+        (TokenKind::Identifier, 0, 4, "name"),
+        (TokenKind::Number, 5, 9, "0x1F"),
+        (TokenKind::StringLiteral, 10, 15, "\"a\\n\""),
+        (TokenKind::StringLiteral, 16, 21, "[[b]]"),
+        (TokenKind::DotDotDot, 22, 25, "..."),
+        (TokenKind::Eof, 25, 25, ""),
+    ] {
+        assert_eq!(token(kind, start, end).text(source), expected, "{kind:?}");
+    }
+}
+
+#[test]
+fn text_of_an_interpolated_string_piece_leaves_out_its_delimiters() {
+    let source = "`a{x}b\\`{y}c` `d`";
+    for (kind, start, end, expected) in [
+        (TokenKind::InterpolatedStringBegin, 0, 3, "a"),
+        (TokenKind::InterpolatedStringMiddle, 4, 9, "b\\`"),
+        (TokenKind::InterpolatedStringEnd, 10, 13, "c"),
+        (TokenKind::InterpolatedStringSimple, 14, 17, "d"),
+    ] {
+        assert_eq!(token(kind, start, end).text(source), expected, "{kind:?}");
+    }
+}
+
+/// An escaped backtick can end an unterminated piece, so only the flag tells
+/// whether its last byte is a delimiter.
+#[test]
+fn text_of_an_unterminated_piece_keeps_its_last_byte() {
+    let source = "`a\\` }b\\` `";
+    for (kind, start, end, expected) in [
+        (TokenKind::InterpolatedStringSimple, 0, 4, "a\\`"),
+        (TokenKind::InterpolatedStringEnd, 5, 9, "b\\`"),
+        (TokenKind::InterpolatedStringSimple, 10, 11, ""),
+    ] {
+        let unterminated = Token { is_unterminated: true, ..token(kind, start, end) };
+        assert_eq!(unterminated.text(source), expected, "{kind:?}");
+    }
 }
 
 #[test]
@@ -75,14 +147,43 @@ fn keyword_reads_back_each_keyword_spelling_under_its_versions() {
         TokenKind::While,
     ];
     for version in LuaVersion::ALL {
-        for kind in &base_keywords {
+        for kind in base_keywords {
             let text = kind.static_text().unwrap_or_default();
-            assert_eq!(TokenKind::keyword(text, version).as_ref(), Some(kind));
+            assert_eq!(TokenKind::keyword(text, version), Some(kind));
         }
         let goto = version.has_goto().then_some(TokenKind::Goto);
         assert_eq!(TokenKind::keyword("goto", version), goto, "{version:?}");
         for name in ["", "x", "End", "functions", "continue", "type", "global"] {
             assert_eq!(TokenKind::keyword(name, version), None, "{name:?}");
+        }
+    }
+}
+
+/// A name that hashes to a keyword's slot is still a name, so a lookup has to
+/// compare the whole spelling.
+#[test]
+fn keyword_rejects_every_near_spelling_of_a_keyword() {
+    let keywords = [
+        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
+        "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+    ];
+    for keyword in keywords {
+        let (_, tail) = keyword.split_at(1);
+        let (head, _) = keyword.split_at(keyword.len() - 1);
+        let mut near = vec![
+            tail.to_owned(),
+            head.to_owned(),
+            format!("{keyword}_"),
+            format!("_{keyword}"),
+            keyword.to_uppercase(),
+        ];
+        for i in 0..keyword.len() {
+            let mut bytes = keyword.as_bytes().to_vec();
+            bytes[i] ^= 1;
+            near.push(String::from_utf8(bytes).expect("ASCII stays UTF-8"));
+        }
+        for name in near.iter().filter(|name| !keywords.contains(&name.as_str())) {
+            assert_eq!(TokenKind::keyword(name, LuaVersion::Lua54), None, "{name:?}");
         }
     }
 }
@@ -112,22 +213,6 @@ fn is_identifier_shaped_holds_for_ascii_names_keywords_included() {
     for text in ["", "1st", "a-b", "has space", "a.b", "a\\nb", "\u{dc}nicode", "x\u{e9}"] {
         assert!(!TokenKind::is_identifier_shaped(text), "{text:?}");
     }
-}
-
-#[test]
-fn identifier_reads_only_identifier_names() {
-    let span = Span::new(0, 3);
-    let name = Token::new(TokenKind::Identifier(CompactString::from("foo")), span);
-    assert_eq!(name.identifier(), Some("foo"));
-    let string = Token::new(TokenKind::StringLiteral(CompactString::from("\"foo\"")), span);
-    assert_eq!(string.identifier(), None);
-    assert_eq!(Token::new(TokenKind::Nil, span).identifier(), None);
-}
-
-#[test]
-fn identifier_is_none_for_the_empty_recovery_placeholder() {
-    let placeholder = Token::new(TokenKind::Identifier(CompactString::default()), Span::new(0, 0));
-    assert_eq!(placeholder.identifier(), None);
 }
 
 #[test]

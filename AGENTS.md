@@ -30,7 +30,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md#commits-and-pull-requests) before you wri
 - Purity analysis assumes metamethods. Only literal arithmetic is pure. A variable read, an index, arithmetic, a comparison, or a concatenation can each call one. `#"str"` is never folded, because escape sequences make the raw length unreliable.
 - Constant folding reproduces the target's float arithmetic exactly, so it never fuses or reorders an operation, as `mul_add` would.
 - `minify(minify(x)) == minify(x)` and `format(format(x)) == format(x)`, and both outputs reparse with no errors. Tests check both.
-- Emitters never read source text. Leaf text comes from token-carried values. Codegen and the formatter consult source only for trivia and verbatim regions and still work without it, because a synthetic AST must stay printable.
+- Emitters never read source text. Leaf text comes from what the tree's leaves hold, since a token holds none. Codegen and the formatter consult source only for trivia and verbatim regions and still work without it, because a synthetic AST must stay printable.
 - Bundle output names no host paths. Every path the bundle carries, in provenance comments and 5.2+ loader data, comes from `ModuleInfo::relative_path`, which is project-relative, with `..` segments above the root and only the file name when there is no shared root. `ModuleInfo::path`, `source_files`, and the line map stay canonical. They're local build data and never reach the output.
 
 ### Fix lints instead of silencing them
@@ -95,7 +95,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 
 - A transform or visitor matches every variant with no wildcard arm, so a new variant makes the compiler point at every consumer. The same goes for a helper that classifies its own enum, such as `category()` or a `has_<feature>` predicate: list every variant, so a new one has to decide its answer. Where only one variant matters, use `if let` or `matches!` rather than a `match` with a wildcard.
 - An error reaches the user as a `Diagnostic` built with a numbered constructor such as `Diagnostic::e008`, never with an inline code. A lex, parse, or format error is a `SourceError`, and a parse failure is always E008.
-- Identifiers stay per-token `CompactString`s. No global string interner, because its lock would serialize rayon's workers.
+- A token holds no text, only its kind, span, and flags, and `Token::text` slices its text from the source. No global string interner, because its lock would serialize rayon's workers.
 - Every spawned task has an owner that can stop it. That's a `TaskTracker` with a `CancellationToken`, a `JoinSet`, or a `JoinHandle` someone holds. No detached `tokio::spawn`.
 
 ### Imports

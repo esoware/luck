@@ -3,48 +3,75 @@ use luck_token::{LuaVersion, Span, TokenKind};
 use crate::cursor::Cursor;
 use crate::lex_error::{LexError, lex_error};
 
-/// Scan a number literal, with the cursor on its first digit or on a `.`
-/// followed by a digit.
+/// Scan a numeral that starts at `start` with `first`, a digit or a `.`
+/// before one, with the cursor past `first`.
 ///
 /// # Errors
 ///
 /// Returns a [`LexError`] for a malformed numeral.
+#[inline]
 pub(crate) fn scan_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
+    start: usize,
+    first: u8,
 ) -> Result<TokenKind, LexError> {
-    let start = cursor.position();
-    let is_integer = match cursor.rest() {
+    let rest = cursor.rest();
+    let digit_count = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+    // Most numerals are decimal integers that nothing else touches.
+    if first != b'.'
+        && !rest
+            .get(digit_count)
+            .is_some_and(|&b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_')
+    {
+        cursor.advance_by(digit_count);
+        return Ok(TokenKind::Number);
+    }
+    scan_other_number(cursor, version, start, first)
+}
+
+/// # Errors
+///
+/// Returns a [`LexError`] for a malformed numeral.
+#[cold]
+#[inline(never)]
+fn scan_other_number(
+    cursor: &mut Cursor<'_>,
+    version: LuaVersion,
+    start: usize,
+    first: u8,
+) -> Result<TokenKind, LexError> {
+    let is_integer = match (first, cursor.rest()) {
         // Every reference scanner reads the digit after a leading `.` as the
         // numeral's first, so `.0x` opens a hex scan that can never convert.
-        [b'.', b'0', b'x' | b'X', ..] => {
-            cursor.advance_by(2);
+        (b'.', [b'0', b'x' | b'X', ..]) => {
+            cursor.advance_by(1);
             return Err(touching_letter_error(cursor, start));
         }
-        [b'0', after_zero @ ..] => {
+        (b'0', after_zero) => {
             // Luau strips every `_` before conversion, so `0_x1` is hex.
             let underscore_count = if version.has_underscore_separators() {
                 after_zero.iter().take_while(|&&b| b == b'_').count()
             } else {
                 0
             };
-            let prefix_length = underscore_count.saturating_add(2);
+            let prefix_length = underscore_count.saturating_add(1);
             match after_zero.get(underscore_count) {
                 Some(b'x' | b'X') => scan_hex_number(cursor, version, start, prefix_length)?,
                 // Luau
                 Some(b'b' | b'B') if version.has_binary_literals() => {
                     scan_binary_number(cursor, version, start, prefix_length)?
                 }
-                _ => scan_decimal_number(cursor, version, start)?,
+                _ => scan_decimal_number(cursor, version, start, false)?,
             }
         }
-        _ => scan_decimal_number(cursor, version, start)?,
+        _ => scan_decimal_number(cursor, version, start, first == b'.')?,
     };
-    let text = cursor.text_since(start).into();
-    Ok(if is_integer { TokenKind::Integer(text) } else { TokenKind::Number(text) })
+    Ok(if is_integer { TokenKind::Integer } else { TokenKind::Number })
 }
 
-/// Whether the numeral took the Luau `i` suffix.
+/// Whether the numeral took the Luau `i` suffix. The cursor is past the `0`,
+/// `prefix_length` bytes before the hex digits.
 ///
 /// # Errors
 ///
@@ -111,7 +138,8 @@ fn scan_hex_number(
     Ok(is_integer)
 }
 
-/// Whether the numeral took the Luau `i` suffix.
+/// Whether the numeral took the Luau `i` suffix. The cursor is past the `0`,
+/// `prefix_length` bytes before the binary digits.
 ///
 /// # Errors
 ///
@@ -139,7 +167,8 @@ fn scan_binary_number(
     Ok(is_integer)
 }
 
-/// Whether the numeral took the Luau `i` suffix.
+/// Whether the numeral took the Luau `i` suffix. The cursor is past the first
+/// digit, or past a leading `.` when `is_fraction` holds.
 ///
 /// # Errors
 ///
@@ -148,13 +177,17 @@ fn scan_decimal_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
+    is_fraction: bool,
 ) -> Result<bool, LexError> {
-    eat_digits(cursor, version, u8::is_ascii_digit);
-
-    let mut is_float = false;
-    if cursor.peek() == Some(b'.') && cursor.peek_next() != Some(b'.') {
-        is_float = true;
-        cursor.advance();
+    let mut is_float = is_fraction;
+    if !is_fraction {
+        eat_digits(cursor, version, u8::is_ascii_digit);
+        if cursor.peek() == Some(b'.') && cursor.peek_next() != Some(b'.') {
+            is_float = true;
+            cursor.advance_by(1);
+        }
+    }
+    if is_float {
         eat_digits(cursor, version, u8::is_ascii_digit);
     }
 
@@ -231,9 +264,9 @@ fn eat_digits(
 /// marker, an optional sign, and the decimal digits. Returns whether any
 /// digits followed.
 fn eat_exponent(cursor: &mut Cursor<'_>, version: LuaVersion) -> bool {
-    cursor.advance();
+    cursor.advance_by(1);
     if matches!(cursor.peek(), Some(b'+' | b'-')) {
-        cursor.advance();
+        cursor.advance_by(1);
     }
     eat_digits(cursor, version, u8::is_ascii_digit)
 }
