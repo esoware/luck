@@ -522,10 +522,10 @@ impl Allocator {
     ///
     /// allocator.alloc(1u8); // 1 byte with alignment 1
     /// allocator.alloc(2u8); // 1 byte with alignment 1
-    /// allocator.alloc(3u64); // 8 bytes with alignment 8
+    /// allocator.alloc(3u32); // 4 bytes with alignment 4
     ///
-    /// // Only 10 bytes were allocated, but 16 bytes were used, in order to align `3u64` on 8
-    /// assert_eq!(allocator.used_bytes(), 16);
+    /// // Only 6 bytes were allocated, but 8 bytes were used, in order to align `3u32` on 4
+    /// assert_eq!(allocator.used_bytes(), 8);
     ///
     /// allocator.reset();
     /// assert_eq!(allocator.used_bytes(), 0);
