@@ -309,6 +309,16 @@ impl<'ast> ScopeTree<'ast> {
             })
     }
 
+    /// The reference whose name holds `offset`, either end included, so an
+    /// editor's cursor just past a name is on it. Names don't overlap, so
+    /// it's the last one to start by then.
+    #[must_use]
+    pub fn reference_at(&self, offset: u32) -> Option<ReferenceId> {
+        let after = self.positions.partition_point(|position| position.start <= offset);
+        let last = self.positions.get(after.checked_sub(1)?)?.reference;
+        (offset <= self.reference(last).span.end).then_some(last)
+    }
+
     /// The references whose names lie within `span`, by where they start.
     pub fn references_within(&self, span: Span) -> impl Iterator<Item = ReferenceId> + '_ {
         let first = self.positions.partition_point(|position| position.start < span.start);
@@ -397,7 +407,28 @@ impl<'ast> ScopeTree<'ast> {
 
 #[cfg(test)]
 mod tests {
+    use luck_allocator::Allocator;
+
     use super::*;
+    use crate::fixtures::parse;
+
+    #[test]
+    fn reference_at_finds_the_name_an_offset_touches() {
+        let allocator = Allocator::new();
+        let source = "local ab = 1 print(ab)";
+        let tree =
+            ScopeTree::build(parse(&allocator, source, LuaVersion::Lua54), LuaVersion::Lua54);
+        let name_at = |offset| tree.reference_at(offset).map(|id| tree.reference(id).span);
+        // `print` is 13..18 and `ab` 19..21.
+        assert_eq!(name_at(13), Some(Span::new(13, 18)));
+        assert_eq!(name_at(18), Some(Span::new(13, 18)));
+        assert_eq!(name_at(19), Some(Span::new(19, 21)));
+        assert_eq!(name_at(21), Some(Span::new(19, 21)));
+        assert_eq!(name_at(22), None);
+        // The declaration makes no reference.
+        assert_eq!(name_at(6), None);
+        assert_eq!(name_at(0), None);
+    }
 
     #[test]
     fn ids_are_niche_optimized() {
