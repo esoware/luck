@@ -4,7 +4,7 @@ use memchr::memmem;
 use super::Lexer;
 use crate::cursor::Cursor;
 use crate::lex_error::{LexError, lex_error};
-use crate::search::{ByteMatchTable, byte_match_table, find_match, short_string_length};
+use crate::search::{ByteMatchTable, byte_match_table, find_match};
 
 // Stop bytes for raw interpolated-string text: escape lead, interpolation
 // opener, closing backtick, and the line breaks Luau rejects.
@@ -29,14 +29,14 @@ impl Lexer<'_> {
     /// follows on later lines lexes as it would have.
     pub(super) fn lex_short_string(&mut self, start: usize, quote: u8) -> Token {
         loop {
-            self.cursor.advance_by(short_string_length(self.cursor.rest(), quote));
+            self.cursor.eat_short_string_run(quote);
             match self.cursor.peek() {
                 None | Some(b'\n' | b'\r') => {
                     self.reject(start, "unterminated string");
                     return self.unterminated_token(TokenKind::StringLiteral, start);
                 }
                 Some(b'\\') => {
-                    self.cursor.advance_by(1);
+                    self.cursor.bump();
                     // The next iteration reports the unterminated string.
                     if let Some(escaped) = self.cursor.peek()
                         && let Err(error) = scan_escape(&mut self.cursor, self.version, escaped)
@@ -46,7 +46,7 @@ impl Lexer<'_> {
                 }
                 // The scan stops only at those bytes and at `quote`.
                 Some(_) => {
-                    self.cursor.advance_by(1);
+                    self.cursor.bump();
                     return self.token(TokenKind::StringLiteral, start);
                 }
             }
@@ -136,10 +136,10 @@ impl Lexer<'_> {
                     return SegmentEnd::Unterminated;
                 }
                 Some(b'\\') => {
-                    self.cursor.advance_by(1);
+                    self.cursor.bump();
                     match self.cursor.peek() {
                         // Escaped braces and backticks stay literal text.
-                        Some(b'{' | b'}' | b'`') => self.cursor.advance_by(1),
+                        Some(b'{' | b'}' | b'`') => self.cursor.bump(),
                         // Consuming `\u{...}` whole also keeps its `{` from
                         // opening an interpolation.
                         Some(escaped) => {
@@ -161,15 +161,15 @@ impl Lexer<'_> {
                     );
                 }
                 Some(b'{') => {
-                    self.cursor.advance_by(1);
+                    self.cursor.bump();
                     return SegmentEnd::OpenBrace;
                 }
                 Some(b'`') => {
-                    self.cursor.advance_by(1);
+                    self.cursor.bump();
                     return SegmentEnd::Backtick;
                 }
                 Some(_) => {
-                    self.cursor.advance_by(1);
+                    self.cursor.bump();
                     self.cursor
                         .advance_by(find_match(self.cursor.rest(), &INTERPOLATED_STRING_STOP));
                 }
@@ -188,28 +188,28 @@ impl Lexer<'_> {
 fn scan_escape(cursor: &mut Cursor<'_>, version: LuaVersion, escaped: u8) -> Result<(), LexError> {
     match escaped {
         b'\n' => {
-            cursor.advance_by(1);
+            cursor.bump();
             if version.has_lfcr_line_break() {
                 cursor.eat(b'\r');
             }
         }
         b'\r' => {
-            cursor.advance_by(1);
+            cursor.bump();
             cursor.eat(b'\n');
         }
         c if c.is_ascii_digit() => scan_decimal_escape(cursor)?,
         b'x' if version.has_hex_escape() => scan_hex_escape(cursor)?,
         b'z' if version.has_whitespace_escape() => {
-            cursor.advance_by(1);
+            cursor.bump();
             cursor.eat_while(is_lua_whitespace);
         }
         b'u' if version.has_unicode_escape() => scan_unicode_escape(cursor, version)?,
         b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'\'' | b'"' => {
-            cursor.advance_by(1);
+            cursor.bump();
         }
         // Lua 5.1 and Luau accept any other escaped character as that
         // literal character; 5.2+ reject it.
-        _ if !version.has_strict_escapes() => cursor.advance_by(1),
+        _ if !version.has_strict_escapes() => cursor.bump(),
         c => return Err(invalid_escape(cursor, c)),
     }
     Ok(())
@@ -241,7 +241,7 @@ fn scan_decimal_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
 /// Returns a [`LexError`] unless exactly two hex digits follow.
 fn scan_hex_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
     let escape_start = cursor.position().saturating_sub(1);
-    cursor.advance_by(1);
+    cursor.bump();
     for digit_count in 0..2u32 {
         if !cursor.peek().is_some_and(|digit| digit.is_ascii_hexdigit()) {
             return Err(lex_error(
@@ -249,7 +249,7 @@ fn scan_hex_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
                 format!("`\\x` escape requires exactly 2 hex digits, got {digit_count}"),
             ));
         }
-        cursor.advance_by(1);
+        cursor.bump();
     }
     Ok(())
 }
@@ -262,7 +262,7 @@ fn scan_hex_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
 /// `version` doesn't allow.
 fn scan_unicode_escape(cursor: &mut Cursor<'_>, version: LuaVersion) -> Result<(), LexError> {
     let escape_start = cursor.position().saturating_sub(1);
-    cursor.advance_by(1);
+    cursor.bump();
     if !cursor.eat(b'{') {
         return Err(lex_error(cursor.span_since(escape_start), "`\\u` escape requires `{`"));
     }
@@ -292,7 +292,7 @@ fn scan_unicode_escape(cursor: &mut Cursor<'_>, version: LuaVersion) -> Result<(
 /// undefined escape.
 fn invalid_escape(cursor: &mut Cursor<'_>, character: u8) -> LexError {
     let character_start = cursor.position();
-    cursor.advance_by(1);
+    cursor.bump();
     let escaped = cursor.eat_rest_of_char(character_start).unwrap_or_else(|| char::from(character));
     lex_error(
         cursor.span_since(character_start.saturating_sub(1)),

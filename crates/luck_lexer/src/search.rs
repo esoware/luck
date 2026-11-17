@@ -117,19 +117,22 @@ const fn name_bytes(word: u64) -> u64 {
     (digits | letters | underscores) & !word & HIGH_BITS
 }
 
-/// How many bytes of name open `bytes`.
+/// How many bytes of name open `bytes`. Every byte it counts is ASCII, which
+/// [`Cursor::eat_name`](crate::cursor::Cursor::eat_name) relies on.
 #[inline]
 pub(crate) fn name_length(bytes: &[u8]) -> usize {
-    let mut length = 0usize;
-    while let Some(&chunk) = bytes.get(length..).and_then(<[u8]>::first_chunk::<8>) {
+    let mut remaining = bytes;
+    while let Some((&chunk, after_chunk)) = remaining.split_first_chunk::<8>() {
         let stops = !name_bytes(word(chunk)) & HIGH_BITS;
         if stops != 0 {
-            return length.wrapping_add(first_answer(stops));
+            return bytes.len().wrapping_sub(remaining.len()).wrapping_add(first_answer(stops));
         }
-        length = length.wrapping_add(8);
+        remaining = after_chunk;
     }
-    let tail = bytes.get(length..).unwrap_or_default();
-    length.wrapping_add(find_match(tail, &NOT_NAME_CONTINUE))
+    bytes
+        .len()
+        .wrapping_sub(remaining.len())
+        .wrapping_add(find_match(remaining, &NOT_NAME_CONTINUE))
 }
 
 /// How many bytes open `bytes` before a `quote`, a `\`, or a line break, the

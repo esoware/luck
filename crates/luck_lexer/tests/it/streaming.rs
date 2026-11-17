@@ -6,6 +6,16 @@ use luck_testgen::collect_fixture_files;
 use luck_token::{LuaVersion, TokenKind};
 
 #[test]
+fn a_lexer_is_send_and_sync() {
+    fn assert_send_sync<T>()
+    where
+        T: Send + Sync,
+    {
+    }
+    assert_send_sync::<Lexer<'static>>();
+}
+
+#[test]
 fn next_token_streams_exactly_what_lex_materializes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
     let fixtures = collect_fixture_files(&root).expect("fixture tree is readable");

@@ -166,6 +166,41 @@ fn empty_source_lexes_to_only_eof() {
     assert_eq!(result.tokens[0].kind, TokenKind::Eof);
 }
 
+/// Every scan can meet the end of the source, so each prefix ends one at a
+/// different byte.
+#[test]
+fn every_prefix_of_a_source_lexes_to_an_eof_at_its_end() {
+    let source = "\u{FEFF}#!lua
+local name_longer_than_a_word, x = 0x1F.8p-3 + 1e+10 .. 0b1_01i, 1_000i
+s = \"esc \\n \\z \t \\x41 \\u{1F600} \\065 \\q \u{e9}\" .. 'q\\\r
+' t = [==[ long ]] ]=] ]==] --[[ block
+comment ]] -- line \u{1F600}\r
+`a {b .. `c {d}`} \\{ {{ e` f(...) ..= //= :: -> \x0B\x0C caf\u{e9}
+";
+    for version in LuaVersion::ALL {
+        // `get` refuses a cut inside a char.
+        for prefix in (0..=source.len()).filter_map(|length| source.get(..length)) {
+            let result = lex(prefix, version);
+            let end = u32::try_from(prefix.len()).expect("the source is short");
+            let (eof, tokens) = result.tokens.split_last().expect("an EOF token");
+            assert_eq!(eof.kind, TokenKind::Eof, "{version:?} {prefix:?}");
+            assert_eq!(eof.span, Span::new(end, end), "{version:?} {prefix:?}");
+            let mut previous_end = 0;
+            for token in tokens {
+                let span = token.span;
+                assert!(
+                    previous_end <= span.start && span.start < span.end && span.end <= end,
+                    "{version:?} {prefix:?} {token:?}"
+                );
+                previous_end = span.end;
+            }
+            for comment in &result.comments {
+                assert!(comment.span.end <= end, "{version:?} {prefix:?} {comment:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn token_spans_cover_their_source_bytes() {
     let result = lex_lua51("local x = 42");

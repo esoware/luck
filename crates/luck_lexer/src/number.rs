@@ -45,7 +45,7 @@ fn scan_other_number(
         // Every reference scanner reads the digit after a leading `.` as the
         // numeral's first, so `.0x` opens a hex scan that can never convert.
         (b'.', [b'0', b'x' | b'X', ..]) => {
-            cursor.advance_by(1);
+            cursor.bump();
             return Err(touching_letter_error(cursor, start));
         }
         (b'0', after_zero) => {
@@ -184,7 +184,7 @@ fn scan_decimal_number(
         eat_digits(cursor, version, u8::is_ascii_digit);
         if cursor.peek() == Some(b'.') && cursor.peek_next() != Some(b'.') {
             is_float = true;
-            cursor.advance_by(1);
+            cursor.bump();
         }
     }
     if is_float {
@@ -264,9 +264,9 @@ fn eat_digits(
 /// marker, an optional sign, and the decimal digits. Returns whether any
 /// digits followed.
 fn eat_exponent(cursor: &mut Cursor<'_>, version: LuaVersion) -> bool {
-    cursor.advance_by(1);
+    cursor.bump();
     if matches!(cursor.peek(), Some(b'+' | b'-')) {
-        cursor.advance_by(1);
+        cursor.bump();
     }
     eat_digits(cursor, version, u8::is_ascii_digit)
 }

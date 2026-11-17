@@ -11,7 +11,6 @@ use crate::cursor::Cursor;
 use crate::lex_error::{LexError, lex_error};
 use crate::lex_result::LexResult;
 use crate::number::scan_number;
-use crate::search::name_length;
 use string::{advance_past_long_bracket_close, eat_long_bracket_level};
 
 /// The densest real file in the bench corpus runs about this many bytes per
@@ -140,11 +139,17 @@ impl<'source> Lexer<'source> {
                 self.has_line_break = eof.has_line_break_before;
                 return eof;
             };
-            self.cursor.advance_by(1);
+            // A name's scan takes its first byte too, so it vouches for the
+            // whole name.
+            if matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'_') {
+                let kind = TokenKind::keyword(self.cursor.eat_name(), self.version)
+                    .unwrap_or(TokenKind::Identifier);
+                return self.token(kind, start);
+            }
+            self.cursor.bump();
             // The bytes that start most tokens come first. The rest go to
             // `lex_operator`, so this stays a small function.
             let kind = match byte {
-                b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.lex_name(start),
                 b'0'..=b'9' => match scan_number(&mut self.cursor, self.version, start, byte) {
                     Ok(kind) => kind,
                     Err(error) => {
@@ -167,7 +172,7 @@ impl<'source> Lexer<'source> {
                         }
                     }
                     Some(b'.') => {
-                        self.cursor.advance_by(1);
+                        self.cursor.bump();
                         if self.cursor.eat(b'.') {
                             TokenKind::DotDotDot
                         } else {
@@ -230,24 +235,19 @@ impl<'source> Lexer<'source> {
 
     #[inline]
     fn skip_whitespace(&mut self) {
-        let rest = self.cursor.rest();
         let is_lfcr_line_break = self.version.has_lfcr_line_break();
-        let length = rest
-            .iter()
-            .position(|&byte| match byte {
-                b' ' | b'\t' | 0x0B | 0x0C => false,
-                b'\n' => {
-                    self.has_line_break = true;
-                    false
-                }
-                b'\r' => {
-                    self.has_line_break |= is_lfcr_line_break;
-                    false
-                }
-                _ => true,
-            })
-            .unwrap_or(rest.len());
-        self.cursor.advance_by(length);
+        self.cursor.eat_while(|byte| match byte {
+            b' ' | b'\t' | 0x0B | 0x0C => true,
+            b'\n' => {
+                self.has_line_break = true;
+                true
+            }
+            b'\r' => {
+                self.has_line_break |= is_lfcr_line_break;
+                true
+            }
+            _ => false,
+        });
     }
 
     /// The token from `start` to the cursor, which also leads every comment
@@ -303,7 +303,7 @@ impl<'source> Lexer<'source> {
     /// A block comment cut off before its closer is still a comment, through
     /// the end of the source. The cursor is past the first `-`.
     fn lex_comment(&mut self, start: usize) {
-        self.cursor.advance_by(1);
+        self.cursor.bump();
 
         let kind = if self.cursor.eat(b'[')
             && let Some(level) = eat_long_bracket_level(&mut self.cursor)
@@ -355,14 +355,6 @@ impl<'source> Lexer<'source> {
         if kind == CommentKind::MultiLineBlock {
             self.has_line_break = true;
         }
-    }
-
-    /// The cursor is past the name's first byte.
-    #[inline]
-    fn lex_name(&mut self, start: usize) -> TokenKind {
-        self.cursor.advance_by(name_length(self.cursor.rest()));
-        TokenKind::keyword(self.cursor.text_since(start), self.version)
-            .unwrap_or(TokenKind::Identifier)
     }
 
     /// Lex an operator from its first `byte` at `start`, with the cursor past
