@@ -284,18 +284,13 @@ pub trait Visitor<'ast> {
                 match suffix {
                     Suffix::Field(_) => {}
                     Suffix::Index { index, .. } => self.visit_expr(index),
-                    Suffix::Call(args) => self.visit_call(Call {
-                        callee: chain.head(i),
-                        method: None,
-                        type_args: None,
-                        args,
-                    }),
-                    Suffix::MethodCall(call) => self.visit_call(Call {
-                        callee: chain.head(i),
-                        method: Some(&call.name),
-                        type_args: call.type_args.as_deref(),
-                        args: &call.args,
-                    }),
+                    // Built in one place, so each level of nested calls holds
+                    // one `Call` in its frame, not one per kind.
+                    Suffix::Call(_) | Suffix::MethodCall(_) => {
+                        if let Some(call) = Call::new(chain.head(i), suffix) {
+                            self.visit_call(call);
+                        }
+                    }
                     // Luau
                     Suffix::TypeInstantiation { type_args, .. } => {
                         for ty in &type_args.args {
