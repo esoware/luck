@@ -169,7 +169,7 @@ pub(crate) struct Checkpoint {
 #[derive(Debug)]
 pub(crate) struct Formatter<'ast> {
     elements: List<'ast, FormatElement<'ast>>,
-    layout: Layout,
+    layout: Layout<'ast>,
     /// How many bytes of text the stream holds, which the output takes at
     /// least.
     text_bytes: usize,
@@ -204,7 +204,8 @@ impl<'ast> Formatter<'ast> {
             comments.source_text().map_or(0, |source| source.len().div_ceil(5).saturating_mul(3));
         Self {
             elements: List::with_capacity_in(capacity, allocator),
-            layout: Layout::default(),
+            // About one element in eleven starts a group.
+            layout: Layout::with_capacity_in(capacity.div_ceil(8), allocator),
             text_bytes: 0,
             space_fence: 0,
             options,
@@ -289,7 +290,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn group_id(&mut self) -> GroupId {
-        self.layout.new_group()
+        self.layout.new_group(self.allocator)
     }
 
     #[inline]
@@ -301,7 +302,7 @@ impl<'ast> Formatter<'ast> {
     fn push_text(&mut self, text: &'ast str, width: TextWidth) {
         self.text_bytes = self.text_bytes.wrapping_add(text.len());
         if width.is_multiline() {
-            self.layout.force_break();
+            self.layout.force_break(self.elements.len());
         }
         self.push(FormatElement::Text(text, width));
     }
@@ -334,7 +335,7 @@ impl<'ast> Formatter<'ast> {
         let width = TextWidth::of(text);
         self.text_bytes = self.text_bytes.wrapping_add(text.len());
         if width.is_multiline() {
-            self.layout.force_break();
+            self.layout.force_break(self.elements.len());
         }
         self.push(FormatElement::Verbatim(text, width));
     }
@@ -391,7 +392,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn expand_parent(&mut self) {
-        self.layout.force_break();
+        self.layout.force_break(self.elements.len());
         self.push(FormatElement::ExpandParent);
     }
 
@@ -501,9 +502,10 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn checkpoint(&mut self) -> Checkpoint {
+        let element_count = self.element_count();
         Checkpoint {
-            element_count: self.element_count(),
-            layout: self.layout.checkpoint(),
+            element_count,
+            layout: self.layout.checkpoint(element_count),
             comments: self.comments.checkpoint(),
         }
     }

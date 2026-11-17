@@ -22,6 +22,7 @@
 use core::mem;
 use core::ops::Range;
 
+use luck_allocator::{Allocator, List};
 use luck_token::{CodeBuffer, index_to_offset, offset_to_index};
 use unicode_width::UnicodeWidthStr as _;
 
@@ -66,48 +67,63 @@ struct OpenGroup {
     /// For a hugged group, the first and last lines directly inside it, as
     /// the group around it counts them.
     hug_lines: Option<(usize, usize)>,
+    /// The element a forced break marked the group expanded at.
+    marked_at: Option<usize>,
 }
 
 /// What the printer has to know about each group before it reaches it, kept
 /// up to date as the stream is written.
-#[derive(Debug, Default)]
-pub(crate) struct Layout {
-    groups: Vec<Group>,
+#[derive(Debug)]
+pub(crate) struct Layout<'ast> {
+    groups: List<'ast, Group>,
     hugs: Vec<Hug>,
     open: Vec<OpenGroup>,
     /// The finished hugs of each open group, innermost last. A group's are
     /// contiguous, since each group inside it moves its own out as it closes,
     /// before its parent's hug of it goes in.
     pending: Vec<Hug>,
-    /// Each group a forced break marked, so a restore can take back the marks
-    /// made since its checkpoint.
-    marked: Vec<GroupId>,
 }
 
 /// Where the layout stood when the stream was at a checkpoint.
 ///
-/// Every group opened since has closed by the time it's restored, so only the
-/// marks, the hugs, and the lines the innermost open group has seen can have
-/// moved.
+/// Every group opened since has closed by the time it's restored, and only an
+/// open group can be marked, so only the marks on the groups still open, the
+/// hugs, and the lines the innermost one has seen can have moved.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LayoutCheckpoint {
-    marked: usize,
+    element_count: usize,
     hugs: usize,
     pending: usize,
     hug_lines: Option<(usize, usize)>,
 }
 
-impl Layout {
-    pub(crate) fn new_group(&mut self) -> GroupId {
+impl<'ast> Layout<'ast> {
+    pub(crate) fn with_capacity_in(group_count: usize, allocator: &'ast Allocator) -> Self {
+        Self {
+            groups: List::with_capacity_in(group_count, allocator),
+            hugs: Vec::new(),
+            open: Vec::new(),
+            pending: Vec::new(),
+        }
+    }
+
+    pub(crate) fn new_group(&mut self, allocator: &'ast Allocator) -> GroupId {
         let id = GroupId::new(self.groups.len());
-        self.groups.push(Group { mode: None, hugs_start: 0, hugs_end: 0 });
+        self.groups.push(Group { mode: None, hugs_start: 0, hugs_end: 0 }, allocator);
         id
     }
 
     /// `content_start` is the index of the group's first element.
     pub(crate) fn open(&mut self, id: GroupId, content_start: usize, is_hugged: bool) {
         let pending_hugs = self.pending.len();
-        self.open.push(OpenGroup { id, content_start, is_hugged, pending_hugs, hug_lines: None });
+        self.open.push(OpenGroup {
+            id,
+            content_start,
+            is_hugged,
+            pending_hugs,
+            hug_lines: None,
+            marked_at: None,
+        });
     }
 
     pub(crate) fn close(&mut self) {
@@ -137,7 +153,7 @@ impl Layout {
             child.hug_lines = Some((first_line, line));
         }
         if matches!(mode, LineMode::Hard | LineMode::Empty) {
-            self.force_break();
+            self.force_break(index);
         }
     }
 
@@ -149,23 +165,26 @@ impl Layout {
     /// marked a group settled every group around it, and each of those is
     /// still open around the same inner group, so the same hug still exempts
     /// it.
-    pub(crate) fn force_break(&mut self) {
+    ///
+    /// `index` is the element the break is.
+    pub(crate) fn force_break(&mut self, index: usize) {
         let mut is_inner_hugged = false;
-        for open in self.open.iter().rev() {
+        for open in self.open.iter_mut().rev() {
             if !is_inner_hugged && let Some(group) = self.groups.get_mut(open.id.index()) {
                 if group.mode == Some(PrintMode::Expanded) {
                     return;
                 }
                 group.mode = Some(PrintMode::Expanded);
-                self.marked.push(open.id);
+                open.marked_at = Some(index);
             }
             is_inner_hugged = open.is_hugged;
         }
     }
 
-    pub(crate) fn checkpoint(&self) -> LayoutCheckpoint {
+    /// `element_count` is how many elements the stream holds now.
+    pub(crate) fn checkpoint(&self, element_count: usize) -> LayoutCheckpoint {
         LayoutCheckpoint {
-            marked: self.marked.len(),
+            element_count,
             hugs: self.hugs.len(),
             pending: self.pending.len(),
             hug_lines: self.open.last().and_then(|open| open.hug_lines),
@@ -173,9 +192,12 @@ impl Layout {
     }
 
     pub(crate) fn restore(&mut self, checkpoint: LayoutCheckpoint) {
-        for id in self.marked.drain(checkpoint.marked..) {
-            if let Some(group) = self.groups.get_mut(id.index()) {
+        for open in &mut self.open {
+            if open.marked_at.is_some_and(|index| index >= checkpoint.element_count)
+                && let Some(group) = self.groups.get_mut(open.id.index())
+            {
                 group.mode = None;
+                open.marked_at = None;
             }
         }
         self.hugs.truncate(checkpoint.hugs);
@@ -188,7 +210,7 @@ impl Layout {
 
 pub(crate) fn print(
     elements: &[FormatElement<'_>],
-    layout: Layout,
+    layout: Layout<'_>,
     options: &FormatOptions,
     base_indent: &str,
     capacity: usize,
@@ -232,7 +254,7 @@ enum Region {
     Entry,
 }
 
-struct Printer<'ast> {
+struct Printer<'ast, 'layout> {
     line_width: usize,
     /// One indent level is `bytes_per_indent` copies of `indent_byte` and
     /// measures `columns_per_indent` columns, so a tab is one byte and as wide
@@ -250,7 +272,7 @@ struct Printer<'ast> {
     indent_level: usize,
     /// Effective print-mode stack; empty means `Expanded` (top level).
     modes: Vec<PrintMode>,
-    groups: Vec<Group>,
+    groups: List<'layout, Group>,
     hugs: Vec<Hug>,
     /// Per open next-line group, whether it moved to the next line, so its
     /// end takes back the indent it added.
@@ -260,7 +282,7 @@ struct Printer<'ast> {
     is_pending_indent: bool,
 }
 
-impl<'ast> Printer<'ast> {
+impl<'ast> Printer<'ast, '_> {
     fn current_mode(&self) -> PrintMode {
         *self.modes.last().unwrap_or(&PrintMode::Expanded)
     }
