@@ -11,7 +11,7 @@ use luck_resolver::read_source_file;
 use luck_token::LuaVersion;
 
 use crate::exit::{Exit, usage_error};
-use crate::output::read_stdin_source;
+use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
 use crate::project::{ProjectFile, config_for_one_shot, for_each_outcome_in_order, project_files};
 use crate::render::render_source_errors;
 use crate::verbosity::Verbosity;
@@ -124,8 +124,8 @@ impl FmtArgs {
         {
             // One lock and one flush per stream for the whole run (the early
             // returns flush on drop).
-            let mut stderr = BufWriter::new(io::stderr().lock());
-            let mut stdout = BufWriter::new(io::stdout().lock());
+            let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
+            let mut stdout = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stdout().lock());
             let editorconfigs = Editorconfigs::default();
             for_each_outcome_in_order(
                 &files,

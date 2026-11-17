@@ -13,7 +13,7 @@ use luck_resolver::{normalize_path, read_source_file};
 use luck_token::{LineIndex, LuaVersion};
 
 use crate::exit::{Exit, operation_error, usage_error};
-use crate::output::read_stdin_source;
+use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
 use crate::project::{
     config_for_one_shot, for_each_outcome_in_order, project_files, resolve_project,
 };
@@ -214,8 +214,8 @@ impl LintArgs {
         let mut total_fixed = 0usize;
         {
             // One lock and one flush per stream for the whole run.
-            let mut stderr = BufWriter::new(io::stderr().lock());
-            let mut stdout = BufWriter::new(io::stdout().lock());
+            let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
+            let mut stdout = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stdout().lock());
             for_each_outcome_in_order(
                 &files,
                 |file, allocator| {

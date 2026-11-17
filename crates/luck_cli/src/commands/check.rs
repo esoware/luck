@@ -7,6 +7,7 @@ use luck_core::LuaTarget;
 use luck_resolver::read_source_file;
 
 use crate::exit::Exit;
+use crate::output::OUTPUT_BUFFER_BYTES;
 use crate::project::{for_each_outcome_in_order, project_files};
 use crate::render::render_source_errors;
 use crate::verbosity::Verbosity;
@@ -43,7 +44,7 @@ impl CheckArgs {
         let mut has_errors = false;
         {
             // One lock and one flush for the whole run.
-            let mut stderr = BufWriter::new(io::stderr().lock());
+            let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
             for_each_outcome_in_order(
                 &files,
                 |file, allocator| check_file(allocator, &file.path, file.target),
