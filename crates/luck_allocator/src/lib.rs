@@ -2,8 +2,8 @@
 //!
 //! The bump arena luck's syntax trees live in. An [`Allocator`] hands out memory that is freed all
 //! at once, when it's [`reset`](Allocator::reset) or dropped. A [`Box`] holds one value in it and a
-//! [`List`] a fixed-size run of values, and neither is ever dropped. An [`AllocatorPool`] recycles
-//! allocators across threads.
+//! [`List`] a run of values, and neither is ever dropped. An [`AllocatorPool`] recycles allocators
+//! across threads.
 //!
 //! Everything but [`List`] is ported from `oxc_allocator` 0.159.0, at oxc commit
 //! `b6ff5069de518a3d8dfd75c931da12eb9746af15`, and kept close enough to it that a diff against
@@ -23,5 +23,5 @@ pub mod arena;
 
 pub use allocator::Allocator;
 pub use boxed::Box;
-pub use list::List;
+pub use list::{List, ListIntoIter};
 pub use pool::{AllocatorGuard, AllocatorPool};
