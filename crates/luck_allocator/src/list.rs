@@ -202,6 +202,13 @@ impl<'alloc, T> List<'alloc, T> {
         tail
     }
 
+    /// How many items the list has room for before a push moves it.
+    #[must_use]
+    #[inline]
+    pub const fn capacity(&self) -> usize {
+        self.capacity as usize
+    }
+
     /// Keeps the first `new_length` items. A list already that short stays as it is.
     pub fn truncate(&mut self, new_length: usize) {
         if let Ok(new_length) = u32::try_from(new_length)
