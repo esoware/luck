@@ -69,7 +69,7 @@ impl<'ast> AstNode<'ast> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Nodes<'ast> {
     table: Vec<AstNode<'ast>>,
     blocks: Vec<&'ast Block<'ast>>,

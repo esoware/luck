@@ -65,8 +65,12 @@ pub fn lint_analyzed(
     let context = LintContext::new(parse, semantic, nodes, config);
 
     let mut diags = run_rules(&context, nodes);
-    suppression::apply(&mut diags, context.comments, context.source, nodes, semantic.version());
-    diags.sort_by_key(|diag| diag.span.start);
+    // A directive only drops or retunes a diagnostic, so with none it reads
+    // no comment.
+    if !diags.is_empty() {
+        suppression::apply(&mut diags, context.comments, context.source, nodes, semantic.version());
+        diags.sort_by_key(|diag| diag.span.start);
+    }
     diags
 }
 
@@ -90,21 +94,27 @@ impl<'ast> Analysis<'ast> {
 }
 
 /// `parse`'s analysis for `target`, with `config`'s extra globals defined.
+///
+/// Every rule reads the node table, so a config that runs none, as the
+/// language server's default does, gets an empty one and skips building it.
 #[must_use]
 pub fn analyze<'ast>(
     parse: &'ast ParseResult<'_>,
     target: LuaTarget,
     config: &LintConfig,
 ) -> Analysis<'ast> {
-    let mut collector = NodeCollector::new(&parse.block);
-    let mut semantic = luck_semantic::analyze_with(
-        &parse.block,
-        target.lua_version(),
-        target.stdlib_environment(),
-        &mut collector,
-    );
+    let (version, environment) = (target.lua_version(), target.stdlib_environment());
+    let block = &parse.block;
+    let (mut semantic, nodes) =
+        if RULES.iter().any(|entry| rule_severity(entry.rule(), config).is_some()) {
+            let mut collector = NodeCollector::new(block);
+            let semantic = luck_semantic::analyze_with(block, version, environment, &mut collector);
+            (semantic, collector.finish())
+        } else {
+            (luck_semantic::analyze(block, version, environment), Nodes::default())
+        };
     semantic.add_extra_globals(config.extra_globals.iter().map(String::as_str));
-    Analysis { semantic, nodes: collector.finish() }
+    Analysis { semantic, nodes }
 }
 
 fn parse_error_diags(parse: &ParseResult<'_>) -> Vec<LintDiagnostic> {
@@ -219,4 +229,28 @@ pub(crate) fn rule_severity(rule: &dyn Rule, config: &LintConfig) -> Option<Seve
             || (rule.category() == Category::Correctness).then(|| rule.default_severity()),
             RuleLevel::severity,
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_token::LuaVersion;
+
+    use super::*;
+
+    #[test]
+    fn a_config_that_runs_no_rule_builds_no_node_table() {
+        let allocator = Allocator::new();
+        let parse = luck_parser::parse(&allocator, "local x = nil print(x)", LuaVersion::Lua54);
+        let mut silent = LintConfig::default();
+        silent.categories.set_level(Category::Correctness, RuleLevel::Off);
+        let unlinted = analyze(&parse, LuaTarget::Lua54, &silent);
+        assert!(unlinted.nodes().as_slice().is_empty());
+        assert_eq!(lint_analyzed(&parse, &unlinted, &silent), []);
+        let mut one_rule = silent;
+        one_rule.rules.set_level("redundant_nil_init", RuleLevel::Warn);
+        let linted = analyze(&parse, LuaTarget::Lua54, &one_rule);
+        assert!(!linted.nodes().as_slice().is_empty());
+        let diags = lint_analyzed(&parse, &linted, &one_rule);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
 }
