@@ -1,7 +1,7 @@
 use core::ops::Range;
 
 use luck_allocator::Allocator;
-use luck_ast::{MAX_NESTING_DEPTH, Visitor, block_nesting_depth};
+use luck_ast::{MAX_NESTING_DEPTH, Statement, Visitor, block_nesting_depth};
 use luck_parser::parse;
 use luck_token::LuaVersion;
 
@@ -366,6 +366,24 @@ fn a_tree_with_errors_stays_within_the_cap() {
         levels.visit_block(&result.block);
         assert!(levels.deepest <= MAX_NESTING_DEPTH, "{}: {:?}", levels.deepest, source.get(..20));
     }
+}
+
+/// An `if` the cap stops in its second `elseif` takes its first clause with
+/// it, rather than leaving it to the `if` around it.
+#[test]
+fn an_if_cut_off_at_the_cap_keeps_its_clauses_to_itself() {
+    let allocator = Allocator::new();
+    let source = format!(
+        "if a then elseif b then {}if c then elseif d then x() elseif e then {}x() end",
+        "do ".repeat(250),
+        "do ".repeat(20),
+    );
+    let result = parse(&allocator, &source, LuaVersion::Lua54);
+    assert!(has_depth_limit_error(&result), "{:?}", result.errors);
+    let Some(Statement::IfStatement(outer)) = result.block.stmts.first() else {
+        panic!("{:?}", result.block.stmts.first());
+    };
+    assert_eq!(outer.elseif_clauses.len(), 1, "{:?}", outer.elseif_clauses);
 }
 
 /// A misplaced last statement stands as the block around it while that block
