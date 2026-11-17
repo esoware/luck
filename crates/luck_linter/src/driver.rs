@@ -186,7 +186,7 @@ fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic
         }
     }
 
-    let mut diags: Vec<LintDiagnostic> = Vec::new();
+    let mut diags = Vec::with_capacity(findings_by_slot.iter().map(Vec::len).sum());
     for ((entry, rule_findings), slot_severity) in
         RULES.iter().zip(findings_by_slot).zip(severities)
     {
