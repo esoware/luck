@@ -3,8 +3,8 @@ use std::collections::hash_map::Entry;
 
 use luck_ast::{
     Assignment, Block, CompoundAssignment, Expression, FunctionBody, FunctionDecl, GenericFor,
-    GlobalDeclaration, IfStatement, LocalAssignment, Name, NumericFor, Statement,
-    TypeDeclarationValue, Var, Visitor,
+    GlobalDeclaration, IfStatement, LastStatement, LocalAssignment, Name, NumericFor, Statement,
+    SuffixedExpression, TableConstructor, TypeDeclarationValue, Var, Visitor,
 };
 use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -13,17 +13,23 @@ use super::{
     BUCKET_SHIFT, MAX_BUCKETS_PER_REFERENCE, NameEntry, NameId, Position, Reference, ReferenceId,
     ReferenceKind, Scope, ScopeId, ScopeKind, ScopeTree, Symbol, SymbolId, SymbolKind,
 };
+use crate::sink::NodeSink;
 
 type InitializedLocals<'ast> = Vec<(SymbolId, &'ast Expression<'ast>)>;
 
 /// [`ScopeTree::build`], and each local that a `local` statement with one
-/// initializer per name declares, paired with its initializer.
+/// initializer per name declares, paired with its initializer. `sink` sees
+/// each node the walk reaches.
 ///
 /// A local comes before any initializer that can read it.
-pub(crate) fn build_with_initializers<'ast>(
+pub(crate) fn build_with_initializers<'ast, Sink>(
     block: &'ast Block<'ast>,
     version: LuaVersion,
-) -> (ScopeTree<'ast>, InitializedLocals<'ast>) {
+    sink: &mut Sink,
+) -> (ScopeTree<'ast>, InitializedLocals<'ast>)
+where
+    Sink: NodeSink<'ast>,
+{
     let module = ScopeId::from_index(0);
     let mut builder = Builder {
         tree: ScopeTree {
@@ -49,6 +55,7 @@ pub(crate) fn build_with_initializers<'ast>(
         is_in_type_function: false,
         type_names: FxHashSet::default(),
         initialized_locals: Vec::new(),
+        sink,
     };
     builder.visit_block(block);
     builder.finish()
@@ -82,7 +89,7 @@ struct OuterScope {
     is_global_star: bool,
 }
 
-struct Builder<'ast> {
+struct Builder<'ast, 'sink, Sink> {
     tree: ScopeTree<'ast>,
     /// Each name's innermost live declaration, by name. Resolving a name is
     /// one hash of it, and leaving a scope hashes nothing.
@@ -103,9 +110,13 @@ struct Builder<'ast> {
     /// Luau: every type declared by a block entered so far.
     type_names: FxHashSet<&'ast str>,
     initialized_locals: InitializedLocals<'ast>,
+    sink: &'sink mut Sink,
 }
 
-impl<'ast> Builder<'ast> {
+impl<'ast, Sink> Builder<'ast, '_, Sink>
+where
+    Sink: NodeSink<'ast>,
+{
     fn finish(mut self) -> (ScopeTree<'ast>, InitializedLocals<'ast>) {
         let ScopeTree { references, resolved, resolved_offsets, positions, buckets, .. } =
             &mut self.tree;
@@ -342,7 +353,10 @@ impl<'ast> Builder<'ast> {
     fn reference_var(&mut self, var: &'ast Var<'ast>, kind: ReferenceKind) {
         match var {
             Var::Name(name) => self.reference(name, kind),
-            Var::Suffixed(chain) => self.visit_suffixed(chain),
+            Var::Suffixed(chain) => {
+                self.sink.chain(chain, true);
+                self.walk_suffixed(chain);
+            }
         }
     }
 
@@ -398,6 +412,7 @@ impl<'ast> Builder<'ast> {
     /// Binds `body`'s parameters in a new function scope and visits its
     /// block.
     fn visit_function_scope(&mut self, body: &'ast FunctionBody<'ast>, is_method: bool) {
+        self.sink.function_body(body);
         self.push_scope(ScopeKind::Function);
         if is_method {
             let span = Span::new(body.span.start, body.span.start);
@@ -517,8 +532,12 @@ impl<'ast> Builder<'ast> {
     }
 }
 
-impl<'ast> Visitor<'ast> for Builder<'ast> {
+impl<'ast, Sink> Visitor<'ast> for Builder<'ast, '_, Sink>
+where
+    Sink: NodeSink<'ast>,
+{
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
+        self.sink.block(block);
         if self.tree.version.has_type_syntax() {
             self.record_type_names(block);
         }
@@ -531,6 +550,7 @@ impl<'ast> Visitor<'ast> for Builder<'ast> {
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
+        self.sink.stmt(stmt);
         match stmt {
             Statement::LocalAssignment(local) => self.visit_local_assignment(local),
             Statement::Assignment(assignment) => self.visit_assignment(assignment),
@@ -594,12 +614,28 @@ impl<'ast> Visitor<'ast> for Builder<'ast> {
         }
     }
 
+    fn visit_last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
+        self.sink.last_stmt(last);
+        self.walk_last_stmt(last);
+    }
+
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
+        self.sink.expr(expr);
         if let Expression::Name(name) = expr {
             self.reference(name, ReferenceKind::Read);
         } else {
             self.walk_expr(expr);
         }
+    }
+
+    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression<'ast>) {
+        self.sink.chain(chain, false);
+        self.walk_suffixed(chain);
+    }
+
+    fn visit_table_constructor(&mut self, table: &'ast TableConstructor<'ast>) {
+        self.sink.table(table);
+        self.walk_table_constructor(table);
     }
 }
 

@@ -3,6 +3,7 @@ use luck_token::{LuaVersion, Span, StdlibEnvironment};
 
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
 use crate::scope::{NameId, Reference, ScopeTree, Symbol, SymbolId, build_with_initializers};
+use crate::sink::NodeSink;
 use crate::stdlib_catalog::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
@@ -34,7 +35,21 @@ pub fn analyze<'ast>(
     version: LuaVersion,
     environment: StdlibEnvironment,
 ) -> SemanticAnalysis<'ast> {
-    let (scope_tree, initialized_locals) = build_with_initializers(block, version);
+    analyze_with(block, version, environment, &mut ())
+}
+
+/// [`analyze`], showing `sink` each node the walk reaches.
+#[must_use]
+pub fn analyze_with<'ast, Sink>(
+    block: &'ast Block<'ast>,
+    version: LuaVersion,
+    environment: StdlibEnvironment,
+    sink: &mut Sink,
+) -> SemanticAnalysis<'ast>
+where
+    Sink: NodeSink<'ast>,
+{
+    let (scope_tree, initialized_locals) = build_with_initializers(block, version, sink);
     let stdlib = library_for(version, environment);
     let symbol_shapes = symbol_shapes(&scope_tree, stdlib, &initialized_locals);
     let host_globals = scope_tree
@@ -204,7 +219,7 @@ impl<'ast> SemanticAnalysis<'ast> {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_ast::Statement;
+    use luck_ast::{Expression, FunctionBody, LastStatement, Statement, TableConstructor};
 
     use super::*;
     use crate::fixtures::parse;
@@ -482,6 +497,69 @@ end",
             unknown.is_empty(),
             "a type function can call a type function declared before it, as luau-analyze \
              accepts, so the body has no unknown global: {unknown:?}"
+        );
+    }
+
+    /// Each node the walk shows, by the hook that saw it and its text.
+    struct Recorder<'ast> {
+        source: &'ast str,
+        seen: Vec<String>,
+    }
+
+    impl<'ast> NodeSink<'ast> for Recorder<'ast> {
+        fn block(&mut self, block: &'ast Block<'ast>) {
+            self.seen.push(format!("block {}", block.stmts.len()));
+        }
+        fn function_body(&mut self, body: &'ast FunctionBody<'ast>) {
+            self.seen.push(format!("body {}", body.params.len()));
+        }
+        fn stmt(&mut self, stmt: &'ast Statement<'ast>) {
+            self.seen.push(format!("stmt {}", stmt.span().text(self.source)));
+        }
+        fn last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
+            self.seen.push(format!("last {}", last.span().text(self.source)));
+        }
+        fn expr(&mut self, expr: &'ast Expression<'ast>) {
+            self.seen.push(format!("expr {}", expr.span().text(self.source)));
+        }
+        fn chain(&mut self, chain: &'ast SuffixedExpression<'ast>, is_target: bool) {
+            let text = chain.span.text(self.source);
+            self.seen.push(format!("{} {text}", if is_target { "target" } else { "chain" }));
+        }
+        fn table(&mut self, table: &'ast TableConstructor<'ast>) {
+            self.seen.push(format!("table {}", table.fields.len()));
+        }
+    }
+
+    #[test]
+    fn analyze_with_shows_the_sink_each_node_in_evaluation_order() {
+        let allocator = Allocator::new();
+        let source = "t.x = f({}, function(a) return a end)
+return t";
+        let block = parse(&allocator, source, LuaVersion::Lua54);
+        let mut recorder = Recorder { source, seen: Vec::new() };
+        let _analysis =
+            analyze_with(block, LuaVersion::Lua54, StdlibEnvironment::Standalone, &mut recorder);
+        assert_eq!(
+            recorder.seen,
+            [
+                "block 1",
+                "stmt t.x = f({}, function(a) return a end)",
+                "expr f({}, function(a) return a end)",
+                "chain f({}, function(a) return a end)",
+                "expr f",
+                "expr {}",
+                "table 0",
+                "expr function(a) return a end",
+                "body 1",
+                "block 0",
+                "last return a",
+                "expr a",
+                "target t.x",
+                "expr t",
+                "last return t",
+                "expr t",
+            ]
         );
     }
 }

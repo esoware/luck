@@ -44,15 +44,17 @@ mod analysis;
 mod fixtures;
 mod resolve;
 mod scope;
+mod sink;
 mod stdlib_catalog;
 mod stdlib_model;
 
-pub use analysis::{SemanticAnalysis, analyze};
+pub use analysis::{SemanticAnalysis, analyze, analyze_with};
 pub use resolve::{ChainCallees, ResolvedCallee};
 pub use scope::{
     NameId, Reference, ReferenceId, ReferenceKind, Scope, ScopeId, ScopeKind, ScopeTree, Symbol,
     SymbolId, SymbolKind,
 };
+pub use sink::NodeSink;
 pub use stdlib_catalog::library_for;
 pub use stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,

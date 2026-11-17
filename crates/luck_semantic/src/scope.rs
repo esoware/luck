@@ -191,7 +191,7 @@ impl<'ast> ScopeTree<'ast> {
     /// One walk over `block`, which recurses once per level of nesting.
     #[must_use]
     pub fn build(block: &'ast Block<'ast>, version: LuaVersion) -> Self {
-        build_with_initializers(block, version).0
+        build_with_initializers(block, version, &mut ()).0
     }
 
     #[must_use]
