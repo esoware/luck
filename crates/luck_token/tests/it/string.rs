@@ -12,6 +12,12 @@ fn decode_in(raw: &str, version: LuaVersion) -> Option<Vec<u8>> {
     decode_string(raw, version).map(Cow::into_owned)
 }
 
+fn encode(bytes: &[u8]) -> String {
+    let mut encoded = String::new();
+    encode_string(bytes, &mut encoded);
+    encoded
+}
+
 #[test]
 fn short_string_body_keeps_escapes_raw() {
     assert_eq!(short_string_body(r#""a\65""#), Some(r"a\65"));
@@ -195,22 +201,30 @@ fn decode_string_drops_one_leading_long_bracket_eol_on_every_version() {
 
 #[test]
 fn encode_string_escapes_quotes_backslashes_and_newlines() {
-    assert_eq!(encode_string(b"hello"), r#""hello""#);
-    assert_eq!(encode_string(b"a\nb"), r#""a\nb""#);
-    assert_eq!(encode_string(b"q\"q"), r#""q\"q""#);
-    assert_eq!(encode_string(b"back\\slash"), r#""back\\slash""#);
+    assert_eq!(encode(b"hello"), r#""hello""#);
+    assert_eq!(encode(b"a\nb"), r#""a\nb""#);
+    assert_eq!(encode(b"q\"q"), r#""q\"q""#);
+    assert_eq!(encode(b"back\\slash"), r#""back\\slash""#);
+}
+
+#[test]
+fn encode_string_appends_to_what_the_buffer_holds() {
+    let mut output = String::from("x = ");
+    encode_string(b"a", &mut output);
+    encode_string(b"b", &mut output);
+    assert_eq!(output, r#"x = "a""b""#);
 }
 
 #[test]
 fn encode_string_writes_invalid_utf8_as_decimal_escapes() {
-    assert_eq!(encode_string(&[0xFF]), r#""\255""#);
+    assert_eq!(encode(&[0xFF]), r#""\255""#);
 }
 
 #[test]
 fn encode_string_pads_decimal_escapes_before_a_digit() {
     // `\1` followed by `2` must pad to `\001` so it can't read as `\12`.
-    assert_eq!(encode_string(&[0x01, b'2']), r#""\0012""#);
-    assert_eq!(encode_string(&[0x01, 0xFF, b'2']), r#""\1\2552""#);
+    assert_eq!(encode(&[0x01, b'2']), r#""\0012""#);
+    assert_eq!(encode(&[0x01, 0xFF, b'2']), r#""\1\2552""#);
 }
 
 #[test]
@@ -219,7 +233,7 @@ fn encode_string_round_trips_every_byte_with_and_without_a_following_digit() {
         for suffix in [None, Some(b'0'), Some(b'9'), Some(b'x')] {
             let mut bytes = vec![byte];
             bytes.extend(suffix);
-            let encoded = encode_string(&bytes);
+            let encoded = encode(&bytes);
             for version in LuaVersion::ALL {
                 assert_eq!(
                     decode_string(&encoded, version).as_deref(),
@@ -247,7 +261,7 @@ fn encode_string_round_trips_through_decode_string() {
         &[b'a', 0x01, 0xFF, b'7', 0x7F, 0xC3, b'3', b'"', 0x02],
     ];
     for bytes in cases {
-        let encoded = encode_string(bytes);
+        let encoded = encode(bytes);
         assert_eq!(
             decode(&encoded).as_deref(),
             Some(*bytes),

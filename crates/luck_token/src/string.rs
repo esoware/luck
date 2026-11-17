@@ -4,8 +4,6 @@
 use alloc::borrow::Cow;
 use core::fmt::Write as _;
 
-use compact_str::CompactString;
-
 use crate::{LuaVersion, is_lua_whitespace, strip_line_break};
 
 /// The text between a quoted string literal's quotes, escapes left undecoded,
@@ -182,35 +180,36 @@ pub fn unicode_escape_codepoint(hex_digits: &[u8], version: LuaVersion) -> Optio
     (value <= limit).then_some(value)
 }
 
+/// Append `bytes` to `output` as a double-quoted string literal, so a caller
+/// can reuse one buffer across literals.
+///
 /// Escapes double quotes, backslashes, and control bytes. Valid UTF-8 runs
 /// pass through intact, and bytes that aren't valid UTF-8 (such as those from
 /// `\xFF` escapes) become decimal escapes.
-#[must_use]
-pub fn encode_string(bytes: &[u8]) -> CompactString {
-    let mut output = CompactString::with_capacity(bytes.len().saturating_add(2));
+pub fn encode_string(bytes: &[u8], output: &mut String) {
+    output.reserve(bytes.len().saturating_add(2));
     output.push('"');
     if let Ok(text) = str::from_utf8(bytes) {
-        push_escaped_text(&mut output, text);
+        push_escaped_text(output, text);
     } else {
         let mut remaining = bytes;
         for chunk in bytes.utf8_chunks() {
-            push_escaped_text(&mut output, chunk.valid());
+            push_escaped_text(output, chunk.valid());
             remaining = remaining.get(chunk.valid().len()..).unwrap_or_default();
             for &b in chunk.invalid() {
                 remaining = remaining.get(1..).unwrap_or_default();
                 let is_followed_by_digit = remaining.first().is_some_and(u8::is_ascii_digit);
-                push_decimal_escape(&mut output, b, is_followed_by_digit);
+                push_decimal_escape(output, b, is_followed_by_digit);
             }
         }
     }
     output.push('"');
-    output
 }
 
 /// The bytes that need escaping are all ASCII, so every split lands on a char boundary. `text`
 /// ends at an invalid byte or the end of input, never a digit, so an escape
 /// at its end needs no padding.
-fn push_escaped_text(output: &mut CompactString, mut text: &str) {
+fn push_escaped_text(output: &mut String, mut text: &str) {
     while let Some((index, byte)) =
         text.bytes().enumerate().find(|&(_, b)| matches!(b, 0..=0x1F | 0x7F | b'"' | b'\\'))
     {
@@ -236,7 +235,7 @@ fn push_escaped_text(output: &mut CompactString, mut text: &str) {
     output.push_str(text);
 }
 
-fn push_decimal_escape(output: &mut CompactString, byte: u8, is_followed_by_digit: bool) {
+fn push_decimal_escape(output: &mut String, byte: u8, is_followed_by_digit: bool) {
     // Pad to 3 digits when a digit follows so the escape can't
     // absorb it (`\9` + `9` must not read as `\99`).
     let written = if is_followed_by_digit {
@@ -244,6 +243,6 @@ fn push_decimal_escape(output: &mut CompactString, byte: u8, is_followed_by_digi
     } else {
         write!(output, "\\{byte}")
     };
-    // Writing to a `CompactString` can't fail.
+    // Writing to a `String` can't fail.
     written.unwrap_or_default();
 }
