@@ -13,7 +13,7 @@
 //! benchmarked hundreds of bytes worse across the corpus than lifting
 //! everything.
 
-use core::mem;
+use core::{iter, mem};
 
 use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
@@ -28,46 +28,40 @@ use crate::limits::{
     GENERIC_FOR_STATE_LOCALS, MAX_REGISTERS, NUMERIC_FOR_STATE_LOCALS, parameter_locals,
 };
 
-/// Says whether it lifted anything.
-pub(crate) fn lift<'ast>(
-    allocator: &'ast Allocator,
-    block: &mut Block<'ast>,
-    version: LuaVersion,
-) -> bool {
-    let mut lifter = Lifter {
-        allocator,
-        version,
-        frames: Frames::default(),
-        scans: Vec::new(),
-        hidden_scan_count: 0,
-        has_changed: false,
-    };
-    lifter.visit_block(block);
-    lifter.has_changed
-}
+/// No frame: a name declared nowhere in the open scopes.
+const NO_FRAME: usize = usize::MAX;
 
 /// The names declared in each open scope, as a stack of frames, with the
 /// frame of each name's innermost declaration at hand.
 #[derive(Default)]
 struct Frames<'ast> {
-    /// Every declaration in an open frame, in order.
-    log: Vec<&'ast str>,
+    ids: FxHashMap<&'ast str, usize>,
+    /// Each name's innermost frame.
+    innermost: Vec<usize>,
+    /// Every declaration in an open frame, in order, with the frame its name
+    /// had before.
+    log: Vec<(usize, usize)>,
     /// Where each open frame's declarations start in `log`.
     starts: Vec<usize>,
-    /// Each name's frames, innermost last.
-    by_name: FxHashMap<&'ast str, Vec<usize>>,
 }
 
 impl<'ast> Frames<'ast> {
+    fn clear(&mut self) {
+        self.ids.clear();
+        self.innermost.clear();
+        self.log.clear();
+        self.starts.clear();
+    }
+
     fn push(&mut self) {
         self.starts.push(self.log.len());
     }
 
     fn pop(&mut self) {
         let start = self.starts.pop().unwrap_or(0);
-        for name in self.log.drain(start..) {
-            if let Some(frames) = self.by_name.get_mut(name) {
-                frames.pop();
+        for (id, outer_frame) in self.log.drain(start..).rev() {
+            if let Some(frame) = self.innermost.get_mut(id) {
+                *frame = outer_frame;
             }
         }
     }
@@ -81,20 +75,26 @@ impl<'ast> Frames<'ast> {
         let Some(frame) = self.starts.len().checked_sub(1) else {
             return;
         };
-        let frames = self.by_name.entry(name).or_default();
-        if frames.last() != Some(&frame) {
-            frames.push(frame);
-            self.log.push(name);
+        let next_id = self.innermost.len();
+        let id = *self.ids.entry(name).or_insert(next_id);
+        if id == next_id {
+            self.innermost.push(NO_FRAME);
+        }
+        if let Some(innermost) = self.innermost.get_mut(id)
+            && *innermost != frame
+        {
+            self.log.push((id, *innermost));
+            *innermost = frame;
         }
     }
 
     /// The innermost frame that declares `name`.
     fn innermost(&self, name: &str) -> Option<usize> {
-        self.by_name.get(name).and_then(|frames| frames.last()).copied()
-    }
-
-    fn contains(&self, name: &str) -> bool {
-        self.innermost(name).is_some()
+        self.ids
+            .get(name)
+            .and_then(|&id| self.innermost.get(id))
+            .copied()
+            .filter(|&frame| frame != NO_FRAME)
     }
 }
 
@@ -102,8 +102,8 @@ impl<'ast> Frames<'ast> {
 ///
 /// By then the body's scan has seen all of it, its closures included. A
 /// closure is lifted before the body around it, whose own lift reads nothing
-/// that changes.
-struct Lifter<'ast> {
+/// that changes. Kept from round to round for its allocations.
+pub(crate) struct Lifter<'ast> {
     allocator: &'ast Allocator,
     version: LuaVersion,
     frames: Frames<'ast>,
@@ -114,14 +114,23 @@ struct Lifter<'ast> {
     /// and count no expression of it, and a function in a `typeof` is no
     /// closure of theirs.
     hidden_scan_count: usize,
+    /// The `local` and `local function` statements of every body the walk is
+    /// in, in order, each body's after those of the bodies around it.
+    candidates: Vec<Candidate>,
+    candidate_names: Vec<&'ast str>,
+    /// Emptied name maps and lists, for the next body's scan.
+    spare_names: Vec<(FxHashMap<&'ast str, bool>, Vec<&'ast str>)>,
+    liftable_names: FxHashSet<&'ast str>,
+    ordered_liftable_names: Vec<&'ast str>,
     has_changed: bool,
 }
 
-/// What a body's walk learns for its lift: the names a declaration hoisted
-/// to the top of the body must never wear, and the body's peak locals and
-/// registers, which bound what that declaration can add.
+/// What a body's walk learns for its lift.
 ///
-/// The names are found by resolving scopes over the body:
+/// That's the names a declaration hoisted to the top of the body must never
+/// wear, its declarations, and the body's peak locals and registers, which
+/// bound what that declaration can add. The names are found by resolving
+/// scopes over the body:
 ///
 /// - names free in the body (globals and upvalues), since the hoisted `local`
 ///   would capture every reference to them;
@@ -135,7 +144,14 @@ struct Lifter<'ast> {
 struct BodyScan<'ast> {
     /// The body's parameter frame, where its scopes start.
     first_frame: usize,
-    ineligible_names: FxHashSet<&'ast str>,
+    /// Each ineligible name, and whether it's free in the body, which makes
+    /// it free or captured in the body around it too.
+    ineligible_names: FxHashMap<&'ast str, bool>,
+    /// The free ones, in the order the walk met them.
+    free_names: Vec<&'ast str>,
+    /// Where the body's own candidates and their names start.
+    first_candidate: usize,
+    first_candidate_name: usize,
     /// Locals the walk has active in the body. A closure's don't count: it
     /// has its own 200.
     active_locals: usize,
@@ -146,7 +162,47 @@ struct BodyScan<'ast> {
     peak_registers: usize,
 }
 
+/// A `local` or `local function` statement in a body, as its lift sees it.
+#[derive(Clone, Copy)]
+struct Candidate {
+    /// Its names in `candidate_names`.
+    names_end: usize,
+    /// Its own shape allows a lift: initialized `local` names with no
+    /// attribute or annotation, all distinct, or a plain `local function`.
+    is_liftable_shape: bool,
+    /// One of its names is already bound in the body where it's declared.
+    is_shadowing: bool,
+}
+
 impl<'ast> Lifter<'ast> {
+    pub(crate) fn new(allocator: &'ast Allocator, version: LuaVersion) -> Self {
+        Self {
+            allocator,
+            version,
+            frames: Frames::default(),
+            scans: Vec::new(),
+            hidden_scan_count: 0,
+            candidates: Vec::new(),
+            candidate_names: Vec::new(),
+            spare_names: Vec::new(),
+            liftable_names: FxHashSet::default(),
+            ordered_liftable_names: Vec::new(),
+            has_changed: false,
+        }
+    }
+
+    /// Says whether it lifted anything.
+    pub(crate) fn lift(&mut self, block: &mut Block<'ast>) -> bool {
+        self.frames.clear();
+        self.scans.clear();
+        self.hidden_scan_count = 0;
+        self.candidates.clear();
+        self.candidate_names.clear();
+        self.has_changed = false;
+        self.visit_block(block);
+        self.has_changed
+    }
+
     /// The scan of the body the walk is directly in, unless a type hides it.
     fn scan(&mut self) -> Option<&mut BodyScan<'ast>> {
         if self.scans.len() > self.hidden_scan_count { self.scans.last_mut() } else { None }
@@ -181,26 +237,169 @@ impl<'ast> Lifter<'ast> {
         }
     }
 
-    /// Resolves `name` once for every body that can see the read: the one
-    /// that binds it, and each closure between that body and the read.
+    /// A read the body binds is its own. Any other is free in it, and the
+    /// body passes it on to the one around it as it leaves.
     fn reference(&mut self, name: &'ast str) {
-        let scans = self.scans.get_mut(self.hidden_scan_count..).unwrap_or_default();
-        let Some(outermost) = scans.first() else {
+        if self.scans.len() <= self.hidden_scan_count {
+            return;
+        }
+        let frames = &self.frames;
+        let Some(scan) = self.scans.last_mut() else {
             return;
         };
-        let binding_frame =
-            self.frames.innermost(name).filter(|&frame| frame >= outermost.first_frame);
-        let mut is_read_in_closure = false;
-        for scan in scans.iter_mut().rev() {
-            let is_bound_here = binding_frame.is_some_and(|frame| frame >= scan.first_frame);
-            // Free in this body, or bound in it and captured.
-            if !is_bound_here || is_read_in_closure {
-                scan.ineligible_names.insert(name);
+        if frames.innermost(name).is_some_and(|frame| frame >= scan.first_frame) {
+            return;
+        }
+        let is_free = scan.ineligible_names.entry(name).or_insert(false);
+        if !*is_free {
+            *is_free = true;
+            scan.free_names.push(name);
+        }
+    }
+
+    /// Records a `local` or `local function` of the body the walk is in,
+    /// before its names are declared.
+    fn record_candidate(
+        &mut self,
+        names: impl Iterator<Item = &'ast str>,
+        is_liftable_shape: bool,
+    ) {
+        let Some(scan) = self.scans.last().filter(|_| self.scans.len() > self.hidden_scan_count)
+        else {
+            return;
+        };
+        let first_frame = scan.first_frame;
+        let mut is_shadowing = false;
+        for name in names {
+            is_shadowing |= self.frames.innermost(name).is_some_and(|frame| frame >= first_frame);
+            self.candidate_names.push(name);
+        }
+        self.candidates.push(Candidate {
+            names_end: self.candidate_names.len(),
+            is_liftable_shape,
+            is_shadowing,
+        });
+    }
+
+    /// Hoists the declarations nested in `body` that its finished scan
+    /// allows, and says whether there were any.
+    ///
+    /// A declaration lifts when its shape allows, there's room, and none of
+    /// its names is already bound where it's declared or ineligible in the
+    /// body. Once one has, every same-named declaration of that shape that
+    /// shadows nothing goes with it.
+    fn lift_body(&mut self, body: &mut FunctionBody<'ast>, scan: &BodyScan<'ast>) -> bool {
+        // Each hoisted name adds at most one local and one register
+        // anywhere in the body, so the body's own peaks bound what fits.
+        let hoist_capacity = MAX_ACTIVE_LOCALS
+            .saturating_sub(scan.peak_active_locals)
+            .min(MAX_REGISTERS.saturating_sub(scan.peak_registers));
+        self.liftable_names.clear();
+        self.ordered_liftable_names.clear();
+        let candidates = self.candidates.get(scan.first_candidate..).unwrap_or_default();
+        let mut names_start = scan.first_candidate_name;
+        for candidate in candidates {
+            let names =
+                self.candidate_names.get(names_start..candidate.names_end).unwrap_or_default();
+            names_start = candidate.names_end;
+            let has_room =
+                self.ordered_liftable_names.len().saturating_add(names.len()) <= hoist_capacity;
+            if candidate.is_liftable_shape
+                && has_room
+                && !candidate.is_shadowing
+                && names.iter().all(|name| !scan.ineligible_names.contains_key(name))
+            {
+                for &name in names {
+                    if self.liftable_names.insert(name) {
+                        self.ordered_liftable_names.push(name);
+                    }
+                }
             }
-            if is_bound_here {
-                break;
+        }
+        // A declaration that already opens the body, lifted alone, would only
+        // be fused back.
+        let is_only_the_first_statement = body.block.stmts.first().is_some_and(|first| {
+            let ordered = &self.ordered_liftable_names;
+            match first {
+                Statement::LocalAssignment(local) => local
+                    .names
+                    .iter()
+                    .map(|attributed| attributed.name.text)
+                    .eq(ordered.iter().copied()),
+                Statement::LocalFunction(local_function) => {
+                    ordered.as_slice() == [local_function.name.text]
+                }
+                Statement::Assignment(_)
+                | Statement::FunctionCall(_)
+                | Statement::DoBlock(_)
+                | Statement::WhileLoop(_)
+                | Statement::RepeatLoop(_)
+                | Statement::IfStatement(_)
+                | Statement::NumericFor(_)
+                | Statement::GenericFor(_)
+                | Statement::FunctionDecl(_)
+                | Statement::EmptyStatement(_)
+                | Statement::Goto(_)
+                | Statement::Label(_)
+                | Statement::GlobalDeclaration(_)
+                | Statement::GlobalFunction(_)
+                | Statement::GlobalStar(_)
+                | Statement::Break(_)
+                | Statement::CompoundAssignment(_)
+                | Statement::TypeDeclaration(_)
+                | Statement::Error(_) => ordered.is_empty(),
             }
-            is_read_in_closure = true;
+        });
+        if self.liftable_names.is_empty() || is_only_the_first_statement {
+            return false;
+        }
+        let mut rewriter = LiftRewriter {
+            allocator: self.allocator,
+            liftable_names: &self.liftable_names,
+            candidates,
+            names: &self.candidate_names,
+            next_candidate: 0,
+            names_start: scan.first_candidate_name,
+        };
+        rewriter.rewrite_block(&mut body.block);
+        let allocator = self.allocator;
+        let names = self.ordered_liftable_names.iter().map(|&text| AttributedName {
+            name: Name { text, span: Span::new(body.span.start, body.span.start) },
+            type_annotation: None,
+            attribute: None,
+        });
+        let declaration = LocalAssignment {
+            span: Span::new(body.span.start, body.span.start),
+            names: List::from_iter_in(names, allocator),
+            exprs: List::new(),
+            kind: LocalAssignmentKind::Local,
+        };
+        body.block.stmts.insert(
+            0,
+            Statement::LocalAssignment(Box::new_in(declaration, allocator)),
+            allocator,
+        );
+        true
+    }
+
+    /// Passes the names free in a closure the walk just left on to the body
+    /// around it: each is ineligible there, as a capture if that body binds
+    /// it and as a free name of its own if not.
+    fn pass_free_names(&mut self, closure: &BodyScan<'ast>) {
+        if self.scans.len() <= self.hidden_scan_count {
+            return;
+        }
+        let frames = &self.frames;
+        let Some(parent) = self.scans.last_mut() else {
+            return;
+        };
+        for &name in &closure.free_names {
+            let is_bound = frames.innermost(name).is_some_and(|frame| frame >= parent.first_frame);
+            let is_free = parent.ineligible_names.entry(name).or_insert(false);
+            if !is_bound && !*is_free {
+                *is_free = true;
+                parent.free_names.push(name);
+            }
         }
     }
 }
@@ -221,13 +420,19 @@ impl<'ast> VisitorMut<'ast> for Lifter<'ast> {
                 // Values before names: `local x = x` reads the outer x.
                 self.walk_stmt(stmt);
                 if let Statement::LocalAssignment(local) = stmt {
+                    let is_liftable_shape = can_lift_assignment(local, self.version);
+                    let names = local.names.iter().map(|attributed| attributed.name.text);
+                    self.record_candidate(names, is_liftable_shape);
                     for attributed in &local.names {
                         self.declare(attributed.name.text);
                     }
                 }
             }
             Statement::LocalFunction(local_function) => {
-                self.declare(local_function.name.text);
+                let name = local_function.name.text;
+                let is_liftable_shape = local_function.kind == LocalFunctionKind::Local;
+                self.record_candidate(iter::once(name), is_liftable_shape);
+                self.declare(name);
                 self.walk_stmt(stmt);
             }
             Statement::FunctionDecl(_) => {
@@ -324,14 +529,17 @@ impl<'ast> VisitorMut<'ast> for Lifter<'ast> {
     /// its declarations.
     fn visit_function_body(&mut self, body: &mut FunctionBody<'ast>) {
         let parameter_count = parameter_locals(body);
-        let mut ineligible_names = FxHashSet::default();
+        let (mut ineligible_names, free_names) = self.spare_names.pop().unwrap_or_default();
         if self.version.has_env_upvalue() {
-            ineligible_names.insert("_ENV");
+            ineligible_names.insert("_ENV", false);
         }
         self.frames.push();
         self.scans.push(BodyScan {
             first_frame: self.frames.len().saturating_sub(1),
             ineligible_names,
+            free_names,
+            first_candidate: self.candidates.len(),
+            first_candidate_name: self.candidate_names.len(),
             active_locals: parameter_count,
             peak_active_locals: parameter_count,
             statement_expr_nodes: 0,
@@ -342,11 +550,18 @@ impl<'ast> VisitorMut<'ast> for Lifter<'ast> {
         }
         self.walk_block(&mut body.block);
         self.frames.pop();
-        if let Some(scan) = self.scans.pop()
-            && lift_body(self.allocator, body, &scan, self.version)
-        {
+        let Some(mut scan) = self.scans.pop() else {
+            return;
+        };
+        self.pass_free_names(&scan);
+        if self.lift_body(body, &scan) {
             self.has_changed = true;
         }
+        self.candidates.truncate(scan.first_candidate);
+        self.candidate_names.truncate(scan.first_candidate_name);
+        scan.ineligible_names.clear();
+        scan.free_names.clear();
+        self.spare_names.push((scan.ineligible_names, scan.free_names));
     }
 
     fn visit_type(&mut self, ty: &mut Type<'ast>) {
@@ -361,205 +576,6 @@ impl<'ast> VisitorMut<'ast> for Lifter<'ast> {
 fn parameter_names<'ast>(body: &FunctionBody<'ast>) -> impl Iterator<Item = &'ast str> {
     let vararg = body.vararg.as_ref().and_then(|vararg| vararg.name).map(|name| name.text);
     body.params.iter().map(|param| param.name.text).chain(vararg)
-}
-
-/// Hoists the declarations nested in `body` that its finished scan allows,
-/// and says whether there were any.
-fn lift_body<'ast>(
-    allocator: &'ast Allocator,
-    body: &mut FunctionBody<'ast>,
-    scan: &BodyScan<'ast>,
-    version: LuaVersion,
-) -> bool {
-    let mut collector = LiftableCollector {
-        scope_names: Frames::default(),
-        ineligible_names: &scan.ineligible_names,
-        liftable_names: FxHashSet::default(),
-        ordered_liftable_names: Vec::new(),
-        // Each hoisted name adds at most one local and one register
-        // anywhere in the body, so the body's own peaks bound what fits.
-        hoist_capacity: MAX_ACTIVE_LOCALS
-            .saturating_sub(scan.peak_active_locals)
-            .min(MAX_REGISTERS.saturating_sub(scan.peak_registers)),
-        version,
-    };
-    collector.scope_names.push();
-    for name in parameter_names(body) {
-        collector.scope_names.declare(name);
-    }
-    collector.collect_block(&body.block);
-    let LiftableCollector { liftable_names, ordered_liftable_names, .. } = collector;
-    // A declaration that already opens the body, lifted alone, would only
-    // be fused back.
-    let is_only_the_first_statement = body.block.stmts.first().is_some_and(|first| {
-        let first_names: Vec<&str> = match first {
-            Statement::LocalAssignment(local) => {
-                local.names.iter().map(|attributed| attributed.name.text).collect()
-            }
-            Statement::LocalFunction(local_function) => vec![local_function.name.text],
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => Vec::new(),
-        };
-        first_names == ordered_liftable_names
-    });
-    if liftable_names.is_empty() || is_only_the_first_statement {
-        return false;
-    }
-    let mut rewriter = LiftRewriter {
-        allocator,
-        liftable_names: &liftable_names,
-        scope_names: Frames::default(),
-        version,
-    };
-    rewriter.rewrite_block(&mut body.block);
-    let names = ordered_liftable_names.into_iter().map(|text| AttributedName {
-        name: Name { text, span: Span::new(body.span.start, body.span.start) },
-        type_annotation: None,
-        attribute: None,
-    });
-    let declaration = LocalAssignment {
-        span: Span::new(body.span.start, body.span.start),
-        names: List::from_iter_in(names, allocator),
-        exprs: List::new(),
-        kind: LocalAssignmentKind::Local,
-    };
-    body.block.stmts.insert(
-        0,
-        Statement::LocalAssignment(Box::new_in(declaration, allocator)),
-        allocator,
-    );
-    true
-}
-
-/// A name qualifies when it isn't already bound in this or an enclosing scope
-/// of the body (rename can give a child local its parent's name) and isn't
-/// ineligible (see [`BodyScan`]).
-///
-/// A `local` statement also has to pass `can_lift_assignment`, which rules out attributes such as
-/// `<const>` and `<close>`.
-struct LiftableCollector<'names, 'ast> {
-    scope_names: Frames<'ast>,
-    ineligible_names: &'names FxHashSet<&'ast str>,
-    liftable_names: FxHashSet<&'ast str>,
-    ordered_liftable_names: Vec<&'ast str>,
-    hoist_capacity: usize,
-    version: LuaVersion,
-}
-
-impl<'ast> LiftableCollector<'_, 'ast> {
-    const fn has_hoist_room(&self, name_count: usize) -> bool {
-        self.ordered_liftable_names.len().saturating_add(name_count) <= self.hoist_capacity
-    }
-
-    fn is_safe_to_lift(&self, name: &str) -> bool {
-        !self.scope_names.contains(name) && !self.ineligible_names.contains(name)
-    }
-
-    fn mark_liftable(&mut self, name: &'ast str) {
-        if self.liftable_names.insert(name) {
-            self.ordered_liftable_names.push(name);
-        }
-    }
-
-    fn collect_block(&mut self, block: &Block<'ast>) {
-        for stmt in &block.stmts {
-            self.collect_stmt(stmt);
-        }
-    }
-
-    fn collect_scoped_block(&mut self, block: &Block<'ast>, names: &[&'ast str]) {
-        self.scope_names.push();
-        for &name in names {
-            self.scope_names.declare(name);
-        }
-        self.collect_block(block);
-        self.scope_names.pop();
-    }
-
-    fn collect_local(&mut self, local: &LocalAssignment<'ast>) {
-        if can_lift_assignment(local, self.version)
-            && self.has_hoist_room(local.names.len())
-            && local.names.iter().all(|attributed| self.is_safe_to_lift(attributed.name.text))
-        {
-            for attributed in &local.names {
-                self.mark_liftable(attributed.name.text);
-            }
-        }
-        for attributed in &local.names {
-            self.scope_names.declare(attributed.name.text);
-        }
-    }
-
-    fn collect_stmt(&mut self, stmt: &Statement<'ast>) {
-        match stmt {
-            Statement::LocalAssignment(local) => self.collect_local(local),
-            Statement::LocalFunction(local_function) => {
-                let name = local_function.name.text;
-                if local_function.kind == LocalFunctionKind::Local
-                    && self.has_hoist_room(1)
-                    && self.is_safe_to_lift(name)
-                {
-                    self.mark_liftable(name);
-                }
-                self.scope_names.declare(name);
-                // The function body gets its own lift, so stop here.
-            }
-            Statement::DoBlock(do_block) => self.collect_scoped_block(&do_block.block, &[]),
-            Statement::WhileLoop(while_loop) => self.collect_scoped_block(&while_loop.block, &[]),
-            Statement::RepeatLoop(repeat_loop) => {
-                self.collect_scoped_block(&repeat_loop.block, &[]);
-            }
-            Statement::IfStatement(if_stmt) => {
-                self.collect_scoped_block(&if_stmt.block, &[]);
-                for clause in &if_stmt.elseif_clauses {
-                    self.collect_scoped_block(&clause.block, &[]);
-                }
-                if let Some(else_clause) = &if_stmt.else_clause {
-                    self.collect_scoped_block(&else_clause.block, &[]);
-                }
-            }
-            Statement::NumericFor(numeric_for) => {
-                self.collect_scoped_block(&numeric_for.block, &[numeric_for.name.text]);
-            }
-            Statement::GenericFor(generic_for) => {
-                let names: Vec<&'ast str> =
-                    generic_for.names.iter().map(|param| param.name.text).collect();
-                self.collect_scoped_block(&generic_for.block, &names);
-            }
-            // Nothing to lift at this level. Function bodies get their own
-            // lift.
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::FunctionDecl(_)
-            | Statement::GlobalFunction(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-    }
 }
 
 fn can_lift_assignment(local: &LocalAssignment<'_>, version: LuaVersion) -> bool {
@@ -581,76 +597,67 @@ fn has_distinct_names(names: &[AttributedName<'_>]) -> bool {
         })
 }
 
-/// Matching is by name, so it tracks every declaration in scope, lifted or
-/// not. A declaration under a same-named binding stays `local`, since its
-/// assignment would write to that binding instead.
-struct LiftRewriter<'names, 'ast> {
+/// Rewrites a body's lifted declarations, which it meets in the order the
+/// walk recorded the body's candidates.
+struct LiftRewriter<'lifter, 'ast> {
     allocator: &'ast Allocator,
-    liftable_names: &'names FxHashSet<&'ast str>,
-    scope_names: Frames<'ast>,
-    version: LuaVersion,
+    liftable_names: &'lifter FxHashSet<&'ast str>,
+    candidates: &'lifter [Candidate],
+    names: &'lifter [&'ast str],
+    next_candidate: usize,
+    names_start: usize,
 }
 
 impl<'ast> LiftRewriter<'_, 'ast> {
-    fn rewrite_block(&mut self, block: &mut Block<'ast>) {
-        self.rewrite_scoped_block(block, &[]);
+    /// Whether the next candidate lifts: a declaration of a liftable shape
+    /// that shadows nothing, all of whose names are liftable.
+    fn next_is_lifted(&mut self) -> bool {
+        let Some(candidate) = self.candidates.get(self.next_candidate) else {
+            return false;
+        };
+        let names = self.names.get(self.names_start..candidate.names_end).unwrap_or_default();
+        self.next_candidate = self.next_candidate.saturating_add(1);
+        self.names_start = candidate.names_end;
+        candidate.is_liftable_shape
+            && !candidate.is_shadowing
+            && names.iter().all(|name| self.liftable_names.contains(name))
     }
 
-    fn rewrite_scoped_block(&mut self, block: &mut Block<'ast>, names: &[&'ast str]) {
-        self.scope_names.push();
-        for &name in names {
-            self.scope_names.declare(name);
-        }
+    fn rewrite_block(&mut self, block: &mut Block<'ast>) {
         for stmt in &mut block.stmts {
             self.rewrite_stmt(stmt);
         }
-        self.scope_names.pop();
     }
 
     /// `local a, b = X, Y` becomes `a, b = X, Y`.
     fn rewrite_local(&mut self, stmt: &mut Statement<'ast>) {
+        if !self.next_is_lifted() {
+            return;
+        }
         let Statement::LocalAssignment(local) = stmt else {
             return;
         };
-        let is_lifted = can_lift_assignment(local, self.version)
-            && local.names.iter().all(|attributed| {
-                self.liftable_names.contains(attributed.name.text)
-                    && !self.scope_names.contains(attributed.name.text)
-            });
-        for attributed in &local.names {
-            self.scope_names.declare(attributed.name.text);
-        }
-        if !is_lifted {
-            return;
-        }
+        let allocator = self.allocator;
         let targets = mem::take(&mut local.names)
             .into_iter()
-            .map(|attributed| Var::Name(Box::new_in(attributed.name, self.allocator)));
+            .map(|attributed| Var::Name(Box::new_in(attributed.name, allocator)));
         let assignment = Assignment {
             span: local.span,
-            targets: List::from_iter_in(targets.collect::<Vec<_>>(), self.allocator),
+            targets: List::from_iter_in(targets, allocator),
             values: mem::take(&mut local.exprs),
         };
-        *stmt = Statement::Assignment(Box::new_in(assignment, self.allocator));
+        *stmt = Statement::Assignment(Box::new_in(assignment, allocator));
     }
 
     /// `local function f(x) ... end` becomes `f = function(x) ... end`.
     fn rewrite_local_function(&mut self, stmt: &mut Statement<'ast>) {
-        let Statement::LocalFunction(declared) = stmt else {
-            return;
-        };
-        let name = declared.name;
-        let is_lifted = declared.kind == LocalFunctionKind::Local
-            && self.liftable_names.contains(name.text)
-            && !self.scope_names.contains(name.text);
-        self.scope_names.declare(name.text);
-        if !is_lifted {
+        if !self.next_is_lifted() {
             return;
         }
         let Statement::LocalFunction(local_function) = stmt.take() else {
             return;
         };
-        let LocalFunction { span, attributes, body, .. } = local_function.unbox();
+        let LocalFunction { span, attributes, body, name, .. } = local_function.unbox();
         let function = FunctionDef { span, attributes, body };
         let value = Expression::FunctionDef(Box::new_in(function, self.allocator));
         let assignment = Assignment {
@@ -680,15 +687,8 @@ impl<'ast> LiftRewriter<'_, 'ast> {
                     self.rewrite_block(&mut else_clause.block);
                 }
             }
-            Statement::NumericFor(numeric_for) => {
-                let name = numeric_for.name.text;
-                self.rewrite_scoped_block(&mut numeric_for.block, &[name]);
-            }
-            Statement::GenericFor(generic_for) => {
-                let names: Vec<&'ast str> =
-                    generic_for.names.iter().map(|param| param.name.text).collect();
-                self.rewrite_scoped_block(&mut generic_for.block, &names);
-            }
+            Statement::NumericFor(numeric_for) => self.rewrite_block(&mut numeric_for.block),
+            Statement::GenericFor(generic_for) => self.rewrite_block(&mut generic_for.block),
             // Nothing to rewrite at this level. Function bodies get their own
             // lift.
             Statement::Assignment(_)

@@ -5,7 +5,7 @@ use luck_token::{
 };
 
 use crate::compress::Compressor;
-use crate::lift_locals;
+use crate::lift_locals::Lifter;
 use crate::rename::Renamer;
 use crate::transform_config::TransformConfig;
 
@@ -86,6 +86,7 @@ fn minify_tree<'ast>(
 ) {
     let mut compressor = Compressor::new(allocator, version, *config);
     let mut renamer = Renamer::new(allocator, version);
+    let mut lifter = Lifter::new(allocator, version);
     let should_rename = config.rename_locals;
     let should_lift = config.lift_locals;
     let mut has_lifted = false;
@@ -104,7 +105,7 @@ fn minify_tree<'ast>(
         let has_renamed = should_rename && renamer.rename(block, config.rename_globals, round == 0);
         // Lift decides by name, and rename's slot reuse gives distinct
         // bindings the same name, so each round can unblock more lifts.
-        has_lifted = should_lift && lift_locals::lift(allocator, block, version);
+        has_lifted = should_lift && lifter.lift(block);
         if !has_renamed && !has_lifted {
             break;
         }
