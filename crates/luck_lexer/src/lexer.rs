@@ -276,10 +276,6 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    /// Cold and out of line, which parses up to 2% faster than leaving it to
-    /// the compiler.
-    #[cold]
-    #[inline(never)]
     fn attach_leading_comments(&mut self, token_start: u32) {
         let waiting = self.comments.get_mut(self.attached_comment_count..).unwrap_or_default();
         for comment in waiting {

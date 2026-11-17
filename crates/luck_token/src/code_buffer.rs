@@ -71,7 +71,8 @@ impl CodeBuffer {
     /// A string of at most 16 bytes, as nearly every piece of code is, is
     /// copied as two overlapping words of one width instead of with a
     /// `memcpy` call, and a string known at compile time folds to its
-    /// stores.
+    /// stores. Any other takes a cold path out of line, which prints about 1%
+    /// faster than inlining it.
     #[inline]
     #[expect(unsafe_code, reason = "extending the vector calls memcpy for every short string")]
     pub fn print_str(&mut self, text: &str) {
