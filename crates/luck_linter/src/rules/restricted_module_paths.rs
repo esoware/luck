@@ -50,7 +50,7 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
     };
     // Escapes stay as written. Long-bracket strings give `None`; module paths
     // rarely use them.
-    let path = short_string_body(&literal.text)?;
+    let path = short_string_body(literal.text)?;
     let pattern = restricted_paths.iter().find(|pattern| path_matches(path, pattern))?;
     Some(
         Finding::new(format!("`require` of restricted module `{path}`"), literal.span)

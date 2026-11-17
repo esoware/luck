@@ -23,26 +23,28 @@ impl_rule!(
 impl WholeRule for UnusedArgument {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
+        let tree = semantic.scope_tree();
         let fixes = UnderscoreFixes::new(semantic);
         let mut findings = Vec::new();
 
-        for symbol in &semantic.scope_tree.symbols {
+        for symbol in tree.symbols() {
             if symbol.kind != SymbolKind::Parameter {
                 continue;
             }
+            let name = tree.name(symbol.name);
             // A parameter spelled `self` is a receiver the interface requires.
-            if symbol.name == "self" {
+            if name == "self" {
                 continue;
             }
-            if symbol.name.starts_with('_') {
+            if name.starts_with('_') {
                 continue;
             }
-            if !symbol.reference_ids.is_empty() {
+            if !tree.resolved_references(symbol.id).is_empty() {
                 continue;
             }
 
             findings.push(
-                Finding::new(format!("unused argument `{}`", symbol.name), symbol.definition_span)
+                Finding::new(format!("unused argument `{name}`"), symbol.definition_span)
                     .with_help("prefix with `_` to suppress this warning")
                     .with_optional_fix(fixes.fix_for(symbol)),
             );

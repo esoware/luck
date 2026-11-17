@@ -25,7 +25,12 @@ impl NodeRule for DivideByZero {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp, NodeType::CompoundAssignment])
     }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let Expression::BinaryOp(run) = expr else {
             return;
         };
@@ -35,17 +40,22 @@ impl NodeRule for DivideByZero {
         for pair in operator_pairs(run) {
             if let Some(op_name) = divisive_op_name(pair.op)
                 && let Some(divisor) = pair.rhs
-                && is_number_literal(divisor, 0.0, context.semantic.version)
+                && is_number_literal(divisor, 0.0, context.semantic.version())
             {
                 findings.push(zero_divisor_finding(op_name, pair.span()));
             }
         }
     }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         // Luau
         if let Statement::CompoundAssignment(compound) = stmt
             && let Some(op_name) = compound_divisive_op_name(compound.op)
-            && is_number_literal(&compound.expr, 0.0, context.semantic.version)
+            && is_number_literal(&compound.expr, 0.0, context.semantic.version())
         {
             findings.push(zero_divisor_finding(op_name, compound.span));
         }

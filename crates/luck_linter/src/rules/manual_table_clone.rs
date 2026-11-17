@@ -1,8 +1,8 @@
 use luck_ast::{
-    Block, Expression, GenericFor, LocalAssignment, NumericFor, Statement, Suffix, Var,
+    Block, Expression, GenericFor, LocalAssignment, Name, NumericFor, Statement, Suffix, Var,
 };
 use luck_semantic::{ScopeTree, SemanticAnalysis};
-use luck_token::{Span, Token, UnOp};
+use luck_token::{Span, UnOp};
 
 use crate::call::is_global_call;
 use crate::diagnostic::Finding;
@@ -32,7 +32,8 @@ impl WholeRule for ManualTableClone {
             return Vec::new();
         };
         context
-            .blocks
+            .nodes
+            .blocks()
             .iter()
             .flat_map(|block| adjacent_stmts(block))
             .filter_map(|(first, second)| manual_copy_span(first, second, suggestion, semantic))
@@ -52,7 +53,7 @@ enum Suggestion {
 
 impl Suggestion {
     /// `None` when the target's stdlib has neither.
-    fn for_target(semantic: &SemanticAnalysis) -> Option<Self> {
+    fn for_target(semantic: &SemanticAnalysis<'_>) -> Option<Self> {
         let stdlib = semantic.stdlib();
         if stdlib.lookup(&["table", "clone"]).is_some() {
             Some(Self::TableClone)
@@ -75,10 +76,10 @@ impl Suggestion {
 /// The span from the `local` through the loop, when `stmt` is
 /// `local out = {}` and `next` a copy loop that `suggestion` can replace.
 fn manual_copy_span(
-    stmt: &Statement,
-    next: &Statement,
+    stmt: &Statement<'_>,
+    next: &Statement<'_>,
     suggestion: Suggestion,
-    semantic: &SemanticAnalysis,
+    semantic: &SemanticAnalysis<'_>,
 ) -> Option<Span> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
@@ -92,7 +93,7 @@ fn manual_copy_span(
                 && !matches!(suggestion, Suggestion::TableMove)
         }
         Statement::NumericFor(loop_node) => {
-            is_numeric_clone(loop_node, destination, &semantic.scope_tree)
+            is_numeric_clone(loop_node, destination, semantic.scope_tree())
         }
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
@@ -117,11 +118,11 @@ fn manual_copy_span(
     is_copy.then(|| Span::new(local.span.start, next.span().end))
 }
 
-fn single_empty_table_local(local: &LocalAssignment) -> Option<&Token> {
-    let [attributed] = local.names.items.as_slice() else {
+fn single_empty_table_local<'ast>(local: &'ast LocalAssignment<'ast>) -> Option<&'ast Name<'ast>> {
+    let [attributed] = &*local.names else {
         return None;
     };
-    let [Expression::TableConstructor(table)] = local.exprs.as_ref()?.items.as_slice() else {
+    let [Expression::TableConstructor(table)] = &*local.exprs else {
         return None;
     };
     table.fields.is_empty().then_some(&attributed.name)
@@ -129,25 +130,29 @@ fn single_empty_table_local(local: &LocalAssignment) -> Option<&Token> {
 
 /// Is this `for k, v in pairs(src) do out[k] = v end`?
 fn is_generic_clone(
-    loop_node: &GenericFor,
-    destination: &Token,
-    semantic: &SemanticAnalysis,
+    loop_node: &GenericFor<'_>,
+    destination: &Name<'_>,
+    semantic: &SemanticAnalysis<'_>,
 ) -> bool {
-    let [key, value] = loop_node.names.items.as_slice() else {
+    let [key, value] = &*loop_node.names else {
         return false;
     };
-    let [iterator] = loop_node.exprs.items.as_slice() else {
+    let [iterator] = &*loop_node.exprs else {
         return false;
     };
-    let tree = &semantic.scope_tree;
+    let tree = semantic.scope_tree();
     is_pairs_call(iterator, semantic)
         && copied_value(&loop_node.block, destination, &key.name, tree)
             .is_some_and(|copied| is_read_of_local(copied, &value.name, tree))
 }
 
 /// Is this `for i = 1, #src do out[i] = src[i] end`?
-fn is_numeric_clone(loop_node: &NumericFor, destination: &Token, tree: &ScopeTree) -> bool {
-    let version = tree.version;
+fn is_numeric_clone(
+    loop_node: &NumericFor<'_>,
+    destination: &Name<'_>,
+    tree: &ScopeTree<'_>,
+) -> bool {
+    let version = tree.version();
     let Some(source_table) = length_of_name(&loop_node.limit) else {
         return false;
     };
@@ -167,20 +172,18 @@ fn is_numeric_clone(loop_node: &NumericFor, destination: &Token, tree: &ScopeTre
 
 /// The value assigned when `body` is exactly `destination[key] = value`.
 fn copied_value<'ast>(
-    body: &'ast Block,
-    destination: &Token,
-    key: &Token,
-    tree: &ScopeTree,
-) -> Option<&'ast Expression> {
+    body: &'ast Block<'ast>,
+    destination: &Name<'_>,
+    key: &Name<'_>,
+    tree: &ScopeTree<'_>,
+) -> Option<&'ast Expression<'ast>> {
     if body.last_stmt.is_some() {
         return None;
     }
-    let [Statement::Assignment(assignment)] = body.stmts.as_slice() else {
+    let [Statement::Assignment(assignment)] = &*body.stmts else {
         return None;
     };
-    let ([Var::Suffixed(target)], [value]) =
-        (assignment.targets.items.as_slice(), assignment.values.items.as_slice())
-    else {
+    let ([Var::Suffixed(target)], [value]) = (&*assignment.targets, &*assignment.values) else {
         return None;
     };
     let [Suffix::Index { index, .. }] = &*target.suffixes else {
@@ -191,7 +194,9 @@ fn copied_value<'ast>(
 }
 
 /// The table and the key of `table[key]`.
-fn index_read(expr: &Expression) -> Option<(&Expression, &Expression)> {
+fn index_read<'ast>(
+    expr: &'ast Expression<'ast>,
+) -> Option<(&'ast Expression<'ast>, &'ast Expression<'ast>)> {
     let Expression::Suffixed(chain) = expr else {
         return None;
     };
@@ -202,7 +207,7 @@ fn index_read(expr: &Expression) -> Option<(&Expression, &Expression)> {
 }
 
 /// A shadowed one is a user iterator, not a table walk.
-fn is_pairs_call(expr: &Expression, semantic: &SemanticAnalysis) -> bool {
+fn is_pairs_call(expr: &Expression<'_>, semantic: &SemanticAnalysis<'_>) -> bool {
     let Expression::Suffixed(chain) = expr else {
         return false;
     };
@@ -211,35 +216,35 @@ fn is_pairs_call(expr: &Expression, semantic: &SemanticAnalysis) -> bool {
     })
 }
 
-fn length_of_name(expr: &Expression) -> Option<&Token> {
+fn length_of_name<'ast>(expr: &'ast Expression<'ast>) -> Option<&'ast Name<'ast>> {
     let Expression::UnaryOp(unary) = expr else {
         return None;
     };
     if unary.op != UnOp::Len {
         return None;
     }
-    let Expression::Name(token) = &unary.operand else {
+    let Expression::Name(name) = &unary.operand else {
         return None;
     };
-    Some(token)
+    Some(name)
 }
 
-fn declaration_of(name: &Token, tree: &ScopeTree) -> Option<Span> {
-    let reference = tree.reference(*tree.references_by_span.get(&name.span)?);
+fn declaration_of(name: &Name<'_>, tree: &ScopeTree<'_>) -> Option<Span> {
+    let reference = tree.reference(tree.reference_of(name)?);
     Some(tree.symbol(reference.resolved?).definition_span)
 }
 
-fn is_read_of_local(expr: &Expression, declaration: &Token, tree: &ScopeTree) -> bool {
-    matches!(expr, Expression::Name(token)
-        if declaration_of(token, tree) == Some(declaration.span))
+fn is_read_of_local(expr: &Expression<'_>, declaration: &Name<'_>, tree: &ScopeTree<'_>) -> bool {
+    matches!(expr, Expression::Name(name)
+        if declaration_of(name, tree) == Some(declaration.span))
 }
 
 /// Whether `expr` is the same name as `source`, resolving the same way, so a
 /// loop variable that shadows it doesn't count.
-fn is_same_binding(expr: &Expression, source: &Token, tree: &ScopeTree) -> bool {
-    matches!(expr, Expression::Name(token)
-        if token.identifier() == source.identifier()
-            && declaration_of(token, tree) == declaration_of(source, tree))
+fn is_same_binding(expr: &Expression<'_>, source: &Name<'_>, tree: &ScopeTree<'_>) -> bool {
+    matches!(expr, Expression::Name(name)
+        if name.text == source.text
+            && declaration_of(name, tree) == declaration_of(source, tree))
 }
 
 #[cfg(test)]

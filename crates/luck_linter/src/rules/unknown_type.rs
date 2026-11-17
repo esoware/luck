@@ -24,7 +24,12 @@ impl NodeRule for UnknownType {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let Expression::BinaryOp(run) = expr else {
             return;
         };
@@ -44,22 +49,22 @@ impl NodeRule for UnknownType {
 
 fn check_literal(
     callee: &str,
-    literal: &Literal,
+    literal: &Literal<'_>,
     context: &LintContext<'_>,
     findings: &mut Vec<Finding>,
 ) {
     // An escape could spell a valid name, so only plain text is checked.
-    let Some(name) = short_string_body(&literal.text).filter(|body| !body.contains('\\')) else {
+    let Some(name) = short_string_body(literal.text).filter(|body| !body.contains('\\')) else {
         return;
     };
-    let primitives = primitive_type_names(context.semantic.version);
+    let primitives = primitive_type_names(context.semantic.version());
     if primitives.contains(&name) {
         return;
     }
     // Roblox `typeof` also returns datatype names (`"Instance"`,
     // `"Vector3"`) that aren't in this list, so only case typos of a
     // primitive are flagged there.
-    let is_roblox_typeof = callee == "typeof" && context.semantic.environment.is_roblox();
+    let is_roblox_typeof = callee == "typeof" && context.semantic.environment().is_roblox();
     let case_match = primitives.iter().find(|primitive| primitive.eq_ignore_ascii_case(name));
     if is_roblox_typeof && case_match.is_none() {
         return;
@@ -76,10 +81,10 @@ fn check_literal(
 }
 
 fn classify_comparison<'ast>(
-    lhs: &'ast Expression,
-    rhs: &'ast Expression,
-    semantic: &SemanticAnalysis,
-) -> Option<(&'static str, &'ast Literal)> {
+    lhs: &'ast Expression<'ast>,
+    rhs: &'ast Expression<'ast>,
+    semantic: &SemanticAnalysis<'_>,
+) -> Option<(&'static str, &'ast Literal<'ast>)> {
     for (call_side, literal_side) in [(lhs, rhs), (rhs, lhs)] {
         let Expression::Suffixed(chain) = call_side else {
             continue;
@@ -98,10 +103,10 @@ fn classify_comparison<'ast>(
 
 /// `type`, or `typeof` on Luau, when `call` is a one-argument call to that
 /// global.
-fn type_function_callee(call: Call<'_>, semantic: &SemanticAnalysis) -> Option<&'static str> {
+fn type_function_callee(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<&'static str> {
     let callee = if is_global_call(call, "type", semantic) {
         "type"
-    } else if semantic.version.is_luau() && is_global_call(call, "typeof", semantic) {
+    } else if semantic.version().is_luau() && is_global_call(call, "typeof", semantic) {
         "typeof"
     } else {
         return None;

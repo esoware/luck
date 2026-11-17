@@ -1,7 +1,6 @@
-use std::sync::OnceLock;
-
-use luck_parser::ParseResult;
-use luck_token::{LuaVersion, Span, StdlibEnvironment};
+use luck_allocator::Allocator;
+use luck_core::LuaTarget;
+use luck_token::{LuaVersion, Span};
 
 use crate::config::LintConfig;
 use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
@@ -15,14 +14,7 @@ pub(crate) fn run_rule(rule: &dyn Rule, source: &str, version: LuaVersion) -> Ve
 }
 
 pub(crate) fn run_rule_roblox(rule: &dyn Rule, source: &str) -> Vec<LintDiagnostic> {
-    let version = LuaVersion::Luau;
-    check(
-        rule,
-        &parse_cleanly(source, version),
-        version,
-        StdlibEnvironment::Roblox,
-        &LintConfig::default(),
-    )
+    check(rule, source, LuaTarget::LuauRoblox, &LintConfig::default())
 }
 
 pub(crate) fn run_rule_with_config(
@@ -31,7 +23,7 @@ pub(crate) fn run_rule_with_config(
     version: LuaVersion,
     config: &LintConfig,
 ) -> Vec<LintDiagnostic> {
-    check(rule, &parse_cleanly(source, version), version, StdlibEnvironment::Standalone, config)
+    check(rule, source, standalone(version), config)
 }
 
 /// Applies the diagnostics' fixes the way `--fix` does, asserting that each
@@ -43,38 +35,35 @@ pub(crate) fn fix_and_reparse(
 ) -> String {
     assert!(diags.iter().all(|diag| diag.fix.is_some()), "{diags:?}");
     let fixed = fix::apply_one_pass(source, diags);
-    let reparse = luck_parser::parse(&fixed, version);
+    let allocator = Allocator::new();
+    let reparse = luck_parser::parse(&allocator, &fixed, version);
     assert!(reparse.errors.is_empty(), "reparse: {:?}", reparse.errors);
     fixed
 }
 
-fn parse_cleanly(source: &str, version: LuaVersion) -> ParseResult {
-    let parse = luck_parser::parse(source, version);
-    assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
-    parse
+const fn standalone(version: LuaVersion) -> LuaTarget {
+    match version {
+        LuaVersion::Lua51 => LuaTarget::Lua51,
+        LuaVersion::Lua52 => LuaTarget::Lua52,
+        LuaVersion::Lua53 => LuaTarget::Lua53,
+        LuaVersion::Lua54 => LuaTarget::Lua54,
+        LuaVersion::Lua55 => LuaTarget::Lua55,
+        LuaVersion::Luau => LuaTarget::Luau,
+    }
 }
 
 fn check(
     rule: &dyn Rule,
-    parse: &ParseResult,
-    version: LuaVersion,
-    environment: StdlibEnvironment,
+    source: &str,
+    target: LuaTarget,
     config: &LintConfig,
 ) -> Vec<LintDiagnostic> {
-    let semantic = driver::analyze(&parse.block, version, environment, config);
+    let allocator = Allocator::new();
+    let parse = luck_parser::parse(&allocator, source, target.lua_version());
+    assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
+    let semantic = driver::analyze(&parse, target, config);
     let nodes = Nodes::collect(&parse.block);
-    let context = LintContext {
-        block: &parse.block,
-        blocks: nodes.blocks(),
-        function_blocks: nodes.function_blocks(),
-        uninitialized_locals: nodes.uninitialized_locals(),
-        semantic: &semantic,
-        source: &parse.source,
-        comments: &parse.comments,
-        config,
-        local_flow: OnceLock::new(),
-        line_index: OnceLock::new(),
-    };
+    let context = LintContext::new(&parse, &semantic, &nodes, config);
     let entry = RULES
         .iter()
         .find(|entry| entry.rule().name() == rule.name())

@@ -10,10 +10,12 @@
 //! # Usage
 //!
 //! ```
-//! use luck_token::LuaVersion;
+//! use luck_allocator::Allocator;
+//! use luck_core::LuaTarget;
 //! use luck_linter::LintConfig;
 //!
-//! let diags = luck_linter::lint("print(1)", LuaVersion::Lua54, &LintConfig::default());
+//! let allocator = Allocator::new();
+//! let diags = luck_linter::lint(&allocator, "print(1)", LuaTarget::Lua54, &LintConfig::default());
 //! assert!(diags.is_empty());
 //! ```
 
@@ -56,7 +58,7 @@ pub use config::{
     RuleLevel, RuleSetting, RuleSettings,
 };
 pub use diagnostic::{Category, LintDiagnostic, Severity};
-pub use driver::{lint, lint_analyzed, lint_parsed, lint_target};
+pub use driver::{lint, lint_analyzed, lint_parsed};
 pub use fix::{
     FIXPOINT_BUDGET, Fix, FixpointError, TextEdit, apply_fixes, apply_fixes_fixpoint,
     non_overlapping_edits,

@@ -25,7 +25,12 @@ impl NodeRule for RedundantNativeAttribute {
             NodeType::FunctionDef,
         ])
     }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let attributes = match stmt {
             Statement::FunctionDecl(function_decl) => &function_decl.attributes,
             Statement::LocalFunction(local_function) => &local_function.attributes,
@@ -51,7 +56,12 @@ impl NodeRule for RedundantNativeAttribute {
         };
         check_attributes(attributes, context, findings);
     }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         if let Expression::FunctionDef(function) = expr {
             check_attributes(&function.attributes, context, findings);
         }
@@ -59,20 +69,20 @@ impl NodeRule for RedundantNativeAttribute {
 }
 
 fn check_attributes(
-    attributes: &[FunctionAttribute],
+    attributes: &[FunctionAttribute<'_>],
     context: &LintContext<'_>,
     findings: &mut Vec<Finding>,
 ) {
     // Check for attributes first, since the directive scan reads the
     // comments.
     if attributes.is_empty()
-        || !context.semantic.version.is_luau()
+        || !context.semantic.version().is_luau()
         || !has_native_directive(context)
     {
         return;
     }
     for attribute in attributes {
-        if attribute.name.identifier() != Some("native") {
+        if attribute.name.text != "native" {
             continue;
         }
         findings.push(
@@ -89,8 +99,8 @@ fn check_attributes(
 /// separator is left behind. A `@[...]` list keeps the fix only when
 /// `attribute` is its sole entry and nothing but its name sits in brackets.
 fn removal_fix(
-    attribute: &FunctionAttribute,
-    attributes: &[FunctionAttribute],
+    attribute: &FunctionAttribute<'_>,
+    attributes: &[FunctionAttribute<'_>],
     source: &str,
 ) -> Option<Fix> {
     let bytes = source.as_bytes();
@@ -134,7 +144,7 @@ fn has_native_directive(context: &LintContext<'_>) -> bool {
         .stmts
         .first()
         .map(Statement::span)
-        .or_else(|| block.last_stmt.as_deref().map(LastStatement::span))
+        .or_else(|| block.last_stmt.as_ref().map(LastStatement::span))
         .map(|span| span.start);
     // Comments come in source order, so the scan stops at the first code.
     context

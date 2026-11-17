@@ -76,13 +76,13 @@ fn check_call(site: &CallSite<'_>, findings: &mut Vec<Finding>) {
 fn invalid_constant_args(
     callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
-    args: &[Expression],
+    args: &[Expression<'_>],
     arg_count: usize,
 ) -> impl Iterator<Item = Finding> {
     args.iter().enumerate().filter_map(move |(index, expr)| {
         let (value, span) = string_literal_value(expr)?;
         let allowed_sets = function.allowed_constants(index, arg_count)?;
-        let allowed = || allowed_sets.iter().flat_map(|values| values.iter());
+        let allowed = || allowed_sets.clone().flatten();
         if allowed().any(|constant| constant.value == value) {
             return None;
         }

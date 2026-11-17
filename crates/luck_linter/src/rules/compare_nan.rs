@@ -22,8 +22,13 @@ impl NodeRule for CompareNan {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let version = context.semantic.version;
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
+        let version = context.semantic.version();
         let Expression::BinaryOp(run) = expr else {
             return;
         };
@@ -31,7 +36,7 @@ impl NodeRule for CompareNan {
             return;
         }
         for pair in operator_pairs(run) {
-            let is_nan = |side: Option<&Expression>| {
+            let is_nan = |side: Option<&Expression<'_>>| {
                 side.is_some_and(|operand| is_nan_expr(operand, version))
             };
             if matches!(pair.op, BinOp::Eq | BinOp::Ne) && (is_nan(pair.lhs) || is_nan(pair.rhs)) {
@@ -49,7 +54,7 @@ impl NodeRule for CompareNan {
 
 /// Whether `expr` divides a zero literal by a zero literal, each in any
 /// spelling, parentheses aside.
-fn is_nan_expr(expr: &Expression, version: LuaVersion) -> bool {
+fn is_nan_expr(expr: &Expression<'_>, version: LuaVersion) -> bool {
     let Expression::BinaryOp(run) = unwrap_parentheses(expr) else {
         return false;
     };

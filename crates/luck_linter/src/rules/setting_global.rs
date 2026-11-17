@@ -15,9 +15,10 @@ impl_rule!(
 impl WholeRule for SettingGlobal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
+        let tree = semantic.scope_tree();
         let mut findings = Vec::new();
 
-        for reference in semantic.scope_tree.unresolved_references() {
+        for reference in tree.global_references() {
             if !reference.kind.is_write() {
                 continue;
             }
@@ -25,14 +26,15 @@ impl WholeRule for SettingGlobal {
             if semantic.is_defined_global(reference) {
                 continue;
             }
+            let name = tree.name(reference.name);
             // `_` is a conventional discard name, not an accidental global.
-            if reference.name == "_" {
+            if name == "_" {
                 continue;
             }
 
             findings.push(
                 Finding::new(
-                    format!("setting global variable `{}` (missing `local`?)", reference.name),
+                    format!("setting global variable `{name}` (missing `local`?)"),
                     reference.span,
                 )
                 .with_help("add `local` before the first assignment"),

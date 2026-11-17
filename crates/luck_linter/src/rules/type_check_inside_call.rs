@@ -29,14 +29,14 @@ impl NodeRule for TypeCheckInsideCall {
     }
 }
 
-fn check_call(call: Call<'_>, semantic: &SemanticAnalysis) -> Option<Finding> {
+fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding> {
     if !is_global_call(call, "type", semantic) && !is_global_call(call, "typeof", semantic) {
         return None;
     }
     let FunctionArgs::Parenthesized { args, .. } = call.args else {
         return None;
     };
-    let [Expression::BinaryOp(binary_op)] = args.items.as_slice() else {
+    let [Expression::BinaryOp(binary_op)] = &**args else {
         return None;
     };
     // A run of comparisons groups from the left, so its last one is

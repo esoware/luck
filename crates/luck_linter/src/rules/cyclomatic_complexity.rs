@@ -22,12 +22,22 @@ impl NodeRule for CyclomaticComplexity {
     fn node_types(&self) -> NodeTypeSet {
         FunctionNode::NODE_TYPES
     }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         findings.extend(
             FunctionNode::of_stmt(stmt).and_then(|function| check_function(function, context)),
         );
     }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         findings.extend(
             FunctionNode::of_expr(expr).and_then(|function| check_function(function, context)),
         );

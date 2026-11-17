@@ -21,7 +21,12 @@ impl NodeRule for EmptyBlock {
             NodeType::RepeatLoop,
         ])
     }
-    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        _context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let (block, message, span) = match stmt {
             Statement::IfStatement(if_stmt) => {
                 findings.extend(check_body(&if_stmt.block, "empty `if` block", if_stmt.span));
@@ -66,7 +71,7 @@ impl NodeRule for EmptyBlock {
     }
 }
 
-fn check_body(block: &Block, message: &str, span: Span) -> Option<Finding> {
+fn check_body(block: &Block<'_>, message: &str, span: Span) -> Option<Finding> {
     (block.stmts.is_empty() && block.last_stmt.is_none()).then(|| Finding::new(message, span))
 }
 

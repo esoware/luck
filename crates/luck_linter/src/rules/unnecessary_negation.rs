@@ -21,7 +21,12 @@ impl NodeRule for UnnecessaryNegation {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::UnaryOp])
     }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let Expression::UnaryOp(unary) = expr else {
             return;
         };

@@ -1,5 +1,5 @@
 use luck_ast::{Expression, FunctionArgs, Literal};
-use luck_token::{LuaVersion, Span, Token, TokenKind, index_to_offset, short_string_body};
+use luck_token::{LuaVersion, Span, index_to_offset, short_string_body};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -31,43 +31,43 @@ impl NodeRule for BadStringEscape {
         ])
     }
 
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let version = context.semantic.version;
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
+        let version = context.semantic.version();
         if let Expression::StringLiteral(literal) = expr {
             check_literal(literal, version, findings);
         }
-        if let Expression::InterpolatedString(interpolated) = expr {
+        if let Expression::InterpolatedString(interpolated) = expr
+            && !interpolated.segments.is_empty()
+        {
             for segment in &interpolated.segments {
-                check_segment(&segment.literal, version, findings);
+                check_piece(&segment.text, version, findings);
             }
+            check_piece(&interpolated.tail, version, findings);
         }
     }
 
     fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let call = site.call;
         if let FunctionArgs::StringLiteral(literal) = call.args {
-            check_literal(literal, context.semantic.version, findings);
+            check_literal(literal, context.semantic.version(), findings);
         }
     }
 }
 
 /// Long-bracket strings have no escapes, so only a quoted body is checked.
-fn check_literal(literal: &Literal, version: LuaVersion, findings: &mut Vec<Finding>) {
-    if let Some(body) = short_string_body(&literal.text) {
+fn check_literal(literal: &Literal<'_>, version: LuaVersion, findings: &mut Vec<Finding>) {
+    if let Some(body) = short_string_body(literal.text) {
         check_escapes(body, literal.span.start.saturating_add(1), false, version, findings);
     }
 }
 
-fn check_segment(literal: &Token, version: LuaVersion, findings: &mut Vec<Finding>) {
-    let (TokenKind::InterpolatedStringBegin(text)
-    | TokenKind::InterpolatedStringMiddle(text)
-    | TokenKind::InterpolatedStringEnd(text)) = &literal.kind
-    else {
-        return;
-    };
-    // Every segment's span ends with its one-byte delimiter.
-    let body_start = literal.span.end.saturating_sub(1).saturating_sub(index_to_offset(text.len()));
-    check_escapes(text, body_start, true, version, findings);
+fn check_piece(piece: &Literal<'_>, version: LuaVersion, findings: &mut Vec<Finding>) {
+    check_escapes(piece.text, piece.span.start, true, version, findings);
 }
 
 fn escape_length(rest: &[u8], is_interpolated: bool, version: LuaVersion) -> Option<usize> {

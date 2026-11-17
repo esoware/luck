@@ -5,11 +5,11 @@ use core::mem;
 use core::num::Saturating;
 
 use luck_ast::{
-    Block, Expression, FunctionBody, IfStatement, LastStatement, RepeatLoop, Statement, Type,
+    Block, Expression, FunctionBody, IfStatement, LastStatement, Name, RepeatLoop, Statement, Type,
     Visitor, WhileLoop, unwrap_parentheses,
 };
 use luck_semantic::SemanticAnalysis;
-use luck_token::{BinOp, Span, Token};
+use luck_token::{BinOp, Span};
 use rustc_hash::FxHashMap;
 
 use crate::call::is_global_call;
@@ -69,7 +69,10 @@ pub(crate) struct LocalDeclaration {
 }
 
 impl FlowGraph {
-    pub(crate) fn of_block(block: &Block, semantic: &SemanticAnalysis) -> Self {
+    pub(crate) fn of_block<'ast>(
+        block: &'ast Block<'ast>,
+        semantic: &'ast SemanticAnalysis<'ast>,
+    ) -> Self {
         let mut builder = GraphBuilder {
             graph: Self {
                 successors: vec![[None; 2]; EXIT_NODE_COUNT],
@@ -140,9 +143,9 @@ impl FlowGraph {
     }
 }
 
-struct GraphBuilder<'ast, 'analysis> {
+struct GraphBuilder<'ast> {
     graph: FlowGraph,
-    semantic: &'analysis SemanticAnalysis,
+    semantic: &'ast SemanticAnalysis<'ast>,
     /// The node the next code runs after, or `None` right after a jump.
     cursor: Option<usize>,
     /// The run of simple statements the cursor ends, which the next one
@@ -157,7 +160,7 @@ struct GraphBuilder<'ast, 'analysis> {
     label_names: Vec<&'ast str>,
 }
 
-impl<'ast> GraphBuilder<'ast, '_> {
+impl<'ast> GraphBuilder<'ast> {
     fn new_node(&mut self) -> usize {
         self.graph.successors.push([None; 2]);
         self.graph.code_starts.push(0);
@@ -215,18 +218,19 @@ impl<'ast> GraphBuilder<'ast, '_> {
         }
     }
 
-    fn block(&mut self, block: &'ast Block) {
+    fn block(&mut self, block: &'ast Block<'ast>) {
         self.scoped_block(block, block.span.end);
     }
 
-    fn scoped_block(&mut self, block: &'ast Block, scope_end: u32) {
+    fn scoped_block(&mut self, block: &'ast Block<'ast>, scope_end: u32) {
         self.run = None;
         let outer_scope_end = mem::replace(&mut self.scope_end, scope_end);
         let outer_label_count = self.label_names.len();
         // A label is visible in its whole block, `goto`s before it included.
         for stmt in &block.stmts {
             if let Statement::Label(label) = stmt
-                && let Some(name) = label.name.identifier()
+                && let name = label.name.text
+                && !name.is_empty()
             {
                 let node = self.new_node();
                 self.labels.entry(name).or_default().push(node);
@@ -248,11 +252,11 @@ impl<'ast> GraphBuilder<'ast, '_> {
         self.run = None;
     }
 
-    fn label_node(&self, token: &Token) -> Option<usize> {
-        self.labels.get(token.identifier()?)?.last().copied()
+    fn label_node(&self, name: &Name<'_>) -> Option<usize> {
+        self.labels.get(name.text)?.last().copied()
     }
 
-    fn stmt(&mut self, stmt: &'ast Statement) {
+    fn stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             Statement::FunctionCall(chain) => {
                 let node = self.simple(chain.span);
@@ -312,7 +316,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
         }
     }
 
-    fn last_stmt(&mut self, last: &'ast LastStatement) {
+    fn last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
         match last {
             LastStatement::Return(node) => {
                 let exit =
@@ -330,7 +334,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
 
     fn loop_body(
         &mut self,
-        block: &'ast Block,
+        block: &'ast Block<'ast>,
         scope_end: u32,
         break_target: usize,
         continue_target: usize,
@@ -343,7 +347,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
         self.continue_target = outer_continue_target;
     }
 
-    fn while_loop(&mut self, node: &'ast WhileLoop) {
+    fn while_loop(&mut self, node: &'ast WhileLoop<'ast>) {
         let head = self.code(Span::new(node.span.start, node.block.span.start));
         let after = self.new_node();
         let truth = literal_truth(&node.condition);
@@ -357,7 +361,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
         self.cursor = Some(after);
     }
 
-    fn repeat_loop(&mut self, node: &'ast RepeatLoop) {
+    fn repeat_loop(&mut self, node: &'ast RepeatLoop<'ast>) {
         let body = self.new_node();
         self.advance_to(body);
         let condition = self.new_node();
@@ -375,7 +379,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
         self.cursor = Some(after);
     }
 
-    fn for_loop(&mut self, header: Span, body: &'ast Block) {
+    fn for_loop(&mut self, header: Span, body: &'ast Block<'ast>) {
         self.code(header);
         let head = self.new_node();
         self.advance_to(head);
@@ -386,7 +390,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
         self.cursor = Some(after);
     }
 
-    fn if_stmt(&mut self, node: &'ast IfStatement) {
+    fn if_stmt(&mut self, node: &'ast IfStatement<'ast>) {
         let mut test = self.code(Span::new(node.span.start, node.block.span.start));
         let join = self.new_node();
         self.block(&node.block);
@@ -406,7 +410,7 @@ impl<'ast> GraphBuilder<'ast, '_> {
     }
 }
 
-fn literal_truth(condition: &Expression) -> Option<bool> {
+fn literal_truth(condition: &Expression<'_>) -> Option<bool> {
     match unwrap_parentheses(condition) {
         Expression::Nil(_) | Expression::False(_) => Some(false),
         Expression::True(_)
@@ -428,7 +432,7 @@ fn literal_truth(condition: &Expression) -> Option<bool> {
     }
 }
 
-pub(crate) fn decision_points(block: &Block) -> u32 {
+pub(crate) fn decision_points(block: &Block<'_>) -> u32 {
     let mut points = DecisionPoints::default();
     points.visit_block(block);
     points.count.0
@@ -448,7 +452,7 @@ impl DecisionPoints {
 }
 
 impl<'ast> Visitor<'ast> for DecisionPoints {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             Statement::IfStatement(node) => self.count_clauses(node.elseif_clauses.len()),
             Statement::WhileLoop(_)
@@ -475,7 +479,7 @@ impl<'ast> Visitor<'ast> for DecisionPoints {
         self.walk_stmt(stmt);
     }
 
-    fn visit_expr(&mut self, expr: &'ast Expression) {
+    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
         match expr {
             Expression::BinaryOp(node) => {
                 if matches!(node.links.first().op, BinOp::And | BinOp::Or) {
@@ -504,28 +508,38 @@ impl<'ast> Visitor<'ast> for DecisionPoints {
         self.walk_expr(expr);
     }
 
-    fn visit_function_body(&mut self, _body: &'ast FunctionBody) {}
+    fn visit_function_body(&mut self, _body: &'ast FunctionBody<'ast>) {}
 
-    fn visit_type(&mut self, _type_value: &'ast Type) {}
+    fn visit_type(&mut self, _ty: &'ast Type<'ast>) {}
 }
 
 #[cfg(test)]
 mod tests {
     use core::fmt::Write as _;
 
-    use luck_token::LuaVersion;
+    use luck_allocator::Allocator;
+    use luck_token::{LuaVersion, StdlibEnvironment};
 
     use super::*;
 
-    fn parse_block(source: &str, version: LuaVersion) -> Block {
-        let parse = luck_parser::parse(source, version);
+    fn parse_block<'ast>(
+        allocator: &'ast Allocator,
+        source: &'ast str,
+        version: LuaVersion,
+    ) -> &'ast Block<'ast> {
+        let parse = luck_parser::parse(allocator, source, version);
         assert!(parse.errors.is_empty(), "parser errors for {source:?}: {:?}", parse.errors);
-        parse.block
+        allocator.alloc(parse.block)
+    }
+
+    fn analyze<'ast>(block: &'ast Block<'ast>, version: LuaVersion) -> SemanticAnalysis<'ast> {
+        luck_semantic::analyze(block, version, StdlibEnvironment::Standalone)
     }
 
     fn flow_of(source: &str, version: LuaVersion) -> FlowGraph {
-        let block = parse_block(source, version);
-        FlowGraph::of_block(&block, &luck_semantic::analyze(&block, version))
+        let allocator = Allocator::new();
+        let block = parse_block(&allocator, source, version);
+        FlowGraph::of_block(block, &analyze(block, version))
     }
 
     fn flow(source: &str) -> FlowGraph {
@@ -533,7 +547,7 @@ mod tests {
     }
 
     fn points(source: &str) -> u32 {
-        decision_points(&parse_block(source, LuaVersion::Lua54))
+        decision_points(parse_block(&Allocator::new(), source, LuaVersion::Lua54))
     }
 
     #[test]
@@ -720,11 +734,12 @@ return 2",
 
     #[test]
     fn continue_of_the_analyzed_block_ends_it() {
-        let block = parse_block("for _ = 1, 3 do continue end", LuaVersion::Luau);
+        let allocator = Allocator::new();
+        let block = parse_block(&allocator, "for _ = 1, 3 do continue end", LuaVersion::Luau);
         let Some(Statement::NumericFor(numeric_for)) = block.stmts.first() else {
             panic!("the statement must be a numeric for");
         };
-        let semantic = luck_semantic::analyze(&block, LuaVersion::Luau);
+        let semantic = analyze(block, LuaVersion::Luau);
         assert!(FlowGraph::of_block(&numeric_for.block, &semantic).reaches(Exit::End));
     }
 
@@ -754,7 +769,9 @@ goto top",
 
     #[test]
     fn goto_to_a_label_outside_the_block_leaves_it() {
+        let allocator = Allocator::new();
         let block = parse_block(
+            &allocator,
             "\
 while true do goto done end
 ::done::",
@@ -763,7 +780,7 @@ while true do goto done end
         let Some(Statement::WhileLoop(while_loop)) = block.stmts.first() else {
             panic!("the statement must be a while loop");
         };
-        let semantic = luck_semantic::analyze(&block, LuaVersion::Lua54);
+        let semantic = analyze(block, LuaVersion::Lua54);
         let graph = FlowGraph::of_block(&while_loop.block, &semantic);
         assert!(graph.reaches(Exit::Break));
         assert!(!graph.reaches(Exit::End));

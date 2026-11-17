@@ -16,23 +16,24 @@ impl_rule!(
 
 impl WholeRule for Shadowing {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let semantic = context.semantic;
+        let tree = context.semantic.scope_tree();
         let mut findings = Vec::new();
 
-        for symbol in &semantic.scope_tree.symbols {
+        for symbol in tree.symbols() {
             let Some(shadowed_id) = symbol.shadows else {
                 continue;
             };
             // A leading `_` marks a name as deliberately unused, and an
             // implicit `self` has no name the author could change.
-            if symbol.name.starts_with('_') || symbol.kind == SymbolKind::ImplicitSelf {
+            let name = tree.name(symbol.name);
+            if name.starts_with('_') || symbol.kind == SymbolKind::ImplicitSelf {
                 continue;
             }
-            let shadowed = semantic.scope_tree.symbol(shadowed_id);
+            let shadowed = tree.symbol(shadowed_id);
             let (line, column) = context.line_index().line_column(shadowed.definition_span.start);
             findings.push(
                 Finding::new(
-                    format!("variable `{}` shadows outer variable", symbol.name),
+                    format!("variable `{name}` shadows outer variable"),
                     symbol.definition_span,
                 )
                 .with_help(format!("outer variable defined at {line}:{column}")),

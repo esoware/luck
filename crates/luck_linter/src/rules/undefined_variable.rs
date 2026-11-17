@@ -15,9 +15,8 @@ impl_rule!(
 impl WholeRule for UndefinedVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        semantic
-            .scope_tree
-            .unresolved_references()
+        let tree = semantic.scope_tree();
+        tree.global_references()
             .filter(|reference| {
                 // `setting_global` owns writes, and a global this file writes
                 // (`function f() end`, `counter = 0`) counts as defined
@@ -25,11 +24,12 @@ impl WholeRule for UndefinedVariable {
                 // use.
                 !reference.kind.is_write()
                     && !semantic.is_defined_global(reference)
-                    && reference.name != "_"
-                    && !semantic.scope_tree.assigned_globals.contains(&reference.name)
+                    && tree.name(reference.name) != "_"
+                    && !tree.is_assigned_global(reference.name)
             })
             .map(|reference| {
-                Finding::new(format!("undefined variable `{}`", reference.name), reference.span)
+                let name = tree.name(reference.name);
+                Finding::new(format!("undefined variable `{name}`"), reference.span)
                     .with_help("declare it with `local`, or add it to `extra_globals`")
             })
             .collect()

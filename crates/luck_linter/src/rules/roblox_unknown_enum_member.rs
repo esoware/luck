@@ -25,7 +25,7 @@ impl NodeRule for RobloxUnknownEnumMember {
     }
     fn on_chain(
         &self,
-        chain: &SuffixedExpression,
+        chain: &SuffixedExpression<'_>,
         position: ChainPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
@@ -33,7 +33,7 @@ impl NodeRule for RobloxUnknownEnumMember {
         let Expression::Name(root) = &chain.prefix else {
             return;
         };
-        if root.identifier() != Some("Enum") {
+        if root.text != "Enum" {
             return;
         }
         // Only the Roblox stdlib has an `Enum` global.
@@ -41,7 +41,7 @@ impl NodeRule for RobloxUnknownEnumMember {
         let Some(mut entry) = stdlib.globals.get("Enum") else {
             return;
         };
-        if context.semantic.resolves_to_local("Enum", root.span) {
+        if context.semantic.scope_tree().resolves_to_local(root) {
             return;
         }
         // A target's last field is stored to, not read.
@@ -53,9 +53,7 @@ impl NodeRule for RobloxUnknownEnumMember {
             let Suffix::Field(name) = suffix else {
                 return;
             };
-            let Some(segment) = name.identifier() else {
-                return;
-            };
+            let segment = name.text;
             // Past the first unknown segment, nothing resolves, so the chain
             // warns once.
             let Some(member) = stdlib.child(entry, segment) else {

@@ -16,17 +16,17 @@ impl_rule!(
 
 impl WholeRule for GlobalUsedAsLocal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = &context.semantic.scope_tree;
-        let mut unresolved_references: Vec<&Reference> = tree.unresolved_references().collect();
-        unresolved_references.sort_by(|a, b| a.name.cmp(&b.name));
+        let tree = context.semantic.scope_tree();
+        let mut global_references: Vec<&Reference> = tree.global_references().collect();
+        global_references.sort_by_key(|reference| reference.name);
 
         let mut findings = Vec::new();
-        for references in unresolved_references.chunk_by(|left, right| left.name == right.name) {
+        for references in global_references.chunk_by(|left, right| left.name == right.name) {
             let Some(first) = references.iter().min_by_key(|reference| reference.span.start) else {
                 continue;
             };
-            let name = first.name.as_str();
-            if name == "_" || context.semantic.is_known_global(name) {
+            let name = tree.name(first.name);
+            if name == "_" || context.semantic.is_known_global_name(first.name) {
                 continue;
             }
             let is_assigned = references.iter().any(|reference| reference.kind.is_write());
@@ -55,16 +55,9 @@ impl WholeRule for GlobalUsedAsLocal {
     }
 }
 
-fn enclosing_function(tree: &ScopeTree, scope: ScopeId) -> Option<ScopeId> {
-    let mut current = Some(scope);
-    while let Some(scope_id) = current {
-        let current_scope = tree.scope(scope_id);
-        if current_scope.kind == ScopeKind::Function {
-            return Some(scope_id);
-        }
-        current = current_scope.parent;
-    }
-    None
+fn enclosing_function(tree: &ScopeTree<'_>, scope: ScopeId) -> Option<ScopeId> {
+    let function = tree.scope(scope).function;
+    (tree.scope(function).kind == ScopeKind::Function).then_some(function)
 }
 
 #[cfg(test)]

@@ -15,12 +15,10 @@ impl_rule!(
 
 impl WholeRule for GlobalUsage {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let is_roblox = context.semantic.environment.is_roblox();
-        context
-            .semantic
-            .scope_tree
-            .unresolved_references()
-            .filter(|reference| match reference.name.as_str() {
+        let is_roblox = context.semantic.environment().is_roblox();
+        let tree = context.semantic.scope_tree();
+        tree.global_references()
+            .filter(|reference| match tree.name(reference.name) {
                 "_G" => true,
                 // Roblox.
                 "shared" => is_roblox,
@@ -28,7 +26,7 @@ impl WholeRule for GlobalUsage {
             })
             .map(|reference| {
                 Finding::new(
-                    format!("global environment `{}` used", reference.name),
+                    format!("global environment `{}` used", tree.name(reference.name)),
                     reference.span,
                 )
                 .with_help("prefer a module or an explicitly passed dependency")

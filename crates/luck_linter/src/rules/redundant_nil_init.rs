@@ -23,26 +23,31 @@ impl NodeRule for RedundantNilInit {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::LocalAssignment])
     }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         if let Statement::LocalAssignment(local) = stmt {
             findings.extend(check_local(local, context.source, context.comments));
         }
     }
 }
 
-fn check_local(local: &LocalAssignment, source: &str, comments: &[Comment]) -> Option<Finding> {
+fn check_local(local: &LocalAssignment<'_>, source: &str, comments: &[Comment]) -> Option<Finding> {
     // Luau requires a `const` to have an initializer.
     if local.kind.is_const() {
         return None;
     }
-    let exprs = local.exprs.as_ref()?;
+    let exprs = &local.exprs;
     let trailing_nil_count =
-        exprs.items.iter().rev().take_while(|expr| matches!(expr, Expression::Nil(_))).count();
+        exprs.iter().rev().take_while(|expr| matches!(expr, Expression::Nil(_))).count();
     if trailing_nil_count == 0 {
         return None;
     }
 
-    let Some(last_kept_expr) = exprs.items.iter().rev().nth(trailing_nil_count) else {
+    let Some(last_kept_expr) = exprs.iter().rev().nth(trailing_nil_count) else {
         return Some(
             Finding::new(
                 "redundant `= nil` initializer, because uninitialized locals are `nil`",
@@ -93,8 +98,8 @@ fn deletion_fix(description: &str, span: Span, comments: &[Comment]) -> Option<F
 
 /// The ` = nil` part of a local, starting after any comments before the `=`.
 fn whole_initializer_span(
-    local: &LocalAssignment,
-    first_expr: &Expression,
+    local: &LocalAssignment<'_>,
+    first_expr: &Expression<'_>,
     source: &str,
     comments: &[Comment],
 ) -> Span {
@@ -110,7 +115,7 @@ fn whole_initializer_span(
     Span::new(delete_start, local.span.end)
 }
 
-fn last_binding_end(local: &LocalAssignment) -> u32 {
+fn last_binding_end(local: &LocalAssignment<'_>) -> u32 {
     let Some(last) = local.names.last() else {
         return local.span.start;
     };

@@ -972,6 +972,7 @@ dependencies = [
 name = "luck_linter"
 version = "0.6.0"
 dependencies = [
+ "luck_allocator",
  "luck_ast",
  "luck_core",
  "luck_parser",

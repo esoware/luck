@@ -26,16 +26,24 @@ impl NodeRule for ForRange {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::NumericFor])
     }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         if let Statement::NumericFor(numeric_for) = stmt
-            && let Some((message, help)) = range_problem(numeric_for, context.semantic.version)
+            && let Some((message, help)) = range_problem(numeric_for, context.semantic.version())
         {
             findings.push(Finding::new(message, numeric_for.span).with_help(help));
         }
     }
 }
 
-fn range_problem(numeric_for: &NumericFor, version: LuaVersion) -> Option<(String, &'static str)> {
+fn range_problem(
+    numeric_for: &NumericFor<'_>,
+    version: LuaVersion,
+) -> Option<(String, &'static str)> {
     let start = signed_number_value(&numeric_for.start, version);
     let limit = signed_number_value(&numeric_for.limit, version);
     let step = numeric_for.step.as_ref().and_then(|step| signed_number_value(step, version));
@@ -90,7 +98,7 @@ fn range_problem(numeric_for: &NumericFor, version: LuaVersion) -> Option<(Strin
 ///
 /// `reversed_for_loop` needs a literal start, so it never fires here.
 fn length_start_problem(
-    numeric_for: &NumericFor,
+    numeric_for: &NumericFor<'_>,
     limit_value: f64,
     step: Option<f64>,
 ) -> Option<(String, &'static str)> {
@@ -120,7 +128,7 @@ fn length_start_problem(
     reason = "this rule reproduces the Lua VM arithmetic in doubles"
 )]
 fn limit_landing_problem(
-    numeric_for: &NumericFor,
+    numeric_for: &NumericFor<'_>,
     start_value: f64,
     limit_value: f64,
     step: Option<f64>,
@@ -153,7 +161,7 @@ fn limit_landing_problem(
     })
 }
 
-fn is_length_of_identifier(expr: &Expression) -> bool {
+fn is_length_of_identifier(expr: &Expression<'_>) -> bool {
     if let Expression::UnaryOp(unary) = expr
         && unary.op == UnOp::Len
     {

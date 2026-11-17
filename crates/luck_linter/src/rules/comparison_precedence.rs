@@ -24,7 +24,12 @@ impl NodeRule for ComparisonPrecedence {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        _context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let Expression::BinaryOp(run) = expr else {
             return;
         };
@@ -98,7 +103,7 @@ fn check_pair(pair: OperatorPair<'_>, findings: &mut Vec<Finding>) {
 }
 
 /// The author of `(not x) == y` was explicit.
-fn is_unparenthesized_not(expr: &Expression) -> bool {
+fn is_unparenthesized_not(expr: &Expression<'_>) -> bool {
     matches!(expr, Expression::UnaryOp(unary) if unary.op == UnOp::Not)
 }
 

@@ -28,7 +28,12 @@ impl NodeRule for LoopExecutesOnce {
             NodeType::GenericFor,
         ])
     }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let (body, span, kind) = match stmt {
             Statement::WhileLoop(node) => (&node.block, node.span, "`while`"),
             Statement::RepeatLoop(node) => (&node.block, node.span, "`repeat`"),

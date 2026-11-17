@@ -1,6 +1,5 @@
-use luck_ast::{Call, Expression, FunctionBody, Statement, Visitor};
+use luck_ast::{Call, Expression, FunctionBody, Statement};
 use luck_semantic::ScopeTree;
-use luck_token::{LineIndex, Span};
 use rustc_hash::FxHashMap;
 
 use crate::call::{has_multi_value_tail, positional_args};
@@ -20,21 +19,17 @@ impl_rule!(
 
 impl WholeRule for MismatchedArgCount {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut definitions = DefinitionCollector {
-            tree: &context.semantic.scope_tree,
-            callees: FxHashMap::default(),
-        };
-        definitions.visit_block(context.block);
-        if definitions.callees.is_empty() {
+        let signatures = function_signatures(context);
+        if signatures.is_empty() {
             return Vec::new();
         }
-        let mut checker = CallChecker {
-            lines: context.line_index(),
-            callees: definitions.callees,
-            findings: Vec::new(),
-        };
-        checker.visit_block(context.block);
-        checker.findings
+        let tree = context.semantic.scope_tree();
+        context
+            .nodes
+            .as_slice()
+            .iter()
+            .filter_map(|node| check_call(node.call()?, tree, &signatures, context))
+            .collect()
     }
 }
 
@@ -42,131 +37,98 @@ impl WholeRule for MismatchedArgCount {
 struct FunctionSignature {
     param_count: usize,
     has_vararg: bool,
-    definition_start: u32,
 }
 
-/// Maps each reference to a local bound to a function literal, by span, to
-/// that function's signature.
-///
-/// A local that's ever reassigned is left out, since it could hold any
-/// function by the time a call runs. Keying by span lets a call's name
-/// resolve without scanning every reference.
-struct DefinitionCollector<'tree> {
-    tree: &'tree ScopeTree,
-    callees: FxHashMap<Span, FunctionSignature>,
-}
-
-impl DefinitionCollector<'_> {
-    fn record(&mut self, name_span: Span, body: &FunctionBody) {
-        let Some(symbol) =
-            self.tree.symbols.iter().find(|symbol| symbol.definition_span == name_span)
-        else {
-            return;
-        };
-        if symbol.is_modified {
-            return;
-        }
-        let signature = FunctionSignature {
-            param_count: body.params.len(),
-            has_vararg: body.vararg.is_some(),
-            definition_start: name_span.start,
-        };
-        for &reference_id in &symbol.reference_ids {
-            self.callees.insert(self.tree.reference(reference_id).span, signature);
-        }
+impl FunctionSignature {
+    fn of(body: &FunctionBody<'_>) -> Self {
+        Self { param_count: body.params.len(), has_vararg: body.vararg.is_some() }
     }
 }
 
-impl<'ast> Visitor<'ast> for DefinitionCollector<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
-        match stmt {
-            Statement::LocalFunction(local_function) => {
-                self.record(local_function.name.span, &local_function.body);
-            }
-            Statement::LocalAssignment(local) => {
-                if let Some(exprs) = &local.exprs {
-                    for (attributed, value) in local.names.iter().zip(exprs.iter()) {
+/// Each local bound to a function literal, by where its name starts, with
+/// that function's signature.
+fn function_signatures(context: &LintContext<'_>) -> FxHashMap<u32, FunctionSignature> {
+    let mut signatures = FxHashMap::default();
+    for block in context.nodes.blocks() {
+        for stmt in &block.stmts {
+            match stmt {
+                Statement::LocalFunction(local_function) => {
+                    let signature = FunctionSignature::of(&local_function.body);
+                    signatures.insert(local_function.name.span.start, signature);
+                }
+                Statement::LocalAssignment(local) => {
+                    for (attributed, value) in local.names.iter().zip(&local.exprs) {
                         if let Expression::FunctionDef(function) = value {
-                            self.record(attributed.name.span, &function.body);
+                            let signature = FunctionSignature::of(&function.body);
+                            signatures.insert(attributed.name.span.start, signature);
                         }
                     }
                 }
+                Statement::Assignment(_)
+                | Statement::FunctionCall(_)
+                | Statement::DoBlock(_)
+                | Statement::WhileLoop(_)
+                | Statement::RepeatLoop(_)
+                | Statement::IfStatement(_)
+                | Statement::NumericFor(_)
+                | Statement::GenericFor(_)
+                | Statement::FunctionDecl(_)
+                | Statement::EmptyStatement(_)
+                | Statement::Goto(_)
+                | Statement::Label(_)
+                | Statement::GlobalDeclaration(_)
+                | Statement::GlobalFunction(_)
+                | Statement::GlobalStar(_)
+                | Statement::Break(_)
+                | Statement::CompoundAssignment(_)
+                | Statement::TypeDeclaration(_)
+                | Statement::Error(_) => {}
             }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
         }
-        self.walk_stmt(stmt);
     }
+    signatures
 }
 
-struct CallChecker<'context> {
-    lines: &'context LineIndex,
-    callees: FxHashMap<Span, FunctionSignature>,
-    findings: Vec<Finding>,
-}
-
-impl CallChecker<'_> {
-    fn check_call(&mut self, call: Call<'_>) {
-        if call.method.is_some() {
-            return;
-        }
-        let Some(token) = call.callee.as_name() else {
-            return;
-        };
-        let Some(name) = token.identifier() else {
-            return;
-        };
-        let Some(&signature) = self.callees.get(&token.span) else {
-            return;
-        };
-        if signature.has_vararg {
-            return;
-        }
-        let (args, arg_count) = positional_args(call.args);
-        // A trailing call or `...` can expand to nothing, so only the args
-        // before it are sure to be passed.
-        let guaranteed_arg_count =
-            arg_count.saturating_sub(usize::from(has_multi_value_tail(args)));
-        if guaranteed_arg_count <= signature.param_count {
-            return;
-        }
-        let line = self.lines.line(signature.definition_start);
-        self.findings.push(
-            Finding::new(
-                format!(
-                    "call passes {guaranteed_arg_count} arguments to function `{name}`, \
-                     which accepts only {} (defined on line {line})",
-                    signature.param_count
-                ),
-                call.span(),
-            )
-            .with_help("extra arguments are silently discarded"),
-        );
+/// A local that's ever reassigned is left out, since it could hold any
+/// function by the time a call runs.
+fn check_call(
+    call: Call<'_>,
+    tree: &ScopeTree<'_>,
+    signatures: &FxHashMap<u32, FunctionSignature>,
+    context: &LintContext<'_>,
+) -> Option<Finding> {
+    if call.method.is_some() {
+        return None;
     }
-}
-
-impl<'ast> Visitor<'ast> for CallChecker<'_> {
-    fn visit_call(&mut self, call: Call<'ast>) {
-        self.check_call(call);
-        self.walk_call(call);
+    let callee = call.callee.as_name()?;
+    let symbol = tree.symbol(tree.reference(tree.reference_of(callee)?).resolved?);
+    if symbol.is_modified {
+        return None;
     }
+    let definition_start = symbol.definition_span.start;
+    let signature = signatures.get(&definition_start)?;
+    if signature.has_vararg {
+        return None;
+    }
+    let (args, arg_count) = positional_args(call.args);
+    // A trailing call or `...` can expand to nothing, so only the args
+    // before it are sure to be passed.
+    let guaranteed_arg_count = arg_count.saturating_sub(usize::from(has_multi_value_tail(args)));
+    if guaranteed_arg_count <= signature.param_count {
+        return None;
+    }
+    let line = context.line_index().line(definition_start);
+    Some(
+        Finding::new(
+            format!(
+                "call passes {guaranteed_arg_count} arguments to function `{}`, \
+                 which accepts only {} (defined on line {line})",
+                callee.text, signature.param_count
+            ),
+            call.span(),
+        )
+        .with_help("extra arguments are silently discarded"),
+    )
 }
 
 #[cfg(test)]

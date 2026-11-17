@@ -26,7 +26,7 @@ impl WholeRule for MultipleStatementsPerLine {
         let lines = context.line_index();
         let mut findings = Vec::new();
         let mut spans: Vec<Span> = Vec::new();
-        for block in context.blocks {
+        for block in context.nodes.blocks() {
             // A bare `;` is a separator, not a statement.
             let stmt_spans = block
                 .stmts
@@ -34,7 +34,7 @@ impl WholeRule for MultipleStatementsPerLine {
                 .filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_)))
                 .map(Statement::span);
             spans.clear();
-            spans.extend(stmt_spans.chain(block.last_stmt.as_deref().map(LastStatement::span)));
+            spans.extend(stmt_spans.chain(block.last_stmt.as_ref().map(LastStatement::span)));
 
             for (previous, next) in spans.iter().zip(spans.iter().skip(1)) {
                 // `end` is exclusive, so step back one byte to stay on the

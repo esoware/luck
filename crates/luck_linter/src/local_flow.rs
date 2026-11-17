@@ -18,13 +18,13 @@ pub(crate) struct LocalFlow {
 
 impl LocalFlow {
     pub(crate) fn compute(context: &LintContext<'_>) -> Self {
-        let tree = &context.semantic.scope_tree;
+        let tree = context.semantic.scope_tree();
         let mut tracked: Vec<&Symbol> = tree
-            .symbols
+            .symbols()
             .iter()
             .filter(|symbol| {
-                !symbol.name.starts_with('_')
-                    && (context.uninitialized_locals.contains(symbol)
+                !tree.name(symbol.name).starts_with('_')
+                    && (context.nodes.uninitialized_locals().contains(symbol)
                         || (symbol.kind == SymbolKind::Local
                             && symbol.is_modified
                             && !symbol.is_upvalue))
@@ -33,7 +33,7 @@ impl LocalFlow {
         tracked.sort_unstable_by_key(|symbol| symbol.definition_span.start);
 
         let mut flow = Self::default();
-        for &function_block in context.function_blocks {
+        for &function_block in context.nodes.function_blocks() {
             let span = function_block.span;
             let first_inside =
                 tracked.partition_point(|symbol| symbol.definition_span.start < span.start);
@@ -67,10 +67,11 @@ impl LocalFlow {
         walk: &mut GraphWalk<'_>,
         context: &LintContext<'_>,
     ) {
-        let tree = &context.semantic.scope_tree;
+        let tree = context.semantic.scope_tree();
         let graph = walk.graph;
-        let mut uses = Vec::with_capacity(symbol.reference_ids.len());
-        for &reference_id in &symbol.reference_ids {
+        let reference_ids = tree.resolved_references(symbol.id);
+        let mut uses = Vec::with_capacity(reference_ids.len());
+        for &reference_id in reference_ids {
             let reference = tree.reference(reference_id);
             let Some(node) = graph.node_at(reference.span.start) else {
                 return;
@@ -85,7 +86,7 @@ impl LocalFlow {
             });
         }
 
-        let is_uninitialized = context.uninitialized_locals.contains(symbol);
+        let is_uninitialized = context.nodes.uninitialized_locals().contains(symbol);
         if is_uninitialized && let Some(reference_id) = walk.first_unassigned_use(&uses, local) {
             self.first_unassigned_uses.push((symbol.id, reference_id));
         }

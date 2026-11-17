@@ -1,8 +1,8 @@
-use std::sync::OnceLock;
-
+use luck_allocator::Allocator;
 use luck_core::LuaTarget;
+use luck_parser::ParseResult;
 use luck_semantic::SemanticAnalysis;
-use luck_token::{LuaVersion, SourceError, StdlibEnvironment};
+use luck_token::SourceError;
 use rayon::prelude::*;
 
 use crate::config::{LintConfig, RuleLevel};
@@ -12,98 +12,78 @@ use crate::rule::{LintContext, NodeRule, Rule, WholeRule};
 use crate::rules::{PARSE_ERROR_PSEUDO_RULE, RULES, RuleEntry};
 use crate::{bus, suppression};
 
-/// Lints `source` with the [`StdlibEnvironment::Standalone`] globals.
-///
-/// Roblox code needs [`lint_target`] with a Roblox `LuaTarget`.
+/// Parses `source` into `allocator` and lints it for `target`, whose stdlib
+/// environment decides which globals exist.
 #[must_use]
-pub fn lint(source: &str, version: LuaVersion, config: &LintConfig) -> Vec<LintDiagnostic> {
-    lint_parsed(
-        &luck_parser::parse(source, version),
-        version,
-        StdlibEnvironment::Standalone,
-        config,
-    )
+pub fn lint(
+    allocator: &Allocator,
+    source: &str,
+    target: LuaTarget,
+    config: &LintConfig,
+) -> Vec<LintDiagnostic> {
+    lint_parsed(&luck_parser::parse(allocator, source, target.lua_version()), target, config)
 }
 
-/// Lints `source` for `target`, whose stdlib environment decides which
-/// globals exist.
-#[must_use]
-pub fn lint_target(source: &str, target: LuaTarget, config: &LintConfig) -> Vec<LintDiagnostic> {
-    let version = target.lua_version();
-    lint_parsed(&luck_parser::parse(source, version), version, target.stdlib_environment(), config)
-}
-
-/// A parse with errors yields one `parse_error` diagnostic per error, and no
-/// rules run.
+/// Analyzes `parse` for `target` and lints it. A parse with errors yields
+/// one `parse_error` diagnostic per error, and no rules run.
 ///
 /// # Panics
 ///
 /// In debug builds, when a rule's `node_types()` omits a type its hooks act on.
 #[must_use]
 pub fn lint_parsed(
-    parse: &luck_parser::ParseResult,
-    version: LuaVersion,
-    environment: StdlibEnvironment,
+    parse: &ParseResult<'_>,
+    target: LuaTarget,
     config: &LintConfig,
 ) -> Vec<LintDiagnostic> {
-    lint_analyzed(parse, &analyze(&parse.block, version, environment, config), config)
+    if !parse.errors.is_empty() {
+        return parse_error_diags(parse);
+    }
+    lint_analyzed(parse, &analyze(parse, target, config), config)
 }
 
 /// Lints an existing parse and analysis, so hosts like the LSP don't build
 /// either twice.
 ///
-/// `semantic` must already hold `config.extra_globals`, because rules read
-/// them from it. A parse with errors yields one `parse_error` diagnostic per
-/// error, and no rules run.
+/// `semantic` must be `parse`'s and already hold `config.extra_globals`,
+/// because rules read them from it. A parse with errors yields one
+/// `parse_error` diagnostic per error, and no rules run.
 ///
 /// # Panics
 ///
 /// In debug builds, when a rule's `node_types()` omits a type its hooks act on.
 #[must_use]
 pub fn lint_analyzed(
-    parse: &luck_parser::ParseResult,
-    semantic: &SemanticAnalysis,
+    parse: &ParseResult<'_>,
+    semantic: &SemanticAnalysis<'_>,
     config: &LintConfig,
 ) -> Vec<LintDiagnostic> {
     if !parse.errors.is_empty() {
-        return parse.errors.iter().map(parse_error_diag).collect();
+        return parse_error_diags(parse);
     }
 
     let nodes = Nodes::collect(&parse.block);
-    let context = LintContext {
-        block: &parse.block,
-        blocks: nodes.blocks(),
-        function_blocks: nodes.function_blocks(),
-        uninitialized_locals: nodes.uninitialized_locals(),
-        semantic,
-        source: &parse.source,
-        comments: &parse.comments,
-        config,
-        local_flow: OnceLock::new(),
-        line_index: OnceLock::new(),
-    };
+    let context = LintContext::new(parse, semantic, &nodes, config);
 
     let mut diags = run_rules(&context, &nodes);
-    suppression::apply(
-        &mut diags,
-        context.comments,
-        context.source,
-        &nodes,
-        context.semantic.version,
-    );
+    suppression::apply(&mut diags, context.comments, context.source, &nodes, semantic.version());
     diags.sort_by_key(|diag| diag.span.start);
     diags
 }
 
-pub(crate) fn analyze(
-    block: &luck_ast::Block,
-    version: LuaVersion,
-    environment: StdlibEnvironment,
+pub(crate) fn analyze<'ast>(
+    parse: &'ast ParseResult<'_>,
+    target: LuaTarget,
     config: &LintConfig,
-) -> SemanticAnalysis {
-    let mut semantic = luck_semantic::analyze_with_environment(block, version, environment);
-    semantic.extra_globals.extend(config.extra_globals.iter().cloned());
+) -> SemanticAnalysis<'ast> {
+    let mut semantic =
+        luck_semantic::analyze(&parse.block, target.lua_version(), target.stdlib_environment());
+    semantic.add_extra_globals(config.extra_globals.iter().map(String::as_str));
     semantic
+}
+
+fn parse_error_diags(parse: &ParseResult<'_>) -> Vec<LintDiagnostic> {
+    parse.errors.iter().map(parse_error_diag).collect()
 }
 
 fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
@@ -126,13 +106,16 @@ fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
 /// its node types occur in this file.
 fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic> {
     let config = context.config;
+    let mut severities: Vec<Option<Severity>> = Vec::with_capacity(RULES.len());
     let mut whole_rules: Vec<(usize, &dyn WholeRule)> = Vec::new();
     let mut node_slots: Vec<usize> = Vec::new();
     let mut node_rules: Vec<&dyn NodeRule> = Vec::new();
     #[cfg(debug_assertions)]
     let mut skipped_node_rules: Vec<&dyn NodeRule> = Vec::new();
     for (slot, entry) in RULES.iter().enumerate() {
-        if rule_severity(entry.rule(), config).is_none() {
+        let severity = rule_severity(entry.rule(), config);
+        severities.push(severity);
+        if severity.is_none() {
             continue;
         }
         match *entry {
@@ -179,10 +162,10 @@ fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic
     }
 
     let mut diags: Vec<LintDiagnostic> = Vec::new();
-    for (entry, rule_findings) in RULES.iter().zip(findings_by_slot) {
-        if !rule_findings.is_empty()
-            && let Some(severity) = rule_severity(entry.rule(), config)
-        {
+    for ((entry, rule_findings), slot_severity) in
+        RULES.iter().zip(findings_by_slot).zip(severities)
+    {
+        if let Some(severity) = slot_severity {
             diags.extend(into_diagnostics(entry.rule(), rule_findings, severity));
         }
     }

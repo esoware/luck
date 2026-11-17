@@ -28,10 +28,10 @@ impl NodeRule for RobloxManualFromScaleOrFromOffset {
         let Some(args) = global_new_call(call, "UDim2", context.semantic) else {
             return;
         };
-        let [x_scale_arg, x_offset_arg, y_scale_arg, y_offset_arg] = args.items.as_slice() else {
+        let [x_scale_arg, x_offset_arg, y_scale_arg, y_offset_arg] = args else {
             return;
         };
-        let version = context.semantic.version;
+        let version = context.semantic.version();
         let (Some(x_scale), Some(x_offset), Some(y_scale), Some(y_offset)) = (
             signed_number_value(x_scale_arg, version),
             signed_number_value(x_offset_arg, version),

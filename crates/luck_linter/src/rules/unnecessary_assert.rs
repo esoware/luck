@@ -27,7 +27,7 @@ impl NodeRule for UnnecessaryAssert {
     }
 }
 
-fn check_call(call: Call<'_>, semantic: &SemanticAnalysis) -> Option<Finding> {
+fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding> {
     if !is_global_call(call, "assert", semantic) {
         return None;
     }

@@ -2,6 +2,7 @@ use luck_ast::{Block, FunctionBody, Statement, Visitor};
 use luck_token::Span;
 
 use crate::diagnostic::Finding;
+use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// A `goto` can't leave its function, so each function body, and the chunk
@@ -20,12 +21,14 @@ impl_rule!(
 impl WholeRule for UnusedLabel {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut findings = Vec::new();
-        check_scope(context.block, &mut findings);
+        if context.nodes.contains_any(NodeTypeSet::from_types(&[NodeType::Label])) {
+            check_scope(context.block, &mut findings);
+        }
         findings
     }
 }
 
-fn check_scope(block: &Block, findings: &mut Vec<Finding>) {
+fn check_scope(block: &Block<'_>, findings: &mut Vec<Finding>) {
     let mut scope = LabelScope::default();
     scope.visit_block(block);
 
@@ -50,24 +53,16 @@ fn check_scope(block: &Block, findings: &mut Vec<Finding>) {
 struct LabelScope<'ast> {
     labels: Vec<(&'ast str, Span)>,
     goto_names: Vec<&'ast str>,
-    nested_bodies: Vec<&'ast FunctionBody>,
+    nested_bodies: Vec<&'ast FunctionBody<'ast>>,
 }
 
 impl<'ast> Visitor<'ast> for LabelScope<'ast> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             // Lua 5.2+
-            Statement::Label(label) => {
-                if let Some(name) = label.name.identifier() {
-                    self.labels.push((name, label.span));
-                }
-            }
+            Statement::Label(label) => self.labels.push((label.name.text, label.span)),
             // Lua 5.2+
-            Statement::Goto(goto) => {
-                if let Some(name) = goto.name.identifier() {
-                    self.goto_names.push(name);
-                }
-            }
+            Statement::Goto(goto) => self.goto_names.push(goto.name.text),
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::DoBlock(_)
@@ -92,7 +87,7 @@ impl<'ast> Visitor<'ast> for LabelScope<'ast> {
     }
 
     // A nested function gets its own `check_scope` pass.
-    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+    fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
         self.nested_bodies.push(body);
     }
 }

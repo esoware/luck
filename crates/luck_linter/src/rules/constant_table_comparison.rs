@@ -21,15 +21,21 @@ impl NodeRule for ConstantTableComparison {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::BinaryOp])
     }
-    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        _context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let Expression::BinaryOp(run) = expr else {
             return;
         };
         if !run.links.first().op.is_comparison() {
             return;
         }
-        let is_table =
-            |operand: Option<&Expression>| matches!(operand, Some(Expression::TableConstructor(_)));
+        let is_table = |operand: Option<&Expression<'_>>| {
+            matches!(operand, Some(Expression::TableConstructor(_)))
+        };
         for pair in operator_pairs(run) {
             if matches!(pair.op, BinOp::Eq | BinOp::Ne)
                 && (is_table(pair.lhs) || is_table(pair.rhs))

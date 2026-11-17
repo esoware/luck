@@ -20,7 +20,7 @@ impl WholeRule for DuplicateFunction {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let mut findings = Vec::new();
         let mut definitions: FxHashMap<String, Span> = FxHashMap::default();
-        for block in context.blocks {
+        for block in context.nodes.blocks() {
             definitions.clear();
             for stmt in &block.stmts {
                 // `redefining_local` covers local functions.
@@ -28,7 +28,7 @@ impl WholeRule for DuplicateFunction {
                     (full_name(&decl.name), decl.name.span)
                 } else if let Statement::GlobalFunction(function) = stmt {
                     // Lua 5.5
-                    (function.name.identifier().map(str::to_owned), function.name.span)
+                    (Some(function.name.text.to_owned()), function.name.span)
                 } else {
                     continue;
                 };
@@ -52,18 +52,17 @@ impl WholeRule for DuplicateFunction {
     }
 }
 
-/// The declared name as written, such as `a.b:c`, or `None` if any part
-/// isn't an identifier.
-fn full_name(function_name: &FunctionName) -> Option<String> {
+/// The declared name as written, such as `a.b:c`.
+fn full_name(function_name: &FunctionName<'_>) -> Option<String> {
     let mut names = function_name.names.iter();
-    let mut joined = names.next()?.identifier()?.to_owned();
-    for token in names {
+    let mut joined = names.next()?.text.to_owned();
+    for name in names {
         joined.push('.');
-        joined.push_str(token.identifier()?);
+        joined.push_str(name.text);
     }
-    if let Some(method_token) = &function_name.method {
+    if let Some(method) = &function_name.method {
         joined.push(':');
-        joined.push_str(method_token.identifier()?);
+        joined.push_str(method.text);
     }
     Some(joined)
 }

@@ -1,14 +1,14 @@
 use core::cell::RefCell;
 use core::ptr;
 
-use luck_ast::{Call, Statement, Suffix};
+use luck_ast::{Call, Statement};
 use luck_semantic::{ChainCallees, SemanticAnalysis};
 use rayon::prelude::*;
 
 use crate::diagnostic::Finding;
 use crate::node_type::NodeType;
 use crate::nodes::{AstNode, NodeKind};
-use crate::rule::{CallPosition, CallSite, LintContext, NodeRule};
+use crate::rule::{CallSite, LintContext, NodeRule};
 
 /// Below this many nodes, handing work to the rayon pool costs more than it
 /// saves.
@@ -23,11 +23,11 @@ thread_local! {
 }
 
 /// `call` is the call `node` makes, which goes to `on_call` alone.
-fn dispatch(
+fn dispatch<'ast>(
     rule: &dyn NodeRule,
-    node: &AstNode<'_>,
-    call: Option<&CallSite<'_>>,
-    context: &LintContext<'_>,
+    node: &AstNode<'ast>,
+    call: Option<&CallSite<'ast>>,
+    context: &LintContext<'ast>,
     findings: &mut Vec<Finding>,
 ) {
     if let Some(site) = call {
@@ -53,29 +53,15 @@ fn dispatch(
 fn call_site<'ast>(
     node: &AstNode<'ast>,
     callees: &mut Option<ChainCallees<'ast>>,
-    semantic: &'ast SemanticAnalysis,
+    semantic: &'ast SemanticAnalysis<'ast>,
 ) -> Option<CallSite<'ast>> {
-    let (chain, index, position) = match node.kind {
-        NodeKind::Statement(Statement::FunctionCall(chain)) => {
-            (&**chain, chain.suffixes.len().saturating_sub(1), CallPosition::Statement)
-        }
-        NodeKind::Call { chain, index } => {
-            (chain, usize::try_from(index).ok()?, CallPosition::Expression)
-        }
-        NodeKind::Statement(_)
-        | NodeKind::LastStatement(_)
-        | NodeKind::Expression(_)
-        | NodeKind::Table(_)
-        | NodeKind::Chain(..) => return None,
-    };
-    let Suffix::Call(suffix) = chain.suffixes.get(index)? else {
-        return None;
-    };
+    let (chain, index, position) = node.chain_call()?;
+    let call = Call::new(chain.head(index), chain.suffixes.get(index)?)?;
     if callees.as_ref().is_none_or(|current| !ptr::eq(current.chain(), chain)) {
         *callees = Some(semantic.chain_callees(chain));
     }
     let callee = callees.as_mut().and_then(|current| current.callee(index));
-    Some(CallSite { call: Call::new(chain.head(index), suffix), position, callee })
+    Some(CallSite { call, position, callee })
 }
 
 /// Splits `nodes` into contiguous chunks across the rayon pool. Chunk results

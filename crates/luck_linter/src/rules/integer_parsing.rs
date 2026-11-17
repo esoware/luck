@@ -26,15 +26,20 @@ impl NodeRule for IntegerParsing {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::Number])
     }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         if let Expression::Number(literal) = expr {
-            findings.extend(check_number(literal, context.semantic.version));
+            findings.extend(check_number(literal, context.semantic.version()));
         }
     }
 }
 
-fn check_number(literal: &Literal, version: LuaVersion) -> Option<Finding> {
-    let raw = literal.text.as_str();
+fn check_number(literal: &Literal<'_>, version: LuaVersion) -> Option<Finding> {
+    let raw = literal.text;
     // Float spellings go unchecked, since nobody writes one expecting an
     // exact integer.
     let IntegerDigits { digits, radix } = integer_digits(raw)?;

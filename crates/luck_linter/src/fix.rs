@@ -4,11 +4,14 @@ use core::error::Error;
 use core::fmt;
 use core::ops::Range;
 
+use luck_allocator::Allocator;
+use luck_core::LuaTarget;
+use luck_parser::ParseResult;
 use luck_token::{Comment, LuaVersion, Span};
 
 use crate::config::LintConfig;
 use crate::diagnostic::LintDiagnostic;
-use crate::driver::lint;
+use crate::driver::lint_parsed;
 
 /// Maximum fix-and-relint rounds. Needing more almost always means two rules
 /// are undoing each other.
@@ -34,17 +37,29 @@ pub(crate) fn comments_within(comments: &[Comment], span: Span) -> &[Comment] {
     comments.get(first..last).unwrap_or_default()
 }
 
-/// If the result doesn't parse, the original source comes back unchanged, so a
-/// broken fix never reaches the user's file.
+/// `source` with the fixes [`non_overlapping_edits`] keeps applied, parsed
+/// into `allocator` with its text, so a caller can lint the result without
+/// parsing it again.
 ///
-/// [`apply_fixes_fixpoint`] re-lints and repeats until no fixes remain.
+/// `None` when the fixes change nothing, or when the result doesn't parse, so
+/// a broken fix never reaches the user's file. [`apply_fixes_fixpoint`]
+/// re-lints and repeats until no fixes remain.
 #[must_use]
-pub fn apply_fixes(source: &str, diags: &[LintDiagnostic], version: LuaVersion) -> String {
-    let fixed = apply_one_pass(source, diags);
-    if fixed != source && !luck_parser::parse(&fixed, version).errors.is_empty() {
-        return source.to_owned();
+pub fn apply_fixes<'ast>(
+    allocator: &'ast Allocator,
+    source: &str,
+    diags: &[LintDiagnostic],
+    version: LuaVersion,
+) -> Option<ParseResult<'ast>> {
+    if diags.iter().all(|diag| diag.fix.is_none()) {
+        return None;
     }
-    fixed
+    let fixed = apply_one_pass(source, diags);
+    if fixed == source {
+        return None;
+    }
+    let parse = luck_parser::parse(allocator, allocator.alloc_str(&fixed), version);
+    parse.errors.is_empty().then_some(parse)
 }
 
 pub(crate) fn apply_one_pass(source: &str, diags: &[LintDiagnostic]) -> String {
@@ -133,52 +148,56 @@ impl fmt::Display for FixpointError {
 
 impl Error for FixpointError {}
 
+/// Lints `source` for `target` and applies the fixes, round after round,
+/// until none remain. Each round's source is parsed into `allocator` once,
+/// both to check it and to lint it.
+///
+/// Returns the last round's parse, whose text is the fixed source, and its
+/// diagnostics, none of which has a fix left to apply. The parse has errors
+/// only when `source` does.
+///
 /// # Errors
 ///
 /// [`FixpointError::BudgetExhausted`] when fixes are still coming after
 /// [`FIXPOINT_BUDGET`] rounds, and [`FixpointError::ReparseFailed`] when a
 /// round's output doesn't parse.
-pub fn apply_fixes_fixpoint(
-    source: &str,
-    version: LuaVersion,
+pub fn apply_fixes_fixpoint<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    target: LuaTarget,
     config: &LintConfig,
-) -> Result<String, FixpointError> {
-    fixpoint_within(source, version, config, FIXPOINT_BUDGET)
+) -> Result<(ParseResult<'ast>, Vec<LintDiagnostic>), FixpointError> {
+    fixpoint_within(allocator, source, target, config, FIXPOINT_BUDGET)
 }
 
 /// # Errors
 ///
 /// As for [`apply_fixes_fixpoint`], with `budget` as the limit.
-fn fixpoint_within(
-    source: &str,
-    version: LuaVersion,
+fn fixpoint_within<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    target: LuaTarget,
     config: &LintConfig,
     budget: usize,
-) -> Result<String, FixpointError> {
-    let mut current = source.to_owned();
+) -> Result<(ParseResult<'ast>, Vec<LintDiagnostic>), FixpointError> {
+    let version = target.lua_version();
+    let mut parse = luck_parser::parse(allocator, source, version);
     for iteration in 0..budget {
-        let diags = lint(&current, version, config);
-        let has_fix = diags.iter().any(|diag| diag.fix.is_some());
-        if !has_fix {
-            return Ok(current);
+        let diags = lint_parsed(&parse, target, config);
+        if diags.iter().all(|diag| diag.fix.is_none()) {
+            return Ok((parse, diags));
         }
-        let next = apply_one_pass(&current, &diags);
-        if next == current {
-            return Ok(current);
+        let fixed = apply_one_pass(parse.source, &diags);
+        if fixed == parse.source {
+            return Ok((parse, diags));
         }
-        let parse = luck_parser::parse(&next, version);
-        if !parse.errors.is_empty() {
-            return Err(FixpointError::ReparseFailed {
-                iteration,
-                message: parse
-                    .errors
-                    .iter()
-                    .map(|e| e.message.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            });
+        let reparse = luck_parser::parse(allocator, allocator.alloc_str(&fixed), version);
+        if !reparse.errors.is_empty() {
+            let messages: Vec<&str> =
+                reparse.errors.iter().map(|error| error.message.as_str()).collect();
+            return Err(FixpointError::ReparseFailed { iteration, message: messages.join("; ") });
         }
-        current = next;
+        parse = reparse;
     }
     Err(FixpointError::BudgetExhausted { iterations: budget })
 }
@@ -206,12 +225,38 @@ mod tests {
         config
     }
 
+    /// What `apply_fixes` leaves of `source`, which is `source` itself when
+    /// it applies nothing.
+    fn fixed(source: &str, diags: &[LintDiagnostic]) -> String {
+        let allocator = Allocator::new();
+        apply_fixes(&allocator, source, diags, LuaVersion::Lua54)
+            .map_or_else(|| source.to_owned(), |parse| parse.source.to_owned())
+    }
+
+    /// # Errors
+    ///
+    /// As for [`fixpoint_within`].
+    fn fixpoint_in(
+        source: &str,
+        config: &LintConfig,
+        budget: usize,
+    ) -> Result<String, FixpointError> {
+        let allocator = Allocator::new();
+        fixpoint_within(&allocator, source, LuaTarget::Lua54, config, budget)
+            .map(|(parse, _)| parse.source.to_owned())
+    }
+
+    /// # Errors
+    ///
+    /// As for [`apply_fixes_fixpoint`].
+    fn fixpoint(source: &str, config: &LintConfig) -> Result<String, FixpointError> {
+        fixpoint_in(source, config, FIXPOINT_BUDGET)
+    }
+
     #[test]
     fn applies_one_fix() {
-        let source = "local foo = 1";
         let diags = vec![diag_with_edit(6, 9, "_foo")];
-        let fixed = apply_fixes(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local _foo = 1");
+        assert_eq!(fixed("local foo = 1", &diags), "local _foo = 1");
     }
 
     #[test]
@@ -220,9 +265,8 @@ mod tests {
 local foo = 1
 local bar = 2";
         let diags = vec![diag_with_edit(6, 9, "_foo"), diag_with_edit(20, 23, "_bar")];
-        let fixed = apply_fixes(source, &diags, LuaVersion::Lua54);
         assert_eq!(
-            fixed,
+            fixed(source, &diags),
             "\
 local _foo = 1
 local _bar = 2"
@@ -259,26 +303,23 @@ local _bar = 2"
     }
 
     #[test]
-    fn unparseable_result_returns_source_unchanged() {
-        let source = "local foo = 1";
+    fn unparseable_result_applies_nothing() {
+        let allocator = Allocator::new();
         let diags = vec![diag_with_edit(6, 9, "end")];
-        let fixed = apply_fixes(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, source);
+        assert!(apply_fixes(&allocator, "local foo = 1", &diags, LuaVersion::Lua54).is_none());
     }
 
     #[test]
-    fn diags_without_fixes_leave_source_unchanged() {
-        let source = "local x = 1";
+    fn diags_without_fixes_apply_nothing() {
+        let allocator = Allocator::new();
         let diags = vec![diagnostic("test", Span { start: 6, end: 7 })];
-        let fixed = apply_fixes(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, source);
+        assert!(apply_fixes(&allocator, "local x = 1", &diags, LuaVersion::Lua54).is_none());
     }
 
     #[test]
-    fn no_diags_leave_source_unchanged() {
-        let source = "local x = 1";
-        let fixed = apply_fixes(source, &[], LuaVersion::Lua54);
-        assert_eq!(fixed, source);
+    fn no_diags_apply_nothing() {
+        let allocator = Allocator::new();
+        assert!(apply_fixes(&allocator, "local x = 1", &[], LuaVersion::Lua54).is_none());
     }
 
     #[test]
@@ -286,9 +327,7 @@ local _bar = 2"
         // unused_variable will rename `unused` -> `_unused`; once renamed
         // it's no longer flagged.
         let config = enable("unused_variable");
-        let source = "local unused = 1";
-        let fixed = apply_fixes_fixpoint(source, LuaVersion::Lua54, &config).expect("fixpoint");
-        assert_eq!(fixed, "local _unused = 1");
+        assert_eq!(fixpoint("local unused = 1", &config).expect("fixpoint"), "local _unused = 1");
     }
 
     #[test]
@@ -297,9 +336,7 @@ local _bar = 2"
         // prefixes the name. The edits don't overlap, so both land in the
         // first round and the second finds nothing left to fix.
         let config = enable("redundant_nil_init");
-        let source = "local unused = nil";
-        let fixed = apply_fixes_fixpoint(source, LuaVersion::Lua54, &config).expect("fixpoint");
-        assert_eq!(fixed, "local _unused");
+        assert_eq!(fixpoint("local unused = nil", &config).expect("fixpoint"), "local _unused");
     }
 
     #[test]
@@ -308,8 +345,18 @@ local _bar = 2"
         let source = "\
 local x = 1
 return x";
-        let result = apply_fixes_fixpoint(source, LuaVersion::Lua54, &config);
-        assert_eq!(result.expect("fixpoint"), source);
+        assert_eq!(fixpoint(source, &config).expect("fixpoint"), source);
+    }
+
+    #[test]
+    fn fixpoint_returns_the_last_round_s_diagnostics() {
+        let allocator = Allocator::new();
+        let config = enable("redundant_nil_init");
+        let (parse, diags) =
+            apply_fixes_fixpoint(&allocator, "local unused = nil", LuaTarget::Lua54, &config)
+                .expect("fixpoint");
+        assert_eq!(parse.source, "local _unused");
+        assert_eq!(diags, Vec::<LintDiagnostic>::new());
     }
 
     #[test]
@@ -317,7 +364,7 @@ return x";
         // The first round applies both fixes, and it takes a second round
         // to see that none remain.
         let config = enable("redundant_nil_init");
-        let result = fixpoint_within("local unused = nil", LuaVersion::Lua54, &config, 1);
+        let result = fixpoint_in("local unused = nil", &config, 1);
         assert_eq!(
             result,
             Err(FixpointError::BudgetExhausted { iterations: 1 }),
@@ -328,7 +375,7 @@ return x";
     #[test]
     fn fixpoint_converges_within_its_budget() {
         let config = enable("redundant_nil_init");
-        let result = fixpoint_within("local unused = nil", LuaVersion::Lua54, &config, 2);
+        let result = fixpoint_in("local unused = nil", &config, 2);
         assert_eq!(result.expect("fixpoint"), "local _unused");
     }
 }

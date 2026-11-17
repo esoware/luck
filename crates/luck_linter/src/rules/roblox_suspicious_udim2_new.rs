@@ -32,7 +32,7 @@ impl NodeRule for RobloxSuspiciousUdim2New {
         }
         let values: Vec<f64> = args
             .iter()
-            .filter_map(|arg| signed_number_value(arg, context.semantic.version))
+            .filter_map(|arg| signed_number_value(arg, context.semantic.version()))
             .collect();
         if values.len() != args.len() {
             return;

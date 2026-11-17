@@ -1,5 +1,5 @@
 use luck_ast::{Call, ChainHead, Expression, FunctionArgs, Suffix};
-use luck_token::{BinOp, LuaVersion, Token, UnOp};
+use luck_token::{BinOp, LuaVersion, UnOp};
 
 use crate::call::dotted_callee;
 use crate::diagnostic::Finding;
@@ -35,9 +35,9 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>, findings: &mut Vec<Find
     let FunctionArgs::Parenthesized { args, .. } = call.args else {
         return;
     };
-    let version = context.semantic.version;
+    let version = context.semantic.version();
     let finding = |message: &str| Finding::new(message, call.span());
-    match (function_name, args.items.as_slice()) {
+    match (function_name, &**args) {
         ("insert", [table, index, _]) => {
             if is_number_literal(index, 0.0, version) {
                 findings.push(
@@ -112,22 +112,25 @@ fn table_stdlib_function<'call>(
     context: &LintContext<'_>,
 ) -> Option<&'call str> {
     let (root, field) = dotted_callee(call)?;
-    if root.identifier() != Some("table") || context.semantic.resolves_to_local("table", root.span)
-    {
+    if root.text != "table" || context.semantic.scope_tree().resolves_to_local(root) {
         return None;
     }
     context.semantic.stdlib().lookup(&["table", field])?;
     Some(field)
 }
 
-fn length_operand(expr: &Expression) -> Option<&Expression> {
+fn length_operand<'ast>(expr: &'ast Expression<'ast>) -> Option<&'ast Expression<'ast>> {
     let Expression::UnaryOp(unary) = expr else {
         return None;
     };
     (unary.op == UnOp::Len).then_some(&unary.operand)
 }
 
-fn length_offset_operand(expr: &Expression, op: BinOp, version: LuaVersion) -> Option<&Expression> {
+fn length_offset_operand<'ast>(
+    expr: &'ast Expression<'ast>,
+    op: BinOp,
+    version: LuaVersion,
+) -> Option<&'ast Expression<'ast>> {
     let Expression::BinaryOp(run) = expr else {
         return None;
     };
@@ -142,23 +145,19 @@ fn length_offset_operand(expr: &Expression, op: BinOp, version: LuaVersion) -> O
 
 /// The same name, or the same name with the same fields after it. Anything
 /// else, such as an index or a call, never matches.
-fn same_target(left: &Expression, right: &Expression) -> bool {
+fn same_target(left: &Expression<'_>, right: &Expression<'_>) -> bool {
     let (left_head, right_head) = (ChainHead::from(left), ChainHead::from(right));
     let (Expression::Name(left_root), Expression::Name(right_root)) =
         (&left_head.prefix, &right_head.prefix)
     else {
         return false;
     };
-    same_identifier(left_root, right_root)
+    left_root.text == right_root.text
         && left_head.suffixes.len() == right_head.suffixes.len()
         && left_head.suffixes.iter().zip(right_head.suffixes).all(|suffixes| {
             matches!(suffixes, (Suffix::Field(left_name), Suffix::Field(right_name))
-                if same_identifier(left_name, right_name))
+                if left_name.text == right_name.text)
         })
-}
-
-fn same_identifier(left: &Token, right: &Token) -> bool {
-    left.identifier().is_some_and(|name| right.identifier() == Some(name))
 }
 
 #[cfg(test)]

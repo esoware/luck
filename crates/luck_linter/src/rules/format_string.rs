@@ -35,9 +35,9 @@ impl NodeRule for FormatString {
         let Some(dsl) = DslKind::of_call(call) else {
             return;
         };
-        findings.extend(check_dsl_literal(call, dsl, semantic.version));
+        findings.extend(check_dsl_literal(call, dsl, semantic.version()));
         if dsl == DslKind::Gsub {
-            findings.extend(check_gsub_replacement(call, semantic.version));
+            findings.extend(check_gsub_replacement(call, semantic.version()));
         }
     }
 }
@@ -62,10 +62,10 @@ enum DslKind {
 impl DslKind {
     fn of_call(call: Call<'_>) -> Option<Self> {
         if let Some(method) = call.method {
-            return Self::of_string_function(method.identifier()?);
+            return Self::of_string_function(method.text);
         }
         let (root, field) = dotted_callee(call)?;
-        match (root.identifier()?, field) {
+        match (root.text, field) {
             ("string", _) => Self::of_string_function(field),
             ("os", "date") => Some(Self::OsDate),
             _ => None,
@@ -100,7 +100,7 @@ impl DslKind {
 /// `None` when string or table call syntax leaves no list to count.
 ///
 /// In a method call the receiver is the format, but the subject of a pattern.
-fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal, Option<&[Expression]>)> {
+fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal<'_>, Option<&[Expression<'_>]>)> {
     let is_method = call.method.is_some();
     if is_method && !dsl.is_pattern() {
         let Some(Expression::StringLiteral(receiver)) =
@@ -109,7 +109,7 @@ fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal, Option<&[Expre
             return None;
         };
         let all_args = match call.args {
-            FunctionArgs::Parenthesized { args, .. } => Some(args.items.as_slice()),
+            FunctionArgs::Parenthesized { args, .. } => Some(&**args),
             FunctionArgs::TableConstructor(_)
             | FunctionArgs::StringLiteral(_)
             | FunctionArgs::Error(_) => None,
@@ -122,7 +122,7 @@ fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal, Option<&[Expre
             let Some(Expression::StringLiteral(literal)) = args.get(literal_index) else {
                 return None;
             };
-            Some((literal, args.items.get(literal_index.saturating_add(1)..)))
+            Some((literal, args.get(literal_index.saturating_add(1)..)))
         }
         FunctionArgs::StringLiteral(literal) if literal_index == 0 => Some((literal, None)),
         FunctionArgs::StringLiteral(_)
@@ -160,8 +160,8 @@ fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Optio
 /// The body of `literal`, or `None` for one that can't be checked here: a
 /// long-bracket string, or a body with a numeric escape, which could spell a
 /// character the DSL reads, since escapes stay undecoded.
-fn checkable_body(literal: &Literal) -> Option<&str> {
-    let body = short_string_body(&literal.text)?;
+fn checkable_body<'ast>(literal: &Literal<'ast>) -> Option<&'ast str> {
+    let body = short_string_body(literal.text)?;
     let mut bytes = body.bytes();
     while let Some(byte) = bytes.next() {
         if byte == b'\\'
@@ -178,7 +178,7 @@ fn checkable_body(literal: &Literal) -> Option<&str> {
 ///
 /// `str_find_aux` also searches plainly when the pattern has no character
 /// from `SPECIALS`, which is what lets a lone `)` through.
-fn is_plain_find(pattern: &str, after_pattern: &[Expression]) -> bool {
+fn is_plain_find(pattern: &str, after_pattern: &[Expression<'_>]) -> bool {
     let is_maybe_plain = match after_pattern {
         [] => false,
         // A call or `...` here can expand over `init` and `plain`.
@@ -188,7 +188,11 @@ fn is_plain_find(pattern: &str, after_pattern: &[Expression]) -> bool {
     is_maybe_plain || !pattern.contains(['^', '$', '*', '+', '?', '.', '(', '[', '%', '-'])
 }
 
-fn check_arg_count(args: &[Expression], literal_span: Span, expected: usize) -> Option<Finding> {
+fn check_arg_count(
+    args: &[Expression<'_>],
+    literal_span: Span,
+    expected: usize,
+) -> Option<Finding> {
     // A `...` or call could expand to any number of values.
     if args.iter().any(is_multi_value) {
         return None;
@@ -225,7 +229,7 @@ fn check_gsub_replacement(call: Call<'_>, version: LuaVersion) -> Option<Finding
 
 /// Reports `error` at its offset in the quoted `literal`, whose `body` the
 /// offset counts into, over the whole character there.
-fn literal_error(error: PatternError, literal: &Literal, body: &str, noun: &str) -> Finding {
+fn literal_error(error: PatternError, literal: &Literal<'_>, body: &str, noun: &str) -> Finding {
     let offset = error.offset();
     let width = body.get(offset..).and_then(|rest| rest.chars().next()).map_or(1, char::len_utf8);
     Finding::new(

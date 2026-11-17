@@ -23,33 +23,32 @@ impl_rule!(
 impl WholeRule for UnusedLoopVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
+        let tree = semantic.scope_tree();
         let fixes = UnderscoreFixes::new(semantic);
         let mut findings = Vec::new();
 
-        for symbol in &semantic.scope_tree.symbols {
+        for symbol in tree.symbols() {
             if !matches!(symbol.kind, SymbolKind::IteratorVariable | SymbolKind::NumericForVariable)
             {
                 continue;
             }
-            if symbol.name.starts_with('_') {
+            let name = tree.name(symbol.name);
+            if name.starts_with('_') {
                 continue;
             }
 
-            let has_read = symbol
-                .reference_ids
+            let has_read = tree
+                .resolved_references(symbol.id)
                 .iter()
-                .any(|&reference_id| semantic.scope_tree.reference(reference_id).kind.is_read());
+                .any(|&reference_id| tree.reference(reference_id).kind.is_read());
             if has_read {
                 continue;
             }
 
             findings.push(
-                Finding::new(
-                    format!("unused loop variable `{}`", symbol.name),
-                    symbol.definition_span,
-                )
-                .with_help("prefix with `_` to suppress this warning")
-                .with_optional_fix(fixes.fix_for(symbol)),
+                Finding::new(format!("unused loop variable `{name}`"), symbol.definition_span)
+                    .with_help("prefix with `_` to suppress this warning")
+                    .with_optional_fix(fixes.fix_for(symbol)),
             );
         }
 

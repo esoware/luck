@@ -3,8 +3,10 @@
 
 use std::fs::{read_dir, read_to_string};
 
-use luck_linter::{LintConfig, lint};
-use luck_token::LuaVersion;
+use luck_core::LuaTarget;
+use luck_linter::LintConfig;
+
+use crate::common::lint;
 
 const IDIOMATIC_DIRECTORY: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/idiomatic");
@@ -19,7 +21,7 @@ fn default_lint_is_silent_on_idiomatic_fixtures() {
             continue;
         }
         let source = read_to_string(&path).expect("readable fixture");
-        let diags = lint(&source, LuaVersion::Lua54, &LintConfig::default());
+        let diags = lint(&source, LuaTarget::Lua54, &LintConfig::default());
         assert!(diags.is_empty(), "false positives in {}: {diags:?}", path.display());
         fixture_count += 1;
     }

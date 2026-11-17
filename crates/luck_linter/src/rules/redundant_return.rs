@@ -1,4 +1,4 @@
-use luck_ast::{Block, FunctionBody, LastStatement, Visitor};
+use luck_ast::{Block, LastStatement};
 
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit};
@@ -15,47 +15,28 @@ impl_rule!(
     "trailing bare `return` has no effect"
 );
 
+/// Only the chunk and function bodies are checked, since in a nested block a
+/// bare `return` is an early exit.
 impl WholeRule for RedundantReturn {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut checker = ReturnChecker { findings: Vec::new() };
-        checker.check_tail(context.block);
-        checker.visit_block(context.block);
-        checker.findings
+        context.nodes.function_blocks().iter().filter_map(|block| check_tail(block)).collect()
     }
 }
 
-struct ReturnChecker {
-    findings: Vec<Finding>,
-}
-
-impl ReturnChecker {
-    /// Flags a bare `return` that ends `block`. Callers pass only function
-    /// bodies and the chunk, since in a nested block it's an early exit.
-    fn check_tail(&mut self, block: &Block) {
-        let Some(LastStatement::Return(return_stmt)) = block.last_stmt.as_deref() else {
-            return;
-        };
-        if !return_stmt.exprs.is_empty() {
-            return;
-        }
-        self.findings.push(
-            Finding::new(
-                "bare `return` at the end of the function has no effect",
-                return_stmt.span,
-            )
+fn check_tail(block: &Block<'_>) -> Option<Finding> {
+    let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
+        return None;
+    };
+    if !return_stmt.exprs.is_empty() {
+        return None;
+    }
+    Some(
+        Finding::new("bare `return` at the end of the function has no effect", return_stmt.span)
             .with_fix(Fix {
                 description: "remove the redundant `return`".to_owned(),
                 edits: vec![TextEdit { span: return_stmt.span, replacement: String::new() }],
             }),
-        );
-    }
-}
-
-impl<'ast> Visitor<'ast> for ReturnChecker {
-    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
-        self.check_tail(&body.block);
-        self.walk_function_body(body);
-    }
+    )
 }
 
 #[cfg(test)]
