@@ -65,6 +65,8 @@ pub(crate) struct Compressor<'ast> {
     global_names: FxHashSet<&'ast str>,
     /// The calls an unused `local` leaves past the first, to follow it.
     extracted_calls: Vec<Statement<'ast>>,
+    /// A block's statements while `do` blocks in it give up theirs.
+    unwrapped_stmts: Vec<Statement<'ast>>,
     literals: Literals,
 }
 
@@ -90,6 +92,7 @@ impl<'ast> Compressor<'ast> {
             live_registers: 0,
             global_names: FxHashSet::default(),
             extracted_calls: Vec::new(),
+            unwrapped_stmts: Vec::new(),
             literals: Literals::default(),
         }
     }
@@ -119,6 +122,11 @@ impl<'ast> Compressor<'ast> {
         self.live_registers = 0;
         self.global_names.clear();
         self.visit_block(block);
+        // The chunk is a function too, and returns nothing either way.
+        if self.config.remove_dead_code && control::ends_in_bare_return(block) {
+            block.last_stmt = None;
+            self.has_changed = true;
+        }
         self.has_changed
     }
 
@@ -286,19 +294,64 @@ impl<'ast> Compressor<'ast> {
         self.ascend();
     }
 
+    /// Walks an expression and rewrites it, as an operand of an operator or
+    /// a cast, or standing alone, where it groups with nothing around it.
+    fn visit_expr_in(&mut self, expr: &mut Expression<'ast>, is_operand: bool) {
+        match expr {
+            Expression::Name(name) => {
+                if !self.values.is_empty()
+                    && let Some(value) = self.take_value(name.text)
+                {
+                    *expr = value;
+                }
+                return;
+            }
+            Expression::BinaryOp(run) => self.walk_run(run),
+            Expression::UnaryOp(unary_op) => {
+                if self.descend() {
+                    self.visit_operand(&mut unary_op.operand, OperandPosition::Unary);
+                }
+                self.ascend();
+            }
+            // Luau
+            Expression::TypeCast(cast) => {
+                if self.descend() {
+                    self.visit_operand(&mut cast.expr, OperandPosition::Cast);
+                    self.visit_type(&mut cast.ty);
+                }
+                self.ascend();
+            }
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Suffixed(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::Error(_) => self.walk_expr(expr),
+        }
+        self.leave_expr(expr, is_operand);
+    }
+
     /// The rewrites an expression takes once its operands have theirs.
-    fn leave_expr(&mut self, expr: &mut Expression<'ast>) {
+    fn leave_expr(&mut self, expr: &mut Expression<'ast>, is_operand: bool) {
         let allocator = self.allocator;
         match expr {
             Expression::BinaryOp(_) => {
                 if self.config.remove_dead_code && control::fold_redundant_ternary(allocator, expr)
                 {
                     self.has_changed = true;
-                    return self.leave_expr(expr);
+                    return self.leave_expr(expr, is_operand);
                 }
                 if self.config.fold_constants && fold::fold(allocator, self.version, expr) {
                     self.has_changed = true;
-                    return self.leave_expr(expr);
+                    return self.leave_expr(expr, is_operand);
                 }
                 if self.config.simplify_parens && parens::strip(allocator, expr) {
                     self.has_changed = true;
@@ -307,14 +360,20 @@ impl<'ast> Compressor<'ast> {
             Expression::UnaryOp(_) => {
                 if self.config.fold_constants && fold::fold(allocator, self.version, expr) {
                     self.has_changed = true;
-                    return self.leave_expr(expr);
+                    return self.leave_expr(expr, is_operand);
                 }
                 if self.config.simplify_parens && parens::strip(allocator, expr) {
                     self.has_changed = true;
                 }
             }
             Expression::Parenthesized(_) => {
-                if self.config.simplify_parens && parens::strip(allocator, expr) {
+                if self.config.simplify_parens
+                    && if is_operand {
+                        parens::strip(allocator, expr)
+                    } else {
+                        parens::strip_standalone(expr)
+                    }
+                {
                     self.has_changed = true;
                 }
             }
@@ -373,6 +432,9 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
         if let Some(last) = &mut block.last_stmt {
             self.visit_last_stmt(last);
         }
+        if self.config.simplify_statements {
+            self.unwrap_do_blocks(block);
+        }
         if self.config.merge_locals {
             // Merging proves each assignment's target local as of its own
             // statement, so the block's locals are counted again in order.
@@ -388,47 +450,10 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
         self.ascend();
     }
 
+    /// Every place the default walks reach an expression from is one where
+    /// it stands alone. Operands and chain prefixes have walks of their own.
     fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
-        match expr {
-            Expression::Name(name) => {
-                if !self.values.is_empty()
-                    && let Some(value) = self.take_value(name.text)
-                {
-                    *expr = value;
-                }
-                return;
-            }
-            Expression::BinaryOp(run) => self.walk_run(run),
-            Expression::UnaryOp(unary_op) => {
-                if self.descend() {
-                    self.visit_operand(&mut unary_op.operand, OperandPosition::Unary);
-                }
-                self.ascend();
-            }
-            // Luau
-            Expression::TypeCast(cast) => {
-                if self.descend() {
-                    self.visit_operand(&mut cast.expr, OperandPosition::Cast);
-                    self.visit_type(&mut cast.ty);
-                }
-                self.ascend();
-            }
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::Error(_) => self.walk_expr(expr),
-        }
-        self.leave_expr(expr);
+        self.visit_expr_in(expr, false);
     }
 
     /// The prefix's own parentheses aren't the walk's to strip, since a
@@ -486,6 +511,12 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
     fn visit_function_args(&mut self, args: &mut FunctionArgs<'ast>) {
         self.walk_function_args(args);
         if self.config.simplify_parens && parens::strip_call_args(args) {
+            self.has_changed = true;
+        }
+        if self.config.shorten_strings
+            && let FunctionArgs::StringLiteral(literal) = args
+            && self.literals.shorten_string(self.allocator, self.version, literal)
+        {
             self.has_changed = true;
         }
     }

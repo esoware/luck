@@ -20,6 +20,45 @@ pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
     block.stmts.is_empty() && block.last_stmt.is_none()
 }
 
+/// Whether a statement declares something its block scopes: a local, a
+/// label, a Luau type, or a Lua 5.5 global.
+const fn is_scoped_declaration(stmt: &Statement<'_>) -> bool {
+    match stmt {
+        Statement::LocalAssignment(_)
+        | Statement::LocalFunction(_)
+        | Statement::Label(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::GlobalDeclaration(_)
+        | Statement::GlobalFunction(_)
+        | Statement::GlobalStar(_) => true,
+        Statement::Assignment(_)
+        | Statement::FunctionCall(_)
+        | Statement::DoBlock(_)
+        | Statement::WhileLoop(_)
+        | Statement::RepeatLoop(_)
+        | Statement::IfStatement(_)
+        | Statement::NumericFor(_)
+        | Statement::GenericFor(_)
+        | Statement::FunctionDecl(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Break(_)
+        | Statement::CompoundAssignment(_)
+        | Statement::Error(_) => false,
+    }
+}
+
+/// Whether a `do` block's statements can take its place in the block around
+/// it: it scopes nothing, and its last statement, if any, can end that
+/// block, which `can_end_outer` says.
+fn can_unwrap(stmt: &Statement<'_>, can_end_outer: bool) -> bool {
+    let Statement::DoBlock(do_block) = stmt else {
+        return false;
+    };
+    (do_block.block.last_stmt.is_none() || can_end_outer)
+        && !do_block.block.stmts.iter().any(is_scoped_declaration)
+}
+
 /// A step of 1 is the default.
 pub(super) fn has_default_step(numeric_for: &NumericFor<'_>) -> bool {
     matches!(&numeric_for.step, Some(Expression::Number(literal)) if literal.text == "1")
@@ -352,6 +391,34 @@ impl<'ast> Compressor<'ast> {
         }
     }
 
+    /// Puts the statements of each `do` block that scopes nothing in its
+    /// place, as in `if true then f() end`, which dead-code removal leaves as
+    /// `do f() end`.
+    pub(super) fn unwrap_do_blocks(&mut self, block: &mut Block<'ast>) {
+        let last_index = block.stmts.len().saturating_sub(1);
+        let can_end_block = block.last_stmt.is_none();
+        let mut stmts = block.stmts.iter().enumerate();
+        if !stmts.any(|(i, stmt)| can_unwrap(stmt, can_end_block && i == last_index)) {
+            return;
+        }
+        self.unwrapped_stmts.clear();
+        for (i, stmt) in mem::take(&mut block.stmts).into_iter().enumerate() {
+            if !can_unwrap(&stmt, can_end_block && i == last_index) {
+                self.unwrapped_stmts.push(stmt);
+                continue;
+            }
+            if let Statement::DoBlock(do_block) = stmt {
+                let inner = do_block.unbox().block;
+                self.unwrapped_stmts.extend(inner.stmts);
+                if inner.last_stmt.is_some() {
+                    block.last_stmt = inner.last_stmt;
+                }
+            }
+        }
+        block.stmts = List::from_iter_in(self.unwrapped_stmts.drain(..), self.allocator);
+        self.has_changed = true;
+    }
+
     /// `repeat ... until true` runs once, so it becomes a `do` block unless
     /// its body has its own `break` or `continue`, which a `do` block would
     /// rebind to an outer loop (or make invalid). Says whether anything of it
@@ -582,6 +649,46 @@ mod tests {
             "while f()do repeat if g()then break end until true end"
         );
         assert_eq!(remove_dead("repeat break until true"), "repeat break until true");
+    }
+
+    #[test]
+    fn drops_a_bare_return_that_ends_the_chunk() {
+        assert_eq!(remove_dead("print(1) return"), "print(1)");
+        assert_eq!(remove_dead("return nil"), "return nil");
+    }
+
+    #[test]
+    fn unwraps_a_do_block_that_scopes_nothing() {
+        for (source, expected) in [
+            ("do f() g() end h()", "f()g()h()"),
+            ("while a do do break end end", "while a do break end"),
+            ("f() do return 1 end", "f()return 1"),
+            ("do do f() end end", "f()"),
+        ] {
+            assert_eq!(simplify(source), expected, "source: {source}");
+        }
+        let both = TransformConfig { remove_dead_code: true, ..STATEMENTS };
+        assert_eq!(minify_with("if true then f() end", LuaVersion::Lua54, &both), "f()");
+    }
+
+    #[test]
+    fn keeps_a_do_block_that_scopes_something() {
+        for source in [
+            "do local x=1 end",
+            "do local function f()end end",
+            "do goto l::l::end",
+            "do return 1 end f()",
+        ] {
+            assert_eq!(simplify(source), source);
+        }
+        assert_eq!(
+            minify_with("do type T=number end", LuaVersion::Luau, &STATEMENTS),
+            "do type T=number end"
+        );
+        assert_eq!(
+            minify_with("do global x end", LuaVersion::Lua55, &STATEMENTS),
+            "do global x end"
+        );
     }
 
     #[test]

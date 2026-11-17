@@ -349,7 +349,7 @@ impl<'ast> Compressor<'ast> {
             }
             return;
         }
-        self.visit_expr(operand);
+        self.visit_expr_in(operand, true);
     }
 
     /// Luau: a cast has no closing token and `T<` opens generic arguments, so

@@ -2,7 +2,9 @@
 //! expression yields.
 
 use luck_allocator::Allocator;
-use luck_ast::{Expression, FunctionArgs, Suffix, SuffixedExpression, is_prefix_expr};
+use luck_ast::{
+    Expression, FunctionArgs, Suffix, SuffixedExpression, is_multi_value, is_prefix_expr,
+};
 use luck_token::{BinOp, OperandSide};
 
 use crate::expr::{
@@ -87,11 +89,12 @@ fn strip_operand(operand: &mut Expression<'_>, op: BinOp, side: OperandSide) -> 
     }
 }
 
-/// Strips a chain's parenthesized prefix in front of a Luau instantiation,
-/// and says whether it did.
+/// Strips a chain's parenthesized prefix wherever what it holds can stand
+/// bare there, and says whether it did.
 ///
-/// The parentheses stay around what can't stand bare there, as in
-/// `("s")<<T>>`, and around a call or `...`, whose values they truncate.
+/// That's a name, a chain, or nested parentheses, and not a literal, as in
+/// `("s"):rep(2)`. In front of a Luau instantiation the parentheses also
+/// stay around a call or `...`, whose values they truncate.
 pub(super) fn strip_prefix<'ast>(
     allocator: &'ast Allocator,
     chain: &mut SuffixedExpression<'ast>,
@@ -101,12 +104,28 @@ pub(super) fn strip_prefix<'ast>(
     };
     let is_instantiated = matches!(chain.suffixes.first(), Suffix::TypeInstantiation { .. });
     let can_strip =
-        is_instantiated && is_prefix_expr(&paren.expr) && can_remove_parens(&paren.expr);
+        is_prefix_expr(&paren.expr) && (!is_instantiated || can_remove_parens(&paren.expr));
     if !can_strip {
         return false;
     }
     chain.prefix = paren.expr.take();
     chain.splice_prefix(allocator);
+    true
+}
+
+/// Strips parentheses where nothing groups with what they hold, and says
+/// whether it did.
+///
+/// That's anywhere but an operand or a chain's prefix. They stay only around
+/// a call or `...`, whose values they truncate.
+pub(super) fn strip_standalone(expr: &mut Expression<'_>) -> bool {
+    let Expression::Parenthesized(paren) = expr else {
+        return false;
+    };
+    if is_multi_value(&paren.expr) || matches!(paren.expr, Expression::Error(_)) {
+        return false;
+    }
+    *expr = paren.expr.take();
     true
 }
 
@@ -216,6 +235,49 @@ mod tests {
                 ("foo({1, 2})", "foo{1,2}"),
                 ("return -(x)", "return-x"),
                 ("return not (a.b)", "return not a.b"),
+            ],
+        );
+    }
+
+    #[test]
+    fn strips_parens_where_nothing_groups_with_them() {
+        assert_outputs(
+            LuaVersion::Lua54,
+            &[
+                ("local x = (a + b)", "local x=a+b"),
+                ("if (a or b) then f() end", "if a or b then f()end"),
+                ("while (not a) do f() end", "while not a do f()end"),
+                ("return (a or b), (c)", "return a or b,c"),
+                ("f((a + b), (c))", "f(a+b,c)"),
+                ("f((\"s\"))", "f\"s\""),
+                ("return {(a + b), k = (c), [(d)] = (e)}", "return{a+b,k=c,[d]=e}"),
+                ("return t[(a + b)]", "return t[a+b]"),
+                ("return ((a + b))", "return a+b"),
+                // A call or `...` keeps the parens that truncate its values.
+                ("return (f()), (...)", "return(f()),(...)"),
+            ],
+        );
+        assert_outputs(
+            LuaVersion::Luau,
+            &[
+                ("local x = (a :: T)", "local x=a::T"),
+                ("return if (a) then (b) else (c or d)", "return if a then b else c or d"),
+                ("return `{(a + b)}`", "return`{a+b}`"),
+            ],
+        );
+    }
+
+    #[test]
+    fn strips_parens_a_chain_prefix_stands_without() {
+        assert_outputs(
+            LuaVersion::Lua54,
+            &[
+                ("return (x).y", "return x.y"),
+                ("(f)()", "f()"),
+                ("return (a.b).c", "return a.b.c"),
+                ("return (f()).x", "return f().x"),
+                ("return ((x)):m()", "return x:m()"),
+                ("f(); (g)()", "f();g()"),
             ],
         );
     }
