@@ -1,15 +1,14 @@
 use alloc::sync::Arc;
-use core::iter;
 use core::num::NonZero;
 use core::panic::AssertUnwindSafe;
-use std::ffi::OsStr;
+use core::{iter, mem};
 use std::panic;
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::sync::mpsc;
 use std::{env, thread};
 
 use globset::GlobSet;
-use ignore::WalkBuilder;
+use ignore::{DirEntry, WalkBuilder, WalkState};
 use luck_allocator::{Allocator, AllocatorPool};
 use luck_bundler::DynamicRequire;
 use luck_config::{
@@ -438,80 +437,146 @@ where
         while let Some((tree, tree_max_depth)) = pending_trees.pop() {
             let canonical_tree = canonical_directory(&tree)?;
             let project = self.for_canonical_directory(&canonical_tree)?;
-            let (nested_sender, nested_receiver) = mpsc::channel();
-            let walker = WalkBuilder::new(&tree)
-                .add_custom_ignore_filename(".luckignore")
-                // Each directory's entries in order make the walk's order the
-                // sorted one, so the sort below only merges nested trees in.
-                .sort_by_file_name(OsStr::cmp)
-                .max_depth(tree_max_depth)
-                .filter_entry({
-                    let (walk_root, canonical_root) = (tree.clone(), canonical_tree.clone());
-                    let tree_filter = project.filter.clone();
-                    move |entry| {
-                        if !entry.file_type().is_some_and(|file_type| file_type.is_dir()) {
-                            return true;
-                        }
-                        let canonical = canonical_below(&walk_root, &canonical_root, entry.path());
-                        if tree_filter.excludes_canonical_tree(&canonical) {
-                            return false;
-                        }
-                        // A directory with its own config is another project's
-                        // tree, walked after this one under that config.
-                        if has_nested_projects
-                            && entry.depth() > 0
-                            && entry.path().join(CONFIG_FILE_NAME).is_file()
-                        {
-                            let nested_max_depth =
-                                tree_max_depth.map(|depth| depth.saturating_sub(entry.depth()));
-                            let _unused =
-                                nested_sender.send((entry.path().to_path_buf(), nested_max_depth));
-                            return false;
-                        }
-                        true
-                    }
-                })
-                .build();
-            for walked in walker {
-                let entry =
-                    walked.map_err(|e| operation_error(format!("cannot walk directory: {e}")))?;
-                let path = entry.path();
-                let is_selected = path
-                    .extension()
-                    .is_some_and(|extension| extension == "lua" || extension == "luau")
-                    && selection.is_none_or(|selected| {
-                        path.strip_prefix(directory)
-                            .is_ok_and(|relative| selected.patterns.is_match(relative))
-                    });
-                if !is_selected {
-                    continue;
-                }
-                // The walk follows no symlink, so only a symlink itself needs
-                // the disk to tell what it is and where it leads.
-                let is_included = if entry.path_is_symlink() {
-                    path.is_file() && project.filter.is_included(path)
-                } else {
-                    #[expect(
-                        clippy::filetype_is_file,
-                        reason = "a pipe or device named like a source file is no file to read"
-                    )]
-                    let is_file = entry.file_type().is_some_and(|file_type| file_type.is_file());
-                    is_file
-                        && project.filter.includes_canonical(&canonical_below(
-                            &tree,
-                            &canonical_tree,
-                            path,
-                        ))
-                };
-                if is_included {
-                    tree_files.push((entry.into_path(), Arc::clone(&project)));
-                }
-            }
-            pending_trees.extend(nested_receiver.try_iter());
+            let walk = TreeWalk {
+                tree: &tree,
+                canonical_tree: &canonical_tree,
+                max_depth: tree_max_depth,
+                filter: &project.filter,
+                selection: selection.map(|selected| (directory, &selected.patterns)),
+                has_nested_projects,
+            };
+            let walked = walk.run()?;
+            tree_files.extend(walked.files.into_iter().map(|path| (path, Arc::clone(&project))));
+            pending_trees.extend(walked.nested_trees);
         }
-        tree_files.sort_by(|(left, _), (right, _)| left.cmp(right));
+        tree_files.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         found.extend(tree_files);
         Ok(())
+    }
+}
+
+/// One project's tree, walked for the Lua files its filter takes.
+struct TreeWalk<'walk> {
+    tree: &'walk Path,
+    canonical_tree: &'walk Path,
+    max_depth: Option<usize>,
+    filter: &'walk ProjectFilter,
+    /// The directory a glob argument names, and the patterns a path below it
+    /// has to match.
+    selection: Option<(&'walk Path, &'walk GlobSet)>,
+    has_nested_projects: bool,
+}
+
+/// What a walk found, or one of its visitors' share of it.
+#[derive(Default)]
+struct Walked {
+    files: Vec<PathBuf>,
+    /// Each with how much deeper a glob without `**` can still match in it.
+    nested_trees: Vec<(PathBuf, Option<usize>)>,
+    error: Option<ignore::Error>,
+}
+
+/// A visitor's share, sent when the walk drops the visitor.
+struct WalkerShare {
+    walked: Walked,
+    sender: mpsc::Sender<Walked>,
+}
+
+impl Drop for WalkerShare {
+    fn drop(&mut self) {
+        let _unused = self.sender.send(mem::take(&mut self.walked));
+    }
+}
+
+impl TreeWalk<'_> {
+    /// # Errors
+    ///
+    /// Reports the failure and returns [`Exit::Failure`] when part of the
+    /// tree outside any excluded directory can't be walked.
+    fn run(&self) -> Result<Walked, Exit> {
+        let (sender, receiver) = mpsc::channel();
+        WalkBuilder::new(self.tree)
+            .add_custom_ignore_filename(".luckignore")
+            .max_depth(self.max_depth)
+            // Measured: one thread of the parallel walker reads a tree in half
+            // the time the serial walker takes, and each thread more idles a
+            // millisecond or so before the walk can end, which a small tree
+            // pays in full.
+            .threads(1)
+            .build_parallel()
+            .run(|| {
+                let mut share = WalkerShare { walked: Walked::default(), sender: sender.clone() };
+                Box::new(move |walked| match walked {
+                    Ok(entry) => self.visit(entry, &mut share.walked),
+                    Err(error) => {
+                        share.walked.error.get_or_insert(error);
+                        WalkState::Quit
+                    }
+                })
+            });
+        drop(sender);
+        let mut walked = Walked::default();
+        for share in receiver {
+            if let Some(error) = share.error {
+                return Err(operation_error(format!("cannot walk directory: {error}")));
+            }
+            walked.files.extend(share.files);
+            walked.nested_trees.extend(share.nested_trees);
+        }
+        Ok(walked)
+    }
+
+    fn visit(&self, entry: DirEntry, walked: &mut Walked) -> WalkState {
+        let path = entry.path();
+        if entry.file_type().is_some_and(|file_type| file_type.is_dir()) {
+            if self.filter.excludes_canonical_tree(&self.canonical(path)) {
+                return WalkState::Skip;
+            }
+            // A directory with its own config is another project's tree,
+            // walked after this one under that config.
+            if self.has_nested_projects
+                && entry.depth() > 0
+                && path.join(CONFIG_FILE_NAME).is_file()
+            {
+                let max_depth = self.max_depth.map(|depth| depth.saturating_sub(entry.depth()));
+                walked.nested_trees.push((entry.into_path(), max_depth));
+                return WalkState::Skip;
+            }
+            return WalkState::Continue;
+        }
+        let is_selected =
+            path.extension().is_some_and(|extension| extension == "lua" || extension == "luau")
+                && self.selection.is_none_or(|(directory, patterns)| {
+                    path.strip_prefix(directory).is_ok_and(|relative| patterns.is_match(relative))
+                });
+        if !is_selected {
+            return WalkState::Continue;
+        }
+        // The walk follows no symlink, so only a symlink itself needs the
+        // disk to tell what it is and where it leads.
+        let is_included = if entry.path_is_symlink() {
+            path.is_file() && self.filter.is_included(path)
+        } else {
+            #[expect(
+                clippy::filetype_is_file,
+                reason = "a pipe or device named like a source file is no file to read"
+            )]
+            let is_file = entry.file_type().is_some_and(|file_type| file_type.is_file());
+            is_file && self.filter.includes_canonical(&self.canonical(path))
+        };
+        if is_included {
+            walked.files.push(entry.into_path());
+        }
+        WalkState::Continue
+    }
+
+    /// `path`, which the walk reached, under the tree's canonical form, so the
+    /// filter sees a canonical path without asking the disk for one.
+    fn canonical(&self, path: &Path) -> PathBuf {
+        match path.strip_prefix(self.tree) {
+            Ok(below) if !below.as_os_str().is_empty() => self.canonical_tree.join(below),
+            Ok(_) | Err(_) => self.canonical_tree.to_path_buf(),
+        }
     }
 }
 
@@ -523,15 +588,6 @@ fn canonical_directory(directory: &Path) -> Result<PathBuf, Exit> {
     // Walking up a `..`, which `path::absolute` keeps on Unix, would leave
     // this directory's ancestors.
     directory.canonicalize().map_err(|e| usage_error(format!("`{}`: {e}", directory.display())))
-}
-
-/// `path`, which a walk of `tree` reached, under `tree`'s canonical form, so
-/// a filter sees a canonical path without asking the disk for one.
-fn canonical_below(tree: &Path, canonical_tree: &Path, path: &Path) -> PathBuf {
-    match path.strip_prefix(tree) {
-        Ok(below) if !below.as_os_str().is_empty() => canonical_tree.join(below),
-        Ok(_) | Err(_) => canonical_tree.to_path_buf(),
-    }
 }
 
 /// Runs `work` over `files` on the rayon pool and hands `take` each outcome
