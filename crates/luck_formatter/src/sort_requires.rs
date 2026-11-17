@@ -13,40 +13,45 @@
 use core::mem;
 use core::ops::Range;
 
-use luck_ast::{ChainHead, Expression, FunctionArgs, LocalAssignment, Statement, Suffix};
+use luck_ast::{Expression, FunctionArgs, Statement, Suffix};
 use rustc_hash::FxHashSet;
 
 use crate::ir::Formatter;
 
 /// What a sortable statement binds and reads.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Require<'block> {
+pub(crate) struct Require<'ast> {
     /// The binding name, used as the sort key.
-    key: &'block str,
+    key: &'ast str,
     /// The name the value reads: `require`, or the `GetService` receiver.
-    callee: &'block str,
+    callee: &'ast str,
     /// The name a required path starts at, which the value reads too:
     /// `script` in `require(script.Parent.Module)`.
-    path_root: Option<&'block str>,
+    path_root: Option<&'ast str>,
 }
 
 /// Matches a `local` with one name bound to one require or `GetService` call,
 /// in any dialect.
-pub(crate) fn sortable_require(stmt: &Statement) -> Option<Require<'_>> {
+pub(crate) fn sortable_require<'ast>(stmt: &Statement<'ast>) -> Option<Require<'ast>> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
-    let key = single_binding_name(local)?;
-    let exprs = local.exprs.as_ref()?;
-    let [value] = exprs.items.as_slice() else {
+    // A `<close>` binding's declaration order sets the order things close in.
+    let [binding] = &*local.names else {
+        return None;
+    };
+    if binding.attribute.as_ref().is_some_and(|attribute| attribute.name.text == "close") {
+        return None;
+    }
+    let [value] = &*local.exprs else {
         return None;
     };
     let (callee, path_root) = pure_require_reads(value)?;
-    Some(Require { key, callee, path_root })
+    Some(Require { key: binding.name.text, callee, path_root })
 }
 
-struct Member<'block> {
-    require: Require<'block>,
+struct Member<'ast> {
+    require: Require<'ast>,
     /// The elements the formatter wrote for it, trailing comments included.
     elements: Range<usize>,
 }
@@ -54,22 +59,23 @@ struct Member<'block> {
 /// The sortable statements a block has printed since the last thing that
 /// ends a run.
 #[derive(Default)]
-pub(crate) struct RequireRun<'block> {
-    members: Vec<Member<'block>>,
+pub(crate) struct RequireRun<'ast> {
+    members: Vec<Member<'ast>>,
 }
 
-impl<'block> RequireRun<'block> {
-    pub(crate) fn push(&mut self, require: Require<'block>, elements: Range<usize>) {
+impl<'ast> RequireRun<'ast> {
+    pub(crate) fn push(&mut self, require: Require<'ast>, elements: Range<usize>) {
         self.members.push(Member { require, elements });
     }
 
     /// Prints the run sorted when it has two or more members and sorting
     /// can't change what they read, then empties it.
-    pub(crate) fn finish(&mut self, f: &mut Formatter) {
-        let members = mem::take(&mut self.members);
-        if members.len() < 2 {
+    pub(crate) fn finish(&mut self, f: &mut Formatter<'_>) {
+        if self.members.len() < 2 {
+            self.members.clear();
             return;
         }
+        let members = mem::take(&mut self.members);
         let keys: FxHashSet<&str> = members.iter().map(|member| member.require.key).collect();
         let reads_a_member = members.iter().any(|member| {
             keys.contains(member.require.callee)
@@ -88,22 +94,6 @@ impl<'block> RequireRun<'block> {
     }
 }
 
-/// The one name `local` binds, unless it's a `<close>` binding, whose
-/// declaration order sets the order things close in.
-fn single_binding_name(local: &LocalAssignment) -> Option<&str> {
-    let [binding] = local.names.items.as_slice() else {
-        return None;
-    };
-    if binding
-        .attribute
-        .as_deref()
-        .is_some_and(|attribute| attribute.name.identifier() == Some("close"))
-    {
-        return None;
-    }
-    binding.name.identifier()
-}
-
 /// The names a sortable value reads: its callee, then the name a required
 /// path starts at.
 ///
@@ -111,41 +101,51 @@ fn single_binding_name(local: &LocalAssignment) -> Option<&str> {
 /// fields, or `NAME:GetService(STRING)`, and a string argument may drop its
 /// parentheses. Anything else, such as `require("a")()`, may have side
 /// effects that sorting would reorder.
-fn pure_require_reads(expr: &Expression) -> Option<(&str, Option<&str>)> {
+fn pure_require_reads<'ast>(expr: &Expression<'ast>) -> Option<(&'ast str, Option<&'ast str>)> {
     let Expression::Suffixed(chain) = expr else {
         return None;
     };
-    let (Expression::Name(callee), [Suffix::Call(call)]) = (&chain.prefix, &*chain.suffixes) else {
+    let Expression::Name(callee) = &chain.prefix else {
         return None;
     };
-    let (method, args) = (call.method(), call.args());
-    let callee_name = callee.identifier()?;
-
-    if let Some(method_name) = method {
-        let is_get_service =
-            method_name.identifier() == Some("GetService") && is_single_string_arg(args);
-        return is_get_service.then_some((callee_name, None));
+    match &*chain.suffixes {
+        [Suffix::MethodCall(call)] => {
+            let is_get_service = call.name.text == "GetService" && is_single_string_arg(&call.args);
+            is_get_service.then_some((callee.text, None))
+        }
+        [Suffix::Call(args)] if callee.text == "require" => {
+            if is_single_string_arg(args) {
+                return Some((callee.text, None));
+            }
+            let FunctionArgs::Parenthesized { args: path_args, .. } = args else {
+                return None;
+            };
+            let [path] = &**path_args else {
+                return None;
+            };
+            Some((callee.text, Some(dotted_path_root(path)?)))
+        }
+        _ => None,
     }
-    if callee_name != "require" {
-        return None;
-    }
-    if is_single_string_arg(args) {
-        return Some((callee_name, None));
-    }
-    let FunctionArgs::Parenthesized { args: path_args, .. } = args else {
-        return None;
-    };
-    let [path] = path_args.items.as_slice() else {
-        return None;
-    };
-    let root = ChainHead::from(path).dotted_path()?.segments.first().copied()?;
-    Some((callee_name, Some(root)))
 }
 
-fn is_single_string_arg(call_args: &FunctionArgs) -> bool {
+/// The name a `NAME(.NAME)*` path starts at.
+fn dotted_path_root<'ast>(path: &Expression<'ast>) -> Option<&'ast str> {
+    let (prefix, suffixes) = if let Expression::Suffixed(chain) = path {
+        (&chain.prefix, &*chain.suffixes)
+    } else {
+        (path, [].as_slice())
+    };
+    let Expression::Name(root) = prefix else {
+        return None;
+    };
+    suffixes.iter().all(|suffix| matches!(suffix, Suffix::Field(_))).then_some(root.text)
+}
+
+fn is_single_string_arg(call_args: &FunctionArgs<'_>) -> bool {
     match call_args {
         FunctionArgs::Parenthesized { args, .. } => {
-            args.len() == 1 && matches!(args.first(), Some(Expression::StringLiteral(_)))
+            matches!(&**args, [Expression::StringLiteral(_)])
         }
         FunctionArgs::StringLiteral(_) => true,
         FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => false,

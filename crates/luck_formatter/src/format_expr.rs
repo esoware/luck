@@ -1,98 +1,17 @@
-//! Leaf text comes from token and literal values, never from source, so
-//! synthetic ASTs stay printable.
+//! Leaf text comes from the tree's leaves, never from source, so synthetic
+//! ASTs stay printable.
 
 use luck_ast::{
-    BinaryOp, CallSuffix, Expression, FunctionDef, IfExpression, InterpolatedString,
-    ParenthesizedExpression, Suffix, SuffixedExpression, UnaryOp, Var, expr_starts_with_brace,
+    BinaryOp, Expression, FunctionDef, IfExpression, InterpolatedString, Suffix,
+    SuffixedExpression, UnaryOp, Var, expr_starts_with_brace,
 };
-use luck_token::{CompactString, TokenKind, UnOp};
+use luck_token::UnOp;
 
-use crate::format_type::ExplicitTypeArgs;
-use crate::ir::{
-    Format, Formatter, format_with, group, indent, soft_line, soft_line_or_space, space, token,
-};
+use crate::ir::Formatter;
 use crate::numbers::normalize_number;
-use crate::quotes::normalize_quote;
+use crate::quotes::requote;
 
-impl Format for Expression {
-    fn fmt(&self, f: &mut Formatter) {
-        match self {
-            Self::Nil(_) => token("nil").fmt(f),
-            Self::False(_) => token("false").fmt(f),
-            Self::True(_) => token("true").fmt(f),
-            Self::VarArg(_) => token("...").fmt(f),
-
-            Self::Number(literal) | Self::Integer(literal) => {
-                let normalized = normalize_number(&literal.text, f.options().hexadecimal_case);
-                f.write_text(normalized);
-            }
-            Self::StringLiteral(literal) => {
-                let normalized = normalize_quote(&literal.text, f.options().quote_style);
-                f.write_text(normalized);
-            }
-
-            Self::Name(name) => name.fmt(f),
-            Self::Suffixed(chain) => chain.fmt(f),
-            Self::BinaryOp(binary_op) => binary_op.fmt(f),
-            Self::UnaryOp(unary_op) => unary_op.fmt(f),
-            Self::Parenthesized(parenthesized) => parenthesized.fmt(f),
-            Self::TableConstructor(table) => table.fmt(f),
-
-            Self::FunctionDef(function_def) => {
-                f.write_without_sorting_requires(FunctionDefinition(function_def));
-            }
-
-            Self::IfExpression(if_expr) => if_expr.fmt(f), // Luau
-            Self::InterpolatedString(interpolated) => interpolated.fmt(f), // Luau
-            // Luau
-            Self::TypeCast(cast) => {
-                (&cast.expr, space(), token("::"), space(), &cast.type_annotation).fmt(f);
-            }
-
-            // A parse-recovery placeholder has no text to print.
-            Self::Error(_) => {}
-        }
-    }
-}
-
-/// A function expression. Only one a statement assigns, which prints this
-/// directly, keeps the require sorting of the block around it.
-pub(crate) struct FunctionDefinition<'def>(pub &'def FunctionDef);
-
-impl Format for FunctionDefinition<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        // Luau attributes stay on the same line as `function` here.
-        for attribute in &self.0.attributes {
-            (attribute, space()).fmt(f);
-        }
-        (token("function"), &self.0.body).fmt(f);
-    }
-}
-
-impl Format for Var {
-    fn fmt(&self, f: &mut Formatter) {
-        match self {
-            Self::Name(name) => name.fmt(f),
-            Self::Suffixed(chain) => chain.fmt(f),
-        }
-    }
-}
-
-pub(crate) struct BracketedKey<'expr>(pub &'expr Expression);
-
-impl Format for BracketedKey<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        // Right after the opening `[`, a long-bracket string would lex as
-        // `[[`, a long-string opener, so it's padded with spaces.
-        if starts_with_bracket(self.0) {
-            (token("["), space(), self.0, space(), token("]")).fmt(f);
-        } else {
-            (token("["), self.0, token("]")).fmt(f);
-        }
-    }
-}
-
-fn starts_with_bracket(expr: &Expression) -> bool {
+fn starts_with_bracket(expr: &Expression<'_>) -> bool {
     let mut current = expr;
     loop {
         current = match current {
@@ -119,206 +38,292 @@ fn starts_with_bracket(expr: &Expression) -> bool {
     }
 }
 
-/// A chain lays out run by run, where a run is calls in a row, fields in a
-/// row, or a lone index or instantiation.
-///
-/// Calls with two or more `:` methods among them break before each method,
-/// and three or more fields before each `.`, when the run doesn't fit. Each
-/// run breaks in a group of its own, so a break before it, as in a callback
-/// passed earlier, doesn't break it.
-impl Format for SuffixedExpression {
-    fn fmt(&self, f: &mut Formatter) {
-        self.prefix.fmt(f);
-        for run in runs(&self.suffixes) {
-            match run {
-                [Suffix::Call(_), ..] if is_method_chain(run) => {
-                    group(indent(format_with(|indented| {
-                        for call in calls(run) {
-                            if call.method().is_some() {
-                                soft_line().fmt(indented);
-                            }
-                            call.fmt(indented);
-                        }
-                    })))
-                    .fmt(f);
-                }
-                [Suffix::Field(_), _, _, ..] => group(indent(format_with(|indented| {
-                    for suffix in run {
-                        if let Suffix::Field(name) = suffix {
-                            (soft_line(), token("."), name).fmt(indented);
-                        }
-                    }
-                })))
-                .fmt(f),
-                _ => {
-                    for suffix in run {
-                        write_suffix(f, suffix);
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn write_suffix(f: &mut Formatter, suffix: &Suffix) {
-    match suffix {
-        Suffix::Field(name) => (token("."), name).fmt(f),
-        Suffix::Index { index, .. } => BracketedKey(index).fmt(f),
-        Suffix::Call(call) => call.fmt(f),
-        // Luau
-        Suffix::TypeInstantiation { type_args, .. } => ExplicitTypeArgs(type_args).fmt(f),
-    }
+const fn is_call(suffix: &Suffix<'_>) -> bool {
+    matches!(suffix, Suffix::Call(_) | Suffix::MethodCall(_))
 }
 
 /// Calls in a row and fields in a row each make one run, and every other
 /// suffix a run of its own.
-fn runs(suffixes: &[Suffix]) -> impl Iterator<Item = &[Suffix]> {
+fn runs<'chain, 'ast>(
+    suffixes: &'chain [Suffix<'ast>],
+) -> impl Iterator<Item = &'chain [Suffix<'ast>]> {
     suffixes.chunk_by(|left, right| {
-        matches!(
-            (left, right),
-            (Suffix::Call(_), Suffix::Call(_)) | (Suffix::Field(_), Suffix::Field(_))
-        )
+        (is_call(left) && is_call(right))
+            || matches!((left, right), (Suffix::Field(_), Suffix::Field(_)))
     })
 }
 
-fn calls(run: &[Suffix]) -> impl Iterator<Item = &CallSuffix> {
-    run.iter().filter_map(|suffix| if let Suffix::Call(call) = suffix { Some(call) } else { None })
-}
-
-fn is_method_chain(run: &[Suffix]) -> bool {
-    calls(run).filter(|call| call.method().is_some()).count() >= 2
-}
-
-/// An operand that binds tighter keeps a group of its own, so
-/// `a == b or c == d` breaks at `or` alone.
-impl Format for BinaryOp {
-    fn fmt(&self, f: &mut Formatter) {
-        write_binary_chain(f, self, true);
-    }
-}
-
-/// A chain that breaks with its operators level with its first operand,
-/// for a condition that already sits on an indented line of its own.
-pub(crate) struct LevelChain<'chain>(pub &'chain BinaryOp);
-
-impl Format for LevelChain<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        write_binary_chain(f, self.0, false);
-    }
-}
-
-fn write_binary_chain(f: &mut Formatter, binary_op: &BinaryOp, is_indented: bool) {
-    let operators = format_with(|lines| {
-        for link in &binary_op.links {
-            (soft_line_or_space(), token(link.op.static_text()), space(), &link.operand).fmt(lines);
-        }
-    });
-    // One group over the whole run, so it's either flat or breaks before
-    // every operator.
-    if is_indented {
-        group((&binary_op.first, indent(&operators))).fmt(f);
-    } else {
-        group((&binary_op.first, &operators)).fmt(f);
-    }
+fn is_method_chain(run: &[Suffix<'_>]) -> bool {
+    run.iter().filter(|suffix| matches!(suffix, Suffix::MethodCall(_))).count() >= 2
 }
 
 /// `-` right before a nested unary `-` would form `--` and start a comment, so
 /// the pair needs a space (`- -x`).
-fn is_double_minus_hazard(op: UnOp, operand: &Expression) -> bool {
+fn is_double_minus_hazard(op: UnOp, operand: &Expression<'_>) -> bool {
     op == UnOp::Neg && matches!(operand, Expression::UnaryOp(inner) if inner.op == UnOp::Neg)
 }
 
-impl Format for UnaryOp {
-    fn fmt(&self, f: &mut Formatter) {
-        token(self.op.static_text()).fmt(f);
-        // `not` is a keyword operator: always separated from its operand.
-        if self.op == UnOp::Not || is_double_minus_hazard(self.op, &self.operand) {
-            space().fmt(f);
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "the formatter is one type with its node families split by file"
+)]
+impl<'ast> Formatter<'ast> {
+    pub(crate) fn write_expr(&mut self, expr: &Expression<'ast>) {
+        match expr {
+            Expression::Nil(_) => self.token("nil"),
+            Expression::False(_) => self.token("false"),
+            Expression::True(_) => self.token("true"),
+            Expression::VarArg(_) => self.token("..."),
+            Expression::Number(literal) | Expression::Integer(literal) => {
+                self.write_number(literal.text);
+            }
+            Expression::StringLiteral(literal) => self.write_string(literal.text),
+            Expression::Name(name) => self.text(name.text),
+            Expression::Suffixed(chain) => self.write_suffixed(chain),
+            Expression::BinaryOp(binary_op) => self.write_binary_chain(binary_op, true),
+            Expression::UnaryOp(unary_op) => self.write_unary(unary_op),
+            Expression::Parenthesized(parenthesized) => {
+                self.token("(");
+                self.write_expr(&parenthesized.expr);
+                self.token(")");
+            }
+            Expression::TableConstructor(table) => self.write_table(table, false),
+            Expression::FunctionDef(function_def) => {
+                self.without_sorting_requires(|f| f.write_function_definition(function_def));
+            }
+            // Luau
+            Expression::IfExpression(if_expr) => self.write_if_expr(if_expr),
+            // Luau
+            Expression::InterpolatedString(interpolated) => self.write_interpolated(interpolated),
+            // Luau
+            Expression::TypeCast(cast) => {
+                self.write_expr(&cast.expr);
+                self.space();
+                self.token("::");
+                self.space();
+                self.write_type(&cast.ty);
+            }
+            // A parse-recovery placeholder has no text to print.
+            Expression::Error(_) => {}
         }
-        self.operand.fmt(f);
     }
-}
 
-impl Format for ParenthesizedExpression {
-    fn fmt(&self, f: &mut Formatter) {
-        (token("("), &self.expr, token(")")).fmt(f);
+    pub(crate) fn write_number(&mut self, text: &'ast str) {
+        let hex_case = self.options().hexadecimal_case;
+        let (buffer, allocator) = self.scratch();
+        let normalized = if normalize_number(text, hex_case, buffer) {
+            allocator.alloc_str(buffer)
+        } else {
+            text
+        };
+        self.text(normalized);
     }
-}
 
-impl Format for IfExpression {
-    fn fmt(&self, f: &mut Formatter) {
-        // Luau: one group, so a long if-expression starts an indented line at
-        // each `then`, `elseif`, and `else`.
-        group((
-            token("if"),
-            space(),
-            &self.condition,
-            indent(format_with(|branches| {
-                (soft_line_or_space(), token("then"), space(), &self.then_expr).fmt(branches);
+    pub(crate) fn write_string(&mut self, text: &'ast str) {
+        let quote_style = self.options().quote_style;
+        let (buffer, allocator) = self.scratch();
+        let requoted =
+            if requote(text, quote_style, buffer) { allocator.alloc_str(buffer) } else { text };
+        self.text(requoted);
+    }
 
-                for clause in &self.elseif_clauses {
-                    (
-                        soft_line_or_space(),
-                        token("elseif"),
-                        space(),
-                        &clause.condition,
-                        space(),
-                        token("then"),
-                        space(),
-                        &clause.expr,
-                    )
-                        .fmt(branches);
+    /// A function expression. Only one a statement assigns, which prints
+    /// this directly, keeps the require sorting of the block around it.
+    pub(crate) fn write_function_definition(&mut self, function_def: &FunctionDef<'ast>) {
+        // Luau attributes stay on the same line as `function` here.
+        for attribute in &function_def.attributes {
+            self.write_function_attribute(attribute);
+            self.space();
+        }
+        self.token("function");
+        self.write_function_body(&function_def.body);
+    }
+
+    pub(crate) fn write_var(&mut self, var: &Var<'ast>) {
+        match var {
+            Var::Name(name) => self.text(name.text),
+            Var::Suffixed(chain) => self.write_suffixed(chain),
+        }
+    }
+
+    /// Right after the opening `[`, a long-bracket string would lex as `[[`,
+    /// a long-string opener, so it's padded with spaces.
+    pub(crate) fn write_bracketed_key(&mut self, key: &Expression<'ast>) {
+        let is_padded = starts_with_bracket(key);
+        self.token("[");
+        if is_padded {
+            self.space();
+        }
+        self.write_expr(key);
+        if is_padded {
+            self.space();
+        }
+        self.token("]");
+    }
+
+    /// A chain lays out run by run, where a run is calls in a row, fields in
+    /// a row, or a lone index or instantiation.
+    ///
+    /// Calls with two or more `:` methods among them break before each
+    /// method, and three or more fields before each `.`, when the run doesn't
+    /// fit. Each run breaks in a group of its own, so a break before it, as in
+    /// a callback passed earlier, doesn't break it.
+    pub(crate) fn write_suffixed(&mut self, chain: &SuffixedExpression<'ast>) {
+        self.write_expr(&chain.prefix);
+        for run in runs(&chain.suffixes) {
+            match run {
+                [first, ..] if is_call(first) && is_method_chain(run) => {
+                    self.group(|grouped| {
+                        grouped.indent(|f| {
+                            for suffix in run {
+                                if matches!(suffix, Suffix::MethodCall(_)) {
+                                    f.soft_line();
+                                }
+                                f.write_suffix(suffix);
+                            }
+                        });
+                    });
                 }
-
-                (soft_line_or_space(), token("else"), space(), &self.else_expr).fmt(branches);
-            })),
-        ))
-        .fmt(f);
+                [Suffix::Field(_), _, _, ..] => self.group(|grouped| {
+                    grouped.indent(|f| {
+                        for suffix in run {
+                            if let Suffix::Field(name) = suffix {
+                                f.soft_line();
+                                f.token(".");
+                                f.text(name.text);
+                            }
+                        }
+                    });
+                }),
+                _ => {
+                    for suffix in run {
+                        self.write_suffix(suffix);
+                    }
+                }
+            }
+        }
     }
-}
 
-impl Format for InterpolatedString {
-    fn fmt(&self, f: &mut Formatter) {
-        // Luau. Punctuation follows expression presence, not token kind: a
-        // plain `` `text` `` parses as `InterpolatedStringBegin("")` plus
-        // `InterpolatedStringEnd(text)` with no expression, and must print
-        // without braces.
-        let mut opener = Some('`');
-        for segment in &self.segments {
-            let part = if let TokenKind::InterpolatedStringBegin(text)
-            | TokenKind::InterpolatedStringMiddle(text)
-            | TokenKind::InterpolatedStringEnd(text) = &segment.literal.kind
-            {
-                text.as_str()
+    fn write_suffix(&mut self, suffix: &Suffix<'ast>) {
+        match suffix {
+            Suffix::Field(name) => {
+                self.token(".");
+                self.text(name.text);
+            }
+            Suffix::Index { index, .. } => self.write_bracketed_key(index),
+            Suffix::Call(args) => self.write_function_args(args),
+            Suffix::MethodCall(call) => {
+                self.token(":");
+                self.text(call.name.text);
+                // Luau rejects a method call whose `(` is on a later line
+                // than its name.
+                if let Some(type_args) = &call.type_args {
+                    self.flat(|f| f.write_delimited_types("<<", ">>", &type_args.args));
+                }
+                self.write_function_args(&call.args);
+            }
+            // Luau
+            Suffix::TypeInstantiation { type_args, .. } => {
+                self.write_delimited_types("<<", ">>", &type_args.args);
+            }
+        }
+    }
+
+    /// One group over the whole run, so it's either flat or breaks before
+    /// every operator. An operand that binds tighter keeps a group of its
+    /// own, so `a == b or c == d` breaks at `or` alone.
+    ///
+    /// Unless `is_indented`, a broken chain keeps its operators level with
+    /// its first operand, for a condition that already sits on an indented
+    /// line of its own.
+    pub(crate) fn write_binary_chain(&mut self, binary_op: &BinaryOp<'ast>, is_indented: bool) {
+        let operators = |f: &mut Self| {
+            for link in &binary_op.links {
+                f.soft_line_or_space();
+                f.token(link.op.static_text());
+                f.space();
+                f.write_expr(&link.operand);
+            }
+        };
+        self.group(|f| {
+            f.write_expr(&binary_op.first);
+            if is_indented {
+                f.indent(operators);
             } else {
-                ""
-            };
-            let mut piece = CompactString::default();
-            piece.extend(opener);
-            piece.push_str(part);
-            if segment.expr.is_some() {
-                piece.push('{');
+                operators(f);
             }
-            f.write_text(piece);
-            if let Some(expr) = &segment.expr {
-                // Luau rejects `{{`, so an expression starting with `{`
-                // gets a space after the opening brace, and one before the
-                // closing brace to match.
-                if expr_starts_with_brace(expr) {
-                    (space(), expr, space()).fmt(f);
-                } else {
-                    expr.fmt(f);
-                }
-            }
-            opener = segment.expr.is_some().then_some('}');
+        });
+    }
+
+    fn write_unary(&mut self, unary_op: &UnaryOp<'ast>) {
+        self.token(unary_op.op.static_text());
+        // `not` is a keyword operator: always separated from its operand.
+        if unary_op.op == UnOp::Not || is_double_minus_hazard(unary_op.op, &unary_op.operand) {
+            self.space();
         }
-        f.write_text("`");
+        self.write_expr(&unary_op.operand);
+    }
+
+    /// Luau: one group, so a long if-expression starts an indented line at
+    /// each `then`, `elseif`, and `else`.
+    fn write_if_expr(&mut self, if_expr: &IfExpression<'ast>) {
+        self.group(|grouped| {
+            grouped.token("if");
+            grouped.space();
+            grouped.write_expr(&if_expr.condition);
+            grouped.indent(|f| {
+                f.soft_line_or_space();
+                f.token("then");
+                f.space();
+                f.write_expr(&if_expr.then_expr);
+                for clause in &if_expr.elseif_clauses {
+                    f.soft_line_or_space();
+                    f.token("elseif");
+                    f.space();
+                    f.write_expr(&clause.condition);
+                    f.space();
+                    f.token("then");
+                    f.space();
+                    f.write_expr(&clause.expr);
+                }
+                f.soft_line_or_space();
+                f.token("else");
+                f.space();
+                f.write_expr(&if_expr.else_expr);
+            });
+        });
+    }
+
+    /// Luau. Luau rejects `{{`, so an expression starting with `{` gets a
+    /// space after the opening brace, and one before the closing brace to
+    /// match.
+    fn write_interpolated(&mut self, interpolated: &InterpolatedString<'ast>) {
+        self.token("`");
+        for segment in &interpolated.segments {
+            if !segment.text.text.is_empty() {
+                self.text(segment.text.text);
+            }
+            self.token("{");
+            let is_padded = expr_starts_with_brace(&segment.expr);
+            if is_padded {
+                self.space();
+            }
+            self.write_expr(&segment.expr);
+            if is_padded {
+                self.space();
+            }
+            self.token("}");
+        }
+        if !interpolated.tail.text.is_empty() {
+            self.text(interpolated.tail.text);
+        }
+        self.token("`");
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::fixtures::{parse_expr, render};
+    use crate::fixtures::render_expr;
     use crate::{FormatOptions, IndentStyle, QuoteStyle};
 
     fn print_expr(source: &str, quote_style: QuoteStyle, line_width: u16) -> String {
@@ -328,7 +333,7 @@ mod tests {
             quote_style,
             ..FormatOptions::default()
         };
-        render(&parse_expr(source), options)
+        render_expr(source, options)
     }
 
     #[test]
@@ -348,10 +353,13 @@ mod tests {
 
     #[test]
     fn binary_chain_breaks_before_op() {
-        let output = print_expr("aaaa + bbbb + cccc", QuoteStyle::Double, 10);
-        assert!(output.starts_with("aaaa"));
-        assert!(output.contains('\n'));
-        assert!(output.contains("+ bbbb"));
+        assert_eq!(
+            print_expr("aaaa + bbbb + cccc", QuoteStyle::Double, 10),
+            "\
+aaaa
+    + bbbb
+    + cccc"
+        );
     }
 
     #[test]
@@ -377,10 +385,14 @@ mod tests {
 
     #[test]
     fn long_field_chain_breaks_per_segment() {
-        let output = print_expr("aaaa.bbbb.cccc.dddd", QuoteStyle::Double, 10);
-        assert!(output.starts_with("aaaa"));
-        assert!(output.contains(".bbbb"));
-        assert!(output.contains('\n'));
+        assert_eq!(
+            print_expr("aaaa.bbbb.cccc.dddd", QuoteStyle::Double, 10),
+            "\
+aaaa
+    .bbbb
+    .cccc
+    .dddd"
+        );
     }
 
     #[test]
@@ -400,8 +412,8 @@ mod tests {
 
     #[test]
     fn plain_interpolated_string_roundtrips() {
-        // A plain backtick string parses as a Begin("") + End(text) pair with
-        // no expression; it must not gain a spurious `{}` hole.
+        // A plain backtick string has no expression, and must not gain a
+        // spurious `{}` hole.
         assert_eq!(print_expr("`plain text`", QuoteStyle::Double, 80), "`plain text`");
     }
 }

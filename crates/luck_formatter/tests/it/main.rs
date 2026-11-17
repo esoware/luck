@@ -15,6 +15,7 @@ mod functions;
 mod idempotency;
 mod luau;
 mod polish;
+mod stack;
 mod stmts;
 mod synthetic;
 mod tables;

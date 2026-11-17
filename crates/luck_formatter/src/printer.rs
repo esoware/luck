@@ -17,89 +17,19 @@
 //! from the start of the next line, one indent deeper. If it fits there, the
 //! printer breaks the line before it and prints it flat.
 
-use core::mem::take;
+use core::mem;
+use core::ops::Range;
 
-use luck_token::CodeBuffer;
+use luck_token::{CodeBuffer, index_to_offset, offset_to_index};
 use unicode_width::UnicodeWidthStr as _;
 
-use crate::ir::{FormatElement, GroupId, LineMode, Tag};
+use crate::ir::{FormatElement, GroupId, LineMode, TextWidth};
 use crate::{FormatOptions, IndentStyle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrintMode {
     Flat,
     Expanded,
-}
-
-pub(crate) fn print(
-    elements: &[FormatElement],
-    group_count: usize,
-    options: &FormatOptions,
-    base_indent: &str,
-) -> String {
-    let columns_per_indent = usize::from(options.indent_width);
-    let (indent_byte, bytes_per_indent) = match options.indent_style {
-        IndentStyle::Tabs => (b'\t', 1),
-        IndentStyle::Spaces => (b' ', columns_per_indent),
-    };
-    let base_indent_columns = base_indent
-        .bytes()
-        .map(|b| if b == b'\t' { columns_per_indent } else { 1 })
-        .fold(0usize, usize::saturating_add);
-    let mut group_modes = vec![None; group_count];
-    let mut hugs = vec![Vec::new(); group_count];
-    let text_bytes = propagate_expand(elements, &mut group_modes, &mut hugs);
-    let mut printer = Printer {
-        line_width: usize::from(options.line_width),
-        indent_byte,
-        bytes_per_indent,
-        columns_per_indent,
-        base_indent: base_indent.to_owned(),
-        base_indent_columns,
-        output: CodeBuffer::with_capacity(text_bytes),
-        line_start: 0,
-        display_column: 0,
-        indent_level: 0,
-        modes: Vec::new(),
-        group_modes,
-        hugs,
-        next_line_moves: Vec::new(),
-        suffixes: Vec::new(),
-        is_pending_space: false,
-        is_pending_indent: !base_indent.is_empty(),
-    };
-    printer.print_elements(elements);
-    printer.flush_suffixes();
-    printer.output.into_string()
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Region {
-    Group,
-    Entry,
-}
-
-impl Region {
-    const fn opens(self, element: &FormatElement) -> bool {
-        match self {
-            Self::Group => matches!(
-                element,
-                FormatElement::Tag(
-                    Tag::StartGroup(_) | Tag::StartHuggedGroup(_) | Tag::StartNextLineGroup(_)
-                )
-            ),
-            Self::Entry => matches!(element, FormatElement::Tag(Tag::StartEntry)),
-        }
-    }
-
-    const fn closes(self, element: &FormatElement) -> bool {
-        match self {
-            Self::Group => {
-                matches!(element, FormatElement::Tag(Tag::EndGroup | Tag::EndNextLineGroup))
-            }
-            Self::Entry => matches!(element, FormatElement::Tag(Tag::EndEntry)),
-        }
-    }
 }
 
 /// A hugged group, as the group right around it sees it. Both offsets count
@@ -113,14 +43,78 @@ struct Hug {
     last_line: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Group {
+    /// Pre-seeded with `Expanded` for a group containing a forced break, and
+    /// filled in as the group is entered.
+    mode: Option<PrintMode>,
+    /// The hugged groups this one holds, in order, in `Printer::hugs`.
+    hugs_start: u32,
+    hugs_end: u32,
+}
+
+pub(crate) fn print(
+    elements: &[FormatElement<'_>],
+    group_count: u32,
+    options: &FormatOptions,
+    base_indent: &str,
+) -> String {
+    let columns_per_indent = usize::from(options.indent_width);
+    let (indent_byte, bytes_per_indent) = match options.indent_style {
+        IndentStyle::Tabs => (b'\t', 1),
+        IndentStyle::Spaces => (b' ', columns_per_indent),
+    };
+    let base_indent_columns = base_indent
+        .bytes()
+        .map(|b| if b == b'\t' { columns_per_indent } else { 1 })
+        .fold(0usize, usize::saturating_add);
+    let unset = Group { mode: None, hugs_start: 0, hugs_end: 0 };
+    let mut groups = vec![unset; offset_to_index(group_count)];
+    let mut hugs = Vec::new();
+    let text_bytes = propagate_expand(elements, &mut groups, &mut hugs);
+    let mut printer = Printer {
+        line_width: usize::from(options.line_width),
+        indent_byte,
+        bytes_per_indent,
+        columns_per_indent,
+        base_indent,
+        base_indent_columns,
+        output: CodeBuffer::with_capacity(text_bytes),
+        line_start: 0,
+        display_column: 0,
+        indent_level: 0,
+        modes: Vec::new(),
+        groups,
+        hugs,
+        next_line_moves: Vec::new(),
+        suffixes: Vec::new(),
+        is_pending_space: false,
+        is_pending_indent: !base_indent.is_empty(),
+    };
+    printer.print_elements(elements);
+    printer.flush_suffixes();
+    printer.output.into_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Region {
+    Group,
+    Entry,
+}
+
 struct OpenGroup {
     id: GroupId,
     /// Index of the group's first element.
     content_start: usize,
     is_hugged: bool,
+    /// Where its hugs start in the pending stack.
+    pending_hugs: usize,
+    /// For a hugged group, the first and last lines directly inside it, as
+    /// the group around it counts them.
+    hug_lines: Option<(usize, usize)>,
 }
 
-struct Printer {
+struct Printer<'ast> {
     line_width: usize,
     /// One indent level is `bytes_per_indent` copies of `indent_byte` and
     /// measures `columns_per_indent` columns, so a tab is one byte and as wide
@@ -129,7 +123,7 @@ struct Printer {
     bytes_per_indent: usize,
     columns_per_indent: usize,
     /// Written before the indent of every line.
-    base_indent: String,
+    base_indent: &'ast str,
     /// A tab in `base_indent` measures `columns_per_indent` too.
     base_indent_columns: usize,
     output: CodeBuffer,
@@ -138,15 +132,12 @@ struct Printer {
     indent_level: usize,
     /// Effective print-mode stack; empty means `Expanded` (top level).
     modes: Vec<PrintMode>,
-    /// Break decision per group id. Pre-seeded with `Expanded` for groups
-    /// containing forced breaks; filled in as groups are entered.
-    group_modes: Vec<Option<PrintMode>>,
-    /// The hugged groups each group holds, in order, by the holder's id.
-    hugs: Vec<Vec<Hug>>,
+    groups: Vec<Group>,
+    hugs: Vec<Hug>,
     /// Per open next-line group, whether it moved to the next line, so its
     /// end takes back the indent it added.
     next_line_moves: Vec<bool>,
-    suffixes: Vec<FormatElement>,
+    suffixes: Vec<(&'ast str, TextWidth)>,
     is_pending_space: bool,
     is_pending_indent: bool,
 }
@@ -154,70 +145,88 @@ struct Printer {
 /// A forced break marks every group on the stack of enclosing groups.
 ///
 /// The exception is the group right around a hugged group the break is in,
-/// which can stay flat while the hugged group breaks. Line suffixes are
-/// boundaries: breaks inside them don't force anything outside.
+/// which can stay flat while the hugged group breaks. Breaks inside a line
+/// suffix don't force anything outside it.
 ///
 /// Returns how many bytes the elements' text, spaces, and lines take, which
 /// the output takes at least.
 fn propagate_expand(
-    elements: &[FormatElement],
-    group_modes: &mut [Option<PrintMode>],
-    hugs: &mut [Vec<Hug>],
+    elements: &[FormatElement<'_>],
+    groups: &mut [Group],
+    hugs: &mut Vec<Hug>,
 ) -> usize {
     let mut open_groups: Vec<OpenGroup> = Vec::new();
-    let mut is_in_suffix = false;
+    // The finished hugs of each open group, innermost last. A group's are
+    // contiguous, since each group inside it moves its own out as it closes,
+    // before its parent's hug of it goes in.
+    let mut pending: Vec<Hug> = Vec::new();
     let mut text_bytes = 0usize;
 
     for (index, element) in elements.iter().enumerate() {
-        let content_start = index.saturating_add(1);
-        match element {
-            FormatElement::Tag(Tag::StartGroup(id) | Tag::StartNextLineGroup(id)) => {
-                open_groups.push(OpenGroup { id: *id, content_start, is_hugged: false });
+        match *element {
+            FormatElement::StartGroup(id)
+            | FormatElement::StartHuggedGroup(id)
+            | FormatElement::StartNextLineGroup(id) => {
+                open_groups.push(OpenGroup {
+                    id,
+                    content_start: index.saturating_add(1),
+                    is_hugged: matches!(element, FormatElement::StartHuggedGroup(_)),
+                    pending_hugs: pending.len(),
+                    hug_lines: None,
+                });
             }
-            FormatElement::Tag(Tag::StartHuggedGroup(id)) => {
-                open_groups.push(OpenGroup { id: *id, content_start, is_hugged: true });
+            FormatElement::EndGroup | FormatElement::EndNextLineGroup => {
+                let Some(closed) = open_groups.pop() else {
+                    continue;
+                };
+                if closed.pending_hugs < pending.len()
+                    && let Some(group) = groups.get_mut(closed.id.index())
+                {
+                    group.hugs_start = index_to_offset(hugs.len());
+                    hugs.extend(pending.drain(closed.pending_hugs..));
+                    group.hugs_end = index_to_offset(hugs.len());
+                }
+                if let Some((first_line, last_line)) = closed.hug_lines {
+                    pending.push(Hug { child: closed.id, first_line, last_line });
+                }
             }
-            FormatElement::Tag(Tag::EndGroup | Tag::EndNextLineGroup) => {
-                open_groups.pop();
-            }
-            FormatElement::Tag(Tag::StartLineSuffix) => is_in_suffix = true,
-            FormatElement::Tag(Tag::EndLineSuffix) => is_in_suffix = false,
             FormatElement::Line(mode) => {
                 text_bytes = text_bytes.saturating_add(1);
-                if let [.., parent, child] = open_groups.as_slice()
+                if let [.., parent, child] = open_groups.as_mut_slice()
                     && child.is_hugged
-                    && let Some(siblings) = hugs.get_mut(parent.id.index())
                 {
                     let line = index.saturating_sub(parent.content_start);
-                    match siblings.last_mut() {
-                        Some(hug) if hug.child == child.id => hug.last_line = line,
-                        Some(_) | None => {
-                            siblings.push(Hug {
-                                child: child.id,
-                                first_line: line,
-                                last_line: line,
-                            });
-                        }
-                    }
+                    let first_line = child.hug_lines.map_or(line, |(first_line, _)| first_line);
+                    child.hug_lines = Some((first_line, line));
                 }
-                if matches!(mode, LineMode::Hard | LineMode::Empty) && !is_in_suffix {
-                    mark_expanded(&open_groups, group_modes);
+                if matches!(mode, LineMode::Hard | LineMode::Empty) {
+                    mark_expanded(&open_groups, groups);
                 }
             }
-            FormatElement::ExpandParent => {
-                if !is_in_suffix {
-                    mark_expanded(&open_groups, group_modes);
-                }
-            }
+            FormatElement::ExpandParent => mark_expanded(&open_groups, groups),
             FormatElement::Text(content, width) | FormatElement::Verbatim(content, width) => {
                 text_bytes = text_bytes.saturating_add(content.len());
-                if !is_in_suffix && width.columns().is_none() {
-                    mark_expanded(&open_groups, group_modes);
+                if width.columns().is_none() {
+                    mark_expanded(&open_groups, groups);
                 }
             }
-            FormatElement::Token(content) => text_bytes = text_bytes.saturating_add(content.len()),
+            FormatElement::LineSuffix(content, _) => {
+                text_bytes = text_bytes.saturating_add(content.len()).saturating_add(1);
+            }
             FormatElement::Space => text_bytes = text_bytes.saturating_add(1),
-            FormatElement::LineSuffixBoundary | FormatElement::Tag(_) => {}
+            FormatElement::LineSuffixBoundary
+            | FormatElement::StartIndent
+            | FormatElement::EndIndent
+            | FormatElement::StartIndentIfGroupBreaks(_)
+            | FormatElement::EndIndentIfGroupBreaks(_)
+            | FormatElement::StartIfGroupBreaks(_)
+            | FormatElement::EndIfGroupBreaks
+            | FormatElement::StartFlat
+            | FormatElement::EndFlat
+            | FormatElement::StartFill
+            | FormatElement::EndFill
+            | FormatElement::StartEntry
+            | FormatElement::EndEntry => {}
         }
     }
     text_bytes
@@ -228,29 +237,35 @@ fn propagate_expand(
 /// The break that marked it settled every group around it, and each of those
 /// is still open around the same inner group, so the same hug still exempts
 /// it.
-fn mark_expanded(open_groups: &[OpenGroup], group_modes: &mut [Option<PrintMode>]) {
+fn mark_expanded(open_groups: &[OpenGroup], groups: &mut [Group]) {
     let mut is_inner_hugged = false;
-    for group in open_groups.iter().rev() {
-        if !is_inner_hugged && let Some(mode) = group_modes.get_mut(group.id.index()) {
-            if *mode == Some(PrintMode::Expanded) {
+    for open in open_groups.iter().rev() {
+        if !is_inner_hugged && let Some(group) = groups.get_mut(open.id.index()) {
+            if group.mode == Some(PrintMode::Expanded) {
                 return;
             }
-            *mode = Some(PrintMode::Expanded);
+            group.mode = Some(PrintMode::Expanded);
         }
-        is_inner_hugged = group.is_hugged;
+        is_inner_hugged = open.is_hugged;
     }
 }
 
-impl Printer {
+impl<'ast> Printer<'ast> {
     fn current_mode(&self) -> PrintMode {
         *self.modes.last().unwrap_or(&PrintMode::Expanded)
     }
 
     fn group_mode(&self, id: GroupId) -> Option<PrintMode> {
-        self.group_modes.get(id.index()).copied().flatten()
+        self.groups.get(id.index())?.mode
     }
 
-    fn print_elements(&mut self, elements: &[FormatElement]) {
+    fn set_group_mode(&mut self, id: GroupId, mode: PrintMode) {
+        if let Some(group) = self.groups.get_mut(id.index()) {
+            group.mode = Some(mode);
+        }
+    }
+
+    fn print_elements(&mut self, elements: &'ast [FormatElement<'ast>]) {
         let mut remaining = elements;
         while let Some((element, rest)) = remaining.split_first() {
             remaining = self.print_element(element, rest);
@@ -259,44 +274,30 @@ impl Printer {
 
     /// Print `element`, returning the elements left after it and after any
     /// region it consumed from `rest`, e.g. a skipped conditional body.
-    fn print_element<'elements>(
+    fn print_element(
         &mut self,
-        element: &FormatElement,
-        rest: &'elements [FormatElement],
-    ) -> &'elements [FormatElement] {
-        match element {
-            FormatElement::Token(content) => self.emit_text(content, Some(content.len())),
+        element: &FormatElement<'ast>,
+        rest: &'ast [FormatElement<'ast>],
+    ) -> &'ast [FormatElement<'ast>] {
+        match *element {
             FormatElement::Text(content, width) => self.emit_text(content, width.columns()),
             FormatElement::Verbatim(content, width) => self.emit_verbatim(content, width.columns()),
+            FormatElement::LineSuffix(content, width) => self.suffixes.push((content, width)),
             FormatElement::Space => self.is_pending_space = true,
-            FormatElement::Line(mode) => self.print_line(*mode),
-            FormatElement::ExpandParent => {}
+            FormatElement::Line(mode) => self.print_line(mode),
             FormatElement::LineSuffixBoundary => {
                 if !self.suffixes.is_empty() {
                     self.emit_newline(false);
                 }
             }
-            FormatElement::Tag(tag) => return self.print_tag(*tag, rest),
-        }
-        rest
-    }
-
-    fn print_tag<'elements>(
-        &mut self,
-        tag: Tag,
-        rest: &'elements [FormatElement],
-    ) -> &'elements [FormatElement] {
-        match tag {
-            Tag::StartGroup(id) | Tag::StartHuggedGroup(id) => {
+            FormatElement::StartGroup(id) | FormatElement::StartHuggedGroup(id) => {
                 // A mode already set was forced by `propagate_expand`, or by
                 // the group around a hugged one.
                 let mode = self.group_mode(id).unwrap_or_else(|| self.decide_mode(id, rest));
-                if let Some(group_mode) = self.group_modes.get_mut(id.index()) {
-                    *group_mode = Some(mode);
-                }
+                self.set_group_mode(id, mode);
                 self.modes.push(mode);
             }
-            Tag::StartNextLineGroup(id) => {
+            FormatElement::StartNextLineGroup(id) => {
                 let next_line_indent =
                     self.indent_columns().saturating_add(self.columns_per_indent);
                 let (mode, is_moved) = match self.group_mode(id) {
@@ -311,9 +312,7 @@ impl Printer {
                     }
                     None => (PrintMode::Expanded, false),
                 };
-                if let Some(group_mode) = self.group_modes.get_mut(id.index()) {
-                    *group_mode = Some(mode);
-                }
+                self.set_group_mode(id, mode);
                 if is_moved {
                     self.emit_newline(false);
                     self.indent_level = self.indent_level.saturating_add(1);
@@ -324,79 +323,81 @@ impl Printer {
                 self.next_line_moves.push(is_moved);
                 self.modes.push(mode);
             }
-            Tag::EndNextLineGroup => {
+            FormatElement::EndNextLineGroup => {
                 self.modes.pop();
                 if self.next_line_moves.pop() == Some(true) {
                     self.indent_level = self.indent_level.saturating_sub(1);
                 }
             }
-            Tag::StartFlat => self.modes.push(PrintMode::Flat),
-            Tag::EndGroup | Tag::EndFlat => {
+            FormatElement::StartFlat => self.modes.push(PrintMode::Flat),
+            FormatElement::EndGroup | FormatElement::EndFlat => {
                 self.modes.pop();
             }
-            Tag::StartIndent => self.indent_level = self.indent_level.saturating_add(1),
-            Tag::EndIndent => self.indent_level = self.indent_level.saturating_sub(1),
-            Tag::StartIndentIfGroupBreaks(group_id) => {
-                if self.group_mode(group_id) == Some(PrintMode::Expanded) {
+            FormatElement::StartIndent => self.indent_level = self.indent_level.saturating_add(1),
+            FormatElement::EndIndent => self.indent_level = self.indent_level.saturating_sub(1),
+            FormatElement::StartIndentIfGroupBreaks(id) => {
+                if self.group_mode(id) == Some(PrintMode::Expanded) {
                     self.indent_level = self.indent_level.saturating_add(1);
                 }
             }
-            Tag::EndIndentIfGroupBreaks(group_id) => {
-                if self.group_mode(group_id) == Some(PrintMode::Expanded) {
+            FormatElement::EndIndentIfGroupBreaks(id) => {
+                if self.group_mode(id) == Some(PrintMode::Expanded) {
                     self.indent_level = self.indent_level.saturating_sub(1);
                 }
             }
-            Tag::StartIfGroupBreaks(group_id) => {
-                let decided_mode = self.group_mode(group_id);
+            FormatElement::StartIfGroupBreaks(id) => {
+                let decided_mode = self.group_mode(id);
                 debug_assert!(
                     decided_mode.is_some(),
-                    "conditional references group {group_id:?} before its decision"
+                    "conditional references group {id:?} before its decision"
                 );
                 if decided_mode != Some(PrintMode::Expanded) {
                     return skip_conditional(rest);
                 }
             }
-            Tag::StartFill => return self.print_fill(rest),
-            Tag::StartLineSuffix => {
-                let (body, after_suffix) = split_line_suffix(rest);
-                self.suffixes.extend_from_slice(body);
-                return after_suffix;
-            }
-            // A taken conditional's end tag is a no-op. `print_fill` and
-            // `split_line_suffix` consume the other tags listed here, so only
-            // malformed IR reaches this arm with one of them.
-            Tag::EndIfGroupBreaks
-            | Tag::EndFill
-            | Tag::StartEntry
-            | Tag::EndEntry
-            | Tag::EndLineSuffix => {}
+            FormatElement::StartFill => return self.print_fill(rest),
+            // `ExpandParent` only steers `propagate_expand`, and a taken
+            // conditional's end is a no-op. `print_fill` consumes the other
+            // elements listed here, so only malformed IR reaches this arm
+            // with one of them.
+            FormatElement::ExpandParent
+            | FormatElement::EndIfGroupBreaks
+            | FormatElement::EndFill
+            | FormatElement::StartEntry
+            | FormatElement::EndEntry => {}
         }
         rest
     }
 
     /// `rest` starts at the group's first element.
-    fn decide_mode(&mut self, id: GroupId, rest: &[FormatElement]) -> PrintMode {
+    fn decide_mode(&mut self, id: GroupId, rest: &[FormatElement<'_>]) -> PrintMode {
         // An enclosing flat group already measured this content;
         // re-measuring can't change the answer.
         if self.current_mode() == PrintMode::Flat || self.fits(rest, Region::Group, 0) {
             return PrintMode::Flat;
         }
-        let hugs = self.hugs.get(id.index()).map_or(&[][..], Vec::as_slice);
+        let hugs = self.groups.get(id.index()).map_or(0..0, |group| {
+            offset_to_index(group.hugs_start)..offset_to_index(group.hugs_end)
+        });
         if hugs.is_empty() {
             return PrintMode::Expanded;
         }
         // A hugged group left undecided here prints flat, like anything else
         // in a flat group. With none forced, that's the flat layout that just
         // failed.
-        let is_any_hug_forced =
-            hugs.iter().any(|hug| self.group_mode(hug.child) == Some(PrintMode::Expanded));
-        if is_any_hug_forced && self.fits_hugging(rest, hugs, false) {
+        let is_any_hug_forced = self
+            .hugs
+            .get(hugs.clone())
+            .unwrap_or_default()
+            .iter()
+            .any(|hug| self.group_mode(hug.child) == Some(PrintMode::Expanded));
+        if is_any_hug_forced && self.fits_hugging(rest, hugs.clone(), false) {
             return PrintMode::Flat;
         }
-        if self.fits_hugging(rest, hugs, true) {
-            for hug in hugs {
-                if let Some(child_mode) = self.group_modes.get_mut(hug.child.index()) {
-                    *child_mode = Some(PrintMode::Expanded);
+        if self.fits_hugging(rest, hugs.clone(), true) {
+            for i in hugs {
+                if let Some(hug) = self.hugs.get(i).copied() {
+                    self.set_group_mode(hug.child, PrintMode::Expanded);
                 }
             }
             return PrintMode::Flat;
@@ -420,17 +421,14 @@ impl Printer {
     /// Greedy fill: each entry goes on the current line if it fits,
     /// otherwise the preceding separator becomes a newline. Entries that
     /// don't fit even on a fresh line print expanded.
-    fn print_fill<'elements>(
-        &mut self,
-        elements: &'elements [FormatElement],
-    ) -> &'elements [FormatElement] {
+    fn print_fill(&mut self, elements: &'ast [FormatElement<'ast>]) -> &'ast [FormatElement<'ast>] {
         let mut remaining = elements;
         while let Some((element, rest)) = remaining.split_first() {
             match element {
-                FormatElement::Tag(Tag::EndFill) => return rest,
+                FormatElement::EndFill => return rest,
                 FormatElement::Line(separator) => {
                     debug_assert!(
-                        matches!(rest.first(), Some(FormatElement::Tag(Tag::StartEntry))),
+                        matches!(rest.first(), Some(FormatElement::StartEntry)),
                         "a fill separator must be followed by an entry"
                     );
                     remaining = rest;
@@ -451,7 +449,7 @@ impl Printer {
                         self.emit_newline(false);
                     }
                 }
-                FormatElement::Tag(Tag::StartEntry) => {
+                FormatElement::StartEntry => {
                     let mode = if self.fits(rest, Region::Entry, 0) {
                         PrintMode::Flat
                     } else {
@@ -465,20 +463,34 @@ impl Printer {
                     // the first `EndEntry` here is this entry's.
                     let mut entry_remaining = rest;
                     while let Some((content, after_content)) = entry_remaining.split_first()
-                        && !matches!(content, FormatElement::Tag(Tag::EndEntry))
+                        && !matches!(content, FormatElement::EndEntry)
                     {
                         entry_remaining = self.print_element(content, after_content);
                     }
                     self.modes.pop();
                     remaining = entry_remaining.get(1..).unwrap_or_default();
                 }
-                FormatElement::Token(_)
-                | FormatElement::Text(..)
+                FormatElement::Text(..)
                 | FormatElement::Verbatim(..)
+                | FormatElement::LineSuffix(..)
                 | FormatElement::Space
                 | FormatElement::ExpandParent
                 | FormatElement::LineSuffixBoundary
-                | FormatElement::Tag(_) => {
+                | FormatElement::StartGroup(_)
+                | FormatElement::StartHuggedGroup(_)
+                | FormatElement::EndGroup
+                | FormatElement::StartNextLineGroup(_)
+                | FormatElement::EndNextLineGroup
+                | FormatElement::StartIndent
+                | FormatElement::EndIndent
+                | FormatElement::StartIndentIfGroupBreaks(_)
+                | FormatElement::EndIndentIfGroupBreaks(_)
+                | FormatElement::StartIfGroupBreaks(_)
+                | FormatElement::EndIfGroupBreaks
+                | FormatElement::StartFlat
+                | FormatElement::EndFlat
+                | FormatElement::StartFill
+                | FormatElement::EndEntry => {
                     remaining = self.print_element(element, rest);
                 }
             }
@@ -504,7 +516,7 @@ impl Printer {
     /// Simulate flat printing of `elements` up to the end of `region`,
     /// checking the content fits the remaining width. `separator_width`
     /// charges width up front for a pending separator.
-    fn fits(&self, elements: &[FormatElement], region: Region, separator_width: usize) -> bool {
+    fn fits(&self, elements: &[FormatElement<'_>], region: Region, separator_width: usize) -> bool {
         let used_width = self.occupied_width().saturating_add(separator_width);
         self.fits_from(elements, region, used_width, 1)
     }
@@ -519,14 +531,14 @@ impl Printer {
     /// forced break expands count, and the others are measured flat.
     fn fits_hugging(
         &self,
-        elements: &[FormatElement],
-        hugs: &[Hug],
+        elements: &[FormatElement<'_>],
+        hugs: Range<usize>,
         should_expand_all: bool,
     ) -> bool {
         let mut line_start = 0;
         let mut used_width = self.occupied_width();
         let mut depth = 1;
-        for hug in hugs {
+        for hug in self.hugs.get(hugs).unwrap_or_default() {
             if !should_expand_all && self.group_mode(hug.child) != Some(PrintMode::Expanded) {
                 continue;
             }
@@ -547,57 +559,82 @@ impl Printer {
     /// where the outermost of them closes.
     fn fits_from(
         &self,
-        elements: &[FormatElement],
+        elements: &[FormatElement<'_>],
         region: Region,
         mut used_width: usize,
         mut depth: usize,
     ) -> bool {
+        let is_group = region == Region::Group;
         let mut remaining = elements;
-
         while let Some((element, rest)) = remaining.split_first() {
             remaining = rest;
-            if region.opens(element) {
-                depth = depth.saturating_add(1);
-            }
-            if region.closes(element) {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return true;
-                }
-            }
-            match element {
-                FormatElement::Token(content) => {
-                    used_width = used_width.saturating_add(content.len());
-                }
+            match *element {
                 FormatElement::Text(_, width) | FormatElement::Verbatim(_, width) => {
                     let Some(columns) = width.columns() else {
                         return false;
                     };
                     used_width = used_width.saturating_add(columns);
+                    if used_width > self.line_width {
+                        return false;
+                    }
                 }
                 FormatElement::Space | FormatElement::Line(LineMode::SoftOrSpace) => {
                     used_width = used_width.saturating_add(1);
+                    if used_width > self.line_width {
+                        return false;
+                    }
                 }
                 FormatElement::Line(LineMode::Hard | LineMode::Empty)
                 | FormatElement::ExpandParent => return false,
-                FormatElement::Tag(Tag::StartIfGroupBreaks(group_id)) => {
+                FormatElement::StartIfGroupBreaks(id) => {
                     // A decided group answers with its decision. An undecided
                     // one is being measured now, and prints flat if this
                     // measurement succeeds.
-                    if self.group_mode(*group_id) != Some(PrintMode::Expanded) {
+                    if self.group_mode(id) != Some(PrintMode::Expanded) {
                         remaining = skip_conditional(rest);
-                        continue;
                     }
                 }
-                FormatElement::Tag(Tag::StartLineSuffix) => {
-                    (_, remaining) = split_line_suffix(rest);
+                FormatElement::StartGroup(_)
+                | FormatElement::StartHuggedGroup(_)
+                | FormatElement::StartNextLineGroup(_)
+                    if is_group =>
+                {
+                    depth = depth.saturating_add(1);
                 }
-                FormatElement::Line(LineMode::Soft)
+                FormatElement::StartEntry if !is_group => depth = depth.saturating_add(1),
+                FormatElement::EndGroup | FormatElement::EndNextLineGroup if is_group => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return true;
+                    }
+                }
+                FormatElement::EndEntry if !is_group => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return true;
+                    }
+                }
+                // A line suffix prints past the line's end, so it takes no
+                // width here.
+                FormatElement::LineSuffix(..)
+                | FormatElement::Line(LineMode::Soft)
                 | FormatElement::LineSuffixBoundary
-                | FormatElement::Tag(_) => {}
-            }
-            if used_width > self.line_width {
-                return false;
+                | FormatElement::StartGroup(_)
+                | FormatElement::StartHuggedGroup(_)
+                | FormatElement::EndGroup
+                | FormatElement::StartNextLineGroup(_)
+                | FormatElement::EndNextLineGroup
+                | FormatElement::StartIndent
+                | FormatElement::EndIndent
+                | FormatElement::StartIndentIfGroupBreaks(_)
+                | FormatElement::EndIndentIfGroupBreaks(_)
+                | FormatElement::EndIfGroupBreaks
+                | FormatElement::StartFlat
+                | FormatElement::EndFlat
+                | FormatElement::StartFill
+                | FormatElement::EndFill
+                | FormatElement::StartEntry
+                | FormatElement::EndEntry => {}
             }
         }
         true
@@ -654,22 +691,10 @@ impl Printer {
         if self.suffixes.is_empty() {
             return;
         }
-        let mut suffixes = take(&mut self.suffixes);
-        for element in &suffixes {
-            match element {
-                FormatElement::Token(content) => self.emit_text(content, Some(content.len())),
-                FormatElement::Text(content, width) => self.emit_text(content, width.columns()),
-                FormatElement::Space => self.is_pending_space = true,
-                // `Formatter::write_line_suffix` writes only a space and
-                // text, so nothing structural can reach a suffix body.
-                FormatElement::Verbatim(..)
-                | FormatElement::Line(_)
-                | FormatElement::ExpandParent
-                | FormatElement::LineSuffixBoundary
-                | FormatElement::Tag(_) => {
-                    debug_assert!(false, "unsupported element in line suffix: {element:?}");
-                }
-            }
+        let mut suffixes = mem::take(&mut self.suffixes);
+        for &(content, width) in &suffixes {
+            self.is_pending_space = true;
+            self.emit_text(content, width.columns());
         }
         suffixes.clear();
         self.suffixes = suffixes;
@@ -690,78 +715,67 @@ impl Printer {
 
     fn flush_indent(&mut self) {
         self.is_pending_indent = false;
-        self.output.print_str(&self.base_indent);
+        self.output.print_str(self.base_indent);
         let indent_bytes = self.indent_level.saturating_mul(self.bytes_per_indent);
         self.output.print_ascii_repeat(self.indent_byte, indent_bytes);
         self.display_column = self.display_column.saturating_add(self.indent_columns());
     }
 }
 
-const fn is_start_conditional(element: &FormatElement) -> bool {
-    matches!(element, FormatElement::Tag(Tag::StartIfGroupBreaks(_)))
-}
-
-const fn is_end_conditional(element: &FormatElement) -> bool {
-    matches!(element, FormatElement::Tag(Tag::EndIfGroupBreaks))
-}
-
-const fn is_end_suffix(element: &FormatElement) -> bool {
-    matches!(element, FormatElement::Tag(Tag::EndLineSuffix))
-}
-
-fn skip_conditional(elements: &[FormatElement]) -> &[FormatElement] {
+fn skip_conditional<'elements, 'ast>(
+    elements: &'elements [FormatElement<'ast>],
+) -> &'elements [FormatElement<'ast>] {
     let mut remaining = elements;
     while let Some((element, rest)) = remaining.split_first() {
-        if is_end_conditional(element) {
+        if matches!(element, FormatElement::EndIfGroupBreaks) {
             return rest;
         }
-        remaining = if is_start_conditional(element) { skip_conditional(rest) } else { rest };
+        let is_nested = matches!(element, FormatElement::StartIfGroupBreaks(_));
+        remaining = if is_nested { skip_conditional(rest) } else { rest };
     }
     remaining
 }
 
-/// Split the elements after a `StartLineSuffix` into the suffix body and what
-/// follows its end tag. A body is comment text, so suffixes never nest.
-fn split_line_suffix(elements: &[FormatElement]) -> (&[FormatElement], &[FormatElement]) {
-    let mut sections = elements.splitn(2, is_end_suffix);
-    let body = sections.next().unwrap_or_default();
-    (body, sections.next().unwrap_or_default())
-}
-
 #[cfg(test)]
 mod tests {
+    use luck_allocator::Allocator;
+
     use crate::comments::Comments;
-    use crate::ir::{
-        Format, Formatter, empty_line, format_with, group, group_with_id, hard_line,
-        hugged_group_with_id, if_group_breaks, indent, indent_if_group_breaks, soft_line,
-        soft_line_or_space, space, token,
-    };
+    use crate::ir::Formatter;
     use crate::{FormatOptions, IndentStyle};
 
-    fn print_document(build: impl Fn(&mut Formatter), line_width: u16) -> String {
+    fn print_with(
+        options: FormatOptions,
+        base_indent: &str,
+        build: impl Fn(&mut Formatter<'_>),
+    ) -> String {
+        let allocator = Allocator::new();
+        let mut f = Formatter::new(&allocator, options, Comments::none());
+        build(&mut f);
+        f.print(base_indent)
+    }
+
+    fn print_document(build: impl Fn(&mut Formatter<'_>), line_width: u16) -> String {
         let options = FormatOptions {
             line_width,
             indent_style: IndentStyle::Spaces,
             indent_width: 4,
             ..FormatOptions::default()
         };
-        let mut f = Formatter::new(options, Comments::none());
-        build(&mut f);
-        f.print("")
+        print_with(options, "", build)
     }
 
     #[test]
     fn flat_group_stays_on_one_line() {
         let output = print_document(
             |f| {
-                group((
-                    token("{"),
-                    soft_line_or_space(),
-                    token("x"),
-                    soft_line_or_space(),
-                    token("}"),
-                ))
-                .fmt(f);
+                f.group(|grouped| {
+                    grouped.token("{");
+                    grouped.soft_line_or_space();
+                    grouped.token("x");
+                    grouped.soft_line_or_space();
+                    grouped.token("}");
+                });
             },
             80,
         );
@@ -772,39 +786,38 @@ mod tests {
     fn wide_group_breaks() {
         let long_text = "x".repeat(90);
         let output = print_document(
-            move |f| {
-                group((
-                    token("{"),
-                    indent((
-                        soft_line_or_space(),
-                        format_with(|indented| indented.write_text(long_text.clone())),
-                    )),
-                    soft_line_or_space(),
-                    token("}"),
-                ))
-                .fmt(f);
+            |f| {
+                let text = f.allocator().alloc_str(&long_text);
+                f.group(|grouped| {
+                    grouped.token("{");
+                    grouped.indent(|indented| {
+                        indented.soft_line_or_space();
+                        indented.text(text);
+                    });
+                    grouped.soft_line_or_space();
+                    grouped.token("}");
+                });
             },
             80,
         );
-        assert!(output.starts_with(
-            "\
-{
-    x"
-        ));
-        assert!(output.ends_with("\n}"));
+        assert_eq!(output, format!("{{\n    {long_text}\n}}"));
     }
 
     #[test]
     fn hard_line_forces_all_enclosing_groups() {
         let output = print_document(
             |f| {
-                group((
-                    token("a"),
-                    group((token("("), soft_line(), hard_line(), token(")"))),
-                    soft_line_or_space(),
-                    token("b"),
-                ))
-                .fmt(f);
+                f.group(|outer| {
+                    outer.token("a");
+                    outer.group(|inner| {
+                        inner.token("(");
+                        inner.soft_line();
+                        inner.hard_line();
+                        inner.token(")");
+                    });
+                    outer.soft_line_or_space();
+                    outer.token("b");
+                });
             },
             80,
         );
@@ -819,57 +832,39 @@ b"
         );
     }
 
+    fn write_conditional_comma(f: &mut Formatter<'_>, content: &str) {
+        let id = f.group_id();
+        let text = f.allocator().alloc_str(content);
+        f.group_with_id(id, |grouped| {
+            grouped.token("[");
+            grouped.soft_line();
+            grouped.text(text);
+            grouped.if_group_breaks(id, |broken| broken.token(","));
+            grouped.soft_line();
+            grouped.token("]");
+        });
+    }
+
     #[test]
     fn if_group_breaks_prints_when_its_group_breaks() {
-        let output = print_document(
-            |f| {
-                let id = f.group_id();
-                group_with_id(
-                    id,
-                    (
-                        token("["),
-                        soft_line(),
-                        format_with(|grouped| grouped.write_text("y".repeat(100))),
-                        if_group_breaks(id, token(",")),
-                        soft_line(),
-                        token("]"),
-                    ),
-                )
-                .fmt(f);
-            },
-            80,
-        );
-        assert!(output.contains(','), "trailing comma appears when broken");
+        let content = "y".repeat(100);
+        let output = print_document(|f| write_conditional_comma(f, &content), 80);
+        assert_eq!(output, format!("[\n{content},\n]"));
     }
 
     #[test]
     fn if_group_breaks_absent_when_flat() {
-        let output = print_document(
-            |f| {
-                let id = f.group_id();
-                group_with_id(
-                    id,
-                    (
-                        token("["),
-                        soft_line(),
-                        token("y"),
-                        if_group_breaks(id, token(",")),
-                        soft_line(),
-                        token("]"),
-                    ),
-                )
-                .fmt(f);
-            },
-            80,
-        );
-        assert_eq!(output, "[y]");
+        assert_eq!(print_document(|f| write_conditional_comma(f, "y"), 80), "[y]");
     }
 
     #[test]
     fn trailing_whitespace_is_trimmed() {
         let output = print_document(
             |f| {
-                (token("a"), space(), hard_line(), token("b")).fmt(f);
+                f.token("a");
+                f.space();
+                f.hard_line();
+                f.token("b");
             },
             80,
         );
@@ -885,7 +880,10 @@ b"
     fn blank_lines_do_not_stack() {
         let output = print_document(
             |f| {
-                (token("a"), empty_line(), empty_line(), token("b")).fmt(f);
+                f.token("a");
+                f.empty_line();
+                f.empty_line();
+                f.token("b");
             },
             80,
         );
@@ -902,9 +900,10 @@ b"
     fn line_suffix_defers_to_line_end() {
         let output = print_document(
             |f| {
-                token("local x = 1").fmt(f);
-                f.write_line_suffix("-- trailing".into());
-                (hard_line(), token("local y = 2")).fmt(f);
+                f.token("local x = 1");
+                f.line_suffix("-- trailing");
+                f.hard_line();
+                f.token("local y = 2");
             },
             80,
         );
@@ -916,28 +915,37 @@ local y = 2"
         );
     }
 
-    fn tab_formatter(indent_width: u8) -> Formatter {
-        let options = FormatOptions {
+    fn tab_options(indent_width: u8) -> FormatOptions {
+        FormatOptions {
             line_width: 10,
             indent_style: IndentStyle::Tabs,
             indent_width,
             ..FormatOptions::default()
-        };
-        Formatter::new(options, Comments::none())
+        }
     }
 
     /// Nine columns when flat, so it fits in ten after one more column and
     /// not after four.
-    fn write_bracketed(f: &mut Formatter) {
-        group((token("["), soft_line(), token("yyyyyyy"), soft_line(), token("]"))).fmt(f);
+    fn write_bracketed(f: &mut Formatter<'_>) {
+        f.group(|grouped| {
+            grouped.token("[");
+            grouped.soft_line();
+            grouped.token("yyyyyyy");
+            grouped.soft_line();
+            grouped.token("]");
+        });
     }
 
     #[test]
     fn tab_indent_measures_indent_width_columns() {
         let print = |indent_width: u8| {
-            let mut f = tab_formatter(indent_width);
-            (token("a"), indent((hard_line(), format_with(write_bracketed)))).fmt(&mut f);
-            f.print("")
+            print_with(tab_options(indent_width), "", |f| {
+                f.token("a");
+                f.indent(|indented| {
+                    indented.hard_line();
+                    write_bracketed(indented);
+                });
+            })
         };
         assert_eq!(
             print(1),
@@ -958,9 +966,7 @@ a
     #[test]
     fn tab_in_base_indent_measures_indent_width_columns() {
         let print = |indent_width: u8, base_indent: &str| {
-            let mut f = tab_formatter(indent_width);
-            write_bracketed(&mut f);
-            f.print(base_indent)
+            print_with(tab_options(indent_width), base_indent, write_bracketed)
         };
         assert_eq!(print(1, "\t"), "\t[yyyyyyy]");
         assert_eq!(
@@ -974,45 +980,52 @@ a
     }
 
     /// `(a, <hugged>, bbbb)`, laid out as a call lays out its arguments.
-    fn write_hugging_list(f: &mut Formatter, hugged: impl Format) {
+    fn write_hugging_list(f: &mut Formatter<'_>, write_hugged: impl FnOnce(&mut Formatter<'_>)) {
         let list = f.group_id();
-        group_with_id(
-            list,
-            (
-                token("("),
-                indent_if_group_breaks(
-                    list,
-                    (
-                        soft_line(),
-                        token("a"),
-                        token(","),
-                        soft_line_or_space(),
-                        hugged,
-                        token(","),
-                        soft_line_or_space(),
-                        token("bbbb"),
-                    ),
-                ),
-                soft_line(),
-                token(")"),
-            ),
-        )
-        .fmt(f);
+        f.group_with_id(list, |grouped| {
+            grouped.token("(");
+            grouped.indent_if_group_breaks(list, |indented| {
+                indented.soft_line();
+                indented.token("a");
+                indented.token(",");
+                indented.soft_line_or_space();
+                write_hugged(indented);
+                indented.token(",");
+                indented.soft_line_or_space();
+                indented.token("bbbb");
+            });
+            grouped.soft_line();
+            grouped.token(")");
+        });
     }
 
     /// `{ <content> }`, laid out as a table.
-    fn braces(content: &'static str) -> impl Format {
-        (
-            token("{"),
-            indent((soft_line_or_space(), token(content))),
-            soft_line_or_space(),
-            token("}"),
-        )
+    fn write_braces(f: &mut Formatter<'_>, content: &'static str) {
+        f.token("{");
+        f.indent(|indented| {
+            indented.soft_line_or_space();
+            indented.token(content);
+        });
+        f.soft_line_or_space();
+        f.token("}");
     }
 
-    fn write_hugged_braces(f: &mut Formatter) {
-        let hugged = hugged_group_with_id(f.group_id(), braces("xxxx"));
-        write_hugging_list(f, hugged);
+    /// A block that always breaks: `do`, an indented `x`, and `end`.
+    fn write_do_block(f: &mut Formatter<'_>) {
+        f.token("do");
+        f.indent(|indented| {
+            indented.hard_line();
+            indented.token("x");
+        });
+        f.hard_line();
+        f.token("end");
+    }
+
+    fn write_hugged_braces(f: &mut Formatter<'_>) {
+        write_hugging_list(f, |list| {
+            let id = list.group_id();
+            list.hugged_group_with_id(id, |hugged| write_braces(hugged, "xxxx"));
+        });
     }
 
     #[test]
@@ -1051,35 +1064,25 @@ a
     }
 
     /// `({xxxx}, <block>)`, both hugged.
-    fn write_hugged_braces_and(f: &mut Formatter, block: impl Format) {
+    fn write_hugged_braces_and(f: &mut Formatter<'_>, write_block: fn(&mut Formatter<'_>)) {
         let (list, braces_group, block_group) = (f.group_id(), f.group_id(), f.group_id());
-        group_with_id(
-            list,
-            (
-                token("("),
-                indent_if_group_breaks(
-                    list,
-                    (
-                        soft_line(),
-                        hugged_group_with_id(braces_group, braces("xxxx")),
-                        token(","),
-                        soft_line_or_space(),
-                        hugged_group_with_id(block_group, block),
-                    ),
-                ),
-                soft_line(),
-                token(")"),
-            ),
-        )
-        .fmt(f);
+        f.group_with_id(list, |grouped| {
+            grouped.token("(");
+            grouped.indent_if_group_breaks(list, |indented| {
+                indented.soft_line();
+                indented.hugged_group_with_id(braces_group, |hugged| write_braces(hugged, "xxxx"));
+                indented.token(",");
+                indented.soft_line_or_space();
+                indented.hugged_group_with_id(block_group, write_block);
+            });
+            grouped.soft_line();
+            grouped.token(")");
+        });
     }
 
     #[test]
     fn hugged_group_stays_flat_beside_one_a_forced_break_expands() {
-        let write = |f: &mut Formatter| {
-            let block = (token("do"), indent((hard_line(), token("x"))), hard_line(), token("end"));
-            write_hugged_braces_and(f, block);
-        };
+        let write = |f: &mut Formatter<'_>| write_hugged_braces_and(f, write_do_block);
         // `({ xxxx }, do` is thirteen columns.
         assert_eq!(
             print_document(write, 13),
@@ -1101,7 +1104,9 @@ end)"
 
     #[test]
     fn hugged_groups_all_expand_when_none_is_forced_to() {
-        let write = |f: &mut Formatter| write_hugged_braces_and(f, braces("yyyy"));
+        let write = |f: &mut Formatter<'_>| {
+            write_hugged_braces_and(f, |hugged| write_braces(hugged, "yyyy"));
+        };
         assert_eq!(print_document(write, 20), "({ xxxx }, { yyyy })");
         assert_eq!(
             print_document(write, 19),
@@ -1116,13 +1121,11 @@ end)"
 
     #[test]
     fn forced_break_in_a_hugged_group_leaves_its_parent_flat() {
-        let write_hugged_block = |f: &mut Formatter| {
-            let block = f.group_id();
-            let hugged = hugged_group_with_id(
-                block,
-                (token("do"), indent((hard_line(), token("x"))), hard_line(), token("end")),
-            );
-            write_hugging_list(f, hugged);
+        let write_hugged_block = |f: &mut Formatter<'_>| {
+            write_hugging_list(f, |list| {
+                let block = list.group_id();
+                list.hugged_group_with_id(block, write_do_block);
+            });
         };
         assert_eq!(
             print_document(write_hugged_block, 80),
@@ -1142,6 +1145,56 @@ end, bbbb)"
     end,
     bbbb
 )"
+        );
+    }
+
+    /// `(a, (a, {xxxx}, bbbb), bbbb)`, where the inner list is hugged by the
+    /// outer one and hugs its own table.
+    fn write_nested_hugging_lists(f: &mut Formatter<'_>) {
+        write_hugging_list(f, |outer| {
+            let inner = outer.group_id();
+            outer.hugged_group_with_id(inner, |hugged| {
+                hugged.token("(");
+                hugged.indent_if_group_breaks(inner, |indented| {
+                    indented.soft_line();
+                    indented.token("a");
+                    indented.token(",");
+                    indented.soft_line_or_space();
+                    let braces = indented.group_id();
+                    indented.hugged_group_with_id(braces, |table| write_braces(table, "xxxx"));
+                    indented.token(",");
+                    indented.soft_line_or_space();
+                    indented.token("bbbb");
+                });
+                hugged.soft_line();
+                hugged.token(")");
+            });
+        });
+    }
+
+    #[test]
+    fn a_hugged_group_that_hugs_keeps_its_own_hugs_apart() {
+        let print = |line_width| print_document(write_nested_hugging_lists, line_width);
+        assert_eq!(print(30), "(a, (a, { xxxx }, bbbb), bbbb)");
+        assert_eq!(
+            print(29),
+            "\
+(a, (
+    a,
+    { xxxx },
+    bbbb
+), bbbb)"
+        );
+        assert_eq!(
+            print(10),
+            "\
+(a, (
+    a,
+    {
+        xxxx
+    },
+    bbbb
+), bbbb)"
         );
     }
 }

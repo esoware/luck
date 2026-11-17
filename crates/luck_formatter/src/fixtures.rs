@@ -1,22 +1,33 @@
-use luck_ast::{Expression, LastStatement};
+use luck_allocator::Allocator;
+use luck_ast::LastStatement;
 use luck_token::LuaVersion;
 
 use crate::FormatOptions;
 use crate::comments::Comments;
-use crate::ir::{Format, Formatter};
+use crate::ir::Formatter;
 
-pub(crate) fn render(node: &dyn Format, options: FormatOptions) -> String {
-    let mut f = Formatter::new(options, Comments::none());
-    node.fmt(&mut f);
+/// What `write` writes, printed with no comments.
+pub(crate) fn render<'ast>(
+    allocator: &'ast Allocator,
+    options: FormatOptions,
+    write: impl FnOnce(&mut Formatter<'ast>),
+) -> String {
+    let mut f = Formatter::new(allocator, options, Comments::none());
+    write(&mut f);
     f.print("")
 }
 
-pub(crate) fn parse_expr(source: &str) -> Expression {
-    let parsed = luck_parser::parse(format!("return {source}\n"), LuaVersion::Luau);
+/// The Luau expression `source`, printed alone.
+pub(crate) fn render_expr(source: &str, options: FormatOptions) -> String {
+    let allocator = Allocator::new();
+    let text = allocator.alloc_str(&format!("return {source}\n"));
+    let parsed = luck_parser::parse(&allocator, text, LuaVersion::Luau);
     assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
-    let last_stmt = parsed.block.last_stmt.expect("wrapped return statement");
-    let LastStatement::Return(return_stmt) = *last_stmt else {
+    let Some(LastStatement::Return(return_stmt)) = &parsed.block.last_stmt else {
         panic!("expected a return statement");
     };
-    return_stmt.exprs.items.into_iter().next().expect("one returned expression")
+    let [expr] = &*return_stmt.exprs else {
+        panic!("expected one returned expression");
+    };
+    render(&allocator, options, |f| f.write_expr(expr))
 }

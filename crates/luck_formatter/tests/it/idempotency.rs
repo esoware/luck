@@ -1,3 +1,4 @@
+use luck_allocator::Allocator;
 use luck_formatter::FormatOptions;
 use luck_token::LuaVersion;
 
@@ -200,7 +201,9 @@ fn call_parentheses_never_format_valid_input_past_the_nesting_cap() {
     }
     for levels in [128, 129, 200, 255] {
         let source = nested_table_calls(levels);
-        let result = luck_formatter::format(&source, LuaVersion::Lua54, &FormatOptions::default());
+        let allocator = Allocator::new();
+        let options = FormatOptions::default();
+        let result = luck_formatter::format(&allocator, &source, LuaVersion::Lua54, &options);
         let [error] = result.errors.as_slice() else {
             panic!("{levels} levels: {:?}", result.errors);
         };

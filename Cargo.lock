@@ -947,6 +947,7 @@ name = "luck_formatter"
 version = "0.6.0"
 dependencies = [
  "insta",
+ "luck_allocator",
  "luck_ast",
  "luck_lexer",
  "luck_parser",

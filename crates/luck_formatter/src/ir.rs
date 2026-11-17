@@ -1,16 +1,19 @@
 //! The document is one flat element stream, with structure marked by paired
-//! `Tag` start and end elements instead of nesting.
+//! start and end elements instead of nesting.
 //!
-//! Printing and measuring walk plain slices, and rolling back to a checkpoint is a truncation.
+//! Printing and measuring walk plain slices, and rolling back to a checkpoint
+//! is a truncation. An element borrows its text from the tree, the source, the
+//! arena, or the binary, so building the stream copies none.
 //!
-//! Emitters write through the [`Format`] trait, the combinators in this
-//! module, and `Formatter`'s `write_*` methods. Only this module pushes raw
-//! elements, which is what keeps every tag paired.
+//! Emitters write through `Formatter`'s methods. Only this module pushes raw
+//! elements, and each region takes its content as a closure, which is what
+//! keeps every start paired with its end.
 
 use core::mem;
 use core::ops::Range;
 
-use luck_token::CompactString;
+use luck_allocator::Allocator;
+use luck_token::offset_to_index;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::comments::{Comments, CommentsCheckpoint};
@@ -18,13 +21,13 @@ use crate::{FormatOptions, printer};
 
 /// Lets conditional content follow the break decision of a group other than
 /// the innermost one around it. Doubles as the group's index into the
-/// printer's mode table.
+/// printer's group table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct GroupId(usize);
+pub(crate) struct GroupId(u32);
 
 impl GroupId {
-    pub(crate) const fn index(self) -> usize {
-        self.0
+    pub(crate) fn index(self) -> usize {
+        offset_to_index(self.0)
     }
 }
 
@@ -40,9 +43,25 @@ pub(crate) enum LineMode {
     Empty,
 }
 
-/// Every `Start*` has a matching `End*`; the builder combinators guarantee pairing.
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub(crate) enum Tag {
+/// Every `Start*` has a matching `End*`, which the region methods guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FormatElement<'ast> {
+    /// May contain newlines (long strings); the printer measures from the
+    /// last line.
+    Text(&'ast str, TextWidth),
+    /// Source copied as written. Text ending in a line break leaves the next
+    /// line to the printer's indent, and any other starts at its own column.
+    Verbatim(&'ast str, TextWidth),
+    /// A space and the text, held back until just before the next line
+    /// break, which is how a trailing comment stays at its line's end.
+    LineSuffix(&'ast str, TextWidth),
+    Space,
+    Line(LineMode),
+    /// Force every enclosing group to expand without printing anything.
+    ExpandParent,
+    /// Break the line here if a line suffix is pending, so a trailing comment
+    /// can't swallow what follows.
+    LineSuffixBoundary,
     /// Content that prints flat if it fits the remaining line width.
     StartGroup(GroupId),
     /// A group that may break while the group right around it stays flat, as
@@ -71,26 +90,6 @@ pub(crate) enum Tag {
     EndFill,
     StartEntry,
     EndEntry,
-    /// Content deferred to just before the next line break (trailing comments).
-    StartLineSuffix,
-    EndLineSuffix,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FormatElement {
-    /// ASCII, so as many columns wide as it is long.
-    Token(&'static str),
-    /// May contain newlines (long strings); the printer measures from the last line.
-    Text(CompactString, TextWidth),
-    Verbatim(CompactString, TextWidth),
-    Space,
-    Line(LineMode),
-    /// Force every enclosing group to expand without printing anything.
-    ExpandParent,
-    /// Break the line here if a line suffix is pending, so a trailing comment
-    /// can't swallow what follows.
-    LineSuffixBoundary,
-    Tag(Tag),
 }
 
 /// Taken once, as the text enters the stream, because the printer measures a
@@ -107,62 +106,23 @@ impl TextWidth {
         }
         // Without a line break, `width` counts every ASCII character as one
         // column.
-        let columns = if text.is_ascii() { text.len() } else { text.width() };
-        // Any width past the line's compares the same, and `MULTILINE` takes
-        // `u32::MAX`.
+        Self::of_columns(if text.is_ascii() { text.len() } else { text.width() })
+    }
+
+    /// Any width past the line's compares the same, and `MULTILINE` takes
+    /// `u32::MAX`.
+    fn of_columns(columns: usize) -> Self {
         Self(u32::try_from(columns).unwrap_or(u32::MAX).min(u32::MAX - 1))
     }
 
     /// `None` for text that spans lines.
     pub(crate) fn columns(self) -> Option<usize> {
-        (self != Self::MULTILINE).then(|| usize::try_from(self.0).unwrap_or(usize::MAX))
+        (self != Self::MULTILINE).then(|| offset_to_index(self.0))
     }
 }
-
-pub(crate) trait Format {
-    fn fmt(&self, f: &mut Formatter);
-}
-
-impl<T: Format + ?Sized> Format for &T {
-    fn fmt(&self, f: &mut Formatter) {
-        (**self).fmt(f);
-    }
-}
-
-impl<T: Format> Format for Option<T> {
-    fn fmt(&self, f: &mut Formatter) {
-        if let Some(value) = self {
-            value.fmt(f);
-        }
-    }
-}
-
-macro_rules! tuple_format {
-    ($($name:ident)+) => {
-        impl<$($name: Format),+> Format for ($($name,)+) {
-            fn fmt(&self, f: &mut Formatter) {
-                #[expect(
-                    non_snake_case,
-                    reason = "each binding reuses its generic parameter's name"
-                )]
-                let ($($name,)+) = self;
-                $($name.fmt(f);)+
-            }
-        }
-    };
-}
-tuple_format!(First Second);
-tuple_format!(First Second Third);
-tuple_format!(First Second Third Fourth);
-tuple_format!(First Second Third Fourth Fifth);
-tuple_format!(First Second Third Fourth Fifth Sixth);
-tuple_format!(First Second Third Fourth Fifth Sixth Seventh);
-tuple_format!(First Second Third Fourth Fifth Sixth Seventh Eighth);
-tuple_format!(First Second Third Fourth Fifth Sixth Seventh Eighth Ninth);
-tuple_format!(First Second Third Fourth Fifth Sixth Seventh Eighth Ninth Tenth);
 
 /// Restoring rewinds the element stream and the comment cursor but not the
-/// group id counter, so no id is ever handed out twice.
+/// group counter, so no id is ever handed out twice.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Checkpoint {
     element_count: usize,
@@ -170,29 +130,43 @@ pub(crate) struct Checkpoint {
 }
 
 #[derive(Debug)]
-pub(crate) struct Formatter {
-    elements: Vec<FormatElement>,
-    next_group_id: usize,
+pub(crate) struct Formatter<'ast> {
+    elements: Vec<FormatElement<'ast>>,
+    group_count: u32,
     options: FormatOptions,
-    comments: Comments,
+    allocator: &'ast Allocator,
+    comments: Comments<'ast>,
     /// Whether a block printed here sorts its runs of requires. Only
     /// [`crate::format()`] starts with it on, and a block inherits it from
     /// the one around it.
     sorts_requires: bool,
+    /// Where text the formatter rewrites is built before it moves to the
+    /// arena, so no rewrite allocates on the heap.
+    scratch: String,
 }
 
-impl Formatter {
-    pub(crate) fn new(options: FormatOptions, comments: Comments) -> Self {
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "the formatter is one type with its node families split by file"
+)]
+impl<'ast> Formatter<'ast> {
+    pub(crate) fn new(
+        allocator: &'ast Allocator,
+        options: FormatOptions,
+        comments: Comments<'ast>,
+    ) -> Self {
         // Roughly one element per 8 source bytes; a mild undershoot that
         // still removes most realloc copies. Synthetic ASTs have no source
         // and start empty.
         let capacity = comments.source_text().map_or(0, |source| source.len().div_ceil(8));
         Self {
             elements: Vec::with_capacity(capacity),
-            next_group_id: 0,
+            group_count: 0,
             options,
+            allocator,
             comments,
             sorts_requires: false,
+            scratch: String::new(),
         }
     }
 
@@ -207,9 +181,9 @@ impl Formatter {
 
     /// Writes a function whose block is no statement's own, so no block in
     /// it sorts its requires.
-    pub(crate) fn write_without_sorting_requires(&mut self, content: impl Format) {
+    pub(crate) fn without_sorting_requires(&mut self, content: impl FnOnce(&mut Self)) {
         let sorts_requires = mem::replace(&mut self.sorts_requires, false);
-        content.fmt(self);
+        content(self);
         self.sorts_requires = sorts_requires;
     }
 
@@ -226,81 +200,216 @@ impl Formatter {
         let (Some(first), Some(last)) = (slices.first(), slices.last()) else {
             return;
         };
-        let tail = self.elements.split_off(last.end);
-        let mut written = self.elements.split_off(first.start).into_iter();
-        let mut gaps = Vec::with_capacity(slices.len());
-        let mut pieces = Vec::with_capacity(slices.len());
-        let mut position = first.start;
-        for slice in slices {
-            gaps.push(
-                written.by_ref().take(slice.start.saturating_sub(position)).collect::<Vec<_>>(),
-            );
-            pieces.push(written.by_ref().take(slice.len()).collect::<Vec<_>>());
-            position = slice.end;
-        }
-        for (gap, &i) in gaps.into_iter().zip(order) {
-            self.elements.extend(gap);
-            if let Some(piece) = pieces.get_mut(i) {
-                self.elements.append(piece);
+        let written = self.elements.get(first.start..last.end).unwrap_or_default().to_vec();
+        let mut target = first.start;
+        let mut gap_start = first.start;
+        for (slice, &i) in slices.iter().zip(order) {
+            let gap = gap_start..slice.start;
+            gap_start = slice.end;
+            let piece = slices.get(i).cloned().unwrap_or_default();
+            for range in [gap, piece] {
+                let shifted =
+                    range.start.saturating_sub(first.start)..range.end.saturating_sub(first.start);
+                let source = written.get(shifted).unwrap_or_default();
+                let end = target.saturating_add(source.len());
+                if let Some(destination) = self.elements.get_mut(target..end) {
+                    destination.copy_from_slice(source);
+                }
+                target = end;
             }
         }
-        self.elements.extend(tail);
     }
 
     pub(crate) const fn options(&self) -> &FormatOptions {
         &self.options
     }
 
-    pub(crate) const fn comments(&self) -> &Comments {
+    pub(crate) const fn allocator(&self) -> &'ast Allocator {
+        self.allocator
+    }
+
+    pub(crate) const fn comments(&self) -> &Comments<'ast> {
         &self.comments
     }
 
-    pub(crate) const fn comments_mut(&mut self) -> &mut Comments {
+    pub(crate) const fn comments_mut(&mut self) -> &mut Comments<'ast> {
         &mut self.comments
     }
 
+    /// The scratch buffer, emptied, and the arena its text moves to.
+    pub(crate) fn scratch(&mut self) -> (&mut String, &'ast Allocator) {
+        self.scratch.clear();
+        (&mut self.scratch, self.allocator)
+    }
+
     pub(crate) const fn group_id(&mut self) -> GroupId {
-        let id = GroupId(self.next_group_id);
-        self.next_group_id = self.next_group_id.saturating_add(1);
+        let id = GroupId(self.group_count);
+        self.group_count = self.group_count.saturating_add(1);
         id
     }
 
     #[inline]
-    fn push(&mut self, element: FormatElement) {
+    fn push(&mut self, element: FormatElement<'ast>) {
         self.elements.push(element);
     }
 
-    /// Moves `content` into the stream, where a reusable [`Format`] value
-    /// would have to copy it.
-    pub(crate) fn write_text(&mut self, content: impl Into<CompactString>) {
-        let text = content.into();
-        let width = TextWidth::of(&text);
-        self.elements.push(FormatElement::Text(text, width));
+    /// ASCII with no line break, so as many columns wide as it is long.
+    #[inline]
+    pub(crate) fn token(&mut self, text: &'static str) {
+        debug_assert!(text.is_ascii() && !text.contains('\n'), "a token is measured by its length");
+        self.push(FormatElement::Text(text, TextWidth::of_columns(text.len())));
     }
 
-    /// Text ending in a line break leaves the next line to the printer's
-    /// indent. Any other starts at its own column.
-    pub(crate) fn write_verbatim(&mut self, content: impl Into<CompactString>) {
-        let text = content.into();
-        let width = TextWidth::of(&text);
-        self.elements.push(FormatElement::Verbatim(text, width));
+    #[inline]
+    pub(crate) fn text(&mut self, text: &'ast str) {
+        self.push(FormatElement::Text(text, TextWidth::of(text)));
     }
 
-    /// Writes a space and `text` as a line suffix, printed just before the
-    /// next line break, which is how a trailing comment stays at its line's
-    /// end.
-    ///
-    /// A suffix body is only ever this, so the printer can flush one without
-    /// laying it out.
-    pub(crate) fn write_line_suffix(&mut self, text: CompactString) {
-        self.push(FormatElement::Tag(Tag::StartLineSuffix));
+    pub(crate) fn verbatim(&mut self, text: &'ast str) {
+        self.push(FormatElement::Verbatim(text, TextWidth::of(text)));
+    }
+
+    /// See [`FormatElement::LineSuffix`].
+    pub(crate) fn line_suffix(&mut self, text: &'ast str) {
+        self.push(FormatElement::LineSuffix(text, TextWidth::of(text)));
+    }
+
+    #[inline]
+    pub(crate) fn space(&mut self) {
         self.push(FormatElement::Space);
-        self.write_text(text);
-        self.push(FormatElement::Tag(Tag::EndLineSuffix));
+    }
+
+    #[inline]
+    pub(crate) fn line(&mut self, mode: LineMode) {
+        self.push(FormatElement::Line(mode));
+    }
+
+    #[inline]
+    pub(crate) fn soft_line(&mut self) {
+        self.line(LineMode::Soft);
+    }
+
+    #[inline]
+    pub(crate) fn soft_line_or_space(&mut self) {
+        self.line(LineMode::SoftOrSpace);
+    }
+
+    #[inline]
+    pub(crate) fn hard_line(&mut self) {
+        self.line(LineMode::Hard);
+    }
+
+    #[inline]
+    pub(crate) fn empty_line(&mut self) {
+        self.line(LineMode::Empty);
+    }
+
+    /// A blank line when `is_blank`, and a plain one otherwise.
+    #[inline]
+    pub(crate) fn line_break(&mut self, is_blank: bool) {
+        self.line(if is_blank { LineMode::Empty } else { LineMode::Hard });
+    }
+
+    pub(crate) fn expand_parent(&mut self) {
+        self.push(FormatElement::ExpandParent);
+    }
+
+    #[inline]
+    pub(crate) fn line_suffix_boundary(&mut self) {
+        self.push(FormatElement::LineSuffixBoundary);
+    }
+
+    #[inline]
+    pub(crate) fn indent(&mut self, content: impl FnOnce(&mut Self)) {
+        self.push(FormatElement::StartIndent);
+        content(self);
+        self.push(FormatElement::EndIndent);
+    }
+
+    #[inline]
+    pub(crate) fn group(&mut self, content: impl FnOnce(&mut Self)) {
+        let id = self.group_id();
+        self.group_with_id(id, content);
+    }
+
+    /// A group with a caller-allocated id, so other elements can follow its
+    /// break decision.
+    #[inline]
+    pub(crate) fn group_with_id(&mut self, id: GroupId, content: impl FnOnce(&mut Self)) {
+        self.push(FormatElement::StartGroup(id));
+        content(self);
+        self.push(FormatElement::EndGroup);
+    }
+
+    /// See [`FormatElement::StartHuggedGroup`].
+    #[inline]
+    pub(crate) fn hugged_group_with_id(&mut self, id: GroupId, content: impl FnOnce(&mut Self)) {
+        self.push(FormatElement::StartHuggedGroup(id));
+        content(self);
+        self.push(FormatElement::EndGroup);
+    }
+
+    /// See [`FormatElement::StartNextLineGroup`].
+    #[inline]
+    pub(crate) fn next_line_group(&mut self, content: impl FnOnce(&mut Self)) {
+        let id = self.group_id();
+        self.push(FormatElement::StartNextLineGroup(id));
+        content(self);
+        self.push(FormatElement::EndNextLineGroup);
+    }
+
+    /// The group must start before this element, as for `if_group_breaks`.
+    #[inline]
+    pub(crate) fn indent_if_group_breaks(&mut self, id: GroupId, content: impl FnOnce(&mut Self)) {
+        self.push(FormatElement::StartIndentIfGroupBreaks(id));
+        content(self);
+        self.push(FormatElement::EndIndentIfGroupBreaks(id));
+    }
+
+    /// The group must start before this element (enclosing or earlier
+    /// sibling).
+    #[inline]
+    pub(crate) fn if_group_breaks(&mut self, id: GroupId, content: impl FnOnce(&mut Self)) {
+        self.push(FormatElement::StartIfGroupBreaks(id));
+        content(self);
+        self.push(FormatElement::EndIfGroupBreaks);
+    }
+
+    #[inline]
+    pub(crate) fn flat(&mut self, content: impl FnOnce(&mut Self)) {
+        self.push(FormatElement::StartFlat);
+        content(self);
+        self.push(FormatElement::EndFlat);
+    }
+
+    /// Packs entries onto lines greedily. `content` writes them with
+    /// [`Formatter::fill_entry`].
+    #[inline]
+    pub(crate) fn fill(&mut self, content: impl FnOnce(&mut Self)) {
+        self.push(FormatElement::StartFill);
+        content(self);
+        self.push(FormatElement::EndFill);
+    }
+
+    /// An entry with the line that parts it from the one before, which the
+    /// first entry has none of. Entry boundaries are explicit so the printer
+    /// can measure each entry as a unit.
+    #[inline]
+    pub(crate) fn fill_entry(
+        &mut self,
+        separator: Option<LineMode>,
+        content: impl FnOnce(&mut Self),
+    ) {
+        if let Some(mode) = separator {
+            self.line(mode);
+        }
+        self.push(FormatElement::StartEntry);
+        content(self);
+        self.push(FormatElement::EndEntry);
     }
 
     #[cfg(test)]
-    pub(crate) fn elements(&self) -> &[FormatElement] {
+    pub(crate) fn elements(&self) -> &[FormatElement<'ast>] {
         &self.elements
     }
 
@@ -314,185 +423,6 @@ impl Formatter {
     }
 
     pub(crate) fn print(self, base_indent: &str) -> String {
-        printer::print(&self.elements, self.next_group_id, &self.options, base_indent)
+        printer::print(&self.elements, self.group_count, &self.options, base_indent)
     }
-}
-
-#[derive(Debug)]
-pub(crate) struct FormatWith<F>(F);
-
-impl<F: Fn(&mut Formatter)> Format for FormatWith<F> {
-    fn fmt(&self, f: &mut Formatter) {
-        (self.0)(f);
-    }
-}
-
-pub(crate) const fn format_with<F>(build: F) -> FormatWith<F>
-where
-    F: Fn(&mut Formatter),
-{
-    FormatWith(build)
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct StaticToken(&'static str);
-
-impl Format for StaticToken {
-    fn fmt(&self, f: &mut Formatter) {
-        f.push(FormatElement::Token(self.0));
-    }
-}
-
-pub(crate) const fn token(content: &'static str) -> StaticToken {
-    debug_assert!(content.is_ascii(), "a token is measured by its length");
-    StaticToken(content)
-}
-
-macro_rules! atom {
-    ($function_name:ident, $element:expr) => {
-        pub(crate) fn $function_name() -> impl Format {
-            format_with(|f| f.push($element))
-        }
-    };
-}
-atom!(space, FormatElement::Space);
-atom!(soft_line, FormatElement::Line(LineMode::Soft));
-atom!(soft_line_or_space, FormatElement::Line(LineMode::SoftOrSpace));
-atom!(hard_line, FormatElement::Line(LineMode::Hard));
-atom!(empty_line, FormatElement::Line(LineMode::Empty));
-atom!(expand_parent, FormatElement::ExpandParent);
-atom!(line_suffix_boundary, FormatElement::LineSuffixBoundary);
-
-pub(crate) fn indent<T>(content: T) -> impl Format
-where
-    T: Format,
-{
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartIndent));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndIndent));
-    })
-}
-
-pub(crate) fn group<T>(content: T) -> impl Format
-where
-    T: Format,
-{
-    format_with(move |f| {
-        let id = f.group_id();
-        f.push(FormatElement::Tag(Tag::StartGroup(id)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndGroup));
-    })
-}
-
-/// Group with a caller-allocated id, so other elements can reference its
-/// break decision via `if_group_breaks`.
-pub(crate) fn group_with_id<T>(id: GroupId, content: T) -> impl Format
-where
-    T: Format,
-{
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartGroup(id)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndGroup));
-    })
-}
-
-/// See [`Tag::StartNextLineGroup`].
-pub(crate) fn next_line_group<T>(content: T) -> impl Format
-where
-    T: Format,
-{
-    format_with(move |f| {
-        let id = f.group_id();
-        f.push(FormatElement::Tag(Tag::StartNextLineGroup(id)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndNextLineGroup));
-    })
-}
-
-/// See [`Tag::StartHuggedGroup`].
-pub(crate) fn hugged_group_with_id<T>(id: GroupId, content: T) -> impl Format
-where
-    T: Format,
-{
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartHuggedGroup(id)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndGroup));
-    })
-}
-
-/// The group must start before this element, as for `if_group_breaks`.
-pub(crate) fn indent_if_group_breaks<T>(group_id: GroupId, content: T) -> impl Format
-where
-    T: Format,
-{
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartIndentIfGroupBreaks(group_id)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndIndentIfGroupBreaks(group_id)));
-    })
-}
-
-pub(crate) fn flat<T>(content: T) -> impl Format
-where
-    T: Format,
-{
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartFlat));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndFlat));
-    })
-}
-
-/// The group must start before this element (enclosing or earlier sibling).
-pub(crate) fn if_group_breaks<T>(group_id: GroupId, content: T) -> impl Format
-where
-    T: Format,
-{
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartIfGroupBreaks(group_id)));
-        content.fmt(f);
-        f.push(FormatElement::Tag(Tag::EndIfGroupBreaks));
-    })
-}
-
-pub(crate) fn separated<T, Separator>(items: &[T], separator: Separator) -> impl Format
-where
-    T: Format,
-    Separator: Format,
-{
-    format_with(move |f| {
-        for (i, item) in items.iter().enumerate() {
-            if i > 0 {
-                separator.fmt(f);
-            }
-            item.fmt(f);
-        }
-    })
-}
-
-/// Pack entries onto lines greedily.
-///
-/// Each entry comes with the line that parts it from the one before, which
-/// the first entry has no use for. Entry boundaries are explicit so the
-/// printer can measure each entry as a unit.
-pub(crate) fn fill<T>(entries: &[(LineMode, T)]) -> impl Format
-where
-    T: Format,
-{
-    format_with(move |f| {
-        f.push(FormatElement::Tag(Tag::StartFill));
-        for (i, (separator, entry)) in entries.iter().enumerate() {
-            if i > 0 {
-                f.push(FormatElement::Line(*separator));
-            }
-            f.push(FormatElement::Tag(Tag::StartEntry));
-            entry.fmt(f);
-            f.push(FormatElement::Tag(Tag::EndEntry));
-        }
-        f.push(FormatElement::Tag(Tag::EndFill));
-    })
 }

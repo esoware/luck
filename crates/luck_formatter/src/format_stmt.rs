@@ -1,501 +1,496 @@
-//! Block statements mostly share the shape `keyword`,
-//! `indent((hard_line, block))`, `hard_line`, `end`. Comment and verbatim
-//! handling around each statement lives in `format_block`.
+//! Block statements mostly share the shape `keyword`, an indented block, a
+//! hard line, and `end`. Comment and verbatim handling around each statement
+//! lives in `format_block`.
 
 use core::slice;
 
 use luck_ast::{
-    Assignment, AttributedName, Block, CompoundAssignment, DoBlock, Expression, FunctionAttribute,
-    FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar,
-    GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment, LocalFunction,
-    LocalFunctionKind, NumericFor, Punctuated, RepeatLoop, Statement, TypeDeclaration,
-    TypeDeclarationValue, WhileLoop, unwrap_parentheses,
+    Assignment, AttributedName, Block, CompoundAssignment, Expression, FunctionAttribute,
+    FunctionName, GenericFor, IfStatement, LastStatement, LocalAssignment, LocalFunctionKind,
+    NumericFor, Statement, TypeDeclaration, TypeDeclarationValue, unwrap_parentheses,
 };
 
 use crate::CollapseSimpleStatement;
-use crate::comments::write_inline_comments_after;
-use crate::format_block::{IndentedBlock, first_item_span};
-use crate::format_expr::{FunctionDefinition, LevelChain};
-use crate::ir::{
-    Format, Formatter, format_with, group, hard_line, indent, line_suffix_boundary,
-    next_line_group, separated, soft_line_or_space, space, token,
-};
-
-/// A statement condition with redundant parens stripped. Conditions are
-/// boolean contexts, so `(f())` truncating multiple values to one changes
-/// nothing observable.
-struct Condition<'expr>(&'expr Expression);
-
-impl Format for Condition<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        unwrap_parentheses(self.0).fmt(f);
-    }
-}
-
-/// The condition between `if`, `elseif`, or `while` and its `then` or `do`,
-/// which breaks onto an indented line of its own, so an operator chain in it
-/// breaks level with its first operand instead of indenting again.
-struct HeaderCondition<'expr>(&'expr Expression);
-
-impl Format for HeaderCondition<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        if let Expression::BinaryOp(chain) = unwrap_parentheses(self.0) {
-            LevelChain(chain).fmt(f);
-        } else {
-            Condition(self.0).fmt(f);
-        }
-        header_comments(self.0).fmt(f);
-    }
-}
-
-/// Two or more share one indented group so they wrap together. A lone item
-/// breaks on its own.
-struct ExprList<'list>(&'list Punctuated<Expression>);
-
-impl Format for ExprList<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        let list = punctuated(self.0, (token(","), soft_line_or_space()));
-        if self.0.len() > 1 {
-            group(indent(list)).fmt(f);
-        } else {
-            list.fmt(f);
-        }
-    }
-}
-
-/// A value a statement assigns.
-struct AssignedValue<'expr>(&'expr Expression);
-
-impl Format for AssignedValue<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        if let Expression::FunctionDef(function_def) = self.0 {
-            FunctionDefinition(function_def).fmt(f);
-        } else {
-            self.0.fmt(f);
-        }
-    }
-}
-
-/// The values a statement assigns, which print as an [`ExprList`] does.
-struct AssignedValues<'list>(&'list Punctuated<Expression>);
-
-impl Format for AssignedValues<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        let list = (
-            format_with(|list| {
-                for (i, value) in self.0.iter().enumerate() {
-                    if i > 0 {
-                        (token(","), soft_line_or_space()).fmt(list);
-                    }
-                    AssignedValue(value).fmt(list);
-                }
-            }),
-            self.0.has_trailing_separator.then_some(token(",")),
-        );
-        if self.0.len() > 1 {
-            group(indent(list)).fmt(f);
-        } else {
-            list.fmt(f);
-        }
-    }
-}
+use crate::format_block::first_item_span;
+use crate::ir::Formatter;
 
 /// What follows `=`.
 ///
 /// A lone table, function, or call breaks inside its own brackets, so it stays
 /// on the `=` line. Anything else that doesn't fit there goes on its own
 /// indented line when it fits that, and hangs from `=` otherwise.
-fn assigned<Values>(values: Values, items: &[Expression]) -> impl Format
-where
-    Values: Format,
-{
-    let is_bracketed =
-        matches!(items, [Expression::TableConstructor(_) | Expression::FunctionDef(_)])
-            || matches!(items, [Expression::Suffixed(chain)] if chain.is_call());
-    format_with(move |f| {
-        if is_bracketed {
-            values.fmt(f);
-        } else {
-            next_line_group(&values).fmt(f);
-        }
-    })
-}
-
-/// No other emitter owns that gap, and a comment left unprinted there would
-/// send the whole statement, body included, to the verbatim fallback.
-fn header_comments(after: &Expression) -> impl Format {
-    let position = after.span().end;
-    format_with(move |f| write_inline_comments_after(f, position))
-}
-
-/// The items of `list` with `separator` between them, then the source's
-/// trailing separator, written as `,`.
-fn punctuated<T, Separator>(list: &Punctuated<T>, separator: Separator) -> impl Format
-where
-    T: Format,
-    Separator: Format,
-{
-    (separated(&list.items, separator), list.has_trailing_separator.then_some(token(",")))
-}
-
-fn indented_body_then_end(block: &Block) -> impl Format {
-    (IndentedBlock(block), hard_line(), line_suffix_boundary(), token("end"))
-}
-
-impl Format for Statement {
-    fn fmt(&self, f: &mut Formatter) {
-        match self {
-            Self::LocalAssignment(local) => local.fmt(f),
-            Self::Assignment(assignment) => assignment.fmt(f),
-            Self::FunctionCall(call) => call.fmt(f),
-            Self::FunctionDecl(function_decl) => function_decl.fmt(f),
-            Self::LocalFunction(local_function) => local_function.fmt(f),
-            // Lua 5.5
-            Self::GlobalFunction(global_function) => global_function.fmt(f),
-            Self::DoBlock(do_block) => do_block.fmt(f),
-            Self::WhileLoop(while_loop) => while_loop.fmt(f),
-            Self::RepeatLoop(repeat_loop) => repeat_loop.fmt(f),
-            Self::IfStatement(if_stmt) => if_stmt.fmt(f),
-            Self::NumericFor(numeric_for) => numeric_for.fmt(f),
-            Self::GenericFor(generic_for) => generic_for.fmt(f),
-            // Lua 5.2+
-            Self::Goto(goto) => goto.fmt(f),
-            // Lua 5.2+
-            Self::Label(label) => label.fmt(f),
-            // Lua 5.5
-            Self::GlobalDeclaration(global) => global.fmt(f),
-            // Lua 5.5
-            Self::GlobalStar(global_star) => global_star.fmt(f),
-            // Luau
-            Self::CompoundAssignment(compound) => compound.fmt(f),
-            // Luau
-            Self::TypeDeclaration(declaration) => declaration.fmt(f),
-            // Lua 5.2+: `break` as a mid-block statement.
-            Self::Break(_) => token("break").fmt(f),
-            // The block loop drops `;`, and a parse-recovery placeholder has
-            // no text to print.
-            Self::EmptyStatement(_) | Self::Error(_) => {}
-        }
-    }
-}
-
-impl Format for LastStatement {
-    fn fmt(&self, f: &mut Formatter) {
-        match self {
-            Self::Return(return_stmt) => {
-                if return_stmt.exprs.is_empty() {
-                    token("return").fmt(f);
-                } else {
-                    group((token("return"), space(), ExprList(&return_stmt.exprs))).fmt(f);
-                }
-            }
-            Self::Break(_) => token("break").fmt(f),
-            // Luau: `continue`.
-            Self::Continue(_) => token("continue").fmt(f),
-            // Parse-recovery placeholder: nothing to print.
-            Self::Error(_) => {}
-        }
-    }
-}
-
-impl Format for LocalAssignment {
-    fn fmt(&self, f: &mut Formatter) {
-        if self.kind.is_exported() {
-            (token("export"), space()).fmt(f);
-        }
-        let keyword = if self.kind.is_const() { "const" } else { "local" };
-        (
-            token(keyword),
-            space(),
-            // Names get their own group so a long binding list breaks
-            // independently of the value list.
-            group(punctuated(&self.names, (token(","), soft_line_or_space()))),
-        )
-            .fmt(f);
-
-        if let Some(exprs) = &self.exprs {
-            (space(), token("="), space(), assigned(AssignedValues(exprs), &exprs.items)).fmt(f);
-        }
-    }
-}
-
-impl Format for AttributedName {
-    fn fmt(&self, f: &mut Formatter) {
-        self.name.fmt(f);
-        if let Some(annotation) = &self.type_annotation {
-            (token(":"), space(), annotation).fmt(f);
-        }
-        if let Some(attribute) = &self.attribute {
-            (space(), token("<"), &attribute.name, token(">")).fmt(f);
-        }
-    }
-}
-
-impl Format for Assignment {
-    fn fmt(&self, f: &mut Formatter) {
-        // Targets are never broken onto multiple lines.
-        group((
-            punctuated(&self.targets, (token(","), space())),
-            space(),
-            token("="),
-            space(),
-            assigned(AssignedValues(&self.values), &self.values.items),
-        ))
-        .fmt(f);
-    }
-}
-
-impl Format for CompoundAssignment {
-    fn fmt(&self, f: &mut Formatter) {
-        let value = assigned(AssignedValue(&self.expr), slice::from_ref(&self.expr));
-        group((&self.var, space(), token(self.op.static_text()), space(), value)).fmt(f);
-    }
-}
-
-impl Format for DoBlock {
-    fn fmt(&self, f: &mut Formatter) {
-        (token("do"), indented_body_then_end(&self.block)).fmt(f);
-    }
-}
-
-impl Format for WhileLoop {
-    fn fmt(&self, f: &mut Formatter) {
-        (
-            group((
-                token("while"),
-                indent((soft_line_or_space(), HeaderCondition(&self.condition))),
-                soft_line_or_space(),
-                token("do"),
-            )),
-            indented_body_then_end(&self.block),
-        )
-            .fmt(f);
-    }
-}
-
-impl Format for RepeatLoop {
-    fn fmt(&self, f: &mut Formatter) {
-        // `until <cond>` closes the loop, so no `end` and no line-suffix flush.
-        (
-            token("repeat"),
-            IndentedBlock(&self.block),
-            hard_line(),
-            token("until"),
-            space(),
-            Condition(&self.condition),
-        )
-            .fmt(f);
-    }
-}
-
-impl Format for IfStatement {
-    fn fmt(&self, f: &mut Formatter) {
-        // Collapses to `if cond then stmt end` when the option allows, there's
-        // one branch holding one statement that no comment around it would
-        // stop from sharing the line, and the whole `if` fits on one line.
-        let can_collapse = f.options().collapse_simple_statement
-            == CollapseSimpleStatement::ConditionalOnly
-            && self.elseif_clauses.is_empty()
-            && self.else_clause.is_none()
-            && is_simple_block(&self.block)
-            && first_item_span(&self.block).is_some_and(|body_stmt| {
-                !f.comments().blocks_if_collapse(
-                    self.condition.span().end,
-                    body_stmt,
-                    self.span.end,
-                )
-            });
-
-        // `if cond then` is a group so a long condition can break onto its
-        // own indented line before `then`.
-        let header = group((
-            token("if"),
-            indent((soft_line_or_space(), HeaderCondition(&self.condition))),
-            soft_line_or_space(),
-            token("then"),
-        ));
-
-        if can_collapse {
-            // The group stays flat only if the whole `if` fits, and a body
-            // spanning lines forces it to break.
-            group((
-                &header,
-                indent((soft_line_or_space(), &self.block)),
-                soft_line_or_space(),
-                line_suffix_boundary(),
-                token("end"),
-            ))
-            .fmt(f);
-            return;
-        }
-
-        (&header, IndentedBlock(&self.block)).fmt(f);
-
-        for clause in &self.elseif_clauses {
-            (
-                hard_line(),
-                group((
-                    token("elseif"),
-                    indent((soft_line_or_space(), HeaderCondition(&clause.condition))),
-                    soft_line_or_space(),
-                    token("then"),
-                )),
-                IndentedBlock(&clause.block),
-            )
-                .fmt(f);
-        }
-
-        if let Some(else_clause) = &self.else_clause {
-            (hard_line(), token("else"), IndentedBlock(&else_clause.block)).fmt(f);
-        }
-
-        (hard_line(), line_suffix_boundary(), token("end")).fmt(f);
-    }
+fn is_bracketed(items: &[Expression<'_>]) -> bool {
+    matches!(items, [Expression::TableConstructor(_) | Expression::FunctionDef(_)])
+        || matches!(items, [Expression::Suffixed(chain)] if chain.is_call())
 }
 
 /// Whether a block is simple enough to collapse onto one line: a single
 /// statement with no terminator, or a lone terminator (return/break/continue).
-fn is_simple_block(block: &Block) -> bool {
+fn is_simple_block(block: &Block<'_>) -> bool {
     let stmt_count =
         block.stmts.iter().filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_))).count();
     matches!((stmt_count, &block.last_stmt), (0, Some(_)) | (1, None))
 }
 
-impl Format for NumericFor {
-    fn fmt(&self, f: &mut Formatter) {
-        (token("for"), space(), &self.name).fmt(f);
-        // Luau: `: T` on the loop variable.
-        if let Some(annotation) = &self.type_annotation {
-            (token(":"), space(), annotation).fmt(f);
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "the formatter is one type with its node families split by file"
+)]
+impl<'ast> Formatter<'ast> {
+    pub(crate) fn write_stmt(&mut self, stmt: &Statement<'ast>) {
+        match stmt {
+            Statement::LocalAssignment(local) => self.write_local_assignment(local),
+            Statement::Assignment(assignment) => self.write_assignment(assignment),
+            Statement::FunctionCall(call) => self.write_suffixed(call),
+            Statement::FunctionDecl(function_decl) => {
+                self.write_function_attributes(&function_decl.attributes);
+                self.token("function");
+                self.space();
+                self.write_function_name(&function_decl.name);
+                self.write_function_body(&function_decl.body);
+            }
+            Statement::LocalFunction(local_function) => {
+                self.write_function_attributes(&local_function.attributes);
+                self.token(match local_function.kind {
+                    LocalFunctionKind::Local => "local",
+                    LocalFunctionKind::Const => "const",
+                    LocalFunctionKind::Export => "export",
+                });
+                self.space();
+                self.token("function");
+                self.space();
+                self.text(local_function.name.text);
+                self.write_function_body(&local_function.body);
+            }
+            // Lua 5.5
+            Statement::GlobalFunction(global_function) => {
+                self.token("global");
+                self.space();
+                self.token("function");
+                self.space();
+                self.text(global_function.name.text);
+                self.write_function_body(&global_function.body);
+            }
+            Statement::DoBlock(do_block) => {
+                self.token("do");
+                self.write_body_then_end(&do_block.block);
+            }
+            Statement::WhileLoop(while_loop) => {
+                self.write_header("while", &while_loop.condition, "do");
+                self.write_body_then_end(&while_loop.block);
+            }
+            Statement::RepeatLoop(repeat_loop) => {
+                // `until <cond>` closes the loop, so no `end` and no
+                // line-suffix flush.
+                self.token("repeat");
+                self.write_indented_block(&repeat_loop.block);
+                self.hard_line();
+                self.token("until");
+                self.space();
+                self.write_expr(unwrap_parentheses(&repeat_loop.condition));
+            }
+            Statement::IfStatement(if_stmt) => self.write_if(if_stmt),
+            Statement::NumericFor(numeric_for) => self.write_numeric_for(numeric_for),
+            Statement::GenericFor(generic_for) => self.write_generic_for(generic_for),
+            // Lua 5.2+
+            Statement::Goto(goto) => {
+                self.token("goto");
+                self.space();
+                self.text(goto.name.text);
+            }
+            // Lua 5.2+
+            Statement::Label(label) => {
+                self.token("::");
+                self.text(label.name.text);
+                self.token("::");
+            }
+            // Lua 5.5
+            Statement::GlobalDeclaration(global) => {
+                self.token("global");
+                self.space();
+                self.write_attributed_names_inline(&global.names);
+                if !global.exprs.is_empty() {
+                    self.space();
+                    self.token("=");
+                    self.space();
+                    self.write_assigned_values(&global.exprs);
+                }
+            }
+            // Lua 5.5
+            Statement::GlobalStar(global_star) => {
+                self.token("global");
+                self.space();
+                if let Some(attribute) = &global_star.attribute {
+                    self.token("<");
+                    self.text(attribute.name.text);
+                    self.token(">");
+                    self.space();
+                }
+                self.token("*");
+            }
+            // Luau
+            Statement::CompoundAssignment(compound) => self.write_compound_assignment(compound),
+            // Luau
+            Statement::TypeDeclaration(declaration) => self.write_type_declaration(declaration),
+            // Lua 5.2+: `break` as a mid-block statement.
+            Statement::Break(_) => self.token("break"),
+            // The block loop drops `;`, and a parse-recovery placeholder has
+            // no text to print.
+            Statement::EmptyStatement(_) | Statement::Error(_) => {}
         }
-        (space(), token("="), space(), &self.start, token(","), space(), &self.limit).fmt(f);
-        if let Some(step) = &self.step {
-            (token(","), space(), step).fmt(f);
-        }
-        (
-            header_comments(self.step.as_ref().unwrap_or(&self.limit)),
-            space(),
-            token("do"),
-            indented_body_then_end(&self.block),
-        )
-            .fmt(f);
     }
-}
 
-impl Format for GenericFor {
-    fn fmt(&self, f: &mut Formatter) {
-        // The bindings are never broken onto multiple lines.
-        (
-            token("for"),
-            space(),
-            punctuated(&self.names, (token(","), space())),
-            space(),
-            token("in"),
-            space(),
-        )
-            .fmt(f);
-        (
-            ExprList(&self.exprs),
-            self.exprs.items.last().map(header_comments),
-            space(),
-            token("do"),
-            indented_body_then_end(&self.block),
-        )
-            .fmt(f);
-    }
-}
-
-impl Format for GotoStatement {
-    fn fmt(&self, f: &mut Formatter) {
-        (token("goto"), space(), &self.name).fmt(f);
-    }
-}
-
-impl Format for LabelStatement {
-    fn fmt(&self, f: &mut Formatter) {
-        (token("::"), &self.name, token("::")).fmt(f);
-    }
-}
-
-impl Format for GlobalDeclaration {
-    fn fmt(&self, f: &mut Formatter) {
-        (token("global"), space(), punctuated(&self.names, (token(","), space()))).fmt(f);
-        if let Some(exprs) = &self.exprs {
-            (space(), token("="), space(), assigned(AssignedValues(exprs), &exprs.items)).fmt(f);
+    pub(crate) fn write_last_stmt(&mut self, last_stmt: &LastStatement<'ast>) {
+        match last_stmt {
+            LastStatement::Return(return_stmt) => {
+                if return_stmt.exprs.is_empty() {
+                    self.token("return");
+                } else {
+                    self.group(|f| {
+                        f.token("return");
+                        f.space();
+                        f.write_expr_list(&return_stmt.exprs);
+                    });
+                }
+            }
+            LastStatement::Break(_) => self.token("break"),
+            // Luau
+            LastStatement::Continue(_) => self.token("continue"),
+            // Parse-recovery placeholder: nothing to print.
+            LastStatement::Error(_) => {}
         }
     }
-}
 
-impl Format for GlobalStar {
-    fn fmt(&self, f: &mut Formatter) {
-        (token("global"), space()).fmt(f);
-        if let Some(attribute) = &self.attribute {
-            (token("<"), &attribute.name, token(">"), space()).fmt(f);
-        }
-        token("*").fmt(f);
+    /// The block, then `end` on a line of its own.
+    fn write_body_then_end(&mut self, block: &Block<'ast>) {
+        self.write_indented_block(block);
+        self.hard_line();
+        self.line_suffix_boundary();
+        self.token("end");
     }
-}
 
-impl Format for FunctionDecl {
-    fn fmt(&self, f: &mut Formatter) {
-        write_function_attributes(f, &self.attributes);
-        (token("function"), space(), &self.name, &self.body).fmt(f);
+    /// `if cond then`, `elseif cond then`, or `while cond do`, a group so a
+    /// long condition can break onto its own indented line before `then` or
+    /// `do`.
+    ///
+    /// An operator chain there breaks level with its first operand instead of
+    /// indenting again. Statement conditions are boolean contexts, so
+    /// redundant parentheses come off: `(f())` truncating values to one
+    /// changes nothing observable.
+    fn write_header(
+        &mut self,
+        open: &'static str,
+        condition: &Expression<'ast>,
+        close: &'static str,
+    ) {
+        self.group(|grouped| {
+            grouped.token(open);
+            grouped.indent(|f| {
+                f.soft_line_or_space();
+                let unwrapped = unwrap_parentheses(condition);
+                if let Expression::BinaryOp(chain) = unwrapped {
+                    f.write_binary_chain(chain, false);
+                } else {
+                    f.write_expr(unwrapped);
+                }
+                f.write_header_comments(condition);
+            });
+            grouped.soft_line_or_space();
+            grouped.token(close);
+        });
     }
-}
 
-impl Format for LocalFunction {
-    fn fmt(&self, f: &mut Formatter) {
-        write_function_attributes(f, &self.attributes);
-        let keyword = match self.kind {
-            LocalFunctionKind::Local => "local",
-            LocalFunctionKind::Const => "const",
-            LocalFunctionKind::Export => "export",
+    /// No other emitter owns that gap, and a comment left unprinted there would
+    /// send the whole statement, body included, to the verbatim fallback.
+    fn write_header_comments(&mut self, after: &Expression<'_>) {
+        self.write_inline_comments_after(after.span().end);
+    }
+
+    /// Two or more share one indented group so they wrap together. A lone item
+    /// breaks on its own.
+    fn write_expr_list(&mut self, exprs: &[Expression<'ast>]) {
+        let write = |f: &mut Self| {
+            for (i, expr) in exprs.iter().enumerate() {
+                if i > 0 {
+                    f.token(",");
+                    f.soft_line_or_space();
+                }
+                f.write_expr(expr);
+            }
         };
-        (token(keyword), space(), token("function"), space(), &self.name, &self.body).fmt(f);
-    }
-}
-
-impl Format for GlobalFunction {
-    fn fmt(&self, f: &mut Formatter) {
-        (token("global"), space(), token("function"), space(), &self.name, &self.body).fmt(f);
-    }
-}
-
-fn write_function_attributes(f: &mut Formatter, attributes: &[FunctionAttribute]) {
-    for attribute in attributes {
-        (attribute, hard_line()).fmt(f);
-    }
-}
-
-impl Format for FunctionName {
-    fn fmt(&self, f: &mut Formatter) {
-        separated(&self.names, token(".")).fmt(f);
-        if let Some(method_name) = &self.method {
-            (token(":"), method_name).fmt(f);
+        if exprs.len() > 1 {
+            self.group(|f| f.indent(write));
+        } else {
+            write(self);
         }
     }
-}
 
-impl Format for TypeDeclaration {
-    fn fmt(&self, f: &mut Formatter) {
-        if self.is_exported {
-            (token("export"), space()).fmt(f);
+    /// A value a statement assigns. Only a function written here keeps the
+    /// require sorting of the block around it.
+    fn write_assigned_value(&mut self, value: &Expression<'ast>) {
+        if let Expression::FunctionDef(function_def) = value {
+            self.write_function_definition(function_def);
+        } else {
+            self.write_expr(value);
         }
-        token("type").fmt(f);
-        match &self.type_value {
-            TypeDeclarationValue::Alias(annotation) => (
-                space(),
-                &self.name,
-                self.generics.as_deref(),
-                space(),
-                token("="),
-                space(),
-                annotation,
-            )
-                .fmt(f),
+    }
+
+    /// The values a statement assigns, which print as an expression list does.
+    fn write_assigned_values(&mut self, values: &[Expression<'ast>]) {
+        let write = |f: &mut Self| {
+            for (i, value) in values.iter().enumerate() {
+                if i > 0 {
+                    f.token(",");
+                    f.soft_line_or_space();
+                }
+                f.write_assigned_value(value);
+            }
+        };
+        let write_list = |f: &mut Self| {
+            if values.len() > 1 {
+                f.group(|grouped| grouped.indent(write));
+            } else {
+                write(f);
+            }
+        };
+        if is_bracketed(values) {
+            write_list(self);
+        } else {
+            self.next_line_group(write_list);
+        }
+    }
+
+    /// Never broken onto several lines.
+    fn write_attributed_names_inline(&mut self, names: &[AttributedName<'ast>]) {
+        for (i, name) in names.iter().enumerate() {
+            if i > 0 {
+                self.token(",");
+                self.space();
+            }
+            self.write_attributed_name(name);
+        }
+    }
+
+    fn write_attributed_name(&mut self, name: &AttributedName<'ast>) {
+        self.text(name.name.text);
+        if let Some(annotation) = &name.type_annotation {
+            self.token(":");
+            self.space();
+            self.write_type(annotation);
+        }
+        if let Some(attribute) = &name.attribute {
+            self.space();
+            self.token("<");
+            self.text(attribute.name.text);
+            self.token(">");
+        }
+    }
+
+    fn write_local_assignment(&mut self, local: &LocalAssignment<'ast>) {
+        if local.kind.is_exported() {
+            self.token("export");
+            self.space();
+        }
+        self.token(if local.kind.is_const() { "const" } else { "local" });
+        self.space();
+        // Names get their own group so a long binding list breaks
+        // independently of the value list.
+        self.group(|f| {
+            for (i, name) in local.names.iter().enumerate() {
+                if i > 0 {
+                    f.token(",");
+                    f.soft_line_or_space();
+                }
+                f.write_attributed_name(name);
+            }
+        });
+        if !local.exprs.is_empty() {
+            self.space();
+            self.token("=");
+            self.space();
+            self.write_assigned_values(&local.exprs);
+        }
+    }
+
+    fn write_assignment(&mut self, assignment: &Assignment<'ast>) {
+        // Targets are never broken onto multiple lines.
+        self.group(|f| {
+            for (i, target) in assignment.targets.iter().enumerate() {
+                if i > 0 {
+                    f.token(",");
+                    f.space();
+                }
+                f.write_var(target);
+            }
+            f.space();
+            f.token("=");
+            f.space();
+            f.write_assigned_values(&assignment.values);
+        });
+    }
+
+    fn write_compound_assignment(&mut self, compound: &CompoundAssignment<'ast>) {
+        self.group(|grouped| {
+            grouped.write_var(&compound.var);
+            grouped.space();
+            grouped.token(compound.op.static_text());
+            grouped.space();
+            if is_bracketed(slice::from_ref(&compound.expr)) {
+                grouped.write_assigned_value(&compound.expr);
+            } else {
+                grouped.next_line_group(|f| f.write_assigned_value(&compound.expr));
+            }
+        });
+    }
+
+    fn write_if(&mut self, if_stmt: &IfStatement<'ast>) {
+        // Collapses to `if cond then stmt end` when the option allows, there's
+        // one branch holding one statement that no comment around it would
+        // stop from sharing the line, and the whole `if` fits on one line.
+        let can_collapse = self.options().collapse_simple_statement
+            == CollapseSimpleStatement::ConditionalOnly
+            && if_stmt.elseif_clauses.is_empty()
+            && if_stmt.else_clause.is_none()
+            && is_simple_block(&if_stmt.block)
+            && first_item_span(&if_stmt.block).is_some_and(|body_stmt| {
+                !self.comments().blocks_if_collapse(
+                    if_stmt.condition.span().end,
+                    body_stmt,
+                    if_stmt.span.end,
+                )
+            });
+
+        if can_collapse {
+            // The group stays flat only if the whole `if` fits, and a body
+            // spanning lines forces it to break.
+            self.group(|grouped| {
+                grouped.write_header("if", &if_stmt.condition, "then");
+                grouped.indent(|f| {
+                    f.soft_line_or_space();
+                    f.write_block(&if_stmt.block);
+                });
+                grouped.soft_line_or_space();
+                grouped.line_suffix_boundary();
+                grouped.token("end");
+            });
+            return;
+        }
+
+        self.write_header("if", &if_stmt.condition, "then");
+        self.write_indented_block(&if_stmt.block);
+
+        for clause in &if_stmt.elseif_clauses {
+            self.hard_line();
+            self.write_header("elseif", &clause.condition, "then");
+            self.write_indented_block(&clause.block);
+        }
+
+        if let Some(else_clause) = &if_stmt.else_clause {
+            self.hard_line();
+            self.token("else");
+            self.write_indented_block(&else_clause.block);
+        }
+
+        self.hard_line();
+        self.line_suffix_boundary();
+        self.token("end");
+    }
+
+    fn write_numeric_for(&mut self, numeric_for: &NumericFor<'ast>) {
+        self.token("for");
+        self.space();
+        self.text(numeric_for.name.text);
+        // Luau: `: T` on the loop variable.
+        if let Some(annotation) = &numeric_for.type_annotation {
+            self.token(":");
+            self.space();
+            self.write_type(annotation);
+        }
+        self.space();
+        self.token("=");
+        self.space();
+        self.write_expr(&numeric_for.start);
+        self.token(",");
+        self.space();
+        self.write_expr(&numeric_for.limit);
+        if let Some(step) = &numeric_for.step {
+            self.token(",");
+            self.space();
+            self.write_expr(step);
+        }
+        self.write_header_comments(numeric_for.step.as_ref().unwrap_or(&numeric_for.limit));
+        self.space();
+        self.token("do");
+        self.write_body_then_end(&numeric_for.block);
+    }
+
+    fn write_generic_for(&mut self, generic_for: &GenericFor<'ast>) {
+        // The bindings are never broken onto multiple lines.
+        self.token("for");
+        self.space();
+        for (i, name) in generic_for.names.iter().enumerate() {
+            if i > 0 {
+                self.token(",");
+                self.space();
+            }
+            self.write_parameter(name);
+        }
+        self.space();
+        self.token("in");
+        self.space();
+        self.write_expr_list(&generic_for.exprs);
+        if let Some(last) = generic_for.exprs.last() {
+            self.write_header_comments(last);
+        }
+        self.space();
+        self.token("do");
+        self.write_body_then_end(&generic_for.block);
+    }
+
+    fn write_function_attributes(&mut self, attributes: &[FunctionAttribute<'ast>]) {
+        for attribute in attributes {
+            self.write_function_attribute(attribute);
+            self.hard_line();
+        }
+    }
+
+    fn write_function_name(&mut self, name: &FunctionName<'ast>) {
+        for (i, part) in name.names.iter().enumerate() {
+            if i > 0 {
+                self.token(".");
+            }
+            self.text(part.text);
+        }
+        if let Some(method_name) = &name.method {
+            self.token(":");
+            self.text(method_name.text);
+        }
+    }
+
+    fn write_type_declaration(&mut self, declaration: &TypeDeclaration<'ast>) {
+        if declaration.is_exported {
+            self.token("export");
+            self.space();
+        }
+        self.token("type");
+        match &declaration.value {
+            TypeDeclarationValue::Alias(annotation) => {
+                self.space();
+                self.text(declaration.name.text);
+                if let Some(generics) = &declaration.generics {
+                    self.write_generic_type_list(generics);
+                }
+                self.space();
+                self.token("=");
+                self.space();
+                self.write_type(annotation);
+            }
             TypeDeclarationValue::TypeFunction(body) => {
-                (space(), token("function"), space(), &self.name).fmt(f);
-                f.write_without_sorting_requires(&**body);
+                self.space();
+                self.token("function");
+                self.space();
+                self.text(declaration.name.text);
+                self.without_sorting_requires(|f| f.write_function_body(body));
             }
         }
     }

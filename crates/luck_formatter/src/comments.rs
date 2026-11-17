@@ -1,55 +1,48 @@
-//! Parsed source carries comments as a sorted `Vec<Comment>` keyed by byte
+//! Parsed source carries comments as a sorted `[Comment]` keyed by byte
 //! offset (`attached_to`); a synthetic AST carries `SyntheticComment`s keyed
 //! by their anchor node's span start.
 //!
-//! Both hold owned text, so printing a
-//! comment never slices source.
-//!
-//! The sourced store is a cursor over the sorted array. The synthetic store
-//! is a map keyed by anchor: synthesis order needn't match document order,
-//! and a synthesizer may comment every statement. It also holds the anchors
-//! that want a blank line before them ([`Comments::with_blank_before`]),
-//! since there's no source to find blank lines in.
+//! A parsed comment's text is sliced from the source as it's written, and
+//! only one whose line breaks need rewriting is copied, to the arena. The
+//! sourced store is a cursor over the sorted array. The synthetic store is a
+//! map keyed by anchor: synthesis order needn't match document order, and a
+//! synthesizer may comment every statement. It also holds the anchors that
+//! want a blank line before them ([`Comments::with_blank_before`]), since
+//! there's no source to find blank lines in.
 
-use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use core::iter::once;
 use core::mem::take;
 use core::ops::Range;
 
+use luck_allocator::Allocator;
 use luck_ast::SyntheticComment;
 use luck_token::{
-    Comment, CommentKind, CommentPosition, CompactString, LuaVersion, Span, has_line_break,
-    index_to_offset, is_lua_whitespace, line_breaks, offset_to_index, strip_line_break,
+    Comment, CommentKind, CommentPosition, LuaVersion, Span, has_line_break, index_to_offset,
+    is_lua_whitespace, line_breaks, offset_to_index, strip_line_break,
 };
 use rustc_hash::FxHashSet;
 
 use crate::directive::{Directive, format_off_regions};
-use crate::format_block::{has_blank_line, has_blank_line_above, has_leading_edge_blank};
-use crate::ir::{Format, Formatter, empty_line, format_with, hard_line, indent, space, token};
+use crate::format_block::{has_blank_line, has_leading_edge_blank};
+use crate::ir::Formatter;
 
-#[derive(Debug, Clone)]
-struct SourcedComment {
-    text: CompactString,
-    attached_to: u32,
-    span: Span,
-    position: CommentPosition,
-    kind: CommentKind,
+#[derive(Debug)]
+struct Sourced<'ast> {
+    comments: &'ast [Comment],
+    /// Kept for newline-gap checks and verbatim statement emission.
+    source: &'ast str,
+    version: LuaVersion,
+    printed_count: usize,
+    /// The spans `-- luck: format off` / `on` regions copy as written,
+    /// the directive comments and their own lines included. Sorted, and
+    /// empty on almost every file.
+    disabled_ranges: Vec<Range<u32>>,
 }
 
 #[derive(Debug)]
-enum Store {
-    Sourced {
-        comments: Vec<SourcedComment>,
-        /// Kept for newline-gap checks and verbatim statement emission.
-        source: String,
-        version: LuaVersion,
-        printed_count: usize,
-        /// The spans `-- luck: format off` / `on` regions copy as written,
-        /// the directive comments and their own lines included. Sorted, and
-        /// empty on almost every file.
-        disabled_ranges: Vec<Range<u32>>,
-    },
+enum Store<'ast> {
+    Sourced(Sourced<'ast>),
     Synthetic {
         /// Keyed by anchor and drained as each anchor is formatted. Whatever
         /// is left flushes at end of file in anchor order.
@@ -59,9 +52,10 @@ enum Store {
     Empty,
 }
 
+/// The comments [`format_block`](crate::format_block()) places around a tree.
 #[derive(Debug)]
-pub struct Comments {
-    store: Store,
+pub struct Comments<'ast> {
+    store: Store<'ast>,
 }
 
 /// Only the parsed path's cursor rewinds. The one speculative region, the
@@ -71,31 +65,17 @@ pub(crate) struct CommentsCheckpoint {
     printed_count: usize,
 }
 
-impl Comments {
+impl<'ast> Comments<'ast> {
     #[must_use]
     pub const fn none() -> Self {
         Self { store: Store::Empty }
     }
 
-    #[must_use]
-    pub fn from_source(comments: &[Comment], source: &str, version: LuaVersion) -> Self {
-        let sourced_comments = comments
-            .iter()
-            .map(|comment| SourcedComment {
-                text: CompactString::from(if comment.kind == CommentKind::Shebang {
-                    // Loaders skip this line up to LF, so a CR in it is text, but a
-                    // trailing one would pair with the line break written after it.
-                    Cow::Borrowed(comment.span.text(source).trim_end_matches('\r'))
-                } else {
-                    unix_line_breaks(comment.span.text(source), version)
-                }),
-                attached_to: comment.attached_to,
-                span: comment.span,
-                position: comment.position,
-                kind: comment.kind,
-            })
-            .collect();
-
+    pub(crate) fn from_source(
+        comments: &'ast [Comment],
+        source: &'ast str,
+        version: LuaVersion,
+    ) -> Self {
         let source_end = index_to_offset(source.len());
         let disabled_ranges = format_off_regions(comments, source)
             .into_iter()
@@ -105,20 +85,15 @@ impl Comments {
                 start..on.map_or(source_end, |close| close.end)
             })
             .collect();
-
-        Self {
-            store: Store::Sourced {
-                comments: sourced_comments,
-                source: source.to_owned(),
-                version,
-                printed_count: 0,
-                disabled_ranges,
-            },
-        }
+        let sourced = Sourced { comments, source, version, printed_count: 0, disabled_ranges };
+        Self { store: Store::Sourced(sourced) }
     }
 
     #[must_use]
-    pub fn synthetic(comments: Vec<SyntheticComment>) -> Self {
+    pub fn synthetic<Synthetic>(comments: Synthetic) -> Self
+    where
+        Synthetic: IntoIterator<Item = SyntheticComment>,
+    {
         let mut comments_by_anchor: BTreeMap<u32, Vec<SyntheticComment>> = BTreeMap::new();
         for comment in comments {
             comments_by_anchor.entry(comment.attached_to).or_default().push(comment);
@@ -132,8 +107,7 @@ impl Comments {
     }
 
     /// Request a blank line before each statement whose span start is in
-    /// `anchors`. Synthetic input only; parsed input gets its blank lines
-    /// from the source.
+    /// `anchors`.
     #[must_use]
     pub fn with_blank_before<Anchors>(mut self, anchors: Anchors) -> Self
     where
@@ -154,22 +128,21 @@ impl Comments {
     pub(crate) fn has_synthetic_blank_before(&self, anchor: u32) -> bool {
         match &self.store {
             Store::Synthetic { blank_before_anchors, .. } => blank_before_anchors.contains(&anchor),
-            Store::Sourced { .. } | Store::Empty => false,
+            Store::Sourced(_) | Store::Empty => false,
         }
     }
 
-    pub(crate) fn source_text(&self) -> Option<&str> {
+    /// The source and its dialect, on the parsed path.
+    pub(crate) const fn source(&self) -> Option<(&'ast str, LuaVersion)> {
         match &self.store {
-            Store::Sourced { source, .. } => Some(source),
+            Store::Sourced(sourced) => Some((sourced.source, sourced.version)),
             Store::Synthetic { .. } | Store::Empty => None,
         }
     }
 
-    /// The verbatim fallback re-lexes its statement with it to tell line
-    /// breaks from newlines inside a long string or comment.
-    pub(crate) const fn source_version(&self) -> Option<LuaVersion> {
+    pub(crate) const fn source_text(&self) -> Option<&'ast str> {
         match &self.store {
-            Store::Sourced { version, .. } => Some(*version),
+            Store::Sourced(sourced) => Some(sourced.source),
             Store::Synthetic { .. } | Store::Empty => None,
         }
     }
@@ -177,26 +150,24 @@ impl Comments {
     /// The first `format off` region not yet behind `position` or the last
     /// printed comment.
     pub(crate) fn next_disabled_region(&self, position: u32) -> Option<Range<u32>> {
-        let Store::Sourced { disabled_ranges, .. } = &self.store else {
+        let Store::Sourced(sourced) = &self.store else {
             return None;
         };
-        let reached = self.last_printed_end().map_or(position, |end| end.max(position));
-        region_ending_after(disabled_ranges, reached).cloned()
+        let reached = sourced.printed_end().map_or(position, |end| end.max(position));
+        region_ending_after(&sourced.disabled_ranges, reached).cloned()
     }
 
     pub(crate) fn overlaps_disabled_region(&self, span: Span) -> bool {
         match &self.store {
-            Store::Sourced { disabled_ranges, .. } => {
-                region_ending_after(disabled_ranges, span.start)
-                    .is_some_and(|region| region.start < span.end)
-            }
+            Store::Sourced(sourced) => region_ending_after(&sourced.disabled_ranges, span.start)
+                .is_some_and(|region| region.start < span.end),
             Store::Synthetic { .. } | Store::Empty => false,
         }
     }
 
     /// Whether `from..to` holds nothing but comments, whitespace and `;`.
     pub(crate) fn is_free_of_tokens(&self, from: u32, to: u32) -> bool {
-        let Store::Sourced { comments, source, .. } = &self.store else {
+        let Store::Sourced(Sourced { comments, source, .. }) = &self.store else {
             return false;
         };
         let first_index = comments.partition_point(|c| c.span.start < from);
@@ -214,13 +185,14 @@ impl Comments {
     /// Narrow this store to `selection`: comments before it count as printed,
     /// and no `format off` region reaches outside it.
     pub(crate) fn restrict_to(&mut self, selection: Span) {
-        if let Store::Sourced { comments, printed_count, disabled_ranges, .. } = &mut self.store {
-            *printed_count = comments.partition_point(|c| c.span.start < selection.start);
-            for region in disabled_ranges.iter_mut() {
+        if let Store::Sourced(sourced) = &mut self.store {
+            sourced.printed_count =
+                sourced.comments.partition_point(|c| c.span.start < selection.start);
+            for region in &mut sourced.disabled_ranges {
                 region.start = region.start.max(selection.start);
                 region.end = region.end.min(selection.end);
             }
-            disabled_ranges.retain(|region| region.start < region.end);
+            sourced.disabled_ranges.retain(|region| region.start < region.end);
         }
     }
 
@@ -228,16 +200,14 @@ impl Comments {
     /// blank-line logic uses to bound its gap scans.
     pub(crate) fn peek_next_start(&self) -> Option<u32> {
         match &self.store {
-            Store::Sourced { comments, printed_count, .. } => {
-                comments.get(*printed_count).map(|c| c.span.start)
-            }
+            Store::Sourced(sourced) => sourced.pending().first().map(|c| c.span.start),
             Store::Synthetic { .. } | Store::Empty => None,
         }
     }
 
     pub(crate) fn last_printed_end(&self) -> Option<u32> {
         match &self.store {
-            Store::Sourced { comments, printed_count, .. } => printed_end(comments, *printed_count),
+            Store::Sourced(sourced) => sourced.printed_end(),
             Store::Synthetic { .. } | Store::Empty => None,
         }
     }
@@ -249,10 +219,9 @@ impl Comments {
     /// synthetic path, any comment anchored at `block_start`.
     pub(crate) fn has_dangling_comments(&self, block_start: u32) -> bool {
         match &self.store {
-            Store::Sourced { comments, printed_count, source, disabled_ranges, .. } => {
-                let limit = disabled_region_limit(disabled_ranges, comments, *printed_count);
-                let pending = pending_comments(comments, *printed_count);
-                !dangling_run(pending, source, block_start, limit).is_empty()
+            Store::Sourced(sourced) => {
+                let limit = sourced.disabled_region_limit();
+                !dangling_run(sourced.pending(), sourced.source, block_start, limit).is_empty()
             }
             Store::Synthetic { comments, .. } => comments.contains_key(&block_start),
             Store::Empty => false,
@@ -267,10 +236,8 @@ impl Comments {
     /// enclosing statement finds them still pending and goes verbatim over its
     /// whole span.
     pub(crate) fn mark_printed_range(&mut self, start: u32, end: u32) {
-        if let Store::Sourced { comments, printed_count, .. } = &mut self.store {
-            take_pending_while(comments, printed_count, |comment| {
-                (start..end).contains(&comment.span.start)
-            });
+        if let Store::Sourced(sourced) = &mut self.store {
+            sourced.take_while(|comment| (start..end).contains(&comment.span.start));
         }
     }
 
@@ -288,12 +255,14 @@ impl Comments {
         if_end: u32,
     ) -> bool {
         match &self.store {
-            Store::Sourced { comments, printed_count, source, version, .. } => {
+            Store::Sourced(Sourced { comments, printed_count, source, version, .. }) => {
                 // Only a comment inside the body needs this, and every `if` a
                 // nest of them holds would scan the same text again.
                 let mut is_body_one_line = None;
                 let mut gap_start = condition_end;
-                pending_comments(comments, *printed_count)
+                comments
+                    .get(*printed_count..)
+                    .unwrap_or_default()
                     .iter()
                     .skip_while(|c| c.span.start < condition_end)
                     .skip_while(|comment| {
@@ -341,12 +310,10 @@ impl Comments {
     }
 
     pub(crate) fn has_unhandled_in(&self, start: u32, end: u32) -> bool {
-        let pending = match &self.store {
-            Store::Sourced { comments, printed_count, .. } => {
-                pending_comments(comments, *printed_count)
-            }
-            Store::Synthetic { .. } | Store::Empty => &[],
+        let Store::Sourced(sourced) = &self.store else {
+            return false;
         };
+        let pending = sourced.pending();
         // Sorted by position, so the first one at or past `start` is found
         // without walking the comments before it.
         let first_index = pending.partition_point(|c| c.span.start < start);
@@ -356,115 +323,238 @@ impl Comments {
     pub(crate) const fn checkpoint(&self) -> CommentsCheckpoint {
         CommentsCheckpoint {
             printed_count: match &self.store {
-                Store::Sourced { printed_count, .. } => *printed_count,
+                Store::Sourced(sourced) => sourced.printed_count,
                 Store::Synthetic { .. } | Store::Empty => 0,
             },
         }
     }
 
     pub(crate) const fn restore(&mut self, checkpoint: CommentsCheckpoint) {
-        if let Store::Sourced { printed_count, .. } = &mut self.store {
-            *printed_count = checkpoint.printed_count;
+        if let Store::Sourced(sourced) = &mut self.store {
+            sourced.printed_count = checkpoint.printed_count;
         }
     }
 
-    /// Parsed input only: a synthetic comment has no offset or source to test.
-    fn take_sourced_while(
-        &mut self,
-        mut should_take: impl FnMut(&SourcedComment, &str) -> bool,
-    ) -> Vec<CompactString> {
-        match &mut self.store {
-            Store::Sourced { comments, printed_count, source, .. } => {
-                comment_texts(take_pending_while(comments, printed_count, |comment| {
-                    should_take(comment, source)
-                }))
+    /// The parsed path's store, whose comments and source outlive it.
+    const fn sourced_mut(&mut self) -> Option<&mut Sourced<'ast>> {
+        if let Store::Sourced(sourced) = &mut self.store { Some(sourced) } else { None }
+    }
+}
+
+impl<'ast> Sourced<'ast> {
+    fn pending(&self) -> &'ast [Comment] {
+        self.comments.get(self.printed_count..).unwrap_or_default()
+    }
+
+    fn printed_end(&self) -> Option<u32> {
+        let last_index = self.printed_count.checked_sub(1)?;
+        self.comments.get(last_index).map(|c| c.span.end)
+    }
+
+    /// Where the next `format off` region starts, past which no block-level
+    /// writer may take a comment, since the region's own bytes hold it.
+    fn disabled_region_limit(&self) -> u32 {
+        let position = self.printed_end().unwrap_or(0);
+        region_ending_after(&self.disabled_ranges, position).map_or(u32::MAX, |region| region.start)
+    }
+
+    /// Takes the pending comments while `should_take` holds.
+    fn take_while(&mut self, mut should_take: impl FnMut(&Comment) -> bool) -> &'ast [Comment] {
+        let pending = self.pending();
+        let n = pending.iter().take_while(|c| should_take(c)).count();
+        self.printed_count = self.printed_count.saturating_add(n);
+        pending.get(..n).unwrap_or_default()
+    }
+
+    /// Takes the first `n` pending comments.
+    fn take(&mut self, n: usize) -> &'ast [Comment] {
+        let pending = self.pending();
+        self.printed_count = self.printed_count.saturating_add(n);
+        pending.get(..n).unwrap_or_default()
+    }
+}
+
+/// The text a comment prints as, with its line breaks written as LF.
+fn comment_text<'ast>(
+    comment: &Comment,
+    source: &'ast str,
+    version: LuaVersion,
+    allocator: &'ast Allocator,
+) -> &'ast str {
+    let text = comment.span.text(source);
+    if comment.kind == CommentKind::Shebang {
+        // Loaders skip this line up to LF, so a CR in it is text, but a
+        // trailing one would pair with the line break written after it.
+        return text.trim_end_matches('\r');
+    }
+    if !text.contains('\r') {
+        return text;
+    }
+    let mut normalized = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for line_break in line_breaks(text, version) {
+        normalized.push_str(text.get(cursor..line_break.start).unwrap_or_default());
+        normalized.push('\n');
+        cursor = line_break.end;
+    }
+    normalized.push_str(text.get(cursor..).unwrap_or_default());
+    allocator.alloc_str(&normalized)
+}
+
+impl<'ast> Formatter<'ast> {
+    fn sourced_text(&self, comment: &Comment) -> &'ast str {
+        self.comments().source().map_or("", |(source, version)| {
+            comment_text(comment, source, version, self.allocator())
+        })
+    }
+
+    /// Writes `comments` a line each, where `following` is the start of
+    /// whatever comes after the last one, ending each with the line break it
+    /// keeps. Returns true when one of them is a `luck: ignore` directive.
+    fn write_comment_lines_from(&mut self, comments: &[Comment], following: u32) -> bool {
+        let Some((source, version)) = self.comments().source() else {
+            return false;
+        };
+        let mut has_ignore = false;
+        let followers = comments.iter().skip(1).map(|c| c.span.start).chain(once(following));
+        for (comment, next_start) in comments.iter().zip(followers) {
+            let text = self.sourced_text(comment);
+            has_ignore |= Directive::parse(text) == Some(Directive::Ignore);
+            self.text(text);
+            self.line_break(has_blank_line(source, comment.span.end, next_start, version));
+        }
+        has_ignore
+    }
+
+    /// Writes `comments` a line each with the line breaks between them, as
+    /// [`Formatter::write_comment_lines_from`] does, but none after the last.
+    fn write_comment_run_from(&mut self, comments: &[Comment]) {
+        let Some((source, version)) = self.comments().source() else {
+            return;
+        };
+        let mut previous_end = None;
+        for comment in comments {
+            if let Some(end) = previous_end {
+                self.line_break(has_blank_line(source, end, comment.span.start, version));
             }
-            Store::Synthetic { .. } | Store::Empty => Vec::new(),
+            previous_end = Some(comment.span.end);
+            let text = self.sourced_text(comment);
+            self.text(text);
         }
     }
-}
 
-pub(crate) fn write_shebang(f: &mut Formatter) {
-    let texts = f.comments_mut().take_sourced_while(|c, _| c.kind == CommentKind::Shebang);
-    write_comment_lines(f, lines_without_blanks(texts));
-}
+    /// The synthetic comments anchored at `anchor` that `filter` takes, each
+    /// line prefixed with `--` where it's missing.
+    fn take_synthetic(
+        &mut self,
+        anchor: u32,
+        filter: impl Fn(&SyntheticComment) -> bool,
+    ) -> Vec<&'ast str> {
+        let allocator = self.allocator();
+        let Store::Synthetic { comments, .. } = &mut self.comments_mut().store else {
+            return Vec::new();
+        };
+        let mut taken = Vec::new();
+        if let Some(anchored_comments) = comments.get_mut(&anchor) {
+            anchored_comments.retain(|comment| {
+                if filter(comment) {
+                    synthetic_comment_lines(&comment.text, allocator, &mut taken);
+                    false
+                } else {
+                    true
+                }
+            });
+            if anchored_comments.is_empty() {
+                comments.remove(&anchor);
+            }
+        }
+        taken
+    }
 
-/// Returns true when one of them is a `luck: ignore` directive.
-pub(crate) fn write_leading_comments(f: &mut Formatter, anchor: u32) -> bool {
-    let lines = match &mut f.comments_mut().store {
-        Store::Sourced { comments, printed_count, source, version, disabled_ranges } => {
-            let limit = disabled_region_limit(disabled_ranges, comments, *printed_count);
-            let taken = take_pending_while(comments, printed_count, |comment| {
+    pub(crate) fn write_shebang(&mut self) {
+        let Some(sourced) = self.comments_mut().sourced_mut() else {
+            return;
+        };
+        let taken = sourced.take_while(|c| c.kind == CommentKind::Shebang);
+        for comment in taken {
+            let text = self.sourced_text(comment);
+            self.text(text);
+            self.hard_line();
+        }
+    }
+
+    /// Returns true when one of them is a `luck: ignore` directive.
+    pub(crate) fn write_leading_comments(&mut self, anchor: u32) -> bool {
+        if let Some(sourced) = self.comments_mut().sourced_mut() {
+            let limit = sourced.disabled_region_limit();
+            let taken = sourced.take_while(|comment| {
                 comment.span.start < limit
                     && comment.attached_to == anchor
                     && comment.position == CommentPosition::Leading
             });
-            comment_lines(taken, source, *version, anchor)
+            return self.write_comment_lines_from(taken, anchor);
         }
-        Store::Synthetic { comments, .. } => {
-            lines_without_blanks(take_synthetic(comments, anchor, |comment| {
-                comment.position == CommentPosition::Leading
-            }))
+        let lines =
+            self.take_synthetic(anchor, |comment| comment.position == CommentPosition::Leading);
+        let mut has_ignore = false;
+        for text in lines {
+            has_ignore |= Directive::parse(text) == Some(Directive::Ignore);
+            self.text(text);
+            self.hard_line();
         }
-        Store::Empty => Vec::new(),
-    };
-    write_comment_lines(f, lines)
-}
+        has_ignore
+    }
 
-/// Write the comments stalled before the statement starting at `anchor`,
-/// each on its own line.
-///
-/// These are attached to a token no emitter asked for, such as the `then` of
-/// an enclosing `if` or a `;` the block loop skips.
-///
-/// Left pending, they'd block the cursor for every later comment. The statement's own leading
-/// comments end the run, since [`write_leading_comments`] owns those.
-///
-/// The run moves only if nothing but whitespace and `;` separates its
-/// comments from each other and from `anchor`, because crossing a token would
-/// relocate a comment. Otherwise it stays pending and the statement holding
-/// it falls back to verbatim.
-///
-/// Returns true when one of them is a `luck: ignore` directive, as one parted
-/// from its statement by a `;` still applies to it.
-pub(crate) fn write_stalled_comments(f: &mut Formatter, anchor: u32) -> bool {
-    let lines = match &mut f.comments_mut().store {
-        Store::Sourced { comments, printed_count, source, version, disabled_ranges } => {
-            let limit =
-                anchor.min(disabled_region_limit(disabled_ranges, comments, *printed_count));
-            let pending = pending_comments(comments, *printed_count);
-            let candidate_count = pending
-                .iter()
-                .take_while(|comment| {
-                    comment.span.start < limit
-                        && !(comment.attached_to == anchor
-                            && comment.position == CommentPosition::Leading)
-                })
-                .count();
-            let (candidates, after_candidates) = pending.split_at(candidate_count);
-            // The run has to reach the statement's own leading comment when
-            // `take_while` stopped on one, since that prints next, and the
-            // anchor otherwise.
-            let last_follower = after_candidates.first().map_or(limit, |c| c.span.start).min(limit);
-            if is_movable_run(candidates, source, last_follower) {
-                *printed_count = printed_count.saturating_add(candidate_count);
-                comment_lines(candidates, source, *version, last_follower)
-            } else {
-                Vec::new()
-            }
+    /// Write the comments stalled before the statement starting at `anchor`,
+    /// each on its own line.
+    ///
+    /// These are attached to a token no emitter asked for, such as the `then`
+    /// of an enclosing `if` or a `;` the block loop skips.
+    ///
+    /// Left pending, they'd block the cursor for every later comment. The
+    /// statement's own leading comments end the run, since
+    /// [`Formatter::write_leading_comments`] owns those.
+    ///
+    /// The run moves only if nothing but whitespace and `;` separates its
+    /// comments from each other and from `anchor`, because crossing a token
+    /// would relocate a comment. Otherwise it stays pending and the statement
+    /// holding it falls back to verbatim.
+    ///
+    /// Returns true when one of them is a `luck: ignore` directive, as one
+    /// parted from its statement by a `;` still applies to it.
+    pub(crate) fn write_stalled_comments(&mut self, anchor: u32) -> bool {
+        let Some(sourced) = self.comments_mut().sourced_mut() else {
+            return false;
+        };
+        let limit = anchor.min(sourced.disabled_region_limit());
+        let pending = sourced.pending();
+        let candidate_count = pending
+            .iter()
+            .take_while(|comment| {
+                comment.span.start < limit
+                    && !(comment.attached_to == anchor
+                        && comment.position == CommentPosition::Leading)
+            })
+            .count();
+        let (candidates, after_candidates) = pending.split_at(candidate_count);
+        // The run has to reach the statement's own leading comment when
+        // `take_while` stopped on one, since that prints next, and the
+        // anchor otherwise.
+        let last_follower = after_candidates.first().map_or(limit, |c| c.span.start).min(limit);
+        if !is_movable_run(candidates, sourced.source, last_follower) {
+            return false;
         }
-        Store::Synthetic { .. } | Store::Empty => Vec::new(),
-    };
-    write_comment_lines(f, lines)
-}
+        let taken = sourced.take(candidate_count);
+        self.write_comment_lines_from(taken, last_follower)
+    }
 
-/// Returns true when one of them is a block comment spanning lines, which
-/// ends its line somewhere other than where the statement's does.
-pub(crate) fn write_trailing_comments(f: &mut Formatter, anchor: u32, stmt_end: u32) -> bool {
-    let (texts, spans_lines) = match &mut f.comments_mut().store {
-        Store::Sourced { comments, printed_count, source, version, .. } => {
+    /// Returns true when one of them is a block comment spanning lines, which
+    /// ends its line somewhere other than where the statement's does.
+    pub(crate) fn write_trailing_comments(&mut self, anchor: u32, stmt_end: u32) -> bool {
+        if let Some(sourced) = self.comments_mut().sourced_mut() {
+            let (source, version) = (sourced.source, sourced.version);
             let mut gap_start = stmt_end;
-            let taken = take_pending_while(comments, printed_count, |comment| {
+            let taken = sourced.take_while(|comment| {
                 if comment.position != CommentPosition::Trailing || gap_start > comment.span.start {
                     return false;
                 }
@@ -472,109 +562,224 @@ pub(crate) fn write_trailing_comments(f: &mut Formatter, anchor: u32, stmt_end: 
                 // between means it trails something else.
                 let gap = Span::new(gap_start, comment.span.start).text(source);
                 gap_start = comment.span.end;
-                !has_line_break(gap, *version) && is_code_free(gap)
+                !has_line_break(gap, version) && is_code_free(gap)
             });
             let spans_lines =
                 taken.iter().any(|comment| comment.kind == CommentKind::MultiLineBlock);
-            (comment_texts(taken), spans_lines)
+            for comment in taken {
+                let text = self.sourced_text(comment);
+                self.line_suffix(text);
+            }
+            return spans_lines;
         }
-        Store::Synthetic { comments, .. } => (
-            take_synthetic(comments, anchor, |comment| {
-                comment.position == CommentPosition::Trailing
-            }),
-            false,
-        ),
-        Store::Empty => (Vec::new(), false),
-    };
-    for text in texts {
-        f.write_line_suffix(text);
+        let texts =
+            self.take_synthetic(anchor, |comment| comment.position == CommentPosition::Trailing);
+        for text in texts {
+            self.line_suffix(text);
+        }
+        false
     }
-    spans_lines
-}
 
-/// `start` is the list's own start.
-///
-/// A pending comment before it was written outside the list, and taking it would drag it across the
-/// opening delimiter, so the cursor stops there and the statement-level fallback takes the whole
-/// run.
-///
-/// Parsed input only: a synthetic comment has no offset to compare, and
-/// [`write_leading_comments`] already places it by anchor.
-///
-/// `can_follow_blank` says whether a line here keeps a blank line the source
-/// has above it, and is set once a line is written.
-fn write_own_line_comments_in(
-    f: &mut Formatter,
-    start: u32,
-    limit: u32,
-    kind: ListKind,
-    can_follow_blank: &mut bool,
-) {
-    let version = f.comments().source_version();
-    let mut blanks_above = Vec::new();
-    let texts = f.comments_mut().take_sourced_while(|c, source| {
-        let is_inside = (start..limit).contains(&c.span.start);
-        if is_inside {
-            blanks_above.push(version.is_some_and(|source_version| {
-                has_leading_edge_blank(source, c.span.start, source_version)
-            }));
+    /// `start` is the list's own start.
+    ///
+    /// A pending comment before it was written outside the list, and taking
+    /// it would drag it across the opening delimiter, so the cursor stops
+    /// there and the statement-level fallback takes the whole run.
+    ///
+    /// Parsed input only: a synthetic comment has no offset to compare, and
+    /// [`Formatter::write_leading_comments`] already places it by anchor.
+    ///
+    /// `can_follow_blank` says whether a line here keeps a blank line the
+    /// source has above it, and is set once a line is written.
+    fn write_own_line_comments_in(
+        &mut self,
+        start: u32,
+        limit: u32,
+        kind: ListKind,
+        can_follow_blank: &mut bool,
+    ) {
+        let Some(sourced) = self.comments_mut().sourced_mut() else {
+            return;
+        };
+        let (source, version) = (sourced.source, sourced.version);
+        let taken = sourced.take_while(|c| (start..limit).contains(&c.span.start));
+        for comment in taken {
+            let has_blank_above = has_leading_edge_blank(source, comment.span.start, version);
+            self.line_break(has_blank_above && *can_follow_blank);
+            *can_follow_blank = kind == ListKind::TableFields;
+            let text = self.sourced_text(comment);
+            self.text(text);
         }
-        is_inside
-    });
-    for (text, has_blank_above) in texts.into_iter().zip(blanks_above) {
-        write_line_break(f, has_blank_above && *can_follow_blank);
-        *can_follow_blank = kind == ListKind::TableFields;
-        f.write_text(text);
     }
-}
 
-/// Only whitespace may come before each one, so every comment stays between
-/// the same two tokens.
-///
-/// A line comment would swallow the rest of the line and
-/// a multi-line block comment would break it, so either one ends the run and
-/// is left to the statement-level verbatim fallback.
-pub(crate) fn write_inline_comments_after(f: &mut Formatter, offset: u32) {
-    let mut gap_start = offset;
-    let texts = f.comments_mut().take_sourced_while(|comment, source| {
-        if comment.span.start < gap_start
-            || comment.kind != CommentKind::SingleLineBlock
-            || !is_code_free(Span::new(gap_start, comment.span.start).text(source))
-        {
-            return false;
+    /// Only whitespace may come before each one, so every comment stays
+    /// between the same two tokens.
+    ///
+    /// A line comment would swallow the rest of the line and a multi-line
+    /// block comment would break it, so either one ends the run and is left to
+    /// the statement-level verbatim fallback.
+    pub(crate) fn write_inline_comments_after(&mut self, offset: u32) {
+        let Some(sourced) = self.comments_mut().sourced_mut() else {
+            return;
+        };
+        let source = sourced.source;
+        let mut gap_start = offset;
+        let taken = sourced.take_while(|comment| {
+            if comment.span.start < gap_start
+                || comment.kind != CommentKind::SingleLineBlock
+                || !is_code_free(Span::new(gap_start, comment.span.start).text(source))
+            {
+                return false;
+            }
+            gap_start = comment.span.end;
+            true
+        });
+        for comment in taken {
+            self.space();
+            let text = self.sourced_text(comment);
+            self.text(text);
         }
-        gap_start = comment.span.end;
-        true
-    });
-    for text in texts {
-        space().fmt(f);
-        f.write_text(text);
     }
-}
 
-/// The run ends at `limit`, the next item the caller writes.
-///
-/// It also ends at a newline, since [`write_own_line_comments_in`] takes the comments after one,
-/// and at a comment pending from before `offset`, which stalled outside this list and isn't the
-/// list's to place.
-fn write_same_line_comments_after(f: &mut Formatter, offset: u32, limit: u32) {
-    let mut gap_start = offset;
-    let Some(version) = f.comments().source_version() else {
-        return;
-    };
-    let texts = f.comments_mut().take_sourced_while(|comment, source| {
-        if comment.span.start < gap_start || comment.span.start >= limit {
-            return false;
+    /// The run ends at `limit`, the next item the caller writes.
+    ///
+    /// It also ends at a newline, since
+    /// [`Formatter::write_own_line_comments_in`] takes the comments after
+    /// one, and at a comment pending from before `offset`, which stalled
+    /// outside this list and isn't the list's to place.
+    fn write_same_line_comments_after(&mut self, offset: u32, limit: u32) {
+        let Some(sourced) = self.comments_mut().sourced_mut() else {
+            return;
+        };
+        let (source, version) = (sourced.source, sourced.version);
+        let mut gap_start = offset;
+        let taken = sourced.take_while(|comment| {
+            if comment.span.start < gap_start || comment.span.start >= limit {
+                return false;
+            }
+            let gap = Span::new(gap_start, comment.span.start).text(source);
+            if has_line_break(gap, version) {
+                return false;
+            }
+            gap_start = comment.span.end;
+            true
+        });
+        for comment in taken {
+            let text = self.sourced_text(comment);
+            self.line_suffix(text);
         }
-        let gap = Span::new(gap_start, comment.span.start).text(source);
-        if has_line_break(gap, version) {
-            return false;
+    }
+
+    /// A packed or flat layout would push a line-suffix comment past the
+    /// closing delimiter and out of the list.
+    ///
+    /// `span` covers the delimiters. [`Comments::has_claimable_comments`]
+    /// decides whether a list may take this path, and guarantees that every
+    /// comment here sits inside the delimiters and outside every item.
+    pub(crate) fn write_commented_list<T>(
+        &mut self,
+        delimiters: (&'static str, &'static str),
+        span: Span,
+        items: &[T],
+        kind: ListKind,
+        span_of: fn(&T) -> Span,
+        write_item: fn(&mut Self, &T),
+    ) {
+        let (open, close) = delimiters;
+        self.token(open);
+        self.indent(|f| {
+            // The line after the opener never follows a blank one.
+            let mut can_follow_blank = false;
+            let mut remaining = items;
+            while let [item, rest @ ..] = remaining {
+                let item_span = span_of(item);
+                let item_start = item_span.start;
+                f.write_own_line_comments_in(span.start, item_start, kind, &mut can_follow_blank);
+                let has_blank_above = can_follow_blank && f.has_blank_line_above(item_start);
+                f.line_break(has_blank_above);
+                can_follow_blank = kind == ListKind::TableFields;
+                write_item(f, item);
+                if kind == ListKind::TableFields || !rest.is_empty() {
+                    f.token(",");
+                }
+                let next_start = rest.first().map_or(span.end, |next| span_of(next).start);
+                f.write_same_line_comments_after(item_span.end, next_start);
+                remaining = rest;
+            }
+            f.write_own_line_comments_in(span.start, span.end, kind, &mut can_follow_blank);
+        });
+        self.hard_line();
+        self.token(close);
+    }
+
+    /// Write the comments in a block with no statements, whose span starts at
+    /// `block_start`, one per line.
+    ///
+    /// On the parsed path that's the [`dangling_run`] there; on the synthetic
+    /// path, every comment anchored at `block_start`. The caller writes the
+    /// line breaks around them.
+    pub(crate) fn write_dangling_comments(&mut self, block_start: u32) {
+        if let Some(sourced) = self.comments_mut().sourced_mut() {
+            let limit = sourced.disabled_region_limit();
+            let run = dangling_run(sourced.pending(), sourced.source, block_start, limit);
+            let taken = sourced.take(run.len());
+            self.write_comment_run_from(taken);
+            return;
         }
-        gap_start = comment.span.end;
-        true
-    });
-    for text in texts {
-        f.write_line_suffix(text);
+        let lines = self.take_synthetic(block_start, |_| true);
+        for (i, text) in lines.into_iter().enumerate() {
+            if i > 0 {
+                self.hard_line();
+            }
+            self.text(text);
+        }
+    }
+
+    /// Write the comments after a block's last statement, each on its own
+    /// line and keeping the blank lines around them.
+    ///
+    /// That's the [`dangling_run`] after `last_end`, so a comment only moves
+    /// past whitespace and `;`. Parsed input only: a synthetic comment names
+    /// its anchor.
+    pub(crate) fn write_tail_comments(&mut self, last_end: u32) {
+        let Some(sourced) = self.comments_mut().sourced_mut() else {
+            return;
+        };
+        let (source, version) = (sourced.source, sourced.version);
+        let limit = sourced.disabled_region_limit();
+        let gap_start = sourced.printed_end().map_or(last_end, |end| end.max(last_end));
+        let run = dangling_run(sourced.pending(), source, gap_start, limit);
+        let taken = sourced.take(run.len());
+        let Some(first) = taken.first() else {
+            return;
+        };
+        self.line_break(has_blank_line(source, gap_start, first.span.start, version));
+        self.write_comment_run_from(taken);
+    }
+
+    pub(crate) fn write_remaining_comments(&mut self, has_stmts_before: bool) {
+        let allocator = self.allocator();
+        let texts: Vec<&'ast str> = match &mut self.comments_mut().store {
+            Store::Sourced(sourced) => {
+                let (source, version) = (sourced.source, sourced.version);
+                let taken = sourced.take(sourced.pending().len());
+                taken.iter().map(|c| comment_text(c, source, version, allocator)).collect()
+            }
+            Store::Synthetic { comments, .. } => {
+                let mut lines = Vec::new();
+                for comment in take(comments).into_values().flatten() {
+                    synthetic_comment_lines(&comment.text, allocator, &mut lines);
+                }
+                lines
+            }
+            Store::Empty => Vec::new(),
+        };
+        for (i, text) in texts.into_iter().enumerate() {
+            if i > 0 || has_stmts_before {
+                self.hard_line();
+            }
+            self.text(text);
+        }
     }
 }
 
@@ -587,232 +792,10 @@ pub(crate) enum ListKind {
     CallArgs,
 }
 
-/// A packed or flat layout would push a line-suffix comment past the closing
-/// delimiter and out of the list.
-///
-/// `span` covers the delimiters. [`Comments::has_claimable_comments`] decides
-/// whether a list may take this path, and guarantees that every comment here
-/// sits inside the delimiters and outside every item.
-pub(crate) fn write_commented_list<T>(
-    f: &mut Formatter,
-    delimiters: (&'static str, &'static str),
-    span: Span,
-    items: &[T],
-    span_of: fn(&T) -> Span,
-    kind: ListKind,
-) where
-    T: Format,
-{
-    let (open, close) = delimiters;
-    token(open).fmt(f);
-    indent(format_with(|indented| {
-        // The line after the opener never follows a blank one.
-        let mut can_follow_blank = false;
-        let mut remaining = items;
-        while let [item, rest @ ..] = remaining {
-            let item_span = span_of(item);
-            let item_start = item_span.start;
-            write_own_line_comments_in(
-                indented,
-                span.start,
-                item_start,
-                kind,
-                &mut can_follow_blank,
-            );
-            let has_blank_above = can_follow_blank && has_blank_line_above(indented, item_start);
-            write_line_break(indented, has_blank_above);
-            can_follow_blank = kind == ListKind::TableFields;
-            item.fmt(indented);
-            if kind == ListKind::TableFields || !rest.is_empty() {
-                token(",").fmt(indented);
-            }
-            let next_start = rest.first().map_or(span.end, |next| span_of(next).start);
-            write_same_line_comments_after(indented, item_span.end, next_start);
-            remaining = rest;
-        }
-        write_own_line_comments_in(indented, span.start, span.end, kind, &mut can_follow_blank);
-    }))
-    .fmt(f);
-    (hard_line(), token(close)).fmt(f);
-}
-
-/// Write the comments in a block with no statements, whose span starts at
-/// `block_start`, one per line.
-///
-/// On the parsed path that's the [`dangling_run`] there; on the synthetic path,
-/// every comment anchored at `block_start`. The caller writes the line breaks
-/// around them.
-pub(crate) fn write_dangling_comments(f: &mut Formatter, block_start: u32) {
-    let lines = match &mut f.comments_mut().store {
-        Store::Sourced { comments, printed_count, source, version, disabled_ranges } => {
-            let limit = disabled_region_limit(disabled_ranges, comments, *printed_count);
-            let run = dangling_run(
-                pending_comments(comments, *printed_count),
-                source,
-                block_start,
-                limit,
-            );
-            *printed_count = printed_count.saturating_add(run.len());
-            comment_lines(run, source, *version, block_start)
-        }
-        Store::Synthetic { comments, .. } => {
-            lines_without_blanks(take_synthetic(comments, block_start, |_| true))
-        }
-        Store::Empty => Vec::new(),
-    };
-    write_comment_run(f, lines);
-}
-
-/// Write the comments after a block's last statement, each on its own line
-/// and keeping the blank lines around them.
-///
-/// That's the [`dangling_run`] after `last_end`, so a comment only moves past
-/// whitespace and `;`. Parsed input only: a synthetic comment names its anchor.
-pub(crate) fn write_tail_comments(f: &mut Formatter, last_end: u32) {
-    let (lines, has_blank_before) = match &mut f.comments_mut().store {
-        Store::Sourced { comments, printed_count, source, version, disabled_ranges } => {
-            let limit = disabled_region_limit(disabled_ranges, comments, *printed_count);
-            let gap_start =
-                printed_end(comments, *printed_count).map_or(last_end, |end| end.max(last_end));
-            let run =
-                dangling_run(pending_comments(comments, *printed_count), source, gap_start, limit);
-            *printed_count = printed_count.saturating_add(run.len());
-            let has_blank_before = run.first().is_some_and(|comment| {
-                has_blank_line(source, gap_start, comment.span.start, *version)
-            });
-            (comment_lines(run, source, *version, gap_start), has_blank_before)
-        }
-        Store::Synthetic { .. } | Store::Empty => return,
-    };
-    if !lines.is_empty() {
-        write_line_break(f, has_blank_before);
-        write_comment_run(f, lines);
-    }
-}
-
-pub(crate) fn write_remaining_comments(f: &mut Formatter, has_stmts_before: bool) {
-    let texts = match &mut f.comments_mut().store {
-        Store::Sourced { comments, printed_count, .. } => {
-            let taken = comment_texts(pending_comments(comments, *printed_count));
-            *printed_count = comments.len();
-            taken
-        }
-        Store::Synthetic { comments, .. } => take(comments)
-            .into_values()
-            .flatten()
-            .flat_map(|c| synthetic_comment_lines(&c.text))
-            .collect(),
-        Store::Empty => Vec::new(),
-    };
-    for (i, text) in texts.into_iter().enumerate() {
-        if i > 0 || has_stmts_before {
-            hard_line().fmt(f);
-        }
-        f.write_text(text);
-    }
-}
-
-struct CommentLine {
-    text: CompactString,
-    has_blank_after: bool,
-}
-
-/// `comments` as lines, where `following` is the start of whatever comes
-/// after the last one.
-fn comment_lines(
-    comments: &[SourcedComment],
-    source: &str,
-    version: LuaVersion,
-    following: u32,
-) -> Vec<CommentLine> {
-    let followers = comments.iter().skip(1).map(|c| c.span.start).chain(once(following));
-    comments
-        .iter()
-        .zip(followers)
-        .map(|(comment, next_start)| CommentLine {
-            text: comment.text.clone(),
-            has_blank_after: has_blank_line(source, comment.span.end, next_start, version),
-        })
-        .collect()
-}
-
-fn lines_without_blanks(texts: Vec<CompactString>) -> Vec<CommentLine> {
-    texts.into_iter().map(|text| CommentLine { text, has_blank_after: false }).collect()
-}
-
-fn write_line_break(f: &mut Formatter, is_blank: bool) {
-    if is_blank {
-        empty_line().fmt(f);
-    } else {
-        hard_line().fmt(f);
-    }
-}
-
-/// Returns true when one of them is a `luck: ignore` directive.
-fn write_comment_lines(f: &mut Formatter, lines: Vec<CommentLine>) -> bool {
-    let has_ignore =
-        lines.iter().any(|line| Directive::parse(&line.text) == Some(Directive::Ignore));
-    for line in lines {
-        f.write_text(line.text);
-        write_line_break(f, line.has_blank_after);
-    }
-    has_ignore
-}
-
-fn write_comment_run(f: &mut Formatter, lines: Vec<CommentLine>) {
-    let mut previous_has_blank = None;
-    for line in lines {
-        if let Some(is_blank) = previous_has_blank {
-            write_line_break(f, is_blank);
-        }
-        previous_has_blank = Some(line.has_blank_after);
-        f.write_text(line.text);
-    }
-}
-
-fn pending_comments(comments: &[SourcedComment], printed_count: usize) -> &[SourcedComment] {
-    comments.get(printed_count..).unwrap_or_default()
-}
-
-fn printed_end(comments: &[SourcedComment], printed_count: usize) -> Option<u32> {
-    let last_index = printed_count.checked_sub(1)?;
-    comments.get(last_index).map(|c| c.span.end)
-}
-
-/// Where the next `format off` region starts, past which no block-level
-/// writer may take a comment, since the region's own bytes hold it.
-fn disabled_region_limit(
-    disabled_ranges: &[Range<u32>],
-    comments: &[SourcedComment],
-    printed_count: usize,
-) -> u32 {
-    let position = printed_end(comments, printed_count).unwrap_or(0);
-    region_ending_after(disabled_ranges, position).map_or(u32::MAX, |region| region.start)
-}
-
 /// The first of `regions` that ends past `position`. `format off` regions are
 /// sorted and apart, so their ends are in order too.
 fn region_ending_after(regions: &[Range<u32>], position: u32) -> Option<&Range<u32>> {
     regions.get(regions.partition_point(|region| region.end <= position))
-}
-
-fn take_pending_while<'comments, F>(
-    comments: &'comments [SourcedComment],
-    printed_count: &mut usize,
-    mut should_take: F,
-) -> &'comments [SourcedComment]
-where
-    F: FnMut(&SourcedComment) -> bool,
-{
-    let pending = pending_comments(comments, *printed_count);
-    let n = pending.iter().take_while(|c| should_take(c)).count();
-    *printed_count = printed_count.saturating_add(n);
-    let (taken, _) = pending.split_at(n);
-    taken
-}
-
-fn comment_texts(comments: &[SourcedComment]) -> Vec<CompactString> {
-    comments.iter().map(|c| c.text.clone()).collect()
 }
 
 /// The comments a block may print with no statement left to attach them to.
@@ -829,11 +812,11 @@ fn comment_texts(comments: &[SourcedComment]) -> Vec<CompactString> {
 /// parameter list that would have to cross the `)`, stays pending and the
 /// statement holding it falls back to verbatim. The run stops at `limit`.
 fn dangling_run<'comments>(
-    pending: &'comments [SourcedComment],
+    pending: &'comments [Comment],
     source: &str,
     start: u32,
     limit: u32,
-) -> &'comments [SourcedComment] {
+) -> &'comments [Comment] {
     let before_count = pending.iter().take_while(|c| c.span.start < start).count();
     let (before, after) = pending.split_at(before_count);
     if !is_movable_run(before, source, start) {
@@ -854,7 +837,7 @@ fn dangling_run<'comments>(
 
 /// Whether every comment of `run` can reach the next one, and the last can
 /// reach `run_end`, crossing only what [`is_code_free`] allows.
-fn is_movable_run(run: &[SourcedComment], source: &str, run_end: u32) -> bool {
+fn is_movable_run(run: &[Comment], source: &str, run_end: u32) -> bool {
     let followers = run.iter().skip(1).map(|c| c.span.start).chain(once(run_end));
     run.iter().zip(followers).all(|(comment, next_start)| {
         next_start >= comment.span.end
@@ -893,74 +876,37 @@ fn after_line_break(source: &str, offset: u32, version: LuaVersion) -> u32 {
     index_to_offset(source.len().saturating_sub(remaining))
 }
 
-fn unix_line_breaks(text: &str, version: LuaVersion) -> Cow<'_, str> {
-    if !text.contains('\r') {
-        return Cow::Borrowed(text);
-    }
-    let mut normalized = String::with_capacity(text.len());
-    let mut cursor = 0;
-    for line_break in line_breaks(text, version) {
-        normalized.push_str(text.get(cursor..line_break.start).unwrap_or_default());
-        normalized.push('\n');
-        cursor = line_break.end;
-    }
-    normalized.push_str(text.get(cursor..).unwrap_or_default());
-    Cow::Owned(normalized)
-}
-
 /// Synthetic text may leave out the `--` marker, so each line gets one when
 /// missing. A long comment carries its line breaks as content and stays whole.
-fn synthetic_comment_lines(text: &str) -> Vec<CompactString> {
+fn synthetic_comment_lines<'ast>(
+    text: &str,
+    allocator: &'ast Allocator,
+    lines: &mut Vec<&'ast str>,
+) {
     let is_long_comment = text
         .trim_start()
         .strip_prefix("--[")
         .is_some_and(|rest| rest.trim_start_matches('=').starts_with('['));
     if is_long_comment {
-        return vec![CompactString::from(text)];
+        lines.push(allocator.alloc_str(text));
+        return;
     }
-    text.lines()
-        .flat_map(|line| line.split('\r'))
-        .map(|line| {
-            if line.trim_start().starts_with("--") {
-                CompactString::from(line)
-            } else if line.is_empty() {
-                CompactString::from("--")
-            } else {
-                let mut prefixed = CompactString::from("-- ");
-                prefixed.push_str(line);
-                prefixed
-            }
-        })
-        .collect()
-}
-
-fn take_synthetic(
-    comments: &mut BTreeMap<u32, Vec<SyntheticComment>>,
-    anchor: u32,
-    filter: impl Fn(&SyntheticComment) -> bool,
-) -> Vec<CompactString> {
-    let mut taken = Vec::new();
-    if let Some(anchored_comments) = comments.get_mut(&anchor) {
-        anchored_comments.retain(|comment| {
-            if filter(comment) {
-                taken.extend(synthetic_comment_lines(&comment.text));
-                false
-            } else {
-                true
-            }
+    for line in text.lines().flat_map(|line| line.split('\r')) {
+        lines.push(if line.trim_start().starts_with("--") {
+            allocator.alloc_str(line)
+        } else if line.is_empty() {
+            "--"
+        } else {
+            allocator.alloc_concat_strs_array(["-- ", line])
         });
-        if anchored_comments.is_empty() {
-            comments.remove(&anchor);
-        }
     }
-    taken
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::FormatOptions;
-    use crate::ir::{FormatElement, Tag};
+    use crate::ir::FormatElement;
 
     fn make_comment(
         start: u32,
@@ -979,88 +925,96 @@ mod tests {
         }
     }
 
-    fn formatter_over(comments: Comments) -> Formatter {
-        Formatter::new(FormatOptions::default(), comments)
+    fn texts<'ast>(f: &Formatter<'ast>) -> Vec<&'ast str> {
+        f.elements()
+            .iter()
+            .filter_map(
+                |element| {
+                    if let FormatElement::Text(text, _) = element { Some(*text) } else { None }
+                },
+            )
+            .collect()
+    }
+
+    fn synthetic(attached_to: u32, text: &str, position: CommentPosition) -> SyntheticComment {
+        SyntheticComment { attached_to, text: text.into(), position }
     }
 
     #[test]
     fn sourced_leading_taken_once() {
+        let allocator = Allocator::new();
         let source = "\
 -- leading
 local x = 1";
-        let comments = vec![make_comment(0, 10, 11, CommentKind::Line, CommentPosition::Leading)];
-        let mut f = formatter_over(Comments::from_source(&comments, source, LuaVersion::Lua54));
+        let comments = [make_comment(0, 10, 11, CommentKind::Line, CommentPosition::Leading)];
+        let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
+        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
 
-        assert!(!write_leading_comments(&mut f, 11));
-        let first_element_count = f.elements().len();
-        assert!(first_element_count > 0);
-        write_leading_comments(&mut f, 11);
-        assert_eq!(f.elements().len(), first_element_count);
+        assert!(!f.write_leading_comments(11));
+        assert_eq!(texts(&f), ["-- leading"]);
+        f.write_leading_comments(11);
+        assert_eq!(texts(&f), ["-- leading"]);
     }
 
     #[test]
     fn ignore_directive_detected() {
+        let allocator = Allocator::new();
         let source = "\
 -- luck: ignore
 local x = 1";
-        let comments = vec![make_comment(0, 15, 16, CommentKind::Line, CommentPosition::Leading)];
-        let mut f = formatter_over(Comments::from_source(&comments, source, LuaVersion::Lua54));
-        assert!(write_leading_comments(&mut f, 16));
+        let comments = [make_comment(0, 15, 16, CommentKind::Line, CommentPosition::Leading)];
+        let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
+        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        assert!(f.write_leading_comments(16));
+    }
+
+    #[test]
+    fn line_breaks_in_a_comment_print_as_lf() {
+        let allocator = Allocator::new();
+        let source = "--[[a\r\nb]]";
+        let comments =
+            [make_comment(0, 10, 10, CommentKind::MultiLineBlock, CommentPosition::Leading)];
+        let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
+        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        f.write_remaining_comments(false);
+        assert_eq!(texts(&f), ["--[[a\nb]]"]);
     }
 
     #[test]
     fn synthetic_comments_attach_by_anchor() {
-        let synthetic = vec![
-            SyntheticComment {
-                attached_to: 5,
-                text: "upvalue u0".into(),
-                position: CommentPosition::Leading,
-            },
-            SyntheticComment {
-                attached_to: 5,
-                text: "-- explicit marker".into(),
-                position: CommentPosition::Trailing,
-            },
-        ];
-        let mut f = formatter_over(Comments::synthetic(synthetic));
+        let allocator = Allocator::new();
+        let store = Comments::synthetic([
+            synthetic(5, "upvalue u0", CommentPosition::Leading),
+            synthetic(5, "-- explicit marker", CommentPosition::Trailing),
+        ]);
+        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
 
-        assert!(!write_leading_comments(&mut f, 5));
-        let has_prefixed = f.elements().iter().any(
-            |element| matches!(element, FormatElement::Text(text, _) if text == "-- upvalue u0"),
-        );
-        assert!(has_prefixed, "marker prefix added to bare text");
+        assert!(!f.write_leading_comments(5));
+        assert_eq!(texts(&f), ["-- upvalue u0"], "marker prefix added to bare text");
 
-        assert!(!write_trailing_comments(&mut f, 5, 0));
-        let has_suffix = f
-            .elements()
-            .iter()
-            .any(|element| matches!(element, FormatElement::Tag(Tag::StartLineSuffix)));
-        assert!(has_suffix);
+        assert!(!f.write_trailing_comments(5, 0));
+        let is_suffix = |element: &FormatElement<'_>| {
+            matches!(element, FormatElement::LineSuffix("-- explicit marker", _))
+        };
+        assert!(f.elements().iter().any(is_suffix));
     }
 
     #[test]
     fn synthetic_dangling_drained_by_anchor() {
-        let synthetic = vec![SyntheticComment {
-            attached_to: 9,
-            text: "unreachable".into(),
-            position: CommentPosition::Leading,
-        }];
-        let comments = Comments::synthetic(synthetic);
-        assert!(comments.has_dangling_comments(9));
-        assert!(!comments.has_dangling_comments(8));
+        let allocator = Allocator::new();
+        let store = Comments::synthetic([synthetic(9, "unreachable", CommentPosition::Leading)]);
+        assert!(store.has_dangling_comments(9));
+        assert!(!store.has_dangling_comments(8));
 
-        let mut f = formatter_over(comments);
-        write_dangling_comments(&mut f, 9);
-        let is_emitted = f.elements().iter().any(
-            |element| matches!(element, FormatElement::Text(text, _) if text == "-- unreachable"),
-        );
-        assert!(is_emitted);
+        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        f.write_dangling_comments(9);
+        assert_eq!(texts(&f), ["-- unreachable"]);
         assert!(!f.comments().has_dangling_comments(9));
     }
 
     #[test]
     fn synthetic_blank_before_recorded() {
-        let comments = Comments::synthetic(vec![]).with_blank_before([3, 7]);
+        let comments = Comments::synthetic([]).with_blank_before([3, 7]);
         assert!(comments.has_synthetic_blank_before(3));
         assert!(comments.has_synthetic_blank_before(7));
         assert!(!comments.has_synthetic_blank_before(5));
@@ -1072,28 +1026,14 @@ local x = 1";
 
     #[test]
     fn synthetic_remaining_flushes_in_anchor_order() {
-        let synthetic = vec![
-            SyntheticComment {
-                attached_to: 20,
-                text: "second".into(),
-                position: CommentPosition::Leading,
-            },
-            SyntheticComment {
-                attached_to: 10,
-                text: "first".into(),
-                position: CommentPosition::Leading,
-            },
-        ];
-        let mut f = formatter_over(Comments::synthetic(synthetic));
-        write_remaining_comments(&mut f, false);
-        let texts: Vec<&str> = f
-            .elements()
-            .iter()
-            .filter_map(|element| {
-                if let FormatElement::Text(text, _) = element { Some(text.as_str()) } else { None }
-            })
-            .collect();
-        assert_eq!(texts, vec!["-- first", "-- second"]);
+        let allocator = Allocator::new();
+        let store = Comments::synthetic([
+            synthetic(20, "second", CommentPosition::Leading),
+            synthetic(10, "first", CommentPosition::Leading),
+        ]);
+        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        f.write_remaining_comments(false);
+        assert_eq!(texts(&f), ["-- first", "-- second"]);
     }
 
     #[test]
@@ -1103,7 +1043,7 @@ local x = 1";
 local x=1
 -- luck: format on
 local y = 2";
-        let source_comments = vec![
+        let source_comments = [
             make_comment(0, 19, 20, CommentKind::Line, CommentPosition::Leading),
             make_comment(30, 49, 50, CommentKind::Line, CommentPosition::Leading),
         ];
