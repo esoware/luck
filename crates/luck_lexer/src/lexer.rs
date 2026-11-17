@@ -123,6 +123,10 @@ impl<'source> Lexer<'source> {
     /// whole stream. Comments and errors accumulate on the lexer; collect
     /// them with [`Lexer::finish`] once the caller has drained to EOF.
     /// Returns the same EOF token forever once the source is exhausted.
+    ///
+    /// Always inlined, so call it from one place, as the parser does.
+    #[expect(clippy::inline_always, reason = "measured: the parser runs 2-4% faster for it")]
+    #[inline(always)]
     pub fn next_token(&mut self) -> Token {
         self.lex_token()
     }
