@@ -18,5 +18,5 @@ pub(crate) fn document_under(
 ) -> DocumentState {
     let settings =
         DocumentSettings { path: None, project: Arc::new(project), target, is_included: true };
-    DocumentState::new(text, 1, Arc::new(settings), Allocator::new())
+    DocumentState::new([text], 1, Arc::new(settings), Allocator::new())
 }

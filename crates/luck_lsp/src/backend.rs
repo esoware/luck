@@ -277,7 +277,7 @@ impl<N: Notifier> Backend<N> {
             self.documents.write().await.remove(uri);
             return None;
         };
-        let state = current.with_text(&text, version, spare.take().unwrap_or_default());
+        let state = current.with_text(text.pieces(), version, spare.take().unwrap_or_default());
         // Unheld, the version it replaces can lend the next one its arena.
         drop(current);
         Some(self.store(uri, state, spare).await)
@@ -426,7 +426,8 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                     continue;
                 };
                 let arena = spare.take().unwrap_or_default();
-                let state = DocumentState::new(current.text(), current.version(), settings, arena);
+                let state =
+                    DocumentState::new([current.text()], current.version(), settings, arena);
                 drop(current);
                 let document = self.store(&uri, state, &mut spare).await;
                 drop(spare);
@@ -449,7 +450,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
             let settings = self.document_settings(&uri).await;
             let (text, version) = (&params.text_document.text, params.text_document.version);
             let state =
-                DocumentState::new(text, version, settings, spare.take().unwrap_or_default());
+                DocumentState::new([text], version, settings, spare.take().unwrap_or_default());
             let document = self.store(&uri, state, &mut spare).await;
             drop(spare);
             document
@@ -484,7 +485,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                 && current.text() != text
             {
                 let arena = spare.take().unwrap_or_default();
-                let state = current.with_text(&text, current.version(), arena);
+                let state = current.with_text([&text], current.version(), arena);
                 drop(current);
                 let document = self.store(&uri, state, &mut spare).await;
                 drop(spare);

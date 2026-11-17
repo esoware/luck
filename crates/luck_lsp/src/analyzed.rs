@@ -64,11 +64,11 @@ const _: () = {
 unsafe impl Sync for Analyzed {}
 
 impl Analyzed {
-    /// Copies `text` into `allocator`, then parses and analyzes it there for
-    /// `target`, with `config`'s extra globals defined. The tokens the parse
-    /// read come back beside it.
-    pub(crate) fn new(
-        text: &str,
+    /// Copies the pieces of `text`, joined, into `allocator`, then parses and
+    /// analyzes them there for `target`, with `config`'s extra globals
+    /// defined. The tokens the parse read come back beside it.
+    pub(crate) fn new<const PIECES: usize>(
+        text: [&str; PIECES],
         target: LuaTarget,
         config: &LintConfig,
         allocator: Allocator,
@@ -78,7 +78,7 @@ impl Analyzed {
         // only after the parse and the analysis do. Nothing built keeps this
         // reference to `allocator` itself.
         let arena: &'static Allocator = unsafe { NonNull::from(&allocator).as_ref() };
-        let source = arena.alloc_str(text);
+        let source = arena.alloc_concat_strs_array(text);
         let (parsed, tokens) = luck_parser::parse_with_tokens(arena, source, target.lua_version());
         let parse = NonNull::from(arena.alloc(ManuallyDrop::new(parsed))).cast::<ParseResult<'_>>();
         // SAFETY: `parse` was just written, and only `ArenaParse` drops it.

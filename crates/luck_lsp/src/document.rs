@@ -46,21 +46,43 @@ pub(crate) struct DocumentState {
     highlights: OnceLock<Highlights>,
 }
 
+/// A version's text, as what a change inserts and the text of the version
+/// before it on either side, so a change copies the text it keeps once,
+/// into the next version's arena.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ChangedText<'current> {
+    pub before: &'current str,
+    pub inserted: String,
+    pub after: &'current str,
+}
+
+impl ChangedText<'_> {
+    pub(crate) fn pieces(&self) -> [&str; 3] {
+        [self.before, &self.inserted, self.after]
+    }
+}
+
 impl DocumentState {
-    /// Parses and analyzes `text` in `arena`, which this version then owns.
-    pub(crate) fn new(
-        text: &str,
+    /// Parses and analyzes the pieces of `text`, joined, in `arena`, which
+    /// this version then owns.
+    pub(crate) fn new<const PIECES: usize>(
+        text: [&str; PIECES],
         version: i32,
         settings: Arc<DocumentSettings>,
         arena: Allocator,
     ) -> Self {
         let (analyzed, tokens) =
             Analyzed::new(text, settings.target, &settings.project.lint_config, arena);
-        let line_index = LineIndex::new(text);
+        let line_index = LineIndex::new(analyzed.parse().source);
         Self { version, settings, analyzed, line_index, tokens, highlights: OnceLock::new() }
     }
 
-    pub(crate) fn with_text(&self, text: &str, version: i32, arena: Allocator) -> Self {
+    pub(crate) fn with_text<const PIECES: usize>(
+        &self,
+        text: [&str; PIECES],
+        version: i32,
+        arena: Allocator,
+    ) -> Self {
         Self::new(text, version, Arc::clone(&self.settings), arena)
     }
 
@@ -159,26 +181,34 @@ impl DocumentState {
     pub(crate) fn changed_text(
         &self,
         changes: Vec<TextDocumentContentChangeEvent>,
-    ) -> Option<String> {
-        let mut text = self.text().to_owned();
-        let mut rebuilt_index = None;
-        let mut remaining_changes = changes.into_iter().peekable();
-        while let Some(change) = remaining_changes.next() {
+    ) -> Option<ChangedText<'_>> {
+        let source = self.text();
+        let mut remaining = changes.into_iter().peekable();
+        let Some(first) = remaining.next() else {
+            return Some(ChangedText { before: source, inserted: String::new(), after: "" });
+        };
+        let (before, after) = match first.range {
+            Some(range) => {
+                let byte_range = self.line_index.byte_range(source, range)?;
+                (source.get(..byte_range.start)?, source.get(byte_range.end..)?)
+            }
+            None => ("", ""),
+        };
+        if remaining.peek().is_none() {
+            return Some(ChangedText { before, inserted: first.text, after });
+        }
+        // Each later change's range is relative to what the one before it
+        // made.
+        let mut text = [before, &first.text, after].concat();
+        for change in remaining {
             if let Some(range) = change.range {
-                let line_index = rebuilt_index.as_ref().unwrap_or(&self.line_index);
-                let byte_range = line_index.byte_range(&text, range)?;
+                let byte_range = LineIndex::new(&text).byte_range(&text, range)?;
                 text.replace_range(byte_range, &change.text);
             } else {
                 text = change.text;
             }
-            // The next change's range is relative to this change's result.
-            // `DocumentState::new` rebuilds the final index, so the last
-            // change skips it.
-            if remaining_changes.peek().is_some() {
-                rebuilt_index = Some(LineIndex::new(&text));
-            }
         }
-        Some(text)
+        Some(ChangedText { before: "", inserted: text, after: "" })
     }
 }
 
@@ -237,7 +267,7 @@ local aa = 11",
             replace(Range::new(Position::new(3, 10), Position::new(3, 11)), "30"),
         ]);
         assert_eq!(
-            text.as_deref(),
+            text.map(|changed| changed.pieces().concat()).as_deref(),
             Some(
                 "\
 local a = 10
@@ -247,6 +277,19 @@ local c = 30"
             ),
             "second edit must land on the line shifted by the first"
         );
+    }
+
+    #[test]
+    fn one_change_keeps_the_text_around_it_in_place() {
+        let document = document("local a = 1", LuaTarget::Lua54);
+        let text = document
+            .changed_text(vec![replace(Range::new(Position::new(0, 6), Position::new(0, 7)), "b")]);
+        assert_eq!(
+            text,
+            Some(ChangedText { before: "local ", inserted: "b".to_owned(), after: " = 1" })
+        );
+        let unchanged = document.changed_text(Vec::new()).expect("no change fits");
+        assert_eq!(unchanged.pieces().concat(), "local a = 1");
     }
 
     #[test]
