@@ -787,8 +787,8 @@ mod tests {
     use rustc_hash::FxHashMap;
 
     use super::*;
+    use crate::discovery::{ParsedModule, parse_module};
     use crate::dynamic_require::DynamicRequire;
-    use crate::graph::{ParsedModule, parse_module};
 
     struct ModuleFixture<'ast> {
         info: ModuleInfo<'ast>,

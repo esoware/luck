@@ -12,7 +12,7 @@ use crate::dynamic_require::DynamicRequire;
 use crate::exports::Exports;
 
 /// A `require("literal")` call that reaches the global `require`.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct RequireSite<'ast> {
     /// The require string with escapes decoded, as real `require` would
     /// receive it.

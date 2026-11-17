@@ -1,25 +1,20 @@
-use alloc::collections::VecDeque;
 use std::path::Path;
 
 use luck_allocator::Allocator;
 use luck_core::Diagnostic;
-use luck_resolver::{
-    ResolveRequest, ResolvedModule, Resolver, native_path, normalize_path, read_source_file,
-};
-use luck_token::{CommentKind, LuaVersion, Span, leading_hot_comments};
+use luck_resolver::normalize_path;
+use luck_token::{LuaVersion, Span};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
+use crate::discovery::{Discovered, Reader, ResolvedModuleInfo, discover_reachable};
 use crate::dynamic_require::DynamicRequire;
-use crate::loader::PREFIX_STEM;
 use crate::module::{Dependency, ModuleId, ModuleInfo};
-use crate::relative_path::{absolute_project_root, make_relative};
-use crate::require_extraction::{ExtractedRequires, RequireSite, extract_requires};
+use crate::relative_path::absolute_project_root;
 
-const MAX_MODULE_COUNT: usize = 10_000;
-const MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
+pub(crate) const MAX_MODULE_COUNT: usize = 10_000;
 
 #[derive(Debug, Clone, Copy)]
 pub struct BundleOptions<'input> {
@@ -44,215 +39,58 @@ pub struct DependencyGraph<'ast> {
 }
 
 impl<'ast> DependencyGraph<'ast> {
-    /// Reads and parses every module the entry reaches into `allocator`.
+    /// Reads and parses every module the entry reaches, each into the arena
+    /// of the thread that reads it.
+    ///
+    /// Each arena after the first backs a thread that reads modules and
+    /// resolves requires as the calling thread hands them out. The calling
+    /// thread reads the entry into the first arena, and takes a task itself
+    /// only while no other thread is busy, so it does all the work when
+    /// there's one arena or one task at a time. The graph and its diagnostics
+    /// are the same however many arenas there are.
     ///
     /// # Errors
     ///
     /// Returns every error found during discovery, such as unreadable,
     /// oversized, or unparsable files, the entry included, and unresolved or
     /// ambiguous requires.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `arenas` is empty.
     pub fn build(
-        allocator: &'ast Allocator,
+        arenas: &'ast mut [Allocator],
         entry_path: &Path,
         options: &BundleOptions<'_>,
     ) -> Result<Self, Vec<Diagnostic>> {
-        // Emitted paths are made relative to this, so it must be absolute
-        // and normalized. `luck bundle main.lua` passes the entry's parent,
-        // which is empty for a bare file name.
-        let root = absolute_project_root(options.project_root);
-        let mut discoverer = Discoverer::new(options, &root);
-        let entry = normalize_path(entry_path);
-        let mut by_path = discover_reachable(allocator, &mut discoverer, &entry);
-        number_modules(entry, &mut by_path, |path| discoverer.discover(allocator, path))
+        build_graph(arenas, entry_path, options).1
     }
 }
 
-/// Everything one module's discovery finds, which depends on no other
-/// module.
-struct Discovered<'ast> {
-    errors: Vec<Diagnostic>,
-    warnings: Vec<Diagnostic>,
-    /// `None` when the file can't be read or is too large.
-    module: Option<ResolvedModuleInfo<'ast>>,
-}
-
-struct ResolvedModuleInfo<'ast> {
-    /// Every field but the dependencies, which need module ids.
-    info: ModuleInfo<'ast>,
-    /// Each require and the path it resolves to, in source order. `None`
-    /// when it doesn't resolve.
-    requires: Vec<(RequireSite<'ast>, Option<String>)>,
-}
-
-impl Discovered<'_> {
-    fn resolved_paths(&self) -> impl Iterator<Item = &String> {
-        self.module.iter().flat_map(|module| &module.requires).filter_map(|(_, path)| path.as_ref())
-    }
-}
-
-/// What discovering a module takes, apart from the module, on one thread.
-struct Discoverer<'input> {
-    version: LuaVersion,
-    dynamic_require: DynamicRequire,
-    /// From [`absolute_project_root`].
-    project_root: &'input str,
-    resolver: Resolver<'input>,
-}
-
-impl<'input> Discoverer<'input> {
-    fn new(options: &BundleOptions<'input>, project_root: &'input str) -> Self {
-        Self {
-            version: options.version,
-            dynamic_require: options.dynamic_require,
-            project_root,
-            resolver: Resolver::new(options.version, options.search_paths, Path::new(project_root)),
-        }
-    }
-
-    /// Reads and parses the module at `path` into `allocator` and resolves
-    /// its requires. A file that can't be read or is too large records the
-    /// error and nothing else.
-    fn discover<'ast>(&mut self, allocator: &'ast Allocator, path: &str) -> Discovered<'ast> {
-        let unreadable =
-            |error| Discovered { errors: vec![error], warnings: Vec::new(), module: None };
-        let file = match read_source_file(native_path(path)) {
-            Ok(file) => file,
-            Err(io_error) => {
-                return unreadable(Diagnostic::e010(path, Span::default(), &io_error.to_string()));
-            }
-        };
-        if file.len() > MAX_FILE_SIZE {
-            return unreadable(Diagnostic::e012(path, Span::default(), file.len(), MAX_FILE_SIZE));
-        }
-        let source = allocator.alloc_str(&file);
-        drop(file);
-
-        let relative_path = make_relative(path, self.project_root);
-        let ParsedModule { info, sites, mut errors, mut warnings } = parse_module(
-            allocator,
-            path.to_owned(),
-            relative_path,
-            source,
-            self.version,
-            self.dynamic_require,
-        );
-        let mut requires = Vec::with_capacity(sites.len());
-        for site in sites {
-            let request = ResolveRequest {
-                module: site.require_string,
-                from_file: path,
-                span: site.call_span,
-            };
-            let resolved = match self.resolver.resolve(&request) {
-                Ok(ResolvedModule { path: target, warnings: resolve_warnings }) => {
-                    warnings.extend(resolve_warnings);
-                    Some(target)
-                }
-                Err(diag) => {
-                    errors.push(diag);
-                    None
-                }
-            };
-            requires.push((site, resolved));
-        }
-        Discovered { errors, warnings, module: Some(ResolvedModuleInfo { info, requires }) }
-    }
-}
-
-/// A module parsed and analyzed, before its requires resolve.
-pub(crate) struct ParsedModule<'ast> {
-    /// Every field but the dependencies.
-    pub info: ModuleInfo<'ast>,
-    /// In source order.
-    pub sites: Vec<RequireSite<'ast>>,
-    /// Parse errors, then the analysis's.
-    pub errors: Vec<Diagnostic>,
-    pub warnings: Vec<Diagnostic>,
-}
-
-/// Parses `source`, the module at `path`, into `allocator` and analyzes its
-/// tree.
-pub(crate) fn parse_module<'ast>(
-    allocator: &'ast Allocator,
-    path: String,
-    relative_path: String,
-    source: &'ast str,
-    version: LuaVersion,
-    dynamic_require: DynamicRequire,
-) -> ParsedModule<'ast> {
-    let parsed = luck_parser::parse(allocator, source, version);
-    let mut errors: Vec<Diagnostic> =
-        parsed.errors.iter().map(|error| Diagnostic::e008(&path, error)).collect();
-    let mut warnings = Vec::new();
-    let ExtractedRequires {
-        sites,
-        dynamic_callees,
-        diags,
-        has_vararg_read,
-        has_global_arg_read,
-        has_env_rebinding,
-        max_function_upvalues,
-        exports,
-    } = extract_requires(allocator, &parsed.block, source, &path, version, dynamic_require);
-    for diag in diags {
-        if diag.is_error() {
-            errors.push(diag);
-        } else {
-            warnings.push(diag);
-        }
-    }
-    let hot_comments = if version.is_luau() {
-        leading_hot_comments(&parsed.comments, source).map(|comment| comment.span).collect()
-    } else {
-        Vec::new()
-    };
-    let shebang = parsed
-        .comments
-        .first()
-        .filter(|comment| comment.kind == CommentKind::Shebang)
-        .map(|comment| comment.span);
-    let info = ModuleInfo {
-        path,
-        relative_path,
-        source,
-        block: parsed.block,
-        nesting_depth: parsed.nesting_depth,
-        dependencies: Vec::new(),
-        dynamic_callees,
-        hot_comments,
-        shebang,
-        has_vararg_read,
-        has_global_arg_read,
-        has_env_rebinding,
-        max_function_upvalues,
-        has_prefix_stem: source.contains(PREFIX_STEM),
-        exports,
-    };
-    ParsedModule { info, sites, errors, warnings }
-}
-
-/// Discovers every module `entry` reaches, by canonical path, stopping once
-/// more modules are known than a graph may hold.
-fn discover_reachable<'ast>(
-    allocator: &'ast Allocator,
-    discoverer: &mut Discoverer<'_>,
-    entry: &str,
-) -> FxHashMap<String, Discovered<'ast>> {
-    let mut by_path = FxHashMap::default();
-    let mut seen: FxHashSet<String> = FxHashSet::default();
-    seen.insert(entry.to_owned());
-    let mut queue = VecDeque::from([entry.to_owned()]);
-    while let Some(path) = queue.pop_front() {
-        let module = discoverer.discover(allocator, &path);
-        for target in module.resolved_paths() {
-            if seen.len() <= MAX_MODULE_COUNT && !seen.contains(target) {
-                seen.insert(target.clone());
-                queue.push_back(target.clone());
-            }
-        }
-        by_path.insert(path, module);
-    }
-    by_path
+/// [`DependencyGraph::build`], and the first of `arenas`, which the calling
+/// thread keeps.
+///
+/// # Panics
+///
+/// Panics if `arenas` is empty.
+pub(crate) fn build_graph<'ast>(
+    arenas: &'ast mut [Allocator],
+    entry_path: &Path,
+    options: &BundleOptions<'_>,
+) -> (&'ast Allocator, Result<DependencyGraph<'ast>, Vec<Diagnostic>>) {
+    #[expect(clippy::expect_used, reason = "the caller gives the calling thread an arena")]
+    let (first, spare_arenas) = arenas.split_first_mut().expect("an arena for the calling thread");
+    let allocator: &'ast Allocator = first;
+    // Emitted paths are made relative to this, so it must be absolute and
+    // normalized. `luck bundle main.lua` passes the entry's parent, which is
+    // empty for a bare file name.
+    let root = absolute_project_root(options.project_root);
+    let mut reader = Reader::new(options, &root);
+    let entry = normalize_path(entry_path);
+    let mut found =
+        discover_reachable(allocator, spare_arenas, &mut reader, &entry, options, &root);
+    let graph = number_modules(entry, &mut found, |path| reader.discover(allocator, path));
+    (allocator, graph)
 }
 
 /// Numbers the modules breadth-first from `entry`, in require order.
@@ -266,7 +104,7 @@ fn discover_reachable<'ast>(
 /// Returns the errors discovery found.
 fn number_modules<'ast>(
     entry: String,
-    by_path: &mut FxHashMap<String, Discovered<'ast>>,
+    found: &mut FxHashMap<String, Discovered<'ast>>,
     mut discover: impl FnMut(&str) -> Discovered<'ast>,
 ) -> Result<DependencyGraph<'ast>, Vec<Diagnostic>> {
     let mut ids: FxHashMap<String, ModuleId> = FxHashMap::default();
@@ -282,7 +120,7 @@ fn number_modules<'ast>(
             break;
         }
         let Discovered { errors: module_errors, warnings: module_warnings, module } =
-            by_path.remove(path).unwrap_or_else(|| discover(path));
+            found.remove(path).unwrap_or_else(|| discover(path));
         errors.extend(module_errors);
         warnings.extend(module_warnings);
         if let Some(ResolvedModuleInfo { mut info, requires }) = module {

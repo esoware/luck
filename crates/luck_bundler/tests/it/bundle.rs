@@ -12,7 +12,7 @@ use luck_core::Diagnostic;
 use luck_token::LuaVersion;
 use tempfile::TempDir;
 
-use crate::common::bundle_both;
+use crate::common::{arenas, bundle_both};
 
 fn fixture_directory(dialect: &str, name: &str) -> PathBuf {
     let manifest_directory = env!("CARGO_MANIFEST_DIR");
@@ -776,6 +776,27 @@ require(\"bad\")
 }
 
 #[test]
+fn require_that_resolves_nowhere_flags_e004_in_each_module_making_it() {
+    let directory = temp_project(&[
+        (
+            "main.lua",
+            b"require(\"a\")
+require(\"b\")
+",
+        ),
+        ("a.lua", b"require(\"missing\")\n"),
+        ("b.lua", b"require(\"missing\")\n"),
+    ])
+    .expect("project");
+    let errors =
+        bundle_lua_project(directory.path()).expect_err("an unresolved module must not bundle");
+    assert_eq!(codes(&errors), ["E004", "E004"], "{errors:?}");
+    let files: Vec<&str> =
+        errors.iter().filter_map(|error| error.file_path.rsplit('/').next()).collect();
+    assert_eq!(files, ["a.lua", "b.lua"], "{errors:?}");
+}
+
+#[test]
 fn oversized_dependency_reports_e012_once_for_its_requirers() {
     let oversized = vec![b'-'; 10 * 1024 * 1024 + 1];
     let directory = temp_project(&[
@@ -810,9 +831,9 @@ require(\"b\")
         ("b.lua", RETURN_ONE),
     ])
     .expect("project");
-    let allocator = Allocator::new();
+    let mut arenas = arenas(2);
     let graph = DependencyGraph::build(
-        &allocator,
+        &mut arenas,
         &directory.path().join("main.lua"),
         &BundleOptions {
             version: LuaVersion::Lua54,

@@ -7,7 +7,7 @@ use luck_minifier::TransformConfig;
 
 use crate::block_emitter;
 use crate::emitter::{self, LineMapEntry};
-use crate::graph::{BundleOptions, DependencyGraph};
+use crate::graph::{BundleOptions, build_graph};
 
 #[derive(Debug)]
 pub struct BundleResult {
@@ -31,19 +31,24 @@ pub struct MinifiedBundle {
 }
 
 /// Bundles the modules `entry_path` reaches, whose sources and trees go in
-/// `allocator`.
+/// `arenas` as [`DependencyGraph::build`](crate::DependencyGraph::build) puts them there.
 ///
 /// # Errors
 ///
 /// Returns every diagnostic that stopped the graph from building, as
-/// [`DependencyGraph::build`] does, or an E013 for each construct that a
+/// [`DependencyGraph::build`](crate::DependencyGraph::build) does, or an E013 for each construct that a
 /// module's wrapper would nest past [`luck_ast::MAX_NESTING_DEPTH`].
+///
+/// # Panics
+///
+/// Panics if `arenas` is empty.
 pub fn bundle(
-    allocator: &Allocator,
+    arenas: &mut [Allocator],
     entry_path: &Path,
     options: &BundleOptions<'_>,
 ) -> Result<BundleResult, Vec<Diagnostic>> {
-    let mut graph = DependencyGraph::build(allocator, entry_path, options)?;
+    let (allocator, built) = build_graph(arenas, entry_path, options);
+    let mut graph = built?;
     let (output, line_map) = emitter::emit(allocator, &mut graph, options.version)?;
     Ok(BundleResult {
         output,
@@ -54,19 +59,24 @@ pub fn bundle(
 }
 
 /// The bundle [`bundle`] writes, minified from the tree that holds each
-/// module's own parse, so its text is never parsed again.
+/// module's own parse, so its text is never parsed again. The nodes it builds
+/// go in the first of `arenas`.
 ///
 /// # Errors
 ///
 /// Returns what [`bundle`] does.
-#[expect(clippy::missing_panics_doc, reason = "the emitter refuses a tree past the cap")]
+///
+/// # Panics
+///
+/// Panics if `arenas` is empty.
 pub fn bundle_minified(
-    allocator: &Allocator,
+    arenas: &mut [Allocator],
     entry_path: &Path,
     options: &BundleOptions<'_>,
     transforms: &TransformConfig,
 ) -> Result<MinifiedBundle, Vec<Diagnostic>> {
-    let mut graph = DependencyGraph::build(allocator, entry_path, options)?;
+    let (allocator, built) = build_graph(arenas, entry_path, options);
+    let mut graph = built?;
     let warnings = mem::take(&mut graph.warnings);
     let source_files = graph.modules.iter().map(|module| module.path.clone()).collect();
     let source_byte_count = graph.modules.iter().map(|module| module.source.len()).sum();
