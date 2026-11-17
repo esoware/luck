@@ -20,7 +20,7 @@ use luck_token::{BinOp, LuaVersion, UnOp};
 
 use super::Compressor;
 use super::simplify_parens;
-use super::simplify_statements::has_no_else;
+use super::simplify_statements::{has_no_else, holds_nested_if};
 use crate::binding::{
     has_attributed_or_env_name, has_fixed_binding, is_droppable_function, local_of,
 };
@@ -360,16 +360,24 @@ impl<'ast> Compressor<'_, 'ast> {
         let Statement::IfStatement(if_stmt) = stmt else {
             return true;
         };
+        let is_in_run = mem::take(&mut self.is_in_if_run);
+        let holds_run = holds_nested_if(if_stmt);
         if !self.config.remove_dead_code {
-            self.walk_if(if_stmt);
-            self.merge_nested_ifs(if_stmt);
+            self.walk_if(if_stmt, holds_run);
+            if !is_in_run {
+                self.merge_nested_ifs(if_stmt, self.depth);
+            }
             return true;
         }
         let IfStatement { condition, block, elseif_clauses, else_clause, .. } = &mut **if_stmt;
         self.visit_expr(condition);
         let mut has_head = match constant_truthiness(condition) {
             Some(true) => {
-                self.visit_block(block);
+                self.visit_run_block(block, holds_run);
+                // The `if`s under it left their merge to this one, which goes.
+                if holds_run && let [Statement::IfStatement(inner)] = &mut *block.stmts {
+                    self.merge_nested_ifs(inner, self.depth.saturating_add(1));
+                }
                 self.retract_arms(elseif_clauses, else_clause.as_ref());
                 *stmt = do_block(self.allocator, block.take());
                 self.has_changed = true;
@@ -380,7 +388,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 false
             }
             None => {
-                self.visit_block(block);
+                self.visit_run_block(block, holds_run);
                 true
             }
         };
@@ -441,7 +449,9 @@ impl<'ast> Compressor<'_, 'ast> {
             };
         }
         self.trade_branches(if_stmt);
-        self.merge_nested_ifs(if_stmt);
+        if !is_in_run {
+            self.merge_nested_ifs(if_stmt, self.depth);
+        }
         // An empty-body `if` can only go when evaluating the condition is
         // side-effect free: `if f() then end` calls f.
         let is_dead = has_no_else(if_stmt)
@@ -453,9 +463,17 @@ impl<'ast> Compressor<'_, 'ast> {
         !is_dead
     }
 
-    fn walk_if(&mut self, if_stmt: &mut IfStatement<'ast>) {
+    /// An `if` whose one statement is an `if` merges the run that starts
+    /// there, so the one inside leaves it.
+    fn visit_run_block(&mut self, block: &mut Block<'ast>, holds_run: bool) {
+        self.is_in_if_run = holds_run && self.config.simplify_statements;
+        self.visit_block(block);
+        self.is_in_if_run = false;
+    }
+
+    fn walk_if(&mut self, if_stmt: &mut IfStatement<'ast>, holds_run: bool) {
         self.visit_expr(&mut if_stmt.condition);
-        self.visit_block(&mut if_stmt.block);
+        self.visit_run_block(&mut if_stmt.block, holds_run);
         for clause in &mut if_stmt.elseif_clauses {
             self.visit_expr(&mut clause.condition);
             self.visit_block(&mut clause.block);

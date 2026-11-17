@@ -57,6 +57,14 @@ pub(super) fn has_no_else(if_stmt: &IfStatement<'_>) -> bool {
     if_stmt.elseif_clauses.is_empty() && if_stmt.else_clause.is_none()
 }
 
+/// Whether `if_stmt`'s one statement is an `if` that
+/// [`Compressor::merge_nested_ifs`] can take into it.
+pub(super) fn holds_nested_if(if_stmt: &IfStatement<'_>) -> bool {
+    has_no_else(if_stmt)
+        && if_stmt.block.last_stmt.is_none()
+        && matches!(&*if_stmt.block.stmts, [Statement::IfStatement(inner)] if has_no_else(inner))
+}
+
 /// `first` and each of `rest` joined by `op`, which is `and` or `or`.
 ///
 /// Both are associative, so an operand that is a bare run of `op` joins the
@@ -119,32 +127,47 @@ fn if_return_guard<'tree, 'ast>(
 )]
 impl<'ast> Compressor<'_, 'ast> {
     /// `if a then if b then X end end` becomes `if a and b then X end`, for
-    /// every level of the run at once. The run of `and`s is one level, so each
-    /// condition is measured once, for the `and` and a pair of parentheses it
-    /// can gain.
-    pub(super) fn merge_nested_ifs(&mut self, outer_if: &mut IfStatement<'ast>) {
-        if !self.config.simplify_statements || !has_no_else(outer_if) {
+    /// every level of the run at once, so an `if` inside the run leaves its
+    /// own merge to this one, which builds the run of `and`s once. The run is
+    /// one level, so each condition is measured once, for the `and` and a pair
+    /// of parentheses it can gain. An `if` whose condition doesn't fit `depth`
+    /// levels down, where this one is, starts a run of its own.
+    pub(super) fn merge_nested_ifs(&mut self, outer_if: &mut IfStatement<'ast>, depth: usize) {
+        if !self.config.simplify_statements {
             return;
         }
-        let mut inner_conditions = Vec::new();
-        while outer_if.block.last_stmt.is_none()
-            && matches!(
-                &*outer_if.block.stmts,
-                [Statement::IfStatement(inner_if)]
-                    if has_no_else(inner_if) && self.fits(self.depth, 2, &inner_if.condition)
-            )
-            && (!inner_conditions.is_empty() || self.fits(self.depth, 2, &outer_if.condition))
-            && let Some(Statement::IfStatement(inner_if)) =
-                outer_if.block.stmts.first_mut().map(Statement::take)
-        {
-            let IfStatement { condition, block, .. } = inner_if.unbox();
-            inner_conditions.push(condition);
-            outer_if.block = block;
-        }
-        if !inner_conditions.is_empty() {
-            outer_if.condition =
-                logical(self.allocator, BinOp::And, outer_if.condition.take(), inner_conditions);
-            self.has_changed = true;
+        let mut head = outer_if;
+        let mut head_depth = depth;
+        while has_no_else(head) {
+            let mut inner_conditions = Vec::new();
+            while head.block.last_stmt.is_none()
+                && matches!(
+                    &*head.block.stmts,
+                    [Statement::IfStatement(inner_if)]
+                        if has_no_else(inner_if) && self.fits(head_depth, 2, &inner_if.condition)
+                )
+                && (!inner_conditions.is_empty() || self.fits(head_depth, 2, &head.condition))
+                && let Some(Statement::IfStatement(inner_if)) =
+                    head.block.stmts.first_mut().map(Statement::take)
+            {
+                let IfStatement { condition, block, .. } = inner_if.unbox();
+                inner_conditions.push(condition);
+                head.block = block;
+            }
+            if !inner_conditions.is_empty() {
+                head.condition =
+                    logical(self.allocator, BinOp::And, head.condition.take(), inner_conditions);
+                self.has_changed = true;
+            }
+            if !holds_nested_if(head) {
+                break;
+            }
+            let Some(Statement::IfStatement(next)) = head.block.stmts.first_mut() else {
+                break;
+            };
+            head = &mut **next;
+            // Its block's level.
+            head_depth = head_depth.saturating_add(1);
         }
     }
 
@@ -247,6 +270,8 @@ impl<'ast> Compressor<'_, 'ast> {
 
 #[cfg(test)]
 mod tests {
+    use luck_allocator::Allocator;
+    use luck_ast::MAX_NESTING_DEPTH;
     use luck_token::LuaVersion;
 
     use crate::fixtures::{NO_PASSES, minify_with};
@@ -309,6 +334,26 @@ mod tests {
             simplify(&source),
             format!("if(a or b){}then x()end", "and(a or b)".repeat(199))
         );
+        let both = TransformConfig { remove_dead_code: true, ..STATEMENTS };
+        for (dropped_if, expected) in [
+            ("if true then if a then if b then x() end end end", "if a and b then x()end"),
+            ("if a then if true then if b then x() end end end", "if a and b then x()end"),
+        ] {
+            assert_eq!(minify_with(dropped_if, LuaVersion::Lua54, &both), expected, "{dropped_if}");
+        }
+    }
+
+    #[test]
+    fn merges_a_run_of_nested_ifs_once_however_deep() {
+        // Merged an `if` at a time, the run of `and`s was copied at every level.
+        // The chunk's block and the call take the levels the `if`s leave.
+        let ifs = MAX_NESTING_DEPTH - 2;
+        let source = format!("{}x(){}", "if a then ".repeat(ifs), " end".repeat(ifs));
+        let allocator = Allocator::new();
+        let output = crate::minify(&allocator, &source, LuaVersion::Lua54, &STATEMENTS);
+        let expected = format!("if a{} then x()end", " and a".repeat(ifs - 1));
+        assert!(output.as_ref() == Ok(&expected), "{:?}", output.map(|text| text.len()));
+        assert!(allocator.used_bytes() < 64 * source.len(), "{}", allocator.used_bytes());
     }
 
     #[test]

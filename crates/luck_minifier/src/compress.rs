@@ -68,6 +68,7 @@ pub(crate) fn compress<'ast>(
     }
 }
 
+#[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the walk")]
 pub(crate) struct Compressor<'walk, 'ast> {
     allocator: &'ast Allocator,
     version: LuaVersion,
@@ -107,6 +108,9 @@ pub(crate) struct Compressor<'walk, 'ast> {
     late_calls: Vec<(usize, Statement<'ast>)>,
     /// A block's statements while `do` blocks in it give up theirs.
     unwrapped_stmts: Vec<Statement<'ast>>,
+    /// Whether the `if` the walk enters next is the one statement of an `if`
+    /// that merges the run of nested `if`s it starts.
+    is_in_if_run: bool,
     respeller: Respeller,
     lifter: Lifter<'ast>,
 }
@@ -139,6 +143,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             group: Vec::new(),
             late_calls: Vec::new(),
             unwrapped_stmts: Vec::new(),
+            is_in_if_run: false,
             respeller: Respeller::default(),
             lifter: Lifter::default(),
         }
