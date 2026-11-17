@@ -1,38 +1,36 @@
-use luck_ast::{Block, Expression, MAX_NESTING_DEPTH, Synth, block_nesting_depth};
+use luck_allocator::Allocator;
+use luck_ast::{Block, Expression, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
 use luck_token::{BinOp, LuaVersion, UnOp};
 
-use crate::common::assert_compacts_to;
+use crate::common::{assert_compacts_to, assert_reprints};
 
 #[test]
-fn output_capacity_hint_never_changes_output() {
+fn a_capacity_hint_never_changes_the_output() {
     for version in LuaVersion::ALL {
         let source = format!(
             "\
 --{}
-local value = - -1; return value .. 'é'",
+local value = - -1; return value .. '\u{e9}'",
             "comment ".repeat(8192)
         );
-        let parsed = luck_parser::parse(&source, version);
+        let allocator = Allocator::new();
+        let parsed = luck_parser::parse(&allocator, &source, version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let expected = luck_codegen::compact(&parsed.block);
         for capacity in [0, 1, expected.len(), expected.len() + 1, source.len()] {
             let output = luck_codegen::compact_with_capacity(&parsed.block, capacity);
             assert_eq!(output, expected);
-            assert_compacts_to(&output, &expected, version);
         }
-    }
-    let synth = Synth::new();
-    let block = synth.block(Vec::new(), Some(synth.return_(vec![synth.string("source-free")])));
-    let expected = luck_codegen::compact(&block);
-    for capacity in [0, 1, 1024] {
-        assert_eq!(luck_codegen::compact_with_capacity(&block, capacity), expected);
+        assert_reprints(&expected, version);
     }
 }
 
 #[test]
 fn a_capacity_hint_the_allocator_cannot_meet_is_dropped() {
-    let synth = Synth::new();
-    let block = synth.block(Vec::new(), Some(synth.return_(vec![synth.number("1")])));
+    let allocator = Allocator::new();
+    let spans = SpanCounter::new();
+    let synth = Synth::new(&allocator, &spans);
+    let block = synth.block([], Some(synth.return_([synth.number("1")])));
     for capacity in [usize::MAX, isize::MAX.unsigned_abs()] {
         let output = luck_codegen::compact_with_capacity(&block, capacity);
         assert_eq!(output, "return 1", "capacity {capacity}");
@@ -40,37 +38,35 @@ fn a_capacity_hint_the_allocator_cannot_meet_is_dropped() {
 }
 
 /// Nests its operand exactly one level deeper.
-type Wrap = fn(&Synth, Expression) -> Expression;
+type Wrap = for<'ast> fn(Synth<'ast>, Expression<'ast>) -> Expression<'ast>;
 
 /// `return x`, with `wrap` applied to `x` until the block nests `depth` deep.
-fn nested_return(depth: usize, wrap: Wrap) -> Block {
-    let synth = Synth::new();
+fn nested_return(synth: Synth<'_>, depth: usize, wrap: Wrap) -> Block<'_> {
     let mut expr = synth.name_expr("x");
     for _ in 1..depth {
-        expr = wrap(&synth, expr);
+        expr = wrap(synth, expr);
     }
-    let block = synth.block(Vec::new(), Some(synth.return_(vec![expr])));
+    let block = synth.block([], Some(synth.return_([expr])));
     assert_eq!(block_nesting_depth(&block), depth, "each wrap adds one level");
     block
 }
 
-fn single_level_wraps() -> Vec<(&'static str, Wrap)> {
-    vec![
-        ("parentheses", |synth, expr| synth.parenthesized(expr)),
-        ("unary operator", |synth, expr| synth.unary_op(UnOp::Not, expr)),
-        ("call argument", |synth, expr| synth.call(synth.name_expr("f"), vec![expr])),
-        ("method argument", |synth, expr| synth.method_call(synth.name_expr("o"), "m", vec![expr])),
-        ("index", |synth, expr| synth.index(synth.name_expr("t"), expr)),
-        ("table", |synth, expr| synth.array(vec![expr])),
-    ]
-}
-
 #[test]
 fn a_tree_at_the_nesting_cap_prints_and_reparses() {
-    for (label, wrap) in single_level_wraps() {
-        let block = nested_return(MAX_NESTING_DEPTH, wrap);
+    let wraps: [(&str, Wrap); 6] = [
+        ("parentheses", |synth, expr| synth.parenthesized(expr)),
+        ("unary operator", |synth, expr| synth.unary_op(UnOp::Not, expr)),
+        ("call argument", |synth, expr| synth.call(synth.name_expr("f"), [expr])),
+        ("method argument", |synth, expr| synth.method_call(synth.name_expr("o"), "m", [expr])),
+        ("index", |synth, expr| synth.index(synth.name_expr("t"), expr)),
+        ("table", |synth, expr| synth.array([expr])),
+    ];
+    for (label, wrap) in wraps {
+        let allocator = Allocator::new();
+        let spans = SpanCounter::new();
+        let block = nested_return(Synth::new(&allocator, &spans), MAX_NESTING_DEPTH, wrap);
         let output = luck_codegen::compact(&block);
-        let reparsed = luck_parser::parse(output, LuaVersion::Lua54);
+        let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Lua54);
         assert!(reparsed.errors.is_empty(), "{label}: {:?}", reparsed.errors.first());
         assert_eq!(block_nesting_depth(&reparsed.block), MAX_NESTING_DEPTH, "{label}");
     }
@@ -78,19 +74,22 @@ fn a_tree_at_the_nesting_cap_prints_and_reparses() {
 
 #[test]
 fn a_run_of_any_length_prints_as_one_level() {
-    let synth = Synth::new();
+    let allocator = Allocator::new();
+    let spans = SpanCounter::new();
+    let synth = Synth::new(&allocator, &spans);
     let mut sum = synth.name_expr("x");
     let mut calls = synth.name_expr("f");
     for _ in 0..200_000u32 {
         sum = synth.binary_op(sum, BinOp::Add, synth.number("1"));
     }
     for _ in 0..2_000u32 {
-        calls = synth.call(calls, Vec::new());
+        calls = synth.call(calls, []);
     }
-    let block = synth.block(Vec::new(), Some(synth.return_(vec![sum, calls])));
+    let block = synth.block([], Some(synth.return_([sum, calls])));
     assert_eq!(block_nesting_depth(&block), 2);
     let output = luck_codegen::compact(&block);
-    let reparsed = luck_parser::parse(output.as_str(), LuaVersion::Lua54);
+    assert_eq!(output.len(), "return x".len() + 200_000 * 2 + ",f".len() + 2_000 * 2);
+    let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Lua54);
     assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors.first());
     assert_eq!(block_nesting_depth(&reparsed.block), 2);
     assert_eq!(luck_codegen::compact(&reparsed.block), output);
@@ -124,10 +123,6 @@ else
 end",
             "if a then x=1 y=2 elseif b then z=3 else w=4 end",
         ),
-        (
-            "if a then x = 1 elseif b then y = 2 else z = 3 end",
-            "if a then x=1 elseif b then y=2 else z=3 end",
-        ),
         ("if not a and not b then return -c .. d end", "if not a and not b then return-c..d end"),
         ("for  i = 1 , 10  do  end", "for i=1,10 do end"),
         ("for  i = 1 , 10 , 2  do  end", "for i=1,10,2 do end"),
@@ -146,9 +141,7 @@ fn functions_compact_to_minimal_whitespace() {
         ("function  f ( )  end", "function f()end"),
         ("function  a . b : c ( )  end", "function a.b:c()end"),
         ("local  function  f ( x , y )  return  x  end", "local function f(x,y)return x end"),
-        ("local function f(a, b) return a + b end", "local function f(a,b)return a+b end"),
         ("x  =  function ( )  end", "x=function()end"),
-        ("x = function(a) return a end", "x=function(a)return a end"),
         ("function  f ( ... )  return  ...  end", "function f(...)return...end"),
         ("function  f ( a , ... )  return  ...  end", "function f(a,...)return...end"),
         (
@@ -164,17 +157,13 @@ fn functions_compact_to_minimal_whitespace() {
 #[test]
 fn exprs_compact_to_minimal_whitespace() {
     for (source, expected) in [
-        ("x  =  a  +  b  *  c", "x=a+b*c"),
         ("x  =  a  +  b  *  ( c  -  d )  /  e", "x=a+b*(c-d)/e"),
         ("x  =  ( a  +  b )", "x=(a+b)"),
         ("x  =  not  y", "x=not y"),
         ("x  =  # t", "x=#t"),
-        ("return  \"a\"  ..  \"b\"", "return\"a\"..\"b\""),
-        ("x  =  \"a\"  ..  \"b\"  ..  \"c\"", "x=\"a\"..\"b\"..\"c\""),
-        ("x  =  a . b", "x=a.b"),
-        ("x  =  a . b . c . d", "x=a.b.c.d"),
-        ("x  =  a [ 1 ]", "x=a[1]"),
+        ("return  \"a\"  ..  \"b\"  ..  \"c\"", "return\"a\"..\"b\"..\"c\""),
         ("x  =  a . b . c [ 2 ]", "x=a.b.c[2]"),
+        ("return  ...  ..  x", "return.....x"),
     ] {
         assert_compacts_to(source, expected, LuaVersion::Lua51);
     }
@@ -183,12 +172,7 @@ fn exprs_compact_to_minimal_whitespace() {
 #[test]
 fn operators_compact_to_minimal_whitespace() {
     for (source, expected, version) in [
-        ("x = a + b", "x=a+b", LuaVersion::Lua51),
-        ("x = a - b", "x=a-b", LuaVersion::Lua51),
-        ("x = a * b", "x=a*b", LuaVersion::Lua51),
-        ("x = a / b", "x=a/b", LuaVersion::Lua51),
-        ("x = a % b", "x=a%b", LuaVersion::Lua51),
-        ("x = a ^ b", "x=a^b", LuaVersion::Lua51),
+        ("x = a + b - c * d / e % f ^ g", "x=a+b-c*d/e%f^g", LuaVersion::Lua51),
         ("x = a .. b", "x=a..b", LuaVersion::Lua51),
         ("x = a == b", "x=a==b", LuaVersion::Lua51),
         ("x = a ~= b", "x=a~=b", LuaVersion::Lua51),
@@ -196,20 +180,14 @@ fn operators_compact_to_minimal_whitespace() {
         ("x = a <= b", "x=a<=b", LuaVersion::Lua51),
         ("x = a > b", "x=a>b", LuaVersion::Lua51),
         ("x = a >= b", "x=a>=b", LuaVersion::Lua51),
-        ("x = a and b", "x=a and b", LuaVersion::Lua51),
-        ("x = a or b", "x=a or b", LuaVersion::Lua51),
+        ("x = a and b or c", "x=a and b or c", LuaVersion::Lua51),
         ("x = -a", "x=-a", LuaVersion::Lua51),
-        ("x = not a", "x=not a", LuaVersion::Lua51),
-        ("x = #a", "x=#a", LuaVersion::Lua51),
         ("x = - -a", "x=- -a", LuaVersion::Lua51),
         ("x = not not a", "x=not not a", LuaVersion::Lua51),
         // Lua 5.3+
         ("x = a // b", "x=a//b", LuaVersion::Lua53),
-        ("x = a & b", "x=a&b", LuaVersion::Lua53),
-        ("x = a | b", "x=a|b", LuaVersion::Lua53),
-        ("x = a ~ b", "x=a~b", LuaVersion::Lua53),
-        ("x = a << b", "x=a<<b", LuaVersion::Lua53),
-        ("x = a >> b", "x=a>>b", LuaVersion::Lua53),
+        ("x = a & b | c ~ d", "x=a&b|c~d", LuaVersion::Lua53),
+        ("x = a << b >> c", "x=a<<b>>c", LuaVersion::Lua53),
         ("x = ~a", "x=~a", LuaVersion::Lua53),
     ] {
         assert_compacts_to(source, expected, version);
@@ -220,11 +198,10 @@ fn operators_compact_to_minimal_whitespace() {
 fn tables_compact_to_minimal_whitespace() {
     for (source, expected) in [
         ("x  =  {  1 ,  2 ,  3  }", "x={1,2,3}"),
-        ("x  =  {  a  =  1 ,  b  =  2  }", "x={a=1,b=2}"),
+        ("x  =  {  a  =  1 ;  b  =  2 ;  }", "x={a=1,b=2}"),
         ("x  =  {  [ 1 ]  =  2  }", "x={[1]=2}"),
         ("x  =  {  }", "x={}"),
         ("x  =  { { 1 } , { 2 } }", "x={{1},{2}}"),
-        ("x = {1, 2, a = 3, [4] = 5}", "x={1,2,a=3,[4]=5}"),
         ("x = {a = 1, b = {c = 2}, [3] = function() end}", "x={a=1,b={c=2},[3]=function()end}"),
     ] {
         assert_compacts_to(source, expected, LuaVersion::Lua51);
@@ -236,6 +213,7 @@ fn calls_compact_to_minimal_whitespace() {
     for (source, expected) in [
         ("f ( 1 , 2 )", "f(1,2)"),
         ("f  \"hello\"", "f\"hello\""),
+        ("f  [[long]]", "f[[long]]"),
         ("f  {  1  }", "f{1}"),
         ("a : b ( 1 )", "a:b(1)"),
         ("f ( g ( h ( 1 ) ) )", "f(g(h(1)))"),
@@ -248,17 +226,12 @@ fn calls_compact_to_minimal_whitespace() {
 fn compact_input_prints_unchanged() {
     for source in [
         "local a,b,c=1,2,3",
-        "x=a+b-c*d/e%f^g",
         "x=a and b or c",
-        "x=not not not true",
         "x=#t+#s",
-        "return 1,2,3",
         "return'a'..'b'..'c'",
-        "f()",
         "f()()()",
         "a.b.c:d()()",
         "x={[1]=2,[3]=4}",
-        "for i=1,#t do end",
     ] {
         assert_compacts_to(source, source, LuaVersion::Lua51);
     }
@@ -268,11 +241,17 @@ fn compact_input_prints_unchanged() {
 fn version_gated_stmts_compact_to_minimal_whitespace() {
     for (source, expected, version) in [
         ("goto  skip  :: skip ::", "goto skip::skip::", LuaVersion::Lua52),
-        (";", ";", LuaVersion::Lua52),
         ("; ;", ";;", LuaVersion::Lua52),
+        ("local  x <const>, y <close> =  1, z", "local x<const>,y<close> =1,z", LuaVersion::Lua54),
         ("global  x", "global x", LuaVersion::Lua55),
         ("global  function  f ( )  end", "global function f()end", LuaVersion::Lua55),
         ("global  *", "global*", LuaVersion::Lua55),
+        ("global <const> *", "global<const>*", LuaVersion::Lua55),
+        (
+            "function  f ( ... t )  return  t  end",
+            "function f(...t)return t end",
+            LuaVersion::Lua55,
+        ),
     ] {
         assert_compacts_to(source, expected, version);
     }
@@ -281,9 +260,12 @@ fn version_gated_stmts_compact_to_minimal_whitespace() {
 #[test]
 fn luau_syntax_compacts_to_minimal_whitespace() {
     for (source, expected) in [
-        ("x  +=  1", "x+=1"),
+        ("x  +=  1  x ..= 'a'", "x+=1 x..='a'"),
         ("for  i = 1 , 10  do  continue  end", "for i=1,10 do continue end"),
-        ("local  x  =  if  a  then  1  else  2", "local x=if a then 1 else 2"),
+        (
+            "local  x  =  if  a  then  1  elseif b then 2 else  3",
+            "local x=if a then 1 elseif b then 2 else 3",
+        ),
         (
             "local result = receiver:map<<number, string>>(value)",
             "local result=receiver:map<<number,string>>(value)",
@@ -294,7 +276,6 @@ local partial = f<<number>>
 local called = t.f<<number, string>>(value)",
             "local partial=f<<number>>local called=t.f<<number,string>>(value)",
         ),
-        // Chaining requires parens (asexp allows one cast per simpleexp).
         ("local  x  =  ( y  ::  number )  ::  string", "local x=(y::number)::string"),
         (
             "return 1i, 1_000_000i, 0xffffffffffffffffi, -123i",
@@ -310,7 +291,12 @@ return seen
 end",
             "export local seen=0i export const MAX=2i@native export function run()return seen end",
         ),
-        ("@native function f() end", "@native function f()end"),
+        ("@native @checked function f() end", "@native@checked function f()end"),
+        ("@[deprecated()] function f() end", "@[deprecated()]function f()end"),
+        (
+            "@[native, deprecated({use = 'g', reason = 'old'})] local function f() end",
+            "@native@[deprecated{use='g',reason='old'}]local function f()end",
+        ),
     ] {
         assert_compacts_to(source, expected, LuaVersion::Luau);
     }
@@ -320,10 +306,9 @@ end",
 fn luau_interpolated_strings_keep_their_text_and_holes() {
     for (source, expected) in [
         ("local  x  =  `hello {name}`", "local x=`hello {name}`"),
-        // A plain backtick string parses as a Begin("") + End(text) pair with
-        // no expression; it must not gain a spurious `{}` hole.
         ("local  x  =  `plain text`", "local x=`plain text`"),
-        ("local  x  =  `a {b} c`", "local x=`a {b} c`"),
+        ("local  x  =  `a {b} c {d .. e} f`", "local x=`a {b} c {d..e} f`"),
+        ("local  x  =  `{ `{inner}` }`", "local x=`{`{inner}`}`"),
     ] {
         assert_compacts_to(source, expected, LuaVersion::Luau);
     }
@@ -332,33 +317,26 @@ fn luau_interpolated_strings_keep_their_text_and_holes() {
 #[test]
 fn luau_types_compact_to_minimal_whitespace() {
     for (source, expected) in [
-        // Type annotations live in the AST and must survive round-tripping.
         ("local  x :  number  =  5", "local x:number=5"),
-        ("local  x :  number ?  =  nil", "local x:number?=nil"),
         ("local  x :  number ? ?  =  nil", "local x:number??=nil"),
         ("local  x :  | number | string  =  y", "local x:|number|string=y"),
-        ("local  x :  A & B  =  y", "local x:A&B=y"),
+        ("local  x :  & A & B  =  y", "local x:&A&B=y"),
         ("local  x :  typeof ( y )  =  y", "local x:typeof(y)=y"),
+        ("local  x :  'a' | true | nil  =  y", "local x:'a'|true|nil=y"),
         ("type  Foo  =  number", "type Foo=number"),
         (
-            "type  T  =  { read  x :  number , [ string ] :  boolean }",
-            "type T={read x:number,[string]:boolean}",
+            "export type  T  =  { read  x :  number , write [ string ] :  boolean }",
+            "export type T={read x:number,write[string]:boolean}",
         ),
-        ("type  T  =  { number }", "type T={number}"),
+        ("type  T  =  { read  number }", "type T={read number}"),
         (
-            "type  Fn  =  ( x :  number , string )  ->  boolean",
-            "type Fn=(x:number,string)->boolean",
+            "type  Fn  =  < T ... > ( x :  number , string )  ->  ( T ... )",
+            "type Fn=<T...>(x:number,string)->(T...)",
         ),
+        ("type  F  =  ( ... number )  ->  ...string", "type F=(...number)->...string"),
         ("function  f < T > ( a :  T )  :  T  return  a  end", "function f<T>(a:T):T return a end"),
-        ("function  f ( )  :  ( number , ... string )  end", "function f():(number,...string)end"),
+        ("function  f ( ... :  T ... )  end", "function f(...:T...)end"),
         ("type  function  Add ( a )  return  a  end", "type function Add(a)return a end"),
-        (
-            "\
-type function Pair(t)
-\treturn t
-end",
-            "type function Pair(t)return t end",
-        ),
         (
             "for  k :  string , v :  number  in  pairs ( t )  do  end",
             "for k:string,v:number in pairs(t)do end",

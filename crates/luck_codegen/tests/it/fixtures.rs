@@ -1,56 +1,40 @@
 use core::fmt::Write as _;
 use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use luck_parser::parse;
+use luck_allocator::Allocator;
 use luck_testgen::{collect_fixture_files, detect_version, is_error_fixture};
 
 #[test]
-fn compact_output_of_every_fixture_reparses() {
+fn every_fixture_compacts_to_output_that_compacts_to_itself() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
-    let files: Vec<PathBuf> = collect_fixture_files(&root)
-        .expect("fixture tree is readable")
-        .into_iter()
-        .filter(|path| matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau")))
-        .collect();
-    assert!(!files.is_empty(), "no fixture files found");
-
-    let mut failures = Vec::new();
-    let mut success_count = 0usize;
-
-    for path in &files {
-        let relative = path.strip_prefix(&root).expect("fixture is under the root");
-        if is_error_fixture(relative) {
+    let mut report = String::new();
+    let mut round_trip_count = 0usize;
+    for path in collect_fixture_files(&root).expect("the fixture tree is readable") {
+        let relative = path.strip_prefix(&root).expect("a fixture is under the root");
+        if is_error_fixture(relative)
+            || !matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau"))
+        {
             continue;
         }
-        let source = fs::read_to_string(path).expect("failed to read fixture file");
+        let source = fs::read_to_string(&path).expect("a fixture is readable");
         let version = detect_version(relative);
-        let parsed = parse(&source, version);
+        let allocator = Allocator::new();
+        let parsed = luck_parser::parse(&allocator, &source, version);
         if !parsed.errors.is_empty() {
             continue;
         }
-
-        let compacted = luck_codegen::compact(&parsed.block);
-        let reparsed = parse(&compacted, version);
-        if reparsed.errors.is_empty() {
-            success_count += 1;
+        let output = luck_codegen::compact(&parsed.block);
+        let reparsed = luck_parser::parse(&allocator, &output, version);
+        if let Some(error) = reparsed.errors.first() {
+            writeln!(report, "{}: {output}\n  {}", relative.display(), error.message).unwrap();
+        } else if luck_codegen::compact(&reparsed.block) == output {
+            round_trip_count += 1;
         } else {
-            failures.push((path.clone(), compacted, reparsed.errors));
+            writeln!(report, "{}: compacting again changed {output}", relative.display()).unwrap();
         }
     }
-
-    if !failures.is_empty() {
-        let mut report = format!("{} fixture(s) failed compact roundtrip:\n", failures.len());
-        for (path, compacted, errors) in &failures {
-            writeln!(report, "  {}:", path.display()).unwrap();
-            writeln!(report, "    compact output: {compacted}").unwrap();
-            for e in errors {
-                writeln!(report, "    - {}", e.message).unwrap();
-            }
-        }
-        panic!("{report}{success_count} fixture(s) passed compact roundtrip");
-    }
-
-    assert!(success_count > 0, "compact roundtrip passed for {success_count} fixtures");
+    assert!(report.is_empty(), "{report}{round_trip_count} fixture(s) round-tripped");
+    assert!(round_trip_count > 0, "no fixture parsed");
 }

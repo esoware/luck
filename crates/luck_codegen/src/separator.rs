@@ -1,87 +1,53 @@
-//! The printer remembers the last emitted piece as a one-byte [`PieceClass`]
-//! and inserts a space only when that class and the next piece's first byte
-//! would otherwise merge into a different token.
+//! Every piece the printer writes leaves a one-bit class behind, and the
+//! next piece's first byte names the classes it would merge with, so a space
+//! goes in only where the two meet.
+//!
+//! The classes cover the merges a tree can print. Only a Luau type prints a
+//! `<` or `>` before another, and Luau has no shift, so those stay glued.
+//! Every other merge, such as `/` into `//` or `=` into `==`, takes a pair no
+//! tree prints.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PieceClass {
-    Word,
-    /// Number literal: word-like, and a following `.` would extend it.
-    Number,
-    Minus,
-    Slash,
-    LeftBracket,
-    Dot,
-    DotDot,
-    Less,
-    Greater,
-    /// `;`, tracked so the statement-boundary guard doesn't add a second one.
-    Semicolon,
-    /// Any other piece, and the start of output, which nothing merges with.
-    Other,
-}
+pub(crate) const OTHER: u8 = 0;
+/// A keyword or a name.
+pub(crate) const WORD: u8 = 1;
+/// A number reads on through letters, digits, `_`, and `.`.
+pub(crate) const NUMBER: u8 = 1 << 1;
+/// `..`, which a `.` extends to `...`, and the field `.`, which nothing that
+/// starts with one follows.
+pub(crate) const DOT_DOT: u8 = 1 << 2;
+/// `-`, which another makes a comment.
+pub(crate) const MINUS: u8 = 1 << 3;
+/// `[`, which a long string's `[` makes a long bracket.
+pub(crate) const LEFT_BRACKET: u8 = 1 << 4;
+/// `>`, which a `=` makes `>=`.
+pub(crate) const GREATER: u8 = 1 << 5;
+/// Luau: the `{` that opens an interpolation, which a table's `{` makes `{{`.
+pub(crate) const INTERPOLATION_BRACE: u8 = 1 << 6;
 
-impl PieceClass {
-    #[inline]
-    pub(crate) fn of_fixed(text: &str) -> Self {
-        match text {
-            "-" => Self::Minus,
-            "/" => Self::Slash,
-            "[" => Self::LeftBracket,
-            "." => Self::Dot,
-            ".." => Self::DotDot,
-            "<" => Self::Less,
-            // Luau's `>>` type-instantiation close, and the 5.3+ right shift
-            // that spells it the same way.
-            ">" | ">>" => Self::Greater,
-            ";" => Self::Semicolon,
-            _ => match text.as_bytes().first() {
-                Some(first) if first.is_ascii_alphanumeric() || *first == b'_' => Self::Word,
-                _ => Self::Other,
-            },
-        }
-    }
-
-    const fn is_wordlike(self) -> bool {
-        match self {
-            Self::Word | Self::Number => true,
-            Self::Minus
-            | Self::Slash
-            | Self::LeftBracket
-            | Self::Dot
-            | Self::DotDot
-            | Self::Less
-            | Self::Greater
-            | Self::Semicolon
-            | Self::Other => false,
-        }
+/// The classes a piece starting with `first` merges with.
+#[inline]
+pub(crate) const fn merges_after(first: u8) -> u8 {
+    match first {
+        b'0'..=b'9' | b'A'..=b'Z' | b'_' | b'a'..=b'z' => WORD | NUMBER,
+        b'.' => NUMBER | DOT_DOT,
+        b'-' => MINUS,
+        b'[' => LEFT_BRACKET,
+        b'=' => GREATER,
+        b'{' => INTERPOLATION_BRACE,
+        _ => OTHER,
     }
 }
 
-pub(crate) const fn needs_space(
-    previous: PieceClass,
-    next_first_byte: u8,
-    next: PieceClass,
-) -> bool {
-    match previous {
-        // Two adjacent words, whether identifier, keyword, or number, merge.
-        PieceClass::Word => next.is_wordlike(),
-        // Number before a word merges; number before `.` extends the literal.
-        PieceClass::Number => next.is_wordlike() || next_first_byte == b'.',
-        // `-` before `-` - prevents `--` comment.
-        PieceClass::Minus => next_first_byte == b'-',
-        // `/` before `/` - prevents `//` floor division.
-        PieceClass::Slash => next_first_byte == b'/',
-        // `[` before `[` (token or long-string literal) - prevents `[[`.
-        PieceClass::LeftBracket => next_first_byte == b'[',
-        // `.` before `.` - prevents `..`. `..` before `.`, `..`, `...`, or
-        // `.5` - prevents `...` / vararg merges.
-        PieceClass::Dot | PieceClass::DotDot => next_first_byte == b'.',
-        // `<` before `<` - prevents `<<` shift.
-        PieceClass::Less => next_first_byte == b'<',
-        // `>` before `>` or `=` - prevents `>>` and `>=`, and a `>>` close
-        // before `=` lexing as `>` `>=`.
-        PieceClass::Greater => next_first_byte == b'>' || next_first_byte == b'=',
-        PieceClass::Semicolon | PieceClass::Other => false,
+/// The class a keyword, symbol, operator, or string ending in `last` leaves.
+#[inline]
+pub(crate) const fn class_of(last: u8) -> u8 {
+    match last {
+        b'0'..=b'9' | b'A'..=b'Z' | b'_' | b'a'..=b'z' => WORD,
+        b'.' => DOT_DOT,
+        b'-' => MINUS,
+        b'[' => LEFT_BRACKET,
+        b'>' => GREATER,
+        _ => OTHER,
     }
 }
 
@@ -90,80 +56,43 @@ mod tests {
     use super::*;
 
     fn needs_space_between(previous: &str, next: &str) -> bool {
-        needs_space(PieceClass::of_fixed(previous), next.as_bytes()[0], PieceClass::of_fixed(next))
+        let last = previous.as_bytes().last().copied().unwrap_or_default();
+        let first = next.as_bytes().first().copied().unwrap_or_default();
+        class_of(last) & merges_after(first) != OTHER
     }
 
     #[test]
-    fn needs_space_between_words() {
-        assert!(needs_space(PieceClass::Word, b'x', PieceClass::Word));
-        assert!(needs_space_between("if", "true"));
-        assert!(needs_space_between("return", "nil"));
-        assert!(needs_space_between("local", "x"));
+    fn words_and_numbers_merge_with_what_continues_a_name() {
+        for (previous, next) in [("if", "true"), ("return", "nil"), ("local", "x"), ("x", "1")] {
+            assert!(needs_space_between(previous, next), "{previous} {next}");
+        }
+        assert_ne!(NUMBER & merges_after(b'x'), OTHER);
+        assert_ne!(NUMBER & merges_after(b'.'), OTHER, "`1..` is a malformed number");
+        assert_eq!(WORD & merges_after(b'.'), OTHER, "`return.5` and `a..b` read as written");
     }
 
     #[test]
-    fn needs_space_after_a_number_before_a_dot_or_number() {
-        assert!(needs_space(PieceClass::Number, b'.', PieceClass::Other));
-        assert!(needs_space(PieceClass::Number, b'1', PieceClass::Number));
+    fn symbols_merge_only_into_a_longer_token() {
+        for (previous, next) in [("-", "-"), ("..", "."), ("..", "..."), ("[", "[["), (">", "=")] {
+            assert!(needs_space_between(previous, next), "{previous} {next}");
+        }
+        for (previous, next) in
+            [("-", "x"), ("..", "5"), ("[", "'s'"), ("<", "<"), (">", ">"), ("<", "=")]
+        {
+            assert!(!needs_space_between(previous, next), "{previous} {next}");
+        }
     }
 
     #[test]
-    fn needs_space_between_minuses() {
-        assert!(needs_space_between("-", "-"));
-        assert!(!needs_space_between("-", "x"));
+    fn pieces_that_cannot_merge_stay_glued() {
+        for (previous, next) in [("x", "("), (")", "("), (",", "x"), (";", "x"), ("]", "]")] {
+            assert!(!needs_space_between(previous, next), "{previous} {next}");
+        }
     }
 
     #[test]
-    fn needs_space_between_slashes() {
-        assert!(needs_space_between("/", "/"));
-        assert!(needs_space_between("/", "//"));
-    }
-
-    #[test]
-    fn needs_space_between_left_brackets() {
-        assert!(needs_space_between("[", "["));
-        // A long-string literal also starts with `[`, so it is the same hazard.
-        let string_literal = PieceClass::Other;
-        assert!(needs_space(PieceClass::LeftBracket, b'[', string_literal));
-        assert!(!needs_space(PieceClass::LeftBracket, b'"', string_literal));
-    }
-
-    #[test]
-    fn needs_space_between_dots() {
-        assert!(needs_space_between(".", "."));
-        assert!(needs_space_between(".", ".."));
-        assert!(needs_space_between("..", "."));
-        assert!(needs_space_between("..", "..."));
-        // A number starting with a dot, `.5`, is the same hazard.
-        assert!(needs_space(PieceClass::DotDot, b'.', PieceClass::Number));
-        assert!(!needs_space(PieceClass::DotDot, b'5', PieceClass::Number));
-    }
-
-    #[test]
-    fn needs_space_between_angle_brackets_that_would_form_one_token() {
-        assert!(needs_space_between("<", "<"));
-        assert!(needs_space_between(">", ">"));
-        assert!(needs_space_between(">", "="));
-        assert!(!needs_space_between("<", "x"));
-    }
-
-    #[test]
-    fn needs_no_space_between_pieces_that_cannot_merge() {
-        assert!(!needs_space(PieceClass::Word, b'(', PieceClass::Other));
-        assert!(!needs_space_between(")", "("));
-        assert!(!needs_space_between(",", "x"));
-        assert!(!needs_space_between(";", "x"));
-    }
-
-    #[test]
-    fn of_fixed_singles_out_only_the_pieces_the_rules_need() {
-        assert_eq!(PieceClass::of_fixed("and"), PieceClass::Word);
-        assert_eq!(PieceClass::of_fixed("end"), PieceClass::Word);
-        assert_eq!(PieceClass::of_fixed("-"), PieceClass::Minus);
-        assert_eq!(PieceClass::of_fixed(".."), PieceClass::DotDot);
-        assert_eq!(PieceClass::of_fixed(">>"), PieceClass::Greater);
-        assert_eq!(PieceClass::of_fixed("..."), PieceClass::Other);
-        assert_eq!(PieceClass::of_fixed(";"), PieceClass::Semicolon);
-        assert_eq!(PieceClass::of_fixed("=="), PieceClass::Other);
+    fn only_an_interpolation_brace_merges_with_a_table() {
+        assert_ne!(INTERPOLATION_BRACE & merges_after(b'{'), OTHER);
+        assert!(!needs_space_between("{", "{"), "a table in a table is `{{`");
     }
 }
