@@ -38,7 +38,9 @@ pub fn minify<'ast>(
         shebang,
         leading_hot_comments(hot_comments, source).map(|comment| comment.span),
     );
-    minify_tree(allocator, &mut result.block, version, config);
+    if !minify_tree(allocator, &mut result.block, version, config, false) {
+        return Err(vec![nesting_error(&result.block)]);
+    }
     let code = luck_codegen::compact(&result.block);
     if output.is_empty() {
         return Ok(code);
@@ -63,26 +65,34 @@ pub fn minify_block<'ast>(
     version: LuaVersion,
     config: &TransformConfig,
 ) -> Result<String, SourceError> {
-    if block_nesting_depth(block) > MAX_NESTING_DEPTH {
-        return Err(SourceError {
-            span: block.span,
-            message: format!(
-                "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
-            ),
-        });
+    if !minify_tree(allocator, block, version, config, true) {
+        return Err(nesting_error(block));
     }
-    minify_tree(allocator, block, version, config);
     Ok(luck_codegen::compact(block))
 }
 
+fn nesting_error(block: &Block<'_>) -> SourceError {
+    SourceError {
+        span: block.span,
+        message: format!(
+            "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
+        ),
+    }
+}
+
 /// Binds the tree once, compresses it to its fixpoint, and names its locals
-/// once, as each phase is on.
+/// once, as each phase is on, or leaves a tree nested deeper than
+/// [`MAX_NESTING_DEPTH`] as it was and says so.
+///
+/// Without `can_nest_too_deep`, for a tree `luck_parser` built, which never
+/// nests that deep, it spares the work of keeping the tree as it was.
 fn minify_tree<'ast>(
     allocator: &'ast Allocator,
     block: &mut Block<'ast>,
     version: LuaVersion,
     config: &TransformConfig,
-) {
+    can_nest_too_deep: bool,
+) -> bool {
     let should_compress = config.remove_dead_code
         || config.simplify_statements
         || config.fold_constants
@@ -100,8 +110,13 @@ fn minify_tree<'ast>(
         || config.rename_locals;
     let mut bindings = Bindings::default();
     let mut names = NameTable::default();
-    if needs_bindings {
-        bind(allocator, block, version, config.remove_dead_code, &mut bindings, &mut names);
+    let fits = if needs_bindings {
+        bind(block, version, can_nest_too_deep, &mut bindings, &mut names)
+    } else {
+        !can_nest_too_deep || block_nesting_depth(block) <= MAX_NESTING_DEPTH
+    };
+    if !fits {
+        return false;
     }
     if should_compress {
         compress(allocator, version, *config, &mut bindings, block);
@@ -109,4 +124,5 @@ fn minify_tree<'ast>(
     if config.rename_locals {
         rename(allocator, version, block, &mut bindings, &names, config.rename_globals);
     }
+    true
 }

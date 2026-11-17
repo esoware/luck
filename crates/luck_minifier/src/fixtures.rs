@@ -75,7 +75,7 @@ pub(crate) fn walk_once(source: &str, config: TransformConfig) -> String {
     let mut block = parse(&allocator, source, LuaVersion::Lua54);
     let mut bindings = Bindings::default();
     let names = &mut NameTable::default();
-    bind(&allocator, &mut block, LuaVersion::Lua54, config.remove_dead_code, &mut bindings, names);
+    bind(&mut block, LuaVersion::Lua54, false, &mut bindings, names);
     Compressor::new(&allocator, LuaVersion::Lua54, config, &mut bindings).walk(&mut block);
     luck_codegen::compact(&block)
 }
@@ -89,7 +89,7 @@ pub(crate) fn compressed<'ast>(
     let mut block = parse(allocator, source, LuaVersion::Lua54);
     let mut bindings = Bindings::default();
     let names = &mut NameTable::default();
-    bind(allocator, &mut block, LuaVersion::Lua54, config.remove_dead_code, &mut bindings, names);
+    bind(&mut block, LuaVersion::Lua54, false, &mut bindings, names);
     compress(allocator, LuaVersion::Lua54, config, &mut bindings, &mut block);
     block
 }

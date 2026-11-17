@@ -37,12 +37,12 @@ use luck_token::{LuaVersion, NumberSubtypes};
 
 use self::inline_locals::{OperandPosition, Value};
 use self::lift_locals::Lifter;
+use self::remove_dead_code::{UnusedLocalAction, unused_local_action};
 use self::respell::Respeller;
-use crate::binding::{Bindings, Counter, NONE, local_of};
+use crate::binding::{Bindings, Counter, NONE, is_droppable_function, local_of};
 use crate::expr::{constant_truthiness, fits_at_depth, inner_operand_side, parenthesize};
 use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
 use crate::transform_config::TransformConfig;
-use crate::unused_locals::UnusedLocals;
 
 /// A walk leaves another behind only for a rewrite it exposed late, so a
 /// handful settle any input, and the cap only bounds one that never stops,
@@ -244,9 +244,26 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
     /// Walks `stmt` and rewrites it, and says whether anything of it stays.
     fn visit_kept_stmt(&mut self, stmt: &mut Statement<'ast>) -> bool {
         let should_remove_dead_code = self.config.remove_dead_code;
+        // A local nothing references when the walk reaches it goes unwalked.
         match stmt {
-            Statement::LocalAssignment(_) => return self.visit_local(stmt),
+            Statement::LocalAssignment(local) => {
+                if should_remove_dead_code
+                    && local.names.iter().all(|attributed| !self.is_used(&attributed.name))
+                    && unused_local_action(local, self.version) == UnusedLocalAction::Remove
+                {
+                    self.retract_stmt(stmt);
+                    return false;
+                }
+                return self.visit_local(stmt);
+            }
             Statement::LocalFunction(local_function) => {
+                if should_remove_dead_code
+                    && is_droppable_function(local_function, self.version)
+                    && !self.is_used(&local_function.name)
+                {
+                    self.retract_stmt(stmt);
+                    return false;
+                }
                 let id = local_of(&local_function.name);
                 self.set_open(id, true);
                 self.walk_stmt(stmt);
@@ -311,20 +328,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         }
         self.walk_stmt(stmt);
         true
-    }
-
-    fn drop_unused(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
-        let mut unused = UnusedLocals {
-            allocator: self.allocator,
-            version: self.version,
-            bindings: self.bindings,
-            function_depth: self.function_depth,
-            type_floor: self.type_floor,
-            calls: &mut self.late_calls,
-        };
-        if unused.drop_unused(stmts) {
-            self.has_changed = true;
-        }
     }
 
     /// A `local function`'s references to itself in its own body keep

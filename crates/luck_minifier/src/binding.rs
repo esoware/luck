@@ -55,12 +55,18 @@ pub(crate) fn global_of(name: &Name<'_>) -> Option<usize> {
     (name.span.start == GLOBAL_MARK).then(|| usize::try_from(name.span.end).unwrap_or(usize::MAX))
 }
 
-pub(crate) fn mark_local(name: &mut Name<'_>, id: usize) {
-    name.span = Span::new(LOCAL_MARK, u32::try_from(id).unwrap_or(u32::MAX));
+/// The span a name that declares or refers to the local `id` holds.
+pub(crate) fn local_span(id: usize) -> Span {
+    Span::new(LOCAL_MARK, u32::try_from(id).unwrap_or(u32::MAX))
 }
 
-pub(crate) fn mark_global(name: &mut Name<'_>, name_id: usize) {
-    name.span = Span::new(GLOBAL_MARK, u32::try_from(name_id).unwrap_or(u32::MAX));
+/// The span a name that refers to the global with name id `name_id` holds.
+pub(crate) fn global_span(name_id: usize) -> Span {
+    Span::new(GLOBAL_MARK, u32::try_from(name_id).unwrap_or(u32::MAX))
+}
+
+pub(crate) fn mark_local(name: &mut Name<'_>, id: usize) {
+    name.span = local_span(id);
 }
 
 pub(crate) const fn has_implicit_arg(body: &FunctionBody<'_>, version: LuaVersion) -> bool {

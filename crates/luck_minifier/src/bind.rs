@@ -1,58 +1,64 @@
 //! The bind walk, which runs once, before anything else rewrites the tree.
 //!
 //! It resolves every name to its binding with the target's scoping rules,
-//! writes each binding's identity into its names, and counts each binding's
-//! references. With `remove_dead_code`, it also drops each block's locals
-//! that nothing references as it leaves the block, so the compressor's
-//! counts are those of the code that stays.
+//! writes each binding's identity into its names, counts each binding's
+//! references, and measures how deep the tree nests.
 
 use core::mem;
 
-use luck_allocator::{Allocator, List};
 use luck_ast::{
-    Block, Expression, FunctionBody, LocalFunction, Name, Statement, Type, Var, VisitorMut,
+    Block, Expression, FunctionBody, LocalFunction, MAX_NESTING_DEPTH, Name, Statement, Type, Var,
+    VisitorMut,
 };
-use luck_token::LuaVersion;
+use luck_token::{LuaVersion, Span};
 
 use crate::binding::{
-    Bindings, IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, NONE, Reference, has_implicit_arg,
-    is_env_binding, mark_global, mark_local,
+    Bindings, IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, NONE, Reference, global_span,
+    has_implicit_arg, is_env_binding, local_span,
 };
 use crate::name_table::NameTable;
-use crate::unused_locals::UnusedLocals;
 
-/// Binds `block`, whose names `names` numbers, into `bindings`, and with
-/// `should_drop_unused`, drops the locals nothing references, building in
-/// `allocator`.
+/// Binds `block`, whose names `names` numbers, into `bindings`, and says
+/// whether it nests within [`MAX_NESTING_DEPTH`].
+///
+/// With `can_nest_too_deep`, a tree that doesn't is left as it was, its
+/// names' spans put back.
 pub(crate) fn bind<'ast>(
-    allocator: &'ast Allocator,
     block: &mut Block<'ast>,
     version: LuaVersion,
-    should_drop_unused: bool,
+    can_nest_too_deep: bool,
     bindings: &mut Bindings,
     names: &mut NameTable<'ast>,
-) {
+) -> bool {
     bindings.clear();
     names.clear();
     names.intern(METHOD_RECEIVER_NAME);
     names.intern(IMPLICIT_VARARG_TABLE_NAME);
     let mut binder = Binder {
-        allocator,
         bindings,
         names,
         version,
-        should_drop_unused,
-        calls: Vec::new(),
+        spans: can_nest_too_deep.then(Vec::new),
+        restored: None,
         innermost: Vec::new(),
         declarations: Vec::new(),
         scope_starts: Vec::new(),
         function_depth: 0,
         type_floor: 0,
         depth: 0,
+        deepest: 0,
     };
     binder.visit_block(block);
     let name_count = binder.names.len();
     binder.bindings.resize_names(name_count);
+    let fits = usize::try_from(binder.deepest).is_ok_and(|deepest| deepest <= MAX_NESTING_DEPTH);
+    if !fits {
+        // The same walk again meets the same names in the same order.
+        binder.restored = Some(0);
+        binder.depth = 0;
+        binder.visit_block(block);
+    }
+    fits
 }
 
 /// A declaration in an open scope.
@@ -65,12 +71,14 @@ struct Declaration {
 }
 
 struct Binder<'walk, 'ast> {
-    allocator: &'ast Allocator,
     bindings: &'walk mut Bindings,
     names: &'walk mut NameTable<'ast>,
     version: LuaVersion,
-    should_drop_unused: bool,
-    calls: Vec<(usize, Statement<'ast>)>,
+    /// The spans the walk overwrote, in walk order, if it may have to put
+    /// them back.
+    spans: Option<Vec<Span>>,
+    /// In the walk that puts them back, how many it has.
+    restored: Option<usize>,
     /// Each name's innermost open declaration, by name id.
     innermost: Vec<u32>,
     declarations: Vec<Declaration>,
@@ -78,7 +86,10 @@ struct Binder<'walk, 'ast> {
     function_depth: u32,
     /// One past the function depth of the innermost type the walk is in.
     type_floor: u32,
+    /// Levels of nesting open where the walk is, and the most there have
+    /// been.
     depth: u32,
+    deepest: u32,
 }
 
 impl<'ast> Binder<'_, 'ast> {
@@ -120,11 +131,35 @@ impl<'ast> Binder<'_, 'ast> {
         self.open(name, u32::try_from(id).unwrap_or(NONE));
     }
 
+    /// Writes `span` into `name`, keeping the one it held if the walk may
+    /// have to put it back.
+    fn write_span(&mut self, name: &mut Name<'ast>, span: Span) {
+        if let Some(spans) = &mut self.spans {
+            spans.push(name.span);
+        }
+        name.span = span;
+    }
+
+    /// In the walk that puts spans back, gives `name` its own, and says so.
+    fn restore(&mut self, name: &mut Name<'ast>) -> bool {
+        let Some(next) = &mut self.restored else {
+            return false;
+        };
+        if let Some(&span) = self.spans.as_ref().and_then(|spans| spans.get(*next)) {
+            name.span = span;
+        }
+        *next = next.saturating_add(1);
+        true
+    }
+
     fn declare(&mut self, name: &mut Name<'ast>, is_exported: bool) -> usize {
+        if self.restore(name) {
+            return usize::MAX;
+        }
         let name_id = self.name_id(name.text);
         let is_fixed = is_exported || is_env_binding(name.text, self.version);
         let id = self.bindings.push(name_id, is_fixed, self.function_depth);
-        mark_local(name, id);
+        self.write_span(name, local_span(id));
         self.open(name_id, u32::try_from(id).unwrap_or(NONE));
         id
     }
@@ -132,13 +167,19 @@ impl<'ast> Binder<'_, 'ast> {
     /// Lua 5.5: a `global` declaration scopes and shadows like a local, and
     /// its references still reach the global.
     fn declare_global(&mut self, name: &mut Name<'ast>) {
+        if self.restore(name) {
+            return;
+        }
         let name_id = self.name_id(name.text);
-        mark_global(name, name_id);
+        self.write_span(name, global_span(name_id));
         self.bindings.count_global_declaration(name, false);
         self.open(name_id, NONE);
     }
 
     fn reference(&mut self, name: &mut Name<'ast>, is_write: bool) {
+        if self.restore(name) {
+            return;
+        }
         let name_id = self.name_id(name.text);
         let reference = Reference {
             is_write,
@@ -152,11 +193,11 @@ impl<'ast> Binder<'_, 'ast> {
             .and_then(|&innermost| self.declarations.get(usize::try_from(innermost).ok()?))
             .map_or(NONE, |declaration| declaration.binding);
         if binding == NONE {
-            mark_global(name, name_id);
+            self.write_span(name, global_span(name_id));
             self.bindings.count_global(name_id, reference, false);
         } else {
             let id = usize::try_from(binding).unwrap_or(usize::MAX);
-            mark_local(name, id);
+            self.write_span(name, local_span(id));
             self.bindings.count(id, reference, false);
         }
     }
@@ -234,37 +275,19 @@ impl<'ast> Binder<'_, 'ast> {
         self.visit_block(block);
         self.exit_scope();
     }
-
-    /// Drops the locals of a block the walk is leaving that nothing
-    /// references.
-    fn drop_unused(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
-        if self.should_drop_unused {
-            UnusedLocals {
-                allocator: self.allocator,
-                version: self.version,
-                bindings: self.bindings,
-                function_depth: self.function_depth,
-                type_floor: self.type_floor,
-                calls: &mut self.calls,
-            }
-            .drop_unused(stmts);
-        }
-    }
 }
 
 impl<'ast> VisitorMut<'ast> for Binder<'_, 'ast> {
+    /// The walk goes no deeper than one level past the cap, so it's safe on a
+    /// tree of any depth.
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
-        true
+        self.deepest = self.deepest.max(self.depth);
+        usize::try_from(self.depth).is_ok_and(|depth| depth <= MAX_NESTING_DEPTH)
     }
 
     fn ascend(&mut self) {
         self.depth = self.depth.saturating_sub(1);
-    }
-
-    fn visit_block(&mut self, block: &mut Block<'ast>) {
-        self.walk_block(block);
-        self.drop_unused(&mut block.stmts);
     }
 
     #[expect(clippy::too_many_lines, reason = "one arm per kind of statement")]
@@ -304,9 +327,8 @@ impl<'ast> VisitorMut<'ast> for Binder<'_, 'ast> {
             Statement::RepeatLoop(repeat_loop) => {
                 // The condition sees the block's locals.
                 self.enter_scope();
-                self.walk_block(&mut repeat_loop.block);
+                self.visit_block(&mut repeat_loop.block);
                 self.visit_expr(&mut repeat_loop.condition);
-                self.drop_unused(&mut repeat_loop.block.stmts);
                 self.exit_scope();
             }
             Statement::IfStatement(if_stmt) => {

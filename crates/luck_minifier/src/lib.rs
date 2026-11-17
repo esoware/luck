@@ -11,7 +11,7 @@
 //! - **Binding**, one walk that resolves every name to its binding, writes
 //!   the binding into the name, so the later phases tell apart two locals
 //!   that share a name however the tree is rewritten, and counts each
-//!   binding's references, dropping the locals nothing references.
+//!   binding's references.
 //! - **Compression**, one in-place walk that runs every rewrite as it leaves
 //!   each node: constant folding, dead-code and dead-local removal, inlining
 //!   single-use locals, merging neighboring locals, `if` and `return`
@@ -58,7 +58,6 @@ mod pipeline;
 mod rename_globals;
 mod rename_locals;
 mod transform_config;
-mod unused_locals;
 
 pub use pipeline::{minify, minify_block};
 pub use transform_config::TransformConfig;

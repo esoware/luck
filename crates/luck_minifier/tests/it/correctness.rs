@@ -345,3 +345,39 @@ fn a_tree_past_the_nesting_cap_is_an_error() {
         .expect_err("the tree nests one level too deep");
     assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
 }
+
+#[test]
+fn a_tree_past_the_nesting_cap_keeps_its_names_and_spans() {
+    let past_the_cap = |allocator, spans| {
+        let synth = Synth::new(allocator, spans);
+        let mut expr = synth.name_expr("x");
+        for _ in 0..MAX_NESTING_DEPTH {
+            expr = synth.unary_op(UnOp::Not, expr);
+        }
+        let identity = synth.block([], Some(synth.return_([synth.name_expr("a")])));
+        let stmts = [
+            synth.local(&["x"], [synth.number("1")]),
+            synth.local_function("f", &["a"], identity),
+            synth.call_stmt(synth.call(synth.name_expr("f"), [synth.name_expr("x")])),
+        ];
+        synth.block(stmts, Some(synth.return_([expr])))
+    };
+    let (allocator, spans) = (Allocator::new(), SpanCounter::new());
+    let mut block = past_the_cap(&allocator, &spans);
+    let (expected_allocator, expected_spans) = (Allocator::new(), SpanCounter::new());
+    let expected = past_the_cap(&expected_allocator, &expected_spans);
+    let without_bindings = TransformConfig {
+        remove_dead_code: false,
+        inline_locals: false,
+        merge_locals: false,
+        lift_locals: false,
+        rename_locals: false,
+        ..TransformConfig::default()
+    };
+    for config in [TransformConfig::default(), without_bindings] {
+        let result =
+            luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config);
+        assert!(result.is_err(), "the tree nests one level too deep");
+        assert_eq!(block, expected, "the refused tree is as it was");
+    }
+}
