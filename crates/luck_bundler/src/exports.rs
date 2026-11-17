@@ -3,6 +3,8 @@ use luck_semantic::{ScopeKind, ScopeTree, Symbol, SymbolId};
 use luck_token::{LuaVersion, Span, TokenKind, line_breaks, offset_to_index};
 use rustc_hash::FxHashSet;
 
+use crate::emitter::Edit;
+
 /// How one module's top-level `export` declarations lower.
 ///
 /// Luau rejects `export` below the top level, and every bundled body sits
@@ -158,21 +160,20 @@ impl<'ast> Exports<'ast> {
         source: &str,
         version: LuaVersion,
         prefix: &str,
-        edits: &mut Vec<(Span, String)>,
+        edits: &mut Vec<(Span, Edit<'_>)>,
     ) {
         let lowering = TextLowerer { source, version, prefix };
         for stmt in &block.stmts {
-            match stmt {
+            let (span, text) = match stmt {
                 // Luau
                 Statement::TypeDeclaration(type_declaration) if type_declaration.is_exported => {
-                    edits.push((export_keyword_span(type_declaration.span), String::new()));
+                    (export_keyword_span(type_declaration.span), String::new())
                 }
                 Statement::LocalAssignment(local) if local.kind.is_exported() => {
-                    edits.push(lowering.local_edit(local, self.is_table_statement(local.span)));
+                    lowering.local_edit(local, self.is_table_statement(local.span))
                 }
                 Statement::LocalFunction(function) if function.kind.is_exported() => {
-                    let is_table = self.is_table_statement(function.span);
-                    edits.push(lowering.function_edit(function, is_table));
+                    lowering.function_edit(function, self.is_table_statement(function.span))
                 }
                 Statement::Assignment(_)
                 | Statement::FunctionCall(_)
@@ -194,13 +195,14 @@ impl<'ast> Exports<'ast> {
                 | Statement::Break(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::TypeDeclaration(_)
-                | Statement::Error(_) => {}
-            }
+                | Statement::Error(_) => continue,
+            };
+            edits.push((span, Edit::Text(text)));
         }
         edits.extend(
             self.field_references
                 .iter()
-                .map(|span| (*span, lowering.table_field(span.text(source)))),
+                .map(|span| (*span, Edit::Text(lowering.table_field(span.text(source))))),
         );
     }
 }

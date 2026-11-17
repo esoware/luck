@@ -400,7 +400,7 @@ pub(crate) enum Edit<'ast> {
     Text(String),
 }
 
-/// The splices `wrapped`'s module takes in its source, by where they start.
+/// The splices `module` takes in its source, by where they start.
 fn module_edits<'ast>(
     module: &ModuleInfo<'ast>,
     plan: &Plan<'ast>,
@@ -431,9 +431,7 @@ fn module_edits<'ast>(
             .map(|callee| (*callee, Edit::Dynamic)),
     );
     if version.has_value_exports() {
-        let mut export_edits = Vec::new();
-        module.exports.text_edits(&module.block, source, version, &plan.prefix, &mut export_edits);
-        edits.extend(export_edits.into_iter().map(|(span, text)| (span, Edit::Text(text))));
+        module.exports.text_edits(&module.block, source, version, &plan.prefix, &mut edits);
     }
     // Only a chunk may open with a shebang or a BOM, and this body is
     // inside a function. The shebang's line break stays for the line map.
