@@ -188,9 +188,6 @@ where
         }
     }
 
-    // This, `pop_scope`, and `reference` stay out of line, so their frames
-    // aren't part of each level the walk recurses through.
-    #[inline(never)]
     fn push_scope(&mut self, kind: ScopeKind) {
         let id = ScopeId::from_index(self.tree.scopes.len());
         let function = if kind == ScopeKind::Function { id } else { self.current_function };
@@ -203,7 +200,6 @@ where
         });
     }
 
-    #[inline(never)]
     fn pop_scope(&mut self) {
         let Some(outer) = self.outer_scopes.pop() else {
             return;
@@ -279,7 +275,6 @@ where
     /// use from a nested function also marks the symbol it reads, or the
     /// local `_ENV` it indexes, as an upvalue, and a write marks a symbol
     /// modified.
-    #[inline(never)]
     fn reference(&mut self, name: &Name<'ast>, kind: ReferenceKind) {
         if name.text.is_empty() {
             return;
@@ -339,8 +334,6 @@ where
     }
 
     /// Luau: a type function sees every type of its block, earlier or later.
-    /// Out of line, since a set insert would swell the frame of every block.
-    #[inline(never)]
     fn record_type_names(&mut self, block: &'ast Block<'ast>) {
         for stmt in &block.stmts {
             if let Statement::TypeDeclaration(declaration) = stmt {

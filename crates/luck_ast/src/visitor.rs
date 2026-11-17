@@ -284,8 +284,8 @@ pub trait Visitor<'ast> {
                 match suffix {
                     Suffix::Field(_) => {}
                     Suffix::Index { index, .. } => self.visit_expr(index),
-                    // Built in one place, so each level of nested calls holds
-                    // one `Call` in its frame, not one per kind.
+                    // One `Call` built for both kinds walks faster than one
+                    // built per kind.
                     Suffix::Call(_) | Suffix::MethodCall(_) => {
                         if let Some(call) = Call::new(chain.head(i), suffix) {
                             self.visit_call(call);
