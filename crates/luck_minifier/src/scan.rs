@@ -14,7 +14,7 @@ use luck_ast::{
     Block, Expression, FunctionBody, LocalAssignment, LocalFunction, Statement, Var, VisitorMut,
 };
 use luck_token::LuaVersion;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::binding::{
     IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, has_attributed_or_env_name,
@@ -26,10 +26,37 @@ use crate::expr::is_pure_expr;
 /// last one's allocations.
 #[derive(Default)]
 pub(crate) struct Scan<'ast> {
-    liveness: Liveness<'ast>,
-    /// Each local that inlines and the depth of its one read.
-    candidates: FxHashMap<&'ast str, usize>,
-    inline: InlineScan<'ast>,
+    /// Each name's entry in `names`.
+    entries: FxHashMap<&'ast str, usize>,
+    names: Vec<NameFacts>,
+    /// The use graph: a node per name and per droppable `local`.
+    nodes: Vec<UseNode>,
+    edges: Vec<UseEdge>,
+    /// Live nodes whose edges aren't followed yet.
+    pending: Vec<usize>,
+    /// The names declared in the open scopes, in declaration order, to
+    /// close them per scope.
+    opened: Vec<usize>,
+}
+
+/// What the scan knows of one name.
+#[derive(Clone, Copy)]
+struct NameFacts {
+    /// Its node in the use graph, live when code the round keeps uses it.
+    node: usize,
+    /// How often it's read in its declaration's scope, and how deep the
+    /// first of those reads sits, which for a name read once is where its
+    /// value lands.
+    reads: usize,
+    read_depth: usize,
+    /// Declared by a `local` that gives each name its own value, so a
+    /// second declaration disqualifies it.
+    is_declared: bool,
+    /// Bound or written anywhere else, or read outside its declaration's
+    /// scope.
+    is_shadowed: bool,
+    /// Its declaration's scope is one the walk is inside.
+    is_open: bool,
 }
 
 impl<'ast> Scan<'ast> {
@@ -40,9 +67,11 @@ impl<'ast> Scan<'ast> {
         should_find_dead: bool,
         should_find_inlinable: bool,
     ) {
-        self.liveness.clear();
-        self.candidates.clear();
-        self.inline.clear();
+        self.entries.clear();
+        self.names.clear();
+        self.nodes.clear();
+        self.edges.clear();
+        self.opened.clear();
         let mut scanner = Scanner {
             scan: self,
             version,
@@ -52,65 +81,55 @@ impl<'ast> Scan<'ast> {
             depth: 0,
         };
         scanner.visit_block(block);
-        self.liveness.propagate();
-        if should_find_inlinable {
-            let InlineScan { declared_names, shadowed_names, references, .. } = &self.inline;
-            self.candidates.extend(references.iter().filter_map(|(&name, reference)| {
-                (reference.count == 1
-                    && declared_names.contains(name)
-                    && !shadowed_names.contains(name))
-                .then_some((name, reference.depth))
-            }));
-        }
+        self.propagate();
+    }
+
+    fn facts(&self, name: &str) -> Option<&NameFacts> {
+        let entry = *self.entries.get(name)?;
+        self.names.get(entry)
     }
 
     /// Whether code the round keeps uses `name`.
     pub(crate) fn is_live(&self, name: &str) -> bool {
-        self.liveness.contains(name)
+        self.facts(name).is_some_and(|facts| self.is_live_node(facts.node))
     }
 
     /// The depth of the one read of a local that inlines.
     pub(crate) fn inline_read_depth(&self, name: &str) -> Option<usize> {
-        self.candidates.get(name).copied()
-    }
-}
-
-/// The use graph a scan builds.
-#[derive(Default)]
-struct Liveness<'ast> {
-    nodes_by_name: FxHashMap<&'ast str, usize>,
-    nodes: Vec<UseNode>,
-    edges: Vec<UseEdge>,
-    /// Live nodes whose edges aren't followed yet.
-    pending: Vec<usize>,
-}
-
-impl<'ast> Liveness<'ast> {
-    fn clear(&mut self) {
-        self.nodes_by_name.clear();
-        self.nodes.clear();
-        self.edges.clear();
+        self.facts(name)
+            .filter(|facts| facts.reads == 1 && facts.is_declared && !facts.is_shadowed)
+            .map(|facts| facts.read_depth)
     }
 
-    fn contains(&self, name: &str) -> bool {
-        self.nodes_by_name
-            .get(name)
-            .and_then(|&node| self.nodes.get(node))
-            .is_some_and(|node| node.is_live)
+    fn entry(&mut self, name: &'ast str) -> usize {
+        if let Some(&entry) = self.entries.get(name) {
+            return entry;
+        }
+        let node = self.push_node();
+        let entry = self.names.len();
+        self.names.push(NameFacts {
+            node,
+            reads: 0,
+            read_depth: 0,
+            is_declared: false,
+            is_shadowed: false,
+            is_open: false,
+        });
+        self.entries.insert(name, entry);
+        entry
+    }
+
+    fn close_scope(&mut self, scope_start: usize) {
+        for entry in self.opened.drain(scope_start..) {
+            if let Some(facts) = self.names.get_mut(entry) {
+                facts.is_open = false;
+            }
+        }
     }
 
     fn push_node(&mut self) -> usize {
         let node = self.nodes.len();
         self.nodes.push(UseNode { is_live: false, first_edge: None });
-        node
-    }
-
-    fn name_node(&mut self, name: &'ast str) -> usize {
-        if let Some(&node) = self.nodes_by_name.get(name) {
-            return node;
-        }
-        let node = self.push_node();
-        self.nodes_by_name.insert(name, node);
         node
     }
 
@@ -170,43 +189,6 @@ struct UseEdge {
     next: Option<usize>,
 }
 
-/// How often a name is read in its declaration's scope, and how deep the
-/// first of those reads sits, which for a name read once is where its value
-/// lands.
-struct Reference {
-    count: usize,
-    depth: usize,
-}
-
-#[derive(Default)]
-struct InlineScan<'ast> {
-    /// Every single-name local with one initializer, so a second declaration
-    /// disqualifies the name.
-    declared_names: FxHashSet<&'ast str>,
-    shadowed_names: FxHashSet<&'ast str>,
-    references: FxHashMap<&'ast str, Reference>,
-    /// Declared names whose scope the walk is inside.
-    open_declarations: FxHashSet<&'ast str>,
-    /// `open_declarations` in opening order, to close them per scope.
-    opened_in_scope: Vec<&'ast str>,
-}
-
-impl InlineScan<'_> {
-    fn clear(&mut self) {
-        self.declared_names.clear();
-        self.shadowed_names.clear();
-        self.references.clear();
-        self.open_declarations.clear();
-        self.opened_in_scope.clear();
-    }
-
-    fn close_scope(&mut self, scope_start: usize) {
-        for name in self.opened_in_scope.drain(scope_start..) {
-            self.open_declarations.remove(name);
-        }
-    }
-}
-
 /// What becomes of a `local` when none of its names is live.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeadLocalAction {
@@ -258,43 +240,54 @@ struct Scanner<'scan, 'ast> {
 }
 
 impl<'ast> Scanner<'_, 'ast> {
-    fn record_use(&mut self, name: &'ast str) {
-        let liveness = &mut self.scan.liveness;
-        let node = liveness.name_node(name);
-        match self.owner {
-            Some(owner) => liveness.keep(owner, node),
-            None => liveness.mark_live(node),
+    /// Records a read or write of `name`, which keeps it live, and for a
+    /// read, `is_read`, counts it toward inlining.
+    fn record(&mut self, name: &'ast str, is_read: bool) {
+        let scan = &mut *self.scan;
+        let entry = scan.entry(name);
+        if self.should_find_dead
+            && let Some(node) = scan.names.get(entry).map(|facts| facts.node)
+        {
+            match self.owner {
+                Some(owner) => scan.keep(owner, node),
+                None => scan.mark_live(node),
+            }
         }
+        if !self.should_find_inlinable || !is_read {
+            return;
+        }
+        let Some(facts) = scan.names.get_mut(entry) else {
+            return;
+        };
+        if !facts.is_open {
+            facts.is_shadowed = true;
+            return;
+        }
+        if facts.reads == 0 {
+            facts.read_depth = self.depth;
+        }
+        facts.reads = facts.reads.saturating_add(1);
     }
 
     /// Makes a droppable `local` the owner, returning the one it replaces.
     fn open_owner(&mut self, names: impl Iterator<Item = &'ast str>) -> Option<usize> {
-        let liveness = &mut self.scan.liveness;
-        let owner = liveness.push_node();
+        let scan = &mut *self.scan;
+        let owner = scan.push_node();
         for name in names {
-            let name_node = liveness.name_node(name);
-            liveness.keep(name_node, owner);
+            let entry = scan.entry(name);
+            if let Some(node) = scan.names.get(entry).map(|facts| facts.node) {
+                scan.keep(node, owner);
+            }
         }
         self.owner.replace(owner)
     }
 
     fn shadow(&mut self, name: &'ast str) {
         if self.should_find_inlinable {
-            self.scan.inline.shadowed_names.insert(name);
-        }
-    }
-
-    fn read(&mut self, name: &'ast str) {
-        if !self.should_find_inlinable {
-            return;
-        }
-        let inline = &mut self.scan.inline;
-        if !inline.open_declarations.contains(name) {
-            inline.shadowed_names.insert(name);
-        } else if let Some(reference) = inline.references.get_mut(name) {
-            reference.count = reference.count.saturating_add(1);
-        } else {
-            inline.references.insert(name, Reference { count: 1, depth: self.depth });
+            let entry = self.scan.entry(name);
+            if let Some(facts) = self.scan.names.get_mut(entry) {
+                facts.is_shadowed = true;
+            }
         }
     }
 
@@ -304,21 +297,23 @@ impl<'ast> Scanner<'_, 'ast> {
         if !self.should_find_inlinable {
             return;
         }
-        let inline = &mut self.scan.inline;
-        let names = local.names.iter().map(|attributed| attributed.name.text);
-        if has_fixed_binding(local, self.version) || local.names.len() != local.exprs.len() {
-            // Bare and multi-value locals are binders too: a reference
-            // between `local x` and a later `local x = 1` resolves to this
-            // one, so the name can't inline.
-            inline.shadowed_names.extend(names);
-            return;
-        }
-        for name in names {
-            if inline.declared_names.insert(name) {
-                inline.open_declarations.insert(name);
-                inline.opened_in_scope.push(name);
+        // Bare and multi-value locals are binders too: a reference between
+        // `local x` and a later `local x = 1` resolves to this one, so the
+        // name can't inline.
+        let can_inline =
+            !has_fixed_binding(local, self.version) && local.names.len() == local.exprs.len();
+        let scan = &mut *self.scan;
+        for attributed in &local.names {
+            let entry = scan.entry(attributed.name.text);
+            let Some(facts) = scan.names.get_mut(entry) else {
+                continue;
+            };
+            if !can_inline || facts.is_declared {
+                facts.is_shadowed = true;
             } else {
-                inline.shadowed_names.insert(name);
+                facts.is_declared = true;
+                facts.is_open = true;
+                scan.opened.push(entry);
             }
         }
     }
@@ -360,9 +355,9 @@ impl<'ast> VisitorMut<'ast> for Scanner<'_, 'ast> {
     }
 
     fn visit_block(&mut self, block: &mut Block<'ast>) {
-        let scope_start = self.scan.inline.opened_in_scope.len();
+        let scope_start = self.scan.opened.len();
         self.walk_block(block);
-        self.scan.inline.close_scope(scope_start);
+        self.scan.close_scope(scope_start);
     }
 
     fn visit_stmt(&mut self, stmt: &mut Statement<'ast>) {
@@ -388,10 +383,10 @@ impl<'ast> VisitorMut<'ast> for Scanner<'_, 'ast> {
             }
             Statement::RepeatLoop(repeat_loop) => {
                 // `until` reads the body's locals, so its scope closes after it.
-                let scope_start = self.scan.inline.opened_in_scope.len();
+                let scope_start = self.scan.opened.len();
                 self.walk_block(&mut repeat_loop.block);
                 self.visit_expr(&mut repeat_loop.condition);
-                self.scan.inline.close_scope(scope_start);
+                self.scan.close_scope(scope_start);
                 return;
             }
             Statement::Assignment(assignment) => {
@@ -413,9 +408,7 @@ impl<'ast> VisitorMut<'ast> for Scanner<'_, 'ast> {
             Statement::FunctionDecl(function_decl) => {
                 if let Some(root_name) = function_decl.name.names.first() {
                     let root = root_name.text;
-                    if self.should_find_dead {
-                        self.record_use(root);
-                    }
+                    self.record(root, false);
                     self.shadow(root);
                 }
                 if function_decl.name.method.is_some() {
@@ -461,11 +454,7 @@ impl<'ast> VisitorMut<'ast> for Scanner<'_, 'ast> {
 
     fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
         if let Expression::Name(read) = expr {
-            let name = read.text;
-            if self.should_find_dead {
-                self.record_use(name);
-            }
-            self.read(name);
+            self.record(read.text, true);
             return;
         }
         self.walk_expr(expr);
@@ -473,9 +462,7 @@ impl<'ast> VisitorMut<'ast> for Scanner<'_, 'ast> {
 
     fn visit_assignment_target(&mut self, target: &mut Var<'ast>) {
         if let Var::Name(name) = target {
-            if self.should_find_dead {
-                self.record_use(name.text);
-            }
+            self.record(name.text, false);
             return;
         }
         self.walk_assignment_target(target);
