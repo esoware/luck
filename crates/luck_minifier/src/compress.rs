@@ -1,20 +1,24 @@
 //! The compressor: one in-place walk that runs every rewrite the tree
 //! allows as it leaves each node, repeated until a walk changes nothing.
 //!
-//! A walk folds constants, drops dead branches and dead locals, inlines
-//! single-use locals, merges neighboring locals and assignments, turns
-//! `if ... return` runs into `and`/`or` chains, shortens literals and
-//! indexes, and strips parentheses. Each rewrite reports what it changed, so
-//! a walk that reports nothing is the fixpoint. Rewrites build their nodes
-//! in the shape the parser gives the text they print, which is what makes
-//! the fixpoint's own output a fixpoint.
+//! Each rewrite lives in the module named after the flag that turns it on,
+//! and `local_uses` and `literal_cache` hold what two flags share. Each
+//! rewrite reports what it changed, so a walk that reports nothing is the
+//! fixpoint. Rewrites build their nodes in the shape the parser gives the
+//! text they print, which is what makes the fixpoint's own output a
+//! fixpoint.
 
-mod control;
-mod fold;
-mod indexes;
-mod literals;
-mod locals;
-mod parens;
+mod fold_constants;
+mod inline_locals;
+mod literal_cache;
+mod local_uses;
+mod merge_locals;
+mod remove_dead_code;
+mod shorten_numbers;
+mod shorten_strings;
+mod simplify_indexes;
+mod simplify_parens;
+mod simplify_statements;
 
 use core::mem;
 
@@ -26,8 +30,8 @@ use luck_ast::{
 use luck_token::{LuaVersion, NumberSubtypes};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use self::literals::Literals;
-use self::locals::{OperandPosition, Value};
+use self::inline_locals::{OperandPosition, Value};
+use self::literal_cache::LiteralCache;
 use crate::expr::{constant_truthiness, inner_operand_side, parenthesize};
 use crate::lift_locals::Lifter;
 use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
@@ -80,7 +84,7 @@ pub(crate) struct Compressor<'ast> {
     extracted_calls: Vec<Statement<'ast>>,
     /// A block's statements while `do` blocks in it give up theirs.
     unwrapped_stmts: Vec<Statement<'ast>>,
-    literals: Literals,
+    literal_cache: LiteralCache,
 }
 
 impl<'ast> Compressor<'ast> {
@@ -111,7 +115,7 @@ impl<'ast> Compressor<'ast> {
             global_names: FxHashSet::default(),
             extracted_calls: Vec::new(),
             unwrapped_stmts: Vec::new(),
-            literals: Literals::default(),
+            literal_cache: LiteralCache::default(),
         }
     }
 
@@ -169,7 +173,7 @@ impl<'ast> Compressor<'ast> {
         lifter.has_changed()
     }
 
-    fn walk(&mut self, block: &mut Block<'ast>) -> bool {
+    pub(crate) fn walk(&mut self, block: &mut Block<'ast>) -> bool {
         let should_find_dead = self.config.remove_dead_code;
         let should_find_inlinable = self.config.inline_locals;
         if (should_find_dead || should_find_inlinable) && !mem::take(&mut self.is_scanned) {
@@ -190,7 +194,7 @@ impl<'ast> Compressor<'ast> {
         self.global_names.clear();
         self.visit_block(block);
         // The chunk is a function too, and returns nothing either way.
-        if self.config.remove_dead_code && control::ends_in_bare_return(block) {
+        if self.config.remove_dead_code && remove_dead_code::ends_in_bare_return(block) {
             block.last_stmt = None;
             self.has_changed = true;
         }
@@ -250,10 +254,11 @@ impl<'ast> Compressor<'ast> {
             Statement::RepeatLoop(_) => return self.visit_repeat(stmt),
             Statement::DoBlock(do_block) => {
                 self.visit_block(&mut do_block.block);
-                return !(should_remove_dead_code && control::is_empty_block(&do_block.block));
+                return !(should_remove_dead_code
+                    && remove_dead_code::is_empty_block(&do_block.block));
             }
             Statement::NumericFor(numeric_for) => {
-                if should_remove_dead_code && control::has_default_step(numeric_for) {
+                if should_remove_dead_code && remove_dead_code::has_default_step(numeric_for) {
                     numeric_for.step = None;
                     self.has_changed = true;
                 }
@@ -299,32 +304,6 @@ impl<'ast> Compressor<'ast> {
         }
         self.walk_stmt(stmt);
         true
-    }
-
-    /// Records the locals a kept statement declares, for the assignments
-    /// after it that merging has to prove assign locals.
-    fn declare_locals(&mut self, stmt: &Statement<'ast>) {
-        if let Statement::LocalAssignment(local) = stmt {
-            for attributed in &local.names {
-                let id = self.names.intern_text(attributed.name.text);
-                self.locals.push(id);
-            }
-        }
-        if let Statement::LocalFunction(local_function) = stmt {
-            let id = self.names.intern_text(local_function.name.text);
-            self.locals.push(id);
-        }
-        self.live_registers = self.live_registers.saturating_add(declared_count(stmt));
-    }
-
-    /// [`Self::declare_locals`] again for the block being merged, from the
-    /// ids its walk found, the next of which is at `next_local`.
-    fn redeclare_locals(&mut self, stmt: &Statement<'ast>, next_local: &mut usize) {
-        let count = declared_count(stmt);
-        let end = next_local.saturating_add(count);
-        self.locals.extend_from_slice(self.block_locals.get(*next_local..end).unwrap_or_default());
-        *next_local = end;
-        self.live_registers = self.live_registers.saturating_add(count);
     }
 
     /// Walks a run's operands, landing an inlined value bare wherever it
@@ -402,34 +381,37 @@ impl<'ast> Compressor<'ast> {
         let allocator = self.allocator;
         match expr {
             Expression::BinaryOp(_) => {
-                if self.config.remove_dead_code && control::fold_redundant_ternary(allocator, expr)
+                if self.config.remove_dead_code
+                    && remove_dead_code::fold_redundant_ternary(allocator, expr)
                 {
                     self.has_changed = true;
                     return self.leave_expr(expr, is_operand);
                 }
-                if self.config.fold_constants && fold::fold(allocator, self.version, expr) {
+                if self.config.fold_constants && fold_constants::fold(allocator, self.version, expr)
+                {
                     self.has_changed = true;
                     return self.leave_expr(expr, is_operand);
                 }
-                if self.config.simplify_parens && parens::strip(allocator, expr) {
+                if self.config.simplify_parens && simplify_parens::strip(allocator, expr) {
                     self.has_changed = true;
                 }
             }
             Expression::UnaryOp(_) => {
-                if self.config.fold_constants && fold::fold(allocator, self.version, expr) {
+                if self.config.fold_constants && fold_constants::fold(allocator, self.version, expr)
+                {
                     self.has_changed = true;
                     return self.leave_expr(expr, is_operand);
                 }
-                if self.config.simplify_parens && parens::strip(allocator, expr) {
+                if self.config.simplify_parens && simplify_parens::strip(allocator, expr) {
                     self.has_changed = true;
                 }
             }
             Expression::Parenthesized(_) => {
                 if self.config.simplify_parens
                     && if is_operand {
-                        parens::strip(allocator, expr)
+                        simplify_parens::strip(allocator, expr)
                     } else {
-                        parens::strip_standalone(expr)
+                        simplify_parens::strip_standalone(expr)
                     }
                 {
                     self.has_changed = true;
@@ -437,21 +419,22 @@ impl<'ast> Compressor<'ast> {
             }
             Expression::StringLiteral(literal) => {
                 if self.config.shorten_strings
-                    && self.literals.shorten_string(allocator, self.version, literal)
+                    && self.literal_cache.shorten_string(allocator, self.version, literal)
                 {
                     self.has_changed = true;
                 }
             }
             Expression::Number(literal) => {
                 if self.config.shorten_numbers
-                    && self.literals.shorten_number(allocator, self.subtypes, literal)
+                    && self.literal_cache.shorten_number(allocator, self.subtypes, literal)
                 {
                     self.has_changed = true;
                 }
             }
             // Luau
             Expression::Integer(literal) => {
-                if self.config.shorten_numbers && self.literals.shorten_integer(allocator, literal)
+                if self.config.shorten_numbers
+                    && self.literal_cache.shorten_integer(allocator, literal)
                 {
                     self.has_changed = true;
                 }
@@ -469,33 +452,6 @@ impl<'ast> Compressor<'ast> {
             | Expression::TypeCast(_)
             | Expression::Error(_) => {}
         }
-    }
-}
-
-/// How many locals `stmt` declares.
-fn declared_count(stmt: &Statement<'_>) -> usize {
-    match stmt {
-        Statement::LocalAssignment(local) => local.names.len(),
-        Statement::LocalFunction(_) => 1,
-        Statement::Assignment(_)
-        | Statement::FunctionCall(_)
-        | Statement::DoBlock(_)
-        | Statement::WhileLoop(_)
-        | Statement::RepeatLoop(_)
-        | Statement::IfStatement(_)
-        | Statement::NumericFor(_)
-        | Statement::GenericFor(_)
-        | Statement::FunctionDecl(_)
-        | Statement::EmptyStatement(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalDeclaration(_)
-        | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_)
-        | Statement::Break(_)
-        | Statement::CompoundAssignment(_)
-        | Statement::TypeDeclaration(_)
-        | Statement::Error(_) => 0,
     }
 }
 
@@ -566,7 +522,7 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
                     Suffix::Index { index, .. } => {
                         self.visit_expr(index);
                         if self.config.simplify_indexes
-                            && indexes::index_to_field(suffix, self.version)
+                            && simplify_indexes::index_to_field(suffix, self.version)
                         {
                             self.has_changed = true;
                         }
@@ -588,7 +544,7 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
                     }
                 }
             }
-            if self.config.simplify_parens && parens::strip_prefix(self.allocator, chain) {
+            if self.config.simplify_parens && simplify_parens::strip_prefix(self.allocator, chain) {
                 self.has_changed = true;
             }
         }
@@ -597,12 +553,12 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
 
     fn visit_function_args(&mut self, args: &mut FunctionArgs<'ast>) {
         self.walk_function_args(args);
-        if self.config.simplify_parens && parens::strip_call_args(args) {
+        if self.config.simplify_parens && simplify_parens::strip_call_args(args) {
             self.has_changed = true;
         }
         if self.config.shorten_strings
             && let FunctionArgs::StringLiteral(literal) = args
-            && self.literals.shorten_string(self.allocator, self.version, literal)
+            && self.literal_cache.shorten_string(self.allocator, self.version, literal)
         {
             self.has_changed = true;
         }
@@ -610,7 +566,7 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
 
     fn visit_table_constructor(&mut self, table: &mut TableConstructor<'ast>) {
         self.walk_table_constructor(table);
-        if self.config.simplify_indexes && indexes::simplify_table(table, self.version) {
+        if self.config.simplify_indexes && simplify_indexes::simplify_table(table, self.version) {
             self.has_changed = true;
         }
     }
@@ -625,7 +581,7 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
         self.walk_function_body(body);
         self.locals.truncate(outer_local_count);
         self.live_registers = outer_registers;
-        if self.config.remove_dead_code && control::ends_in_bare_return(&body.block) {
+        if self.config.remove_dead_code && remove_dead_code::ends_in_bare_return(&body.block) {
             body.block.last_stmt = None;
             self.has_changed = true;
         }

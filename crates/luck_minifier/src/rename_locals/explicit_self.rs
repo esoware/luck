@@ -9,7 +9,7 @@ use luck_ast::{Expression, FunctionBody, FunctionDecl, Name, Parameter, Var, Vis
 
 use crate::binding::METHOD_RECEIVER_NAME;
 
-pub(crate) fn rewrite<'ast>(
+pub(super) fn rewrite<'ast>(
     allocator: &'ast Allocator,
     function_declaration: &mut FunctionDecl<'ast>,
 ) {
@@ -66,11 +66,7 @@ impl<'tree> Visitor<'tree> for SelfCounter {
 mod tests {
     use luck_token::LuaVersion;
 
-    use crate::fixtures::{NO_PASSES, minify_with};
-    use crate::transform_config::TransformConfig;
-
-    const RENAMING: TransformConfig =
-        TransformConfig { rename_locals: true, rename_globals: true, ..NO_PASSES };
+    use crate::fixtures::{RENAMING, minify_with};
 
     /// Rewrites, then renames, so an explicit `self` shows up renamed.
     fn rewrite_and_rename(source: &str) -> String {

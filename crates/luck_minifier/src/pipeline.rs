@@ -6,7 +6,7 @@ use luck_token::{
 
 use crate::compress::Compressor;
 use crate::lift_locals::Lifter;
-use crate::rename::Renamer;
+use crate::rename_locals::Renamer;
 use crate::transform_config::TransformConfig;
 
 /// Two or three rounds settle every measured input, so the cap only bounds

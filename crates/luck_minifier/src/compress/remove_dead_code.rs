@@ -1,62 +1,28 @@
-//! Rewrites of control flow: dead and constant branches, loops that run once
-//! or never, nested `if`s, and `if ... return` runs.
+//! Dropping code that never runs or does nothing.
+//!
+//! That's constant branches and the `if`s they leave, loops that run once or
+//! never, a default `for` step, a bare closing `return`, `cond and X or X`,
+//! empty statements, and `local`s nothing kept uses.
 
-use core::{iter, mem};
+use core::mem;
 
-use luck_allocator::{Allocator, Box, List};
+use luck_allocator::{Allocator, Box};
 use luck_ast::{
-    BinaryLink, BinaryOp, Block, DoBlock, ElseClause, Expression, IfStatement, LastStatement,
-    NumericFor, OneOrMore, Statement, UnaryOp, VisitorMut as _, is_multi_value,
+    BinaryOp, Block, DoBlock, ElseClause, Expression, IfStatement, LastStatement, LocalAssignment,
+    NumericFor, OneOrMore, Statement, UnaryOp, VisitorMut as _,
 };
 use luck_token::{BinOp, UnOp};
 
 use super::Compressor;
+use super::simplify_statements::has_no_else;
 use crate::expr::{
-    binds_looser_than_unary, constant_truthiness, ends_in_if_expr, fits_at_depth, is_always_truthy,
-    is_pure_expr, is_same_pure_expr, parenthesize, truncate_multi_value,
+    binds_looser_than_unary, constant_truthiness, fits_at_depth, is_nil, is_pure_expr,
+    is_same_pure_expr, parenthesize, truncate_multi_value,
 };
+use crate::scan::is_call;
 
 pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
     block.stmts.is_empty() && block.last_stmt.is_none()
-}
-
-/// Whether a statement declares something its block scopes: a local, a
-/// label, a Luau type, or a Lua 5.5 global.
-const fn is_scoped_declaration(stmt: &Statement<'_>) -> bool {
-    match stmt {
-        Statement::LocalAssignment(_)
-        | Statement::LocalFunction(_)
-        | Statement::Label(_)
-        | Statement::TypeDeclaration(_)
-        | Statement::GlobalDeclaration(_)
-        | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_) => true,
-        Statement::Assignment(_)
-        | Statement::FunctionCall(_)
-        | Statement::DoBlock(_)
-        | Statement::WhileLoop(_)
-        | Statement::RepeatLoop(_)
-        | Statement::IfStatement(_)
-        | Statement::NumericFor(_)
-        | Statement::GenericFor(_)
-        | Statement::FunctionDecl(_)
-        | Statement::EmptyStatement(_)
-        | Statement::Goto(_)
-        | Statement::Break(_)
-        | Statement::CompoundAssignment(_)
-        | Statement::Error(_) => false,
-    }
-}
-
-/// Whether a `do` block's statements can take its place in the block around
-/// it: it scopes nothing, and its last statement, if any, can end that
-/// block, which `can_end_outer` says.
-fn can_unwrap(stmt: &Statement<'_>, can_end_outer: bool) -> bool {
-    let Statement::DoBlock(do_block) = stmt else {
-        return false;
-    };
-    (do_block.block.last_stmt.is_none() || can_end_outer)
-        && !do_block.block.stmts.iter().any(is_scoped_declaration)
 }
 
 /// A step of 1 is the default.
@@ -68,10 +34,6 @@ pub(super) fn has_default_step(numeric_for: &NumericFor<'_>) -> bool {
 /// `select('#', f())` observes the difference.
 pub(super) fn ends_in_bare_return(block: &Block<'_>) -> bool {
     matches!(&block.last_stmt, Some(LastStatement::Return(return_stmt)) if return_stmt.exprs.is_empty())
-}
-
-fn has_no_else(if_stmt: &IfStatement<'_>) -> bool {
-    if_stmt.elseif_clauses.is_empty() && if_stmt.else_clause.is_none()
 }
 
 /// Nested loops and function bodies aren't searched, since their exits can't
@@ -169,65 +131,17 @@ pub(super) fn fold_redundant_ternary<'ast>(
     true
 }
 
-/// `first` and each of `rest` joined by `op`, which is `and` or `or`.
-///
-/// Both are associative, so an operand that is a bare run of `op` joins the
-/// run. Only an if-expression printed last can't swallow an operator, so one
-/// anywhere else gets parentheses.
-fn logical<'ast>(
-    allocator: &'ast Allocator,
-    op: BinOp,
-    first: Expression<'ast>,
-    rest: Vec<Expression<'ast>>,
-) -> Expression<'ast> {
-    let wrap = |operand: Expression<'ast>, is_last: bool| {
-        let binds_looser = matches!(
-            &operand,
-            Expression::BinaryOp(inner) if inner.precedence().0 < op.precedence().0
-        );
-        if binds_looser || (!is_last && ends_in_if_expr(&operand)) {
-            parenthesize(allocator, operand)
-        } else {
-            operand
-        }
-    };
-    let last_index = rest.len().saturating_sub(1);
-    let first_operand = wrap(first, rest.is_empty());
-    let wrapped = rest
-        .into_iter()
-        .enumerate()
-        .map(|(i, operand)| BinaryLink { op, operand: wrap(operand, i == last_index) });
-    let Some(links) = OneOrMore::from_list(List::from_iter_in(wrapped, allocator)) else {
-        return first_operand;
-    };
-    let span = first_operand.span().merge(links.last().operand.span());
-    let mut run = BinaryOp { span, first: first_operand, links };
-    run.splice_operands(allocator);
-    Expression::BinaryOp(Box::new_in(run, allocator))
-}
-
-/// The condition and value of `if c then return v end`.
-fn if_return_guard<'tree, 'ast>(
-    stmt: &'tree Statement<'ast>,
-) -> Option<(&'tree Expression<'ast>, &'tree Expression<'ast>)> {
-    let Statement::IfStatement(if_stmt) = stmt else {
-        return None;
-    };
-    if !has_no_else(if_stmt) || !if_stmt.block.stmts.is_empty() {
-        return None;
-    }
-    let Some(LastStatement::Return(return_stmt)) = &if_stmt.block.last_stmt else {
-        return None;
-    };
-    let [return_expr] = &*return_stmt.exprs else {
-        return None;
-    };
-    Some((&if_stmt.condition, return_expr))
+/// `local x = nil` can become `local x`, since nil is the default. Const
+/// declarations keep their mandatory initializer.
+pub(super) fn is_nil_initialized(local: &LocalAssignment<'_>) -> bool {
+    !local.kind.is_const()
+        && local.names.len() == 1
+        && matches!(&*local.exprs, [value] if is_nil(value))
 }
 
 #[expect(
     clippy::multiple_inherent_impl,
-    reason = "the compressor is one type with its rewrites split by family"
+    reason = "the compressor is one type with its rewrites split by flag"
 )]
 impl<'ast> Compressor<'ast> {
     /// Walks an `if`, keeping only the arms that can run and walking only
@@ -361,64 +275,6 @@ impl<'ast> Compressor<'ast> {
         }
     }
 
-    /// `if a then if b then X end end` becomes `if a and b then X end`, for
-    /// every level of the run at once. The run of `and`s is one level, so each
-    /// condition is measured once, for the `and` and a pair of parentheses it
-    /// can gain.
-    fn merge_nested_ifs(&mut self, outer_if: &mut IfStatement<'ast>) {
-        if !self.config.simplify_statements || !has_no_else(outer_if) {
-            return;
-        }
-        let mut inner_conditions = Vec::new();
-        while outer_if.block.last_stmt.is_none()
-            && matches!(
-                &*outer_if.block.stmts,
-                [Statement::IfStatement(inner_if)]
-                    if has_no_else(inner_if) && fits_at_depth(self.depth, 2, &inner_if.condition)
-            )
-            && (!inner_conditions.is_empty() || fits_at_depth(self.depth, 2, &outer_if.condition))
-            && let Some(Statement::IfStatement(inner_if)) =
-                outer_if.block.stmts.first_mut().map(Statement::take)
-        {
-            let IfStatement { condition, block, .. } = inner_if.unbox();
-            inner_conditions.push(condition);
-            outer_if.block = block;
-        }
-        if !inner_conditions.is_empty() {
-            outer_if.condition =
-                logical(self.allocator, BinOp::And, outer_if.condition.take(), inner_conditions);
-            self.has_changed = true;
-        }
-    }
-
-    /// Puts the statements of each `do` block that scopes nothing in its
-    /// place, as in `if true then f() end`, which dead-code removal leaves as
-    /// `do f() end`.
-    pub(super) fn unwrap_do_blocks(&mut self, block: &mut Block<'ast>) {
-        let last_index = block.stmts.len().saturating_sub(1);
-        let can_end_block = block.last_stmt.is_none();
-        let mut stmts = block.stmts.iter().enumerate();
-        if !stmts.any(|(i, stmt)| can_unwrap(stmt, can_end_block && i == last_index)) {
-            return;
-        }
-        self.unwrapped_stmts.clear();
-        for (i, stmt) in mem::take(&mut block.stmts).into_iter().enumerate() {
-            if !can_unwrap(&stmt, can_end_block && i == last_index) {
-                self.unwrapped_stmts.push(stmt);
-                continue;
-            }
-            if let Statement::DoBlock(do_block) = stmt {
-                let inner = do_block.unbox().block;
-                self.unwrapped_stmts.extend(inner.stmts);
-                if inner.last_stmt.is_some() {
-                    block.last_stmt = inner.last_stmt;
-                }
-            }
-        }
-        block.stmts = List::from_iter_in(self.unwrapped_stmts.drain(..), self.allocator);
-        self.has_changed = true;
-    }
-
     /// `repeat ... until true` runs once, so it becomes a `do` block unless
     /// its body has its own `break` or `continue`, which a `do` block would
     /// rebind to an outer loop (or make invalid). Says whether anything of it
@@ -442,91 +298,41 @@ impl<'ast> Compressor<'ast> {
         !is_empty
     }
 
-    /// Converts `if c1 then return X end; if c2 then return Y end; return Z`
-    /// into `return c1 and X or c2 and Y or Z` when `X` and `Y` are always
-    /// truthy.
-    pub(super) fn convert_if_return_chain(&mut self, block: &mut Block<'ast>) {
-        // The walk is inside the block, at its own level.
-        let level = self.depth;
-        let Block { stmts, last_stmt, .. } = block;
-        let Some(LastStatement::Return(return_stmt)) = last_stmt else {
+    /// Puts the calls of an unused `local` whose other initializers are pure
+    /// in its place.
+    pub(super) fn extract_calls(&mut self, stmt: &mut Statement<'ast>) {
+        let Statement::LocalAssignment(local) = stmt else {
             return;
         };
-        let [fallback] = &mut *return_stmt.exprs else {
-            return;
-        };
-        // `return f()` returns every value f does, but as the `or` fallback it
-        // would be truncated to one, so leave the chain alone.
-        if is_multi_value(fallback) {
-            return;
+        let mut calls = local.exprs.iter_mut().filter(|expr| is_call(expr)).filter_map(|expr| {
+            if let Expression::Suffixed(chain) = expr.take() {
+                Some(Statement::FunctionCall(chain))
+            } else {
+                None
+            }
+        });
+        let first_call = calls.next();
+        self.extracted_calls.extend(calls);
+        if let Some(call) = first_call {
+            *stmt = call;
         }
-        // The guards and the fallback make one run of `or`s whatever its
-        // length, and each guard's condition and value sit in a run of `and`s
-        // under it, each maybe in parentheses.
-        let link_count = stmts
-            .iter()
-            .rev()
-            .take_while(|stmt| match if_return_guard(stmt) {
-                Some((condition, return_expr)) => {
-                    is_always_truthy(return_expr)
-                        && fits_at_depth(level, 3, condition)
-                        && fits_at_depth(level, 3, return_expr)
-                }
-                None => matches!(stmt, Statement::EmptyStatement(_)),
-            })
-            .count();
-        let chain_start = stmts.len().saturating_sub(link_count);
-        let chain = stmts.get(chain_start..).unwrap_or_default();
-        let has_guard = chain.iter().any(|stmt| if_return_guard(stmt).is_some());
-        if !has_guard || !fits_at_depth(level, 1, fallback) {
-            return;
-        }
-        let allocator = self.allocator;
-        let mut guards = Vec::with_capacity(link_count);
-        for stmt in stmts.iter_mut().skip(chain_start) {
-            let Statement::IfStatement(if_stmt) = stmt else {
-                continue;
-            };
-            let Some(LastStatement::Return(guard_return)) = &mut if_stmt.block.last_stmt else {
-                continue;
-            };
-            let Some(value) = (*guard_return.exprs).first_mut().map(Expression::take) else {
-                continue;
-            };
-            guards.push(logical(allocator, BinOp::And, if_stmt.condition.take(), vec![value]));
-        }
-        stmts.truncate(chain_start);
-        let mut chain_values = guards.into_iter();
-        let fallback_expr = fallback.take();
-        *fallback = match chain_values.next() {
-            Some(first_guard) => logical(
-                allocator,
-                BinOp::Or,
-                first_guard,
-                chain_values.chain(iter::once(fallback_expr)).collect(),
-            ),
-            None => fallback_expr,
-        };
         self.has_changed = true;
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use luck_token::LuaVersion;
 
-    use crate::fixtures::{NO_PASSES, minify_with};
+    use crate::fixtures::{NO_PASSES, assert_outputs, minify_with, walk_once};
     use crate::transform_config::TransformConfig;
 
     const DEAD_CODE: TransformConfig = TransformConfig { remove_dead_code: true, ..NO_PASSES };
-    const STATEMENTS: TransformConfig = TransformConfig { simplify_statements: true, ..NO_PASSES };
 
     fn remove_dead(source: &str) -> String {
         minify_with(source, LuaVersion::Lua54, &DEAD_CODE)
-    }
-
-    fn simplify(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &STATEMENTS)
     }
 
     #[test]
@@ -658,40 +464,6 @@ mod tests {
     }
 
     #[test]
-    fn unwraps_a_do_block_that_scopes_nothing() {
-        for (source, expected) in [
-            ("do f() g() end h()", "f()g()h()"),
-            ("while a do do break end end", "while a do break end"),
-            ("f() do return 1 end", "f()return 1"),
-            ("do do f() end end", "f()"),
-        ] {
-            assert_eq!(simplify(source), expected, "source: {source}");
-        }
-        let both = TransformConfig { remove_dead_code: true, ..STATEMENTS };
-        assert_eq!(minify_with("if true then f() end", LuaVersion::Lua54, &both), "f()");
-    }
-
-    #[test]
-    fn keeps_a_do_block_that_scopes_something() {
-        for source in [
-            "do local x=1 end",
-            "do local function f()end end",
-            "do goto l::l::end",
-            "do return 1 end f()",
-        ] {
-            assert_eq!(simplify(source), source);
-        }
-        assert_eq!(
-            minify_with("do type T=number end", LuaVersion::Luau, &STATEMENTS),
-            "do type T=number end"
-        );
-        assert_eq!(
-            minify_with("do global x end", LuaVersion::Lua55, &STATEMENTS),
-            "do global x end"
-        );
-    }
-
-    #[test]
     fn negated_empty_then_condition_keeps_its_grouping() {
         for (condition, expected) in [
             ("a == b", "if not(a==b)then print(1)end"),
@@ -728,95 +500,101 @@ mod tests {
     }
 
     #[test]
-    fn flattens_nested_ifs_into_one_run_of_ands() {
-        for (source, expected) in [
-            ("if a then if b then print(1) end end", "if a and b then print(1)end"),
-            ("if a or b then if c then x() end end", "if(a or b)and c then x()end"),
-            ("if a then if b or c then x() end end", "if a and(b or c)then x()end"),
-            ("if a and b then if c then x() end end", "if a and b and c then x()end"),
-            ("if a then if b and c then x() end end", "if a and b and c then x()end"),
-            ("if not a then if b == c then x() end end", "if not a and b==c then x()end"),
-        ] {
-            assert_eq!(simplify(source), expected, "source: {source}");
-        }
-        let source = format!("{}x(){}", "if a or b then ".repeat(200), " end".repeat(200));
-        assert_eq!(
-            simplify(&source),
-            format!("if(a or b){}then x()end", "and(a or b)".repeat(199))
+    fn removes_unused_locals() {
+        assert_outputs(
+            remove_dead,
+            &[
+                ("local unused = 42 local used = 1 return used", "local used=1 return used"),
+                ("local function unused() return 1 end return 2", "return 2"),
+                ("local unused = 1 + 2", ""),
+                ("local unused = foo()", "foo()"),
+                ("local a, b = f(), 1", "f()"),
+                ("local a, b = f(), g()", "f()g()"),
+            ],
         );
     }
 
     #[test]
-    fn turns_an_if_return_run_into_a_ternary() {
-        for (source, expected) in [
-            ("if x then return 1 end return 0", "return x and 1 or 0"),
-            (
-                "if cond then return \"hello\" end return \"world\"",
-                "return cond and\"hello\"or\"world\"",
-            ),
-            (
-                "if a then return 1 end if b then return 2 end return 0",
-                "return a and 1 or b and 2 or 0",
-            ),
-            ("if a or b then return 1 end return 0", "return(a or b)and 1 or 0"),
-            ("if a and b then return 1 end return c or d", "return a and b and 1 or c or d"),
-            // Lua 5.2+ parses semicolons as statements, which must not break
-            // the chain.
-            (
-                "if x then return 1 end; if y then return 2 end; return 0",
-                "return x and 1 or y and 2 or 0",
-            ),
-        ] {
-            assert_eq!(simplify(source), expected, "source: {source}");
+    fn keeps_unused_env_only_where_it_redirects_globals() {
+        let source = "local _ENV = {} return 1";
+        assert_eq!(remove_dead(source), "local _ENV={}return 1");
+        for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+            assert_eq!(minify_with(source, version, &DEAD_CODE), "return 1", "{version:?}");
         }
     }
 
     #[test]
-    fn keeps_an_if_return_whose_value_may_be_falsy() {
+    fn keeps_local_rooting_a_function_declaration() {
         for source in [
-            "if x then return false end return true",
-            "if x then return y end return 0",
-            "if x then return 1 end return f()",
+            "local M = {} function M.foo() end print(\"ok\")",
+            "local M = {} function M:foo() end print(\"ok\")",
+            "local M = {} function M.a.b() end print(\"ok\")",
+            "local M = {} do function M.foo() end end print(\"ok\")",
+            "local M function M() end print(\"ok\")",
         ] {
-            assert!(simplify(source).starts_with("if"), "source: {source}");
+            assert!(remove_dead(source).contains("local M"), "{source}");
         }
     }
 
     #[test]
-    fn converts_a_long_if_return_run_into_one_run_of_ors() {
-        let result = simplify(&format!("{}return 0\n", "if a then return 1 end\n".repeat(300)));
-        assert_eq!(result, format!("return {}0", "a and 1 or ".repeat(300)));
+    fn removes_unused_local_named_like_a_function_declaration_field() {
+        assert_eq!(remove_dead("local foo = {} function M.foo() end"), "function M.foo()end");
     }
 
     #[test]
-    fn merged_if_exprs_end_before_the_next_operator() {
-        for (source, expected) in [
-            (
-                "if if a then b else c then return 1 end return 0",
-                "return(if a then b else c)and 1 or 0",
-            ),
-            (
-                "if a then if if b then c else d then x() end end",
-                "if a and if b then c else d then x()end",
-            ),
-            (
-                "if a then if if b then c else d then if e then x() end end end",
-                "if a and(if b then c else d)and e then x()end",
-            ),
-            (
-                "if a then if if b then c else d then return 1 end end return 0",
-                "return(a and if b then c else d)and 1 or 0",
-            ),
-            (
-                "if not if a then b else c then return 1 end return 0",
-                "return(not if a then b else c)and 1 or 0",
-            ),
-            (
-                "if a then return 1 end return if b then c else d",
-                "return a and 1 or if b then c else d",
-            ),
+    fn removes_a_run_of_locals_each_used_only_by_the_next_in_one_walk() {
+        let mut forward = String::from("local function f0() end\n");
+        for (i, previous) in (1..300u32).zip(0u32..) {
+            writeln!(forward, "local function f{i}() f{previous}() end").unwrap();
+        }
+        let mut backward = String::new();
+        for (i, next) in (0..300u32).zip(1u32..) {
+            writeln!(backward, "local f{i} = function() f{next}() end").unwrap();
+        }
+        for source in [forward, backward] {
+            assert_eq!(walk_once(&source, DEAD_CODE), "", "source: {source}");
+        }
+    }
+
+    #[test]
+    fn keeps_a_local_used_by_a_kept_local() {
+        let source = "local a = function() end local b = function() return a end return b";
+        assert_eq!(
+            walk_once(source, DEAD_CODE),
+            "local a=function()end local b=function()return a end return b"
+        );
+    }
+
+    #[test]
+    fn removes_an_unused_local_function_that_calls_itself() {
+        assert_eq!(walk_once("local function f() return f() end\n", DEAD_CODE), "");
+    }
+
+    #[test]
+    fn a_kept_call_keeps_what_it_uses() {
+        assert_eq!(
+            walk_once("local y = 1 local x = function() return y end, g()", DEAD_CODE),
+            "g()"
+        );
+        assert_eq!(walk_once("local y = 1 local x = g(y)", DEAD_CODE), "local y=1 g(y)");
+    }
+
+    #[test]
+    fn keeps_unused_locals_whose_initializer_can_raise_or_read() {
+        for initializer in [
+            "g",
+            "1 // 0",
+            "1 % 0",
+            "nil + 1",
+            "#nil",
+            "\"a\" .. nil",
+            "1 < \"a\"",
+            "-\"a\"",
+            "{[nil] = 1}",
+            "{[0/0] = 1}",
         ] {
-            assert_eq!(minify_with(source, LuaVersion::Luau, &STATEMENTS), expected, "{source}");
+            let result = remove_dead(&format!("local unused = {initializer} return 1"));
+            assert!(result.contains("local unused"), "`{initializer}` must stay: {result}");
         }
     }
 }

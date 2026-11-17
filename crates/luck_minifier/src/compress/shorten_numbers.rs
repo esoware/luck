@@ -1,75 +1,21 @@
-//! Respelling strings and numbers shorter.
+//! Respelling a number literal shorter.
 //!
-//! A string goes through its decoded bytes, which keeps every escape, UTF-8
-//! sequence, and arbitrary byte exact, and a number keeps its value and, on
-//! Lua 5.3+, its integer or float subtype: `1.0` never becomes `1`, an
-//! integer never becomes `1e6`, and a candidate is only used if it parses
-//! back to the same value.
+//! It keeps its value and, on Lua 5.3+, its integer or float subtype: `1.0`
+//! never becomes `1`, an integer never becomes `1e6`, and a candidate is
+//! only used if it parses back to the same value.
 
 use luck_allocator::Allocator;
 use luck_ast::Literal;
-use luck_token::{LuaVersion, NumberSubtypes, decode_string, encode_string, encodes_to_at_least};
-use rustc_hash::FxHashSet;
+use luck_token::NumberSubtypes;
 
+use super::literal_cache::LiteralCache;
 use crate::expr::int_to_float;
 
-/// Respells literals, and remembers the ones it found as short as they get,
-/// so a later walk skips them.
-#[derive(Default)]
-pub(super) struct Literals {
-    /// Each settled literal's text by where it lives and how long it is,
-    /// which no other text shares, since nothing in the arena or the source
-    /// moves or is freed while the tree lives.
-    settled: FxHashSet<(usize, usize)>,
-    scratch: String,
-}
-
-impl Literals {
-    /// Respells `literal` with `respell`, and says whether it did.
-    fn shorten<'ast>(
-        &mut self,
-        allocator: &'ast Allocator,
-        literal: &mut Literal<'ast>,
-        respell: impl FnOnce(&str, &mut String) -> bool,
-    ) -> bool {
-        let key = (literal.text.as_ptr().addr(), literal.text.len());
-        if self.settled.contains(&key) {
-            return false;
-        }
-        self.scratch.clear();
-        if !respell(literal.text, &mut self.scratch) || self.scratch.len() >= literal.text.len() {
-            self.settled.insert(key);
-            return false;
-        }
-        literal.text = allocator.alloc_str(&self.scratch);
-        // Every respelling is already as short as its value gets.
-        self.settled.insert((literal.text.as_ptr().addr(), literal.text.len()));
-        true
-    }
-
-    /// A string literal, as written, quotes or long brackets included.
-    pub(super) fn shorten_string<'ast>(
-        &mut self,
-        allocator: &'ast Allocator,
-        version: LuaVersion,
-        literal: &mut Literal<'ast>,
-    ) -> bool {
-        // A quoted string without escapes encodes to at least its own length.
-        if !literal.text.starts_with('[') && !literal.text.contains('\\') {
-            return false;
-        }
-        self.shorten(allocator, literal, |text, respelled| {
-            let Some(bytes) = decode_string(text, version) else {
-                return false;
-            };
-            if encodes_to_at_least(&bytes, text.len()) {
-                return false;
-            }
-            encode_string(&bytes, respelled);
-            true
-        })
-    }
-
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "the cache is one type with its respellings split by flag"
+)]
+impl LiteralCache {
     pub(super) fn shorten_number<'ast>(
         &mut self,
         allocator: &'ast Allocator,
@@ -273,8 +219,6 @@ fn format_shortest_decimal(value: f64, should_stay_float_formed: bool) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixtures::{NO_PASSES, minify_with};
-    use crate::transform_config::TransformConfig;
 
     #[test]
     fn no_subtype_trailing_zero_drops() {
@@ -403,40 +347,5 @@ mod tests {
             Some("2834i"),
             "the digits after `0x` must not lose a leading `0b`"
         );
-    }
-
-    const STRINGS: TransformConfig = TransformConfig { shorten_strings: true, ..NO_PASSES };
-
-    fn apply(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &STRINGS)
-    }
-
-    #[test]
-    fn respells_a_string_shorter_and_exact() {
-        for (source, expected) in [
-            ("local x = [[hello]]", "local x=\"hello\""),
-            ("local x = [=[hello]=]", "local x=\"hello\""),
-            ("local x = [[hello\nworld]]", "local x=\"hello\\nworld\""),
-            ("local x = \"\\097\\098\\099\"", "local x=\"abc\""),
-            ("local x = \"\\000\"", "local x=\"\\0\""),
-            ("local x = \"\u{e9}\\097\\098\\099\"", "local x=\"\u{e9}abc\""),
-            ("local t = {[[hello]], [[world]]}", "local t={\"hello\",\"world\"}"),
-        ] {
-            assert_eq!(apply(source), expected, "source: {source}");
-        }
-    }
-
-    #[test]
-    fn keeps_a_string_no_shorter_spelling_beats() {
-        for source in [
-            "local x=\"hello\"",
-            // The re-encoded forms are the same length.
-            "local x='hello'",
-            "local x=[[say \"hi\"]]",
-            // `\\097` is a literal backslash followed by "097", not the byte 97.
-            "local x=\"\\\\097\"",
-        ] {
-            assert_eq!(apply(source), source);
-        }
     }
 }

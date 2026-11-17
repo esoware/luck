@@ -45,7 +45,6 @@ extern crate alloc;
 
 mod binding;
 mod compress;
-mod explicit_self;
 mod expr;
 #[cfg(test)]
 mod fixtures;
@@ -53,7 +52,8 @@ mod lift_locals;
 mod limits;
 mod name_table;
 mod pipeline;
-mod rename;
+mod rename_globals;
+mod rename_locals;
 mod scan;
 mod transform_config;
 
