@@ -21,6 +21,22 @@ impl<'ast, T> OneOrMore<'ast, T> {
         (!items.is_empty()).then_some(Self(items))
     }
 
+    /// Moves `items[at..]` into the arena, as [`List::split_off_in`] does.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at` isn't below `items.len()`, which would leave the list
+    /// empty, or if more than `u32::MAX` items move.
+    #[must_use]
+    pub fn split_off_in(items: &mut Vec<T>, at: usize, allocator: &'ast Allocator) -> Self {
+        assert!(
+            at < items.len(),
+            "a run takes at least one of the {} items from {at}",
+            items.len()
+        );
+        Self(List::split_off_in(items, at, allocator))
+    }
+
     /// See [`List::push`].
     pub fn push(&mut self, item: T, allocator: &'ast Allocator) {
         self.0.push(item, allocator);
@@ -128,5 +144,13 @@ mod tests {
         assert!(OneOrMore::<u8>::from_list(List::new()).is_none());
         let list = OneOrMore::from_list(List::from_array_in([7u8, 8], &allocator));
         assert_eq!(list.as_deref(), Some([7, 8].as_slice()));
+    }
+
+    #[test]
+    fn splits_the_tail_off_a_scratch_vec() {
+        let allocator = Allocator::new();
+        let mut scratch = vec![1u8, 2, 3];
+        let tail = OneOrMore::split_off_in(&mut scratch, 1, &allocator);
+        assert_eq!((scratch.as_slice(), &*tail), ([1].as_slice(), [2, 3].as_slice()));
     }
 }
