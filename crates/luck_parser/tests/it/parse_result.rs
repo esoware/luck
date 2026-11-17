@@ -1,34 +1,48 @@
-use luck_ast::{Call, FunctionArgs, Visitor};
+use core::ptr;
+
+use luck_allocator::Allocator;
+use luck_ast::{Call, Expression, FunctionArgs, Statement, Visitor};
 use luck_parser::parse;
 use luck_token::LuaVersion;
 
+/// Names and literals are slices of the source, not copies of it.
 #[test]
-fn owned_source_moves_into_the_result_without_a_copy() {
-    for text in ["return 1", "local = 5"] {
-        let mut source = String::with_capacity(256);
-        source.push_str(text);
-        let pointer = source.as_ptr();
-        let capacity = source.capacity();
-        for _ in 0u8..3 {
-            let parsed = parse(source, LuaVersion::Lua54);
-            assert_eq!(parsed.source.as_ptr(), pointer);
-            assert_eq!(parsed.source.capacity(), capacity);
-            assert_eq!(parsed.source, text);
-            assert_eq!(parsed.errors.is_empty(), text == "return 1", "{:?}", parsed.errors);
-            source = parsed.source;
-        }
+fn the_tree_borrows_its_leaves_from_the_source() {
+    let allocator = Allocator::new();
+    let source = String::from("local name = 'text' .. 42");
+    let result = parse(&allocator, &source, LuaVersion::Lua54);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert!(ptr::eq(result.source, source.as_str()));
+    let Some(Statement::LocalAssignment(local)) = result.block.stmts.first() else {
+        panic!("{:?}", result.block.stmts);
+    };
+    let Some(Expression::BinaryOp(concat)) = local.exprs.first() else {
+        panic!("{:?}", local.exprs);
+    };
+    let (Expression::StringLiteral(text), Expression::Number(number)) =
+        (&concat.first, &concat.links.first().operand)
+    else {
+        panic!("{concat:?}");
+    };
+    for (leaf, span) in [
+        (local.names[0].name.text, local.names[0].name.span),
+        (text.text, text.span),
+        (number.text, number.span),
+    ] {
+        assert!(ptr::eq(leaf, span.text(&source)), "{leaf}");
     }
 }
 
 #[test]
 fn declaration_without_values_spans_its_annotation_and_attribute() {
+    let allocator = Allocator::new();
     for (source, version) in [
         ("local x <const>", LuaVersion::Lua54),
         ("local a, b <close>", LuaVersion::Lua54),
         ("global x <const>", LuaVersion::Lua55),
         ("local x: number", LuaVersion::Luau),
     ] {
-        let result = parse(source, version);
+        let result = parse(&allocator, source, version);
         assert!(result.errors.is_empty(), "{source}: {:?}", result.errors);
         let statement_span = result.block.stmts[0].span();
         assert_eq!(statement_span.text(source), source, "the statement must span all of {source}");
@@ -46,7 +60,7 @@ impl<'ast> Visitor<'ast> for ArgLists<'ast> {
     fn visit_call(&mut self, call: Call<'ast>) {
         if let FunctionArgs::Parenthesized { args, .. } = call.args {
             let texts = args.iter().map(|arg| arg.span().text(self.source)).collect();
-            self.lists.push((texts, args.items.capacity()));
+            self.lists.push((texts, args.capacity()));
         }
         self.walk_call(call);
     }
@@ -54,8 +68,9 @@ impl<'ast> Visitor<'ast> for ArgLists<'ast> {
 
 #[test]
 fn an_expression_list_nested_in_another_fills_a_list_of_exactly_its_length() {
+    let allocator = Allocator::new();
     let source = "f(a, g(b, h(c, d, e, i, j), k), l)(m)()";
-    let result = parse(source, LuaVersion::Lua54);
+    let result = parse(&allocator, source, LuaVersion::Lua54);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     let mut calls = ArgLists { source, lists: Vec::new() };
     calls.visit_block(&result.block);

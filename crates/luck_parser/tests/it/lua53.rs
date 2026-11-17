@@ -1,17 +1,19 @@
+use luck_allocator::Allocator;
 use luck_ast::Expression;
 use luck_parser::ParseResult;
 use luck_token::{BinOp, LuaVersion, UnOp};
 
 use crate::common::{assert_no_errors, local_value, run_operands, run_ops};
 
-fn parse_lua53(source: &str) -> ParseResult {
-    luck_parser::parse(source, LuaVersion::Lua53)
+fn parse_lua53<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
+    luck_parser::parse(allocator, source, LuaVersion::Lua53)
 }
 
 #[test]
 fn bitwise_and_or_precedence() {
+    let allocator = Allocator::new();
     // `&` binds tighter than `|`, so `a & b | c` is `(a & b) | c`.
-    let result = parse_lua53("local x = a & b | c");
+    let result = parse_lua53(&allocator, "local x = a & b | c");
     assert_no_errors(&result);
     let expr = local_value(&result);
     assert_eq!(run_ops(expr), [BinOp::BitOr]);
@@ -20,7 +22,8 @@ fn bitwise_and_or_precedence() {
 
 #[test]
 fn unary_bitwise_not() {
-    let result = parse_lua53("local x = ~y");
+    let allocator = Allocator::new();
+    let result = parse_lua53(&allocator, "local x = ~y");
     assert_no_errors(&result);
     let expr = local_value(&result);
     if let Expression::UnaryOp(unary) = expr {
@@ -32,23 +35,26 @@ fn unary_bitwise_not() {
 
 #[test]
 fn floor_division() {
-    let result = parse_lua53("local x = a // b");
+    let allocator = Allocator::new();
+    let result = parse_lua53(&allocator, "local x = a // b");
     assert_no_errors(&result);
     assert_eq!(run_ops(local_value(&result)), [BinOp::FloorDiv]);
 }
 
 #[test]
 fn left_shift() {
-    let result = parse_lua53("local x = a << 3");
+    let allocator = Allocator::new();
+    let result = parse_lua53(&allocator, "local x = a << 3");
     assert_no_errors(&result);
     assert_eq!(run_ops(local_value(&result)), [BinOp::Shl]);
 }
 
 #[test]
 fn shift_and_bitwise_precedence() {
+    let allocator = Allocator::new();
     // `>>` (level 7) binds tighter than `&` (level 6), so `a >> b & c`
     // parses as `(a >> b) & c`.
-    let result = parse_lua53("local x = a >> b & c");
+    let result = parse_lua53(&allocator, "local x = a >> b & c");
     assert_no_errors(&result);
     let expr = local_value(&result);
     assert_eq!(run_ops(expr), [BinOp::BitAnd]);
@@ -57,14 +63,16 @@ fn shift_and_bitwise_precedence() {
 
 #[test]
 fn bitwise_xor() {
-    let result = parse_lua53("local x = a ~ b");
+    let allocator = Allocator::new();
+    let result = parse_lua53(&allocator, "local x = a ~ b");
     assert_no_errors(&result);
     assert_eq!(run_ops(local_value(&result)), [BinOp::BitXor]);
 }
 
 #[test]
 fn goto_and_labels_parse_in_lua53() {
-    let result = parse_lua53("goto done ::done::");
+    let allocator = Allocator::new();
+    let result = parse_lua53(&allocator, "goto done ::done::");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 2);
 }
