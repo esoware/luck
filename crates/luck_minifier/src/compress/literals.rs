@@ -1,67 +1,100 @@
-use luck_ast::{Block, Expression, Literal, Transform};
-use luck_token::{LuaVersion, NumberSubtypes, Span};
+//! Respelling strings and numbers shorter.
+//!
+//! A string goes through its decoded bytes, which keeps every escape, UTF-8
+//! sequence, and arbitrary byte exact, and a number keeps its value and, on
+//! Lua 5.3+, its integer or float subtype: `1.0` never becomes `1`, an
+//! integer never becomes `1e6`, and a candidate is only used if it parses
+//! back to the same value.
+
+use luck_allocator::Allocator;
+use luck_ast::Literal;
+use luck_token::{LuaVersion, NumberSubtypes, decode_string, encode_string};
+use rustc_hash::FxHashSet;
 
 use crate::expr::int_to_float;
 
-/// On Lua 5.3+ every literal keeps its integer/float subtype (`1.0` never
-/// becomes `1`, an integer never becomes `1e6`), and a candidate is only used
-/// if it parses back to the same value.
-pub(crate) fn shorten(block: Block, version: LuaVersion) -> Block {
-    NumberShortener { subtypes: NumberSubtypes::from(version) }.transform_block(block)
+/// Respells literals, and remembers the ones it found as short as they get,
+/// so a later walk skips them.
+#[derive(Default)]
+pub(super) struct Literals {
+    /// Each settled literal's text by where it lives and how long it is,
+    /// which no other text shares, since nothing in the arena or the source
+    /// moves or is freed while the tree lives.
+    settled: FxHashSet<(usize, usize)>,
+    scratch: String,
 }
 
-struct NumberShortener {
-    subtypes: NumberSubtypes,
-}
-
-impl NumberShortener {
-    // Out of line, so an expression nested below holds only the walk's frame,
-    // not these temporaries.
-    fn shorten_literal(&self, walked: Expression) -> Expression {
-        match walked {
-            Expression::Number(literal) => {
-                if let Some(shortened) = shorten_number(&literal.text, self.subtypes) {
-                    return Expression::Number(Literal {
-                        text: shortened.into(),
-                        span: Span::default(),
-                    });
-                }
-                Expression::Number(literal)
-            }
-            // Luau
-            Expression::Integer(literal) => {
-                if let Some(shortened) = shorten_integer(&literal.text) {
-                    return Expression::Integer(Literal {
-                        text: shortened.into(),
-                        span: Span::default(),
-                    });
-                }
-                Expression::Integer(literal)
-            }
-            other @ (Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_)) => other,
+impl Literals {
+    /// Respells `literal` with `respell`, and says whether it did.
+    fn shorten<'ast>(
+        &mut self,
+        allocator: &'ast Allocator,
+        literal: &mut Literal<'ast>,
+        respell: impl FnOnce(&str, &mut String) -> bool,
+    ) -> bool {
+        let key = (literal.text.as_ptr().addr(), literal.text.len());
+        if self.settled.contains(&key) {
+            return false;
         }
+        self.scratch.clear();
+        if !respell(literal.text, &mut self.scratch) || self.scratch.len() >= literal.text.len() {
+            self.settled.insert(key);
+            return false;
+        }
+        literal.text = allocator.alloc_str(&self.scratch);
+        true
     }
-}
 
-impl Transform for NumberShortener {
-    fn transform_expr(&mut self, expr: Expression) -> Expression {
-        let walked = self.walk_expr(expr);
-        self.shorten_literal(walked)
+    /// A string literal, as written, quotes or long brackets included.
+    pub(super) fn shorten_string<'ast>(
+        &mut self,
+        allocator: &'ast Allocator,
+        version: LuaVersion,
+        literal: &mut Literal<'ast>,
+    ) -> bool {
+        // A quoted string without escapes encodes to at least its own length.
+        if !literal.text.starts_with('[') && !literal.text.contains('\\') {
+            return false;
+        }
+        self.shorten(allocator, literal, |text, respelled| {
+            let Some(bytes) = decode_string(text, version) else {
+                return false;
+            };
+            encode_string(&bytes, respelled);
+            true
+        })
+    }
+
+    pub(super) fn shorten_number<'ast>(
+        &mut self,
+        allocator: &'ast Allocator,
+        subtypes: NumberSubtypes,
+        literal: &mut Literal<'ast>,
+    ) -> bool {
+        // A one-character literal can never shrink.
+        if literal.text.len() == 1 || is_shortest_integer(literal.text, subtypes) {
+            return false;
+        }
+        self.shorten(allocator, literal, |text, respelled| {
+            shorten_number(text, subtypes).is_some_and(|shortened| {
+                respelled.push_str(&shortened);
+                true
+            })
+        })
+    }
+
+    /// Luau: an exact 64-bit integer literal.
+    pub(super) fn shorten_integer<'ast>(
+        &mut self,
+        allocator: &'ast Allocator,
+        literal: &mut Literal<'ast>,
+    ) -> bool {
+        self.shorten(allocator, literal, |text, respelled| {
+            shorten_integer(text).is_some_and(|shortened| {
+                respelled.push_str(&shortened);
+                true
+            })
+        })
     }
 }
 
@@ -69,14 +102,19 @@ impl Transform for NumberShortener {
 /// every pattern; decimal only up to `i64::MAX`, since larger values would
 /// need a unary minus, which is a different AST shape.
 fn shorten_integer(text: &str) -> Option<String> {
+    let body = text.strip_suffix('i').unwrap_or(text);
+    // Twelve decimal digits are never longer than the hex spelling.
+    if body.len() <= 12 && !body.starts_with('0') && body.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
     // Luau drops every `_`, even after the suffix, as in `1i_`.
     let spelled: String = text.chars().filter(|c| *c != '_').collect();
-    let body = spelled.strip_suffix('i').unwrap_or(&spelled);
-    let binary_digits = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B"));
-    let (digits, radix) = match (hex_digits(body), binary_digits) {
+    let spelled_body = spelled.strip_suffix('i').unwrap_or(&spelled);
+    let binary_digits = spelled_body.strip_prefix("0b").or_else(|| spelled_body.strip_prefix("0B"));
+    let (digits, radix) = match (hex_digits(spelled_body), binary_digits) {
         (Some(hex), _) => (hex, 16),
         (None, Some(binary)) => (binary, 2),
-        (None, None) => (body, 10),
+        (None, None) => (spelled_body, 10),
     };
     let value = u64::from_str_radix(digits, radix).ok()?;
 
@@ -106,10 +144,20 @@ fn roundtrips(candidate: &str, value: f64) -> bool {
     candidate.parse::<f64>() == Ok(value)
 }
 
+/// Whether `text` is a decimal integer no other spelling beats: one without
+/// a leading zero, exact as a float, and on a target with no integer subtype,
+/// too few trailing zeros for an exponent to pay off.
+fn is_shortest_integer(text: &str, subtypes: NumberSubtypes) -> bool {
+    let is_plain =
+        text.len() <= 15 && !text.starts_with('0') && text.bytes().all(|b| b.is_ascii_digit());
+    is_plain
+        && (subtypes == NumberSubtypes::IntFloat
+            || text.bytes().rev().take_while(|&b| b == b'0').count() < 3)
+}
+
 fn shorten_number(text: &str, subtypes: NumberSubtypes) -> Option<String> {
-    // A one-character literal can never shrink, and single digits are the
-    // most common literals in already-minified rounds.
-    if text.len() == 1 {
+    // A one-character literal can never shrink.
+    if text.len() == 1 || is_shortest_integer(text, subtypes) {
         return None;
     }
 
@@ -193,7 +241,7 @@ fn format_shortest_decimal(value: f64, should_stay_float_formed: bool) -> String
 
     // Exponent forms are already float-formed and must skip the trailing-
     // zero trim, which would otherwise eat exponent digits ("1.5e300").
-    if formatted.contains('e') || formatted.contains('E') {
+    if formatted.contains(['e', 'E']) {
         return formatted.to_owned();
     }
 
@@ -220,6 +268,8 @@ fn format_shortest_decimal(value: f64, should_stay_float_formed: bool) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::{NO_PASSES, minify_with};
+    use crate::transform_config::TransformConfig;
 
     #[test]
     fn no_subtype_trailing_zero_drops() {
@@ -279,6 +329,7 @@ mod tests {
         assert_eq!(shorten_number("0.5", NumberSubtypes::Unified).as_deref(), Some(".5"));
         assert_eq!(shorten_number("0.5", NumberSubtypes::IntFloat).as_deref(), Some(".5"));
         assert_eq!(shorten_number("0.25", NumberSubtypes::IntFloat).as_deref(), Some(".25"));
+        assert_eq!(shorten_number("007", NumberSubtypes::IntFloat).as_deref(), Some("7"));
     }
 
     #[test]
@@ -286,6 +337,16 @@ mod tests {
         assert_eq!(shorten_number("1", NumberSubtypes::IntFloat), None);
         assert_eq!(shorten_number("42", NumberSubtypes::Unified), None);
         assert_eq!(shorten_number("0", NumberSubtypes::IntFloat), None);
+        assert_eq!(shorten_number("1200", NumberSubtypes::Unified), None);
+    }
+
+    #[test]
+    fn a_long_integer_shortens_to_its_exponent_where_floats_are_the_only_numbers() {
+        let literal = format!("12345678901234567{}", "0".repeat(13));
+        assert_eq!(
+            shorten_number(&literal, NumberSubtypes::Unified).as_deref(),
+            Some("1.2345678901234568e29")
+        );
     }
 
     #[test]
@@ -322,6 +383,7 @@ mod tests {
             shorten_integer("0xFFFF_FFFF_FFFF_FFFFi").as_deref(),
             Some("0xffffffffffffffffi")
         );
+        assert_eq!(shorten_integer("1000000000000000000i").as_deref(), Some("0xde0b6b3a7640000i"));
         // Already-shortest spellings stay put (idempotent).
         assert_eq!(shorten_integer("255i"), None);
         assert_eq!(shorten_integer("0i"), None);
@@ -336,5 +398,40 @@ mod tests {
             Some("2834i"),
             "the digits after `0x` must not lose a leading `0b`"
         );
+    }
+
+    const STRINGS: TransformConfig = TransformConfig { shorten_strings: true, ..NO_PASSES };
+
+    fn apply(source: &str) -> String {
+        minify_with(source, LuaVersion::Lua54, &STRINGS)
+    }
+
+    #[test]
+    fn respells_a_string_shorter_and_exact() {
+        for (source, expected) in [
+            ("local x = [[hello]]", "local x=\"hello\""),
+            ("local x = [=[hello]=]", "local x=\"hello\""),
+            ("local x = [[hello\nworld]]", "local x=\"hello\\nworld\""),
+            ("local x = \"\\097\\098\\099\"", "local x=\"abc\""),
+            ("local x = \"\\000\"", "local x=\"\\0\""),
+            ("local x = \"\u{e9}\\097\\098\\099\"", "local x=\"\u{e9}abc\""),
+            ("local t = {[[hello]], [[world]]}", "local t={\"hello\",\"world\"}"),
+        ] {
+            assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn keeps_a_string_no_shorter_spelling_beats() {
+        for source in [
+            "local x=\"hello\"",
+            // The re-encoded forms are the same length.
+            "local x='hello'",
+            "local x=[[say \"hi\"]]",
+            // `\\097` is a literal backslash followed by "097", not the byte 97.
+            "local x=\"\\\\097\"",
+        ] {
+            assert_eq!(apply(source), source);
+        }
     }
 }

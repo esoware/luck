@@ -1,8 +1,15 @@
+use luck_allocator::Allocator;
 use luck_minifier::{TransformConfig, minify};
 use luck_token::LuaVersion;
 
+/// Minifies `source`, and checks that the output reparses and minifies to
+/// itself.
 pub(crate) fn minify_with(source: &str, version: LuaVersion, config: &TransformConfig) -> String {
-    minify(source, version, config).expect("minify failed")
+    let allocator = Allocator::new();
+    let output = minify(&allocator, source, version, config).expect("minify failed");
+    let again = minify(&allocator, &output, version, config).expect("the output reparses");
+    assert_eq!(again, output, "minifying the output again changed it\n{source}");
+    output
 }
 
 pub(crate) fn minify_lua54(source: &str) -> String {
@@ -19,5 +26,6 @@ pub(crate) fn minify_renaming_globals(source: &str, version: LuaVersion) -> Stri
 }
 
 pub(crate) fn reparses(source: &str) -> bool {
-    luck_parser::parse(source, LuaVersion::Lua54).errors.is_empty()
+    let allocator = Allocator::new();
+    luck_parser::parse(&allocator, source, LuaVersion::Lua54).errors.is_empty()
 }

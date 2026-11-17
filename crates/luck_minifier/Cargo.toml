@@ -21,13 +21,17 @@ schemars = ["dep:schemars", "serde"]
 workspace = true
 
 [dependencies]
-luck_ast     = { workspace = true }
-luck_codegen = { workspace = true }
-luck_parser  = { workspace = true }
-luck_token   = { workspace = true }
+luck_allocator = { workspace = true }
+luck_ast       = { workspace = true }
+luck_codegen   = { workspace = true }
+luck_parser    = { workspace = true }
+luck_token     = { workspace = true }
 
 itoa       = { workspace = true }
 rustc-hash = { workspace = true }
 ryu        = { workspace = true }
 schemars   = { workspace = true, optional = true }
 serde      = { workspace = true, optional = true }
+
+[dev-dependencies]
+luck_testgen = { workspace = true }

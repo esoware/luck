@@ -1,6 +1,7 @@
 use core::fmt::Write as _;
 
-use luck_ast::{Block, MAX_NESTING_DEPTH, Synth, block_nesting_depth};
+use luck_allocator::Allocator;
+use luck_ast::{Block, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
 use luck_minifier::TransformConfig;
 use luck_token::{LuaVersion, UnOp};
 
@@ -219,7 +220,8 @@ fn long_if_return_run_minifies_within_the_depth_cap() {
 fn assert_minifies_within_the_depth_cap(source: &str) -> String {
     let output = minify_lua54(source);
     assert!(reparses(&output), "output must reparse");
-    let input = luck_parser::parse(source, LuaVersion::Lua54).block;
+    let allocator = Allocator::new();
+    let input = luck_parser::parse(&allocator, source, LuaVersion::Lua54).block;
     let compact_input = luck_codegen::compact(&input);
     assert!(output.len() <= compact_input.len(), "output must be no longer than the compact input");
     assert!(minify_lua54(&output) == output, "output must be a fixpoint");
@@ -310,28 +312,36 @@ fn an_empty_then_branch_is_not_negated_where_the_condition_would_nest_past_the_c
     assert_eq!(assert_minifies_within_the_depth_cap(shallow), "if not(a==b)then x()end");
 }
 
-fn nested_negations(wraps: usize) -> Block {
-    let synth = Synth::new();
+fn nested_negations<'ast>(
+    allocator: &'ast Allocator,
+    spans: &'ast SpanCounter,
+    wraps: usize,
+) -> Block<'ast> {
+    let synth = Synth::new(allocator, spans);
     let mut expr = synth.name_expr("x");
     for _ in 0..wraps {
         expr = synth.unary_op(UnOp::Not, expr);
     }
-    synth.block(Vec::new(), Some(synth.return_(vec![expr])))
+    synth.block([], Some(synth.return_([expr])))
 }
 
 #[test]
 fn a_tree_at_the_nesting_cap_minifies() {
     let wraps = MAX_NESTING_DEPTH - 1;
-    let block = nested_negations(wraps);
+    let (allocator, spans) = (Allocator::new(), SpanCounter::new());
+    let mut block = nested_negations(&allocator, &spans, wraps);
     assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
-    let output = luck_minifier::minify_block(block, LuaVersion::Lua54, &TransformConfig::default());
+    let config = TransformConfig::default();
+    let output = luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config);
     assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps))));
 }
 
 #[test]
 fn a_tree_past_the_nesting_cap_is_an_error() {
-    let block = nested_negations(MAX_NESTING_DEPTH);
-    let error = luck_minifier::minify_block(block, LuaVersion::Lua54, &TransformConfig::default())
+    let (allocator, spans) = (Allocator::new(), SpanCounter::new());
+    let mut block = nested_negations(&allocator, &spans, MAX_NESTING_DEPTH);
+    let config = TransformConfig::default();
+    let error = luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config)
         .expect_err("the tree nests one level too deep");
     assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
 }

@@ -1032,9 +1032,11 @@ name = "luck_minifier"
 version = "0.6.0"
 dependencies = [
  "itoa",
+ "luck_allocator",
  "luck_ast",
  "luck_codegen",
  "luck_parser",
+ "luck_testgen",
  "luck_token",
  "rustc-hash",
  "ryu",

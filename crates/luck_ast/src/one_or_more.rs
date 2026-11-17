@@ -54,6 +54,29 @@ impl<'ast, T> OneOrMore<'ast, T> {
         self.0.split_off(1)
     }
 
+    /// Keeps the first `at` items and returns the rest in order, without
+    /// allocating, as [`List::split_off`] does.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at` is zero, which would leave the list empty, or past the
+    /// list's length.
+    #[must_use]
+    pub fn split_off(&mut self, at: usize) -> List<'ast, T> {
+        assert!(at > 0, "a run keeps at least one item");
+        self.0.split_off(at)
+    }
+
+    /// Keeps the first `new_length` items, as [`List::truncate`] does.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `new_length` is zero, which would leave the list empty.
+    pub fn truncate(&mut self, new_length: usize) {
+        assert!(new_length > 0, "a run keeps at least one item");
+        self.0.truncate(new_length);
+    }
+
     #[must_use]
     pub fn first(&self) -> &T {
         #[expect(clippy::indexing_slicing, reason = "the list is never empty")]

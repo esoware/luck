@@ -1,3 +1,4 @@
+use luck_allocator::Allocator;
 use luck_minifier::TransformConfig;
 use luck_token::LuaVersion;
 
@@ -105,7 +106,8 @@ end
     assert!(result.contains("export function apply"), "{result}");
     assert!(result.contains("identity<<T>>"), "{result}");
     assert!(result.contains(":T"), "{result}");
-    let reparsed = luck_parser::parse(result.clone(), LuaVersion::Luau);
+    let allocator = Allocator::new();
+    let reparsed = luck_parser::parse(&allocator, &result, LuaVersion::Luau);
     assert!(
         reparsed.errors.is_empty(),
         "minified merged-RFC syntax must reparse: {:?}\n{result}",
