@@ -149,7 +149,7 @@ while c do if c then return 1 else return 2 end end");
     #[test]
     fn flags_nested_loops_outer_first() {
         let diags = run("while true do for i = 1, 2 do break end return end");
-        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
         assert_eq!(
             messages,
             [

@@ -27,7 +27,7 @@ local second = 2",
     let messages: Vec<&str> = diags
         .iter()
         .filter(|diag| diag.rule == "unused_variable")
-        .map(|diag| diag.message.as_str())
+        .map(|diag| &*diag.message)
         .collect();
     assert_eq!(messages.len(), 1, "{diags:?}");
     assert!(messages[0].contains("`second`"), "{diags:?}");
@@ -221,7 +221,7 @@ fn allow_after_cr_only_line_break_covers_next_stmt() {
     let messages: Vec<&str> = diags
         .iter()
         .filter(|diag| diag.rule == "unused_variable")
-        .map(|diag| diag.message.as_str())
+        .map(|diag| &*diag.message)
         .collect();
     assert_eq!(
         messages,

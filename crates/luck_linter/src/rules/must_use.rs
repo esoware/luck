@@ -55,7 +55,10 @@ mod tests {
     use crate::fixtures::run_rule;
 
     fn run(source: &str, version: LuaVersion) -> Vec<String> {
-        run_rule(&MustUse, source, version).into_iter().map(|diag| diag.message).collect()
+        run_rule(&MustUse, source, version)
+            .into_iter()
+            .map(|diag| diag.message.into_owned())
+            .collect()
     }
 
     #[test]

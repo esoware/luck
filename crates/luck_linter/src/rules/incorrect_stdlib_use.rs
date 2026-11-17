@@ -119,12 +119,15 @@ mod tests {
     fn run(source: &str, version: LuaVersion) -> Vec<String> {
         run_rule(&IncorrectStdlibUse, source, version)
             .into_iter()
-            .map(|diag| diag.message)
+            .map(|diag| diag.message.into_owned())
             .collect()
     }
 
     fn run_roblox(source: &str) -> Vec<String> {
-        run_rule_roblox(&IncorrectStdlibUse, source).into_iter().map(|diag| diag.message).collect()
+        run_rule_roblox(&IncorrectStdlibUse, source)
+            .into_iter()
+            .map(|diag| diag.message.into_owned())
+            .collect()
     }
 
     #[test]

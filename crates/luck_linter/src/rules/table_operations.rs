@@ -36,7 +36,7 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>, findings: &mut Vec<Find
         return;
     };
     let version = context.semantic.version();
-    let finding = |message: &str| Finding::new(message, call.span());
+    let finding = |message: &'static str| Finding::new(message, call.span());
     match (function_name, &**args) {
         ("insert", [table, index, _]) => {
             if is_number_literal(index, 0.0, version) {

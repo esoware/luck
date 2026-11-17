@@ -1,3 +1,5 @@
+use alloc::borrow::Cow;
+
 use luck_token::Span;
 
 use crate::fix::Fix;
@@ -43,14 +45,16 @@ impl Category {
     }
 }
 
+/// A message or help that's a fixed text borrows it, so only one that names
+/// something from the source is allocated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintDiagnostic {
     pub rule: &'static str,
     pub category: Category,
     pub severity: Severity,
-    pub message: String,
+    pub message: Cow<'static, str>,
     pub span: Span,
-    pub help: Option<String>,
+    pub help: Option<Cow<'static, str>>,
     pub fix: Option<Fix>,
 }
 
@@ -58,9 +62,9 @@ pub struct LintDiagnostic {
 /// rule's name and category and its resolved severity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Finding {
-    pub message: String,
+    pub message: Cow<'static, str>,
     pub span: Span,
-    pub help: Option<String>,
+    pub help: Option<Cow<'static, str>>,
     pub fix: Option<Fix>,
 }
 
@@ -68,7 +72,7 @@ impl Finding {
     #[must_use]
     pub(crate) fn new<Message>(message: Message, span: Span) -> Self
     where
-        Message: Into<String>,
+        Message: Into<Cow<'static, str>>,
     {
         Self { message: message.into(), span, help: None, fix: None }
     }
@@ -76,7 +80,7 @@ impl Finding {
     #[must_use]
     pub(crate) fn with_help<Help>(mut self, help: Help) -> Self
     where
-        Help: Into<String>,
+        Help: Into<Cow<'static, str>>,
     {
         self.help = Some(help.into());
         self

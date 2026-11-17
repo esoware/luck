@@ -91,7 +91,7 @@ fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
         rule: PARSE_ERROR_PSEUDO_RULE,
         category: Category::Correctness,
         severity: Severity::Error,
-        message: error.message.clone(),
+        message: error.message.clone().into(),
         span: error.span,
         help: None,
         fix: None,

@@ -71,7 +71,7 @@ impl NodeRule for EmptyBlock {
     }
 }
 
-fn check_body(block: &Block<'_>, message: &str, span: Span) -> Option<Finding> {
+fn check_body(block: &Block<'_>, message: &'static str, span: Span) -> Option<Finding> {
     (block.stmts.is_empty() && block.last_stmt.is_none()).then(|| Finding::new(message, span))
 }
 
@@ -92,7 +92,7 @@ mod tests {
         let diags = run("\
 local c = 1
 if c then elseif c then else end");
-        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
         assert_eq!(
             messages,
             ["empty `if` block", "empty `elseif` block", "empty `else` block"],
@@ -109,7 +109,7 @@ do end
 for i = 1, 2 do end
 for k in pairs({}) do end
 repeat until c");
-        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
         assert_eq!(
             messages,
             [
