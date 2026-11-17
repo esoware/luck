@@ -7,9 +7,9 @@
 //! Every tree it returns, with errors or without, is at most
 //! [`luck_ast::MAX_NESTING_DEPTH`] levels deep, measured as
 //! [`luck_ast::block_nesting_depth`] measures it, so no consumer of the tree
-//! needs more than a bounded stack. Nesting past the cap is one error that
-//! ends the parse, as input over 4 GiB is. Error recovery reports multiple
-//! parse errors in a single pass.
+//! needs more stack than [`luck_ast::MIN_STACK_BYTES`]. Nesting past the cap
+//! is one error that ends the parse, as input over 4 GiB is. Error recovery
+//! reports multiple parse errors in a single pass.
 //!
 //! # Usage
 //!

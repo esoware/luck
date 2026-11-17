@@ -11,6 +11,7 @@ description            = "Internal test harness: deterministic Lua program gener
 workspace = true
 
 [dependencies]
+luck_ast   = { workspace = true }
 luck_token = { workspace = true }
 
 [dev-dependencies]

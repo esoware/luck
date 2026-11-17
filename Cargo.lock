@@ -866,6 +866,7 @@ dependencies = [
  "globset",
  "ignore",
  "luck_allocator",
+ "luck_ast",
  "luck_bundler",
  "luck_config",
  "luck_core",
@@ -1074,6 +1075,7 @@ name = "luck_testgen"
 version = "0.0.0"
 dependencies = [
  "luck_allocator",
+ "luck_ast",
  "luck_formatter",
  "luck_minifier",
  "luck_parser",

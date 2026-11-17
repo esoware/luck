@@ -7,12 +7,37 @@ use crate::stmt::{Block, Statement};
 use crate::types::Type;
 use crate::visitor::Visitor;
 
-/// The deepest tree `luck_parser` builds, in the levels [`Visitor::descend`]
-/// counts.
+/// The deepest tree `luck_parser` builds, in every dialect, in the levels
+/// [`Visitor::descend`] counts.
+///
+/// Luau's parser counts a level for each statement in a block and each
+/// expression, and stops past 1,000, and Lua's stops at 200. Nesting a
+/// construct on itself takes at most two levels here for each of Luau's, and
+/// the deepest, 1,000 nested function declarations, takes 2,001: the chunk's
+/// block, then a body and a block for each. So luck reads any construct
+/// nested on itself as deep as either does.
 ///
 /// Every traversal recurses once per level, so this is what bounds their
-/// stack.
-pub const MAX_NESTING_DEPTH: usize = 256;
+/// stack, to [`MIN_STACK_BYTES`].
+pub const MAX_NESTING_DEPTH: usize = 2001;
+
+/// The stack a thread needs to run any luck stage on any input.
+///
+/// That's about six times the most any stage was measured to take on a tree
+/// [`MAX_NESTING_DEPTH`] deep in an optimized build, on Linux and Windows,
+/// and two and a half times in an unoptimized one. A main thread starts with
+/// the platform's stack, 1 MiB on Windows, and a spawned Rust thread with
+/// 2 MiB, so give this to every thread that parses, prints, formats,
+/// minifies, analyzes, lints, or bundles, with
+/// `std::thread::Builder::stack_size`. The linter runs a large file's rules
+/// on rayon's pool, so build that with `ThreadPoolBuilder::stack_size` too.
+/// `luck_lsp` serves requests on the thread that polls it and on tokio's
+/// blocking pool, which takes it from `Builder::thread_stack_size`.
+/// `luck_bundler` starts its own threads with it.
+///
+/// A stack is reserved address space, and a thread takes memory only for the
+/// pages it touches.
+pub const MIN_STACK_BYTES: usize = 16 * 1024 * 1024;
 
 /// How many levels deep `block` nests, itself included, or
 /// `MAX_NESTING_DEPTH + 1` for anything deeper.

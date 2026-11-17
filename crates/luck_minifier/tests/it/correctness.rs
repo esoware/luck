@@ -3,6 +3,7 @@ use core::fmt::Write as _;
 use luck_allocator::Allocator;
 use luck_ast::{Block, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
 use luck_minifier::TransformConfig;
+use luck_testgen::with_the_smallest_stack;
 use luck_token::{LuaVersion, UnOp};
 
 use crate::common::{minify_lua54, reparses};
@@ -234,44 +235,50 @@ fn nested(open: &str, count: usize, innermost: &str, close: &str) -> String {
 
 #[test]
 fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
-    // The initializer is 31 levels deep, and its one use sits 241 levels in.
-    let initializer = format!("{}#\"a\"{}", "#\"a\"+(".repeat(15), ")".repeat(15));
-    let source = format!(
-        "\
-local x = {initializer}
-return {}
-",
-        nested("{", 240, "x", "}")
-    );
-    let output = assert_minifies_within_the_depth_cap(&source);
-    assert!(output.starts_with("local "), "the local must stay declared");
+    with_the_smallest_stack(|| {
+        // The initializer is 31 levels deep, and its one use sits 15 levels
+        // short of the cap.
+        let initializer = format!("{}#\"a\"{}", "#\"a\"+(".repeat(15), ")".repeat(15));
+        let source = format!(
+            "\
+    local x = {initializer}
+    return {}
+    ",
+            nested("{", MAX_NESTING_DEPTH - 16, "x", "}")
+        );
+        let output = assert_minifies_within_the_depth_cap(&source);
+        assert!(output.starts_with("local "), "the local must stay declared");
 
-    let shallow = format!(
-        "\
-local x = {initializer}
-return {}
-",
-        nested("{", 200, "x", "}")
-    );
-    let inlined = assert_minifies_within_the_depth_cap(&shallow);
-    assert!(inlined.starts_with("return"), "the local fits where it's used");
+        let shallow = format!(
+            "\
+    local x = {initializer}
+    return {}
+    ",
+            nested("{", MAX_NESTING_DEPTH - 56, "x", "}")
+        );
+        let inlined = assert_minifies_within_the_depth_cap(&shallow);
+        assert!(inlined.starts_with("return"), "the local fits where it's used");
+    });
 }
 
 #[test]
 fn an_if_return_run_stops_at_a_guard_whose_value_would_nest_past_the_cap() {
-    let mut source = String::new();
-    for guard in 0..30u32 {
-        writeln!(source, "if a{guard} then return {{}} end").unwrap();
-    }
-    writeln!(source, "if deep then return {} end", nested("{", 253, "1", "}")).unwrap();
-    for guard in 30..60u32 {
-        writeln!(source, "if a{guard} then return {{}} end").unwrap();
-    }
-    source.push_str("return 0\n");
-    let output = assert_minifies_within_the_depth_cap(&source);
-    assert!(output.starts_with("if a0 then"), "the guards before it must stay statements");
-    assert!(output.contains("if deep then"), "the deep guard must stay a statement");
-    assert!(output.ends_with("a59 and{}or 0"), "the guards after it make one chain: {output}");
+    with_the_smallest_stack(|| {
+        let mut source = String::new();
+        for guard in 0..30u32 {
+            writeln!(source, "if a{guard} then return {{}} end").unwrap();
+        }
+        let deep = nested("{", MAX_NESTING_DEPTH - 3, "1", "}");
+        writeln!(source, "if deep then return {deep} end").unwrap();
+        for guard in 30..60u32 {
+            writeln!(source, "if a{guard} then return {{}} end").unwrap();
+        }
+        source.push_str("return 0\n");
+        let output = assert_minifies_within_the_depth_cap(&source);
+        assert!(output.starts_with("if a0 then"), "the guards before it must stay statements");
+        assert!(output.contains("if deep then"), "the deep guard must stay a statement");
+        assert!(output.ends_with("a59 and{}or 0"), "the guards after it make one chain: {output}");
+    });
 }
 
 #[test]
@@ -290,26 +297,30 @@ fn if_return_chains_in_nested_functions_do_not_compound_past_the_cap() {
 
 #[test]
 fn nested_ifs_are_not_merged_where_the_condition_would_nest_past_the_cap() {
-    let deep_condition = nested("f(", 254, "a", ")");
-    let source = format!("if {deep_condition} then if b then if c then x() end end end\n");
-    let output = assert_minifies_within_the_depth_cap(&source);
-    assert!(output.contains("b and c"), "the inner conditions still merge");
+    with_the_smallest_stack(|| {
+        let deep_condition = nested("f(", MAX_NESTING_DEPTH - 2, "a", ")");
+        let source = format!("if {deep_condition} then if b then if c then x() end end end\n");
+        let output = assert_minifies_within_the_depth_cap(&source);
+        assert!(output.contains("b and c"), "the inner conditions still merge");
 
-    // Two levels shallower, the condition fits under both `and`s.
-    let fitting = nested("f(", 252, "a", ")");
-    let merged = format!("if a then if b then if {fitting} then x() end end end\n");
-    assert!(assert_minifies_within_the_depth_cap(&merged).starts_with("if a and b and f("));
+        // Two levels shallower, the condition fits under both `and`s.
+        let fitting = nested("f(", MAX_NESTING_DEPTH - 4, "a", ")");
+        let merged = format!("if a then if b then if {fitting} then x() end end end\n");
+        assert!(assert_minifies_within_the_depth_cap(&merged).starts_with("if a and b and f("));
+    });
 }
 
 #[test]
 fn an_empty_then_branch_is_not_negated_where_the_condition_would_nest_past_the_cap() {
-    let condition = format!("{} == b", nested("{", 254, "", "}"));
-    let source = format!("if {condition} then else x() end\n");
-    let output = assert_minifies_within_the_depth_cap(&source);
-    assert!(output.contains("else"), "the branches must stay as written");
+    with_the_smallest_stack(|| {
+        let condition = format!("{} == b", nested("{", MAX_NESTING_DEPTH - 2, "", "}"));
+        let source = format!("if {condition} then else x() end\n");
+        let output = assert_minifies_within_the_depth_cap(&source);
+        assert!(output.contains("else"), "the branches must stay as written");
 
-    let shallow = "if a == b then else x() end\n";
-    assert_eq!(assert_minifies_within_the_depth_cap(shallow), "if not(a==b)then x()end");
+        let shallow = "if a == b then else x() end\n";
+        assert_eq!(assert_minifies_within_the_depth_cap(shallow), "if not(a==b)then x()end");
+    });
 }
 
 fn nested_negations<'ast>(
@@ -327,57 +338,64 @@ fn nested_negations<'ast>(
 
 #[test]
 fn a_tree_at_the_nesting_cap_minifies() {
-    let wraps = MAX_NESTING_DEPTH - 1;
-    let (allocator, spans) = (Allocator::new(), SpanCounter::new());
-    let mut block = nested_negations(&allocator, &spans, wraps);
-    assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
-    let config = TransformConfig::default();
-    let output = luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config);
-    assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps))));
+    with_the_smallest_stack(|| {
+        let wraps = MAX_NESTING_DEPTH - 1;
+        let (allocator, spans) = (Allocator::new(), SpanCounter::new());
+        let mut block = nested_negations(&allocator, &spans, wraps);
+        assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
+        let config = TransformConfig::default();
+        let output =
+            luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config);
+        assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps))));
+    });
 }
 
 #[test]
 fn a_tree_past_the_nesting_cap_is_an_error() {
-    let (allocator, spans) = (Allocator::new(), SpanCounter::new());
-    let mut block = nested_negations(&allocator, &spans, MAX_NESTING_DEPTH);
-    let config = TransformConfig::default();
-    let error = luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config)
-        .expect_err("the tree nests one level too deep");
-    assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
+    with_the_smallest_stack(|| {
+        let (allocator, spans) = (Allocator::new(), SpanCounter::new());
+        let mut block = nested_negations(&allocator, &spans, MAX_NESTING_DEPTH);
+        let config = TransformConfig::default();
+        let error = luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config)
+            .expect_err("the tree nests one level too deep");
+        assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
+    });
 }
 
 #[test]
 fn a_tree_past_the_nesting_cap_keeps_its_names_and_spans() {
-    let past_the_cap = |allocator, spans| {
-        let synth = Synth::new(allocator, spans);
-        let mut expr = synth.name_expr("x");
-        for _ in 0..MAX_NESTING_DEPTH {
-            expr = synth.unary_op(UnOp::Not, expr);
+    with_the_smallest_stack(|| {
+        let past_the_cap = |allocator, spans| {
+            let synth = Synth::new(allocator, spans);
+            let mut expr = synth.name_expr("x");
+            for _ in 0..MAX_NESTING_DEPTH {
+                expr = synth.unary_op(UnOp::Not, expr);
+            }
+            let identity = synth.block([], Some(synth.return_([synth.name_expr("a")])));
+            let stmts = [
+                synth.local(&["x"], [synth.number("1")]),
+                synth.local_function("f", &["a"], identity),
+                synth.call_stmt(synth.call(synth.name_expr("f"), [synth.name_expr("x")])),
+            ];
+            synth.block(stmts, Some(synth.return_([expr])))
+        };
+        let (allocator, spans) = (Allocator::new(), SpanCounter::new());
+        let mut block = past_the_cap(&allocator, &spans);
+        let (expected_allocator, expected_spans) = (Allocator::new(), SpanCounter::new());
+        let expected = past_the_cap(&expected_allocator, &expected_spans);
+        let without_bindings = TransformConfig {
+            remove_dead_code: false,
+            inline_locals: false,
+            merge_locals: false,
+            lift_locals: false,
+            rename_locals: false,
+            ..TransformConfig::default()
+        };
+        for config in [TransformConfig::default(), without_bindings] {
+            let result =
+                luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config);
+            assert!(result.is_err(), "the tree nests one level too deep");
+            assert_eq!(block, expected, "the refused tree is as it was");
         }
-        let identity = synth.block([], Some(synth.return_([synth.name_expr("a")])));
-        let stmts = [
-            synth.local(&["x"], [synth.number("1")]),
-            synth.local_function("f", &["a"], identity),
-            synth.call_stmt(synth.call(synth.name_expr("f"), [synth.name_expr("x")])),
-        ];
-        synth.block(stmts, Some(synth.return_([expr])))
-    };
-    let (allocator, spans) = (Allocator::new(), SpanCounter::new());
-    let mut block = past_the_cap(&allocator, &spans);
-    let (expected_allocator, expected_spans) = (Allocator::new(), SpanCounter::new());
-    let expected = past_the_cap(&expected_allocator, &expected_spans);
-    let without_bindings = TransformConfig {
-        remove_dead_code: false,
-        inline_locals: false,
-        merge_locals: false,
-        lift_locals: false,
-        rename_locals: false,
-        ..TransformConfig::default()
-    };
-    for config in [TransformConfig::default(), without_bindings] {
-        let result =
-            luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config);
-        assert!(result.is_err(), "the tree nests one level too deep");
-        assert_eq!(block, expected, "the refused tree is as it was");
-    }
+    });
 }

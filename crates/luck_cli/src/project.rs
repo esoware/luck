@@ -10,6 +10,7 @@ use std::{env, thread};
 use globset::GlobSet;
 use ignore::{DirEntry, WalkBuilder, WalkState};
 use luck_allocator::{Allocator, AllocatorPool};
+use luck_ast::MIN_STACK_BYTES;
 use luck_bundler::DynamicRequire;
 use luck_config::{
     CONFIG_FILE_NAME, LuckConfig, ProjectConfig, ProjectFilter, discover_config, glob_set,
@@ -17,6 +18,7 @@ use luck_config::{
 };
 use luck_core::LuaTarget;
 use luck_resolver::{native_path, normalize_path};
+use rayon::ThreadPoolBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::exit::{Exit, operation_error, usage_error};
@@ -612,6 +614,9 @@ where
     Settings: Send + Sync,
     Outcome: Send,
 {
+    // Before anything starts rayon's default pool, whose threads' stacks are
+    // too small for a deep file.
+    let _already_built = ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global();
     let thread_count = rayon::current_num_threads();
     // A worker waiting on a file's own parallel lint can steal another file,
     // which takes an arena of its own, so the pool can grow past this.

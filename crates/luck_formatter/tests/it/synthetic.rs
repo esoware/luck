@@ -6,6 +6,7 @@ use luck_ast::{
     SyntheticComment, Type, TypeFieldAccess, TypeFieldSpec, block_nesting_depth,
 };
 use luck_formatter::{CollapseSimpleStatement, Comments, FormatOptions, format_block};
+use luck_testgen::with_the_smallest_stack;
 use luck_token::{BinOp, LuaVersion, TokenKind, UnOp, decode_string};
 
 use crate::common::{Fixture, assert_format_with};
@@ -982,22 +983,26 @@ fn nested_negations(synth: Synth<'_>, wraps: usize) -> Block<'_> {
 
 #[test]
 fn a_tree_at_the_nesting_cap_formats_and_reparses() {
-    let fixture = Fixture::default();
-    let wraps = MAX_NESTING_DEPTH - 1;
-    let block = nested_negations(fixture.synth(), wraps);
-    assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
-    let expected = format!("return {}x\n", "not ".repeat(wraps));
-    assert_format_block(&fixture, &block, LuaVersion::Lua54, &expected);
+    with_the_smallest_stack(|| {
+        let fixture = Fixture::default();
+        let wraps = MAX_NESTING_DEPTH - 1;
+        let block = nested_negations(fixture.synth(), wraps);
+        assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
+        let expected = format!("return {}x\n", "not ".repeat(wraps));
+        assert_format_block(&fixture, &block, LuaVersion::Lua54, &expected);
+    });
 }
 
 #[test]
 fn a_tree_past_the_nesting_cap_is_an_error_instead_of_output_that_cannot_reparse() {
-    let fixture = Fixture::default();
-    let block = nested_negations(fixture.synth(), MAX_NESTING_DEPTH);
-    let error =
-        format_block(fixture.allocator(), &block, Comments::none(), &FormatOptions::default())
-            .expect_err("the tree nests one level too deep");
-    assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
+    with_the_smallest_stack(|| {
+        let fixture = Fixture::default();
+        let block = nested_negations(fixture.synth(), MAX_NESTING_DEPTH);
+        let error =
+            format_block(fixture.allocator(), &block, Comments::none(), &FormatOptions::default())
+                .expect_err("the tree nests one level too deep");
+        assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
+    });
 }
 
 #[test]

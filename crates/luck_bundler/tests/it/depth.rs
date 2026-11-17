@@ -10,6 +10,7 @@ use luck_allocator::Allocator;
 use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_bundler::{BundleOptions, BundleResult, DynamicRequire};
 use luck_core::Diagnostic;
+use luck_testgen::with_the_smallest_stack;
 use luck_token::{LuaVersion, offset_to_index};
 use tempfile::TempDir;
 
@@ -152,46 +153,51 @@ impl Shape {
 
 #[test]
 fn deepest_module_that_fits_bundles_to_the_cap_for_every_wrapper() {
-    for shape in SHAPES {
-        // The module's own block is a level, and its groups stand on it.
-        let parentheses = MAX_NESTING_DEPTH - shape.wrapper_levels - 1;
-        let (_, result) = shape.bundle(parentheses);
-        let output = result.unwrap_or_else(|errors| panic!("{}: {errors:?}", shape.name)).output;
-        let allocator = Allocator::new();
-        let reparsed = luck_parser::parse(&allocator, &output, shape.version);
-        assert!(reparsed.errors.is_empty(), "{}: {:?}", shape.name, reparsed.errors);
-        assert_eq!(
-            block_nesting_depth(&reparsed.block),
-            MAX_NESTING_DEPTH,
-            "{}: the wrapper must add exactly {} levels",
-            shape.name,
-            shape.wrapper_levels
-        );
-    }
+    with_the_smallest_stack(|| {
+        for shape in SHAPES {
+            // The module's own block is a level, and its groups stand on it.
+            let parentheses = MAX_NESTING_DEPTH - shape.wrapper_levels - 1;
+            let (_, result) = shape.bundle(parentheses);
+            let output =
+                result.unwrap_or_else(|errors| panic!("{}: {errors:?}", shape.name)).output;
+            let allocator = Allocator::new();
+            let reparsed = luck_parser::parse(&allocator, &output, shape.version);
+            assert!(reparsed.errors.is_empty(), "{}: {:?}", shape.name, reparsed.errors);
+            assert_eq!(
+                block_nesting_depth(&reparsed.block),
+                MAX_NESTING_DEPTH,
+                "{}: the wrapper must add exactly {} levels",
+                shape.name,
+                shape.wrapper_levels
+            );
+        }
+    });
 }
 
 #[test]
 fn flags_e013_at_the_construct_a_wrapper_pushes_past_the_cap() {
-    for shape in SHAPES {
-        let parentheses = MAX_NESTING_DEPTH - shape.wrapper_levels;
-        let (deep_source, result) = shape.bundle(parentheses);
-        let errors = result.err().unwrap_or_else(|| panic!("{}: must not bundle", shape.name));
-        let [error] = errors.as_slice() else {
-            panic!("{}: expected one error: {errors:?}", shape.name);
-        };
-        assert_eq!(error.code, "E013", "{}: {error:?}", shape.name);
-        assert!(error.file_path.ends_with(shape.deep_file), "{}: {error:?}", shape.name);
-        // The innermost group is the one past the cap.
-        let innermost = shape.prefix.len() + parentheses - 1;
-        assert_eq!(offset_to_index(error.span.start), innermost, "{}: {error:?}", shape.name);
-        assert_eq!(error.span.text(&deep_source), "(1)", "{}: {error:?}", shape.name);
-        let help = error.help.as_deref().unwrap_or_default();
-        assert!(
-            help.contains(&format!("{} levels deeper", shape.wrapper_levels)),
-            "{}: {help}",
-            shape.name
-        );
-    }
+    with_the_smallest_stack(|| {
+        for shape in SHAPES {
+            let parentheses = MAX_NESTING_DEPTH - shape.wrapper_levels;
+            let (deep_source, result) = shape.bundle(parentheses);
+            let errors = result.err().unwrap_or_else(|| panic!("{}: must not bundle", shape.name));
+            let [error] = errors.as_slice() else {
+                panic!("{}: expected one error: {errors:?}", shape.name);
+            };
+            assert_eq!(error.code, "E013", "{}: {error:?}", shape.name);
+            assert!(error.file_path.ends_with(shape.deep_file), "{}: {error:?}", shape.name);
+            // The innermost group is the one past the cap.
+            let innermost = shape.prefix.len() + parentheses - 1;
+            assert_eq!(offset_to_index(error.span.start), innermost, "{}: {error:?}", shape.name);
+            assert_eq!(error.span.text(&deep_source), "(1)", "{}: {error:?}", shape.name);
+            let help = error.help.as_deref().unwrap_or_default();
+            assert!(
+                help.contains(&format!("{} levels deeper", shape.wrapper_levels)),
+                "{}: {help}",
+                shape.name
+            );
+        }
+    });
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use luck_allocator::Allocator;
 use luck_ast::{Block, Expression, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
+use luck_testgen::with_the_smallest_stack;
 use luck_token::{BinOp, LuaVersion, UnOp};
 
 use crate::common::{assert_compacts_to, assert_reprints};
@@ -53,23 +54,25 @@ fn nested_return(synth: Synth<'_>, depth: usize, wrap: Wrap) -> Block<'_> {
 
 #[test]
 fn a_tree_at_the_nesting_cap_prints_and_reparses() {
-    let wraps: [(&str, Wrap); 6] = [
-        ("parentheses", |synth, expr| synth.parenthesized(expr)),
-        ("unary operator", |synth, expr| synth.unary_op(UnOp::Not, expr)),
-        ("call argument", |synth, expr| synth.call(synth.name_expr("f"), [expr])),
-        ("method argument", |synth, expr| synth.method_call(synth.name_expr("o"), "m", [expr])),
-        ("index", |synth, expr| synth.index(synth.name_expr("t"), expr)),
-        ("table", |synth, expr| synth.array([expr])),
-    ];
-    for (label, wrap) in wraps {
-        let allocator = Allocator::new();
-        let spans = SpanCounter::new();
-        let block = nested_return(Synth::new(&allocator, &spans), MAX_NESTING_DEPTH, wrap);
-        let output = luck_codegen::compact(&block);
-        let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Lua54);
-        assert!(reparsed.errors.is_empty(), "{label}: {:?}", reparsed.errors.first());
-        assert_eq!(block_nesting_depth(&reparsed.block), MAX_NESTING_DEPTH, "{label}");
-    }
+    with_the_smallest_stack(|| {
+        let wraps: [(&str, Wrap); 6] = [
+            ("parentheses", |synth, expr| synth.parenthesized(expr)),
+            ("unary operator", |synth, expr| synth.unary_op(UnOp::Not, expr)),
+            ("call argument", |synth, expr| synth.call(synth.name_expr("f"), [expr])),
+            ("method argument", |synth, expr| synth.method_call(synth.name_expr("o"), "m", [expr])),
+            ("index", |synth, expr| synth.index(synth.name_expr("t"), expr)),
+            ("table", |synth, expr| synth.array([expr])),
+        ];
+        for (label, wrap) in wraps {
+            let allocator = Allocator::new();
+            let spans = SpanCounter::new();
+            let block = nested_return(Synth::new(&allocator, &spans), MAX_NESTING_DEPTH, wrap);
+            let output = luck_codegen::compact(&block);
+            let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Lua54);
+            assert!(reparsed.errors.is_empty(), "{label}: {:?}", reparsed.errors.first());
+            assert_eq!(block_nesting_depth(&reparsed.block), MAX_NESTING_DEPTH, "{label}");
+        }
+    });
 }
 
 #[test]

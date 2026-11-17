@@ -1,5 +1,5 @@
 //! Input nested to the cap, past it, and broken at every level has to parse
-//! on the smallest stack luck gets embedded on.
+//! on `luck_ast::MIN_STACK_BYTES`.
 
 use luck_allocator::Allocator;
 use luck_testgen::{

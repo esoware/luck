@@ -21,8 +21,9 @@
 //! [`BinaryOp`], so however long a run gets, it nests one level.
 //!
 //! Every traversal recurses on the plain stack, once per level of nesting.
-//! `luck_parser` builds no tree deeper than [`MAX_NESTING_DEPTH`]. Nothing
-//! checks a tree built with [`Synth`] as it grows, so measure one with
+//! `luck_parser` builds no tree deeper than [`MAX_NESTING_DEPTH`], which any
+//! stage walks on a thread with [`MIN_STACK_BYTES`]. Nothing checks a tree
+//! built with [`Synth`] as it grows, so measure one with
 //! [`block_nesting_depth`] or [`expr_nesting_depth`], which are safe at any
 //! depth.
 //!
@@ -71,8 +72,8 @@ mod visitor_mut;
 pub use chain::{Call, ChainHead, DottedPath};
 pub use counts::TreeCounts;
 pub use depth::{
-    MAX_NESTING_DEPTH, block_nesting_depth, expr_nesting_depth, spans_past_nesting_cap,
-    type_nesting_depth,
+    MAX_NESTING_DEPTH, MIN_STACK_BYTES, block_nesting_depth, expr_nesting_depth,
+    spans_past_nesting_cap, type_nesting_depth,
 };
 pub use expr::{
     BinaryLink, BinaryOp, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionDef,

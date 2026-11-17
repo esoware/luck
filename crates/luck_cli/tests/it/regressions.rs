@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Output;
 
+use luck_ast::MAX_NESTING_DEPTH;
 use tempfile::TempDir;
 
 use crate::common::{luck_in, write_file};
@@ -320,8 +321,8 @@ fn deep_module_project(groups: usize) -> TempDir {
 
 #[test]
 fn bundle_at_the_nesting_cap_reads_back() {
-    // That bundle nests exactly `luck_ast::MAX_NESTING_DEPTH` levels deep.
-    let directory = deep_module_project(253);
+    // That bundle nests exactly `MAX_NESTING_DEPTH` levels deep.
+    let directory = deep_module_project(MAX_NESTING_DEPTH - 3);
 
     for args in [
         &["bundle", "main.lua", "-o", "bundle.lua"][..],
@@ -343,16 +344,17 @@ fn bundle_at_the_nesting_cap_reads_back() {
 
 #[test]
 fn bundle_reports_a_module_too_deep_to_wrap_in_that_module() {
-    let directory = deep_module_project(255);
+    let directory = deep_module_project(MAX_NESTING_DEPTH - 1);
+    // The first group the wrapper pushes past the cap follows `return ` and
+    // the groups before it.
+    let first_too_deep = format!("deep.lua:1:{} ", "return ".len() + MAX_NESTING_DEPTH - 2);
 
     for args in [&["bundle", "main.lua"][..], &["bundle", "main.lua", "--minify"]] {
         let output = run(directory.path(), args);
         let stderr = stderr_text(&output);
         assert_eq!(output.status.code(), Some(1i32), "`{}`:\n{stderr}", args.join(" "));
         assert!(stderr.contains("E013"), "{stderr}");
-        // The 254th group, the first the wrapper pushes past the cap, opens at
-        // byte 260 of `deep.lua`.
-        assert!(stderr.contains("deep.lua:1:261 "), "{stderr}");
+        assert!(stderr.contains(&first_too_deep), "{stderr}");
         assert!(!stderr.contains("main.lua:"), "{stderr}");
     }
 }

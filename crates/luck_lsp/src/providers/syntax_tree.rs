@@ -181,10 +181,12 @@ mod tests {
         }
     }
 
-    /// One tree at the cap, which nests statements and function bodies, and
-    /// whose dump ends within the bound.
+    /// One tree at the cap, which nests statements and function bodies.
+    ///
+    /// Every level indents its lines further, so the dump reaches the bound
+    /// long before the innermost node, however deep the tree.
     #[test]
-    fn a_tree_at_the_cap_dumps_on_the_smallest_stack() {
+    fn a_tree_at_the_cap_dumps_within_the_bound_on_the_smallest_stack() {
         // The chunk is a level, and each function a body and a block.
         let levels = MAX_NESTING_DEPTH.saturating_sub(1).div_euclid(2);
         let source = format!(
@@ -195,7 +197,9 @@ mod tests {
         on_the_smallest_stack([(LuaVersion::Lua54, source)], |text, _| {
             let document = document(text, LuaTarget::Lua54);
             assert!(document.parse().errors.is_empty(), "{:?}", document.parse().errors);
-            assert!(syntax_tree(&document).contains("innermost"), "the dump got to the bottom");
+            let dump = syntax_tree(&document);
+            assert!(dump.len() <= MAX_DUMP_BYTES.saturating_add(64), "{}", dump.len());
+            assert!(dump.ends_with("cut off here"), "the dump says it stopped early");
         });
     }
 

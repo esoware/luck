@@ -1,6 +1,6 @@
 //! The printer recurses once per level, so a tree at the cap, or whatever a
-//! parse past it or of broken input leaves, has to print on the smallest
-//! stack luck runs on.
+//! parse past it or of broken input leaves, has to print on
+//! `luck_ast::MIN_STACK_BYTES`.
 
 use luck_allocator::Allocator;
 use luck_testgen::{

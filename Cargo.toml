@@ -76,8 +76,8 @@ debug = "line-tables-only"
 insta.opt-level = 3
 similar.opt-level = 3
 
-# The stack tests hold every stage to a 1 MiB stack, which only an optimized
-# build's frames have to fit.
+# The stack tests hold every stage to `luck_ast::MIN_STACK_BYTES` in frames
+# close to the ones that ship.
 [profile.test]
 opt-level = 1
 

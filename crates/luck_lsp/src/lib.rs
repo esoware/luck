@@ -22,9 +22,23 @@
 //!
 //! # Usage
 //!
+//! Requests are served on the thread that polls the server, on tokio's
+//! blocking pool, and, for a large file's lint, on rayon's pool, so each
+//! needs [`luck_ast::MIN_STACK_BYTES`]:
+//!
 //! ```no_run
-//! let runtime = tokio::runtime::Runtime::new()?;
-//! runtime.block_on(luck_lsp::serve_stdio());
+//! use std::thread;
+//!
+//! use luck_ast::MIN_STACK_BYTES;
+//!
+//! let runtime = tokio::runtime::Builder::new_multi_thread()
+//!     .thread_stack_size(MIN_STACK_BYTES)
+//!     .enable_all()
+//!     .build()?;
+//! let server = thread::Builder::new()
+//!     .stack_size(MIN_STACK_BYTES)
+//!     .spawn(move || runtime.block_on(luck_lsp::serve_stdio()))?;
+//! server.join().expect("the server doesn't panic");
 //! # Ok::<(), std::io::Error>(())
 //! ```
 

@@ -1,6 +1,6 @@
 //! Every walk recurses once per level, so input nested to the parser's cap,
-//! and runs and lists far longer than it, have to minify on the smallest
-//! stack luck runs on.
+//! and runs and lists far longer than it, have to minify on
+//! `luck_ast::MIN_STACK_BYTES`.
 
 use luck_allocator::Allocator;
 use luck_minifier::TransformConfig;

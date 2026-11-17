@@ -3,36 +3,45 @@ use core::ops::Range;
 use luck_allocator::Allocator;
 use luck_ast::{MAX_NESTING_DEPTH, Statement, Visitor, block_nesting_depth};
 use luck_parser::parse;
+use luck_testgen::with_the_smallest_stack;
 use luck_token::LuaVersion;
 
 #[test]
 fn depth_cap_is_the_same_in_every_dialect() {
-    for version in LuaVersion::ALL {
-        for depth in [255, 256] {
-            let allocator = Allocator::new();
-            let source = format!("return {}1{}", "(".repeat(depth), ")".repeat(depth));
-            let result = parse(&allocator, &source, version);
-            if depth == 255 {
-                assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors);
-            } else {
-                assert!(
-                    result.errors.iter().any(|e| e.message.contains("luck parser resource limit")),
-                    "{version:?}: {:?}",
-                    result.errors
-                );
+    with_the_smallest_stack(|| {
+        for version in LuaVersion::ALL {
+            // The chunk's block is a level, and each group another.
+            for groups in [MAX_NESTING_DEPTH - 1, MAX_NESTING_DEPTH] {
+                let allocator = Allocator::new();
+                let source = format!("return {}1{}", "(".repeat(groups), ")".repeat(groups));
+                let result = parse(&allocator, &source, version);
+                if groups < MAX_NESTING_DEPTH {
+                    assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors);
+                } else {
+                    assert!(
+                        result
+                            .errors
+                            .iter()
+                            .any(|e| e.message.contains("luck parser resource limit")),
+                        "{version:?}: {:?}",
+                        result.errors
+                    );
+                }
             }
         }
-    }
+    });
 }
 
 #[test]
 fn parens_past_the_depth_cap_are_an_error() {
-    let allocator = Allocator::new();
-    let open = "(".repeat(1000);
-    let close = ")".repeat(1000);
-    let source = format!("{open}1{close}");
-    let result = parse(&allocator, &source, LuaVersion::Lua54);
-    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let open = "(".repeat(MAX_NESTING_DEPTH);
+        let close = ")".repeat(MAX_NESTING_DEPTH);
+        let source = format!("{open}1{close}");
+        let result = parse(&allocator, &source, LuaVersion::Lua54);
+        assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    });
 }
 
 /// Stock Lua loops over left-associative operators and suffixes, so a run of
@@ -66,30 +75,37 @@ fn a_run_of_any_length_is_one_level() {
 }
 #[test]
 fn blocks_past_the_depth_cap_are_an_error() {
-    let allocator = Allocator::new();
-    let source = format!("{}local x = 1{}", "do ".repeat(500), " end".repeat(500));
-    let result = parse(&allocator, &source, LuaVersion::Lua54);
-    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let blocks = MAX_NESTING_DEPTH;
+        let source = format!("{}local x = 1{}", "do ".repeat(blocks), " end".repeat(blocks));
+        let result = parse(&allocator, &source, LuaVersion::Lua54);
+        assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    });
 }
 
 #[test]
 fn tables_past_the_depth_cap_are_an_error() {
-    let allocator = Allocator::new();
-    let open = "{".repeat(500);
-    let close = "}".repeat(500);
-    let source = format!("local x = {open}1{close}");
-    let result = parse(&allocator, &source, LuaVersion::Lua54);
-    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let open = "{".repeat(MAX_NESTING_DEPTH);
+        let close = "}".repeat(MAX_NESTING_DEPTH);
+        let source = format!("local x = {open}1{close}");
+        let result = parse(&allocator, &source, LuaVersion::Lua54);
+        assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    });
 }
 
 #[test]
 fn functions_past_the_depth_cap_are_an_error() {
-    let allocator = Allocator::new();
-    let prefix = "function() return ".repeat(500);
-    let suffix = " end".repeat(500);
-    let source = format!("local x = {prefix}1{suffix}");
-    let result = parse(&allocator, &source, LuaVersion::Lua54);
-    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let prefix = "function() return ".repeat(MAX_NESTING_DEPTH);
+        let suffix = " end".repeat(MAX_NESTING_DEPTH);
+        let source = format!("local x = {prefix}1{suffix}");
+        let result = parse(&allocator, &source, LuaVersion::Lua54);
+        assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    });
 }
 
 fn has_depth_limit_error(result: &luck_parser::ParseResult<'_>) -> bool {
@@ -98,34 +114,52 @@ fn has_depth_limit_error(result: &luck_parser::ParseResult<'_>) -> bool {
 
 #[test]
 fn nested_call_arguments_count_toward_the_depth_cap() {
-    let allocator = Allocator::new();
-    let source = format!("return {}1{}", "f(".repeat(300), ")".repeat(300));
-    let result = parse(&allocator, &source, LuaVersion::Lua54);
-    assert!(has_depth_limit_error(&result), "call nesting past the cap must report the limit");
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let source =
+            format!("return {}1{}", "f(".repeat(MAX_NESTING_DEPTH), ")".repeat(MAX_NESTING_DEPTH));
+        let result = parse(&allocator, &source, LuaVersion::Lua54);
+        assert!(has_depth_limit_error(&result), "call nesting past the cap must report the limit");
+    });
 }
 
 #[test]
 fn nested_index_expressions_count_toward_the_depth_cap() {
-    let allocator = Allocator::new();
-    let source = format!("return {}1{}", "a[".repeat(300), "]".repeat(300));
-    let result = parse(&allocator, &source, LuaVersion::Lua54);
-    assert!(has_depth_limit_error(&result), "index nesting past the cap must report the limit");
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let source =
+            format!("return {}1{}", "a[".repeat(MAX_NESTING_DEPTH), "]".repeat(MAX_NESTING_DEPTH));
+        let result = parse(&allocator, &source, LuaVersion::Lua54);
+        assert!(has_depth_limit_error(&result), "index nesting past the cap must report the limit");
+    });
 }
 
 #[test]
 fn nested_interpolated_strings_count_toward_the_depth_cap() {
-    let allocator = Allocator::new();
-    let source = format!("return {}1{}", "`{".repeat(300), "}`".repeat(300));
-    let result = parse(&allocator, &source, LuaVersion::Luau);
-    assert!(has_depth_limit_error(&result), "string nesting past the cap must report the limit");
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let source =
+            format!("return {}1{}", "`{".repeat(MAX_NESTING_DEPTH), "}`".repeat(MAX_NESTING_DEPTH));
+        let result = parse(&allocator, &source, LuaVersion::Luau);
+        assert!(
+            has_depth_limit_error(&result),
+            "string nesting past the cap must report the limit"
+        );
+    });
 }
 
 #[test]
 fn nested_attribute_arguments_count_toward_the_depth_cap() {
-    let allocator = Allocator::new();
-    let source = format!("return {}1{}", "@[deprecated(".repeat(300), ")]".repeat(300));
-    let result = parse(&allocator, &source, LuaVersion::Luau);
-    assert!(has_depth_limit_error(&result), "attribute nesting past the cap must report the limit");
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let levels = MAX_NESTING_DEPTH;
+        let source = format!("return {}1{}", "@[deprecated(".repeat(levels), ")]".repeat(levels));
+        let result = parse(&allocator, &source, LuaVersion::Luau);
+        assert!(
+            has_depth_limit_error(&result),
+            "attribute nesting past the cap must report the limit"
+        );
+    });
 }
 
 /// A construct nested `wraps` times, and how deep that makes the tree.
@@ -255,32 +289,75 @@ fn shapes() -> Vec<Shape> {
 
 #[test]
 fn the_cap_bounds_the_depth_of_the_tree_exactly() {
-    for shape in shapes() {
-        let wraps_at_cap =
-            (MAX_NESTING_DEPTH - shape.fixed_levels).div_euclid(shape.levels_per_wrap);
-        for wraps in wraps_at_cap - 1..=wraps_at_cap + 2 {
-            let depth = shape.fixed_levels + shape.levels_per_wrap * wraps;
-            let allocator = Allocator::new();
-            let source = (shape.build)(wraps);
-            let result = parse(&allocator, &source, shape.version);
-            if depth <= MAX_NESTING_DEPTH {
-                assert!(
-                    result.errors.is_empty(),
-                    "{} at depth {depth}: {:?}",
-                    shape.name,
-                    result.errors.first()
-                );
-                assert_eq!(block_nesting_depth(&result.block), depth, "{}", shape.name);
-                assert_eq!(result.nesting_depth, depth, "{}", shape.name);
-            } else {
-                let [error] = result.errors.as_slice() else {
-                    panic!("{} at depth {depth}: {:?}", shape.name, result.errors);
-                };
-                assert!(error.message.contains("luck parser resource limit"), "{}", shape.name);
-                assert!(block_nesting_depth(&result.block) <= MAX_NESTING_DEPTH, "{}", shape.name);
+    with_the_smallest_stack(|| {
+        for shape in shapes() {
+            let wraps_at_cap =
+                (MAX_NESTING_DEPTH - shape.fixed_levels).div_euclid(shape.levels_per_wrap);
+            for wraps in wraps_at_cap - 1..=wraps_at_cap + 2 {
+                let depth = shape.fixed_levels + shape.levels_per_wrap * wraps;
+                let allocator = Allocator::new();
+                let source = (shape.build)(wraps);
+                let result = parse(&allocator, &source, shape.version);
+                if depth <= MAX_NESTING_DEPTH {
+                    assert!(
+                        result.errors.is_empty(),
+                        "{} at depth {depth}: {:?}",
+                        shape.name,
+                        result.errors.first()
+                    );
+                    assert_eq!(block_nesting_depth(&result.block), depth, "{}", shape.name);
+                    assert_eq!(result.nesting_depth, depth, "{}", shape.name);
+                } else {
+                    let [error] = result.errors.as_slice() else {
+                        panic!("{} at depth {depth}: {:?}", shape.name, result.errors);
+                    };
+                    assert!(error.message.contains("luck parser resource limit"), "{}", shape.name);
+                    assert!(
+                        block_nesting_depth(&result.block) <= MAX_NESTING_DEPTH,
+                        "{}",
+                        shape.name
+                    );
+                }
             }
         }
-    }
+    });
+}
+
+/// Each construct nested as deep as Luau's parser reads it.
+///
+/// Luau counts a level for each statement in a block and each expression,
+/// and stops past 1,000. Each of these takes at most two levels here for each
+/// of its own, so the deepest, 1,000 function declarations, sets the cap.
+/// Lua's stops at 200.
+#[test]
+fn each_construct_nests_as_deep_as_luau_reads_it() {
+    with_the_smallest_stack(|| {
+        let nested = |open: &str, count: usize, close: &str| {
+            format!("{}{}", open.repeat(count), close.repeat(count))
+        };
+        let mut deepest = 0;
+        for source in [
+            nested("local function f() ", 1000, " end"),
+            nested("function f() ", 1000, " end"),
+            nested("f{function() ", 500, " end}"),
+            nested("(function() ", 500, " end)()"),
+            format!("local v = {}", nested("f{", 999, "}")),
+            format!("local v = {}x{}", "(".repeat(997), " + 1)".repeat(997)),
+            format!("local v = {}x{}", "(".repeat(997), " :: T)".repeat(997)),
+            format!("local v = {}f{}", "(".repeat(998), ")()".repeat(998)),
+        ] {
+            let allocator = Allocator::new();
+            let result = parse(&allocator, &source, LuaVersion::Luau);
+            assert!(
+                result.errors.is_empty(),
+                "{:?}: {:?}",
+                source.get(..24),
+                result.errors.first()
+            );
+            deepest = deepest.max(block_nesting_depth(&result.block));
+        }
+        assert_eq!(deepest, MAX_NESTING_DEPTH);
+    });
 }
 
 /// A run wraps its first operand, so it counts once from that operand's
@@ -288,32 +365,42 @@ fn the_cap_bounds_the_depth_of_the_tree_exactly() {
 /// are.
 #[test]
 fn a_run_counts_once_from_its_first_operand() {
-    let allocator = Allocator::new();
-    for (label, source) in [
-        (
-            "operators over parentheses",
-            format!("return {}x{}{}", "(".repeat(255), ")".repeat(255), "+1".repeat(255)),
-        ),
-        (
-            "fields over parentheses",
-            format!("return {}x{}{}", "(".repeat(255), ")".repeat(255), ".b".repeat(255)),
-        ),
-        (
-            "calls over a table",
-            format!("return ({}{}){}", "{".repeat(254), "}".repeat(254), "()".repeat(255)),
-        ),
-    ] {
-        let result = parse(&allocator, &source, LuaVersion::Lua54);
-        assert!(has_depth_limit_error(&result), "{label}: {:?}", result.errors.first());
-    }
-    let optionals = format!("type X = {}T{}{}", "{".repeat(255), "}".repeat(255), "?".repeat(255));
-    assert!(has_depth_limit_error(&parse(&allocator, &optionals, LuaVersion::Luau)));
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        // Under the chunk's block, each operand alone sits at the cap.
+        let (groups, tables) = (MAX_NESTING_DEPTH - 1, MAX_NESTING_DEPTH - 2);
+        for (label, source) in [
+            (
+                "operators over parentheses",
+                format!("return {}x{}{}", "(".repeat(groups), ")".repeat(groups), "+1".repeat(300)),
+            ),
+            (
+                "fields over parentheses",
+                format!("return {}x{}{}", "(".repeat(groups), ")".repeat(groups), ".b".repeat(300)),
+            ),
+            (
+                "calls over a table",
+                format!(
+                    "return ({}{}){}",
+                    "{".repeat(tables),
+                    "}".repeat(tables),
+                    "()".repeat(300)
+                ),
+            ),
+        ] {
+            let result = parse(&allocator, &source, LuaVersion::Lua54);
+            assert!(has_depth_limit_error(&result), "{label}: {:?}", result.errors.first());
+        }
+        let optionals =
+            format!("type X = {}T{}{}", "{".repeat(groups), "}".repeat(groups), "?".repeat(300));
+        assert!(has_depth_limit_error(&parse(&allocator, &optionals, LuaVersion::Luau)));
 
-    let later_operand =
-        format!("return 1+{}x{}{}", "(".repeat(254), ")".repeat(254), "+1".repeat(255));
-    let result = parse(&allocator, &later_operand, LuaVersion::Lua54);
-    assert!(result.errors.is_empty(), "{:?}", result.errors.first());
-    assert_eq!(block_nesting_depth(&result.block), MAX_NESTING_DEPTH);
+        let later_operand =
+            format!("return 1+{}x{}{}", "(".repeat(tables), ")".repeat(tables), "+1".repeat(300));
+        let result = parse(&allocator, &later_operand, LuaVersion::Lua54);
+        assert!(result.errors.is_empty(), "{:?}", result.errors.first());
+        assert_eq!(block_nesting_depth(&result.block), MAX_NESTING_DEPTH);
+    });
 }
 /// Counts every level, where `block_nesting_depth` stops just past the cap.
 struct Levels {
@@ -335,85 +422,101 @@ impl Visitor<'_> for Levels {
 
 #[test]
 fn a_tree_with_errors_stays_within_the_cap() {
-    let allocator = Allocator::new();
-    let lua = [
-        format!("return {}", "(".repeat(5000)),
-        format!("return {}", "{".repeat(5000)),
-        format!("return {}", "f(".repeat(5000)),
-        format!("return x{}", "+(x".repeat(5000)),
-        format!("return x{}", ".b[(x".repeat(5000)),
-        format!("return {}x", "- ".repeat(5000)),
-        "do ".repeat(5000),
-        "function f() ".repeat(5000),
-        format!("return {}", "function() return ".repeat(5000)),
-    ];
-    let luau = [
-        format!("return {}x", "if a then b else ".repeat(5000)),
-        format!("return {}", "`{".repeat(5000)),
-        format!("return {}x{}", "(".repeat(5000), " :: T)".repeat(5000)),
-        format!("type X = {}", "{".repeat(5000)),
-        format!("type X = {}T", "() -> ".repeat(5000)),
-        format!("type X = {}T", "A<".repeat(5000)),
-        format!("type X = {}T{}{}", "{".repeat(255), "}".repeat(255), "?".repeat(5000)),
-    ];
-    let sources = lua.into_iter().map(|source| (LuaVersion::Lua54, source));
-    for (version, source) in
-        sources.chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
-    {
-        let result = parse(&allocator, source.as_str(), version);
-        assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
-        let mut levels = Levels { depth: 0, deepest: 0 };
-        levels.visit_block(&result.block);
-        assert!(levels.deepest <= MAX_NESTING_DEPTH, "{}: {:?}", levels.deepest, source.get(..20));
-    }
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let groups = MAX_NESTING_DEPTH - 1;
+        let lua = [
+            format!("return {}", "(".repeat(5000)),
+            format!("return {}", "{".repeat(5000)),
+            format!("return {}", "f(".repeat(5000)),
+            format!("return x{}", "+(x".repeat(5000)),
+            format!("return x{}", ".b[(x".repeat(5000)),
+            format!("return {}x", "- ".repeat(5000)),
+            "do ".repeat(5000),
+            "function f() ".repeat(5000),
+            format!("return {}", "function() return ".repeat(5000)),
+        ];
+        let luau = [
+            format!("return {}x", "if a then b else ".repeat(5000)),
+            format!("return {}", "`{".repeat(5000)),
+            format!("return {}x{}", "(".repeat(5000), " :: T)".repeat(5000)),
+            format!("type X = {}", "{".repeat(5000)),
+            format!("type X = {}T", "() -> ".repeat(5000)),
+            format!("type X = {}T", "A<".repeat(5000)),
+            format!("type X = {}T{}{}", "{".repeat(groups), "}".repeat(groups), "?".repeat(5000)),
+        ];
+        let sources = lua.into_iter().map(|source| (LuaVersion::Lua54, source));
+        for (version, source) in
+            sources.chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
+        {
+            let result = parse(&allocator, source.as_str(), version);
+            assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
+            let mut levels = Levels { depth: 0, deepest: 0 };
+            levels.visit_block(&result.block);
+            assert!(
+                levels.deepest <= MAX_NESTING_DEPTH,
+                "{}: {:?}",
+                levels.deepest,
+                source.get(..20)
+            );
+        }
+    });
 }
 
 /// An `if` the cap stops in its second `elseif` takes its first clause with
 /// it, rather than leaving it to the `if` around it.
 #[test]
 fn an_if_cut_off_at_the_cap_keeps_its_clauses_to_itself() {
-    let allocator = Allocator::new();
-    let source = format!(
-        "if a then elseif b then {}if c then elseif d then x() elseif e then {}x() end",
-        "do ".repeat(250),
-        "do ".repeat(20),
-    );
-    let result = parse(&allocator, &source, LuaVersion::Lua54);
-    assert!(has_depth_limit_error(&result), "{:?}", result.errors);
-    let Some(Statement::IfStatement(outer)) = result.block.stmts.first() else {
-        panic!("{:?}", result.block.stmts.first());
-    };
-    assert_eq!(outer.elseif_clauses.len(), 1, "{:?}", outer.elseif_clauses);
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let source = format!(
+            "if a then elseif b then {}if c then elseif d then x() elseif e then {}x() end",
+            "do ".repeat(MAX_NESTING_DEPTH - 6),
+            "do ".repeat(20),
+        );
+        let result = parse(&allocator, &source, LuaVersion::Lua54);
+        assert!(has_depth_limit_error(&result), "{:?}", result.errors);
+        let Some(Statement::IfStatement(outer)) = result.block.stmts.first() else {
+            panic!("{:?}", result.block.stmts.first());
+        };
+        assert_eq!(outer.elseif_clauses.len(), 1, "{:?}", outer.elseif_clauses);
+    });
 }
 
 /// A misplaced last statement stands as the block around it while that block
 /// fits, and is an error node once it wouldn't.
 #[test]
 fn a_misplaced_last_statement_is_wrapped_only_within_the_cap() {
-    let allocator = Allocator::new();
-    let in_blocks = |blocks: usize, statement: &str| {
-        format!("{}{statement} x(){}", "while a do ".repeat(blocks), " end".repeat(blocks))
-    };
-    let returning = |parentheses: usize| {
-        format!("return {}a{}", "(".repeat(parentheses), ")".repeat(parentheses))
-    };
-    for (version, source, wrapped_depth) in [
-        (LuaVersion::Lua54, in_blocks(250, &returning(4)), Some(MAX_NESTING_DEPTH)),
-        (LuaVersion::Lua54, in_blocks(250, &returning(5)), None),
-        (LuaVersion::Lua51, in_blocks(254, "break"), Some(MAX_NESTING_DEPTH)),
-        (LuaVersion::Lua51, in_blocks(255, "break"), None),
-    ] {
-        let result = parse(&allocator, source.as_str(), version);
-        let [error] = result.errors.as_slice() else {
-            panic!("{:?}", result.errors);
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let in_blocks = |blocks: usize, statement: &str| {
+            format!("{}{statement} x(){}", "while a do ".repeat(blocks), " end".repeat(blocks))
         };
-        assert!(error.message.contains("must be the last statement"), "{error:?}");
-        let depth = block_nesting_depth(&result.block);
-        assert!(depth <= MAX_NESTING_DEPTH, "{depth}");
-        if let Some(expected) = wrapped_depth {
-            assert_eq!(depth, expected);
+        let returning = |parentheses: usize| {
+            format!("return {}a{}", "(".repeat(parentheses), ")".repeat(parentheses))
+        };
+        for (version, source, wrapped_depth) in [
+            (
+                LuaVersion::Lua54,
+                in_blocks(MAX_NESTING_DEPTH - 6, &returning(4)),
+                Some(MAX_NESTING_DEPTH),
+            ),
+            (LuaVersion::Lua54, in_blocks(MAX_NESTING_DEPTH - 6, &returning(5)), None),
+            (LuaVersion::Lua51, in_blocks(MAX_NESTING_DEPTH - 2, "break"), Some(MAX_NESTING_DEPTH)),
+            (LuaVersion::Lua51, in_blocks(MAX_NESTING_DEPTH - 1, "break"), None),
+        ] {
+            let result = parse(&allocator, source.as_str(), version);
+            let [error] = result.errors.as_slice() else {
+                panic!("{:?}", result.errors);
+            };
+            assert!(error.message.contains("must be the last statement"), "{error:?}");
+            let depth = block_nesting_depth(&result.block);
+            assert!(depth <= MAX_NESTING_DEPTH, "{depth}");
+            if let Some(expected) = wrapped_depth {
+                assert_eq!(depth, expected);
+            }
         }
-    }
+    });
 }
 
 /// `construct` as an expression nested at the cap, so anything but a name or
@@ -427,52 +530,59 @@ fn at_the_cap_in_an_expression(construct: &str) -> String {
 /// broken.
 #[test]
 fn nesting_past_the_cap_ends_the_parse() {
-    let allocator = Allocator::new();
-    let source = format!(
-        "{}
-local after = 1
-x = = 1
-",
-        at_the_cap_in_an_expression("(x)")
-    );
-    let result = parse(&allocator, source.as_str(), LuaVersion::Lua54);
-    let [error] = result.errors.as_slice() else {
-        panic!("{:?}", result.errors);
-    };
-    assert!(error.message.contains("luck parser resource limit"), "{error:?}");
-    assert_eq!(result.block.stmts.len(), 1, "{:?}", result.block.stmts);
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let source = format!(
+            "{}
+    local after = 1
+    x = = 1
+    ",
+            at_the_cap_in_an_expression("(x)")
+        );
+        let result = parse(&allocator, source.as_str(), LuaVersion::Lua54);
+        let [error] = result.errors.as_slice() else {
+            panic!("{:?}", result.errors);
+        };
+        assert!(error.message.contains("luck parser resource limit"), "{error:?}");
+        assert_eq!(result.block.stmts.len(), 1, "{:?}", result.block.stmts);
+    });
 }
 
 /// However many constructs wrap the one the cap stops, it's one error.
 #[test]
 fn a_construct_past_the_cap_is_one_error_however_many_wrap_it() {
-    let allocator = Allocator::new();
-    for (version, construct) in [
-        (LuaVersion::Lua54, "(a).b(c) + d .. e"),
-        (LuaVersion::Lua54, "-a + b"),
-        (LuaVersion::Lua54, "{} == c"),
-        (LuaVersion::Lua54, "function() if a then end end"),
-        (LuaVersion::Luau, "(a)::T + 1"),
-        (LuaVersion::Luau, "if a then b else c :: T"),
-        (LuaVersion::Luau, "`{a}b{c}`"),
-    ] {
-        let source = at_the_cap_in_an_expression(construct);
-        let result = parse(&allocator, source.as_str(), version);
-        assert_eq!(result.errors.len(), 1, "{construct}: {:?}", result.errors);
-    }
-    let source = format!("type X = {}{{T}}? & U | V{}", "{".repeat(254), "}".repeat(254));
-    assert_eq!(parse(&allocator, source.as_str(), LuaVersion::Luau).errors.len(), 1);
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        for (version, construct) in [
+            (LuaVersion::Lua54, "(a).b(c) + d .. e"),
+            (LuaVersion::Lua54, "-a + b"),
+            (LuaVersion::Lua54, "{} == c"),
+            (LuaVersion::Lua54, "function() if a then end end"),
+            (LuaVersion::Luau, "(a)::T + 1"),
+            (LuaVersion::Luau, "if a then b else c :: T"),
+            (LuaVersion::Luau, "`{a}b{c}`"),
+        ] {
+            let source = at_the_cap_in_an_expression(construct);
+            let result = parse(&allocator, source.as_str(), version);
+            assert_eq!(result.errors.len(), 1, "{construct}: {:?}", result.errors);
+        }
+        let tables = MAX_NESTING_DEPTH - 2;
+        let source = format!("type X = {}{{T}}? & U | V{}", "{".repeat(tables), "}".repeat(tables));
+        assert_eq!(parse(&allocator, source.as_str(), LuaVersion::Luau).errors.len(), 1);
+    });
 }
 
 #[test]
 fn an_operand_cut_off_at_the_cap_is_one_error_where_it_was_cut() {
-    let allocator = Allocator::new();
-    let deep = format!("{}x{}", "(".repeat(MAX_NESTING_DEPTH), ")".repeat(MAX_NESTING_DEPTH));
-    let source = format!("local v = {deep}.b + 1 :: T .. 2");
-    let result = parse(&allocator, source.as_str(), LuaVersion::Luau);
-    let [error] = result.errors.as_slice() else {
-        panic!("{:?}", result.errors);
-    };
-    let innermost = "local v = ".len() + MAX_NESTING_DEPTH - 1;
-    assert_eq!(Range::<usize>::from(error.span).start, innermost);
+    with_the_smallest_stack(|| {
+        let allocator = Allocator::new();
+        let deep = format!("{}x{}", "(".repeat(MAX_NESTING_DEPTH), ")".repeat(MAX_NESTING_DEPTH));
+        let source = format!("local v = {deep}.b + 1 :: T .. 2");
+        let result = parse(&allocator, source.as_str(), LuaVersion::Luau);
+        let [error] = result.errors.as_slice() else {
+            panic!("{:?}", result.errors);
+        };
+        let innermost = "local v = ".len() + MAX_NESTING_DEPTH - 1;
+        assert_eq!(Range::<usize>::from(error.span).start, innermost);
+    });
 }

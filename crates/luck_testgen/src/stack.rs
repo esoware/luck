@@ -1,18 +1,12 @@
 //! Input nested to the parser's cap, and runs and sibling lists far longer
-//! than it, which every stage has to get through on the smallest stack luck
-//! gets embedded on.
-//!
-//! The test profile is optimized, so the frames measured are close to the
-//! ones that ship.
+//! than it, which every stage has to get through on
+//! [`luck_ast::MIN_STACK_BYTES`].
 
 use core::fmt::Write as _;
-use std::thread;
+use std::{panic, thread};
 
+use luck_ast::{MAX_NESTING_DEPTH, MIN_STACK_BYTES};
 use luck_token::LuaVersion;
-
-/// What a Windows main thread and a wasm module get by default, half of a
-/// spawned Rust thread's.
-pub const SMALLEST_STACK_BYTES: usize = 1024 * 1024;
 
 fn wrapped(open: &str, count: usize, innermost: &str, close: &str) -> String {
     format!("{}{innermost}{}", open.repeat(count), close.repeat(count))
@@ -21,45 +15,53 @@ fn wrapped(open: &str, count: usize, innermost: &str, close: &str) -> String {
 /// One source per construct, each nested as deep as the parser accepts.
 #[must_use]
 pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
+    // How many times a construct that nests one, two, three, or four levels
+    // fits under the chunk's own.
+    let one = MAX_NESTING_DEPTH - 1;
+    let (two, three, four) = (one.div_euclid(2), one.div_euclid(3), one.div_euclid(4));
     let lua = [
-        format!("return {}", wrapped("(", 255, "x", ")")),
-        format!("return {}", wrapped("f(", 255, "x", ")")),
-        format!("return {}", wrapped("a:m(", 255, "x", ")")),
-        format!("return {}", wrapped("a[", 255, "x", "]")),
-        format!("return {}", wrapped("{", 255, "1", "}")),
-        format!("return {}", wrapped("{a=", 255, "1", "}")),
-        format!("return {}", wrapped("{[1]=", 255, "1", "}")),
-        format!("return {}", wrapped("f{", 127, "", "}")),
-        format!("return {}x", "not ".repeat(255)),
-        format!("return {}x{}", "(".repeat(127), "+x)".repeat(127)),
-        format!("return {}", wrapped("x..(", 127, "x", ")")),
-        format!("return {}", wrapped("x^-", 127, "x", "")),
-        format!("return {}a{}", "(".repeat(127), ").b".repeat(127)),
-        format!("return {}f{}", "(".repeat(127), ")()".repeat(127)),
-        format!("return {}", wrapped("function() return ", 127, "1", " end")),
-        wrapped("x = function() ", 127, "x = 1", " end"),
-        wrapped("local function f() ", 127, "local x = 1", " end"),
-        wrapped("do ", 255, "x = 1", " end"),
-        wrapped("if a then ", 255, "x = 1", " end"),
-        wrapped("if a then else ", 255, "x = 1", " end"),
-        wrapped("if a then elseif b then ", 255, "x = 1", " end"),
-        wrapped("while a do ", 255, "x = 1", " end"),
-        wrapped("for i = 1, 2 do ", 255, "x = 1", " end"),
-        wrapped("for k, v in p do ", 255, "x = 1", " end"),
-        wrapped("repeat ", 255, "x = 1", " until a"),
+        format!("return {}", wrapped("(", one, "x", ")")),
+        format!("return {}", wrapped("f(", one, "x", ")")),
+        format!("return {}", wrapped("a:m(", one, "x", ")")),
+        format!("return {}", wrapped("a[", one, "x", "]")),
+        format!("return {}", wrapped("{", one, "1", "}")),
+        format!("return {}", wrapped("{a=", one, "1", "}")),
+        format!("return {}", wrapped("{[1]=", one, "1", "}")),
+        format!("return {}", wrapped("f{", two, "", "}")),
+        format!("return {}x", "not ".repeat(one)),
+        format!("return {}x{}", "(".repeat(two), "+x)".repeat(two)),
+        format!("return {}", wrapped("x..(", two, "x", ")")),
+        format!("return {}", wrapped("x^-", two, "x", "")),
+        format!("return {}a{}", "(".repeat(two), ").b".repeat(two)),
+        format!("return {}f{}", "(".repeat(two), ")()".repeat(two)),
+        format!("return {}", wrapped("function() return ", two, "1", " end")),
+        wrapped("x = function() ", two, "x = 1", " end"),
+        wrapped("local function f() ", two, "local x = 1", " end"),
+        wrapped("f(function() ", three, "x = 1", " end)"),
+        wrapped("a:m(function() ", three, "x = 1", " end)"),
+        wrapped("f{function() ", four, "x = 1", " end}"),
+        wrapped("(function() ", four, "x = 1", " end)()"),
+        wrapped("do ", one, "x = 1", " end"),
+        wrapped("if a then ", one, "x = 1", " end"),
+        wrapped("if a then else ", one, "x = 1", " end"),
+        wrapped("if a then elseif b then ", one, "x = 1", " end"),
+        wrapped("while a do ", one, "x = 1", " end"),
+        wrapped("for i = 1, 2 do ", one, "x = 1", " end"),
+        wrapped("for k, v in p do ", one, "x = 1", " end"),
+        wrapped("repeat ", one, "x = 1", " until a"),
     ];
     let luau = [
-        format!("return {}x", "if a then b else ".repeat(255)),
-        format!("return {}", wrapped("`{", 255, "x", "}`")),
-        format!("return {}", wrapped("(", 127, "x", " :: T)")),
-        format!("type X = {}", wrapped("{", 255, "T", "}")),
-        format!("type X = {}", wrapped("(", 255, "T", ")")),
-        format!("type X = {}", wrapped("A<", 255, "T", " >")),
-        format!("type X = {}T", "() -> ".repeat(255)),
-        format!("type X = T{}", "?".repeat(255)),
-        format!("type X = {}", wrapped("(A | ", 127, "T", ")")),
-        format!("type X = {}", wrapped("typeof(x :: ", 127, "x", ")")),
-        format!("local x: {} = 1", wrapped("{", 255, "T", "}")),
+        format!("return {}x", "if a then b else ".repeat(one)),
+        format!("return {}", wrapped("`{", one, "x", "}`")),
+        format!("return {}", wrapped("(", two, "x", " :: T)")),
+        format!("type X = {}", wrapped("{", one, "T", "}")),
+        format!("type X = {}", wrapped("(", one, "T", ")")),
+        format!("type X = {}", wrapped("A<", one, "T", " >")),
+        format!("type X = {}T", "() -> ".repeat(one)),
+        format!("type X = T{}", "?".repeat(one)),
+        format!("type X = {}", wrapped("(A | ", two, "T", ")")),
+        format!("type X = {}", wrapped("typeof(x :: ", two, "x", ")")),
+        format!("local x: {} = 1", wrapped("{", one, "T", "}")),
     ];
     lua.into_iter()
         .map(|source| (LuaVersion::Lua54, source))
@@ -217,6 +219,7 @@ pub fn broken_sources() -> Vec<(LuaVersion, String)> {
     let luau = [
         format!("return {}x", "`{".repeat(LEVELS)),
         format!("return {}x{}", "`{".repeat(LEVELS), ")".repeat(LEVELS)),
+        format!("return {}1{}", "@[deprecated(".repeat(LEVELS), ")]".repeat(LEVELS)),
         "local x = `{y}a\n".repeat(LEVELS),
         "local x: A<B = 1\n".repeat(LEVELS),
         "\
@@ -240,23 +243,38 @@ pub fn deep_and_long_sources() -> Vec<(LuaVersion, String)> {
     sources
 }
 
-/// Runs `stage` over every source, each on a thread with
-/// [`SMALLEST_STACK_BYTES`] of stack. Overflowing it takes the whole test
-/// process down.
+/// Runs `stage` over every source, each [`with_the_smallest_stack`].
 ///
 /// # Panics
 ///
-/// Panics when a thread can't start, or when `stage` panics.
+/// Panics when a thread can't start, or with what `stage` panics with.
 pub fn on_the_smallest_stack<Sources>(sources: Sources, stage: fn(&str, LuaVersion))
 where
     Sources: IntoIterator<Item = (LuaVersion, String)>,
 {
     for (version, source) in sources {
-        #[expect(clippy::expect_used, reason = "the stage can't run without its thread")]
-        let worker = thread::Builder::new()
-            .stack_size(SMALLEST_STACK_BYTES)
-            .spawn(move || stage(&source, version))
-            .expect("the thread starts");
-        assert!(worker.join().is_ok(), "the stage panicked");
+        with_the_smallest_stack(|| stage(&source, version));
     }
+}
+
+/// Runs `work` on a thread with [`MIN_STACK_BYTES`] of stack, as luck asks of
+/// every thread that runs a stage. Overflowing it takes the whole test
+/// process down.
+///
+/// # Panics
+///
+/// Panics when the thread can't start, or with what `work` panics with.
+pub fn with_the_smallest_stack<T, Work>(work: Work) -> T
+where
+    T: Send,
+    Work: FnOnce() -> T + Send,
+{
+    thread::scope(|scope| {
+        #[expect(clippy::expect_used, reason = "the work can't run without its thread")]
+        let worker = thread::Builder::new()
+            .stack_size(MIN_STACK_BYTES)
+            .spawn_scoped(scope, work)
+            .expect("the thread starts");
+        worker.join().unwrap_or_else(|payload| panic::resume_unwind(payload))
+    })
 }

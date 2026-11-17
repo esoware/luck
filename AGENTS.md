@@ -79,7 +79,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 
 ### Crates and modules
 
-- `luck_allocator` and `luck_token` depend on nothing in the workspace. `luck_lexer`, `luck_core`, and `luck_testgen` depend on `luck_token` only, `luck_ast` on `luck_token` and `luck_allocator`, `luck_parser` on `luck_token`, `luck_lexer`, `luck_ast`, and `luck_allocator`, `luck_codegen` and `luck_semantic` on `luck_token` and `luck_ast`, and `luck_resolver` on `luck_token` and `luck_core`.
+- `luck_allocator` and `luck_token` depend on nothing in the workspace. `luck_lexer` and `luck_core` depend on `luck_token` only, `luck_ast` on `luck_token` and `luck_allocator`, `luck_testgen` on `luck_token` and `luck_ast`, `luck_parser` on `luck_token`, `luck_lexer`, `luck_ast`, and `luck_allocator`, `luck_codegen` and `luck_semantic` on `luck_token` and `luck_ast`, and `luck_resolver` on `luck_token` and `luck_core`.
 - `luck_codegen`, `luck_formatter`, and `luck_minifier` never depend on `luck_semantic`, `luck_resolver`, `luck_linter`, `luck_bundler`, or `luck_config`.
 - `luck_cli` is the only crate that depends on `luck_lsp`, only `luck_cli`, `luck_lsp`, and the `luck` facade's opt-in `config` feature depend on `luck_config`, and nothing depends on `luck_cli` or on the `luck` facade.
 - Only `luck_allocator`, `luck_token`'s `code_buffer.rs`, `luck_lexer`'s `cursor.rs`, `luck_resolver`'s `source_io.rs`, `luck_lsp`'s `analyzed.rs`, and `luck_benchmark` may use `unsafe`, so the workspace denies `unsafe_code` rather than forbidding it.

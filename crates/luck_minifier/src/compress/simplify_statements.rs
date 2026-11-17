@@ -272,6 +272,7 @@ impl<'ast> Compressor<'_, 'ast> {
 mod tests {
     use luck_allocator::Allocator;
     use luck_ast::MAX_NESTING_DEPTH;
+    use luck_testgen::with_the_smallest_stack;
     use luck_token::LuaVersion;
 
     use crate::fixtures::{NO_PASSES, minify_with};
@@ -345,15 +346,17 @@ mod tests {
 
     #[test]
     fn merges_a_run_of_nested_ifs_once_however_deep() {
-        // Merged an `if` at a time, the run of `and`s was copied at every level.
-        // The chunk's block and the call take the levels the `if`s leave.
-        let ifs = MAX_NESTING_DEPTH - 2;
-        let source = format!("{}x(){}", "if a then ".repeat(ifs), " end".repeat(ifs));
-        let allocator = Allocator::new();
-        let output = crate::minify(&allocator, &source, LuaVersion::Lua54, &STATEMENTS);
-        let expected = format!("if a{} then x()end", " and a".repeat(ifs - 1));
-        assert!(output.as_ref() == Ok(&expected), "{:?}", output.map(|text| text.len()));
-        assert!(allocator.used_bytes() < 64 * source.len(), "{}", allocator.used_bytes());
+        with_the_smallest_stack(|| {
+            // Merged an `if` at a time, the run of `and`s was copied at every level.
+            // The chunk's block and the call take the levels the `if`s leave.
+            let ifs = MAX_NESTING_DEPTH - 2;
+            let source = format!("{}x(){}", "if a then ".repeat(ifs), " end".repeat(ifs));
+            let allocator = Allocator::new();
+            let output = crate::minify(&allocator, &source, LuaVersion::Lua54, &STATEMENTS);
+            let expected = format!("if a{} then x()end", " and a".repeat(ifs - 1));
+            assert!(output.as_ref() == Ok(&expected), "{:?}", output.map(|text| text.len()));
+            assert!(allocator.used_bytes() < 64 * source.len(), "{}", allocator.used_bytes());
+        });
     }
 
     #[test]

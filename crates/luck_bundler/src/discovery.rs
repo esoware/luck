@@ -6,6 +6,7 @@ use std::panic;
 use std::thread::{self, Scope};
 
 use luck_allocator::Allocator;
+use luck_ast::MIN_STACK_BYTES;
 use luck_core::Diagnostic;
 use luck_resolver::{ResolveRequest, ResolvedModule, Resolver, native_path, read_source_file};
 use luck_token::{CommentKind, LuaVersion, Span, leading_hot_comments};
@@ -398,7 +399,11 @@ fn work<'scope, 'ast>(
         if !arenas.is_empty() {
             MutexGuard::unlocked(&mut discovery, || {
                 for arena in arenas {
-                    scope.spawn(move || work(shared, scope, reader, arena));
+                    // One that can't start leaves its tasks to the threads
+                    // already running.
+                    let _unused = thread::Builder::new()
+                        .stack_size(MIN_STACK_BYTES)
+                        .spawn_scoped(scope, move || work(shared, scope, reader, arena));
                 }
             });
         }

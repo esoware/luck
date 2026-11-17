@@ -22,6 +22,7 @@ doc = false
 
 [dependencies]
 luck_allocator = { workspace = true }
+luck_ast       = { workspace = true }
 luck_bundler   = { workspace = true }
 luck_config    = { workspace = true }
 luck_core      = { workspace = true }

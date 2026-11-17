@@ -2,9 +2,10 @@
 //! those run on the smallest stack too.
 
 use luck_allocator::Allocator;
+use luck_ast::MIN_STACK_BYTES;
 use luck_core::LuaTarget;
 use luck_linter::{LintConfig, apply_fixes, lint_parsed};
-use luck_testgen::{SMALLEST_STACK_BYTES, deep_and_long_sources, on_the_smallest_stack};
+use luck_testgen::{deep_and_long_sources, on_the_smallest_stack};
 use luck_token::LuaVersion;
 use rayon::ThreadPoolBuilder;
 
@@ -26,10 +27,8 @@ fn every_rule() -> LintConfig {
 #[test]
 fn linting_and_fixing_fit_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
-        let pool = ThreadPoolBuilder::new()
-            .stack_size(SMALLEST_STACK_BYTES)
-            .build()
-            .expect("the pool starts");
+        let pool =
+            ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build().expect("the pool starts");
         let config = every_rule();
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source, version);

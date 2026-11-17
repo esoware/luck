@@ -12,7 +12,7 @@
 //! [`generate_full`] gives up runtime safety to reach the whole grammar.
 //!
 //! [`deep_and_long_sources`] and [`on_the_smallest_stack`] check that a stage
-//! fits the smallest stack luck runs on.
+//! fits the stack luck asks of its threads.
 
 #![cfg_attr(
     test,
@@ -32,6 +32,6 @@ pub use fixtures::{collect_fixture_files, detect_version, is_error_fixture};
 pub use full::generate_full;
 pub use runtime::generate_runtime_safe;
 pub use stack::{
-    SMALLEST_STACK_BYTES, broken_sources, deep_and_long_sources, on_the_smallest_stack,
-    sources_at_the_nesting_cap, sources_past_the_nesting_cap,
+    broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_at_the_nesting_cap,
+    sources_past_the_nesting_cap, with_the_smallest_stack,
 };
