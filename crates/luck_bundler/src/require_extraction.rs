@@ -1,10 +1,10 @@
 use luck_allocator::Allocator;
 use luck_ast::{
     Block, Call, Expression, FunctionArgs, FunctionBody, Name, Statement, Suffix,
-    SuffixedExpression, Var, Visitor,
+    SuffixedExpression, Var,
 };
 use luck_core::Diagnostic;
-use luck_semantic::{ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
+use luck_semantic::{NodeSink, ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
 use luck_token::{LuaVersion, Span, StdlibEnvironment, decode_string};
 use rustc_hash::FxHashSet;
 
@@ -60,7 +60,18 @@ pub(crate) fn extract_requires<'ast>(
     version: LuaVersion,
     dynamic_require: DynamicRequire,
 ) -> ExtractedRequires<'ast> {
-    let tree = ScopeTree::build(block, version);
+    let mut uses = Uses {
+        version,
+        functions: Vec::new(),
+        requires: Vec::new(),
+        arg_reads: Vec::new(),
+        package_loaded_writes: Vec::new(),
+        has_vararg_read: false,
+    };
+    let tree = ScopeTree::build_with(block, version, &mut uses);
+    // The walk reaches an assignment's values before its targets, and the
+    // diagnostics follow the source.
+    uses.requires.sort_by_key(RequireUse::start);
     let mut finder = RequireFinder {
         allocator,
         source,
@@ -71,26 +82,16 @@ pub(crate) fn extract_requires<'ast>(
         sites: Vec::new(),
         dynamic_callees: Vec::new(),
         diags: Vec::new(),
-        package_loaded_writes: Vec::new(),
         seen_require_strings: FxHashSet::default(),
         direct_callees: Vec::new(),
-        function_depth: 0,
-        vararg_function_depth: 0,
-        has_vararg_read: false,
-        has_global_arg_read: false,
     };
-    finder.visit_block(block);
-
-    let RequireFinder {
-        mut sites,
-        dynamic_callees,
-        mut diags,
-        package_loaded_writes,
-        mut direct_callees,
-        has_vararg_read,
-        has_global_arg_read,
-        ..
-    } = finder;
+    for require in &uses.requires {
+        match *require {
+            RequireUse::Call(call) => finder.handle_call(call),
+            RequireUse::GlobalTable(chain, table) => finder.flag_global_table_require(chain, table),
+        }
+    }
+    let RequireFinder { mut sites, dynamic_callees, mut diags, mut direct_callees, .. } = finder;
 
     if let Some(require) = tree.name_id("require") {
         direct_callees.sort_unstable_by_key(|span| span.start);
@@ -111,7 +112,14 @@ pub(crate) fn extract_requires<'ast>(
     }
 
     sites.sort_by_key(|site| site.call_span.start);
-    diags.extend(package_loaded_writes);
+    // A local named `package` is no concern of the bundle's.
+    diags.extend(
+        uses.package_loaded_writes
+            .iter()
+            .filter(|(package, _)| tree.reaches_host_global(package))
+            .map(|(_, target)| Diagnostic::e006(file_path, *target)),
+    );
+    let has_global_arg_read = uses.arg_reads.iter().any(|name| !tree.resolves_to_local(name));
 
     let has_env_rebinding = version.has_env_upvalue()
         && (tree.is_env_assigned()
@@ -134,7 +142,7 @@ pub(crate) fn extract_requires<'ast>(
         sites,
         dynamic_callees,
         diags,
-        has_vararg_read,
+        has_vararg_read: uses.has_vararg_read,
         has_global_arg_read,
         has_env_rebinding,
         max_function_upvalues,
@@ -171,6 +179,119 @@ fn max_function_upvalues(tree: &ScopeTree<'_>) -> usize {
     counts.into_iter().max().unwrap_or(0)
 }
 
+/// What the scope tree's walk finds that bundling has to look at once the tree
+/// can say what each name reaches.
+struct Uses<'tree> {
+    version: LuaVersion,
+    /// The function bodies the walk is in, innermost last, and whether each
+    /// declares `...`, binding its own `arg` on 5.1.
+    functions: Vec<(Span, bool)>,
+    requires: Vec<RequireUse<'tree>>,
+    /// Lua 5.1: each name `arg` outside every vararg function.
+    arg_reads: Vec<&'tree Name<'tree>>,
+    /// Luau: each write to or into `package.loaded`, by its `package` name.
+    package_loaded_writes: Vec<(&'tree Name<'tree>, Span)>,
+    /// The module's own chunk reads `...`.
+    has_vararg_read: bool,
+}
+
+#[derive(Clone, Copy)]
+enum RequireUse<'tree> {
+    /// A direct call of a name `require`.
+    Call(Call<'tree>),
+    /// A chain reading `require` from the global table named.
+    GlobalTable(&'tree SuffixedExpression<'tree>, &'tree Name<'tree>),
+}
+
+impl RequireUse<'_> {
+    fn start(&self) -> u32 {
+        match self {
+            Self::Call(call) => call.span().start,
+            Self::GlobalTable(chain, _) => chain.span.start,
+        }
+    }
+}
+
+impl<'tree> Uses<'tree> {
+    /// Leaves each function body that doesn't hold `start`, since the walk
+    /// is past it.
+    fn reach(&mut self, start: u32) {
+        while let Some(&(body, _)) = self.functions.last()
+            && !(body.start <= start && start < body.end)
+        {
+            self.functions.pop();
+        }
+    }
+
+    fn note_target(&mut self, target: &'tree Var<'tree>) {
+        match target {
+            Var::Name(name) => self.note_arg_read(name),
+            // Lua targets use package.loaded itself as the bundle cache, so
+            // writes to it behave as in real Lua. Luau has no package table,
+            // and its bundle cache is private.
+            Var::Suffixed(_) => {
+                if self.version.is_luau()
+                    && let Some(package) = package_loaded_root(target, self.version)
+                {
+                    self.package_loaded_writes.push((package, target.span()));
+                }
+            }
+        }
+    }
+
+    /// Lua 5.1: a read of `arg`, outside every vararg function.
+    fn note_arg_read(&mut self, name: &'tree Name<'tree>) {
+        if self.version.has_implicit_vararg_table()
+            && name.text == "arg"
+            && !self.functions.iter().any(|&(_, is_vararg)| is_vararg)
+        {
+            self.arg_reads.push(name);
+        }
+    }
+}
+
+impl<'tree> NodeSink<'tree> for Uses<'tree> {
+    fn function_body(&mut self, body: &'tree FunctionBody<'tree>) {
+        self.reach(body.span.start);
+        self.functions.push((body.span, body.vararg.is_some()));
+    }
+
+    fn stmt(&mut self, stmt: &'tree Statement<'tree>) {
+        self.reach(stmt.span().start);
+        if let Statement::Assignment(assignment) = stmt {
+            for target in &assignment.targets {
+                self.note_target(target);
+            }
+        }
+        // Luau
+        if let Statement::CompoundAssignment(compound) = stmt {
+            self.note_target(&compound.var);
+        }
+    }
+
+    fn expr(&mut self, expr: &'tree Expression<'tree>) {
+        self.reach(expr.span().start);
+        if matches!(expr, Expression::VarArg(_)) && self.functions.is_empty() {
+            self.has_vararg_read = true;
+        }
+        if let Expression::Name(name) = expr {
+            self.note_arg_read(name);
+        }
+    }
+
+    fn chain(&mut self, chain: &'tree SuffixedExpression<'tree>, _is_target: bool) {
+        if let Some(table) = global_table_require(chain, self.version) {
+            self.requires.push(RequireUse::GlobalTable(chain, table));
+        }
+        for call in chain.calls() {
+            if require_callee(call).is_some() {
+                self.requires.push(RequireUse::Call(call));
+            }
+        }
+    }
+}
+
+/// What the module's requires make of it, decided in source order.
 struct RequireFinder<'tree, 'ast> {
     allocator: &'ast Allocator,
     source: &'ast str,
@@ -181,16 +302,8 @@ struct RequireFinder<'tree, 'ast> {
     sites: Vec<RequireSite<'ast>>,
     dynamic_callees: Vec<Span>,
     diags: Vec<Diagnostic>,
-    /// E006s, which follow every other diagnostic.
-    package_loaded_writes: Vec<Diagnostic>,
     seen_require_strings: FxHashSet<&'ast str>,
     direct_callees: Vec<Span>,
-    /// Function bodies entered so far; zero is the module's own chunk.
-    function_depth: usize,
-    /// How many of those declare `...`, each binding its own `arg` on 5.1.
-    vararg_function_depth: usize,
-    has_vararg_read: bool,
-    has_global_arg_read: bool,
 }
 
 impl<'ast> RequireFinder<'_, 'ast> {
@@ -261,91 +374,12 @@ impl<'ast> RequireFinder<'_, 'ast> {
         Some(self.allocator.alloc_str(str::from_utf8(&decoded).ok()?))
     }
 
-    /// A local named `package` is no concern of the bundle's.
-    fn flag_package_loaded_write(&mut self, target: &Var<'_>) {
-        if let Some(package) = package_loaded_root(target, self.version)
-            && self.tree.reaches_host_global(package)
-        {
-            self.package_loaded_writes.push(Diagnostic::e006(self.file_path, target.span()));
-        }
-    }
-
     /// W005 for `_G.require` or `_ENV.require`, the global `require` reached
     /// through its table rather than a direct call.
-    fn flag_global_table_require(&mut self, chain: &SuffixedExpression<'_>) {
-        if let Some(table) = global_table_require(chain, self.version)
-            && self.tree.reaches_host_global(table)
-        {
+    fn flag_global_table_require(&mut self, chain: &SuffixedExpression<'_>, table: &Name<'_>) {
+        if self.tree.reaches_host_global(table) {
             self.diags.push(Diagnostic::w005_aliased(self.file_path, chain.head(1).span()));
         }
-    }
-
-    /// Lua 5.1: a read of the global `arg`, outside every vararg function.
-    fn note_arg_read(&mut self, name: &Name<'_>) {
-        if self.vararg_function_depth == 0
-            && self.version.has_implicit_vararg_table()
-            && name.text == "arg"
-            && !self.tree.resolves_to_local(name)
-        {
-            self.has_global_arg_read = true;
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for RequireFinder<'_, '_> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-        // Lua targets use package.loaded itself as the bundle cache, so writes
-        // to it behave as in real Lua. Luau has no package table, and its
-        // bundle cache is private.
-        if self.version.is_luau() {
-            if let Statement::Assignment(assignment) = stmt {
-                for target in &assignment.targets {
-                    self.flag_package_loaded_write(target);
-                }
-            }
-            if let Statement::CompoundAssignment(compound) = stmt {
-                self.flag_package_loaded_write(&compound.var);
-            }
-        }
-        self.walk_stmt(stmt);
-    }
-
-    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
-        if self.function_depth == 0 && matches!(expr, Expression::VarArg(_)) {
-            self.has_vararg_read = true;
-        }
-        if let Expression::Name(name) = expr {
-            self.note_arg_read(name);
-        }
-        self.walk_expr(expr);
-    }
-
-    fn visit_assignment_target(&mut self, target: &'ast Var<'ast>) {
-        if let Var::Name(name) = target {
-            self.note_arg_read(name);
-        }
-        self.walk_assignment_target(target);
-    }
-
-    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression<'ast>) {
-        self.flag_global_table_require(chain);
-        self.walk_suffixed(chain);
-    }
-
-    fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
-        let is_vararg = body.vararg.is_some();
-        self.function_depth = self.function_depth.saturating_add(1);
-        self.vararg_function_depth =
-            self.vararg_function_depth.saturating_add(usize::from(is_vararg));
-        self.walk_function_body(body);
-        self.vararg_function_depth =
-            self.vararg_function_depth.saturating_sub(usize::from(is_vararg));
-        self.function_depth = self.function_depth.saturating_sub(1);
-    }
-
-    fn visit_call(&mut self, call: Call<'ast>) {
-        self.handle_call(call);
-        self.walk_call(call);
     }
 }
 

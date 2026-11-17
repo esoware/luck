@@ -4,6 +4,7 @@ use luck_ast::{Block, Name};
 use luck_token::{LuaVersion, Span, offset_to_index};
 use rustc_hash::FxHashMap;
 
+use crate::sink::NodeSink;
 pub(crate) use builder::build_with_initializers;
 
 /// Defines an index newtype over `NonZeroU32` holding `index + 1`, so
@@ -191,7 +192,16 @@ impl<'ast> ScopeTree<'ast> {
     /// One walk over `block`, which recurses once per level of nesting.
     #[must_use]
     pub fn build(block: &'ast Block<'ast>, version: LuaVersion) -> Self {
-        build_with_initializers(block, version, &mut ()).0
+        Self::build_with(block, version, &mut ())
+    }
+
+    /// [`Self::build`], showing `sink` each node the walk reaches.
+    #[must_use]
+    pub fn build_with<Sink>(block: &'ast Block<'ast>, version: LuaVersion, sink: &mut Sink) -> Self
+    where
+        Sink: NodeSink<'ast>,
+    {
+        build_with_initializers(block, version, sink).0
     }
 
     #[must_use]
