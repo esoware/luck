@@ -162,6 +162,17 @@ mod tests {
     }
 
     #[test]
+    fn splits_and_truncates_without_emptying() {
+        let allocator = Allocator::new();
+        let mut list = OneOrMore::from_list(List::from_array_in([1u8, 2, 3, 4], &allocator))
+            .expect("the list has items");
+        let rest = list.split_off(3);
+        assert_eq!((&*list, &*rest), ([1, 2, 3].as_slice(), [4].as_slice()));
+        list.truncate(1);
+        assert_eq!(*list, [1]);
+    }
+
+    #[test]
     fn builds_from_any_list_but_an_empty_one() {
         let allocator = Allocator::new();
         assert!(OneOrMore::<u8>::from_list(List::new()).is_none());
