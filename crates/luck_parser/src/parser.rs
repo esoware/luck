@@ -20,12 +20,6 @@ use rustc_hash::FxHashSet;
 use crate::validate::check_type_functions;
 use crate::{ParseError, ParseResult};
 
-/// The lexer's reservation for its token list, which `parse_with_tokens`
-/// shares: about one token per four bytes, and never so many that a huge
-/// comment-only file reserves gigabytes it never touches.
-const BYTES_PER_TOKEN: usize = 4;
-const MAX_RESERVED_TOKENS: usize = 1 << 20;
-
 /// The tree and every list in it go in `allocator`, and its names and
 /// literals borrow `source`.
 #[must_use]
@@ -34,7 +28,7 @@ pub fn parse<'ast>(
     source: &'ast str,
     version: LuaVersion,
 ) -> ParseResult<'ast> {
-    parse_recording(allocator, source, version, None).0
+    parse_recording(allocator, source, version, false).0
 }
 
 /// [`parse`], and every token the parse read, as [`luck_lexer::lex`] gives
@@ -45,9 +39,7 @@ pub fn parse_with_tokens<'ast>(
     source: &'ast str,
     version: LuaVersion,
 ) -> (ParseResult<'ast>, Vec<Token>) {
-    let capacity = source.len().div_ceil(BYTES_PER_TOKEN).min(MAX_RESERVED_TOKENS);
-    let (parse, recorded) =
-        parse_recording(allocator, source, version, Some(Vec::with_capacity(capacity)));
+    let (parse, recorded) = parse_recording(allocator, source, version, true);
     let mut tokens = recorded.unwrap_or_default();
     // The lexer repeats its `Eof` to a parser that reads on.
     while let [.., Token { kind: TokenKind::Eof, .. }, Token { kind: TokenKind::Eof, .. }] =
@@ -62,7 +54,7 @@ fn parse_recording<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,
     version: LuaVersion,
-    tokens: Option<Vec<Token>>,
+    is_recording: bool,
 ) -> (ParseResult<'ast>, Option<Vec<Token>>) {
     let lexer = match Lexer::new(source, version) {
         Ok(lexer) => lexer,
@@ -72,9 +64,10 @@ fn parse_recording<'ast>(
             let errors = vec![error];
             let parse =
                 ParseResult { source, block, comments: Vec::new(), errors, nesting_depth: 1 };
-            return (parse, tokens.map(|_| Vec::new()));
+            return (parse, is_recording.then(Vec::new));
         }
     };
+    let tokens = is_recording.then(|| Vec::with_capacity(lexer.token_capacity()));
     let placeholder = Token {
         span: Span::new(0, 0),
         kind: TokenKind::Eof,

@@ -36,8 +36,7 @@ pub fn lex(source: &str, version: LuaVersion) -> LexResult {
             };
         }
     };
-    let capacity = lexer.cursor.rest().len().div_ceil(BYTES_PER_TOKEN);
-    let mut tokens = Vec::with_capacity(capacity.min(MAX_RESERVED_TOKENS));
+    let mut tokens = Vec::with_capacity(lexer.token_capacity());
     loop {
         let token = lexer.lex_token();
         tokens.push(token);
@@ -222,6 +221,12 @@ impl<'source> Lexer<'source> {
             };
             return self.token(kind, start);
         }
+    }
+
+    /// What a list of the tokens left to lex reserves.
+    #[must_use]
+    pub fn token_capacity(&self) -> usize {
+        self.cursor.rest().len().div_ceil(BYTES_PER_TOKEN).min(MAX_RESERVED_TOKENS)
     }
 
     #[must_use]
