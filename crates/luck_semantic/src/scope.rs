@@ -299,6 +299,18 @@ impl<'ast> ScopeTree<'ast> {
             })
     }
 
+    /// The references whose names lie within `span`, by where they start.
+    pub fn references_within(&self, span: Span) -> impl Iterator<Item = ReferenceId> + '_ {
+        let first = self.positions.partition_point(|position| position.start < span.start);
+        self.positions
+            .get(first..)
+            .unwrap_or_default()
+            .iter()
+            .take_while(move |position| position.start < span.end)
+            .map(|position| position.reference)
+            .filter(move |&id| self.reference(id).span.end <= span.end)
+    }
+
     /// Code that matches stdlib paths (`table.insert`, `require(...)`,
     /// `error(...)`) must bail when the base name is shadowed
     /// (`local table = {}`), or it reports stdlib diagnostics on user values.

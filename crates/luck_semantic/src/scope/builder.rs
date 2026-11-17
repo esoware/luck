@@ -1141,6 +1141,21 @@ t[x], x = x, function() y = x end",
     }
 
     #[test]
+    fn references_within_lists_a_span_s_names_in_source_order() {
+        let allocator = Allocator::new();
+        let source = "\
+local x = 1
+t[x], x = y, function() z = x end
+print(x)";
+        let tree = scope_tree(&allocator, source);
+        let line = Span::new(12, 45);
+        let names: Vec<&str> =
+            tree.references_within(line).map(|id| tree.name(tree.reference(id).name)).collect();
+        assert_eq!(names, ["t", "x", "x", "y", "z", "x"]);
+        assert_eq!(tree.references_within(Span::new(13, 15)).count(), 1, "only `x`, not `t`");
+    }
+
+    #[test]
     fn assignment_values_are_read_before_targets_are_written() {
         let allocator = Allocator::new();
         let tree = scope_tree(
