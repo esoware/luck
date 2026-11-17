@@ -20,9 +20,7 @@ mod never_grow_in_place_allocator;
 
 // Every bench imports criterion from here, so even one that uses nothing
 // else of this crate links its global allocator.
-pub use criterion::{
-    BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main,
-};
+pub use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 
 pub use corpus::{
     ProjectFile, TestFile, TestProject, bundle_project_root, test_files, test_projects,

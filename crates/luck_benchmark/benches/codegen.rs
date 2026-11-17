@@ -1,24 +1,28 @@
+use luck_allocator::Allocator;
 use luck_benchmark::{
     BenchmarkId, Criterion, black_box, criterion_group, criterion_main, test_files, test_projects,
 };
 
+/// Each iteration prints a parse made once, since printing only reads the
+/// tree.
 fn bench_codegen(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("codegen");
 
     for file in test_files() {
         let id = BenchmarkId::from_parameter(file.file_name);
-        let source_text = file.source_text.as_str();
-        let parse_result = file.parse();
+        let allocator = Allocator::new();
+        let parse_result = file.parse(&allocator);
         group.bench_function(id, |bencher| {
             bencher.iter_with_large_drop(|| {
-                luck_codegen::compact_with_capacity(&parse_result.block, source_text.len())
+                luck_codegen::compact_with_capacity(&parse_result.block, parse_result.source.len())
             });
         });
     }
 
     for project in test_projects() {
         let id = BenchmarkId::from_parameter(project.name);
-        let parse_results = project.parse_files();
+        let allocator = Allocator::new();
+        let parse_results = project.parse_files(&allocator);
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
                 for parse_result in &parse_results {
