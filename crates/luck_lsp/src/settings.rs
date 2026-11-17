@@ -5,7 +5,7 @@ use alloc::sync::Arc;
 use std::path::{Path, PathBuf};
 
 use luck_config::{
-    DialectKey, FormatConfig, LuckConfig, ProjectFilter, discover_config, resolved_format_config,
+    DialectKey, Editorconfigs, FormatConfig, LuckConfig, ProjectFilter, discover_config,
 };
 use luck_core::LuaTarget;
 use luck_formatter::FormatOptions;
@@ -36,6 +36,9 @@ pub(crate) struct ProjectSettings {
     /// Directory containing the discovered `luck.json`. `None` means no
     /// config was found or it failed to load, so these are the defaults.
     pub root: Option<PathBuf>,
+    /// The `.editorconfig` files formatting has read, each read once until
+    /// a watched config file changes and these settings are rebuilt.
+    pub editorconfigs: Editorconfigs,
 }
 
 impl Default for ProjectSettings {
@@ -69,6 +72,7 @@ impl ProjectSettings {
             }),
             search_paths: config.search_paths.clone().unwrap_or_default(),
             root,
+            editorconfigs: Editorconfigs::default(),
         }
     }
 
@@ -86,21 +90,23 @@ impl ProjectSettings {
     /// Untitled and other non-file documents have no `.editorconfig` to find,
     /// so they get the project's `format` section alone.
     pub(crate) fn format_options(&self, file_path: Option<&Path>) -> FormatOptions {
-        FormatOptions::from(&resolved_format_config(self.format_config, file_path))
+        FormatOptions::from(
+            &self.editorconfigs.resolved_format_config(self.format_config, file_path),
+        )
     }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct SettingsCache {
-    /// Shared by every document without a config or a file path.
-    defaults: Arc<ProjectSettings>,
-    /// One lock for both maps, so a reader never sees a root without its
+    /// One lock for all of them, so a reader never sees a root without its
     /// settings.
     lookups: RwLock<Lookups>,
 }
 
 #[derive(Debug, Default)]
 struct Lookups {
+    /// Shared by every document without a config or a file path.
+    defaults: Arc<ProjectSettings>,
     settings_by_root: FxHashMap<PathBuf, Arc<ProjectSettings>>,
     /// Each search directory's config root, or `None` for no config, so a
     /// repeat lookup doesn't walk the filesystem again.
@@ -114,7 +120,7 @@ impl SettingsCache {
     /// no file path.
     pub(crate) async fn settings_for(&self, document_path: Option<&Path>) -> Arc<ProjectSettings> {
         let Some(file_path) = document_path else {
-            return Arc::clone(&self.defaults);
+            return Arc::clone(&self.lookups.read().await.defaults);
         };
         let search_directory =
             file_path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf);
@@ -127,7 +133,7 @@ impl SettingsCache {
                         return Arc::clone(settings);
                     }
                 }
-                Some(None) => return Arc::clone(&self.defaults),
+                Some(None) => return Arc::clone(&lookups.defaults),
                 None => {}
             }
         }
@@ -144,8 +150,9 @@ impl SettingsCache {
         .flatten();
         let Some((root, settings)) = discovered else {
             // Cache the negative lookup so we don't re-walk every did_change.
-            self.lookups.write().await.roots_by_search_directory.insert(search_directory, None);
-            return Arc::clone(&self.defaults);
+            let mut lookups = self.lookups.write().await;
+            lookups.roots_by_search_directory.insert(search_directory, None);
+            return Arc::clone(&lookups.defaults);
         };
         let mut lookups = self.lookups.write().await;
         lookups.settings_by_root.insert(root.clone(), Arc::clone(&settings));
@@ -153,10 +160,9 @@ impl SettingsCache {
         settings
     }
 
+    /// Forgets every lookup, and the defaults' `.editorconfig` reads too.
     pub(crate) async fn clear(&self) {
-        let mut lookups = self.lookups.write().await;
-        lookups.settings_by_root.clear();
-        lookups.roots_by_search_directory.clear();
+        *self.lookups.write().await = Lookups::default();
     }
 }
 
@@ -217,6 +223,35 @@ mod tests {
         assert_eq!(cache.settings_for(Some(&first)).await.lua_target, LuaTarget::Lua53);
         cache.clear().await;
         assert_eq!(cache.settings_for(Some(&first)).await.lua_target, LuaTarget::Lua51);
+    }
+
+    #[tokio::test]
+    async fn an_editorconfig_is_read_once_until_the_cache_clears() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+        let editorconfig = directory.path().join(".editorconfig");
+        let indented = |size: u8| {
+            format!(
+                "\
+[*.lua]
+indent_style = space
+indent_size = {size}
+"
+            )
+        };
+        fs::write(&editorconfig, indented(2)).expect("write editorconfig");
+        let file_path = directory.path().join("main.lua");
+        let cache = SettingsCache::default();
+        let indent_width = async || {
+            let settings = cache.settings_for(Some(&file_path)).await;
+            settings.format_options(Some(&file_path)).indent_width
+        };
+
+        assert_eq!(indent_width().await, 2);
+        fs::write(&editorconfig, indented(3)).expect("rewrite editorconfig");
+        assert_eq!(indent_width().await, 2, "the first read holds until a watched file changes");
+        cache.clear().await;
+        assert_eq!(indent_width().await, 3);
     }
 
     #[test]
