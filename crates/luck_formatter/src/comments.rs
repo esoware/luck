@@ -153,6 +153,9 @@ impl<'ast> Comments<'ast> {
         let Store::Sourced(sourced) = &self.store else {
             return None;
         };
+        if sourced.disabled_ranges.is_empty() {
+            return None;
+        }
         let reached = sourced.printed_end().map_or(position, |end| end.max(position));
         region_ending_after(&sourced.disabled_ranges, reached).cloned()
     }
@@ -359,6 +362,9 @@ impl<'ast> Sourced<'ast> {
     /// Where the next `format off` region starts, past which no block-level
     /// writer may take a comment, since the region's own bytes hold it.
     fn disabled_region_limit(&self) -> u32 {
+        if self.disabled_ranges.is_empty() {
+            return u32::MAX;
+        }
         let position = self.printed_end().unwrap_or(0);
         region_ending_after(&self.disabled_ranges, position).map_or(u32::MAX, |region| region.start)
     }

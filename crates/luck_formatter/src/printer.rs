@@ -295,7 +295,10 @@ impl<'ast> Printer<'ast> {
         rest: &'ast [FormatElement<'ast>],
     ) -> &'ast [FormatElement<'ast>] {
         match *element {
-            FormatElement::Text(content, width) => self.emit_text(content, width.columns()),
+            FormatElement::Text(content, width) => {
+                self.emit_text(content, width.columns());
+                self.is_pending_space |= width.has_space_after();
+            }
             FormatElement::Verbatim(content, width) => self.emit_verbatim(content, width.columns()),
             FormatElement::LineSuffix(content, width) => self.suffixes.push((content, width)),
             FormatElement::Space => self.is_pending_space = true,
@@ -588,7 +591,8 @@ impl<'ast> Printer<'ast> {
                     let Some(columns) = width.columns() else {
                         return false;
                     };
-                    used_width = used_width.saturating_add(columns);
+                    let space = usize::from(width.has_space_after());
+                    used_width = used_width.saturating_add(columns).saturating_add(space);
                     if used_width > self.line_width {
                         return false;
                     }

@@ -100,11 +100,16 @@ pub(crate) enum FormatElement<'ast> {
 
 /// Taken once, as the text enters the stream, because the printer measures a
 /// text again for every layout it tries.
+///
+/// The top bit says a space follows the text, which saves the stream a
+/// `Space` after one text in five, and the rest are its columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TextWidth(u32);
 
 impl TextWidth {
-    const MULTILINE: Self = Self(u32::MAX);
+    const SPACE_AFTER: u32 = 1 << 31;
+    const COLUMNS: u32 = Self::SPACE_AFTER - 1;
+    const MULTILINE: Self = Self(Self::COLUMNS);
 
     fn of(text: &str) -> Self {
         // Without a line break, `width` counts every ASCII character as one
@@ -125,18 +130,30 @@ impl TextWidth {
     }
 
     /// Any width past the line's compares the same, and `MULTILINE` takes
-    /// `u32::MAX`.
+    /// the widest.
     fn of_columns(columns: usize) -> Self {
-        Self(u32::try_from(columns).unwrap_or(u32::MAX).min(u32::MAX - 1))
+        let widest = Self::COLUMNS - 1;
+        Self(u32::try_from(columns).unwrap_or(widest).min(widest))
     }
 
     /// `None` for text that spans lines.
     pub(crate) fn columns(self) -> Option<usize> {
-        (self != Self::MULTILINE).then(|| offset_to_index(self.0))
+        let columns = self.0 & Self::COLUMNS;
+        (columns != Self::COLUMNS).then(|| offset_to_index(columns))
     }
 
     const fn is_multiline(self) -> bool {
-        self.0 == Self::MULTILINE.0
+        self.0 & Self::COLUMNS == Self::COLUMNS
+    }
+
+    /// Whether a space follows the text, which then prints as a `Space`
+    /// after it would.
+    pub(crate) const fn has_space_after(self) -> bool {
+        self.0 & Self::SPACE_AFTER != 0
+    }
+
+    const fn with_space_after(self) -> Self {
+        Self(self.0 | Self::SPACE_AFTER)
     }
 }
 
@@ -156,6 +173,9 @@ pub(crate) struct Formatter<'ast> {
     /// How many bytes of text the stream holds, which the output takes at
     /// least.
     text_bytes: usize,
+    /// No space joins an element before this one, which starts a run of
+    /// elements an emitter moves or takes back as a unit.
+    space_fence: usize,
     options: FormatOptions,
     allocator: &'ast Allocator,
     comments: Comments<'ast>,
@@ -186,6 +206,7 @@ impl<'ast> Formatter<'ast> {
             elements: List::with_capacity_in(capacity, allocator),
             layout: Layout::default(),
             text_bytes: 0,
+            space_fence: 0,
             options,
             allocator,
             comments,
@@ -212,9 +233,10 @@ impl<'ast> Formatter<'ast> {
     }
 
     /// Where the next element goes, which an emitter notes to find what it
-    /// wrote.
-    pub(crate) fn element_count(&self) -> usize {
-        self.elements.len()
+    /// writes from here.
+    pub(crate) fn element_count(&mut self) -> usize {
+        self.space_fence = self.elements.len();
+        self.space_fence
     }
 
     /// Prints the statements written to `slices`, element ranges in stream
@@ -326,6 +348,12 @@ impl<'ast> Formatter<'ast> {
     #[inline]
     pub(crate) fn space(&mut self) {
         self.text_bytes = self.text_bytes.wrapping_add(1);
+        if self.elements.len() > self.space_fence
+            && let Some(FormatElement::Text(_, width)) = self.elements.last_mut()
+        {
+            *width = width.with_space_after();
+            return;
+        }
         self.push(FormatElement::Space);
     }
 
@@ -472,9 +500,9 @@ impl<'ast> Formatter<'ast> {
         &self.elements
     }
 
-    pub(crate) fn checkpoint(&self) -> Checkpoint {
+    pub(crate) fn checkpoint(&mut self) -> Checkpoint {
         Checkpoint {
-            element_count: self.elements.len(),
+            element_count: self.element_count(),
             layout: self.layout.checkpoint(),
             comments: self.comments.checkpoint(),
         }

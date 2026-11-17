@@ -192,7 +192,7 @@ impl<'ast> Formatter<'ast> {
             }
 
             let item_start = self.element_count();
-            self.write_verbatim_or(item, is_opted_out);
+            self.write_verbatim_or(item, Span { start, end }, is_opted_out);
             let has_multi_line_trailer = self.write_trailing_comments(start, end);
 
             if should_sort_requires {
@@ -338,12 +338,12 @@ impl<'ast> Formatter<'ast> {
     /// A statement that opted out or has such a comment takes its block's
     /// indentation, keeping its line breaks only if it opted out. One holding
     /// a `format off` region goes out byte for byte.
-    fn write_verbatim_or(&mut self, item: BlockItem<'_, 'ast>, is_opted_out: bool) {
+    fn write_verbatim_or(&mut self, item: BlockItem<'_, 'ast>, span: Span, is_opted_out: bool) {
         if matches!(item, BlockItem::Verbatim { .. }) {
             self.write_item(item);
             return;
         }
-        let Span { start, end } = item.span();
+        let Span { start, end } = span;
         if is_opted_out && self.write_reindented(start, end, true) {
             return;
         }
@@ -474,8 +474,25 @@ fn has_trailing_edge_blank(source: &str, end: u32, version: LuaVersion) -> bool 
 
 /// Whether `text` holds a blank line: two line breaks with no `;` between them,
 /// since a line holding only a `;` isn't blank.
-fn run_has_blank(text: &str, version: LuaVersion) -> bool {
-    text.split(';').any(|segment| line_breaks(segment, version).nth(1).is_some())
+///
+/// The text is a gap between tokens, a few bytes as a rule, so one walk beats
+/// searching it.
+const fn run_has_blank(text: &str, version: LuaVersion) -> bool {
+    let mut remaining = text.as_bytes();
+    let mut has_break = false;
+    while let Some((&b, rest)) = remaining.split_first() {
+        if let Some(after_break) = strip_line_break(remaining, version) {
+            if has_break {
+                return true;
+            }
+            has_break = true;
+            remaining = after_break;
+        } else {
+            has_break &= b != b';';
+            remaining = rest;
+        }
+    }
+    false
 }
 
 pub(crate) fn has_blank_line(source: &str, start: u32, end: u32, version: LuaVersion) -> bool {
@@ -550,7 +567,29 @@ fn separable_newlines(text: &str, version: LuaVersion) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::{LuaVersion, line_breaks};
+
+    #[test]
+    fn a_blank_line_is_two_breaks_with_no_semicolon_between() {
+        // Every gap of up to six bytes from these, against the definition.
+        let pieces = ['\n', '\r', ';', ' ', 'x'];
+        let mut gaps = vec![String::new()];
+        let mut longest = gaps.clone();
+        for _ in 0..6u8 {
+            longest = longest
+                .iter()
+                .flat_map(|gap| pieces.iter().map(move |piece| format!("{gap}{piece}")))
+                .collect();
+            gaps.extend(longest.iter().cloned());
+        }
+        for version in [LuaVersion::Lua54, LuaVersion::Luau] {
+            for gap in &gaps {
+                let expected =
+                    gap.split(';').any(|segment| line_breaks(segment, version).nth(1).is_some());
+                assert_eq!(super::run_has_blank(gap, version), expected, "{gap:?} in {version:?}");
+            }
+        }
+    }
 
     #[test]
     fn newlines_inside_a_token_do_not_separate_lines() {
