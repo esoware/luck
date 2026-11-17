@@ -41,31 +41,11 @@ fn print_block<'ast>(
 
     let trimmed = output.trim_end();
     output.truncate(trimmed.len());
-    output.push('\n');
-    if options.line_endings == LineEndings::Windows {
-        output = with_windows_line_endings(&output);
-    }
+    output.push_str(match options.line_endings {
+        LineEndings::Unix => "\n",
+        LineEndings::Windows => "\r\n",
+    });
     output
-}
-
-/// Verbatim text can already hold CRLF or LFCR, from CRLF input or an earlier
-/// pass, and a second CR would be another line break in a long string.
-fn with_windows_line_endings(text: &str) -> String {
-    let mut converted =
-        String::with_capacity(text.len().saturating_add(text.matches('\n').count()));
-    let mut segments = text.split_inclusive('\n').peekable();
-    while let Some(segment) = segments.next() {
-        let is_half_of_a_line_break =
-            segment.ends_with("\r\n") || segments.peek().is_some_and(|next| next.starts_with('\r'));
-        match segment.strip_suffix('\n') {
-            Some(line) if !is_half_of_a_line_break => {
-                converted.push_str(line);
-                converted.push_str("\r\n");
-            }
-            Some(_) | None => converted.push_str(segment),
-        }
-    }
-    converted
 }
 
 /// Formats a tree, including one built in code with no source text, such as
@@ -155,16 +135,11 @@ pub fn format_range<'ast>(
         .map_or_else(
             || source.to_owned(),
             |(span, selected)| {
-                let text = if options.line_endings == LineEndings::Windows {
-                    with_windows_line_endings(&selected)
-                } else {
-                    selected
-                };
                 let before = source.get(..offset_to_index(span.start)).unwrap_or_default();
                 let after = source.get(offset_to_index(span.end)..).unwrap_or_default();
                 let mut spliced = String::with_capacity(source.len());
                 spliced.push_str(before);
-                spliced.push_str(&text);
+                spliced.push_str(&selected);
                 spliced.push_str(after);
                 spliced
             },

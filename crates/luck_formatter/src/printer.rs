@@ -27,7 +27,7 @@ use luck_token::{CodeBuffer, index_to_offset, offset_to_index};
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::ir::{FormatElement, GroupId, LineMode, TextWidth};
-use crate::{FormatOptions, IndentStyle};
+use crate::{FormatOptions, IndentStyle, LineEndings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrintMode {
@@ -232,6 +232,8 @@ pub(crate) fn print(
         base_indent,
         base_indent_columns,
         output: CodeBuffer::with_capacity(capacity),
+        is_crlf: options.line_endings == LineEndings::Windows,
+        crlf_end: None,
         line_start: 0,
         display_column: 0,
         indent_level: 0,
@@ -267,6 +269,13 @@ struct Printer<'ast, 'layout> {
     /// A tab in `base_indent` measures `columns_per_indent` too.
     base_indent_columns: usize,
     output: CodeBuffer,
+    /// Each LF that isn't half of a CRLF or an LFCR prints as CRLF. Verbatim
+    /// text and long strings can hold either already, and another CR would
+    /// be another line break.
+    is_crlf: bool,
+    /// Where the latest CRLF made of an LF ends. A CR written right after it
+    /// makes it an LF again, as half of an LFCR.
+    crlf_end: Option<usize>,
     line_start: usize,
     display_column: usize,
     indent_level: usize,
@@ -691,7 +700,14 @@ impl<'ast> Printer<'ast, '_> {
             self.output.print_ascii_byte(b' ');
             self.display_column = self.display_column.saturating_add(1);
         }
-        self.output.print_str(content);
+        if self.crlf_end == Some(self.output.len()) {
+            self.keep_lf_before_cr(content);
+        }
+        if columns.is_none() && self.is_crlf {
+            self.print_crlf(content);
+        } else {
+            self.output.print_str(content);
+        }
         if let Some(width) = columns {
             self.display_column = self.display_column.saturating_add(width);
         } else {
@@ -712,20 +728,75 @@ impl<'ast> Printer<'ast, '_> {
         self.is_pending_indent = content.ends_with(['\n', '\r']);
     }
 
+    /// The CRLF the output ends in, made of an LF, goes back to an LF when
+    /// `content` starts with a CR, as half of an LFCR.
+    fn keep_lf_before_cr(&mut self, content: &str) {
+        if content.starts_with('\r') {
+            self.crlf_end = None;
+            self.output.truncate(self.output.len().saturating_sub(2));
+            self.output.print_ascii_byte(b'\n');
+            self.line_start = self.output.len();
+        }
+    }
+
+    /// Writes `content`, which spans lines, with each LF that isn't half of
+    /// a CRLF or an LFCR as CRLF.
+    fn print_crlf(&mut self, content: &str) {
+        let bytes = content.as_bytes();
+        let mut written = 0;
+        let mut is_crlf_last = false;
+        for (i, _) in content.match_indices('\n') {
+            let previous =
+                i.checked_sub(1).map_or_else(|| self.output.as_bytes().last(), |j| bytes.get(j));
+            if previous != Some(&b'\r') && bytes.get(i.saturating_add(1)) != Some(&b'\r') {
+                self.output.print_str(content.get(written..i).unwrap_or_default());
+                self.output.print_ascii_byte(b'\r');
+                written = i;
+                is_crlf_last = i.saturating_add(1) == bytes.len();
+            }
+        }
+        self.output.print_str(content.get(written..).unwrap_or_default());
+        if is_crlf_last {
+            self.crlf_end = Some(self.output.len());
+        }
+    }
+
     fn emit_newline(&mut self, is_blank_line: bool) {
         self.flush_suffixes();
         self.is_pending_space = false;
         self.trim_trailing_whitespace();
-        // Blank lines never stack, so a break right after one adds nothing.
-        while !self.output.as_bytes().ends_with(b"\n\n") {
-            self.output.print_ascii_byte(b'\n');
-            if !is_blank_line {
-                break;
+        if self.is_crlf {
+            self.print_crlf_line_break(is_blank_line);
+        } else {
+            // Blank lines never stack, so a break right after one adds nothing.
+            while !self.output.as_bytes().ends_with(b"\n\n") {
+                self.output.print_ascii_byte(b'\n');
+                if !is_blank_line {
+                    break;
+                }
             }
         }
         self.line_start = self.output.len();
         self.display_column = 0;
         self.is_pending_indent = true;
+    }
+
+    /// A line break as CRLF, or as LF after a CR. The output ends in a blank
+    /// line when it ends in two LFs, the last of them made CRLF.
+    fn print_crlf_line_break(&mut self, is_blank_line: bool) {
+        while !(self.crlf_end == Some(self.output.len())
+            && self.output.as_bytes().ends_with(b"\n\r\n"))
+        {
+            if self.output.as_bytes().last() == Some(&b'\r') {
+                self.output.print_ascii_byte(b'\n');
+            } else {
+                self.output.print_str("\r\n");
+                self.crlf_end = Some(self.output.len());
+            }
+            if !is_blank_line {
+                break;
+            }
+        }
     }
 
     fn flush_suffixes(&mut self) {

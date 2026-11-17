@@ -1105,6 +1105,18 @@ fn windows_line_endings_keep_other_verbatim_line_breaks() {
     }
 }
 
+#[test]
+fn windows_line_endings_keep_an_lf_that_verbatim_text_follows_with_a_cr() {
+    // Luau reads no line break in a CR, so the region starts with one, and
+    // the line break before it is half of an LFCR.
+    assert_format_with(
+        "-- luck: format off\n\rlocal x=1\n-- luck: format on\nlocal y=2\n",
+        "-- luck: format off\n\rlocal x=1\r\n-- luck: format on\r\nlocal y = 2\r\n",
+        LuaVersion::Luau,
+        &windows_options(),
+    );
+}
+
 fn conditional_collapse_options() -> FormatOptions {
     FormatOptions {
         collapse_simple_statement: CollapseSimpleStatement::ConditionalOnly,
