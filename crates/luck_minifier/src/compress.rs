@@ -1,227 +1,241 @@
-//! The compressor: one in-place walk that runs every rewrite the tree
-//! allows as it leaves each node, repeated until a walk changes nothing.
+//! The compressor: an in-place walk that runs every rewrite the tree allows
+//! as it leaves each node.
+//!
+//! The walk reads each name's binding from the name itself and decides by
+//! what the bind walk counted of the binding, which every rewrite keeps true
+//! by uncounting what it drops. A block's locals are only ever referenced in
+//! the block, so the walk drops the ones nothing references as it leaves it,
+//! and one walk reaches the fixpoint. It walks again only when it leaves a
+//! rewrite behind that it could see but not make, after a fresh count.
 //!
 //! Each rewrite lives in the module named after the flag that turns it on,
-//! and `local_uses` and `literal_cache` hold what two flags share. Each
-//! rewrite reports what it changed, so a walk that reports nothing is the
-//! fixpoint. Rewrites build their nodes in the shape the parser gives the
-//! text they print, which is what makes the fixpoint's own output a
-//! fixpoint.
+//! and `respell` holds what two flags share. Rewrites build their nodes in
+//! the shape the parser gives the text they print, which is what makes the
+//! fixpoint's own output a fixpoint.
 
 mod fold_constants;
 mod inline_locals;
-mod literal_cache;
-mod local_uses;
+mod lift_locals;
 mod merge_locals;
 mod remove_dead_code;
+mod respell;
 mod shorten_numbers;
 mod shorten_strings;
 mod simplify_indexes;
 mod simplify_parens;
 mod simplify_statements;
 
+use core::cell::Cell;
 use core::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
-    BinaryOp, Block, Expression, FunctionArgs, FunctionBody, MAX_NESTING_DEPTH, Statement, Suffix,
-    SuffixedExpression, TableConstructor, VisitorMut, block_nesting_depth, is_prefix_expr,
+    BinaryOp, Block, Expression, FunctionArgs, FunctionBody, Statement, Suffix, SuffixedExpression,
+    TableConstructor, Type, Visitor as _, VisitorMut, is_prefix_expr,
 };
 use luck_token::{LuaVersion, NumberSubtypes};
-use rustc_hash::{FxHashMap, FxHashSet};
 
 use self::inline_locals::{OperandPosition, Value};
-use self::literal_cache::LiteralCache;
-use crate::expr::{constant_truthiness, inner_operand_side, parenthesize};
-use crate::lift_locals::Lifter;
+use self::lift_locals::Lifter;
+use self::respell::Respeller;
+use crate::binding::{Bindings, Counter, NONE, local_of};
+use crate::expr::{constant_truthiness, fits_at_depth, inner_operand_side, parenthesize};
 use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
-use crate::name_table::NameTable;
-use crate::scan::{Scan, is_droppable_function};
 use crate::transform_config::TransformConfig;
+use crate::unused_locals::UnusedLocals;
 
-/// Measured corpora settle in two or three walks, so the cap only bounds a
-/// rewrite that never stops changing the tree, which the fixpoint tests
-/// catch.
-const MAX_WALKS: usize = 16;
+/// A walk leaves another behind only for a rewrite it exposed late, so a
+/// handful settle any input, and the cap only bounds one that never stops,
+/// which the fixpoint tests catch.
+const MAX_WALKS: usize = 8;
 
-pub(crate) struct Compressor<'ast> {
+/// Compresses `block`, whose bindings `bindings` holds, until a walk leaves
+/// nothing for another.
+pub(crate) fn compress<'ast>(
+    allocator: &'ast Allocator,
+    version: LuaVersion,
+    config: TransformConfig,
+    bindings: &mut Bindings,
+    block: &mut Block<'ast>,
+) {
+    let mut compressor = Compressor::new(allocator, version, config, bindings);
+    for walk in 1..=MAX_WALKS {
+        compressor.walk(block);
+        if !compressor.needs_revisit || walk == MAX_WALKS {
+            break;
+        }
+        compressor.recount(block);
+    }
+}
+
+pub(crate) struct Compressor<'walk, 'ast> {
     allocator: &'ast Allocator,
     version: LuaVersion,
     subtypes: NumberSubtypes,
     config: TransformConfig,
+    bindings: &'walk mut Bindings,
     has_changed: bool,
+    /// Whether the walk left a rewrite it exposed but couldn't make.
+    needs_revisit: bool,
     /// Levels of nesting open where the walk is.
     depth: usize,
-    /// Every name the passes have met, which renaming and lifting share.
-    names: NameTable<'ast>,
-    scan: Scan,
-    /// Whether `scan` already holds the next walk's facts.
-    is_scanned: bool,
-    /// Each inlined local's value by its name's id, waiting for its one read.
-    values: FxHashMap<usize, Value<'ast>>,
+    /// Functions open where the walk is, and one past that count at the
+    /// innermost type the walk is in, or 0, as the bind walk counts them.
+    function_depth: u32,
+    type_floor: u32,
+    /// The inlined locals' values waiting for their one read, each indexed
+    /// by its binding's `held_value`.
+    values: Vec<Option<Value<'ast>>>,
+    held_count: usize,
+    /// Whether a rewrite stayed undone for want of depth, which it may have
+    /// once the tree around it flattens.
+    has_depth_refusal: Cell<bool>,
     /// Whether a value has landed bare as an operand since the run being
     /// walked began, so the run may hold one to splice.
     has_bare_operand: bool,
     /// The inlined locals taken in by the values landed since the
     /// initializer being walked began.
     landed_locals: usize,
-    /// Each initializer's `landed_locals`, and each name's scan facts, for
-    /// the `local`s being walked, innermost last.
+    /// Each initializer's `landed_locals`, for the `local`s being walked,
+    /// innermost last.
     landed_counts: Vec<usize>,
-    local_facts: Vec<(bool, Option<usize>)>,
-    /// The ids of the declared locals and parameters in scope, upvalues
-    /// included.
-    locals: Vec<usize>,
-    /// The ids of the locals the block being merged declares, in order, and
-    /// the names of the group being merged.
-    block_locals: Vec<usize>,
-    group_names: Vec<&'ast str>,
     live_registers: usize,
-    /// Lua 5.5: every name a `global` statement has declared so far, which
-    /// stops counting as a local even past that statement's block.
-    global_names: FxHashSet<&'ast str>,
-    /// The calls an unused `local` leaves past the first, to follow it.
-    extracted_calls: Vec<Statement<'ast>>,
+    /// The bindings of the group being merged.
+    group: Vec<usize>,
+    /// The calls the unused `local`s of the block the walk is leaving
+    /// leave, each after its index.
+    late_calls: Vec<(usize, Statement<'ast>)>,
     /// A block's statements while `do` blocks in it give up theirs.
     unwrapped_stmts: Vec<Statement<'ast>>,
-    literal_cache: LiteralCache,
+    respeller: Respeller,
+    lifter: Lifter<'ast>,
 }
 
-impl<'ast> Compressor<'ast> {
+impl<'walk, 'ast> Compressor<'walk, 'ast> {
     pub(crate) fn new(
         allocator: &'ast Allocator,
         version: LuaVersion,
         config: TransformConfig,
+        bindings: &'walk mut Bindings,
     ) -> Self {
         Self {
             allocator,
             version,
             subtypes: NumberSubtypes::from(version),
             config,
+            bindings,
             has_changed: false,
+            needs_revisit: false,
             depth: 0,
-            names: NameTable::new(),
-            scan: Scan::default(),
-            is_scanned: false,
-            values: FxHashMap::default(),
+            function_depth: 0,
+            type_floor: 0,
+            values: Vec::new(),
+            held_count: 0,
+            has_depth_refusal: Cell::new(false),
             has_bare_operand: false,
             landed_locals: 0,
             landed_counts: Vec::new(),
-            local_facts: Vec::new(),
-            locals: Vec::new(),
-            block_locals: Vec::new(),
-            group_names: Vec::new(),
             live_registers: 0,
-            global_names: FxHashSet::default(),
-            extracted_calls: Vec::new(),
+            group: Vec::new(),
+            late_calls: Vec::new(),
             unwrapped_stmts: Vec::new(),
-            literal_cache: LiteralCache::default(),
+            respeller: Respeller::default(),
+            lifter: Lifter::default(),
         }
     }
 
-    pub(crate) const fn names(&mut self) -> &mut NameTable<'ast> {
-        &mut self.names
-    }
-
-    /// Walks until a walk changes nothing, and says whether any did.
-    pub(crate) fn compress(&mut self, block: &mut Block<'ast>) -> bool {
-        let mut has_changed = false;
-        for _ in 0..MAX_WALKS {
-            if !self.walk(block) {
-                break;
-            }
-            has_changed = true;
-        }
-        has_changed
-    }
-
-    /// Whether `block` nests within [`MAX_NESTING_DEPTH`], found by the first
-    /// walk's scan where there is one.
-    pub(crate) fn fits_nesting_cap(&mut self, block: &mut Block<'ast>) -> bool {
-        let should_find_dead = self.config.remove_dead_code;
-        let should_find_inlinable = self.config.inline_locals;
-        if !should_find_dead && !should_find_inlinable {
-            return block_nesting_depth(block) <= MAX_NESTING_DEPTH;
-        }
-        self.is_scanned = true;
-        self.scan.run(
-            block,
-            &mut self.names,
-            self.version,
-            should_find_dead,
-            should_find_inlinable,
-            None,
-        ) <= MAX_NESTING_DEPTH
-    }
-
-    /// Lifts the declarations nested in each function body with `lifter`,
-    /// in the scan that finds the next walk's facts, and says whether it
-    /// lifted any.
-    pub(crate) fn lift(&mut self, block: &mut Block<'ast>, lifter: &mut Lifter<'ast>) -> bool {
-        let should_find_dead = self.config.remove_dead_code;
-        let should_find_inlinable = self.config.inline_locals;
-        lifter.begin();
-        self.scan.run(
-            block,
-            &mut self.names,
-            self.version,
-            should_find_dead,
-            should_find_inlinable,
-            Some(lifter),
-        );
-        self.is_scanned = should_find_dead || should_find_inlinable;
-        lifter.has_changed()
-    }
-
+    /// One walk over `block`, which says whether it changed anything.
     pub(crate) fn walk(&mut self, block: &mut Block<'ast>) -> bool {
-        let should_find_dead = self.config.remove_dead_code;
-        let should_find_inlinable = self.config.inline_locals;
-        if (should_find_dead || should_find_inlinable) && !mem::take(&mut self.is_scanned) {
-            self.scan.run(
-                block,
-                &mut self.names,
-                self.version,
-                should_find_dead,
-                should_find_inlinable,
-                None,
-            );
-        }
         self.has_changed = false;
+        self.needs_revisit = false;
+        self.has_depth_refusal.set(false);
         self.depth = 0;
+        self.function_depth = 0;
+        self.type_floor = 0;
         self.values.clear();
-        self.locals.clear();
+        self.held_count = 0;
         self.live_registers = 0;
-        self.global_names.clear();
         self.visit_block(block);
         // The chunk is a function too, and returns nothing either way.
         if self.config.remove_dead_code && remove_dead_code::ends_in_bare_return(block) {
             block.last_stmt = None;
             self.has_changed = true;
         }
+        self.needs_revisit |= self.has_depth_refusal.get() && self.has_changed;
         self.has_changed
     }
 
-    /// Walks each statement, drops the ones the walk leaves nothing of, and
-    /// puts the calls an unused `local` leaves in its place.
+    /// Whether `expr` still nests within the parser's cap once it sits
+    /// `added_levels` below `depth`, noting when it doesn't.
+    fn fits(&self, depth: usize, added_levels: usize, expr: &Expression<'_>) -> bool {
+        let fits = fits_at_depth(depth, added_levels, expr);
+        if !fits {
+            self.has_depth_refusal.set(true);
+        }
+        fits
+    }
+
+    /// Counts every binding's references afresh, for a walk after one that
+    /// changed where they sit.
+    fn recount(&mut self, block: &Block<'ast>) {
+        for binding in &mut self.bindings.entries {
+            binding.reads = 0;
+            binding.writes = 0;
+            binding.captures = 0;
+            binding.held_value = NONE;
+        }
+        self.bindings.global_uses.fill(0);
+        self.bindings.name_captures.fill(0);
+        self.bindings.global_declarations.fill(0);
+        let mut counter = Counter {
+            bindings: self.bindings,
+            is_retracting: false,
+            function_depth: 0,
+            type_floor: 0,
+            depth: 0,
+        };
+        counter.visit_block(block);
+    }
+
+    const fn counter(&mut self) -> Counter<'_> {
+        Counter {
+            bindings: self.bindings,
+            is_retracting: true,
+            function_depth: self.function_depth,
+            type_floor: self.type_floor,
+            depth: 0,
+        }
+    }
+
+    /// Uncounts the references in `expr`, which the walk drops.
+    fn retract_expr(&mut self, expr: &Expression<'ast>) {
+        self.counter().visit_expr(expr);
+    }
+
+    fn retract_stmt(&mut self, stmt: &Statement<'ast>) {
+        self.counter().visit_stmt(stmt);
+    }
+
+    fn retract_block(&mut self, block: &Block<'ast>) {
+        self.counter().visit_block(block);
+    }
+
+    /// Walks each statement, and drops the ones the walk leaves nothing of.
     fn visit_stmts(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
         let mut kept = 0usize;
-        let mut index = 0usize;
-        while let Some(stmt) = stmts.get_mut(index) {
+        for index in 0..stmts.len() {
+            let Some(stmt) = stmts.get_mut(index) else {
+                break;
+            };
             if self.visit_kept_stmt(stmt) {
                 stmts.swap(kept, index);
                 if let Some(kept_stmt) = stmts.get(kept) {
-                    self.declare_locals(kept_stmt);
+                    self.live_registers =
+                        self.live_registers.saturating_add(merge_locals::declared_count(kept_stmt));
                 }
                 kept = kept.saturating_add(1);
             } else {
                 self.has_changed = true;
-            }
-            index = index.saturating_add(1);
-            let allocator = self.allocator;
-            for call in self.extracted_calls.drain(..) {
-                stmts.insert(kept, call, allocator);
-                kept = kept.saturating_add(1);
-                index = index.saturating_add(1);
             }
         }
         stmts.truncate(kept);
@@ -233,12 +247,11 @@ impl<'ast> Compressor<'ast> {
         match stmt {
             Statement::LocalAssignment(_) => return self.visit_local(stmt),
             Statement::LocalFunction(local_function) => {
-                if should_remove_dead_code
-                    && is_droppable_function(local_function, self.version)
-                    && !self.scan.is_live(self.names.find(local_function.name.text))
-                {
-                    return false;
-                }
+                let id = local_of(&local_function.name);
+                self.set_open(id, true);
+                self.walk_stmt(stmt);
+                self.set_open(id, false);
+                return true;
             }
             Statement::IfStatement(_) => return self.visit_if(stmt),
             Statement::WhileLoop(while_loop) => {
@@ -246,6 +259,7 @@ impl<'ast> Compressor<'ast> {
                 if should_remove_dead_code
                     && constant_truthiness(&while_loop.condition) == Some(false)
                 {
+                    self.retract_block(&while_loop.block);
                     return false;
                 }
                 self.visit_block(&mut while_loop.block);
@@ -282,20 +296,13 @@ impl<'ast> Compressor<'ast> {
             // since every Lua skips past it to see, and the printer puts one
             // back before a statement that starts with `(`.
             Statement::EmptyStatement(_) => return !should_remove_dead_code,
-            // Lua 5.5
-            Statement::GlobalDeclaration(global) => {
-                self.global_names
-                    .extend(global.names.iter().map(|attributed| attributed.name.text));
-            }
-            // Lua 5.5
-            Statement::GlobalFunction(global_function) => {
-                self.global_names.insert(global_function.name.text);
-            }
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::FunctionDecl(_)
             | Statement::Goto(_)
             | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
             | Statement::CompoundAssignment(_)
@@ -306,12 +313,57 @@ impl<'ast> Compressor<'ast> {
         true
     }
 
+    fn drop_unused(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
+        let mut unused = UnusedLocals {
+            allocator: self.allocator,
+            version: self.version,
+            bindings: self.bindings,
+            function_depth: self.function_depth,
+            type_floor: self.type_floor,
+            calls: &mut self.late_calls,
+        };
+        if unused.drop_unused(stmts) {
+            self.has_changed = true;
+        }
+    }
+
+    /// A `local function`'s references to itself in its own body keep
+    /// nothing alive.
+    fn set_open(&mut self, id: Option<usize>, is_open: bool) {
+        if let Some(binding) = id.and_then(|own| self.bindings.get_mut(own)) {
+            binding.is_open = is_open;
+        }
+    }
+
+    /// What a block takes once its statements have theirs: its unused
+    /// locals go, then `do` blocks give up their statements, neighbors
+    /// merge, and a run of `if ... return` folds.
+    fn finish_block(&mut self, block: &mut Block<'ast>, outer_registers: usize) {
+        if self.config.remove_dead_code {
+            self.drop_unused(&mut block.stmts);
+        }
+        if self.config.inline_locals {
+            self.inline_late(block, outer_registers);
+        }
+        if self.config.simplify_statements {
+            self.unwrap_do_blocks(block);
+        }
+        if self.config.merge_locals {
+            self.live_registers = outer_registers;
+            self.merge_stmts(&mut block.stmts);
+        }
+        if self.config.simplify_statements {
+            self.convert_if_return_chain(block);
+        }
+        self.live_registers = outer_registers;
+    }
+
     /// Walks a run's operands, landing an inlined value bare wherever it
     /// keeps its grouping, and splices a run that lands bare at the run's
     /// own level.
     fn walk_run(&mut self, run: &mut BinaryOp<'ast>) {
         if self.descend() {
-            if !self.values.is_empty() {
+            if self.held_count > 0 {
                 self.close_casts_before_less_than(run);
             }
             let op = run.links.first().op;
@@ -336,8 +388,8 @@ impl<'ast> Compressor<'ast> {
     fn visit_expr_in(&mut self, expr: &mut Expression<'ast>, is_operand: bool) {
         match expr {
             Expression::Name(name) => {
-                if !self.values.is_empty()
-                    && let Some(value) = self.take_value(name.text)
+                if self.held_count > 0
+                    && let Some(value) = local_of(name).and_then(|id| self.take_value(id))
                 {
                     *expr = value;
                 }
@@ -381,14 +433,11 @@ impl<'ast> Compressor<'ast> {
         let allocator = self.allocator;
         match expr {
             Expression::BinaryOp(_) => {
-                if self.config.remove_dead_code
-                    && remove_dead_code::fold_redundant_ternary(allocator, expr)
-                {
+                if self.config.remove_dead_code && self.fold_redundant_ternary(expr) {
                     self.has_changed = true;
                     return self.leave_expr(expr, is_operand);
                 }
-                if self.config.fold_constants && fold_constants::fold(allocator, self.version, expr)
-                {
+                if self.config.fold_constants && self.fold(expr) {
                     self.has_changed = true;
                     return self.leave_expr(expr, is_operand);
                 }
@@ -397,8 +446,7 @@ impl<'ast> Compressor<'ast> {
                 }
             }
             Expression::UnaryOp(_) => {
-                if self.config.fold_constants && fold_constants::fold(allocator, self.version, expr)
-                {
+                if self.config.fold_constants && self.fold(expr) {
                     self.has_changed = true;
                     return self.leave_expr(expr, is_operand);
                 }
@@ -419,22 +467,21 @@ impl<'ast> Compressor<'ast> {
             }
             Expression::StringLiteral(literal) => {
                 if self.config.shorten_strings
-                    && self.literal_cache.shorten_string(allocator, self.version, literal)
+                    && self.respeller.shorten_string(allocator, self.version, literal)
                 {
                     self.has_changed = true;
                 }
             }
             Expression::Number(literal) => {
                 if self.config.shorten_numbers
-                    && self.literal_cache.shorten_number(allocator, self.subtypes, literal)
+                    && self.respeller.shorten_number(allocator, self.subtypes, literal)
                 {
                     self.has_changed = true;
                 }
             }
             // Luau
             Expression::Integer(literal) => {
-                if self.config.shorten_numbers
-                    && self.literal_cache.shorten_integer(allocator, literal)
+                if self.config.shorten_numbers && self.respeller.shorten_integer(allocator, literal)
                 {
                     self.has_changed = true;
                 }
@@ -453,9 +500,74 @@ impl<'ast> Compressor<'ast> {
             | Expression::Error(_) => {}
         }
     }
+
+    /// Folds `expr` and uncounts the operands the fold drops. A literal the
+    /// fold leaves at either end of a run, or under a `-`, is one the walk
+    /// never reaches, so it takes its rewrites here, and the caller's take
+    /// a whole folded literal.
+    fn fold(&mut self, expr: &mut Expression<'ast>) -> bool {
+        let (allocator, version) = (self.allocator, self.version);
+        let mut counter = self.counter();
+        if !fold_constants::fold(allocator, version, expr, &mut |dropped| {
+            counter.visit_expr(dropped);
+        }) {
+            return false;
+        }
+        match expr {
+            Expression::BinaryOp(run) => {
+                self.leave_literal(&mut run.first);
+                self.leave_literal(&mut run.links.last_mut().operand);
+            }
+            Expression::UnaryOp(_) => self.leave_literal(expr),
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::Error(_) => {}
+        }
+        true
+    }
+
+    /// The rewrites of a folded literal, a negative number's numeral
+    /// included.
+    fn leave_literal(&mut self, expr: &mut Expression<'ast>) {
+        match expr {
+            Expression::Number(_) | Expression::StringLiteral(_) => self.leave_expr(expr, true),
+            Expression::UnaryOp(negation) if matches!(negation.operand, Expression::Number(_)) => {
+                self.leave_expr(&mut negation.operand, true);
+            }
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Integer(_)
+            | Expression::UnaryOp(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
+            | Expression::BinaryOp(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::Error(_) => {}
+        }
+    }
 }
 
-impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
+impl<'ast> VisitorMut<'ast> for Compressor<'_, 'ast> {
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
         true
@@ -467,29 +579,12 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
 
     fn visit_block(&mut self, block: &mut Block<'ast>) {
         self.descend();
-        let scope_start = self.locals.len();
         let outer_registers = self.live_registers;
         self.visit_stmts(&mut block.stmts);
         if let Some(last) = &mut block.last_stmt {
             self.visit_last_stmt(last);
         }
-        if self.config.simplify_statements {
-            self.unwrap_do_blocks(block);
-        }
-        if self.config.merge_locals {
-            // Merging proves each assignment's target local as of its own
-            // statement, so the block's locals are counted again in order.
-            self.block_locals.clear();
-            self.block_locals.extend_from_slice(self.locals.get(scope_start..).unwrap_or_default());
-            self.locals.truncate(scope_start);
-            self.live_registers = outer_registers;
-            self.merge_stmts(&mut block.stmts);
-        }
-        if self.config.simplify_statements {
-            self.convert_if_return_chain(block);
-        }
-        self.locals.truncate(scope_start);
-        self.live_registers = outer_registers;
+        self.finish_block(block, outer_registers);
         self.ascend();
     }
 
@@ -558,7 +653,7 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
         }
         if self.config.shorten_strings
             && let FunctionArgs::StringLiteral(literal) = args
-            && self.literal_cache.shorten_string(self.allocator, self.version, literal)
+            && self.respeller.shorten_string(self.allocator, self.version, literal)
         {
             self.has_changed = true;
         }
@@ -571,19 +666,47 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
         }
     }
 
+    /// The signature belongs to the scope around the function, as the bind
+    /// walk counts it.
     fn visit_function_body(&mut self, body: &mut FunctionBody<'ast>) {
         let outer_registers = mem::replace(&mut self.live_registers, parameter_locals(body));
-        let outer_local_count = self.locals.len();
-        for param in &body.params {
-            let id = self.names.intern_text(param.name.text);
-            self.locals.push(id);
+        if self.descend() {
+            if let Some(generics) = &mut body.generics {
+                self.visit_generic_type_list(generics);
+            }
+            for param in &mut body.params {
+                if let Some(ty) = &mut param.type_annotation {
+                    self.visit_type(ty);
+                }
+            }
+            if let Some(ty) =
+                body.vararg.as_mut().and_then(|vararg| vararg.type_annotation.as_mut())
+            {
+                self.visit_type(ty);
+            }
+            if let Some(ty) = &mut body.return_type {
+                self.visit_type(ty);
+            }
+            self.function_depth = self.function_depth.saturating_add(1);
+            let outer_has_changed = mem::take(&mut self.has_changed);
+            self.visit_block(&mut body.block);
+            if self.config.remove_dead_code && remove_dead_code::ends_in_bare_return(&body.block) {
+                body.block.last_stmt = None;
+                self.has_changed = true;
+            }
+            if self.config.lift_locals {
+                self.lift(body);
+            }
+            self.has_changed |= outer_has_changed;
+            self.function_depth = self.function_depth.saturating_sub(1);
         }
-        self.walk_function_body(body);
-        self.locals.truncate(outer_local_count);
+        self.ascend();
         self.live_registers = outer_registers;
-        if self.config.remove_dead_code && remove_dead_code::ends_in_bare_return(&body.block) {
-            body.block.last_stmt = None;
-            self.has_changed = true;
-        }
+    }
+
+    fn visit_type(&mut self, ty: &mut Type<'ast>) {
+        let outer_floor = mem::replace(&mut self.type_floor, self.function_depth.saturating_add(1));
+        self.walk_type(ty);
+        self.type_floor = outer_floor;
     }
 }

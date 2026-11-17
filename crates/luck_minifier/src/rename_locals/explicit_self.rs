@@ -1,48 +1,70 @@
 //! `function t:m(x)` becomes `function t.m(self, x)` where its body reads
 //! `self` often enough that renaming the parameter pays for the comma.
 //!
-//! The renamer makes the rewrite as its first walk reaches each method, so
-//! the parameter is a binding of its own from the start.
+//! The renamer makes the rewrite as its first walk reaches each method, and
+//! merges the implicit `self` into the new parameter, so every reference to
+//! it is the parameter's from the start.
 
 use luck_allocator::Allocator;
 use luck_ast::{Expression, FunctionBody, FunctionDecl, Name, Parameter, Var, Visitor};
 
-use crate::binding::METHOD_RECEIVER_NAME;
+use crate::binding::{Bindings, METHOD_RECEIVER_NAME, RECEIVER_NAME_ID, local_of, mark_local};
 
 pub(super) fn rewrite<'ast>(
     allocator: &'ast Allocator,
+    bindings: &mut Bindings,
     function_declaration: &mut FunctionDecl<'ast>,
 ) {
-    if function_declaration.name.method.is_some()
-        // The new `X,` parameter costs 2 bytes, and each `self` saves 3
-        // once renamed to a single character.
-        && count_self_references(&function_declaration.body) >= 2
-        && let Some(method) = function_declaration.name.method.take()
-    {
-        function_declaration.name.names.push(method, allocator);
-        let name = Name { text: METHOD_RECEIVER_NAME, span: method.span };
-        let receiver = Parameter { name, type_annotation: None };
-        function_declaration.body.params.insert(0, receiver, allocator);
+    if function_declaration.name.method.is_none() {
+        return;
     }
+    let mut counter = SelfCounter { bindings, receiver: None, count: 0 };
+    counter.visit_block(&function_declaration.body.block);
+    // The new `X,` parameter costs 2 bytes, and each `self` saves 3 once
+    // renamed to a single character.
+    if counter.count < 2 {
+        return;
+    }
+    let (Some(receiver), Some(method)) =
+        (counter.receiver, function_declaration.name.method.take())
+    else {
+        return;
+    };
+    function_declaration.name.names.push(method, allocator);
+    let parameter = bindings.push(RECEIVER_NAME_ID, false, 0);
+    if let Some(binding) = bindings.entries.get_mut(receiver) {
+        binding.merged_into = u32::try_from(parameter).unwrap_or(binding.merged_into);
+    }
+    let mut name = Name { text: METHOD_RECEIVER_NAME, span: method.span };
+    mark_local(&mut name, parameter);
+    function_declaration.body.params.insert(
+        0,
+        Parameter { name, type_annotation: None },
+        allocator,
+    );
 }
 
-fn count_self_references(body: &FunctionBody<'_>) -> usize {
-    let mut counter = SelfCounter(0);
-    counter.visit_block(&body.block);
-    counter.0
+/// Counts the references to the method's own `self`.
+struct SelfCounter<'bindings> {
+    bindings: &'bindings Bindings,
+    receiver: Option<usize>,
+    count: usize,
 }
 
-struct SelfCounter(usize);
-
-impl SelfCounter {
+impl SelfCounter<'_> {
     fn count(&mut self, name: &Name<'_>) {
-        if name.text == METHOD_RECEIVER_NAME {
-            self.0 = self.0.saturating_add(1);
+        if let Some(id) = local_of(name)
+            && let Some(binding) = self.bindings.entries.get(id)
+            && binding.is_fixed
+            && usize::try_from(binding.name).ok() == Some(RECEIVER_NAME_ID)
+        {
+            self.receiver = Some(id);
+            self.count = self.count.saturating_add(1);
         }
     }
 }
 
-impl<'tree> Visitor<'tree> for SelfCounter {
+impl<'tree> Visitor<'tree> for SelfCounter<'_> {
     fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
         if let Expression::Name(name) = expr {
             self.count(name);

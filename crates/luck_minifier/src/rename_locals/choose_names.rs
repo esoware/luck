@@ -4,7 +4,7 @@ use core::cmp::Reverse;
 
 use super::candidate_pool::CandidatePool;
 use super::scope_claims::ScopeClaims;
-use super::{BindingKind, Renamer, Scope, UNRESOLVED};
+use super::{Renamer, Scope, UNRESOLVED};
 use crate::name_table::NameTable;
 
 /// What choosing names computes, kept for its allocations.
@@ -39,9 +39,9 @@ pub(super) struct Choice<'ast> {
     candidate_reads: Vec<Option<(usize, usize)>>,
 }
 
-impl Renamer<'_> {
-    /// Gives every renamable binding its slot's name and every other one its
-    /// own.
+impl Renamer<'_, '_> {
+    /// Gives every renamable binding its slot's name, and every other one
+    /// none, since it keeps its own.
     pub(super) fn choose_names(&mut self) {
         let scope_count = self.scopes.len();
         if let Some(root) = self.scopes.first_mut() {
@@ -51,20 +51,20 @@ impl Renamer<'_> {
         self.find_live_scopes();
         let slot_count = self.assign_slots();
         self.name_slots(slot_count);
-        let Self { bindings, choice, new_names, .. } = self;
+        let Self { choice, new_names, .. } = self;
         new_names.clear();
-        new_names.extend(bindings.iter().zip(&choice.slot_of).map(|(binding, slot)| {
-            slot.and_then(|index| choice.slot_names.get(index).copied()).unwrap_or(binding.name)
+        new_names.extend(choice.slot_of.iter().map(|slot| {
+            slot.and_then(|index| choice.slot_names.get(index).copied()).unwrap_or("")
         }));
     }
 
     /// Groups the global reads by name, each name's scopes ascending and
     /// once each.
     fn group_global_reads(&mut self) {
-        let Self { global_reads, choice, name_states, .. } = self;
+        let Self { global_reads, choice, names, .. } = self;
         let ranges = &mut choice.read_ranges;
         ranges.clear();
-        ranges.resize(name_states.len(), (0, 0));
+        ranges.resize(names.len(), (0, 0));
         for &(name_id, _) in &*global_reads {
             if let Some(range) = ranges.get_mut(name_id) {
                 range.1 = range.1.saturating_add(1);
@@ -112,7 +112,7 @@ impl Renamer<'_> {
     /// Each renamable binding's live scopes: a scope is live for a binding
     /// on the path from each scope that reads it up to its own.
     fn find_live_scopes(&mut self) {
-        let Self { bindings, scopes, reference_scopes, choice, .. } = self;
+        let Self { renamed: bindings, scopes, reference_scopes, choice, .. } = self;
         let binding_count = bindings.len();
         // Group the reference scopes by binding, keeping walk order.
         let starts = &mut choice.group_starts;
@@ -144,7 +144,7 @@ impl Renamer<'_> {
         choice.live_scopes.clear();
         for (id, binding) in bindings.iter().enumerate() {
             choice.live_starts.push(choice.live_scopes.len());
-            if binding.kind != BindingKind::Renamable {
+            if binding.is_fixed {
                 continue;
             }
             if let Some(mark) = choice.marks.get_mut(binding.scope) {
@@ -171,7 +171,7 @@ impl Renamer<'_> {
     /// Gives each renamable binding the first slot that isn't live in its
     /// scope, in scope preorder, and says how many slots that takes.
     fn assign_slots(&mut self) -> usize {
-        let Self { bindings, scopes, choice, .. } = self;
+        let Self { renamed: bindings, scopes, choice, .. } = self;
         // Scope ids come from one depth-first walk, so they're in preorder:
         // parents before their children. Within a scope, bindings stay in
         // declaration order.
@@ -208,7 +208,7 @@ impl Renamer<'_> {
             let Some(binding) = bindings.get(id) else {
                 continue;
             };
-            if binding.kind != BindingKind::Renamable {
+            if binding.is_fixed {
                 continue;
             }
             // Reuse the first slot that isn't live in this scope.
@@ -228,7 +228,7 @@ impl Renamer<'_> {
     }
 
     fn name_slots(&mut self, slot_count: usize) {
-        let Self { bindings, scopes, choice, pool, names, .. } = self;
+        let Self { renamed: bindings, scopes, choice, pool, names, .. } = self;
         // Each slot's live scopes, its bindings' in turn.
         choice.slot_starts.clear();
         choice.slot_starts.resize(slot_count.saturating_add(1), 0);
@@ -310,9 +310,6 @@ impl Renamer<'_> {
             if let Some(name) = slot_names.get_mut(slot) {
                 *name = pick(live_scopes, pool, claims, candidate_reads, &reads);
             }
-        }
-        for name in slot_names {
-            names.intern(name);
         }
     }
 }
@@ -416,7 +413,7 @@ mod tests {
         let mut ranges = Vec::new();
         let mut scopes = Vec::new();
         for &(name, scope) in global_reads {
-            assert_eq!(names.intern_text(name), ranges.len());
+            assert_eq!(names.intern(name), ranges.len());
             ranges.push((scopes.len(), scopes.len().saturating_add(1)));
             scopes.push(scope);
         }

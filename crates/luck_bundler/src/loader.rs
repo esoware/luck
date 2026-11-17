@@ -58,11 +58,12 @@ fn write_loader(prefix: &str, version: LuaVersion, is_loader_global: bool, outpu
 
 /// What a loader function's declaration opens and closes with.
 ///
-/// A global one is declared inside `do ... end`, off the bundle's top level,
-/// where the minifier's `rename_globals` finds the globals a file defines, so
-/// it keeps its prefixed name, which no host global shares.
+/// A global one is declared in a function the bundle calls at once. A
+/// function body is never the top level where the minifier's
+/// `rename_globals` finds the globals a file defines, so the loader keeps its
+/// prefixed name, which no host global shares.
 const fn entry_point(is_loader_global: bool) -> (&'static str, &'static str) {
-    if is_loader_global { ("do function", " end") } else { ("local function", "") }
+    if is_loader_global { (";(function()function", " end)()") } else { ("local function", "") }
 }
 
 /// The cache holds only a non-nil result, so a raising or nil-returning

@@ -5,23 +5,23 @@ use core::mem;
 
 use luck_allocator::List;
 use luck_ast::{
-    Assignment, AttributedName, Expression, LocalAssignment, LocalAssignmentKind, Statement, Var,
-    Visitor,
+    Assignment, AttributedName, Expression, LocalAssignment, LocalAssignmentKind, Name, Statement,
+    Var, Visitor,
 };
-use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS};
+use luck_token::LuaVersion;
 
 use super::Compressor;
-use crate::binding::{has_fixed_binding, is_env_binding};
+use crate::binding::{Bindings, has_fixed_binding, is_env_binding, local_of};
 use crate::expr::{is_pure_modulo_name_reads, is_single_register_value};
 use crate::limits::assignment_target_limit;
 
-/// The name and value of a lone `local name = value` whose value a group may
-/// evaluate beside its neighbors, the only kind of `local` an initialized
-/// group merges.
+/// The binding and value of a lone `local name = value` whose value a group
+/// may evaluate beside its neighbors, the only kind of `local` an
+/// initialized group merges.
 fn single_local<'tree, 'ast>(
     stmt: &'tree Statement<'ast>,
     version: LuaVersion,
-) -> Option<(&'ast str, &'tree Expression<'ast>)> {
+) -> Option<(usize, &'tree Expression<'ast>)> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
@@ -33,30 +33,40 @@ fn single_local<'tree, 'ast>(
     if let ([attributed], [expr]) = (&*local.names, &*local.exprs)
         && is_pure_modulo_name_reads(expr)
     {
-        return Some((attributed.name.text, expr));
+        return local_of(&attributed.name).map(|id| (id, expr));
     }
     None
 }
 
-fn is_bare_local(stmt: &Statement<'_>, version: LuaVersion) -> bool {
+pub(super) fn is_bare_local(stmt: &Statement<'_>, version: LuaVersion) -> bool {
     matches!(stmt, Statement::LocalAssignment(local) if local.exprs.is_empty() && !has_fixed_binding(local, version))
 }
 
-/// Finds a read or write of any of a group's names, closure bodies included.
-struct ReferenceFinder<'names, 'ast> {
-    names: &'names [&'ast str],
+/// Finds a read or write of any of a group's bindings, closure bodies
+/// included.
+struct ReferenceFinder<'group> {
+    group: &'group [usize],
+    bindings: &'group Bindings,
     has_reference: bool,
 }
 
-impl<'tree> Visitor<'tree> for ReferenceFinder<'_, '_> {
+impl ReferenceFinder<'_> {
+    fn check(&mut self, name: &Name<'_>) {
+        if let Some(id) = local_of(name) {
+            let resolved = self.bindings.resolve(id);
+            self.has_reference |=
+                self.group.iter().any(|&member| self.bindings.resolve(member) == resolved);
+        }
+    }
+}
+
+impl<'tree> Visitor<'tree> for ReferenceFinder<'_> {
     fn visit_assignment_target(&mut self, target: &'tree Var<'tree>) {
         if self.has_reference {
             return;
         }
-        if let Var::Name(name) = target
-            && contains(self.names, name.text)
-        {
-            self.has_reference = true;
+        if let Var::Name(name) = target {
+            self.check(name);
             return;
         }
         self.walk_assignment_target(target);
@@ -66,10 +76,8 @@ impl<'tree> Visitor<'tree> for ReferenceFinder<'_, '_> {
         if self.has_reference {
             return;
         }
-        if let Expression::Name(name) = expr
-            && contains(self.names, name.text)
-        {
-            self.has_reference = true;
+        if let Expression::Name(name) = expr {
+            self.check(name);
             return;
         }
         self.walk_expr(expr);
@@ -81,21 +89,15 @@ impl<'tree> Visitor<'tree> for ReferenceFinder<'_, '_> {
         }
         if let Statement::FunctionDecl(function_decl) = stmt
             && let Some(root) = function_decl.name.names.first()
-            && contains(self.names, root.text)
         {
-            self.has_reference = true;
-            return;
+            self.check(root);
         }
         self.walk_stmt(stmt);
     }
 }
 
-fn contains(names: &[&str], name: &str) -> bool {
-    names.contains(&name)
-}
-
-fn references_any(expr: &Expression<'_>, names: &[&str]) -> bool {
-    let mut finder = ReferenceFinder { names, has_reference: false };
+fn references_any(expr: &Expression<'_>, group: &[usize], bindings: &Bindings) -> bool {
+    let mut finder = ReferenceFinder { group, bindings, has_reference: false };
     finder.visit_expr(expr);
     finder.has_reference
 }
@@ -104,56 +106,29 @@ fn references_any(expr: &Expression<'_>, names: &[&str]) -> bool {
     clippy::multiple_inherent_impl,
     reason = "the compressor is one type with its rewrites split by flag"
 )]
-impl<'ast> Compressor<'ast> {
-    /// Records the locals a kept statement declares, for the assignments
-    /// after it that merging has to prove assign locals.
-    pub(super) fn declare_locals(&mut self, stmt: &Statement<'ast>) {
-        if let Statement::LocalAssignment(local) = stmt {
-            for attributed in &local.names {
-                let id = self.names.intern_text(attributed.name.text);
-                self.locals.push(id);
-            }
-        }
-        if let Statement::LocalFunction(local_function) = stmt {
-            let id = self.names.intern_text(local_function.name.text);
-            self.locals.push(id);
-        }
-        self.live_registers = self.live_registers.saturating_add(declared_count(stmt));
-    }
-
-    /// [`Self::declare_locals`] again for the block being merged, from the
-    /// ids its walk found, the next of which is at `next_local`.
-    fn redeclare_locals(&mut self, stmt: &Statement<'ast>, next_local: &mut usize) {
-        let count = declared_count(stmt);
-        let end = next_local.saturating_add(count);
-        self.locals.extend_from_slice(self.block_locals.get(*next_local..end).unwrap_or_default());
-        *next_local = end;
-        self.live_registers = self.live_registers.saturating_add(count);
-    }
-
+impl<'ast> Compressor<'_, 'ast> {
     /// `local a = 1 local b = 2` becomes `local a, b = 1, 2`, `a = 1 b = 2`
-    /// becomes `a, b = 1, 2` where both are proven locals, `local a local b`
+    /// becomes `a, b = 1, 2` where both are locals, `local a local b`
     /// becomes `local a, b`, and `local a, b` and then `a, b = X, Y` becomes
     /// `local a, b = X, Y`.
     pub(super) fn merge_stmts(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
         let mut kept = 0usize;
         let mut index = 0usize;
-        let mut next_local = 0usize;
-        let mut group_names = mem::take(&mut self.group_names);
+        let mut group = mem::take(&mut self.group);
         while index < stmts.len() {
-            let group_end = self.merge_group_end(stmts, index, &mut group_names);
+            let group_end = self.merge_group_end(stmts, index, &mut group);
             if group_end > index.saturating_add(1) {
                 self.merge_group(stmts, index, group_end);
                 self.has_changed = true;
             }
             stmts.swap(kept, index);
             if let Some(stmt) = stmts.get(kept) {
-                self.redeclare_locals(stmt, &mut next_local);
+                self.live_registers = self.live_registers.saturating_add(declared_count(stmt));
             }
             kept = kept.saturating_add(1);
             index = group_end;
         }
-        self.group_names = group_names;
+        self.group = group;
         stmts.truncate(kept);
         self.fuse_bare_locals(stmts);
     }
@@ -163,22 +138,23 @@ impl<'ast> Compressor<'ast> {
         &self,
         stmts: &[Statement<'ast>],
         start: usize,
-        group_names: &mut Vec<&'ast str>,
+        group: &mut Vec<usize>,
     ) -> usize {
         let Some(first) = stmts.get(start) else {
             return start;
         };
         let followers = stmts.get(start.saturating_add(1)..).unwrap_or_default();
-        group_names.clear();
-        let follower_count = if let Some((name, _)) = single_local(first, self.version) {
-            group_names.push(name);
+        group.clear();
+        let bindings = &*self.bindings;
+        let follower_count = if let Some((id, _)) = single_local(first, self.version) {
+            group.push(id);
             followers
                 .iter()
                 .take_while(|stmt| {
                     single_local(stmt, self.version).is_some_and(|(follower, value)| {
-                        let can_join = !references_any(value, group_names);
+                        let can_join = !references_any(value, group, bindings);
                         if can_join {
-                            group_names.push(follower);
+                            group.push(follower);
                         }
                         can_join
                     })
@@ -187,10 +163,10 @@ impl<'ast> Compressor<'ast> {
         } else if is_bare_local(first, self.version) {
             followers.iter().take_while(|stmt| is_bare_local(stmt, self.version)).count()
         } else if let Statement::Assignment(assignment) = first
-            && let Some((name, _)) = self.single_assignment(assignment)
+            && let Some((id, _)) = self.single_assignment(assignment)
         {
             let follower_limit = assignment_target_limit(self.live_registers).saturating_sub(1);
-            group_names.push(name);
+            group.push(id);
             followers
                 .iter()
                 .take(follower_limit)
@@ -198,13 +174,15 @@ impl<'ast> Compressor<'ast> {
                     let Statement::Assignment(follower) = stmt else {
                         return false;
                     };
-                    self.single_assignment(follower).is_some_and(|(target, value)| {
+                    self.single_assignment(follower).is_some_and(|(follower_id, value)| {
                         // PUC Lua stores a multiple assignment right to left,
                         // so a repeated target would keep its first value.
+                        let target = bindings.resolve(follower_id);
                         let can_join =
-                            !group_names.contains(&target) && !references_any(value, group_names);
+                            !group.iter().any(|&member| bindings.resolve(member) == target)
+                                && !references_any(value, group, bindings);
                         if can_join {
-                            group_names.push(target);
+                            group.push(target);
                         }
                         can_join
                     })
@@ -276,37 +254,24 @@ impl<'ast> Compressor<'ast> {
         }
     }
 
-    /// Past [`MAX_ACTIVE_LOCALS`] in scope, no name is proven a local.
-    fn is_in_scope(&self, name: &str) -> bool {
-        self.locals.len() <= MAX_ACTIVE_LOCALS
-            && self
-                .names
-                .find(name)
-                .is_some_and(|id| self.locals.iter().rev().any(|&local| local == id))
-    }
-
-    /// A group stores right to left, so only a proven local may join, since
-    /// any other store can run `__newindex`. A group also holds one register
-    /// per value until the stores run, and only a leaf value needs exactly
-    /// one.
+    /// A group stores right to left, so only a local may join, since any
+    /// other store can run `__newindex`. A group also holds one register per
+    /// value until the stores run, and only a leaf value needs exactly one.
     fn single_assignment<'tree>(
         &self,
         assignment: &'tree Assignment<'ast>,
-    ) -> Option<(&'ast str, &'tree Expression<'ast>)> {
+    ) -> Option<(usize, &'tree Expression<'ast>)> {
         if let ([Var::Name(name)], [expr]) = (&*assignment.targets, &*assignment.values)
             && is_single_register_value(expr)
+            && !is_env_binding(name.text, self.version)
         {
-            let target = name.text;
-            let is_proven_local = !is_env_binding(target, self.version)
-                && (self.global_names.is_empty() || !self.global_names.contains(target))
-                && self.is_in_scope(target);
-            return is_proven_local.then_some((target, expr));
+            return local_of(name).map(|id| (id, expr));
         }
         None
     }
 
     /// Fuses `local a, b` plus `a, b = X, Y` into `local a, b = X, Y`.
-    fn fuse_bare_locals(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
+    pub(super) fn fuse_bare_locals(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
         let mut kept = 0usize;
         let mut index = 0usize;
         while index < stmts.len() {
@@ -314,7 +279,8 @@ impl<'ast> Compressor<'ast> {
                 (stmts.get(index), stmts.get(index.saturating_add(1)))
                 && let Statement::LocalAssignment(local) = stmt
             {
-                is_bare_local(stmt, self.version) && can_fuse_assignment(local, assignment)
+                is_bare_local(stmt, self.version)
+                    && can_fuse_assignment(local, assignment, self.bindings)
             } else {
                 false
             };
@@ -340,7 +306,7 @@ impl<'ast> Compressor<'ast> {
 }
 
 /// How many locals `stmt` declares.
-fn declared_count(stmt: &Statement<'_>) -> usize {
+pub(super) fn declared_count(stmt: &Statement<'_>) -> usize {
     match stmt {
         Statement::LocalAssignment(local) => local.names.len(),
         Statement::LocalFunction(_) => 1,
@@ -366,32 +332,39 @@ fn declared_count(stmt: &Statement<'_>) -> usize {
     }
 }
 
-/// Whether `assignment` assigns exactly the names a bare `local` declares, so
-/// the two can fuse into one initialized declaration.
-fn can_fuse_assignment(local: &LocalAssignment<'_>, assignment: &Assignment<'_>) -> bool {
-    // Every target must be the matching declared name, or a field store like
+/// Whether `assignment` assigns exactly the bindings a bare `local`
+/// declares, each once, so the two can fuse into one initialized
+/// declaration.
+fn can_fuse_assignment(
+    local: &LocalAssignment<'_>,
+    assignment: &Assignment<'_>,
+    bindings: &Bindings,
+) -> bool {
+    // Every target must be the matching declared local, or a field store like
     // the `t.x` in `a, t.x = 1, 2` would be lost in the fused `local`.
-    let has_same_names = local.names.len() == assignment.targets.len()
-        && local.names.iter().zip(assignment.targets.iter()).all(|(attributed, target)| {
-            matches!(target, Var::Name(name) if name.text == attributed.name.text)
-        });
-    if !has_same_names {
+    if local.names.len() != assignment.targets.len() {
         return false;
     }
-    let declared_names: Vec<&str> =
-        local.names.iter().map(|attributed| attributed.name.text).collect();
-    // `local a, a; a, a = 1, 2` stores both values in the second `a`, right to
-    // left, but `local a, a = 1, 2` gives it the last.
-    let has_distinct_names = declared_names
-        .iter()
-        .enumerate()
-        .all(|(i, name)| !declared_names.iter().take(i).any(|earlier| earlier == name));
-    // The values must not reference the declared names: in
+    let mut declared = Vec::with_capacity(local.names.len());
+    for (attributed, target) in local.names.iter().zip(assignment.targets.iter()) {
+        let (Some(id), Var::Name(name)) = (local_of(&attributed.name), target) else {
+            return false;
+        };
+        let resolved = bindings.resolve(id);
+        // `local a, a; a, a = 1, 2` stores both values in the second `a`,
+        // right to left, but `local a, a = 1, 2` gives it the last.
+        if local_of(name).map(|assigned| bindings.resolve(assigned)) != Some(resolved)
+            || declared.contains(&resolved)
+        {
+            return false;
+        }
+        declared.push(resolved);
+    }
+    // The values must not reference the declared locals: in
     // `local f; f = function() f() end` the body's `f` is the new local, but
     // fused into `local f = function() ... end` it would resolve to an outer
     // `f`.
-    has_distinct_names
-        && !assignment.values.iter().any(|value| references_any(value, &declared_names))
+    !assignment.values.iter().any(|value| references_any(value, &declared, bindings))
 }
 
 #[cfg(test)]

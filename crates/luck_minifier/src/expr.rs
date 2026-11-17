@@ -37,7 +37,8 @@ pub(crate) fn is_nil(expr: &Expression<'_>) -> bool {
 }
 
 /// `Some(false)` for `nil` and `false`, `Some(true)` for `true` and a
-/// number or string literal, and `None` for anything else.
+/// number or string literal, the opposite for `not` of one, and `None` for
+/// anything else.
 pub(crate) fn constant_truthiness(expr: &Expression<'_>) -> Option<bool> {
     match unwrap_parentheses(expr) {
         Expression::True(_)
@@ -45,6 +46,9 @@ pub(crate) fn constant_truthiness(expr: &Expression<'_>) -> Option<bool> {
         | Expression::Integer(_)
         | Expression::StringLiteral(_) => Some(true),
         Expression::False(_) | Expression::Nil(_) => Some(false),
+        Expression::UnaryOp(unop) if unop.op == UnOp::Not => {
+            constant_truthiness(&unop.operand).map(|is_truthy| !is_truthy)
+        }
         Expression::Parenthesized(_)
         | Expression::VarArg(_)
         | Expression::FunctionDef(_)

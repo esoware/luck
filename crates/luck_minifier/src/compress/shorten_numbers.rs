@@ -8,14 +8,14 @@ use luck_allocator::Allocator;
 use luck_ast::Literal;
 use luck_token::NumberSubtypes;
 
-use super::literal_cache::LiteralCache;
+use super::respell::Respeller;
 use crate::expr::int_to_float;
 
 #[expect(
     clippy::multiple_inherent_impl,
-    reason = "the cache is one type with its respellings split by flag"
+    reason = "the respeller is one type with its respellings split by flag"
 )]
-impl LiteralCache {
+impl Respeller {
     pub(super) fn shorten_number<'ast>(
         &mut self,
         allocator: &'ast Allocator,

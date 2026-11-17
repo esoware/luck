@@ -12,7 +12,7 @@ use luck_ast::{
 use luck_token::BinOp;
 
 use super::Compressor;
-use crate::expr::{ends_in_if_expr, fits_at_depth, is_always_truthy, parenthesize};
+use crate::expr::{ends_in_if_expr, is_always_truthy, parenthesize};
 
 /// Whether a statement declares something its block scopes: a local, a
 /// label, a Luau type, or a Lua 5.5 global.
@@ -117,7 +117,7 @@ fn if_return_guard<'tree, 'ast>(
     clippy::multiple_inherent_impl,
     reason = "the compressor is one type with its rewrites split by flag"
 )]
-impl<'ast> Compressor<'ast> {
+impl<'ast> Compressor<'_, 'ast> {
     /// `if a then if b then X end end` becomes `if a and b then X end`, for
     /// every level of the run at once. The run of `and`s is one level, so each
     /// condition is measured once, for the `and` and a pair of parentheses it
@@ -131,9 +131,9 @@ impl<'ast> Compressor<'ast> {
             && matches!(
                 &*outer_if.block.stmts,
                 [Statement::IfStatement(inner_if)]
-                    if has_no_else(inner_if) && fits_at_depth(self.depth, 2, &inner_if.condition)
+                    if has_no_else(inner_if) && self.fits(self.depth, 2, &inner_if.condition)
             )
-            && (!inner_conditions.is_empty() || fits_at_depth(self.depth, 2, &outer_if.condition))
+            && (!inner_conditions.is_empty() || self.fits(self.depth, 2, &outer_if.condition))
             && let Some(Statement::IfStatement(inner_if)) =
                 outer_if.block.stmts.first_mut().map(Statement::take)
         {
@@ -203,8 +203,8 @@ impl<'ast> Compressor<'ast> {
             .take_while(|stmt| match if_return_guard(stmt) {
                 Some((condition, return_expr)) => {
                     is_always_truthy(return_expr)
-                        && fits_at_depth(level, 3, condition)
-                        && fits_at_depth(level, 3, return_expr)
+                        && self.fits(level, 3, condition)
+                        && self.fits(level, 3, return_expr)
                 }
                 None => matches!(stmt, Statement::EmptyStatement(_)),
             })
@@ -212,7 +212,7 @@ impl<'ast> Compressor<'ast> {
         let chain_start = stmts.len().saturating_sub(link_count);
         let chain = stmts.get(chain_start..).unwrap_or_default();
         let has_guard = chain.iter().any(|stmt| if_return_guard(stmt).is_some());
-        if !has_guard || !fits_at_depth(level, 1, fallback) {
+        if !has_guard || !self.fits(level, 1, fallback) {
             return;
         }
         let allocator = self.allocator;

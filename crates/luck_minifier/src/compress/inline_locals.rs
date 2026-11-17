@@ -1,10 +1,18 @@
 //! Inlining a local read once: its value, a literal expression that can't
 //! raise, moves to the read, in parentheses only where it would regroup.
 
-use luck_ast::{BinaryOp, Expression, MAX_NESTING_DEPTH, expr_nesting_depth};
+use core::mem;
+
+use luck_allocator::List;
+use luck_ast::{
+    BinaryOp, Block, Expression, LocalAssignment, MAX_NESTING_DEPTH, Statement, Visitor,
+    VisitorMut as _, expr_nesting_depth,
+};
 use luck_token::{BinOp, MAX_ACTIVE_LOCALS, OperandSide};
 
 use super::Compressor;
+use super::remove_dead_code::is_nil_initialized;
+use crate::binding::{Bindings, NONE, Reference, has_fixed_binding, local_of};
 use crate::expr::{MAX_ADDED_DEPTH, binds_looser_than_unary, literal_kind, parenthesize};
 
 /// An inlined local's initializer, waiting for the local's one read.
@@ -101,49 +109,316 @@ fn last_operand<'tree, 'ast>(expr: &'tree mut Expression<'ast>) -> &'tree mut Ex
     }
 }
 
-/// Whether a local's value moves to its one read, `read_depth` levels deep,
-/// having taken in the values of `landed_locals` locals inlined into it.
-fn can_inline(value: &Expression<'_>, landed_locals: usize, read_depth: usize) -> bool {
-    if landed_locals >= MAX_ACTIVE_LOCALS || literal_kind(value).is_none() {
-        return false;
+/// Why a local read once keeps its value.
+enum Refusal {
+    /// More locals inlined into it than one function holds at once.
+    Chain,
+    /// It would nest past the parser's cap where it lands.
+    Depth,
+}
+
+/// Why a local's value can't move to its one read, `read_depth` levels
+/// deep, having taken in the values of `landed_locals` locals inlined into
+/// it, if it can't.
+fn refusal(value: &Expression<'_>, landed_locals: usize, read_depth: usize) -> Option<Refusal> {
+    if landed_locals >= MAX_ACTIVE_LOCALS {
+        return Some(Refusal::Chain);
     }
     let depth = expr_nesting_depth(value);
     // The value can gain parentheses where it lands, and a cast inside it
     // a second pair.
-    depth <= MAX_ADDED_DEPTH
-        && read_depth.saturating_add(2).saturating_add(depth) <= MAX_NESTING_DEPTH
+    let fits = depth <= MAX_ADDED_DEPTH
+        && read_depth.saturating_add(2).saturating_add(depth) <= MAX_NESTING_DEPTH;
+    (!fits).then_some(Refusal::Depth)
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the compressor is one type with its rewrites split by flag"
-)]
-impl<'ast> Compressor<'ast> {
-    /// Takes `value`, the initializer of the local `name`, to wait for the
-    /// local's one read, if the scan found one, `inline_read_depth` levels
-    /// deep, and the value can move there. Says whether it took it.
-    pub(super) fn hold_value(
-        &mut self,
-        name: &str,
-        value: &mut Expression<'ast>,
-        landed_locals: usize,
-        inline_read_depth: Option<usize>,
-    ) -> bool {
-        if let Some(read_depth) = inline_read_depth
-            && can_inline(value, landed_locals, read_depth)
-            && let Some(id) = self.names.find(name)
-        {
-            let locals = landed_locals.saturating_add(1);
-            self.values.insert(id, Value { expr: value.take(), locals });
+/// A binding's `held_value` once the walk refuses to move its value, which
+/// the walk then leaves where it is.
+const REFUSED: u32 = NONE - 1;
+
+/// Removes the statement at `index`, keeping the others in order.
+fn remove_stmt(stmts: &mut List<'_, Statement<'_>>, index: usize) {
+    let kept = stmts.len().saturating_sub(1);
+    for i in index..kept {
+        stmts.swap(i, i.saturating_add(1));
+    }
+    stmts.truncate(kept);
+}
+
+/// The statement of a block that holds a read: one of its statements, or
+/// its closing one.
+#[derive(Clone, Copy)]
+enum ReadSite {
+    Stmt(usize),
+    Last,
+}
+
+/// Finds a read of one binding.
+struct ReadFinder<'bindings> {
+    bindings: &'bindings Bindings,
+    id: usize,
+    is_found: bool,
+}
+
+impl<'tree> Visitor<'tree> for ReadFinder<'_> {
+    fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
+        if self.is_found {
+            return;
+        }
+        if let Expression::Name(name) = expr {
+            self.is_found = local_of(name).is_some_and(|id| self.bindings.resolve(id) == self.id);
+            return;
+        }
+        self.walk_expr(expr);
+    }
+
+    fn visit_stmt(&mut self, stmt: &'tree Statement<'tree>) {
+        if !self.is_found {
+            self.walk_stmt(stmt);
+        }
+    }
+}
+
+impl<'ast> Compressor<'_, 'ast> {
+    /// Walks a `local` and drops each name read once whose value moves to
+    /// the read, in a statement that gives each name its own value, and a
+    /// `nil` initializer. Says whether anything of it stays.
+    pub(super) fn visit_local(&mut self, stmt: &mut Statement<'ast>) -> bool {
+        let Statement::LocalAssignment(local) = stmt else {
+            return true;
+        };
+        // An initializer can hold `local`s of its own, so the list is a
+        // stack that every `local` leaves as it found it.
+        let landed_start = self.landed_counts.len();
+        self.walk_attributed_names(&mut local.names);
+        for expr in &mut local.exprs {
+            let outer_landed_locals = mem::replace(&mut self.landed_locals, 0);
+            self.visit_expr(expr);
+            let landed_locals = mem::replace(&mut self.landed_locals, outer_landed_locals);
+            self.landed_counts.push(landed_locals);
+        }
+        let is_kept = self.inline_from(local, landed_start);
+        self.landed_counts.truncate(landed_start);
+        is_kept
+    }
+
+    fn inline_from(&mut self, local: &mut LocalAssignment<'ast>, landed_start: usize) -> bool {
+        if self.config.remove_dead_code && is_nil_initialized(local) {
+            local.exprs = List::new();
+            self.has_changed = true;
             return true;
         }
-        false
+        // Dropping a name and its value keeps every other name's value only
+        // when each name has its own.
+        if !self.config.inline_locals
+            || has_fixed_binding(local, self.version)
+            || local.names.len() != local.exprs.len()
+        {
+            return true;
+        }
+        let mut kept = 0usize;
+        for index in 0..local.names.len() {
+            let (Some(attributed), Some(value), Some(&landed_locals)) = (
+                local.names.get(index),
+                local.exprs.get_mut(index),
+                self.landed_counts.get(landed_start.saturating_add(index)),
+            ) else {
+                break;
+            };
+            if local_of(&attributed.name)
+                .is_some_and(|id| self.hold_value(id, value, landed_locals))
+            {
+                self.has_changed = true;
+            } else {
+                local.names.swap(kept, index);
+                local.exprs.swap(kept, index);
+                kept = kept.saturating_add(1);
+            }
+        }
+        local.names.truncate(kept);
+        local.exprs.truncate(kept);
+        kept > 0
+    }
+
+    /// Inlines each local of `block` whose other reads went after the walk
+    /// passed it, by walking the statement that holds its one read again
+    /// with its value held, `outer_registers` being the registers around the
+    /// block.
+    pub(super) fn inline_late(&mut self, block: &mut Block<'ast>, outer_registers: usize) {
+        while let Some((index, name_index, id)) = self.late_candidate(&block.stmts) {
+            // A read in a `repeat`'s condition isn't the block's to walk.
+            let Some(read) = self.find_read(block, index, id) else {
+                self.needs_revisit = true;
+                return;
+            };
+            let is_held = match block.stmts.get_mut(index) {
+                Some(Statement::LocalAssignment(local)) => local
+                    .exprs
+                    .get_mut(name_index)
+                    .is_some_and(|value| self.hold_value(id, value, 0)),
+                _ => false,
+            };
+            if !is_held {
+                continue;
+            }
+            let before_read = match read {
+                ReadSite::Stmt(read_index) => read_index,
+                ReadSite::Last => block.stmts.len(),
+            };
+            self.live_registers =
+                block.stmts.iter().take(before_read).fold(outer_registers, |registers, stmt| {
+                    registers.saturating_add(super::merge_locals::declared_count(stmt))
+                });
+            let is_read_kept = match read {
+                ReadSite::Stmt(read_index) => {
+                    block.stmts.get_mut(read_index).is_none_or(|stmt| self.visit_kept_stmt(stmt))
+                }
+                ReadSite::Last => {
+                    if let Some(last) = &mut block.last_stmt {
+                        self.visit_last_stmt(last);
+                    }
+                    true
+                }
+            };
+            self.live_registers = outer_registers;
+            if let Some(unlanded) = self.unland(id) {
+                // Something kept the walk from the read, so the value goes
+                // back for another walk.
+                if let Some(Statement::LocalAssignment(declaration)) = block.stmts.get_mut(index)
+                    && let Some(value) = declaration.exprs.get_mut(name_index)
+                {
+                    *value = unlanded;
+                }
+                self.needs_revisit = true;
+                continue;
+            }
+            if !is_read_kept && let ReadSite::Stmt(read_index) = read {
+                remove_stmt(&mut block.stmts, read_index);
+            }
+            if let Some(Statement::LocalAssignment(declaration)) = block.stmts.get_mut(index) {
+                let kept = declaration.names.len().saturating_sub(1);
+                for i in name_index..kept {
+                    declaration.names.swap(i, i.saturating_add(1));
+                    declaration.exprs.swap(i, i.saturating_add(1));
+                }
+                declaration.names.truncate(kept);
+                declaration.exprs.truncate(kept);
+                if kept == 0 {
+                    remove_stmt(&mut block.stmts, index);
+                }
+            }
+            self.has_changed = true;
+            if self.config.remove_dead_code {
+                self.drop_unused(&mut block.stmts);
+            }
+        }
+    }
+
+    /// Where the one read of the local `id`, declared by the statement at
+    /// `index`, sits.
+    fn find_read(&self, block: &Block<'ast>, index: usize, id: usize) -> Option<ReadSite> {
+        let mut finder = ReadFinder { bindings: &*self.bindings, id, is_found: false };
+        let later = block.stmts.iter().enumerate().skip(index.saturating_add(1));
+        for (read_index, stmt) in later {
+            finder.visit_stmt(stmt);
+            if finder.is_found {
+                return Some(ReadSite::Stmt(read_index));
+            }
+        }
+        finder.visit_last_stmt(block.last_stmt.as_ref()?);
+        finder.is_found.then_some(ReadSite::Last)
+    }
+
+    /// The value of the local `id` if it's still held, which the walk then
+    /// refuses to move.
+    fn unland(&mut self, id: usize) -> Option<Expression<'ast>> {
+        let binding = self.bindings.get_mut(id)?;
+        let index = usize::try_from(binding.held_value).ok()?;
+        let value = self.values.get_mut(index)?.take()?;
+        binding.held_value = REFUSED;
+        self.held_count = self.held_count.saturating_sub(1);
+        Some(value.expr)
+    }
+
+    /// A local of `stmts` read once with no write, with a value that can
+    /// move to the read, which the walk passed while it was read more: its
+    /// statement's index, the name's index in it, and its binding.
+    fn late_candidate(&self, stmts: &[Statement<'ast>]) -> Option<(usize, usize, usize)> {
+        stmts.iter().enumerate().find_map(|(index, stmt)| {
+            let Statement::LocalAssignment(local) = stmt else {
+                return None;
+            };
+            if has_fixed_binding(local, self.version) || local.names.len() != local.exprs.len() {
+                return None;
+            }
+            local.names.iter().zip(&local.exprs).enumerate().find_map(
+                |(name_index, (attributed, value))| {
+                    let id = local_of(&attributed.name)?;
+                    let binding = self.bindings.get(id)?;
+                    (binding.reads == 1
+                        && binding.writes == 0
+                        && binding.held_value != REFUSED
+                        && literal_kind(value).is_some())
+                    .then_some((index, name_index, id))
+                },
+            )
+        })
+    }
+
+    /// Takes `value`, the initializer of the local `id`, to wait for the
+    /// local's one read, if it has exactly one and no write, and the value
+    /// can move there. Says whether it took it.
+    pub(super) fn hold_value(
+        &mut self,
+        id: usize,
+        value: &mut Expression<'ast>,
+        landed_locals: usize,
+    ) -> bool {
+        let Some(facts) = self.bindings.get(id) else {
+            return false;
+        };
+        if facts.reads != 1 || facts.writes != 0 || literal_kind(value).is_none() {
+            return false;
+        }
+        let read_depth = usize::try_from(facts.read_depth).unwrap_or(usize::MAX);
+        let held_value = match refusal(value, landed_locals, read_depth) {
+            None => {
+                let index = self.values.len();
+                let locals = landed_locals.saturating_add(1);
+                self.values.push(Some(Value { expr: value.take(), locals }));
+                self.held_count = self.held_count.saturating_add(1);
+                u32::try_from(index).unwrap_or(REFUSED)
+            }
+            Some(Refusal::Chain) => {
+                self.needs_revisit = true;
+                REFUSED
+            }
+            Some(Refusal::Depth) => {
+                self.has_depth_refusal.set(true);
+                REFUSED
+            }
+        };
+        if let Some(binding) = self.bindings.get_mut(id) {
+            binding.held_value = held_value;
+        }
+        held_value != REFUSED
     }
 
     /// An inlined local's value for its one read, which it reaches as the
     /// walk does, already rewritten.
-    pub(super) fn take_value(&mut self, name: &str) -> Option<Expression<'ast>> {
-        let value = self.values.remove(&self.names.find(name)?)?;
+    pub(super) fn take_value(&mut self, id: usize) -> Option<Expression<'ast>> {
+        let binding = self.bindings.get_mut(id)?;
+        let index = usize::try_from(binding.held_value).ok()?;
+        let value = self.values.get_mut(index)?.take()?;
+        binding.held_value = NONE;
+        let read = Reference {
+            is_write: false,
+            function_depth: self.function_depth,
+            type_floor: self.type_floor,
+            depth: 0,
+        };
+        self.bindings.count(id, read, true);
+        self.held_count = self.held_count.saturating_sub(1);
         self.landed_locals = self.landed_locals.saturating_add(value.locals);
         Some(value.expr)
     }
@@ -157,8 +432,8 @@ impl<'ast> Compressor<'ast> {
         position: OperandPosition,
     ) {
         if let Expression::Name(name) = operand
-            && !self.values.is_empty()
-            && let Some(value) = self.take_value(name.text)
+            && self.held_count > 0
+            && let Some(value) = local_of(name).and_then(|id| self.take_value(id))
         {
             if keeps_grouping(&value, position) {
                 self.has_bare_operand = true;
@@ -180,8 +455,10 @@ impl<'ast> Compressor<'ast> {
         for link in &mut *run.links {
             if link.op == BinOp::Lt
                 && let Expression::Name(name) = last_operand(before)
-                && let Some(id) = self.names.find(name.text)
-                && let Some(value) = self.values.get_mut(&id)
+                && let Some(index) = local_of(name)
+                    .and_then(|id| self.bindings.get(id))
+                    .and_then(|binding| usize::try_from(binding.held_value).ok())
+                && let Some(Some(value)) = self.values.get_mut(index)
             {
                 let cast = last_operand(&mut value.expr);
                 if matches!(cast, Expression::TypeCast(_)) {
@@ -201,8 +478,7 @@ mod tests {
     use luck_ast::{LastStatement, expr_nesting_depth};
     use luck_token::LuaVersion;
 
-    use super::Compressor;
-    use crate::fixtures::{NO_PASSES, assert_outputs, minify_with, parse, walk_once};
+    use crate::fixtures::{NO_PASSES, assert_outputs, compressed, minify_with, walk_once};
     use crate::transform_config::TransformConfig;
 
     const INLINING: TransformConfig = TransformConfig { inline_locals: true, ..NO_PASSES };
@@ -284,6 +560,26 @@ mod tests {
         ] {
             let result = minify_with(source, LuaVersion::Lua55, &INLINING);
             assert!(!result.contains("return 1"), "{source}: {result}");
+        }
+    }
+
+    #[test]
+    fn inlines_each_of_two_locals_that_share_a_name() {
+        assert_eq!(
+            walk_once("local x = 1 print(x) do local x = 2 print(x) end", INLINING),
+            "print(1)do print(2)end"
+        );
+    }
+
+    #[test]
+    fn inlines_a_local_whose_other_reads_the_walk_drops_after_passing_it() {
+        let both = TransformConfig { remove_dead_code: true, fold_constants: true, ..INLINING };
+        for source in [
+            "local x = 1 print(x) if false then print(x) end",
+            "local x = 1 print(x) print(false and x)",
+            "local x = 1 print(x) local function f() return x end",
+        ] {
+            assert!(walk_once(source, both).starts_with("print(1)"), "{source}");
         }
     }
 
@@ -387,8 +683,7 @@ mod tests {
         let links = luck_token::MAX_ACTIVE_LOCALS - 1;
         let allocator = Allocator::new();
         let source = sum_chain(links);
-        let mut block = parse(&allocator, &source, LuaVersion::Lua54);
-        Compressor::new(&allocator, LuaVersion::Lua54, INLINING).compress(&mut block);
+        let block = compressed(&allocator, &source, INLINING);
         let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
             panic!("expected a return");
         };

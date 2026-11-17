@@ -209,8 +209,7 @@ mod tests {
     use luck_ast::{LastStatement, expr_nesting_depth};
     use luck_token::LuaVersion;
 
-    use crate::compress::Compressor;
-    use crate::fixtures::{NO_PASSES, minify_with, parse};
+    use crate::fixtures::{NO_PASSES, compressed, minify_with};
     use crate::transform_config::TransformConfig;
 
     const PARENS: TransformConfig = TransformConfig { simplify_parens: true, ..NO_PASSES };
@@ -306,8 +305,7 @@ mod tests {
     fn a_run_freed_of_its_parens_joins_the_run_around_it() {
         let allocator = Allocator::new();
         let source = "return (a + b) - c, x .. (y .. z), (a * b) + c";
-        let mut block = parse(&allocator, source, LuaVersion::Lua54);
-        Compressor::new(&allocator, LuaVersion::Lua54, PARENS).compress(&mut block);
+        let block = compressed(&allocator, source, PARENS);
         let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
             panic!("expected a return");
         };

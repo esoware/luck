@@ -1,19 +1,17 @@
 //! Renames every local to the shortest name its scopes allow.
 //!
-//! One walk resolves each name to a binding with the scoping rules of the
-//! target, and records where each binding is read. Bindings that are never
-//! live in the same scope share a slot, the most-read slots get the
-//! shortest names, and a slot never wears the name of a global read where
-//! it's live. The same walk then runs again and writes each binding's name
-//! into its declaration and its references, in the order the first one met
-//! them.
+//! One walk records where each binding is declared and read, reading each
+//! name's binding from the name itself. Bindings that are never live in the
+//! same scope share a slot, the most-read slots get the shortest names, and
+//! a slot never wears the name of a global read where it's live. A second
+//! walk writes each binding's name into its declaration and its references.
 
 mod candidate_pool;
 mod choose_names;
 mod explicit_self;
 mod scope_claims;
 
-use core::{mem, ptr};
+use core::ptr;
 
 use luck_allocator::Allocator;
 use luck_ast::{Block, Expression, FunctionBody, Name, Statement, Var, VisitorMut};
@@ -21,44 +19,19 @@ use luck_token::LuaVersion;
 
 use self::candidate_pool::CandidatePool;
 use self::choose_names::Choice;
-use crate::binding::{
-    IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, has_implicit_arg, is_env_binding,
-};
+use crate::binding::{Bindings, Identity, NONE, global_of, identity_of, local_of};
 use crate::name_table::NameTable;
 use crate::rename_globals::renamable_globals;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BindingKind {
-    Renamable,
+struct Binding {
+    scope: usize,
     /// Keeps its name: a function's implicit `self` or 5.1 `arg`, a 5.2+
     /// `_ENV`, or a Luau export.
-    Fixed,
-    /// Lua 5.5: a `global` declaration. It keeps its name and scopes and
-    /// shadows like a local, but its references still reach the real global.
-    Global,
-}
-
-struct Binding<'ast> {
-    name: &'ast str,
-    name_id: usize,
-    scope: usize,
-    kind: BindingKind,
+    is_fixed: bool,
     references: usize,
-    /// The binding of the same name this one hides while it's in scope.
-    shadowed: usize,
     /// The scope of the latest reference, so a run of references in one
     /// scope records it once.
     last_reference_scope: usize,
-}
-
-/// What the walk knows of a name where it is.
-#[derive(Clone, Copy)]
-struct NameState {
-    /// The innermost binding in scope.
-    innermost: usize,
-    /// The scope of the latest global read, so a run of them in one scope
-    /// records it once.
-    last_global_read_scope: usize,
 }
 
 struct Scope {
@@ -68,35 +41,26 @@ struct Scope {
     end: usize,
 }
 
-/// No binding: a global, or a name that keeps its own.
+/// No binding.
 const UNRESOLVED: usize = usize::MAX;
 
-/// The renamer, kept from round to round so each rename reuses the last
-/// one's allocations and candidate names.
-///
-/// One walk both resolves names and, with `is_applying`, writes the chosen
-/// ones. Running it twice is what keeps the bindings and references the
-/// second pass meets in the order the first recorded them.
-pub(crate) struct Renamer<'ast> {
+/// The renamer, which a minify runs once.
+struct Renamer<'walk, 'ast> {
     allocator: &'ast Allocator,
-    version: LuaVersion,
     is_applying: bool,
-    /// Whether the resolve walk makes each method's `self` explicit first.
-    should_make_self_explicit: bool,
+    bindings: &'walk mut Bindings,
+    names: &'walk NameTable<'ast>,
+    /// Each local binding's renamed binding, and each global name's, by
+    /// binding id and by name id.
+    of_local: Vec<u32>,
+    of_global: Vec<u32>,
     scopes: Vec<Scope>,
     current_scope: usize,
-    bindings: Vec<Binding<'ast>>,
-    /// The bindings in scope where the walk is, in declaration order, and
-    /// where each open scope's start.
-    open_bindings: Vec<usize>,
-    open_scope_starts: Vec<usize>,
-    /// The pipeline's names, held while a rename runs.
-    names: NameTable<'ast>,
-    /// What the walk knows of each name, by id.
-    name_states: Vec<NameState>,
-    /// Each reference's binding, in walk order.
-    resolutions: Vec<usize>,
-    /// Each binding and a scope below its own it's read in.
+    renamed: Vec<Binding>,
+    /// Each name's latest scope read as a global, so a run of reads in one
+    /// scope records it once.
+    last_global_read_scopes: Vec<usize>,
+    /// Each renamed binding and a scope below its own it's read in.
     reference_scopes: Vec<(usize, usize)>,
     /// Each name read as a global or held by a binding that keeps it, and
     /// a scope it's read in.
@@ -104,92 +68,56 @@ pub(crate) struct Renamer<'ast> {
     choice: Choice<'ast>,
     pool: CandidatePool<'ast>,
     new_names: Vec<&'ast str>,
-    next_binding: usize,
-    next_reference: usize,
-    has_changed: bool,
 }
 
-impl<'ast> Renamer<'ast> {
-    pub(crate) fn new(allocator: &'ast Allocator, version: LuaVersion) -> Self {
-        Self {
-            allocator,
-            version,
-            is_applying: false,
-            should_make_self_explicit: false,
-            scopes: Vec::new(),
-            current_scope: 0,
-            bindings: Vec::new(),
-            open_bindings: Vec::new(),
-            open_scope_starts: Vec::new(),
-            names: NameTable::default(),
-            name_states: Vec::new(),
-            resolutions: Vec::new(),
-            reference_scopes: Vec::new(),
-            global_reads: Vec::new(),
-            choice: Choice::default(),
-            pool: CandidatePool::new(allocator, version),
-            new_names: Vec::new(),
-            next_binding: 0,
-            next_reference: 0,
-            has_changed: false,
+/// Renames the locals of `block`, whose bindings and names `bindings` and
+/// `names` hold, and with `should_rename_globals`, the globals it assigns
+/// before anything reads them.
+///
+/// A method that reads `self` often enough first takes it as a parameter,
+/// so it's renamed too.
+pub(crate) fn rename<'ast>(
+    allocator: &'ast Allocator,
+    version: LuaVersion,
+    block: &mut Block<'ast>,
+    bindings: &mut Bindings,
+    names: &NameTable<'ast>,
+    should_rename_globals: bool,
+) {
+    let binding_count = bindings.entries.len();
+    let mut renamer = Renamer {
+        allocator,
+        is_applying: false,
+        bindings,
+        names,
+        of_local: vec![NONE; binding_count],
+        of_global: vec![NONE; names.len()],
+        scopes: vec![Scope { parent: None, end: 1 }],
+        current_scope: 0,
+        renamed: Vec::new(),
+        last_global_read_scopes: vec![UNRESOLVED; names.len()],
+        reference_scopes: Vec::new(),
+        global_reads: Vec::new(),
+        choice: Choice::default(),
+        pool: CandidatePool::new(allocator, version),
+        new_names: Vec::new(),
+    };
+    // Opt-in, since renamed globals end up under new `_G` keys.
+    if should_rename_globals {
+        for name in renamable_globals(block, version, renamer.bindings, names) {
+            let id = renamer.declare_renamed(false);
+            if let Some(slot) = renamer.of_global.get_mut(name) {
+                *slot = u32::try_from(id).unwrap_or(NONE);
+            }
         }
     }
+    renamer.visit_block(block);
+    renamer.choose_names();
+    renamer.is_applying = true;
+    renamer.visit_block(block);
+}
 
-    /// Renames the locals of `block`, and with `should_rename_globals`, the
-    /// globals it assigns before anything reads them. Says whether any name
-    /// changed.
-    ///
-    /// With `should_make_self_explicit`, a method that reads `self` often
-    /// enough first takes it as a parameter, so it's renamed too.
-    pub(crate) fn rename(
-        &mut self,
-        block: &mut Block<'ast>,
-        names: &mut NameTable<'ast>,
-        should_rename_globals: bool,
-        should_make_self_explicit: bool,
-    ) -> bool {
-        self.names = mem::take(names);
-        let has_changed =
-            self.rename_with_names(block, should_rename_globals, should_make_self_explicit);
-        *names = mem::take(&mut self.names);
-        has_changed
-    }
-
-    fn rename_with_names(
-        &mut self,
-        block: &mut Block<'ast>,
-        should_rename_globals: bool,
-        should_make_self_explicit: bool,
-    ) -> bool {
-        self.scopes.clear();
-        self.scopes.push(Scope { parent: None, end: 1 });
-        self.current_scope = 0;
-        self.bindings.clear();
-        self.open_bindings.clear();
-        self.open_scope_starts.clear();
-        self.name_states.clear();
-        self.resolutions.clear();
-        self.reference_scopes.clear();
-        self.global_reads.clear();
-        self.is_applying = false;
-        self.has_changed = false;
-        // Opt-in, since renamed globals end up under new `_G` keys.
-        let root_globals =
-            if should_rename_globals { renamable_globals(block, self.version) } else { Vec::new() };
-        for &name in &root_globals {
-            self.declare_binding(name, BindingKind::Renamable);
-        }
-        self.should_make_self_explicit = should_make_self_explicit;
-        self.visit_block(block);
-        self.should_make_self_explicit = false;
-        self.choose_names();
-        self.next_binding = root_globals.len();
-        self.next_reference = 0;
-        self.is_applying = true;
-        self.visit_block(block);
-        self.has_changed
-    }
-
+impl<'ast> Renamer<'_, 'ast> {
     fn enter_scope(&mut self) {
         if self.is_applying {
             return;
@@ -197,7 +125,6 @@ impl<'ast> Renamer<'ast> {
         let id = self.scopes.len();
         self.scopes.push(Scope { parent: Some(self.current_scope), end: id.saturating_add(1) });
         self.current_scope = id;
-        self.open_scope_starts.push(self.open_bindings.len());
     }
 
     fn exit_scope(&mut self) {
@@ -210,123 +137,105 @@ impl<'ast> Renamer<'ast> {
         };
         scope.end = end;
         self.current_scope = scope.parent.unwrap_or(0);
-        let start = self.open_scope_starts.pop().unwrap_or(0);
-        for binding in self.open_bindings.drain(start..).rev() {
-            if let Some(closing) = self.bindings.get(binding)
-                && let Some(state) = self.name_states.get_mut(closing.name_id)
-            {
-                state.innermost = closing.shadowed;
-            }
-        }
     }
 
-    /// The id of `name`, which then holds the table's copy of its text.
-    fn name_id(&mut self, name: &mut &'ast str) -> usize {
-        let id = self.names.intern(name);
-        if self.name_states.len() <= id {
-            let unread = NameState { innermost: UNRESOLVED, last_global_read_scope: UNRESOLVED };
-            self.name_states.resize(id.saturating_add(1), unread);
-        }
+    fn declare_renamed(&mut self, is_fixed: bool) -> usize {
+        let id = self.renamed.len();
+        let scope = self.current_scope;
+        self.renamed.push(Binding { scope, is_fixed, references: 0, last_reference_scope: scope });
         id
     }
 
-    /// Declares a binding with no name of its own in the tree. One that
-    /// keeps its name counts as read in its own scope, even if nothing reads
-    /// it, since a local renamed to that name would otherwise capture every
-    /// use of it.
-    fn declare_binding(&mut self, mut name: &'ast str, kind: BindingKind) {
+    /// The renamed binding a name declares or refers to, if it's a local or
+    /// a renamed global.
+    fn renamed_of(&self, name: &Name<'_>) -> usize {
+        let slot = match identity_of(name) {
+            Some(Identity::Local(id)) => self.of_local.get(self.bindings.resolve(id)),
+            Some(Identity::Global(global)) => self.of_global.get(global),
+            None => None,
+        };
+        slot.and_then(|&renamed| usize::try_from(renamed).ok()).unwrap_or(UNRESOLVED)
+    }
+
+    /// Declares the binding `name` holds. One that keeps its name counts as
+    /// read in its own scope, even if nothing reads it, since a local
+    /// renamed to that name would otherwise capture every use of it.
+    fn declare(&mut self, name: &mut Name<'ast>) {
         if self.is_applying {
-            self.next_binding = self.next_binding.saturating_add(1);
+            self.apply(name);
             return;
         }
-        let name_id = self.name_id(&mut name);
-        let id = self.bindings.len();
-        let scope = self.current_scope;
-        let Some(state) = self.name_states.get_mut(name_id) else {
+        let Some(id) = local_of(name).map(|id| self.bindings.resolve(id)) else {
+            if let Some(global) = global_of(name) {
+                self.read_globally(global);
+            }
             return;
         };
-        let shadowed = state.innermost;
-        state.innermost = id;
-        self.bindings.push(Binding {
-            name,
-            name_id,
-            scope,
-            kind,
-            references: 0,
-            shadowed,
-            last_reference_scope: scope,
-        });
-        self.open_bindings.push(id);
-        if kind != BindingKind::Renamable {
-            self.resolve(name_id);
-        }
-    }
-
-    fn declare(&mut self, name: &mut Name<'ast>, kind: BindingKind) {
-        if self.is_applying {
-            self.apply(name, self.next_binding);
-            self.next_binding = self.next_binding.saturating_add(1);
+        let Some(binding) = self.bindings.entries.get(id) else {
             return;
+        };
+        let (is_fixed, name_id) = (binding.is_fixed, binding.name);
+        let renamed = self.declare_renamed(is_fixed);
+        if self.of_local.len() <= id {
+            self.of_local.resize(id.saturating_add(1), NONE);
         }
-        self.names.intern(&mut name.text);
-        self.declare_binding(name.text, kind);
-    }
-
-    fn declare_local(&mut self, name: &mut Name<'ast>, is_exported: bool) {
-        let is_fixed = is_exported || is_env_binding(name.text, self.version);
-        self.declare(name, if is_fixed { BindingKind::Fixed } else { BindingKind::Renamable });
+        if let Some(slot) = self.of_local.get_mut(id) {
+            *slot = u32::try_from(renamed).unwrap_or(NONE);
+        }
+        if is_fixed {
+            self.read_globally(usize::try_from(name_id).unwrap_or(usize::MAX));
+        }
     }
 
     fn reference(&mut self, name: &mut Name<'ast>) {
         if self.is_applying {
-            let binding = self.resolutions.get(self.next_reference).copied().unwrap_or(UNRESOLVED);
-            self.next_reference = self.next_reference.saturating_add(1);
-            self.apply(name, binding);
+            self.apply(name);
             return;
         }
-        let name_id = self.name_id(&mut name.text);
-        let binding = self.resolve(name_id);
-        self.resolutions.push(binding);
+        let renamed = self.renamed_of(name);
+        let current_scope = self.current_scope;
+        if let Some(binding) = self.renamed.get_mut(renamed) {
+            binding.references = binding.references.saturating_add(1);
+            if binding.last_reference_scope != current_scope {
+                binding.last_reference_scope = current_scope;
+                self.reference_scopes.push((renamed, current_scope));
+            }
+            if !binding.is_fixed {
+                return;
+            }
+        }
+        // A binding that keeps its name holds that name wherever it's read,
+        // as a global does.
+        let held_name = match identity_of(name) {
+            Some(Identity::Local(id)) => {
+                self.bindings.get(id).and_then(|binding| usize::try_from(binding.name).ok())
+            }
+            Some(Identity::Global(global)) => Some(global),
+            None => None,
+        };
+        if let Some(read_name) = held_name {
+            self.read_globally(read_name);
+        }
     }
 
-    fn apply(&mut self, name: &mut Name<'ast>, binding: usize) {
-        if let Some(&new_name) = self.new_names.get(binding)
+    fn apply(&self, name: &mut Name<'ast>) {
+        let renamed = self.renamed_of(name);
+        if let Some(&new_name) = self.new_names.get(renamed)
+            && !new_name.is_empty()
             && !ptr::eq(name.text, new_name)
             && name.text != new_name
         {
             name.text = new_name;
-            self.has_changed = true;
         }
     }
 
-    /// The binding a read of the name here reaches.
-    fn resolve(&mut self, name_id: usize) -> usize {
+    fn read_globally(&mut self, name: usize) {
         let current_scope = self.current_scope;
-        let Some((id, binding)) = self.name_states.get(name_id).and_then(|state| {
-            self.bindings.get_mut(state.innermost).map(|binding| (state.innermost, binding))
-        }) else {
-            self.read_globally(name_id);
-            return UNRESOLVED;
-        };
-        binding.references = binding.references.saturating_add(1);
-        if binding.last_reference_scope != current_scope {
-            binding.last_reference_scope = current_scope;
-            self.reference_scopes.push((id, current_scope));
-        }
-        // A binding that keeps its name holds that name wherever it's read.
-        if binding.kind != BindingKind::Renamable {
-            self.read_globally(name_id);
-        }
-        id
-    }
-
-    fn read_globally(&mut self, name_id: usize) {
-        let current_scope = self.current_scope;
-        if let Some(state) = self.name_states.get_mut(name_id)
-            && state.last_global_read_scope != current_scope
+        if let Some(scope) = self.last_global_read_scopes.get_mut(name)
+            && *scope != current_scope
         {
-            state.last_global_read_scope = current_scope;
-            self.global_reads.push((name_id, current_scope));
+            *scope = current_scope;
+            self.global_reads.push((name, current_scope));
         }
     }
 
@@ -353,21 +262,15 @@ impl<'ast> Renamer<'ast> {
         }
     }
 
-    /// A function's parameters and implicit names, and then its block.
-    fn visit_function_scope(&mut self, body: &mut FunctionBody<'ast>, is_method: bool) {
+    /// A function's parameters, and then its block.
+    fn visit_function_scope(&mut self, body: &mut FunctionBody<'ast>) {
         self.enter_scope();
-        if is_method {
-            self.declare_binding(METHOD_RECEIVER_NAME, BindingKind::Fixed);
-        }
         for param in &mut body.params {
-            self.declare_local(&mut param.name, false);
-        }
-        if has_implicit_arg(body, self.version) {
-            self.declare_binding(IMPLICIT_VARARG_TABLE_NAME, BindingKind::Fixed);
+            self.declare(&mut param.name);
         }
         // Lua 5.5
         if let Some(name) = body.vararg.as_mut().and_then(|vararg| vararg.name.as_mut()) {
-            self.declare_local(name, false);
+            self.declare(name);
         }
         self.visit_block(&mut body.block);
         self.exit_scope();
@@ -380,39 +283,29 @@ impl<'ast> Renamer<'ast> {
     }
 }
 
-impl<'ast> VisitorMut<'ast> for Renamer<'ast> {
-    #[expect(clippy::too_many_lines, reason = "one arm per kind of statement")]
+impl<'ast> VisitorMut<'ast> for Renamer<'_, 'ast> {
     fn visit_stmt(&mut self, stmt: &mut Statement<'ast>) {
         match stmt {
             Statement::LocalAssignment(local) => {
-                // Values and annotations before the names: in
-                // `local x: typeof(x) = x` both read the outer x.
                 for expr in &mut local.exprs {
                     self.visit_expr(expr);
                 }
+                self.walk_attributed_names(&mut local.names);
                 for attributed in &mut local.names {
-                    if let Some(ty) = &mut attributed.type_annotation {
-                        self.visit_type(ty);
-                    }
-                }
-                let is_exported = local.kind.is_exported();
-                for attributed in &mut local.names {
-                    self.declare_local(&mut attributed.name, is_exported);
+                    self.declare(&mut attributed.name);
                 }
             }
             Statement::LocalFunction(local_function) => {
                 self.visit_signature(&mut local_function.body);
-                let is_exported = local_function.kind.is_exported();
-                self.declare_local(&mut local_function.name, is_exported);
-                self.visit_function_scope(&mut local_function.body, false);
+                self.declare(&mut local_function.name);
+                self.visit_function_scope(&mut local_function.body);
             }
             Statement::FunctionDecl(function_declaration) => {
-                if self.should_make_self_explicit {
-                    explicit_self::rewrite(self.allocator, function_declaration);
+                if !self.is_applying {
+                    explicit_self::rewrite(self.allocator, self.bindings, function_declaration);
                 }
                 self.visit_signature(&mut function_declaration.body);
-                let is_method = function_declaration.name.method.is_some();
-                self.visit_function_scope(&mut function_declaration.body, is_method);
+                self.visit_function_scope(&mut function_declaration.body);
                 if let Some(root) = function_declaration.name.names.first_mut() {
                     self.reference(root);
                 }
@@ -451,7 +344,7 @@ impl<'ast> VisitorMut<'ast> for Renamer<'ast> {
                     self.visit_type(ty);
                 }
                 self.enter_scope();
-                self.declare_local(&mut numeric_for.name, false);
+                self.declare(&mut numeric_for.name);
                 self.visit_block(&mut numeric_for.block);
                 self.exit_scope();
             }
@@ -467,14 +360,14 @@ impl<'ast> VisitorMut<'ast> for Renamer<'ast> {
                 }
                 self.enter_scope();
                 for param in &mut generic_for.names {
-                    self.declare_local(&mut param.name, false);
+                    self.declare(&mut param.name);
                 }
                 self.visit_block(&mut generic_for.block);
                 self.exit_scope();
             }
             // Lua 5.5: as with `local function`, the body sees the name.
             Statement::GlobalFunction(global_function) => {
-                self.declare(&mut global_function.name, BindingKind::Global);
+                self.declare(&mut global_function.name);
                 self.visit_function_body(&mut global_function.body);
             }
             // Lua 5.5: as with `local`, the initializers see the outer scope.
@@ -483,7 +376,7 @@ impl<'ast> VisitorMut<'ast> for Renamer<'ast> {
                     self.visit_expr(expr);
                 }
                 for attributed in &mut global_declaration.names {
-                    self.declare(&mut attributed.name, BindingKind::Global);
+                    self.declare(&mut attributed.name);
                 }
             }
             // These bind nothing themselves. The walk still reaches the
@@ -520,7 +413,7 @@ impl<'ast> VisitorMut<'ast> for Renamer<'ast> {
 
     fn visit_function_body(&mut self, body: &mut FunctionBody<'ast>) {
         self.visit_signature(body);
-        self.visit_function_scope(body, false);
+        self.visit_function_scope(body);
     }
 }
 

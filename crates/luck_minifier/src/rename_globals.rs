@@ -1,298 +1,169 @@
 //! The globals `rename_globals` renames: each one a file defines at its top
 //! level before anything there reads it, and declares nowhere.
+//!
+//! A `do` block at the top level runs where it stands, so its statements
+//! count as the top level's, which keeps the answer the same once a `do`
+//! block that scopes nothing is unwrapped.
 
-use luck_ast::{Assignment, Block, Expression, FunctionBody, Statement, Type, Var, VisitorMut};
+use luck_ast::{
+    Assignment, Block, Expression, FunctionBody, LastStatement, Statement, Type, Var, Visitor,
+};
 use luck_token::LuaVersion;
-use rustc_hash::FxHashSet;
 
-use crate::binding::is_env_binding;
+use crate::binding::{Bindings, global_of, is_env_binding};
+use crate::name_table::NameTable;
 
-/// The globals to rename, in the order the renamer declares them as root
-/// bindings: each top-level `function g()` name, then each name a top-level
-/// assignment defines.
-pub(crate) fn renamable_globals<'ast>(
-    block: &mut Block<'ast>,
+/// The name ids of the globals to rename, in the order the renamer declares
+/// them as root bindings: each top-level `function g()` name, then each name
+/// a top-level assignment defines.
+pub(crate) fn renamable_globals(
+    block: &Block<'_>,
     version: LuaVersion,
-) -> Vec<&'ast str> {
-    let mut declarations = DeclaredGlobals::default();
-    declarations.visit_block(block);
-    let declared_globals = declarations.0;
-    let function_globals = toplevel_function_globals(block, &declared_globals, version);
-    let assign_first_globals =
-        assign_first_globals(block, &function_globals, &declared_globals, version);
+    bindings: &Bindings,
+    names: &NameTable<'_>,
+) -> Vec<usize> {
+    let mut top_level = Vec::new();
+    flatten(block, &mut top_level);
+    let is_excluded = |name: usize| {
+        bindings.global_declarations.get(name).is_some_and(|&count| count > 0)
+            || names.find("_ENV") == Some(name) && is_env_binding("_ENV", version)
+    };
+    let name_count = names.len();
+    let function_globals = function_globals(&top_level, name_count, &is_excluded);
 
-    let mut names = Vec::new();
-    let mut seen_names = FxHashSet::default();
-    for stmt in &block.stmts {
-        if let Statement::FunctionDecl(function_declaration) = stmt
-            && let [name] = &*function_declaration.name.names
-            && function_declaration.name.method.is_none()
-            && function_globals.contains(name.text)
-            && seen_names.insert(name.text)
-        {
-            names.push(name.text);
-        }
-    }
-    for stmt in &block.stmts {
-        if let Statement::Assignment(assignment) = stmt {
-            for target in &assignment.targets {
-                if let Var::Name(name) = target
-                    && assign_first_globals.contains(name.text)
-                    && seen_names.insert(name.text)
-                {
-                    names.push(name.text);
-                }
-            }
-        }
-    }
-    names
-}
-
-/// A name declared anywhere is the same variable everywhere, so one
-/// declaration keeps the whole file from renaming it.
-#[derive(Default)]
-struct DeclaredGlobals<'ast>(FxHashSet<&'ast str>);
-
-impl<'ast> VisitorMut<'ast> for DeclaredGlobals<'ast> {
-    fn visit_stmt(&mut self, stmt: &mut Statement<'ast>) {
-        match stmt {
-            // Lua 5.5
-            Statement::GlobalDeclaration(global_declaration) => {
-                self.0
-                    .extend(global_declaration.names.iter().map(|attributed| attributed.name.text));
-            }
-            // Lua 5.5
-            Statement::GlobalFunction(global_function) => {
-                self.0.insert(global_function.name.text);
-            }
-            // `global *` names nothing, and the rest declare no global.
-            // `walk_stmt` below still descends into nested blocks.
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-        self.walk_stmt(stmt);
-    }
-}
-
-fn toplevel_function_globals<'ast>(
-    block: &mut Block<'ast>,
-    declared_globals: &FxHashSet<&'ast str>,
-    version: LuaVersion,
-) -> FxHashSet<&'ast str> {
-    let mut top_locals: FxHashSet<&'ast str> = FxHashSet::default();
-    for stmt in &block.stmts {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                top_locals.extend(local.names.iter().map(|attributed| attributed.name.text));
-            }
-            Statement::LocalFunction(local_function) => {
-                top_locals.insert(local_function.name.text);
-            }
-            // Nothing else binds a local at this level.
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-    }
-
-    let mut reads = NameReads::new(&top_locals);
-    let mut assigned_first_names: FxHashSet<&'ast str> = FxHashSet::default();
-    let mut function_globals = FxHashSet::default();
-    for stmt in &mut block.stmts {
-        if let Statement::Assignment(assignment) = stmt {
-            reads.visit_assignment_reads(assignment);
-            for target in &assignment.targets {
-                if let Var::Name(name) = target
-                    && !reads.names.contains(name.text)
-                {
-                    assigned_first_names.insert(name.text);
-                }
-            }
-        } else if let Statement::FunctionDecl(function_declaration) = stmt
-            && let [function_name] = &*function_declaration.name.names
-            && function_declaration.name.method.is_none()
-        {
-            let name = function_name.text;
-            let is_read_first = reads.names.contains(name) && !assigned_first_names.contains(name);
-            if !top_locals.contains(name)
-                && !is_read_first
-                && !declared_globals.contains(name)
-                && !is_env_binding(name, version)
+    let mut reads = Reads::new(name_count);
+    let mut is_assign_first = vec![false; name_count];
+    let mut assign_first = Vec::new();
+    for item in &top_level {
+        let TopLevel::Stmt(Statement::Assignment(assignment)) = item else {
+            reads.visit_item(item);
+            continue;
+        };
+        reads.visit_assignment(assignment);
+        for target in &assignment.targets {
+            if let Some(name) = target_global(target)
+                && !function_globals.contains(&name)
+                && !reads.has(name)
+                && !is_excluded(name)
+                && let Some(slot) = is_assign_first.get_mut(name)
+                && !*slot
             {
-                function_globals.insert(name);
+                *slot = true;
+                assign_first.push(name);
+            }
+        }
+    }
+    let mut renamable = function_globals;
+    renamable.extend(assign_first);
+    renamable
+}
+
+/// A top-level statement, or the closing statement of a top-level `do`.
+enum TopLevel<'tree, 'ast> {
+    Stmt(&'tree Statement<'ast>),
+    Last(&'tree LastStatement<'ast>),
+}
+
+fn flatten<'tree, 'ast>(block: &'tree Block<'ast>, top_level: &mut Vec<TopLevel<'tree, 'ast>>) {
+    for stmt in &block.stmts {
+        if let Statement::DoBlock(do_block) = stmt {
+            flatten(&do_block.block, top_level);
+            if let Some(last) = &do_block.block.last_stmt {
+                top_level.push(TopLevel::Last(last));
             }
         } else {
-            reads.visit_stmt(stmt);
+            top_level.push(TopLevel::Stmt(stmt));
+        }
+    }
+}
+
+fn target_global(target: &Var<'_>) -> Option<usize> {
+    if let Var::Name(name) = target { global_of(name) } else { None }
+}
+
+/// The name of each top-level `function g()` nothing at the top level reads
+/// before it, unless an assignment to `g` came first, once each.
+fn function_globals(
+    top_level: &[TopLevel<'_, '_>],
+    name_count: usize,
+    is_excluded: &impl Fn(usize) -> bool,
+) -> Vec<usize> {
+    let mut reads = Reads::new(name_count);
+    let mut is_assigned_first = vec![false; name_count];
+    let mut is_taken = vec![false; name_count];
+    let mut function_globals = Vec::new();
+    for item in top_level {
+        match item {
+            TopLevel::Stmt(Statement::Assignment(assignment)) => {
+                reads.visit_assignment(assignment);
+                for name in assignment.targets.iter().filter_map(target_global) {
+                    if !reads.has(name)
+                        && let Some(slot) = is_assigned_first.get_mut(name)
+                    {
+                        *slot = true;
+                    }
+                }
+            }
+            TopLevel::Stmt(Statement::FunctionDecl(function_declaration)) => {
+                let defined = match &*function_declaration.name.names {
+                    [root] if function_declaration.name.method.is_none() => global_of(root),
+                    _ => None,
+                };
+                let Some(name) = defined else {
+                    reads.visit_item(item);
+                    continue;
+                };
+                let is_read_first =
+                    reads.has(name) && !is_assigned_first.get(name).copied().unwrap_or(false);
+                if !is_read_first
+                    && !is_excluded(name)
+                    && let Some(slot) = is_taken.get_mut(name)
+                    && !*slot
+                {
+                    *slot = true;
+                    function_globals.push(name);
+                }
+            }
+            TopLevel::Stmt(_) | TopLevel::Last(_) => reads.visit_item(item),
         }
     }
     function_globals
 }
 
-/// A name assigned at the top level before anything there reads it, and
-/// while no top-level local of that name is in scope.
-fn assign_first_globals<'ast>(
-    block: &mut Block<'ast>,
-    function_globals: &FxHashSet<&'ast str>,
-    declared_globals: &FxHashSet<&'ast str>,
-    version: LuaVersion,
-) -> FxHashSet<&'ast str> {
-    let no_locals = FxHashSet::default();
-    let mut reads = NameReads::new(&no_locals);
-    let mut assign_first_globals: FxHashSet<&'ast str> = FxHashSet::default();
-    for stmt in &mut block.stmts {
-        if let Statement::Assignment(assignment) = stmt {
-            reads.visit_assignment_reads(assignment);
-            for target in &assignment.targets {
-                if let Var::Name(target_name) = target {
-                    let name = target_name.text;
-                    if !reads.is_local(name)
-                        && !function_globals.contains(name)
-                        && !reads.names.contains(name)
-                        && !declared_globals.contains(name)
-                        && !is_env_binding(name, version)
-                    {
-                        assign_first_globals.insert(name);
-                    }
-                }
-            }
-            continue;
-        }
-        // Everything else only contributes reads, and a top-level local
-        // makes its name local from here on.
-        reads.visit_stmt(stmt);
-        reads.hide_declared(stmt);
-    }
-    assign_first_globals
+/// The globals statements read, outside function bodies and types.
+struct Reads {
+    is_read: Vec<bool>,
 }
 
-/// The names statements read as globals: each name outside `locals` and
-/// outside the locals the enclosing nested blocks have declared so far.
-struct NameReads<'locals, 'ast> {
-    locals: &'locals FxHashSet<&'ast str>,
-    hidden_names: FxHashSet<&'ast str>,
-    /// What `hidden_names` gained, in order, so each scope can drop its own on exit.
-    hidden_log: Vec<&'ast str>,
-    names: FxHashSet<&'ast str>,
-}
+impl Reads {
+    fn new(name_count: usize) -> Self {
+        Self { is_read: vec![false; name_count] }
+    }
 
-impl<'locals, 'ast> NameReads<'locals, 'ast> {
-    fn new(locals: &'locals FxHashSet<&'ast str>) -> Self {
-        Self {
-            locals,
-            hidden_names: FxHashSet::default(),
-            hidden_log: Vec::new(),
-            names: FxHashSet::default(),
+    fn has(&self, name: usize) -> bool {
+        self.is_read.get(name).copied().unwrap_or(false)
+    }
+
+    fn read(&mut self, name: &luck_ast::Name<'_>) {
+        if let Some(slot) = global_of(name).and_then(|global| self.is_read.get_mut(global)) {
+            *slot = true;
         }
     }
 
-    fn is_local(&self, name: &str) -> bool {
-        self.locals.contains(name) || self.hidden_names.contains(name)
-    }
-
-    fn read(&mut self, name: &'ast str) {
-        if !self.is_local(name) {
-            self.names.insert(name);
+    fn visit_item(&mut self, item: &TopLevel<'_, '_>) {
+        match item {
+            TopLevel::Stmt(stmt) => self.visit_stmt(stmt),
+            TopLevel::Last(last) => self.visit_last_stmt(last),
         }
-    }
-
-    fn hide(&mut self, name: &'ast str) {
-        if !self.is_local(name) {
-            self.hidden_names.insert(name);
-            self.hidden_log.push(name);
-        }
-    }
-
-    fn unhide_from(&mut self, mark: usize) {
-        for name in self.hidden_log.drain(mark..) {
-            self.hidden_names.remove(name);
-        }
-    }
-
-    fn hide_declared(&mut self, stmt: &Statement<'ast>) {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                for attributed in &local.names {
-                    self.hide(attributed.name.text);
-                }
-            }
-            Statement::LocalFunction(local_function) => self.hide(local_function.name.text),
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-    }
-
-    /// A block's own locals don't count as reads. Slot reuse gives nested
-    /// locals the names of renamed globals, so on every later round they'd
-    /// otherwise look like reads of those globals.
-    fn visit_scope(&mut self, block: &mut Block<'ast>) -> usize {
-        let mark = self.hidden_log.len();
-        for stmt in &mut block.stmts {
-            self.visit_stmt(stmt);
-            self.hide_declared(stmt);
-        }
-        if let Some(last) = &mut block.last_stmt {
-            self.visit_last_stmt(last);
-        }
-        mark
     }
 
     /// Every target's prefix and index is evaluated before any store, so
     /// `g, t[g] = 1, 2` reads `g` even though its own target comes first.
-    fn visit_assignment_reads(&mut self, assignment: &mut Assignment<'ast>) {
-        for expr in &mut assignment.values {
+    fn visit_assignment(&mut self, assignment: &Assignment<'_>) {
+        for expr in &assignment.values {
             self.visit_expr(expr);
         }
-        for target in &mut assignment.targets {
+        for target in &assignment.targets {
             if !matches!(target, Var::Name(_)) {
                 self.visit_assignment_target(target);
             }
@@ -300,92 +171,42 @@ impl<'locals, 'ast> NameReads<'locals, 'ast> {
     }
 }
 
-impl<'ast> VisitorMut<'ast> for NameReads<'_, 'ast> {
-    fn visit_block(&mut self, block: &mut Block<'ast>) {
-        let mark = self.visit_scope(block);
-        self.unhide_from(mark);
-    }
-
-    fn visit_stmt(&mut self, stmt: &mut Statement<'ast>) {
-        match stmt {
-            Statement::RepeatLoop(repeat_loop) => {
-                // The condition sees the block's locals.
-                let mark = self.visit_scope(&mut repeat_loop.block);
-                self.visit_expr(&mut repeat_loop.condition);
-                self.unhide_from(mark);
+impl<'tree> Visitor<'tree> for Reads {
+    fn visit_stmt(&mut self, stmt: &'tree Statement<'tree>) {
+        // `function g.f()` and `function g:f()` read `g` to store into it. A
+        // plain `function g()` only assigns it.
+        if let Statement::FunctionDecl(function_declaration) = stmt {
+            if let [root, nested @ ..] = &*function_declaration.name.names
+                && (!nested.is_empty() || function_declaration.name.method.is_some())
+            {
+                self.read(root);
             }
-            Statement::NumericFor(numeric_for) => {
-                self.visit_expr(&mut numeric_for.start);
-                self.visit_expr(&mut numeric_for.limit);
-                if let Some(step) = &mut numeric_for.step {
-                    self.visit_expr(step);
-                }
-                let mark = self.hidden_log.len();
-                self.hide(numeric_for.name.text);
-                self.visit_block(&mut numeric_for.block);
-                self.unhide_from(mark);
-            }
-            Statement::GenericFor(generic_for) => {
-                for expr in &mut generic_for.exprs {
-                    self.visit_expr(expr);
-                }
-                let mark = self.hidden_log.len();
-                for param in &generic_for.names {
-                    self.hide(param.name.text);
-                }
-                self.visit_block(&mut generic_for.block);
-                self.unhide_from(mark);
-            }
-            // `function g.f()` and `function g:f()` read `g` to store into it. A
-            // plain `function g()` only assigns it.
-            Statement::FunctionDecl(function_declaration) => {
-                if let [root, nested @ ..] = &*function_declaration.name.names
-                    && (!nested.is_empty() || function_declaration.name.method.is_some())
-                {
-                    self.read(root.text);
-                }
-            }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => self.walk_stmt(stmt),
+            return;
         }
+        self.walk_stmt(stmt);
     }
 
-    fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
+    fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
         if let Expression::Name(name) = expr {
-            self.read(name.text);
+            self.read(name);
             return;
         }
         self.walk_expr(expr);
     }
 
-    fn visit_assignment_target(&mut self, target: &mut Var<'ast>) {
+    fn visit_assignment_target(&mut self, target: &'tree Var<'tree>) {
         if let Var::Name(name) = target {
-            self.read(name.text);
+            self.read(name);
             return;
         }
         self.walk_assignment_target(target);
     }
 
     // A function body's reads belong to its own scope.
-    fn visit_function_body(&mut self, _body: &mut FunctionBody<'ast>) {}
+    fn visit_function_body(&mut self, _body: &'tree FunctionBody<'tree>) {}
 
     // Types never run, so they read nothing.
-    fn visit_type(&mut self, _ty: &mut Type<'ast>) {}
+    fn visit_type(&mut self, _ty: &'tree Type<'tree>) {}
 }
 
 #[cfg(test)]
@@ -393,6 +214,7 @@ mod tests {
     use luck_token::LuaVersion;
 
     use crate::fixtures::{RENAMING, assert_lua55_renames, assert_luau_renames, minify_with};
+    use crate::transform_config::TransformConfig;
 
     fn apply(source: &str) -> String {
         minify_with(source, LuaVersion::Lua54, &RENAMING)
@@ -414,6 +236,32 @@ print(h, g)
 ",
         );
         assert!(result.contains('g'), "global 'g' read via typecast must be preserved: {result}");
+    }
+
+    #[test]
+    fn a_global_defined_in_a_top_level_do_block_is_renamed_as_at_the_top_level() {
+        assert_luau_renames(&[
+            ("do function g() end end g()\n", "do function l()end end l()"),
+            (
+                "do local x = f() function g() return x end end g()\n",
+                "do local u=f()function l()return u end end l()",
+            ),
+            ("do g = 1 end print(g)\n", "do l=1 end print(l)"),
+        ]);
+        // Unwrapping the block that scopes nothing changes nothing about it.
+        let config = TransformConfig { rename_globals: true, ..TransformConfig::default() };
+        assert_eq!(
+            minify_with("do function g() end end g()\n", LuaVersion::Lua51, &config),
+            "function l()end l()"
+        );
+    }
+
+    #[test]
+    fn a_global_defined_in_a_function_body_keeps_its_name() {
+        assert_luau_renames(&[(
+            "(function() function g() end end)() g()\n",
+            "(function()function g()end end)()g()",
+        )]);
     }
 
     #[test]

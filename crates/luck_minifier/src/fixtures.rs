@@ -2,7 +2,10 @@ use luck_allocator::Allocator;
 use luck_ast::Block;
 use luck_token::LuaVersion;
 
-use crate::compress::Compressor;
+use crate::bind::bind;
+use crate::binding::Bindings;
+use crate::compress::{Compressor, compress};
+use crate::name_table::NameTable;
 use crate::transform_config::TransformConfig;
 
 /// Every pass off, for a test to turn on the ones it covers.
@@ -66,10 +69,27 @@ pub(crate) fn assert_lua55_renames(cases: &[(&str, &str)]) {
     }
 }
 
-/// One walk of `source`, printed.
+/// One compression walk of `source`, after the bind walk, printed.
 pub(crate) fn walk_once(source: &str, config: TransformConfig) -> String {
     let allocator = Allocator::new();
     let mut block = parse(&allocator, source, LuaVersion::Lua54);
-    Compressor::new(&allocator, LuaVersion::Lua54, config).walk(&mut block);
+    let mut bindings = Bindings::default();
+    let names = &mut NameTable::default();
+    bind(&allocator, &mut block, LuaVersion::Lua54, config.remove_dead_code, &mut bindings, names);
+    Compressor::new(&allocator, LuaVersion::Lua54, config, &mut bindings).walk(&mut block);
     luck_codegen::compact(&block)
+}
+
+/// Binds and compresses `source` as a minify does, without renaming.
+pub(crate) fn compressed<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    config: TransformConfig,
+) -> Block<'ast> {
+    let mut block = parse(allocator, source, LuaVersion::Lua54);
+    let mut bindings = Bindings::default();
+    let names = &mut NameTable::default();
+    bind(allocator, &mut block, LuaVersion::Lua54, config.remove_dead_code, &mut bindings, names);
+    compress(allocator, LuaVersion::Lua54, config, &mut bindings, &mut block);
+    block
 }

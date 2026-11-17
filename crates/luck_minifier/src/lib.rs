@@ -6,17 +6,20 @@
 //! takes a tree. Both rewrite the tree in place and print it once, with
 //! [`luck_codegen::compact`].
 //!
-//! The work runs in two phases, repeated until neither changes the tree:
+//! The work runs in three phases, each once:
 //!
+//! - **Binding**, one walk that resolves every name to its binding, writes
+//!   the binding into the name, so the later phases tell apart two locals
+//!   that share a name however the tree is rewritten, and counts each
+//!   binding's references, dropping the locals nothing references.
 //! - **Compression**, one in-place walk that runs every rewrite as it leaves
-//!   each node, repeated until a walk changes nothing: constant folding,
-//!   dead-code and dead-local removal, inlining single-use locals, merging
-//!   neighboring locals, `if` and `return` simplification, and shorter
-//!   literals, indexes, and parentheses. One scan before each walk finds the
-//!   dead and inlinable locals.
-//! - **Renaming**, which gives locals the shortest names their scopes allow,
-//!   and then lifting, which hoists nested declarations to the top of their
-//!   function in the walk of the next scan.
+//!   each node: constant folding, dead-code and dead-local removal, inlining
+//!   single-use locals, merging neighboring locals, `if` and `return`
+//!   simplification, shorter literals, indexes, and parentheses, and lifting
+//!   nested declarations to the top of their function. Each rewrite keeps
+//!   the binding walk's counts true, so the walk reaches the fixpoint, and
+//!   walks again only for a rewrite it exposed too late to make.
+//! - **Renaming**, which gives locals the shortest names their scopes allow.
 //!
 //! [`TransformConfig`] turns each rewrite on or off.
 //!
@@ -43,19 +46,19 @@
 
 extern crate alloc;
 
+mod bind;
 mod binding;
 mod compress;
 mod expr;
 #[cfg(test)]
 mod fixtures;
-mod lift_locals;
 mod limits;
 mod name_table;
 mod pipeline;
 mod rename_globals;
 mod rename_locals;
-mod scan;
 mod transform_config;
+mod unused_locals;
 
 pub use pipeline::{minify, minify_block};
 pub use transform_config::TransformConfig;

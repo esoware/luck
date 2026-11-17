@@ -12,15 +12,17 @@ use luck_token::{
 use crate::expr::{boolean, extract_boolean, int_to_float, is_nil, truncate_multi_value};
 
 /// Folds a run of binary operators or a unary operator over literals, and
-/// says whether it did.
+/// says whether it did. Hands `drop` each operand it drops that isn't a
+/// literal, which only `and` and `or` drop.
 pub(super) fn fold<'ast>(
     allocator: &'ast Allocator,
     version: LuaVersion,
     expr: &mut Expression<'ast>,
+    drop: &mut impl FnMut(&Expression<'ast>),
 ) -> bool {
     match expr {
         Expression::BinaryOp(run) => match run.precedence().1 {
-            Associativity::Left => fold_left_run(allocator, version, expr),
+            Associativity::Left => fold_left_run(allocator, version, expr, drop),
             Associativity::Right => fold_right_run(allocator, version, expr),
         },
         Expression::UnaryOp(_) => fold_unary(allocator, NumberSubtypes::from(version), expr),
@@ -60,6 +62,7 @@ fn fold_left_run<'ast>(
     allocator: &'ast Allocator,
     version: LuaVersion,
     expr: &mut Expression<'ast>,
+    drop: &mut impl FnMut(&Expression<'ast>),
 ) -> bool {
     let Expression::BinaryOp(boxed) = expr else {
         return false;
@@ -70,8 +73,14 @@ fn fold_left_run<'ast>(
     for link in &mut *run.links {
         let left = folded.as_ref().unwrap_or(&run.first);
         match fold_binary(allocator, left, link.op, &link.operand, version) {
-            Some(BinaryFold::Literal(literal)) => folded = Some(literal),
+            Some(BinaryFold::Literal(literal)) => {
+                if matches!(link.op, BinOp::And | BinOp::Or) {
+                    drop(&link.operand);
+                }
+                folded = Some(literal);
+            }
             Some(BinaryFold::Left) => {
+                drop(&link.operand);
                 if folded.is_none() {
                     folded = Some(run.first.take());
                 }
