@@ -15,20 +15,19 @@ use luck_ast::{
     Var, VisitorMut,
 };
 use luck_token::LuaVersion;
-use rustc_hash::FxHashMap;
 
 use crate::binding::{
     IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, has_attributed_or_env_name,
     has_fixed_binding, has_implicit_arg, is_env_binding,
 };
 use crate::expr::is_pure_expr;
+use crate::name_table::NameTable;
 
 /// The scan's findings, kept from round to round so each scan reuses the
 /// last one's allocations.
 #[derive(Default)]
-pub(crate) struct Scan<'ast> {
-    /// Each name's entry in `names`.
-    entries: FxHashMap<&'ast str, usize>,
+pub(crate) struct Scan {
+    /// Each name's facts, by its id in the name table.
     names: Vec<NameFacts>,
     /// The use graph: a node per name and per droppable `local`.
     nodes: Vec<UseNode>,
@@ -43,7 +42,8 @@ pub(crate) struct Scan<'ast> {
 /// What the scan knows of one name.
 #[derive(Clone, Copy)]
 struct NameFacts {
-    /// Its node in the use graph, live when code the round keeps uses it.
+    /// Its node in the use graph, live when code the round keeps uses it,
+    /// or [`UNSEEN`] for a name the scan hasn't met.
     node: usize,
     /// How often it's read in its declaration's scope, and how deep the
     /// first of those reads sits, which for a name read once is where its
@@ -60,23 +60,38 @@ struct NameFacts {
     is_open: bool,
 }
 
-impl<'ast> Scan<'ast> {
+const UNSEEN: usize = usize::MAX;
+
+impl NameFacts {
+    const UNSEEN: Self = Self {
+        node: UNSEEN,
+        reads: 0,
+        read_depth: 0,
+        is_declared: false,
+        is_shadowed: false,
+        is_open: false,
+    };
+}
+
+impl Scan {
     /// Scans `block`, and says how many levels deep it nests, or
     /// `MAX_NESTING_DEPTH + 1` for anything deeper, where the scan stops.
-    pub(crate) fn run(
+    pub(crate) fn run<'ast>(
         &mut self,
         block: &mut Block<'ast>,
+        names: &mut NameTable<'ast>,
         version: LuaVersion,
         should_find_dead: bool,
         should_find_inlinable: bool,
     ) -> usize {
-        self.entries.clear();
         self.names.clear();
+        self.names.resize(names.len(), NameFacts::UNSEEN);
         self.nodes.clear();
         self.edges.clear();
         self.opened.clear();
         let mut scanner = Scanner {
             scan: self,
+            names,
             version,
             should_find_dead,
             should_find_inlinable,
@@ -90,19 +105,18 @@ impl<'ast> Scan<'ast> {
         deepest
     }
 
-    fn facts(&self, name: &str) -> Option<&NameFacts> {
-        let entry = *self.entries.get(name)?;
-        self.names.get(entry)
+    fn facts(&self, name: Option<usize>) -> Option<&NameFacts> {
+        self.names.get(name?).filter(|facts| facts.node != UNSEEN)
     }
 
-    /// Whether code the round keeps uses `name`.
-    pub(crate) fn is_live(&self, name: &str) -> bool {
+    /// Whether code the round keeps uses the name with id `name`.
+    pub(crate) fn is_live(&self, name: Option<usize>) -> bool {
         self.facts(name).is_some_and(|facts| self.is_live_node(facts.node))
     }
 
-    /// Whether code the round keeps uses `name`, and the depth of its one
-    /// read if it's a local that inlines.
-    pub(crate) fn local(&self, name: &str) -> (bool, Option<usize>) {
+    /// Whether code the round keeps uses the name with id `name`, and the
+    /// depth of its one read if it's a local that inlines.
+    pub(crate) fn local(&self, name: Option<usize>) -> (bool, Option<usize>) {
         let Some(facts) = self.facts(name) else {
             return (false, None);
         };
@@ -110,27 +124,24 @@ impl<'ast> Scan<'ast> {
         (self.is_live_node(facts.node), is_inlinable.then_some(facts.read_depth))
     }
 
-    fn entry(&mut self, name: &'ast str) -> usize {
-        if let Some(&entry) = self.entries.get(name) {
-            return entry;
+    /// The facts of the name with id `name`, met for the first time if the
+    /// scan hasn't yet.
+    fn entry(&mut self, name: usize) -> Option<&mut NameFacts> {
+        if self.names.len() <= name {
+            self.names.resize(name.saturating_add(1), NameFacts::UNSEEN);
         }
-        let node = self.push_node();
-        let entry = self.names.len();
-        self.names.push(NameFacts {
-            node,
-            reads: 0,
-            read_depth: 0,
-            is_declared: false,
-            is_shadowed: false,
-            is_open: false,
-        });
-        self.entries.insert(name, entry);
-        entry
+        if self.names.get(name).is_some_and(|facts| facts.node == UNSEEN) {
+            let node = self.push_node();
+            if let Some(facts) = self.names.get_mut(name) {
+                facts.node = node;
+            }
+        }
+        self.names.get_mut(name)
     }
 
     fn close_scope(&mut self, scope_start: usize) {
-        for entry in self.opened.drain(scope_start..) {
-            if let Some(facts) = self.names.get_mut(entry) {
+        for name in self.opened.drain(scope_start..) {
+            if let Some(facts) = self.names.get_mut(name) {
                 facts.is_open = false;
             }
         }
@@ -238,7 +249,8 @@ pub(crate) fn is_call(expr: &Expression<'_>) -> bool {
 }
 
 struct Scanner<'scan, 'ast> {
-    scan: &'scan mut Scan<'ast>,
+    scan: &'scan mut Scan,
+    names: &'scan mut NameTable<'ast>,
     version: LuaVersion,
     should_find_dead: bool,
     should_find_inlinable: bool,
@@ -253,12 +265,13 @@ struct Scanner<'scan, 'ast> {
 impl<'ast> Scanner<'_, 'ast> {
     /// Records a read or write of `name`, which keeps it live, and for a
     /// read, `is_read`, counts it toward inlining.
-    fn record(&mut self, name: &'ast str, is_read: bool) {
+    fn record(&mut self, name: &mut &'ast str, is_read: bool) {
+        let id = self.names.intern(name);
         let scan = &mut *self.scan;
-        let entry = scan.entry(name);
-        if self.should_find_dead
-            && let Some(node) = scan.names.get(entry).map(|facts| facts.node)
-        {
+        let Some(&mut NameFacts { node, .. }) = scan.entry(id) else {
+            return;
+        };
+        if self.should_find_dead {
             match self.owner {
                 Some(owner) => scan.keep(owner, node),
                 None => scan.mark_live(node),
@@ -267,7 +280,7 @@ impl<'ast> Scanner<'_, 'ast> {
         if !self.should_find_inlinable || !is_read {
             return;
         }
-        let Some(facts) = scan.names.get_mut(entry) else {
+        let Some(facts) = scan.names.get_mut(id) else {
             return;
         };
         if !facts.is_open {
@@ -281,22 +294,27 @@ impl<'ast> Scanner<'_, 'ast> {
     }
 
     /// Makes a droppable `local` the owner, returning the one it replaces.
-    fn open_owner(&mut self, names: impl Iterator<Item = &'ast str>) -> Option<usize> {
-        let scan = &mut *self.scan;
-        let owner = scan.push_node();
+    fn open_owner<'name>(
+        &mut self,
+        names: impl Iterator<Item = &'name mut &'ast str>,
+    ) -> Option<usize>
+    where
+        'ast: 'name,
+    {
+        let owner = self.scan.push_node();
         for name in names {
-            let entry = scan.entry(name);
-            if let Some(node) = scan.names.get(entry).map(|facts| facts.node) {
-                scan.keep(node, owner);
+            let id = self.names.intern(name);
+            if let Some(&mut NameFacts { node, .. }) = self.scan.entry(id) {
+                self.scan.keep(node, owner);
             }
         }
         self.owner.replace(owner)
     }
 
-    fn shadow(&mut self, name: &'ast str) {
+    fn shadow(&mut self, name: &mut &'ast str) {
         if self.should_find_inlinable {
-            let entry = self.scan.entry(name);
-            if let Some(facts) = self.scan.names.get_mut(entry) {
+            let id = self.names.intern(name);
+            if let Some(facts) = self.scan.entry(id) {
                 facts.is_shadowed = true;
             }
         }
@@ -304,7 +322,7 @@ impl<'ast> Scanner<'_, 'ast> {
 
     /// A local inlines only where the walk can tell its one read by name,
     /// and only from a statement that gives each name its own value.
-    fn declare(&mut self, local: &LocalAssignment<'ast>) {
+    fn declare(&mut self, local: &mut LocalAssignment<'ast>) {
         if !self.should_find_inlinable {
             return;
         }
@@ -313,10 +331,9 @@ impl<'ast> Scanner<'_, 'ast> {
         // name can't inline.
         let can_inline =
             !has_fixed_binding(local, self.version) && local.names.len() == local.exprs.len();
-        let scan = &mut *self.scan;
-        for attributed in &local.names {
-            let entry = scan.entry(attributed.name.text);
-            let Some(facts) = scan.names.get_mut(entry) else {
+        for attributed in &mut local.names {
+            let id = self.names.intern(&mut attributed.name.text);
+            let Some(facts) = self.scan.entry(id) else {
                 continue;
             };
             if !can_inline || facts.is_declared {
@@ -324,7 +341,7 @@ impl<'ast> Scanner<'_, 'ast> {
             } else {
                 facts.is_declared = true;
                 facts.is_open = true;
-                scan.opened.push(entry);
+                self.scan.opened.push(id);
             }
         }
     }
@@ -334,7 +351,7 @@ impl<'ast> Scanner<'_, 'ast> {
             && unused_local_action(local, self.version) != DeadLocalAction::Keep;
         if is_droppable {
             let outer_owner =
-                self.open_owner(local.names.iter().map(|attributed| attributed.name.text));
+                self.open_owner(local.names.iter_mut().map(|attributed| &mut attributed.name.text));
             let owner = self.owner;
             self.walk_attributed_names(&mut local.names);
             for expr in &mut local.exprs {
@@ -379,18 +396,18 @@ impl<'ast> VisitorMut<'ast> for Scanner<'_, 'ast> {
                 return;
             }
             Statement::LocalFunction(local_function) => {
-                self.shadow(local_function.name.text);
+                self.shadow(&mut local_function.name.text);
                 if self.should_find_dead && is_droppable_function(local_function, self.version) {
-                    let outer_owner = self.open_owner(iter::once(local_function.name.text));
+                    let outer_owner = self.open_owner(iter::once(&mut local_function.name.text));
                     self.walk_stmt(stmt);
                     self.owner = outer_owner;
                     return;
                 }
             }
-            Statement::NumericFor(numeric_for) => self.shadow(numeric_for.name.text),
+            Statement::NumericFor(numeric_for) => self.shadow(&mut numeric_for.name.text),
             Statement::GenericFor(generic_for) => {
-                for param in &generic_for.names {
-                    self.shadow(param.name.text);
+                for param in &mut generic_for.names {
+                    self.shadow(&mut param.name.text);
                 }
             }
             Statement::RepeatLoop(repeat_loop) => {
@@ -403,36 +420,38 @@ impl<'ast> VisitorMut<'ast> for Scanner<'_, 'ast> {
             }
             Statement::Assignment(assignment) => {
                 // A write to an inlined local's name would land on a global.
-                for target in &assignment.targets {
+                for target in &mut assignment.targets {
                     if let Var::Name(name) = target {
-                        self.shadow(name.text);
+                        self.shadow(&mut name.text);
                     }
                 }
             }
             // Luau
             Statement::CompoundAssignment(compound) => {
-                if let Var::Name(name) = &compound.var {
-                    self.shadow(name.text);
+                if let Var::Name(name) = &mut compound.var {
+                    self.shadow(&mut name.text);
                 }
             }
             // `function x()` writes `x`, and `function x.y()` reads it.
             // Neither root is a name expression or an assignment target.
             Statement::FunctionDecl(function_decl) => {
-                if let Some(root_name) = function_decl.name.names.first() {
-                    let root = root_name.text;
-                    self.record(root, false);
-                    self.shadow(root);
+                if let Some(root) = function_decl.name.names.first_mut() {
+                    self.record(&mut root.text, false);
+                    self.shadow(&mut root.text);
                 }
                 if function_decl.name.method.is_some() {
-                    self.shadow(METHOD_RECEIVER_NAME);
+                    let mut receiver = METHOD_RECEIVER_NAME;
+                    self.shadow(&mut receiver);
                 }
             }
             // Lua 5.5
-            Statement::GlobalFunction(global_function) => self.shadow(global_function.name.text),
+            Statement::GlobalFunction(global_function) => {
+                self.shadow(&mut global_function.name.text);
+            }
             // Lua 5.5
             Statement::GlobalDeclaration(global) => {
-                for attributed in &global.names {
-                    self.shadow(attributed.name.text);
+                for attributed in &mut global.names {
+                    self.shadow(&mut attributed.name.text);
                 }
             }
             Statement::FunctionCall(_)
@@ -451,22 +470,23 @@ impl<'ast> VisitorMut<'ast> for Scanner<'_, 'ast> {
     }
 
     fn visit_function_body(&mut self, body: &mut FunctionBody<'ast>) {
-        for param in &body.params {
-            self.shadow(param.name.text);
+        for param in &mut body.params {
+            self.shadow(&mut param.name.text);
         }
         // Lua 5.5
-        if let Some(vararg_name) = body.vararg.as_ref().and_then(|vararg| vararg.name) {
-            self.shadow(vararg_name.text);
+        if let Some(vararg_name) = body.vararg.as_mut().and_then(|vararg| vararg.name.as_mut()) {
+            self.shadow(&mut vararg_name.text);
         }
         if has_implicit_arg(body, self.version) {
-            self.shadow(IMPLICIT_VARARG_TABLE_NAME);
+            let mut implicit_arg = IMPLICIT_VARARG_TABLE_NAME;
+            self.shadow(&mut implicit_arg);
         }
         self.walk_function_body(body);
     }
 
     fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
         if let Expression::Name(read) = expr {
-            self.record(read.text, true);
+            self.record(&mut read.text, true);
             return;
         }
         self.walk_expr(expr);
@@ -474,7 +494,7 @@ impl<'ast> VisitorMut<'ast> for Scanner<'_, 'ast> {
 
     fn visit_assignment_target(&mut self, target: &mut Var<'ast>) {
         if let Var::Name(name) = target {
-            self.record(name.text, false);
+            self.record(&mut name.text, false);
             return;
         }
         self.walk_assignment_target(target);

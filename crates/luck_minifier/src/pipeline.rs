@@ -104,10 +104,11 @@ fn minify_tree<'ast>(
         }
         // Methods take an explicit self on the first rename, so the renamer
         // can shorten the parameter.
-        let has_renamed = should_rename && renamer.rename(block, config.rename_globals, round == 0);
+        let has_renamed = should_rename
+            && renamer.rename(block, compressor.names(), config.rename_globals, round == 0);
         // Lift decides by name, and rename's slot reuse gives distinct
         // bindings the same name, so each round can unblock more lifts.
-        has_lifted = should_lift && lifter.lift(block);
+        has_lifted = should_lift && lifter.lift(block, compressor.names());
         if !has_renamed && !has_lifted {
             break;
         }

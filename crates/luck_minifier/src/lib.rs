@@ -50,6 +50,7 @@ mod expr;
 mod fixtures;
 mod lift_locals;
 mod limits;
+mod name_table;
 mod pipeline;
 mod rename;
 mod scan;

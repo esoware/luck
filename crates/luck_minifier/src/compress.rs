@@ -30,6 +30,7 @@ use self::literals::Literals;
 use self::locals::{OperandPosition, Value};
 use crate::expr::{constant_truthiness, inner_operand_side, parenthesize};
 use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
+use crate::name_table::NameTable;
 use crate::scan::{Scan, is_droppable_function};
 use crate::transform_config::TransformConfig;
 
@@ -46,11 +47,13 @@ pub(crate) struct Compressor<'ast> {
     has_changed: bool,
     /// Levels of nesting open where the walk is.
     depth: usize,
-    scan: Scan<'ast>,
+    /// Every name the passes have met, which renaming and lifting share.
+    names: NameTable<'ast>,
+    scan: Scan,
     /// Whether `scan` already holds the next walk's facts.
     is_scanned: bool,
-    /// Each inlined local's value, waiting for its one read.
-    values: FxHashMap<&'ast str, Value<'ast>>,
+    /// Each inlined local's value by its name's id, waiting for its one read.
+    values: FxHashMap<usize, Value<'ast>>,
     /// Whether a value has landed bare as an operand since the run being
     /// walked began, so the run may hold one to splice.
     has_bare_operand: bool,
@@ -61,8 +64,9 @@ pub(crate) struct Compressor<'ast> {
     /// the `local`s being walked, innermost last.
     landed_counts: Vec<usize>,
     local_facts: Vec<(bool, Option<usize>)>,
-    /// Declared locals and parameters in scope, upvalues included.
-    locals: Vec<&'ast str>,
+    /// The ids of the declared locals and parameters in scope, upvalues
+    /// included.
+    locals: Vec<usize>,
     live_registers: usize,
     /// Lua 5.5: every name a `global` statement has declared so far, which
     /// stops counting as a local even past that statement's block.
@@ -87,6 +91,7 @@ impl<'ast> Compressor<'ast> {
             config,
             has_changed: false,
             depth: 0,
+            names: NameTable::new(),
             scan: Scan::default(),
             is_scanned: false,
             values: FxHashMap::default(),
@@ -101,6 +106,10 @@ impl<'ast> Compressor<'ast> {
             unwrapped_stmts: Vec::new(),
             literals: Literals::default(),
         }
+    }
+
+    pub(crate) const fn names(&mut self) -> &mut NameTable<'ast> {
+        &mut self.names
     }
 
     /// Walks until a walk changes nothing, and says whether any did.
@@ -124,7 +133,7 @@ impl<'ast> Compressor<'ast> {
             return block_nesting_depth(block) <= MAX_NESTING_DEPTH;
         }
         self.is_scanned = true;
-        self.scan.run(block, self.version, should_find_dead, should_find_inlinable)
+        self.scan.run(block, &mut self.names, self.version, should_find_dead, should_find_inlinable)
             <= MAX_NESTING_DEPTH
     }
 
@@ -132,7 +141,13 @@ impl<'ast> Compressor<'ast> {
         let should_find_dead = self.config.remove_dead_code;
         let should_find_inlinable = self.config.inline_locals;
         if (should_find_dead || should_find_inlinable) && !mem::take(&mut self.is_scanned) {
-            self.scan.run(block, self.version, should_find_dead, should_find_inlinable);
+            self.scan.run(
+                block,
+                &mut self.names,
+                self.version,
+                should_find_dead,
+                should_find_inlinable,
+            );
         }
         self.has_changed = false;
         self.depth = 0;
@@ -183,7 +198,7 @@ impl<'ast> Compressor<'ast> {
             Statement::LocalFunction(local_function) => {
                 if should_remove_dead_code
                     && is_droppable_function(local_function, self.version)
-                    && !self.scan.is_live(local_function.name.text)
+                    && !self.scan.is_live(self.names.find(local_function.name.text))
                 {
                     return false;
                 }
@@ -258,11 +273,15 @@ impl<'ast> Compressor<'ast> {
     fn declare_locals(&mut self, stmt: &Statement<'ast>) {
         let declared = match stmt {
             Statement::LocalAssignment(local) => {
-                self.locals.extend(local.names.iter().map(|attributed| attributed.name.text));
+                for attributed in &local.names {
+                    let id = self.names.intern_text(attributed.name.text);
+                    self.locals.push(id);
+                }
                 local.names.len()
             }
             Statement::LocalFunction(local_function) => {
-                self.locals.push(local_function.name.text);
+                let id = self.names.intern_text(local_function.name.text);
+                self.locals.push(id);
                 1
             }
             Statement::Assignment(_)
@@ -550,7 +569,10 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
     fn visit_function_body(&mut self, body: &mut FunctionBody<'ast>) {
         let outer_registers = mem::replace(&mut self.live_registers, parameter_locals(body));
         let outer_local_count = self.locals.len();
-        self.locals.extend(body.params.iter().map(|param| param.name.text));
+        for param in &body.params {
+            let id = self.names.intern_text(param.name.text);
+            self.locals.push(id);
+        }
         self.walk_function_body(body);
         self.locals.truncate(outer_local_count);
         self.live_registers = outer_registers;

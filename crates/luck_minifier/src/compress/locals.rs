@@ -249,9 +249,10 @@ impl<'ast> Compressor<'ast> {
         };
         let local = &mut **boxed;
         let should_remove_dead = self.config.remove_dead_code;
-        let scan = &self.scan;
-        self.local_facts
-            .extend(local.names.iter().map(|attributed| scan.local(attributed.name.text)));
+        let Self { scan, names, local_facts, .. } = self;
+        local_facts.extend(
+            local.names.iter().map(|attributed| scan.local(names.find(attributed.name.text))),
+        );
         let is_dead = should_remove_dead
             && !self
                 .local_facts
@@ -311,9 +312,10 @@ impl<'ast> Compressor<'ast> {
             } else if self.config.inline_locals
                 && let Some(read_depth) = inline_read_depth
                 && can_inline(value, landed_locals, read_depth)
+                && let Some(id) = self.names.find(name)
             {
                 let locals = landed_locals.saturating_add(1);
-                self.values.insert(name, Value { expr: value.take(), locals });
+                self.values.insert(id, Value { expr: value.take(), locals });
                 true
             } else {
                 false
@@ -355,7 +357,7 @@ impl<'ast> Compressor<'ast> {
     /// An inlined local's value for its one read, which it reaches as the
     /// walk does, already rewritten.
     pub(super) fn take_value(&mut self, name: &str) -> Option<Expression<'ast>> {
-        let value = self.values.remove(name)?;
+        let value = self.values.remove(&self.names.find(name)?)?;
         self.landed_locals = self.landed_locals.saturating_add(value.locals);
         Some(value.expr)
     }
@@ -392,7 +394,8 @@ impl<'ast> Compressor<'ast> {
         for link in &mut *run.links {
             if link.op == BinOp::Lt
                 && let Expression::Name(name) = last_operand(before)
-                && let Some(value) = self.values.get_mut(name.text)
+                && let Some(id) = self.names.find(name.text)
+                && let Some(value) = self.values.get_mut(&id)
             {
                 let cast = last_operand(&mut value.expr);
                 if matches!(cast, Expression::TypeCast(_)) {
@@ -549,7 +552,10 @@ impl<'ast> Compressor<'ast> {
     /// Past [`MAX_ACTIVE_LOCALS`] in scope, no name is proven a local.
     fn is_in_scope(&self, name: &str) -> bool {
         self.locals.len() <= MAX_ACTIVE_LOCALS
-            && self.locals.iter().rev().any(|local| *local == name)
+            && self
+                .names
+                .find(name)
+                .is_some_and(|id| self.locals.iter().rev().any(|&local| local == id))
     }
 
     /// A group stores right to left, so only a proven local may join, since
@@ -565,7 +571,7 @@ impl<'ast> Compressor<'ast> {
         {
             let target = name.text;
             let is_proven_local = !is_env_binding(target, self.version)
-                && !self.global_names.contains(target)
+                && (self.global_names.is_empty() || !self.global_names.contains(target))
                 && self.is_in_scope(target);
             return is_proven_local.then_some((target, expr));
         }

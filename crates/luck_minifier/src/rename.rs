@@ -12,11 +12,11 @@ mod globals;
 mod names;
 
 use core::cmp::Reverse;
+use core::{mem, ptr};
 
 use luck_allocator::Allocator;
 use luck_ast::{Block, Expression, FunctionBody, Name, Statement, Var, VisitorMut};
 use luck_token::LuaVersion;
-use rustc_hash::FxHashMap;
 
 use self::globals::renamable_globals;
 use self::names::{CandidatePool, ScopeClaims};
@@ -24,6 +24,7 @@ use crate::binding::{
     IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, has_implicit_arg, is_env_binding,
 };
 use crate::explicit_self;
+use crate::name_table::NameTable;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BindingKind {
@@ -88,8 +89,10 @@ pub(crate) struct Renamer<'ast> {
     /// where each open scope's start.
     open_bindings: Vec<usize>,
     open_scope_starts: Vec<usize>,
-    name_ids: FxHashMap<&'ast str, usize>,
-    names: Vec<NameState>,
+    /// The pipeline's names, held while a rename runs.
+    names: NameTable<'ast>,
+    /// What the walk knows of each name, by id.
+    name_states: Vec<NameState>,
     /// Each reference's binding, in walk order.
     resolutions: Vec<usize>,
     /// Each binding and a scope below its own it's read in.
@@ -149,8 +152,8 @@ impl<'ast> Renamer<'ast> {
             bindings: Vec::new(),
             open_bindings: Vec::new(),
             open_scope_starts: Vec::new(),
-            name_ids: FxHashMap::default(),
-            names: Vec::new(),
+            names: NameTable::default(),
+            name_states: Vec::new(),
             resolutions: Vec::new(),
             reference_scopes: Vec::new(),
             global_reads: Vec::new(),
@@ -172,6 +175,20 @@ impl<'ast> Renamer<'ast> {
     pub(crate) fn rename(
         &mut self,
         block: &mut Block<'ast>,
+        names: &mut NameTable<'ast>,
+        should_rename_globals: bool,
+        should_make_self_explicit: bool,
+    ) -> bool {
+        self.names = mem::take(names);
+        let has_changed =
+            self.rename_with_names(block, should_rename_globals, should_make_self_explicit);
+        *names = mem::take(&mut self.names);
+        has_changed
+    }
+
+    fn rename_with_names(
+        &mut self,
+        block: &mut Block<'ast>,
         should_rename_globals: bool,
         should_make_self_explicit: bool,
     ) -> bool {
@@ -181,8 +198,7 @@ impl<'ast> Renamer<'ast> {
         self.bindings.clear();
         self.open_bindings.clear();
         self.open_scope_starts.clear();
-        self.name_ids.clear();
-        self.names.clear();
+        self.name_states.clear();
         self.resolutions.clear();
         self.reference_scopes.clear();
         self.global_reads.clear();
@@ -228,19 +244,19 @@ impl<'ast> Renamer<'ast> {
         let start = self.open_scope_starts.pop().unwrap_or(0);
         for binding in self.open_bindings.drain(start..).rev() {
             if let Some(closing) = self.bindings.get(binding)
-                && let Some(state) = self.names.get_mut(closing.name_id)
+                && let Some(state) = self.name_states.get_mut(closing.name_id)
             {
                 state.innermost = closing.shadowed;
             }
         }
     }
 
-    fn name_id(&mut self, name: &'ast str) -> usize {
-        let next_id = self.names.len();
-        let id = *self.name_ids.entry(name).or_insert(next_id);
-        if id == next_id {
-            self.names
-                .push(NameState { innermost: UNRESOLVED, last_global_read_scope: UNRESOLVED });
+    /// The id of `name`, which then holds the table's copy of its text.
+    fn name_id(&mut self, name: &mut &'ast str) -> usize {
+        let id = self.names.intern(name);
+        if self.name_states.len() <= id {
+            let unread = NameState { innermost: UNRESOLVED, last_global_read_scope: UNRESOLVED };
+            self.name_states.resize(id.saturating_add(1), unread);
         }
         id
     }
@@ -249,15 +265,15 @@ impl<'ast> Renamer<'ast> {
     /// keeps its name counts as read in its own scope, even if nothing reads
     /// it, since a local renamed to that name would otherwise capture every
     /// use of it.
-    fn declare_binding(&mut self, name: &'ast str, kind: BindingKind) {
+    fn declare_binding(&mut self, mut name: &'ast str, kind: BindingKind) {
         if self.is_applying {
             self.next_binding = self.next_binding.saturating_add(1);
             return;
         }
-        let name_id = self.name_id(name);
+        let name_id = self.name_id(&mut name);
         let id = self.bindings.len();
         let scope = self.current_scope;
-        let Some(state) = self.names.get_mut(name_id) else {
+        let Some(state) = self.name_states.get_mut(name_id) else {
             return;
         };
         let shadowed = state.innermost;
@@ -283,6 +299,7 @@ impl<'ast> Renamer<'ast> {
             self.next_binding = self.next_binding.saturating_add(1);
             return;
         }
+        self.names.intern(&mut name.text);
         self.declare_binding(name.text, kind);
     }
 
@@ -298,13 +315,14 @@ impl<'ast> Renamer<'ast> {
             self.apply(name, binding);
             return;
         }
-        let name_id = self.name_id(name.text);
+        let name_id = self.name_id(&mut name.text);
         let binding = self.resolve(name_id);
         self.resolutions.push(binding);
     }
 
     fn apply(&mut self, name: &mut Name<'ast>, binding: usize) {
         if let Some(&new_name) = self.new_names.get(binding)
+            && !ptr::eq(name.text, new_name)
             && name.text != new_name
         {
             name.text = new_name;
@@ -315,7 +333,7 @@ impl<'ast> Renamer<'ast> {
     /// The binding a read of the name here reaches.
     fn resolve(&mut self, name_id: usize) -> usize {
         let current_scope = self.current_scope;
-        let Some((id, binding)) = self.names.get(name_id).and_then(|state| {
+        let Some((id, binding)) = self.name_states.get(name_id).and_then(|state| {
             self.bindings.get_mut(state.innermost).map(|binding| (state.innermost, binding))
         }) else {
             self.read_globally(name_id);
@@ -335,7 +353,7 @@ impl<'ast> Renamer<'ast> {
 
     fn read_globally(&mut self, name_id: usize) {
         let current_scope = self.current_scope;
-        if let Some(state) = self.names.get_mut(name_id)
+        if let Some(state) = self.name_states.get_mut(name_id)
             && state.last_global_read_scope != current_scope
         {
             state.last_global_read_scope = current_scope;
@@ -412,11 +430,11 @@ impl<'ast> Renamer<'ast> {
 
     /// Sorts and dedups the global reads, and finds each name's run of them.
     fn group_global_reads(&mut self) {
-        let Self { global_reads, choice, names, .. } = self;
+        let Self { global_reads, choice, name_states, .. } = self;
         global_reads.sort_unstable();
         global_reads.dedup();
         choice.read_ranges.clear();
-        choice.read_ranges.resize(names.len(), (0, 0));
+        choice.read_ranges.resize(name_states.len(), (0, 0));
         choice.read_scopes.clear();
         for &(name_id, scope) in &*global_reads {
             let index = choice.read_scopes.len();
@@ -530,7 +548,7 @@ impl<'ast> Renamer<'ast> {
     }
 
     fn name_slots(&mut self, slot_count: usize) {
-        let Self { bindings, scopes, choice, pool, name_ids, .. } = self;
+        let Self { bindings, scopes, choice, pool, names, .. } = self;
         // Each slot's live scopes, its bindings' in turn.
         choice.slot_starts.clear();
         choice.slot_starts.resize(slot_count.saturating_add(1), 0);
@@ -604,7 +622,7 @@ impl<'ast> Renamer<'ast> {
         candidate_reads.clear();
         slot_names.clear();
         slot_names.resize(slot_count, "");
-        let reads = Reads { name_ids, ranges: read_ranges, scopes: read_scopes, tree: scopes };
+        let reads = Reads { names, ranges: read_ranges, scopes: read_scopes, tree: scopes };
         for &slot in &*by_frequency {
             let start = slot_starts.get(slot).copied().unwrap_or(0);
             let end = slot_starts.get(slot.saturating_add(1)).copied().unwrap_or(start);
@@ -612,6 +630,9 @@ impl<'ast> Renamer<'ast> {
             if let Some(name) = slot_names.get_mut(slot) {
                 *name = pick(live_scopes, pool, claims, candidate_reads, &reads);
             }
+        }
+        for name in slot_names {
+            names.intern(name);
         }
     }
 }
@@ -762,7 +783,7 @@ impl<'ast> VisitorMut<'ast> for Renamer<'ast> {
 
 /// Where each name is read as a global.
 struct Reads<'reads, 'ast> {
-    name_ids: &'reads FxHashMap<&'ast str, usize>,
+    names: &'reads NameTable<'ast>,
     ranges: &'reads [(usize, usize)],
     scopes: &'reads [usize],
     tree: &'reads [Scope],
@@ -770,7 +791,7 @@ struct Reads<'reads, 'ast> {
 
 impl Reads<'_, '_> {
     fn range_of(&self, name: &str) -> (usize, usize) {
-        self.name_ids.get(name).and_then(|&id| self.ranges.get(id)).copied().unwrap_or((0, 0))
+        self.names.find(name).and_then(|id| self.ranges.get(id)).copied().unwrap_or((0, 0))
     }
 
     /// Whether one of the reads in `range` is in or below `scope`.
@@ -860,15 +881,15 @@ mod tests {
                 end: if id == 0 { 10 } else { id.saturating_add(1) },
             })
             .collect();
-        let mut name_ids = FxHashMap::default();
+        let mut names = NameTable::default();
         let mut ranges = Vec::new();
         let mut scopes = Vec::new();
         for &(name, scope) in global_reads {
-            name_ids.insert(name, ranges.len());
+            assert_eq!(names.intern_text(name), ranges.len());
             ranges.push((scopes.len(), scopes.len().saturating_add(1)));
             scopes.push(scope);
         }
-        let reads = Reads { name_ids: &name_ids, ranges: &ranges, scopes: &scopes, tree: &tree };
+        let reads = Reads { names: &names, ranges: &ranges, scopes: &scopes, tree: &tree };
         let mut candidate_reads = Vec::new();
         slots
             .iter()
