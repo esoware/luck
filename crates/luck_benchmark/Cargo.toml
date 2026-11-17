@@ -50,9 +50,10 @@ harness = false
 codspeed = ["criterion2/codspeed"]
 
 [dependencies]
-luck_core   = { workspace = true }
-luck_parser = { workspace = true }
-luck_token  = { workspace = true }
+luck_allocator = { workspace = true }
+luck_core      = { workspace = true }
+luck_parser    = { workspace = true }
+luck_token     = { workspace = true }
 
 criterion2    = { workspace = true }
 flate2        = { workspace = true }

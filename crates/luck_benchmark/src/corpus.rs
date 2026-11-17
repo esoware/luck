@@ -17,6 +17,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use luck_allocator::Allocator;
 use luck_core::LuaTarget;
 use luck_parser::ParseResult;
 use luck_token::LuaVersion;
@@ -35,8 +36,8 @@ impl TestFile {
     ///
     /// Panics when the file doesn't parse cleanly.
     #[must_use]
-    pub fn parse(&self) -> ParseResult {
-        parse_cleanly(self.file_name, &self.source_text, self.target.lua_version())
+    pub fn parse<'ast>(&'ast self, allocator: &'ast Allocator) -> ParseResult<'ast> {
+        parse_cleanly(allocator, self.file_name, &self.source_text, self.target.lua_version())
     }
 }
 
@@ -58,11 +59,11 @@ impl TestProject {
     ///
     /// Panics when a file doesn't parse cleanly.
     #[must_use]
-    pub fn parse_files(&self) -> Vec<ParseResult> {
+    pub fn parse_files<'ast>(&'ast self, allocator: &'ast Allocator) -> Vec<ParseResult<'ast>> {
         let version = self.target.lua_version();
         self.files
             .iter()
-            .map(|file| parse_cleanly(&file.relative_path, &file.source_text, version))
+            .map(|file| parse_cleanly(allocator, &file.relative_path, &file.source_text, version))
             .collect()
     }
 }
@@ -70,8 +71,13 @@ impl TestProject {
 /// # Panics
 ///
 /// Panics when `source_text` doesn't parse cleanly.
-fn parse_cleanly(name: &str, source_text: &str, version: LuaVersion) -> ParseResult {
-    let parse_result = luck_parser::parse(source_text, version);
+fn parse_cleanly<'ast>(
+    allocator: &'ast Allocator,
+    name: &str,
+    source_text: &'ast str,
+    version: LuaVersion,
+) -> ParseResult<'ast> {
+    let parse_result = luck_parser::parse(allocator, source_text, version);
     assert!(parse_result.errors.is_empty(), "{name}: {:?}", parse_result.errors);
     parse_result
 }

@@ -837,6 +837,7 @@ version = "0.0.0"
 dependencies = [
  "criterion2",
  "flate2",
+ "luck_allocator",
  "luck_bundler",
  "luck_codegen",
  "luck_core",
