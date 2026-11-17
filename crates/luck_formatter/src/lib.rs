@@ -10,10 +10,11 @@
 //! gets them blank-line preservation, `-- luck: format off` regions, and
 //! comments placed by byte position.
 //!
-//! Every entry point takes the arena the caller owns: `format` parses into
-//! it, and all of them put the little text they rewrite there, such as a
-//! requoted string. Everything else the output holds is borrowed from the
-//! tree or the source, never copied.
+//! Every entry point takes an arena the caller owns, and `format` parses into
+//! it. All of them build their element stream there, with the few texts they
+//! rewrite, such as a requoted string. Every other text is borrowed from the
+//! tree or the source, never copied. An arena reused across files, as from an
+//! `AllocatorPool`, saves each one the heap's large allocations.
 //!
 //! # Usage
 //!

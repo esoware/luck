@@ -385,38 +385,31 @@ impl<'ast> Sourced<'ast> {
     }
 }
 
-/// The text a comment prints as, with its line breaks written as LF.
-fn comment_text<'ast>(
-    comment: &Comment,
-    source: &'ast str,
-    version: LuaVersion,
-    allocator: &'ast Allocator,
-) -> &'ast str {
-    let text = comment.span.text(source);
-    if comment.kind == CommentKind::Shebang {
-        // Loaders skip this line up to LF, so a CR in it is text, but a
-        // trailing one would pair with the line break written after it.
-        return text.trim_end_matches('\r');
-    }
-    if !text.contains('\r') {
-        return text;
-    }
-    let mut normalized = String::with_capacity(text.len());
-    let mut cursor = 0;
-    for line_break in line_breaks(text, version) {
-        normalized.push_str(text.get(cursor..line_break.start).unwrap_or_default());
-        normalized.push('\n');
-        cursor = line_break.end;
-    }
-    normalized.push_str(text.get(cursor..).unwrap_or_default());
-    allocator.alloc_str(&normalized)
-}
-
 impl<'ast> Formatter<'ast> {
-    fn sourced_text(&self, comment: &Comment) -> &'ast str {
-        self.comments().source().map_or("", |(source, version)| {
-            comment_text(comment, source, version, self.allocator())
-        })
+    /// The text a parsed comment prints as, with its line breaks written as
+    /// LF.
+    fn sourced_text(&mut self, comment: &Comment) -> &'ast str {
+        let Some((source, version)) = self.comments().source() else {
+            return "";
+        };
+        let text = comment.span.text(source);
+        if comment.kind == CommentKind::Shebang {
+            // Loaders skip this line up to LF, so a CR in it is text, but a
+            // trailing one would pair with the line break written after it.
+            return text.trim_end_matches('\r');
+        }
+        if !text.contains('\r') || !has_line_break(text, version) {
+            return text;
+        }
+        let (normalized, allocator) = self.scratch();
+        let mut cursor = 0;
+        for line_break in line_breaks(text, version) {
+            normalized.push_str(text.get(cursor..line_break.start).unwrap_or_default());
+            normalized.push('\n');
+            cursor = line_break.end;
+        }
+        normalized.push_str(text.get(cursor..).unwrap_or_default());
+        allocator.alloc_str(normalized)
     }
 
     /// Writes `comments` a line each, where `following` is the start of
@@ -772,9 +765,15 @@ impl<'ast> Formatter<'ast> {
         let allocator = self.allocator();
         let texts: Vec<&'ast str> = match &mut self.comments_mut().store {
             Store::Sourced(sourced) => {
-                let (source, version) = (sourced.source, sourced.version);
                 let taken = sourced.take(sourced.pending().len());
-                taken.iter().map(|c| comment_text(c, source, version, allocator)).collect()
+                for (i, comment) in taken.iter().enumerate() {
+                    if i > 0 || has_stmts_before {
+                        self.hard_line();
+                    }
+                    let text = self.sourced_text(comment);
+                    self.text(text);
+                }
+                return;
             }
             Store::Synthetic { comments, .. } => {
                 let mut lines = Vec::new();
@@ -783,7 +782,7 @@ impl<'ast> Formatter<'ast> {
                 }
                 lines
             }
-            Store::Empty => Vec::new(),
+            Store::Empty => return,
         };
         for (i, text) in texts.into_iter().enumerate() {
             if i > 0 || has_stmts_before {

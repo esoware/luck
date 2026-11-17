@@ -184,7 +184,7 @@ pub(crate) struct Formatter<'ast> {
     /// the one around it.
     sorts_requires: bool,
     /// Where text the formatter rewrites is built before it moves to the
-    /// arena, so no rewrite allocates on the heap.
+    /// arena, so every rewrite shares one heap buffer.
     scratch: String,
 }
 
