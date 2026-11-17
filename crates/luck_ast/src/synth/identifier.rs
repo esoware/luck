@@ -73,7 +73,7 @@ fn sanitize_with(name: &str, is_reserved: impl Fn(&str) -> bool) -> CompactStrin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::synth::Synth;
+    use crate::fixtures::Fixture;
 
     #[test]
     fn identifier_validity() {
@@ -155,10 +155,10 @@ mod tests {
         assert_eq!(sanitize_identifier_in("global", LuaVersion::Lua54).as_str(), "global");
         assert_eq!(sanitize_identifier_in("global", LuaVersion::Lua55).as_str(), "_global");
 
-        // The sanitized form feeds identifier() without tripping its assert.
-        let synth = Synth::new().with_version(LuaVersion::Luau);
-        let token = synth.identifier(&sanitize_identifier_in("goto", LuaVersion::Luau));
-        assert!(matches!(token.kind, TokenKind::Identifier(_)));
+        // The sanitized form feeds `name` without tripping its assert.
+        let fixture = Fixture::default();
+        let synth = fixture.synth().with_version(LuaVersion::Luau);
+        assert_eq!(synth.name(&sanitize_identifier_in("goto", LuaVersion::Luau)).text, "goto");
     }
 
     #[test]

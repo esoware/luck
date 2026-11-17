@@ -1,147 +1,150 @@
-use luck_token::{CompoundOp, Span, Token};
+use luck_allocator::{Box, List};
+use luck_token::{CompoundOp, Span};
 
 use crate::expr::{Expression, SuffixedExpression, Var};
 use crate::function::{FunctionAttribute, FunctionBody, Parameter};
-use crate::punctuated::Punctuated;
+use crate::leaf::Name;
 use crate::types::{GenericTypeList, Type};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Block {
+#[derive(Debug, PartialEq, Eq)]
+pub struct Block<'ast> {
     pub span: Span,
-    pub stmts: Vec<Statement>,
-    pub last_stmt: Option<Box<LastStatement>>,
+    pub stmts: List<'ast, Statement<'ast>>,
+    pub last_stmt: Option<LastStatement<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Two words, like [`Expression`].
+#[derive(Debug, PartialEq, Eq)]
 #[expect(
     clippy::enum_variant_names,
     reason = "each variant is named for its payload, and the syntax tree view prints these names"
 )]
-pub enum Statement {
-    Assignment(Box<Assignment>),
+pub enum Statement<'ast> {
+    Assignment(Box<'ast, Assignment<'ast>>),
     /// A chain that ends in a call.
-    FunctionCall(Box<SuffixedExpression>),
-    DoBlock(Box<DoBlock>),
-    WhileLoop(Box<WhileLoop>),
-    RepeatLoop(Box<RepeatLoop>),
-    IfStatement(Box<IfStatement>),
-    NumericFor(Box<NumericFor>),
-    GenericFor(Box<GenericFor>),
-    FunctionDecl(Box<FunctionDecl>),
-    LocalFunction(Box<LocalFunction>),
-    LocalAssignment(Box<LocalAssignment>),
+    FunctionCall(Box<'ast, SuffixedExpression<'ast>>),
+    DoBlock(Box<'ast, DoBlock<'ast>>),
+    WhileLoop(Box<'ast, WhileLoop<'ast>>),
+    RepeatLoop(Box<'ast, RepeatLoop<'ast>>),
+    IfStatement(Box<'ast, IfStatement<'ast>>),
+    NumericFor(Box<'ast, NumericFor<'ast>>),
+    GenericFor(Box<'ast, GenericFor<'ast>>),
+    FunctionDecl(Box<'ast, FunctionDecl<'ast>>),
+    LocalFunction(Box<'ast, LocalFunction<'ast>>),
+    LocalAssignment(Box<'ast, LocalAssignment<'ast>>),
     EmptyStatement(Span),
-    Goto(Box<GotoStatement>),
-    Label(Box<LabelStatement>),
-    GlobalDeclaration(Box<GlobalDeclaration>),
-    GlobalFunction(Box<GlobalFunction>),
-    GlobalStar(Box<GlobalStar>),
+    Goto(Box<'ast, GotoStatement<'ast>>),
+    Label(Box<'ast, LabelStatement<'ast>>),
+    GlobalDeclaration(Box<'ast, GlobalDeclaration<'ast>>),
+    GlobalFunction(Box<'ast, GlobalFunction<'ast>>),
+    GlobalStar(Box<'ast, GlobalStar<'ast>>),
     /// Lua 5.2+: `break` as a regular statement, not only a last statement.
     Break(Span),
-    CompoundAssignment(Box<CompoundAssignment>),
-    TypeDeclaration(Box<TypeDeclaration>),
+    CompoundAssignment(Box<'ast, CompoundAssignment<'ast>>),
+    TypeDeclaration(Box<'ast, TypeDeclaration<'ast>>),
     Error(Span),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LastStatement {
-    Return(Box<ReturnStatement>),
+#[derive(Debug, PartialEq, Eq)]
+pub enum LastStatement<'ast> {
+    Return(Box<'ast, ReturnStatement<'ast>>),
     Break(Span),
     Continue(Span),
     Error(Span),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Assignment {
+#[derive(Debug, PartialEq, Eq)]
+pub struct Assignment<'ast> {
     pub span: Span,
-    pub targets: Punctuated<Var>,
-    pub values: Punctuated<Expression>,
+    pub targets: List<'ast, Var<'ast>>,
+    pub values: List<'ast, Expression<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DoBlock {
+#[derive(Debug, PartialEq, Eq)]
+pub struct DoBlock<'ast> {
     pub span: Span,
-    pub block: Block,
+    pub block: Block<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WhileLoop {
+#[derive(Debug, PartialEq, Eq)]
+pub struct WhileLoop<'ast> {
     pub span: Span,
-    pub condition: Expression,
-    pub block: Block,
+    pub condition: Expression<'ast>,
+    pub block: Block<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepeatLoop {
+#[derive(Debug, PartialEq, Eq)]
+pub struct RepeatLoop<'ast> {
     pub span: Span,
-    pub block: Block,
-    pub condition: Expression,
+    pub block: Block<'ast>,
+    pub condition: Expression<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IfStatement {
+#[derive(Debug, PartialEq, Eq)]
+pub struct IfStatement<'ast> {
     pub span: Span,
-    pub condition: Expression,
-    pub block: Block,
-    pub elseif_clauses: Vec<ElseIfClause>,
-    pub else_clause: Option<ElseClause>,
+    pub condition: Expression<'ast>,
+    pub block: Block<'ast>,
+    pub elseif_clauses: List<'ast, ElseIfClause<'ast>>,
+    pub else_clause: Option<ElseClause<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ElseIfClause {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ElseIfClause<'ast> {
     pub span: Span,
-    pub condition: Expression,
-    pub block: Block,
+    pub condition: Expression<'ast>,
+    pub block: Block<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ElseClause {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ElseClause<'ast> {
     pub span: Span,
-    pub block: Block,
+    pub block: Block<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NumericFor {
+#[derive(Debug, PartialEq, Eq)]
+pub struct NumericFor<'ast> {
     pub span: Span,
-    pub name: Token,
-    pub type_annotation: Option<Type>,
-    pub start: Expression,
-    pub limit: Expression,
-    pub step: Option<Expression>,
-    pub block: Block,
+    pub name: Name<'ast>,
+    pub type_annotation: Option<Type<'ast>>,
+    pub start: Expression<'ast>,
+    pub limit: Expression<'ast>,
+    pub step: Option<Expression<'ast>>,
+    pub block: Block<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GenericFor {
+#[derive(Debug, PartialEq, Eq)]
+pub struct GenericFor<'ast> {
     pub span: Span,
-    pub names: Punctuated<Parameter>,
-    pub exprs: Punctuated<Expression>,
-    pub block: Block,
+    pub names: List<'ast, Parameter<'ast>>,
+    pub exprs: List<'ast, Expression<'ast>>,
+    pub block: Block<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionName {
+/// `a.b.c` or `a.b:c`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionName<'ast> {
     pub span: Span,
-    pub names: Vec<Token>,
-    pub method: Option<Token>,
+    pub names: List<'ast, Name<'ast>>,
+    pub method: Option<Name<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionDecl {
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionDecl<'ast> {
     pub span: Span,
     /// Luau: `@attr` list preceding `function`. Empty outside Luau.
-    pub attributes: Vec<FunctionAttribute>,
-    pub name: FunctionName,
-    pub body: FunctionBody,
+    pub attributes: List<'ast, FunctionAttribute<'ast>>,
+    pub name: FunctionName<'ast>,
+    pub body: FunctionBody<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalFunction {
+#[derive(Debug, PartialEq, Eq)]
+pub struct LocalFunction<'ast> {
     pub span: Span,
     /// Luau: `@attr` list preceding `local function`. Empty outside Luau.
-    pub attributes: Vec<FunctionAttribute>,
-    pub name: Token,
-    pub body: FunctionBody,
+    pub attributes: List<'ast, FunctionAttribute<'ast>>,
+    pub name: Name<'ast>,
+    pub body: FunctionBody<'ast>,
     pub kind: LocalFunctionKind,
 }
 
@@ -174,28 +177,29 @@ impl LocalFunctionKind {
     }
 }
 
-/// The name stays a token because the parser keeps whatever identifier it
-/// finds there, after reporting any name other than `const` or `close`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Attribute {
+/// Lua 5.4+: `<const>` or `<close>`. The name is whatever identifier the
+/// parser finds there, after it reports any other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Attribute<'ast> {
     pub span: Span,
-    pub name: Token,
+    pub name: Name<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttributedName {
-    pub name: Token,
+#[derive(Debug, PartialEq, Eq)]
+pub struct AttributedName<'ast> {
+    pub name: Name<'ast>,
     /// Luau: `: T` annotation. The parser never sets both this and
     /// `attribute`, since attributes are Lua 5.4+ only.
-    pub type_annotation: Option<Type>,
-    pub attribute: Option<Box<Attribute>>,
+    pub type_annotation: Option<Type<'ast>>,
+    pub attribute: Option<Box<'ast, Attribute<'ast>>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalAssignment {
+/// `exprs` is empty for a declaration with no `=`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LocalAssignment<'ast> {
     pub span: Span,
-    pub names: Punctuated<AttributedName>,
-    pub exprs: Option<Punctuated<Expression>>,
+    pub names: List<'ast, AttributedName<'ast>>,
+    pub exprs: List<'ast, Expression<'ast>>,
     pub kind: LocalAssignmentKind,
 }
 
@@ -230,65 +234,70 @@ impl LocalAssignmentKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GotoStatement {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GotoStatement<'ast> {
     pub span: Span,
-    pub name: Token,
+    pub name: Name<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LabelStatement {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LabelStatement<'ast> {
     pub span: Span,
-    pub name: Token,
+    pub name: Name<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReturnStatement {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReturnStatement<'ast> {
     pub span: Span,
-    pub exprs: Punctuated<Expression>,
+    pub exprs: List<'ast, Expression<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompoundAssignment {
+/// Luau: `var op= expr`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CompoundAssignment<'ast> {
     pub span: Span,
-    pub var: Var,
+    pub var: Var<'ast>,
     pub op: CompoundOp,
-    pub expr: Expression,
+    pub expr: Expression<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeDeclaration {
+/// Luau: `type Name<T> = T` or `type function Name funcbody`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TypeDeclaration<'ast> {
     pub span: Span,
     pub is_exported: bool,
-    pub name: Token,
-    pub generics: Option<Box<GenericTypeList>>,
-    pub type_value: TypeDeclarationValue,
+    pub name: Name<'ast>,
+    pub generics: Option<Box<'ast, GenericTypeList<'ast>>>,
+    pub value: TypeDeclarationValue<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeDeclarationValue {
-    Alias(Type),
+#[derive(Debug, PartialEq, Eq)]
+pub enum TypeDeclarationValue<'ast> {
+    Alias(Type<'ast>),
     /// `type function Name funcbody`, a compile-time function evaluated
     /// during type checking. Its body is ordinary Luau.
-    TypeFunction(Box<FunctionBody>),
+    TypeFunction(Box<'ast, FunctionBody<'ast>>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GlobalDeclaration {
+/// Lua 5.5: `global names [= exprs]`. `exprs` is empty when there's no `=`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct GlobalDeclaration<'ast> {
     pub span: Span,
-    pub names: Punctuated<AttributedName>,
-    pub exprs: Option<Punctuated<Expression>>,
+    pub names: List<'ast, AttributedName<'ast>>,
+    pub exprs: List<'ast, Expression<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GlobalFunction {
+/// Lua 5.5: `global function Name funcbody`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct GlobalFunction<'ast> {
     pub span: Span,
-    pub name: Token,
-    pub body: FunctionBody,
+    pub name: Name<'ast>,
+    pub body: FunctionBody<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GlobalStar {
+/// Lua 5.5: `global *`, with an optional attribute before the `*`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlobalStar<'ast> {
     pub span: Span,
-    pub attribute: Option<Attribute>,
+    pub attribute: Option<Attribute<'ast>>,
 }

@@ -826,6 +826,7 @@ dependencies = [
 name = "luck_ast"
 version = "0.6.0"
 dependencies = [
+ "luck_allocator",
  "luck_token",
  "rustc-hash",
 ]

@@ -13,36 +13,41 @@ pub use identifier::{
     is_valid_identifier, is_valid_identifier_in, sanitize_identifier, sanitize_identifier_in,
 };
 pub use literal::InterpolatedStringPart;
-pub use types::{TypeFieldAccess, TypeFieldSpec};
+pub use types::TypeFieldSpec;
 
-use alloc::sync::Arc;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
-use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
+use luck_allocator::{Allocator, Box, List};
+use luck_token::{LuaVersion, Span};
 
-/// Node constructors backed by a monotonic span counter.
+use crate::leaf::{Literal, Name};
+
+/// Node constructors for trees built without source text.
 ///
-/// Builds `luck_ast` nodes without any source text. Writing the node structs
-/// by hand means spelling out every `Token { kind, span }`; these
-/// constructors do that for you. They're built for tools that emit an AST
-/// directly, so they also take on the output-validity work such a tool would
-/// otherwise reimplement.
+/// They're built for tools that emit a tree directly, such as decompilers,
+/// so they also take on the output-validity work such a tool would otherwise
+/// reimplement. Nodes go in the [`Allocator`] the synthesizer is given, and
+/// every name and literal is copied into it. Lists come in as arrays or as
+/// iterators of known length.
 ///
-/// Methods take `&self`, so calls nest:
-/// `synth.call(synth.name_expr("f"), vec![synth.nil()])`.
+/// `Synth` is `Copy`, and its methods take `&self`, so calls nest:
+/// `synth.call(synth.name_expr("f"), [synth.nil()])`.
 ///
 /// # Spans
 ///
-/// Every synthesized node gets a fresh single-point span `Span::new(n, n)`,
-/// with `n` strictly increasing until the counter saturates at `u32::MAX`,
-/// after which every later node gets that offset instead of wrapping back to
-/// zero. These spans don't index into any source; they only keep nodes
-/// distinguishable for comment anchoring and diagnostics. Spans are unique
-/// within one `Synth` and across every synthesizer created from it with
-/// [`Synth::share`], so when several synthesizers feed one tree (parallel
-/// decompilation of function protos, say), have them share one counter. To
-/// splice synthetic nodes into a parsed AST, use [`Synth::starting_at`] to
-/// put them above the source's byte offsets, or comment anchors will
+/// Every synthesized node gets a fresh single-point span `Span::new(n, n)`
+/// from the [`SpanCounter`] the synthesizer is given, with `n` strictly
+/// increasing until it reaches `u32::MAX`, after which every later node gets
+/// that offset instead of wrapping back to zero. These spans don't index into
+/// any source; they only keep nodes distinguishable for comment anchoring and
+/// diagnostics. Spans are unique among every synthesizer that shares a
+/// counter, so when several feed one tree, give them one. An arena isn't
+/// shared across threads, but a counter is: a synthesizer on each thread,
+/// each with its own arena and all with one counter, can build the pieces of
+/// one tree in parallel, and the pieces join into it unchanged, since a tree
+/// may hold nodes from any number of arenas that outlive it. To splice
+/// synthetic nodes into a parsed tree, start the counter above the source's
+/// byte offsets with [`SpanCounter::starting_at`], or comment anchors will
 /// collide.
 ///
 /// # What the constructors guarantee
@@ -63,9 +68,9 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   parenthesized expression, or type instantiation: `("s"):rep(2)`,
 ///   `({}).x`, `(function() end)()`.
 /// - **Escaping.** [`Synth::string`] and [`Synth::string_bytes`] produce the
-///   quoted token text. Decimal escapes are always three digits, so a
-///   following literal digit can't extend them. Interpolated-string segments
-///   escape `` ` ``, `{`, and `\`. [`Synth::long_string`] falls back to the
+///   quoted literal text. Decimal escapes are always three digits, so a
+///   following literal digit can't extend them. Interpolated-string text
+///   escapes `` ` ``, `{`, and `\`. [`Synth::long_string`] falls back to the
 ///   quoted form for carriage returns and NUL bytes.
 /// - **Numeric literals.** [`Synth::number_f64`] and [`Synth::number_i64`]
 ///   render any value, including those with no literal form: negatives
@@ -77,11 +82,17 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   drop the `.0`, `i64::MIN` becomes an exact negated decimal literal, and
 ///   other integers may round to the nearest double. NaN sign and payload
 ///   aren't preserved.
-/// - **Loud failure on invalid names.** [`Synth::identifier`] asserts, in release
+/// - **Loud failure on invalid names.** [`Synth::name`] asserts, in release
 ///   builds too, that its argument is an identifier, so hostile input such
 ///   as bytecode debug info or obfuscated names fails fast instead of
 ///   producing output that won't re-parse. Every constructor that takes a
 ///   name goes through it and says so under `# Panics`.
+/// - **Runs.** A run of suffixes, of binary operators at one level, or of
+///   `?`s on a type is one level of nesting however long it gets, and the
+///   constructors join a run they extend rather than nest it. Extending a
+///   run at its end takes amortized constant time and arena space. Extending
+///   a right-associative run (`..` or `^`) at its start shifts the run, so
+///   build a long one from the left, as a binary operator's operands come.
 ///
 /// # What the caller still owes
 ///
@@ -103,25 +114,22 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 ///   [`is_valid_identifier`] / [`is_valid_identifier_in`] and rename them
 ///   yourself. Sanitized names are deterministic but can collide, so
 ///   deduplication is up to the caller.
-/// - **Raw text.** [`Synth::token`] takes a token of any kind, and
-///   [`Synth::number`] and [`Synth::integer_literal`] take numeral text as
-///   written. The printers print each leaf as the tree holds it, so a token
-///   that doesn't belong where it's placed, such as `end` as a name, or text
-///   that isn't one numeral, prints output that doesn't read back as the tree.
+/// - **Raw text.** [`Synth::number`] and [`Synth::integer_literal`] take
+///   numeral text as written. The printers print each leaf as the tree holds
+///   it, so text that isn't one numeral prints output that doesn't read back
+///   as the tree. The same goes for a node built by hand, with spans from
+///   [`Synth::next_span`].
 /// - **Type names.** A type reads a bare `typeof` as the start of
 ///   `typeof(expr)`, so [`Synth::ty_named`] or [`Synth::ty_generic`] given
 ///   `typeof` prints a type that doesn't read back. Don't build one: a type
 ///   named `typeof` can be referred to only through its module, with
 ///   [`Synth::ty_qualified`], or as a pack, with [`Synth::ty_generic_pack`].
-/// - **Nesting depth.** No constructor counts it. Every traversal, drop and
-///   clone included, recurses once per level of nesting, so keep the tree
-///   within [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH), the deepest
-///   `luck_parser` builds. A run of suffixes, of binary operators at one
-///   level, or of `?`s on a type is one level however long it gets, and the
-///   constructors join a run they extend rather than nest it.
-///   [`block_nesting_depth`](crate::block_nesting_depth) and
-///   [`expr_nesting_depth`](crate::expr_nesting_depth) measure a tree of any
-///   depth without recursing past the cap.
+/// - **Nesting depth.** No constructor counts it. Every traversal recurses
+///   once per level of nesting, so keep the tree within
+///   [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH), the deepest
+///   `luck_parser` builds. [`block_nesting_depth`](crate::block_nesting_depth)
+///   and [`expr_nesting_depth`](crate::expr_nesting_depth) measure a tree of
+///   any depth without recursing past the cap.
 ///
 /// To format the result, pass it to `luck_formatter::format_block`, with any
 /// [`SyntheticComment`]s wrapped in `Comments::synthetic`. For compact
@@ -132,58 +140,79 @@ use luck_token::{CompactString, LuaVersion, Span, Token, TokenKind};
 /// # Usage
 ///
 /// ```
-/// use luck_ast::Synth;
+/// use luck_allocator::Allocator;
+/// use luck_ast::{SpanCounter, Synth};
 /// use luck_token::BinOp;
 ///
-/// let synth = Synth::new();
+/// let allocator = Allocator::new();
+/// let spans = SpanCounter::new();
+/// let synth = Synth::new(&allocator, &spans);
 /// // total = a + b * 2 -- precedence handled, no manual parens.
 /// let sum = synth.binary_op(
 ///     synth.name_expr("a"),
 ///     BinOp::Add,
 ///     synth.binary_op(synth.name_expr("b"), BinOp::Mul, synth.number_i64(2)),
 /// );
-/// let stmt = synth.assign(vec![synth.name_var("total")], vec![sum]);
-/// let block = synth.block(vec![stmt], None);
+/// let stmt = synth.assign([synth.name_var("total")], [sum]);
+/// let block = synth.block([stmt], None);
 /// assert_eq!(block.stmts.len(), 1);
 /// ```
-#[derive(Debug, Default)]
-pub struct Synth {
-    next_offset: Arc<AtomicU32>,
+#[derive(Debug, Clone, Copy)]
+pub struct Synth<'ast> {
+    allocator: &'ast Allocator,
+    spans: &'ast SpanCounter,
     version: Option<LuaVersion>,
+}
+
+/// Where a [`Synth`] takes each node's span from, shared by every synthesizer
+/// whose nodes join one tree, on any number of threads.
+#[derive(Debug, Default)]
+pub struct SpanCounter {
+    /// Wider than an offset, so it can't wrap before every offset is given
+    /// out.
+    next_offset: AtomicU64,
+}
+
+impl SpanCounter {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { next_offset: AtomicU64::new(0) }
+    }
+
+    /// A counter whose spans start at `offset`, for splicing nodes into a
+    /// parsed tree without colliding with its byte offsets.
+    #[must_use]
+    pub fn starting_at(offset: u32) -> Self {
+        Self { next_offset: AtomicU64::new(u64::from(offset)) }
+    }
+
+    /// Relaxed is enough: uniqueness needs atomicity, not ordering. Offsets
+    /// stop at `u32::MAX` instead of wrapping, since a wrapped counter would
+    /// hand out offsets that collide with earlier nodes or real source
+    /// positions. Repeating `u32::MAX` keeps synthesis infallible and only
+    /// costs comment placement.
+    fn next_span(&self) -> Span {
+        let counted = self.next_offset.fetch_add(1, Ordering::Relaxed);
+        let offset = u32::try_from(counted).unwrap_or(u32::MAX);
+        Span::new(offset, offset)
+    }
 }
 
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "the synthesizer is one type with its constructors split by node family"
 )]
-impl Synth {
+impl<'ast> Synth<'ast> {
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// A synthesizer whose spans start at `offset`, for splicing nodes into a
-    /// parsed AST without colliding with its byte offsets. For several
-    /// synthesizers feeding one tree, use [`Synth::share`] instead of picking
-    /// disjoint ranges.
-    #[must_use]
-    pub fn starting_at(offset: u32) -> Self {
-        Self { next_offset: Arc::new(AtomicU32::new(offset)), version: None }
-    }
-
-    /// A synthesizer that shares this one's span counter and version pin.
-    /// Spans never collide across the family, so give one to each thread when
-    /// synthesizing in parallel.
-    #[must_use]
-    pub fn share(&self) -> Self {
-        Self { next_offset: Arc::clone(&self.next_offset), version: self.version }
+    pub const fn new(allocator: &'ast Allocator, spans: &'ast SpanCounter) -> Self {
+        Self { allocator, spans, version: None }
     }
 
     /// Pins name handling and number rendering to one dialect.
     ///
-    /// [`Synth::identifier`] checks names against that dialect's keywords
-    /// instead of only the ones every dialect reserves. [`Synth::field_or_index`]
-    /// and [`Synth::record`] use the dot or named form for any name that's an
+    /// [`Synth::name`] checks names against that dialect's keywords instead
+    /// of only the ones every dialect reserves. [`Synth::field_or_index`] and
+    /// [`Synth::record`] use the dot or named form for any name that's an
     /// identifier there (`t.goto` on Luau) instead of falling back to
     /// brackets. [`Synth::number_f64`] and [`Synth::number_i64`] render for
     /// that dialect's number model. It deliberately doesn't gate which
@@ -194,32 +223,11 @@ impl Synth {
         self
     }
 
-    /// A fresh single-point span, distinct from every earlier one until the
-    /// counter saturates.
-    fn next_span(&self) -> Span {
-        // Relaxed is enough: uniqueness needs atomicity, not ordering. The
-        // loop stops at `u32::MAX` instead of wrapping, since a wrapped
-        // counter would hand out offsets that collide with earlier nodes or
-        // real source positions. Repeating `u32::MAX` keeps synthesis
-        // infallible and only costs comment placement.
-        let mut offset = self.next_offset.load(Ordering::Relaxed);
-        while let Some(next) = offset.checked_add(1) {
-            match self.next_offset.compare_exchange_weak(
-                offset,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(observed) => offset = observed,
-            }
-        }
-        Span::new(offset, offset)
-    }
-
+    /// A fresh single-point span, distinct from every earlier one the counter
+    /// gave out until it reaches `u32::MAX`, for a node built by hand.
     #[must_use]
-    pub fn token(&self, kind: TokenKind) -> Token {
-        Token::new(kind, self.next_span())
+    pub fn next_span(&self) -> Span {
+        self.spans.next_span()
     }
 
     /// Asserts validity in release builds too, so an untrusted name fails
@@ -230,24 +238,16 @@ impl Synth {
     ///
     /// # Panics
     ///
-    /// Panics if `name` isn't an identifier under the pinned version, or in
+    /// Panics if `text` isn't an identifier under the pinned version, or in
     /// any dialect when none is pinned.
     #[must_use]
-    pub fn identifier(&self, name: &str) -> Token {
-        self.token(TokenKind::Identifier(self.identifier_name(name)))
-    }
-
-    /// # Panics
-    ///
-    /// Panics if `name` isn't an identifier under the pinned version, or in
-    /// any dialect when none is pinned.
-    fn identifier_name(&self, name: &str) -> CompactString {
+    pub fn name(&self, text: &str) -> Name<'ast> {
         let is_valid = self.version.map_or_else(
-            || is_valid_identifier(name),
-            |version| is_valid_identifier_in(name, version),
+            || is_valid_identifier(text),
+            |version| is_valid_identifier_in(text, version),
         );
-        assert!(is_valid, "synth: {name:?} is not a valid identifier");
-        CompactString::from(name)
+        assert!(is_valid, "synth: {text:?} is not a valid identifier");
+        Name { text: self.allocator.alloc_str(text), span: self.next_span() }
     }
 
     /// Whether `name` works as a `.name` field or `name =` key: an identifier
@@ -257,6 +257,23 @@ impl Synth {
             || LuaVersion::ALL.iter().all(|&version| is_valid_identifier_in(name, version)),
             |version| is_valid_identifier_in(name, version),
         )
+    }
+
+    fn list<T, Items>(&self, items: Items) -> List<'ast, T>
+    where
+        Items: IntoIterator<Item = T>,
+        Items::IntoIter: ExactSizeIterator,
+    {
+        List::from_iter_in(items, self.allocator)
+    }
+
+    fn boxed<T>(&self, value: T) -> Box<'ast, T> {
+        Box::new_in(value, self.allocator)
+    }
+
+    /// `text` copied into the arena, at a fresh span.
+    fn literal(&self, text: &str) -> Literal<'ast> {
+        Literal { text: self.allocator.alloc_str(text), span: self.next_span() }
     }
 }
 
@@ -268,11 +285,14 @@ mod tests {
     use rustc_hash::FxHashSet;
 
     use super::*;
-    use crate::expr::{Expression, Suffix};
+    use crate::expr::{Expression, FunctionArgs, Suffix};
+    use crate::fixtures::Fixture;
+    use crate::stmt::LastStatement;
 
     #[test]
     fn spans_are_monotonic() {
-        let synth = Synth::new();
+        let fixture = Fixture::default();
+        let synth = fixture.synth();
         let first = synth.nil();
         let second = synth.nil();
         let third = synth.number("3");
@@ -282,18 +302,20 @@ mod tests {
 
     #[test]
     fn starting_at_offsets_spans() {
-        let synth = Synth::starting_at(1000);
-        assert_eq!(synth.nil().span().start, 1000);
+        let allocator = Allocator::new();
+        let spans = SpanCounter::starting_at(1000);
+        assert_eq!(Synth::new(&allocator, &spans).nil().span().start, 1000);
     }
 
     #[test]
     fn exhausted_spans_never_wrap_even_when_shared() {
-        let synth = Synth::starting_at(u32::MAX - 1);
-        let shared = synth.share();
+        let (first, second) = (Allocator::new(), Allocator::new());
+        let spans = SpanCounter::starting_at(u32::MAX - 1);
+        let synth = Synth::new(&first, &spans);
+        let shared = Synth::new(&second, &spans);
         assert_eq!(synth.nil().span().start, u32::MAX - 1);
-        for allocator in [&synth, &shared, &synth] {
-            assert_eq!(allocator.nil().span().start, u32::MAX);
-            assert_eq!(allocator.next_offset.load(Ordering::Relaxed), u32::MAX);
+        for synthesizer in [&synth, &shared, &synth] {
+            assert_eq!(synthesizer.nil().span().start, u32::MAX);
         }
     }
 
@@ -303,20 +325,18 @@ mod tests {
         // the counter to zero while another is mid-allocation, handing out
         // offsets that collide with the range's first nodes.
         let start = u32::MAX - 4;
-        let synth = Synth::starting_at(start);
-        let mut offsets: Vec<u32> = Vec::new();
-        thread::scope(|scope| {
-            let handles: Vec<_> = repeat_with(|| {
-                let shared = synth.share();
-                scope.spawn(move || {
-                    repeat_with(|| shared.nil().span().start).take(4).collect::<Vec<u32>>()
+        let spans = SpanCounter::starting_at(start);
+        let offsets: Vec<u32> = thread::scope(|scope| {
+            let workers: Vec<_> = repeat_with(|| {
+                scope.spawn(|| {
+                    let allocator = Allocator::new();
+                    let synth = Synth::new(&allocator, &spans);
+                    repeat_with(|| synth.nil().span().start).take(4).collect::<Vec<u32>>()
                 })
             })
             .take(4)
             .collect();
-            for handle in handles {
-                offsets.extend(handle.join().unwrap());
-            }
+            workers.into_iter().flat_map(|worker| worker.join().unwrap()).collect()
         });
         assert!(offsets.iter().all(|&offset| offset >= start), "{offsets:?}");
         // Only `u32::MAX` may repeat; every other offset is distinct however
@@ -325,63 +345,78 @@ mod tests {
             offsets.iter().copied().filter(|&offset| offset < u32::MAX).collect();
         let unique: FxHashSet<u32> = allocated.iter().copied().collect();
         assert_eq!(unique.len(), allocated.len(), "{offsets:?}");
-        assert_eq!(synth.next_offset.load(Ordering::Relaxed), u32::MAX);
+        assert_eq!(allocated.len(), 4, "{offsets:?}");
     }
 
     #[test]
-    fn shared_synths_never_collide() {
-        let synth = Synth::new();
-        let shared = synth.share();
-        let spans = [
-            synth.nil().span().start,
-            shared.nil().span().start,
-            synth.nil().span().start,
-            shared.nil().span().start,
-        ];
-        let unique: FxHashSet<u32> = spans.iter().copied().collect();
-        assert_eq!(unique.len(), spans.len(), "{spans:?}");
-    }
-
-    #[test]
-    fn shared_synths_never_collide_across_threads() {
-        let synth = Synth::new();
-        let mut all_spans: Vec<u32> = Vec::new();
-        thread::scope(|scope| {
-            let handles: Vec<_> = repeat_with(|| {
-                let shared = synth.share();
-                scope.spawn(move || {
-                    repeat_with(|| shared.nil().span().start).take(250).collect::<Vec<u32>>()
+    fn synths_sharing_a_counter_build_one_tree_across_threads() {
+        let spans = SpanCounter::new();
+        let mut arenas: Vec<Allocator> = repeat_with(Allocator::new).take(4).collect();
+        let main_arena = Allocator::new();
+        let synth = Synth::new(&main_arena, &spans);
+        let shared = &spans;
+        let pieces: Vec<Expression<'_>> = thread::scope(|scope| {
+            let workers: Vec<_> = arenas
+                .iter_mut()
+                .map(|arena| {
+                    scope.spawn(move || {
+                        let worker = Synth::new(arena, shared);
+                        let args = repeat_with(|| worker.nil()).take(250).collect::<Vec<_>>();
+                        worker.call(worker.name_expr("f"), args)
+                    })
                 })
-            })
-            .take(4)
-            .collect();
-            for handle in handles {
-                all_spans.extend(handle.join().unwrap());
-            }
+                .collect();
+            workers.into_iter().map(|worker| worker.join().unwrap()).collect()
         });
-        let unique: FxHashSet<u32> = all_spans.iter().copied().collect();
-        assert_eq!(unique.len(), all_spans.len());
+        let tree = synth.block([], Some(synth.return_(pieces)));
+        let mut offsets = Vec::new();
+        let Some(LastStatement::Return(returned)) = &tree.last_stmt else {
+            panic!("expected a return");
+        };
+        for piece in &returned.exprs {
+            let Expression::Suffixed(chain) = piece else {
+                panic!("expected a call, found {piece:?}");
+            };
+            offsets.push(chain.span.start);
+            let Suffix::Call(FunctionArgs::Parenthesized { args, .. }) = chain.suffixes.first()
+            else {
+                panic!("expected parenthesized arguments");
+            };
+            offsets.extend(args.iter().map(|arg| arg.span().start));
+        }
+        let unique: FxHashSet<u32> = offsets.iter().copied().collect();
+        assert_eq!(unique.len(), offsets.len());
+        assert_eq!(offsets.len(), 4 * 251);
     }
 
     #[test]
-    fn share_preserves_version_pin() {
-        let shared = Synth::new().with_version(LuaVersion::Luau).share();
+    fn with_version_pins_field_names() {
+        let fixture = Fixture::default();
+        let synth = fixture.synth().with_version(LuaVersion::Luau);
         // `goto` is an identifier only under the pinned Luau dialect, so the
-        // dot form proves the pin carried over.
-        let Expression::Suffixed(chain) = shared.field_or_index(shared.name_expr("t"), "goto")
-        else {
+        // dot form proves the pin.
+        let Expression::Suffixed(chain) = synth.field_or_index(synth.name_expr("t"), "goto") else {
             panic!("expected a field");
         };
         assert!(matches!(chain.suffixes.last(), Suffix::Field(_)));
     }
 
     #[test]
-    fn synth_is_send_and_sync() {
+    fn names_are_copied_into_the_arena() {
+        let fixture = Fixture::default();
+        let text = String::from("local_name");
+        let name = fixture.synth().name(&text);
+        drop(text);
+        assert_eq!(name.text, "local_name");
+    }
+
+    #[test]
+    fn span_counter_is_send_and_sync() {
         fn assert_send_sync<T>()
         where
             T: Send + Sync,
         {
         }
-        assert_send_sync::<Synth>();
+        assert_send_sync::<SpanCounter>();
     }
 }

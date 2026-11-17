@@ -1,88 +1,87 @@
-use luck_token::{Token, TokenKind, encode_string};
-
 use crate::expr::Expression;
-use crate::punctuated::Punctuated;
 use crate::synth::Synth;
 use crate::types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
     IntersectionType, NamedType, OptionalType, ParenthesizedType, TableType, Type, TypeArgs,
-    TypeField, TypePack, TypeofType, UnionType, VariadicType,
+    TypeField, TypeFieldAccess, TypePack, TypeofType, UnionType, VariadicType,
 };
 
-/// A table-type field for [`Synth::ty_table`], which fills in the spans and
-/// separators a real [`TypeField`] needs.
+/// A table-type field for [`Synth::ty_table`], which fills in the spans a
+/// real [`TypeField`] needs.
 #[derive(Debug)]
-pub enum TypeFieldSpec<'name> {
-    Named { access: Option<TypeFieldAccess>, name: &'name str, value: Type },
-    Indexer { access: Option<TypeFieldAccess>, key: Type, value: Type },
-    Array(Type),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TypeFieldAccess {
-    Read,
-    Write,
+pub enum TypeFieldSpec<'name, 'ast> {
+    Named { access: Option<TypeFieldAccess>, name: &'name str, value: Type<'ast> },
+    Indexer { access: Option<TypeFieldAccess>, key: Type<'ast>, value: Type<'ast> },
+    Array(Type<'ast>),
 }
 
 #[expect(
     clippy::multiple_inherent_impl,
     reason = "the synthesizer is one type with its constructors split by node family"
 )]
-impl Synth {
+impl<'ast> Synth<'ast> {
     /// # Panics
     ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
-    pub fn ty_named(&self, name: &str) -> Type {
-        Type::Name { name: self.identifier_name(name), span: self.next_span() }
+    pub fn ty_named(&self, name: &str) -> Type<'ast> {
+        Type::Name(self.boxed(self.name(name)))
     }
 
     /// # Panics
     ///
-    /// Panics if `module` or `name` isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if `module` or `name` isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
-    pub fn ty_qualified(&self, module: &str, name: &str) -> Type {
-        Type::Named(Box::new(NamedType {
+    pub fn ty_qualified(&self, module: &str, name: &str) -> Type<'ast> {
+        Type::Named(self.boxed(NamedType {
             span: self.next_span(),
-            prefix: Some(self.identifier(module)),
-            name: self.identifier(name),
+            prefix: Some(self.name(module)),
+            name: self.name(name),
             generics: None,
         }))
     }
 
     /// # Panics
     ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
-    pub fn ty_generic(&self, name: &str, args: Vec<Type>) -> Type {
-        Type::Named(Box::new(NamedType {
+    pub fn ty_generic<Args>(&self, name: &str, args: Args) -> Type<'ast>
+    where
+        Args: IntoIterator<Item = Type<'ast>>,
+        Args::IntoIter: ExactSizeIterator,
+    {
+        Type::Named(self.boxed(NamedType {
             span: self.next_span(),
             prefix: None,
-            name: self.identifier(name),
-            generics: Some(TypeArgs { span: self.next_span(), args: Punctuated::from_items(args) }),
+            name: self.name(name),
+            generics: Some(TypeArgs { span: self.next_span(), args: self.list(args) }),
         }))
     }
 
     #[must_use]
-    pub fn ty_typeof(&self, expr: Expression) -> Type {
-        Type::Typeof(Box::new(TypeofType { span: self.next_span(), expr }))
+    pub fn ty_typeof(&self, expr: Expression<'ast>) -> Type<'ast> {
+        Type::Typeof(self.boxed(TypeofType { span: self.next_span(), expr }))
     }
 
     /// Parenthesizes a union, intersection, or function type so it stays a
     /// single member of the type being built: `(A | B)?`, `(() -> A) | B`.
-    fn parenthesize_if_composite(&self, inner: Type) -> Type {
+    fn parenthesize_if_composite(&self, inner: Type<'ast>) -> Type<'ast> {
         match inner {
             Type::Union(_) | Type::Intersection(_) | Type::Function(_) => {
                 self.ty_parenthesized(inner)
             }
-            Type::Name { .. }
+            Type::Name(_)
             | Type::Named(_)
             | Type::Typeof(_)
             | Type::Table(_)
             | Type::Optional(_)
             | Type::Parenthesized(_)
             | Type::Pack(_)
-            | Type::Singleton(_)
+            | Type::Nil(_)
+            | Type::True(_)
+            | Type::False(_)
+            | Type::StringLiteral(_)
+            | Type::Number(_)
             | Type::Variadic(_)
             | Type::GenericPack(_)
             | Type::Error(_) => inner,
@@ -90,70 +89,70 @@ impl Synth {
     }
 
     #[must_use]
-    pub fn ty_optional(&self, inner: Type) -> Type {
-        Type::Optional(Box::new(OptionalType {
-            span: self.next_span(),
-            type_value: self.parenthesize_if_composite(inner),
-        }))
+    pub fn ty_optional(&self, inner: Type<'ast>) -> Type<'ast> {
+        let ty = self.parenthesize_if_composite(inner);
+        Type::Optional(self.boxed(OptionalType { span: self.next_span(), ty }))
     }
 
     #[must_use]
-    pub fn ty_union(&self, types: Vec<Type>) -> Type {
-        Type::Union(Box::new(UnionType {
-            span: self.next_span(),
-            has_leading_pipe: false,
-            types: Punctuated::from_items(
-                types.into_iter().map(|inner| self.parenthesize_if_composite(inner)).collect(),
-            ),
-        }))
+    pub fn ty_union<Types>(&self, types: Types) -> Type<'ast>
+    where
+        Types: IntoIterator<Item = Type<'ast>>,
+        Types::IntoIter: ExactSizeIterator,
+    {
+        let span = self.next_span();
+        let members =
+            self.list(types.into_iter().map(|inner| self.parenthesize_if_composite(inner)));
+        Type::Union(self.boxed(UnionType { span, has_leading_pipe: false, types: members }))
     }
 
     #[must_use]
-    pub fn ty_intersection(&self, types: Vec<Type>) -> Type {
-        Type::Intersection(Box::new(IntersectionType {
-            span: self.next_span(),
+    pub fn ty_intersection<Types>(&self, types: Types) -> Type<'ast>
+    where
+        Types: IntoIterator<Item = Type<'ast>>,
+        Types::IntoIter: ExactSizeIterator,
+    {
+        let span = self.next_span();
+        // Luau rejects a `?` suffix beside `&`, so an optional member needs
+        // parens here but not in a union.
+        let members = self.list(types.into_iter().map(|inner| {
+            if matches!(inner, Type::Optional(_)) {
+                self.ty_parenthesized(inner)
+            } else {
+                self.parenthesize_if_composite(inner)
+            }
+        }));
+        Type::Intersection(self.boxed(IntersectionType {
+            span,
             has_leading_ampersand: false,
-            types: Punctuated::from_items(
-                types
-                    .into_iter()
-                    // Luau rejects a `?` suffix beside `&`, so an optional
-                    // member needs parens here but not in a union.
-                    .map(|inner| {
-                        if matches!(inner, Type::Optional(_)) {
-                            self.ty_parenthesized(inner)
-                        } else {
-                            self.parenthesize_if_composite(inner)
-                        }
-                    })
-                    .collect(),
-            ),
+            types: members,
         }))
     }
 
     #[must_use]
-    pub fn ty_parenthesized(&self, inner: Type) -> Type {
-        Type::Parenthesized(Box::new(ParenthesizedType {
-            span: self.next_span(),
-            type_value: inner,
-        }))
+    pub fn ty_parenthesized(&self, inner: Type<'ast>) -> Type<'ast> {
+        Type::Parenthesized(self.boxed(ParenthesizedType { span: self.next_span(), ty: inner }))
     }
 
     #[must_use]
-    pub fn ty_table_array(&self, element: Type) -> Type {
-        self.ty_table(vec![TypeFieldSpec::Array(element)])
+    pub fn ty_table_array(&self, element: Type<'ast>) -> Type<'ast> {
+        self.ty_table([TypeFieldSpec::Array(element)])
     }
 
     /// # Panics
     ///
-    /// Panics if a field's name isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if a field's name isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
-    pub fn ty_record(&self, fields: Vec<(&str, Type)>) -> Type {
-        self.ty_table(
-            fields
-                .into_iter()
-                .map(|(name, v)| TypeFieldSpec::Named { access: None, name, value: v })
-                .collect(),
-        )
+    pub fn ty_record<'name, Fields>(&self, fields: Fields) -> Type<'ast>
+    where
+        Fields: IntoIterator<Item = (&'name str, Type<'ast>)>,
+        Fields::IntoIter: ExactSizeIterator,
+    {
+        self.ty_table(fields.into_iter().map(|(name, value)| TypeFieldSpec::Named {
+            access: None,
+            name,
+            value,
+        }))
     }
 
     /// Named fields and indexers can take a `read`/`write` access modifier.
@@ -164,153 +163,150 @@ impl Synth {
     ///
     /// # Panics
     ///
-    /// Panics if a [`TypeFieldSpec::Named`] name isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if a [`TypeFieldSpec::Named`] name isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
-    pub fn ty_table(&self, fields: Vec<TypeFieldSpec<'_>>) -> Type {
+    pub fn ty_table<'name, Fields>(&self, fields: Fields) -> Type<'ast>
+    where
+        Fields: IntoIterator<Item = TypeFieldSpec<'name, 'ast>>,
+        Fields::IntoIter: ExactSizeIterator,
+    {
         let span = self.next_span();
-        let can_use_array_shorthand = fields.len() == 1;
-        let built_fields = fields
-            .into_iter()
-            .map(|field| match field {
-                TypeFieldSpec::Named { access, name, value } => TypeField::Named {
-                    span: self.next_span(),
-                    access: access.map(|modifier| self.access_token(modifier)),
-                    name: self.identifier(name),
-                    value,
-                },
-                TypeFieldSpec::Indexer { access, key, value } => TypeField::Indexer {
-                    span: self.next_span(),
-                    access: access.map(|modifier| self.access_token(modifier)),
-                    key,
-                    value,
-                },
-                TypeFieldSpec::Array(value)
-                    if can_use_array_shorthand
-                        && !matches!(leading_name(&value), Some("read" | "write")) =>
-                {
-                    TypeField::Array { span: self.next_span(), access: None, value }
-                }
-                TypeFieldSpec::Array(value) => TypeField::Indexer {
-                    span: self.next_span(),
-                    access: None,
-                    key: self.ty_named("number"),
-                    value,
-                },
-            })
-            .collect();
-        Type::Table(Box::new(TableType { span, fields: Punctuated::from_items(built_fields) }))
-    }
-
-    fn access_token(&self, access: TypeFieldAccess) -> Token {
-        self.identifier(match access {
-            TypeFieldAccess::Read => "read",
-            TypeFieldAccess::Write => "write",
-        })
+        let specs = fields.into_iter();
+        let can_use_array_shorthand = specs.len() == 1;
+        let built = self.list(specs.map(|spec| match spec {
+            TypeFieldSpec::Named { access, name, value } => {
+                TypeField::Named { span: self.next_span(), access, name: self.name(name), value }
+            }
+            TypeFieldSpec::Indexer { access, key, value } => {
+                TypeField::Indexer { span: self.next_span(), access, key, value }
+            }
+            TypeFieldSpec::Array(value)
+                if can_use_array_shorthand
+                    && !matches!(leading_name(&value), Some("read" | "write")) =>
+            {
+                TypeField::Array { span: self.next_span(), access: None, value }
+            }
+            TypeFieldSpec::Array(value) => TypeField::Indexer {
+                span: self.next_span(),
+                access: None,
+                key: self.ty_named("number"),
+                value,
+            },
+        }));
+        Type::Table(self.boxed(TableType { span, fields: built, has_trailing_separator: false }))
     }
 
     /// For generics or named parameters, use [`Synth::ty_function_full`].
     #[must_use]
-    pub fn ty_function(&self, params: Vec<Type>, return_type: Type) -> Type {
-        self.ty_function_full(None, params.into_iter().map(|ty| (None, ty)).collect(), return_type)
+    pub fn ty_function<Params>(&self, params: Params, return_type: Type<'ast>) -> Type<'ast>
+    where
+        Params: IntoIterator<Item = Type<'ast>>,
+        Params::IntoIter: ExactSizeIterator,
+    {
+        self.ty_function_full(None, params.into_iter().map(|ty| (None, ty)), return_type)
     }
 
     /// Each parameter is `(optional name, type)`. For a pack return, pass a [`Synth::ty_pack`].
     ///
     /// # Panics
     ///
-    /// Panics if a parameter's name isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if a parameter's name isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
-    pub fn ty_function_full(
+    pub fn ty_function_full<'name, Params>(
         &self,
-        generics: Option<GenericTypeList>,
-        params: Vec<(Option<&str>, Type)>,
-        return_type: Type,
-    ) -> Type {
+        generics: Option<GenericTypeList<'ast>>,
+        params: Params,
+        return_type: Type<'ast>,
+    ) -> Type<'ast>
+    where
+        Params: IntoIterator<Item = (Option<&'name str>, Type<'ast>)>,
+        Params::IntoIter: ExactSizeIterator,
+    {
         let span = self.next_span();
-        let typed_params: Vec<FunctionTypeParam> = params
-            .into_iter()
-            .map(|(param_name, type_value)| FunctionTypeParam {
-                span: self.next_span(),
-                name: param_name.map(|name| self.identifier(name)),
-                type_value,
-            })
-            .collect();
-        Type::Function(Box::new(FunctionType {
+        let typed = self.list(params.into_iter().map(|(param_name, ty)| FunctionTypeParam {
+            name: param_name.map(|name| self.name(name)),
+            ty,
+        }));
+        Type::Function(self.boxed(FunctionType {
             span,
-            generics,
-            params: Punctuated::from_items(typed_params),
+            generics: generics.map(|list| self.boxed(list)),
+            params: typed,
             return_type,
         }))
     }
 
     #[must_use]
-    pub fn ty_singleton_string(&self, content: &str) -> Type {
-        Type::Singleton(self.token(TokenKind::StringLiteral(encode_string(content.as_bytes()))))
+    pub fn ty_singleton_string(&self, content: &str) -> Type<'ast> {
+        Type::StringLiteral(self.boxed(self.quoted(content.as_bytes())))
     }
 
     #[must_use]
-    pub fn ty_singleton_bool(&self, value: bool) -> Type {
-        let kind = if value { TokenKind::True } else { TokenKind::False };
-        Type::Singleton(self.token(kind))
+    pub fn ty_singleton_bool(&self, value: bool) -> Type<'ast> {
+        if value { Type::True(self.next_span()) } else { Type::False(self.next_span()) }
     }
 
     #[must_use]
-    pub fn ty_singleton_nil(&self) -> Type {
-        Type::Singleton(self.token(TokenKind::Nil))
+    pub fn ty_singleton_nil(&self) -> Type<'ast> {
+        Type::Nil(self.next_span())
     }
 
     #[must_use]
-    pub fn ty_pack(&self, types: Vec<Type>) -> Type {
+    pub fn ty_pack<Types>(&self, types: Types) -> Type<'ast>
+    where
+        Types: IntoIterator<Item = Type<'ast>>,
+        Types::IntoIter: ExactSizeIterator,
+    {
         let span = self.next_span();
-        Type::Pack(Box::new(TypePack { span, types: Punctuated::from_items(types) }))
+        Type::Pack(self.boxed(TypePack { span, types: self.list(types) }))
     }
 
     #[must_use]
-    pub fn ty_variadic(&self, element: Type) -> Type {
-        Type::Variadic(Box::new(VariadicType { span: self.next_span(), type_value: element }))
+    pub fn ty_variadic(&self, element: Type<'ast>) -> Type<'ast> {
+        Type::Variadic(self.boxed(VariadicType { span: self.next_span(), ty: element }))
     }
 
     /// # Panics
     ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
-    pub fn ty_generic_pack(&self, name: &str) -> Type {
-        Type::GenericPack(Box::new(GenericPackType {
-            span: self.next_span(),
-            name: self.identifier(name),
-        }))
+    pub fn ty_generic_pack(&self, name: &str) -> Type<'ast> {
+        Type::GenericPack(
+            self.boxed(GenericPackType { span: self.next_span(), name: self.name(name) }),
+        )
     }
 
     /// Each pair is a name and whether it's a pack (`T...`). Defaults aren't supported.
     ///
     /// # Panics
     ///
-    /// Panics if a parameter's name isn't a valid identifier, as [`Synth::identifier`] does.
+    /// Panics if a parameter's name isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
-    pub fn generic_type_list(&self, params: Vec<(&str, bool)>) -> GenericTypeList {
+    pub fn generic_type_list<'name, Params>(&self, params: Params) -> GenericTypeList<'ast>
+    where
+        Params: IntoIterator<Item = (&'name str, bool)>,
+        Params::IntoIter: ExactSizeIterator,
+    {
         let span = self.next_span();
-        let generic_params: Vec<GenericTypeParam> = params
-            .into_iter()
-            .map(|(name, is_pack)| GenericTypeParam {
+        let generic_params =
+            self.list(params.into_iter().map(|(name, is_pack)| GenericTypeParam {
                 span: self.next_span(),
-                name: self.identifier(name),
+                name: self.name(name),
                 is_pack,
                 default: None,
-            })
-            .collect();
-        GenericTypeList { span, params: Punctuated::from_items(generic_params) }
+            }));
+        GenericTypeList { span, params: generic_params }
     }
 }
 
 /// The name `ty` prints first, if it opens with one.
-fn leading_name(ty: &Type) -> Option<&str> {
+fn leading_name<'ast>(ty: &Type<'ast>) -> Option<&'ast str> {
     let mut current = ty;
     loop {
         current = match current {
-            Type::Name { name, .. } => return Some(name),
-            Type::Named(named) => return named.prefix.as_ref().unwrap_or(&named.name).identifier(),
-            Type::GenericPack(pack) => return pack.name.identifier(),
-            Type::Optional(optional) => &optional.type_value,
+            Type::Name(name) => return Some(name.text),
+            Type::Named(named) => return Some(named.prefix.unwrap_or(named.name).text),
+            Type::GenericPack(pack) => return Some(pack.name.text),
+            Type::Optional(optional) => &optional.ty,
             Type::Union(union) if !union.has_leading_pipe => union.types.first()?,
             Type::Intersection(intersection) if !intersection.has_leading_ampersand => {
                 intersection.types.first()?
@@ -322,7 +318,11 @@ fn leading_name(ty: &Type) -> Option<&str> {
             | Type::Function(_)
             | Type::Parenthesized(_)
             | Type::Pack(_)
-            | Type::Singleton(_)
+            | Type::Nil(_)
+            | Type::True(_)
+            | Type::False(_)
+            | Type::StringLiteral(_)
+            | Type::Number(_)
             | Type::Variadic(_)
             | Type::Error(_) => return None,
         };
@@ -331,16 +331,16 @@ fn leading_name(ty: &Type) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use std::panic::catch_unwind;
-
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::fixtures::Fixture;
 
     #[test]
     fn builds_full_table_type() {
-        let synth = Synth::new();
-        let ty = synth.ty_table(vec![
+        let fixture = Fixture::default();
+        let synth = fixture.synth();
+        let ty = synth.ty_table([
             TypeFieldSpec::Named {
                 access: Some(TypeFieldAccess::Read),
                 name: "id",
@@ -355,75 +355,78 @@ mod tests {
         let Type::Table(table) = &ty else {
             panic!("expected table type");
         };
-        assert!(matches!(&table.fields.items[0], TypeField::Named { access: Some(_), .. }));
-        assert!(matches!(&table.fields.items[1], TypeField::Indexer { .. }));
+        assert!(matches!(
+            *table.fields,
+            [
+                TypeField::Named { access: Some(TypeFieldAccess::Read), .. },
+                TypeField::Indexer { access: None, .. }
+            ]
+        ));
     }
 
     #[test]
     fn builds_remaining_type_forms() {
-        let synth = Synth::new();
+        let fixture = Fixture::default();
+        let synth = fixture.synth();
         assert!(matches!(synth.ty_typeof(synth.name_expr("x")), Type::Typeof(_)));
         assert!(matches!(synth.ty_parenthesized(synth.ty_named("T")), Type::Parenthesized(_)));
         assert!(matches!(synth.ty_generic_pack("T"), Type::GenericPack(_)));
-        assert!(matches!(
-            synth.ty_singleton_bool(true),
-            Type::Singleton(Token { kind: TokenKind::True, .. })
-        ));
-        assert!(matches!(
-            synth.ty_singleton_nil(),
-            Type::Singleton(Token { kind: TokenKind::Nil, .. })
-        ));
+        assert!(matches!(synth.ty_singleton_bool(true), Type::True(_)));
+        assert!(matches!(synth.ty_singleton_nil(), Type::Nil(_)));
+        let Type::StringLiteral(literal) = synth.ty_singleton_string("a") else {
+            panic!("expected a string singleton");
+        };
+        assert_eq!(literal.text, "\"a\"");
 
         let named_param = synth.ty_function_full(
-            Some(synth.generic_type_list(vec![("T", true)])),
-            vec![(Some("x"), synth.ty_named("number"))],
-            synth.ty_pack(vec![]),
+            Some(synth.generic_type_list([("T", true)])),
+            [(Some("x"), synth.ty_named("number"))],
+            synth.ty_pack([]),
         );
         let Type::Function(function) = &named_param else {
             panic!("expected function type");
         };
         assert!(function.generics.is_some());
-        assert!(function.params.first().unwrap().name.is_some());
+        assert!(function.params.iter().all(|param| param.name.is_some()));
         assert!(matches!(function.return_type, Type::Pack(_)));
     }
 
     #[test]
     fn ty_table_spells_out_an_element_the_shorthand_would_read_as_an_access_modifier() {
-        let synth = Synth::new();
-        let element_field = |element: Type| {
+        let fixture = Fixture::default();
+        let synth = fixture.synth();
+        let is_long_form = |element: Type<'_>| {
             let Type::Table(table) = synth.ty_table_array(element) else {
                 panic!("expected a table type");
             };
-            table.fields.items.into_iter().next().expect("one field")
+            matches!(*table.fields, [TypeField::Indexer { .. }])
         };
         for element in [
             synth.ty_named("read"),
             synth.ty_optional(synth.ty_named("write")),
-            synth.ty_union(vec![synth.ty_named("read"), synth.ty_named("T")]),
+            synth.ty_union([synth.ty_named("read"), synth.ty_named("T")]),
             synth.ty_qualified("write", "T"),
         ] {
-            assert!(matches!(element_field(element), TypeField::Indexer { .. }));
+            assert!(is_long_form(element));
         }
-        assert!(matches!(element_field(synth.ty_named("reader")), TypeField::Array { .. }));
+        assert!(!is_long_form(synth.ty_named("reader")));
     }
 
     #[test]
     fn ty_table_keeps_no_array_element_beside_other_fields() {
         // Luau: `TableType ::= '{' Type '}' | '{' [PropList] '}'`, so
         // `{ T, a: U }` is a parse error.
-        let built = catch_unwind(|| {
-            let synth = Synth::new().with_version(LuaVersion::Luau);
-            synth.ty_table(vec![
-                TypeFieldSpec::Array(synth.ty_named("T")),
-                TypeFieldSpec::Named { access: None, name: "a", value: synth.ty_named("U") },
-            ])
-        });
-        // Refusing the mix and desugaring it to `[number]: T` are both correct.
-        if let Ok(Type::Table(table)) = built {
-            assert!(
-                !table.fields.iter().any(|field| matches!(field, TypeField::Array { .. })),
-                "an array element beside named fields prints `{{ T, a: U }}`, which Luau rejects"
-            );
-        }
+        let fixture = Fixture::default();
+        let synth = fixture.synth().with_version(LuaVersion::Luau);
+        let Type::Table(table) = synth.ty_table([
+            TypeFieldSpec::Array(synth.ty_named("T")),
+            TypeFieldSpec::Named { access: None, name: "a", value: synth.ty_named("U") },
+        ]) else {
+            panic!("expected a table type");
+        };
+        assert!(
+            !table.fields.iter().any(|field| matches!(field, TypeField::Array { .. })),
+            "an array element beside named fields prints `{{ T, a: U }}`, which Luau rejects"
+        );
     }
 }

@@ -1,115 +1,97 @@
-use luck_token::{BinOp, CompactString, Span, Token, UnOp};
+use luck_allocator::{Box, List};
+use luck_token::{BinOp, Span, UnOp};
 
 use crate::function::{FunctionAttribute, FunctionBody};
+use crate::leaf::{Literal, Name};
 use crate::one_or_more::OneOrMore;
-use crate::punctuated::Punctuated;
 use crate::types::{Type, TypeArgs};
 
-/// Fixed-spelling leaves (`nil`, `true`, `false`, `...`) carry only their
-/// span; number and string leaves carry a [`Literal`] with their text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Two words: every variant is a span or a box. `nil`, `true`, `false`,
+/// `...`, and an error are their span alone.
+#[derive(Debug, PartialEq, Eq)]
 #[expect(
     clippy::enum_variant_names,
     reason = "each variant is named for its payload, and the syntax tree view prints these names"
 )]
-pub enum Expression {
+pub enum Expression<'ast> {
     Nil(Span),
     False(Span),
     True(Span),
-    Number(Literal),
+    Number(Box<'ast, Literal<'ast>>),
     /// Luau: exact 64-bit integer literal with an `i` suffix.
-    Integer(Literal),
-    StringLiteral(Literal),
+    Integer(Box<'ast, Literal<'ast>>),
+    StringLiteral(Box<'ast, Literal<'ast>>),
     VarArg(Span),
-    FunctionDef(Box<FunctionDef>),
-    Name(Token),
-    Suffixed(Box<SuffixedExpression>),
-    Parenthesized(Box<ParenthesizedExpression>),
-    TableConstructor(Box<TableConstructor>),
-    BinaryOp(Box<BinaryOp>),
-    UnaryOp(Box<UnaryOp>),
-    IfExpression(Box<IfExpression>),
-    InterpolatedString(Box<InterpolatedString>),
-    TypeCast(Box<TypeCast>),
+    FunctionDef(Box<'ast, FunctionDef<'ast>>),
+    Name(Box<'ast, Name<'ast>>),
+    Suffixed(Box<'ast, SuffixedExpression<'ast>>),
+    Parenthesized(Box<'ast, ParenthesizedExpression<'ast>>),
+    TableConstructor(Box<'ast, TableConstructor<'ast>>),
+    BinaryOp(Box<'ast, BinaryOp<'ast>>),
+    UnaryOp(Box<'ast, UnaryOp<'ast>>),
+    IfExpression(Box<'ast, IfExpression<'ast>>),
+    InterpolatedString(Box<'ast, InterpolatedString<'ast>>),
+    TypeCast(Box<'ast, TypeCast<'ast>>),
     Error(Span),
 }
 
-/// The owning variant implies the token kind, so none is stored.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Literal {
-    pub text: CompactString,
-    pub span: Span,
-}
-
 /// An assignment target.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Var {
-    Name(Token),
+#[derive(Debug, PartialEq, Eq)]
+pub enum Var<'ast> {
+    Name(Box<'ast, Name<'ast>>),
     /// A chain whose last suffix is a field or an index.
-    Suffixed(Box<SuffixedExpression>),
+    Suffixed(Box<'ast, SuffixedExpression<'ast>>),
 }
 
 /// A name or a parenthesized expression and the run of fields, indexes,
 /// calls, and Luau instantiations after it, as one node however long the
-/// run: `a.b[c]:d(e)` is `a` and four suffixes.
+/// run: `a.b[c]:d(e)` is `a` and three suffixes.
 ///
 /// The last suffix decides what the whole is: a call, or a [`Var`] that can
 /// be assigned to.
 ///
 /// `prefix` is never itself a suffixed expression, so a run adds one level of
-/// nesting whatever its length. The parser and `Synth` keep it that way.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SuffixedExpression {
+/// nesting whatever its length. The parser and `Synth` keep it that way, and
+/// [`SuffixedExpression::splice_prefix`] restores it after a rewrite.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SuffixedExpression<'ast> {
     pub span: Span,
-    pub prefix: Expression,
-    pub suffixes: OneOrMore<Suffix>,
+    pub prefix: Expression<'ast>,
+    pub suffixes: OneOrMore<'ast, Suffix<'ast>>,
 }
 
-/// A method call and a Luau instantiation are boxed, so no suffix is larger
-/// than an index, and a chain of one suffix is one small allocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Suffix {
-    /// A field, `.name`.
-    Field(Token),
+#[derive(Debug, PartialEq, Eq)]
+pub enum Suffix<'ast> {
+    /// `.name`.
+    Field(Name<'ast>),
     /// `[index]`, where `span` covers the brackets.
-    Index {
-        span: Span,
-        index: Expression,
-    },
-    Call(CallSuffix),
+    Index { span: Span, index: Expression<'ast> },
+    /// `(args)`, `{...}`, or `"..."`.
+    Call(FunctionArgs<'ast>),
+    /// `:name(args)`.
+    MethodCall(Box<'ast, MethodCall<'ast>>),
     /// Luau: `<<T>>`, where `span` covers the outer angle brackets.
-    TypeInstantiation {
-        span: Span,
-        type_args: Box<TypeArgs>,
-    },
+    TypeInstantiation { span: Span, type_args: Box<'ast, TypeArgs<'ast>> },
 }
 
-/// `(args)`, `{...}`, or `"..."`, or a method call, `:name` before them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CallSuffix {
-    Plain(FunctionArgs),
-    Method(Box<MethodCall>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MethodCall {
-    pub name: Token,
-    /// Luau: explicit type arguments between the method name and the call
-    /// arguments (`receiver:method<<T>>()`). Non-method instantiation is a
+#[derive(Debug, PartialEq, Eq)]
+pub struct MethodCall<'ast> {
+    pub name: Name<'ast>,
+    /// Luau: `receiver:method<<T>>()`. A plain call's instantiation is a
     /// [`Suffix::TypeInstantiation`] instead.
-    pub explicit_type_args: Option<Box<TypeArgs>>,
-    pub args: FunctionArgs,
+    pub type_args: Option<Box<'ast, TypeArgs<'ast>>>,
+    pub args: FunctionArgs<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FunctionArgs {
+#[derive(Debug, PartialEq, Eq)]
+pub enum FunctionArgs<'ast> {
+    /// `span` covers the parentheses.
     Parenthesized {
-        /// Covers `(`..`)`.
         span: Span,
-        args: Punctuated<Expression>,
+        args: List<'ast, Expression<'ast>>,
     },
-    TableConstructor(Box<TableConstructor>),
-    StringLiteral(Literal),
+    TableConstructor(Box<'ast, TableConstructor<'ast>>),
+    StringLiteral(Literal<'ast>),
     /// Arguments the parser found missing, or a table argument the depth cap
     /// stopped.
     Error(Span),
@@ -124,87 +106,106 @@ pub enum FunctionArgs {
 ///
 /// An operand is never a bare run at the same level where it would merge
 /// into this one when printed, since that is what reading the printed run
-/// back gives. The parser and `Synth` keep it that way.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BinaryOp {
+/// back gives. The parser and `Synth` keep it that way, and
+/// [`BinaryOp::splice_operands`] restores it after a rewrite.
+#[derive(Debug, PartialEq, Eq)]
+pub struct BinaryOp<'ast> {
     pub span: Span,
-    pub first: Expression,
-    /// Every operator here shares one precedence level.
-    pub links: OneOrMore<BinaryLink>,
+    pub first: Expression<'ast>,
+    pub links: OneOrMore<'ast, BinaryLink<'ast>>,
 }
 
 /// An operator and the operand after it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BinaryLink {
+#[derive(Debug, PartialEq, Eq)]
+pub struct BinaryLink<'ast> {
     pub op: BinOp,
-    pub operand: Expression,
+    pub operand: Expression<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnaryOp {
+#[derive(Debug, PartialEq, Eq)]
+pub struct UnaryOp<'ast> {
     pub span: Span,
     pub op: UnOp,
-    pub operand: Expression,
+    pub operand: Expression<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParenthesizedExpression {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParenthesizedExpression<'ast> {
     pub span: Span,
-    pub expr: Expression,
+    pub expr: Expression<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TableConstructor {
+#[derive(Debug, PartialEq, Eq)]
+pub struct TableConstructor<'ast> {
     pub span: Span,
-    pub fields: Punctuated<Field>,
+    pub fields: List<'ast, Field<'ast>>,
+    /// Whether a `,` or `;` follows the last field. The printers write `,`.
+    pub has_trailing_separator: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Field {
-    Bracketed { span: Span, key: Expression, value: Expression },
-    Named { span: Span, name: Token, value: Expression },
-    Positional { span: Span, value: Expression },
+/// A named or positional field spans from its name or value, so it holds no
+/// span of its own.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Field<'ast> {
+    /// `[key] = value`, where `span` covers the whole field.
+    Bracketed {
+        span: Span,
+        key: Expression<'ast>,
+        value: Expression<'ast>,
+    },
+    Named {
+        name: Name<'ast>,
+        value: Expression<'ast>,
+    },
+    Positional(Expression<'ast>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionDef {
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionDef<'ast> {
     pub span: Span,
     /// Luau: `@attr` list preceding `function`. Empty outside Luau.
-    pub attributes: Vec<FunctionAttribute>,
-    pub body: FunctionBody,
+    pub attributes: List<'ast, FunctionAttribute<'ast>>,
+    pub body: FunctionBody<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IfExpression {
+/// Luau: `if condition then expr elseif ... else expr`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct IfExpression<'ast> {
     pub span: Span,
-    pub condition: Expression,
-    pub then_expr: Expression,
-    pub elseif_clauses: Vec<ElseIfExprClause>,
-    pub else_expr: Expression,
+    pub condition: Expression<'ast>,
+    pub then_expr: Expression<'ast>,
+    pub elseif_clauses: List<'ast, ElseIfExprClause<'ast>>,
+    pub else_expr: Expression<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ElseIfExprClause {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ElseIfExprClause<'ast> {
     pub span: Span,
-    pub condition: Expression,
-    pub expr: Expression,
+    pub condition: Expression<'ast>,
+    pub expr: Expression<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InterpolatedString {
+/// Luau: `` `text{expr}text` ``. Each piece of text is as written, escapes
+/// included, and spans only itself, not its delimiters.
+#[derive(Debug, PartialEq, Eq)]
+pub struct InterpolatedString<'ast> {
     pub span: Span,
-    pub segments: Vec<InterpolatedStringSegment>,
+    /// Each expression, with the text before it.
+    pub segments: List<'ast, InterpolatedSegment<'ast>>,
+    /// The text after the last expression, or all of it when there's none.
+    pub tail: Literal<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InterpolatedStringSegment {
-    pub literal: Token,
-    pub expr: Option<Expression>,
+#[derive(Debug, PartialEq, Eq)]
+pub struct InterpolatedSegment<'ast> {
+    pub text: Literal<'ast>,
+    pub expr: Expression<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeCast {
+/// Luau: `expr :: T`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TypeCast<'ast> {
     pub span: Span,
-    pub expr: Expression,
-    pub type_annotation: Type,
+    pub expr: Expression<'ast>,
+    pub ty: Type<'ast>,
 }

@@ -1,12 +1,19 @@
 //! # `luck_ast`
 //!
-//! AST node types and traversal infrastructure for Lua/Luau. A [`Block`] holds
-//! [`Statement`]s and an optional last statement; every value position is an
-//! [`Expression`].
+//! The syntax tree of Lua 5.1 to 5.5 and Luau, and what walks, measures,
+//! queries, and builds it. A [`Block`] holds [`Statement`]s and an optional
+//! last statement; every value position is an [`Expression`].
 //!
-//! Two traversals share one shape: [`Visitor`] borrows the tree, and
-//! [`Transform`] takes each node by value and returns its replacement, as the
-//! minifier's passes do. Override the `visit_*` or `transform_*` method you
+//! A tree lives in a `luck_allocator` arena: every node is in a `Box` or a
+//! `List` there, and none needs dropping, so a tree is freed with its arena
+//! all at once. [`Expression`], [`Statement`], and [`Type`] are two words
+//! each. A leaf, a [`Name`] or a [`Literal`], holds its text as written: a
+//! parsed tree's borrows the source, and a built tree's lives in the arena,
+//! so a printer never needs the source. A tree is `Send` and `Sync`, and
+//! may join nodes from any number of arenas that outlive it.
+//!
+//! Two traversals share one walk: [`Visitor`] borrows the tree, and
+//! [`VisitorMut`] rewrites it in place. Override the `visit_*` method you
 //! care about and call `self.walk_*` to recurse.
 //!
 //! A run of suffixes (`a.b[c]:d()`) is one [`SuffixedExpression`], and a
@@ -22,11 +29,14 @@
 //! # Usage
 //!
 //! ```
-//! use luck_ast::{Expression, Synth};
+//! use luck_allocator::Allocator;
+//! use luck_ast::{Expression, SpanCounter, Synth};
 //!
-//! let synth = Synth::new();
+//! let allocator = Allocator::new();
+//! let spans = SpanCounter::new();
+//! let synth = Synth::new(&allocator, &spans);
 //! let expr = synth.number("42");
-//! assert!(matches!(expr, Expression::Number(_)));
+//! assert!(matches!(expr, Expression::Number(literal) if literal.text == "42"));
 //! ```
 
 #![cfg_attr(
@@ -37,23 +47,23 @@
     )
 )]
 
-extern crate alloc;
-
 mod chain;
 mod depth;
 mod expr;
+#[cfg(test)]
+mod fixtures;
 mod function;
 #[cfg(test)]
 mod layout;
+mod leaf;
 mod one_or_more;
-mod punctuated;
 mod query;
 mod span;
 mod stmt;
 mod synth;
-mod transform;
 mod types;
 mod visitor;
+mod visitor_mut;
 
 pub use chain::{Call, ChainHead};
 pub use depth::{
@@ -61,13 +71,13 @@ pub use depth::{
     type_nesting_depth,
 };
 pub use expr::{
-    BinaryLink, BinaryOp, CallSuffix, ElseIfExprClause, Expression, Field, FunctionArgs,
-    FunctionDef, IfExpression, InterpolatedString, InterpolatedStringSegment, Literal, MethodCall,
-    ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
+    BinaryLink, BinaryOp, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionDef,
+    IfExpression, InterpolatedSegment, InterpolatedString, MethodCall, ParenthesizedExpression,
+    Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
+pub use leaf::{Literal, Name};
 pub use one_or_more::OneOrMore;
-pub use punctuated::Punctuated;
 pub use query::{
     DottedPath, expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,
     unwrap_parentheses,
@@ -80,14 +90,14 @@ pub use stmt::{
     Statement, TypeDeclaration, TypeDeclarationValue, WhileLoop,
 };
 pub use synth::{
-    FieldSpec, FunctionSignature, InterpolatedStringPart, Synth, SyntheticComment, TypeFieldAccess,
+    FieldSpec, FunctionSignature, InterpolatedStringPart, SpanCounter, Synth, SyntheticComment,
     TypeFieldSpec, is_valid_identifier, is_valid_identifier_in, sanitize_identifier,
     sanitize_identifier_in,
 };
-pub use transform::Transform;
 pub use types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
     IntersectionType, NamedType, OptionalType, ParenthesizedType, TableType, Type, TypeArgs,
-    TypeField, TypePack, TypeofType, UnionType, VariadicType,
+    TypeField, TypeFieldAccess, TypePack, TypeofType, UnionType, VariadicType,
 };
 pub use visitor::Visitor;
+pub use visitor_mut::VisitorMut;

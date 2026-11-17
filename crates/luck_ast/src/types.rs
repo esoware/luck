@@ -3,144 +3,171 @@
 //!
 //! Outside Luau these nodes never occur; the parser gates on `LuaVersion::has_type_syntax`.
 
-use luck_token::{CompactString, Span, Token};
+use luck_allocator::{Box, List};
+use luck_token::Span;
 
 use crate::expr::Expression;
-use crate::punctuated::Punctuated;
+use crate::leaf::{Literal, Name};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Type {
-    Name {
-        name: CompactString,
-        span: Span,
-    },
-    Named(Box<NamedType>),
-    Typeof(Box<TypeofType>),
-    Table(Box<TableType>),
-    Function(Box<FunctionType>),
-    Optional(Box<OptionalType>),
-    Union(Box<UnionType>),
-    Intersection(Box<IntersectionType>),
-    Parenthesized(Box<ParenthesizedType>),
+/// Two words, like [`Expression`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum Type<'ast> {
+    /// A bare name, which keeps the most common type to one small box.
+    Name(Box<'ast, Name<'ast>>),
+    Named(Box<'ast, NamedType<'ast>>),
+    Typeof(Box<'ast, TypeofType<'ast>>),
+    Table(Box<'ast, TableType<'ast>>),
+    Function(Box<'ast, FunctionType<'ast>>),
+    Optional(Box<'ast, OptionalType<'ast>>),
+    Union(Box<'ast, UnionType<'ast>>),
+    Intersection(Box<'ast, IntersectionType<'ast>>),
+    Parenthesized(Box<'ast, ParenthesizedType<'ast>>),
     /// `(T, U)` or `()`, valid only where a type pack is expected
     /// (return positions, generic argument lists).
-    Pack(Box<TypePack>),
-    /// Literal singleton type: a string literal, `true`, `false`, or `nil`.
-    /// The parser also accepts numbers, which Luau rejects, so sources
-    /// carrying them keep round-tripping.
-    Singleton(Token),
-    Variadic(Box<VariadicType>),
-    GenericPack(Box<GenericPackType>),
+    Pack(Box<'ast, TypePack<'ast>>),
+    /// The singleton `nil`.
+    Nil(Span),
+    True(Span),
+    False(Span),
+    StringLiteral(Box<'ast, Literal<'ast>>),
+    /// A numeral, which Luau rejects as a type. The parser accepts one so a
+    /// source carrying it keeps round-tripping.
+    Number(Box<'ast, Literal<'ast>>),
+    Variadic(Box<'ast, VariadicType<'ast>>),
+    GenericPack(Box<'ast, GenericPackType<'ast>>),
     Error(Span),
 }
 
-/// A bare `Name` is a [`Type::Name`] instead, which keeps the most common
-/// type allocation-free. The parser and `Synth` only build this node with a
-/// prefix or generics.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NamedType {
+/// A bare `Name` is a [`Type::Name`] instead. The parser and `Synth` only
+/// build this node with a prefix or generics.
+#[derive(Debug, PartialEq, Eq)]
+pub struct NamedType<'ast> {
     pub span: Span,
-    pub prefix: Option<Token>,
-    pub name: Token,
-    pub generics: Option<TypeArgs>,
+    /// The module of `module.Name`.
+    pub prefix: Option<Name<'ast>>,
+    pub name: Name<'ast>,
+    pub generics: Option<TypeArgs<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeArgs {
+/// `<T, U>`, where `span` covers the angle brackets.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TypeArgs<'ast> {
     pub span: Span,
-    pub args: Punctuated<Type>,
+    pub args: List<'ast, Type<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeofType {
+#[derive(Debug, PartialEq, Eq)]
+pub struct TypeofType<'ast> {
     pub span: Span,
-    pub expr: Expression,
+    pub expr: Expression<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TableType {
+#[derive(Debug, PartialEq, Eq)]
+pub struct TableType<'ast> {
     pub span: Span,
-    pub fields: Punctuated<TypeField>,
+    pub fields: List<'ast, TypeField<'ast>>,
+    /// Whether a `,` or `;` follows the last field. The printers write `,`.
+    pub has_trailing_separator: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeField {
-    Named { span: Span, access: Option<Token>, name: Token, value: Type },
-    Indexer { span: Span, access: Option<Token>, key: Type, value: Type },
-    Array { span: Span, access: Option<Token>, value: Type },
+#[derive(Debug, PartialEq, Eq)]
+pub enum TypeField<'ast> {
+    Named { span: Span, access: Option<TypeFieldAccess>, name: Name<'ast>, value: Type<'ast> },
+    Indexer { span: Span, access: Option<TypeFieldAccess>, key: Type<'ast>, value: Type<'ast> },
+    Array { span: Span, access: Option<TypeFieldAccess>, value: Type<'ast> },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionType {
-    pub span: Span,
-    pub generics: Option<GenericTypeList>,
-    pub params: Punctuated<FunctionTypeParam>,
-    pub return_type: Type,
+/// The `read` or `write` before a table type's field, which starts its span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeFieldAccess {
+    Read,
+    Write,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionTypeParam {
+impl TypeFieldAccess {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionType<'ast> {
     pub span: Span,
-    pub name: Option<Token>,
-    pub type_value: Type,
+    pub generics: Option<Box<'ast, GenericTypeList<'ast>>>,
+    pub params: List<'ast, FunctionTypeParam<'ast>>,
+    pub return_type: Type<'ast>,
+}
+
+/// `name: T` or `T`, spanning from whichever comes first, so it holds no span
+/// of its own.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionTypeParam<'ast> {
+    pub name: Option<Name<'ast>>,
+    pub ty: Type<'ast>,
 }
 
 /// One `?`, so `T??` is an optional of an optional.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OptionalType {
+#[derive(Debug, PartialEq, Eq)]
+pub struct OptionalType<'ast> {
     pub span: Span,
-    pub type_value: Type,
+    pub ty: Type<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnionType {
+#[derive(Debug, PartialEq, Eq)]
+pub struct UnionType<'ast> {
     pub span: Span,
     pub has_leading_pipe: bool,
-    pub types: Punctuated<Type>,
+    pub types: List<'ast, Type<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IntersectionType {
+#[derive(Debug, PartialEq, Eq)]
+pub struct IntersectionType<'ast> {
     pub span: Span,
     pub has_leading_ampersand: bool,
-    pub types: Punctuated<Type>,
+    pub types: List<'ast, Type<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParenthesizedType {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParenthesizedType<'ast> {
     pub span: Span,
-    pub type_value: Type,
+    pub ty: Type<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypePack {
+#[derive(Debug, PartialEq, Eq)]
+pub struct TypePack<'ast> {
     pub span: Span,
-    pub types: Punctuated<Type>,
+    pub types: List<'ast, Type<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VariadicType {
+/// `...T`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct VariadicType<'ast> {
     pub span: Span,
-    pub type_value: Type,
+    pub ty: Type<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GenericPackType {
+/// `T...`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GenericPackType<'ast> {
     pub span: Span,
-    pub name: Token,
+    pub name: Name<'ast>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GenericTypeList {
+#[derive(Debug, PartialEq, Eq)]
+pub struct GenericTypeList<'ast> {
     pub span: Span,
-    pub params: Punctuated<GenericTypeParam>,
+    pub params: List<'ast, GenericTypeParam<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GenericTypeParam {
+#[derive(Debug, PartialEq, Eq)]
+pub struct GenericTypeParam<'ast> {
     pub span: Span,
-    pub name: Token,
+    pub name: Name<'ast>,
     pub is_pack: bool,
     /// Only legal in type alias declarations.
-    pub default: Option<Type>,
+    pub default: Option<Type<'ast>>,
 }
