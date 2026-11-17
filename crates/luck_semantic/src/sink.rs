@@ -3,9 +3,10 @@ use luck_ast::{
 };
 
 /// Sees each node as [`analyze_with`](crate::analyze_with) or
-/// [`ScopeTree::build_with`](crate::ScopeTree::build_with) reaches it, so a
-/// consumer that needs its own view of every node, such as the linter's node
-/// table, builds it in the same walk instead of walking the tree again.
+/// [`ScopeTree::build_with`](crate::ScopeTree::build_with) reaches it.
+///
+/// A consumer that needs its own view of every node, such as the linter's
+/// node table, builds it in the same walk instead of walking the tree again.
 ///
 /// The walk is in evaluation order, which is source order except that an
 /// assignment's values come before its targets, and a function's signature
