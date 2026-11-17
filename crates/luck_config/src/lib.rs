@@ -33,6 +33,8 @@
     )
 )]
 
+extern crate alloc;
+
 mod config;
 mod editorconfig;
 mod filter;
@@ -42,7 +44,7 @@ mod path;
 mod resolve;
 
 pub use config::{DialectKey, EntryConfig, LuckConfig, ProfileOverrides};
-pub use editorconfig::resolved_format_config;
+pub use editorconfig::{Editorconfigs, resolved_format_config};
 pub use filter::{ProjectFilter, glob_set};
 pub use format_config::FormatConfig;
 pub use load::{

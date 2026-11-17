@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use globset::{Candidate, GlobBuilder, GlobSet, GlobSetBuilder};
 
 use crate::path::canonicalize_existing;
 
@@ -33,7 +33,9 @@ impl ProjectFilter {
         include: Option<&[String]>,
         exclude: Option<&[String]>,
     ) -> Result<Self, String> {
-        let default_include = ["{**/,}*.lua".to_owned(), "{**/,}*.luau".to_owned()];
+        // A leading `**/` also matches no directory at all, and this form
+        // compiles to an extension lookup instead of a regex.
+        let default_include = ["**/*.lua".to_owned(), "**/*.luau".to_owned()];
         let exclude_patterns = exclude.unwrap_or_default();
         let excluded_trees: Vec<String> = exclude_patterns
             .iter()
@@ -59,19 +61,30 @@ impl ProjectFilter {
     /// needn't enter it.
     #[must_use]
     pub fn excludes_tree(&self, directory: &Path) -> bool {
-        if self.excluded_trees.is_empty() {
-            return false;
-        }
-        let candidate = canonicalize_existing(directory);
-        let relative = candidate.strip_prefix(&self.root).unwrap_or(&candidate);
-        self.excluded_trees.is_match(relative)
+        !self.excluded_trees.is_empty()
+            && self.excludes_canonical_tree(&canonicalize_existing(directory))
+    }
+
+    /// [`excludes_tree`](Self::excludes_tree) for a canonical path, such as a
+    /// walk from a canonical directory builds, which touches no disk.
+    #[must_use]
+    pub fn excludes_canonical_tree(&self, directory: &Path) -> bool {
+        !self.excluded_trees.is_empty()
+            && self.excluded_trees.is_match(directory.strip_prefix(&self.root).unwrap_or(directory))
     }
 
     #[must_use]
     pub fn is_included(&self, path: &Path) -> bool {
-        let candidate = canonicalize_existing(path);
-        let relative = candidate.strip_prefix(&self.root).unwrap_or(&candidate);
-        self.include.is_match(relative) && !self.exclude.is_match(relative)
+        self.includes_canonical(&canonicalize_existing(path))
+    }
+
+    /// [`is_included`](Self::is_included) for a canonical path, such as a
+    /// walk from a canonical directory builds, which touches no disk.
+    #[must_use]
+    pub fn includes_canonical(&self, path: &Path) -> bool {
+        let candidate = Candidate::new(path.strip_prefix(&self.root).unwrap_or(path));
+        self.include.is_match_candidate(&candidate)
+            && (self.exclude.is_empty() || !self.exclude.is_match_candidate(&candidate))
     }
 
     /// Whether an `exclude` glob matches `path`, whatever `include` says. A
@@ -176,6 +189,10 @@ mod tests {
         let filter = ProjectFilter::new(Path::new("/proj"), None, None).expect("valid globs");
         assert!(filter.is_included(Path::new("/proj/x.lua")));
         assert!(filter.is_included(Path::new("/proj/sub/y.luau")));
+        assert!(filter.is_included(Path::new("/proj/.lua")));
+        assert!(filter.is_included(Path::new("/elsewhere/z.lua")));
         assert!(!filter.is_included(Path::new("/proj/x.txt")));
+        assert!(!filter.is_included(Path::new("/proj/x.lua.bak")));
+        assert!(!filter.is_included(Path::new("/proj/x.luaux")));
     }
 }

@@ -47,6 +47,7 @@ memchr                = "2"
 mimalloc-safe         = "0.1.70"
 notify-debouncer-mini = "0.7"
 oxc_data_structures   = { version = "0.159", features = ["types"] }
+parking_lot           = "0.12"
 petgraph              = { version = "0.8", default-features = false, features = ["std"] }
 predicates            = { version = "3", default-features = false }
 quickcheck            = { version = "1.1", default-features = false }

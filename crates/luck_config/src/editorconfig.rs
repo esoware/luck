@@ -3,10 +3,12 @@
 
 mod glob;
 
+use alloc::sync::Arc;
 use std::fs;
-use std::path::{self, Path};
+use std::path::{self, Path, PathBuf};
 
 use luck_formatter::{IndentStyle, LineEndings};
+use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use self::glob::SectionGlob;
@@ -21,78 +23,167 @@ const MAX_SECTION_NAME_BYTES: usize = 4096;
 /// Without a `file_path`, for a document that isn't on disk or a caller that
 /// ignores `.editorconfig`, the `format` section stands alone. The formatter
 /// fills in its own defaults for whatever neither sets.
+///
+/// Reads the `.editorconfig` files above `file_path` afresh. A run over many
+/// files reads each once through [`Editorconfigs`] instead.
 #[must_use]
 pub fn resolved_format_config(
     project_format: Option<FormatConfig>,
     file_path: Option<&Path>,
 ) -> FormatConfig {
-    let Some(path) = file_path else {
-        return project_format.unwrap_or_default();
-    };
-    let editorconfig = format_config_for(path);
-    project_format.map_or(editorconfig, |format| format.merge_onto(editorconfig))
+    Editorconfigs::default().resolved_format_config(project_format, file_path)
 }
 
-fn format_config_for(file_path: &Path) -> FormatConfig {
-    // A relative path would hide the directories above the working directory
-    // from the walk and from sections anchored at them.
-    let Ok(absolute_path) = path::absolute(file_path) else {
-        return FormatConfig::default();
-    };
-    let properties = editorconfig_properties(&absolute_path);
-    let lowercase_value = |k: &str| properties.get(k).map(|v| v.to_ascii_lowercase());
-    let number_value = |k: &str| properties.get(k)?.parse::<usize>().ok();
+/// The `.editorconfig` files a run has read, each once, however many files
+/// share it. An edit made during the run isn't seen.
+#[derive(Debug, Default)]
+pub struct Editorconfigs {
+    /// The files that apply in each directory, farthest first.
+    chains: Mutex<FxHashMap<PathBuf, Chain>>,
+}
 
-    let indent_style = match lowercase_value("indent_style").as_deref() {
-        Some("tab") => Some(IndentStyle::Tabs),
-        Some("space") => Some(IndentStyle::Spaces),
-        _ => None,
-    };
+type Chain = Arc<[Arc<Editorconfig>]>;
 
-    let indent_width = number_value("indent_size").or_else(|| number_value("tab_width"));
+/// One `.editorconfig`, parsed and with its section globs compiled.
+#[derive(Debug)]
+struct Editorconfig {
+    directory: PathBuf,
+    sections: Vec<Section>,
+}
 
-    let line_endings = match lowercase_value("end_of_line").as_deref() {
-        Some("lf") => Some(LineEndings::Unix),
-        Some("crlf") => Some(LineEndings::Windows),
-        // `LineEndings` has no bare-CR option.
-        _ => None,
-    };
+#[derive(Debug)]
+struct Section {
+    /// `None` for a name too long to read, which matches nothing.
+    glob: Option<SectionGlob>,
+    /// In file order, with lowercased keys.
+    pairs: Vec<(String, String)>,
+}
 
-    FormatConfig {
-        // `off`, like any other non-number, leaves `line_width` unset.
-        line_width: number_value("max_line_length").and_then(|w| u16::try_from(w).ok()),
-        indent_style,
-        indent_width: indent_width.and_then(|w| u8::try_from(w).ok()),
-        line_endings,
-        ..FormatConfig::default()
+impl Editorconfigs {
+    /// [`resolved_format_config`] from the files this has read.
+    #[must_use]
+    pub fn resolved_format_config(
+        &self,
+        project_format: Option<FormatConfig>,
+        file_path: Option<&Path>,
+    ) -> FormatConfig {
+        let Some(path) = file_path else {
+            return project_format.unwrap_or_default();
+        };
+        let editorconfig = self.format_config_for(path);
+        project_format.map_or(editorconfig, |format| format.merge_onto(editorconfig))
     }
-}
 
-/// The properties applying to `file_path`, an absolute path, keyed by
-/// lowercased name. Nearer files override farther ones, and within a file
-/// later sections override earlier ones.
-fn editorconfig_properties(file_path: &Path) -> FxHashMap<String, String> {
-    let mut files = Vec::new();
-    for directory in file_path.ancestors().skip(1) {
-        if let Ok(bytes) = fs::read(directory.join(EDITORCONFIG_FILE_NAME)) {
-            let contents = String::from_utf8_lossy(&bytes).into_owned();
-            let is_root = is_root_file(&contents);
-            files.push((directory, contents));
-            if is_root {
-                break;
+    /// The files that apply in `directory`, an absolute path, farthest first.
+    /// Two threads asking at once may both read a file, and either answer is
+    /// kept.
+    fn chain(&self, directory: &Path) -> Chain {
+        let cached = self.chains.lock().get(directory).cloned();
+        if let Some(chain) = cached {
+            return chain;
+        }
+        let own = fs::read(directory.join(EDITORCONFIG_FILE_NAME)).ok().map(|bytes| {
+            let contents = String::from_utf8_lossy(&bytes);
+            (is_root_file(&contents), Editorconfig::parse(directory, &contents))
+        });
+        let chain: Chain = match own {
+            Some((true, file)) => Arc::new([Arc::new(file)]),
+            Some((false, file)) => {
+                let parent_chain = directory.parent().map(|parent| self.chain(parent));
+                parent_chain
+                    .iter()
+                    .flat_map(|chain| chain.iter().cloned())
+                    .chain([Arc::new(file)])
+                    .collect()
             }
+            None => directory.parent().map_or_else(|| Chain::from([]), |parent| self.chain(parent)),
+        };
+        self.chains.lock().insert(directory.to_path_buf(), Arc::clone(&chain));
+        chain
+    }
+
+    fn format_config_for(&self, file_path: &Path) -> FormatConfig {
+        // A relative path would hide the directories above the working
+        // directory from the walk and from sections anchored at them.
+        let Ok(absolute_path) = path::absolute(file_path) else {
+            return FormatConfig::default();
+        };
+        let chain = absolute_path.parent().map(|directory| self.chain(directory));
+        let properties =
+            editorconfig_properties(&absolute_path, chain.as_deref().unwrap_or_default());
+        let lowercase_value = |k: &str| properties.get(k).map(|v| v.to_ascii_lowercase());
+        let number_value = |k: &str| properties.get(k)?.parse::<usize>().ok();
+
+        let indent_style = match lowercase_value("indent_style").as_deref() {
+            Some("tab") => Some(IndentStyle::Tabs),
+            Some("space") => Some(IndentStyle::Spaces),
+            _ => None,
+        };
+
+        let indent_width = number_value("indent_size").or_else(|| number_value("tab_width"));
+
+        let line_endings = match lowercase_value("end_of_line").as_deref() {
+            Some("lf") => Some(LineEndings::Unix),
+            Some("crlf") => Some(LineEndings::Windows),
+            // `LineEndings` has no bare-CR option.
+            _ => None,
+        };
+
+        FormatConfig {
+            // `off`, like any other non-number, leaves `line_width` unset.
+            line_width: number_value("max_line_length").and_then(|w| u16::try_from(w).ok()),
+            indent_style,
+            indent_width: indent_width.and_then(|w| u8::try_from(w).ok()),
+            line_endings,
+            ..FormatConfig::default()
         }
     }
+}
 
+impl Editorconfig {
+    /// Pairs before the first section, such as `root`, apply to no file.
+    fn parse(directory: &Path, contents: &str) -> Self {
+        let mut sections: Vec<Section> = Vec::new();
+        for line in parsed_lines(contents) {
+            match line {
+                EditorconfigLine::Section(name) => sections.push(Section {
+                    glob: (name.len() <= MAX_SECTION_NAME_BYTES).then(|| SectionGlob::new(name)),
+                    pairs: Vec::new(),
+                }),
+                EditorconfigLine::Pair(key, value) => {
+                    if let Some(section) = sections.last_mut() {
+                        section.pairs.push((key.to_ascii_lowercase(), value.to_owned()));
+                    }
+                }
+            }
+        }
+        Self { directory: directory.to_path_buf(), sections }
+    }
+}
+
+/// The properties `chain` gives `file_path`, an absolute path, keyed by
+/// lowercased name. Nearer files override farther ones, and within a file
+/// later sections override earlier ones.
+fn editorconfig_properties<'chain>(
+    file_path: &Path,
+    chain: &'chain [Arc<Editorconfig>],
+) -> FxHashMap<&'chain str, &'chain str> {
     let mut properties = FxHashMap::default();
-    for (directory, contents) in files.iter().rev() {
-        let relative_path = file_path.strip_prefix(directory).unwrap_or(file_path);
-        let mut subject = Vec::new();
+    let mut subject = Vec::new();
+    for file in chain {
+        let relative_path = file_path.strip_prefix(&file.directory).unwrap_or(file_path);
+        subject.clear();
         for component in relative_path.components() {
             subject.push('/');
             subject.extend(component.as_os_str().to_string_lossy().chars());
         }
-        apply_file(contents, &subject, &mut properties);
+        for section in &file.sections {
+            if section.glob.as_ref().is_some_and(|glob| glob.matches(&subject)) {
+                properties.extend(
+                    section.pairs.iter().map(|(key, value)| (key.as_str(), value.as_str())),
+                );
+            }
+        }
     }
     properties
 }
@@ -106,22 +197,6 @@ fn is_root_file(contents: &str) -> bool {
         .filter(|(k, _)| k.eq_ignore_ascii_case("root"))
         .last()
         .is_some_and(|(_, v)| v.eq_ignore_ascii_case("true"))
-}
-
-fn apply_file(contents: &str, subject: &[char], properties: &mut FxHashMap<String, String>) {
-    let mut is_applicable = false;
-    for line in parsed_lines(contents) {
-        match line {
-            EditorconfigLine::Section(name) => {
-                is_applicable =
-                    name.len() <= MAX_SECTION_NAME_BYTES && SectionGlob::new(name).matches(subject);
-            }
-            EditorconfigLine::Pair(key, value) if is_applicable => {
-                properties.insert(key.to_ascii_lowercase(), value.to_owned());
-            }
-            EditorconfigLine::Pair(..) => {}
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -158,6 +233,10 @@ fn section_name(line: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn format_config_for(file_path: &Path) -> FormatConfig {
+        Editorconfigs::default().format_config_for(file_path)
+    }
 
     #[test]
     fn reads_basic_editorconfig() {
