@@ -1,0 +1,2 @@
+# oxc's clippy.toml at the commit lib.rs names, reduced to what applies here. It replaces luck's.
+avoid-breaking-exported-api = false

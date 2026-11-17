@@ -12,6 +12,7 @@ Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and 
 
 | Crate | Role | Key entry |
 |-------|------|-----------|
+| `luck_allocator` | Bump arena ported from `oxc_allocator`, diffable against the upstream commit `lib.rs` names: `Allocator`, the drop-free `Box`, the fixed-size `List` frozen from a scratch `Vec` in one copy, and `AllocatorPool` for reuse across threads. Linted by oxc's levels and `clippy.toml`, not the workspace's | `allocator.rs`, `boxed.rs`, `list.rs`, `pool.rs`, `arena/` |
 | `luck_token` | Spans, `LuaVersion`, `StdlibEnvironment`, `SourceError`, shared literal decode/encode, `CompactString` storage, `CodeBuffer` byte-level output builder | `span.rs`, `version.rs`, `token.rs`, `op.rs`, `number.rs`, `string.rs`, `code_buffer.rs` |
 | `luck_lexer` | Single-pass tokenizer, comments emitted separately, memchr + byte-table batched scanning | `lexer.rs`, `search.rs` |
 | `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `Transform`, `Synth` builder (source-free AST construction), `MAX_NESTING_DEPTH` and the depth measures | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs`, `depth.rs` |

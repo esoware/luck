@@ -79,10 +79,11 @@ Copy is any text a user reads. That means every string the extension shows, plus
 
 ### Crates and modules
 
-- `luck_token` depends on nothing in the workspace. `luck_lexer`, `luck_ast`, `luck_core`, and `luck_testgen` depend on `luck_token` only, `luck_parser` on `luck_token`, `luck_lexer`, and `luck_ast`, `luck_codegen` and `luck_semantic` on `luck_token` and `luck_ast`, and `luck_resolver` on `luck_token` and `luck_core`.
+- `luck_allocator` and `luck_token` depend on nothing in the workspace. `luck_lexer`, `luck_ast`, `luck_core`, and `luck_testgen` depend on `luck_token` only, `luck_parser` on `luck_token`, `luck_lexer`, and `luck_ast`, `luck_codegen` and `luck_semantic` on `luck_token` and `luck_ast`, and `luck_resolver` on `luck_token` and `luck_core`.
 - `luck_codegen`, `luck_formatter`, and `luck_minifier` never depend on `luck_semantic`, `luck_resolver`, `luck_linter`, `luck_bundler`, or `luck_config`.
 - `luck_cli` is the only crate that depends on `luck_lsp`, only `luck_cli`, `luck_lsp`, and the `luck` facade's opt-in `config` feature depend on `luck_config`, and nothing depends on `luck_cli` or on the `luck` facade.
-- Only `luck_token`'s `code_buffer.rs`, `luck_resolver`'s `source_io.rs`, and `luck_benchmark` may use `unsafe`, so the workspace denies `unsafe_code` rather than forbidding it.
+- Only `luck_allocator`, `luck_token`'s `code_buffer.rs`, `luck_resolver`'s `source_io.rs`, and `luck_benchmark` may use `unsafe`, so the workspace denies `unsafe_code` rather than forbidding it.
+- `luck_allocator` is a port of `oxc_allocator`, kept close enough to diff against the commit its `lib.rs` names. It takes oxc's lint levels and `clippy.toml` instead of the workspace's, and its ported files keep oxc's style, so the naming, comment, lint, copy, and test rules here bind only the files luck added to it, such as `list.rs`. Its `testing` feature, upstream's, makes the private arena public to its own tests and doctests.
 - A dialect's facts live in `LuaVersion` and `StdlibEnvironment` in `luck_token`. `LuaTarget` in `luck_core` is the dialect a user names, and it projects onto those two once, at each entry boundary. Codegen-side crates, the minifier included, read only `LuaVersion`, so `-t roblox` and `-t luau` minify identically.
 - A version's syntax reaches its consumers as a `LuaVersion::has_<feature>` predicate, never as a comparison of `LuaVersion` variants. The only `is_` forms are `is_luau` and `is_roblox`.
 - Adding a Lua version is a `LuaVersion` variant, a `LuaTarget` variant, and an arm in every `has_<feature>` predicate. Each of those predicates is exhaustive so a new version has to answer it.
