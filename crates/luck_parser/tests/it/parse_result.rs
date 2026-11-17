@@ -2,8 +2,31 @@ use core::ptr;
 
 use luck_allocator::Allocator;
 use luck_ast::{Call, Expression, FunctionArgs, Statement, Visitor};
-use luck_parser::parse;
+use luck_parser::{parse, parse_with_tokens};
+use luck_testgen::{broken_sources, sources_past_the_nesting_cap};
 use luck_token::LuaVersion;
+
+/// The parse reads every token once, in order, so what it hands back is the
+/// lexer's stream, `Eof` once at its end, however the parse stops.
+#[test]
+fn parse_with_tokens_hands_back_the_lexed_stream() {
+    let allocator = Allocator::new();
+    let handwritten = [
+        (LuaVersion::Lua54, String::new()),
+        (LuaVersion::Lua54, "local x = \"open".to_owned()),
+        (LuaVersion::Lua54, "--[[ never closed".to_owned()),
+        (LuaVersion::Luau, "local s = `a{b}c` .. `d`".to_owned()),
+        (LuaVersion::Lua51, "x = = 1 end )".to_owned()),
+    ];
+    for (version, source) in
+        handwritten.into_iter().chain(broken_sources()).chain(sources_past_the_nesting_cap())
+    {
+        let (parse, tokens) = parse_with_tokens(&allocator, &source, version);
+        let lexed = luck_lexer::lex(&source, version);
+        assert_eq!(tokens, lexed.tokens, "{source:.80}");
+        assert_eq!(parse.comments, lexed.comments, "{source:.80}");
+    }
+}
 
 /// Names and literals are slices of the source, not copies of it.
 #[test]

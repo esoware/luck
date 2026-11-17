@@ -33,5 +33,5 @@ mod parser;
 mod validate;
 
 pub use parse_result::{ParseError, ParseResult};
-pub use parser::parse;
+pub use parser::{parse, parse_with_tokens};
 pub use validate::validate;

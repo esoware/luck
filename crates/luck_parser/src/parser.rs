@@ -20,6 +20,12 @@ use rustc_hash::FxHashSet;
 use crate::validate::check_type_functions;
 use crate::{ParseError, ParseResult};
 
+/// The lexer's reservation for its token list, which `parse_with_tokens`
+/// shares: about one token per four bytes, and never so many that a huge
+/// comment-only file reserves gigabytes it never touches.
+const BYTES_PER_TOKEN: usize = 4;
+const MAX_RESERVED_TOKENS: usize = 1 << 20;
+
 /// The tree and every list in it go in `allocator`, and its names and
 /// literals borrow `source`.
 #[must_use]
@@ -28,13 +34,45 @@ pub fn parse<'ast>(
     source: &'ast str,
     version: LuaVersion,
 ) -> ParseResult<'ast> {
+    parse_recording(allocator, source, version, None).0
+}
+
+/// [`parse`], and every token the parse read, as [`luck_lexer::lex`] gives
+/// them, for a host that needs both, so it lexes the source once.
+#[must_use]
+pub fn parse_with_tokens<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    version: LuaVersion,
+) -> (ParseResult<'ast>, Vec<Token>) {
+    let capacity = source.len().div_ceil(BYTES_PER_TOKEN).min(MAX_RESERVED_TOKENS);
+    let (parse, recorded) =
+        parse_recording(allocator, source, version, Some(Vec::with_capacity(capacity)));
+    let mut tokens = recorded.unwrap_or_default();
+    // The lexer repeats its `Eof` to a parser that reads on.
+    while let [.., Token { kind: TokenKind::Eof, .. }, Token { kind: TokenKind::Eof, .. }] =
+        tokens.as_slice()
+    {
+        tokens.pop();
+    }
+    (parse, tokens)
+}
+
+fn parse_recording<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    version: LuaVersion,
+    tokens: Option<Vec<Token>>,
+) -> (ParseResult<'ast>, Option<Vec<Token>>) {
     let lexer = match Lexer::new(source, version) {
         Ok(lexer) => lexer,
         Err(error) => {
             let block = Block { span: Span::new(0, 0), stmts: List::new(), last_stmt: None };
             // The empty block's own level.
             let errors = vec![error];
-            return ParseResult { source, block, comments: Vec::new(), errors, nesting_depth: 1 };
+            let parse =
+                ParseResult { source, block, comments: Vec::new(), errors, nesting_depth: 1 };
+            return (parse, tokens.map(|_| Vec::new()));
         }
     };
     let placeholder = Token {
@@ -64,6 +102,7 @@ pub fn parse<'ast>(
         has_syntax_error: false,
         settled_unterminated: 0,
         errors: Vec::new(),
+        tokens,
     };
     // `advance` is the lexer's one caller, so it's inlined there alone.
     parser.advance();
@@ -107,6 +146,8 @@ struct Parser<'ast> {
     /// before that statement.
     settled_unterminated: usize,
     errors: Vec<ParseError>,
+    /// Every token lexed so far, for `parse_with_tokens`.
+    tokens: Option<Vec<Token>>,
 }
 
 /// The items of every list being parsed, innermost list last.
@@ -234,7 +275,7 @@ struct FunctionScope {
 impl<'ast> Parser<'ast> {
     /// Nothing is open around the chunk's block, so it reads to the end of
     /// the source, and the lexer is drained by then.
-    fn parse_chunk(mut self) -> ParseResult<'ast> {
+    fn parse_chunk(mut self) -> (ParseResult<'ast>, Option<Vec<Token>>) {
         let start_span = self.token.span;
         let block = self.parse_block().unwrap_or(Block {
             span: start_span,
@@ -247,13 +288,14 @@ impl<'ast> Parser<'ast> {
             errors = check_type_functions(&block, self.version);
         }
         errors.sort_by_key(|e| e.span.start);
-        ParseResult {
+        let parse = ParseResult {
             source: self.source,
             block,
             comments,
             errors,
             nesting_depth: self.deepest_level,
-        }
+        };
+        (parse, self.tokens)
     }
 
     #[inline]
@@ -307,6 +349,9 @@ impl<'ast> Parser<'ast> {
         self.previous_span = span;
         self.token = self.next;
         self.next = self.lexer.next_token();
+        if let Some(tokens) = &mut self.tokens {
+            tokens.push(self.next);
+        }
         span
     }
 
