@@ -4,25 +4,22 @@
 
 use libfuzzer_sys::fuzz_target;
 use luck_formatter::FormatOptions;
-use luck_fuzz::decode_input;
+use luck_fuzz::{decode_input, with_arena};
 
 fuzz_target!(|data: &[u8]| {
     let Some((source, version)) = decode_input(data) else {
         return;
     };
-    if !luck_parser::parse(source, version).errors.is_empty() {
-        return;
-    }
-
-    let options = FormatOptions::default();
-    let first = luck_formatter::format(source, version, &options);
-    if !first.errors.is_empty() {
-        return;
-    }
-
-    let reparsed = luck_parser::parse(&first.output, version);
-    assert!(reparsed.errors.is_empty(), "formatted output failed to reparse");
-
-    let second = luck_formatter::format(&first.output, version, &options);
-    assert_eq!(first.output, second.output, "format not idempotent on its own output");
+    with_arena(|allocator| {
+        let options = FormatOptions::default();
+        // Formatting reports only parse errors, so this skips what doesn't
+        // parse.
+        let first = luck_formatter::format(allocator, source, version, &options);
+        if !first.errors.is_empty() {
+            return;
+        }
+        let second = luck_formatter::format(allocator, &first.output, version, &options);
+        assert!(second.errors.is_empty(), "formatted output failed to reparse");
+        assert_eq!(first.output, second.output, "format not idempotent on its own output");
+    });
 });

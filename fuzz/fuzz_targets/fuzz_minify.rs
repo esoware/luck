@@ -3,29 +3,23 @@
 //! minified output re-parses clean.
 
 use libfuzzer_sys::fuzz_target;
-use luck_fuzz::decode_input;
+use luck_fuzz::{decode_input, with_arena};
 use luck_minifier::TransformConfig;
 
 fuzz_target!(|data: &[u8]| {
     let Some((source, version)) = decode_input(data) else {
         return;
     };
-    if !luck_parser::parse(source, version).errors.is_empty() {
-        return;
-    }
-
-    let config = TransformConfig::default();
-    let Ok(first) = luck_minifier::minify(source, version, &config) else {
-        // Unreachable: `minify` only fails on a parse error, and this input
-        // just parsed clean.
-        return;
-    };
-
-    let reparsed = luck_parser::parse(&first, version);
-    assert!(reparsed.errors.is_empty(), "minified output failed to reparse");
-
-    let Ok(second) = luck_minifier::minify(&first, version, &config) else {
-        panic!("second minify pass errored on its own output");
-    };
-    assert_eq!(first, second, "minify not idempotent");
+    with_arena(|allocator| {
+        let config = TransformConfig::default();
+        // `minify` fails only on a parse error, so this skips what doesn't
+        // parse.
+        let Ok(first) = luck_minifier::minify(allocator, source, version, &config) else {
+            return;
+        };
+        let Ok(second) = luck_minifier::minify(allocator, &first, version, &config) else {
+            panic!("minified output failed to reparse");
+        };
+        assert_eq!(first, second, "minify not idempotent");
+    });
 });

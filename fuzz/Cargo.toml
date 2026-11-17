@@ -33,6 +33,8 @@ doc   = false
 bench = false
 
 [dependencies]
+luck_allocator = { path = "../crates/luck_allocator" }
+luck_ast       = { path = "../crates/luck_ast" }
 luck_formatter = { path = "../crates/luck_formatter" }
 luck_lexer     = { path = "../crates/luck_lexer" }
 luck_minifier  = { path = "../crates/luck_minifier" }
