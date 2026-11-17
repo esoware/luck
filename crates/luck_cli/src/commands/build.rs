@@ -5,6 +5,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use clap::Args;
+use luck_allocator::Allocator;
 use luck_bundler::{BundleOptions, bundle, bundle_minified};
 use luck_config::{
     BuildConfig, check_output_paths, config_directory, discover_config, load_or_discover_config,
@@ -17,7 +18,7 @@ use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::Recursiv
 
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::{format_size, write_output_file};
-use crate::project::current_directory;
+use crate::project::{bundle_arenas, current_directory};
 use crate::render::print_diags;
 use crate::verbosity::Verbosity;
 
@@ -108,8 +109,9 @@ impl BuildArgs {
             print_build_header(first_config);
         }
 
+        let mut arenas = bundle_arenas();
         for config in &configs {
-            match self.build_one(config, verbosity) {
+            match self.build_one(&mut arenas, config, verbosity) {
                 Ok(_) => {}
                 Err(BuildFailure::Failed { .. }) => {
                     eprintln!("\n  \x1b[31merror:\x1b[0m build failed");
@@ -130,7 +132,8 @@ impl BuildArgs {
     /// Returns [`Exit::Failure`] when the file watcher can't start, and the
     /// exit code when a build's output can't be written.
     fn rebuild_on_change(&self, verbosity: Verbosity) -> Result<(), Exit> {
-        let mut source_files = self.build_for_watch(verbosity)?;
+        let mut arenas = bundle_arenas();
+        let mut source_files = self.build_for_watch(&mut arenas, verbosity)?;
 
         loop {
             let directories = self.watched_directories(&source_files);
@@ -156,7 +159,7 @@ impl BuildArgs {
 
             eprintln!();
 
-            source_files = self.build_for_watch(verbosity)?;
+            source_files = self.build_for_watch(&mut arenas, verbosity)?;
         }
     }
 
@@ -193,14 +196,18 @@ impl BuildArgs {
     /// Returns the exit code when a build's output can't be written. A failed
     /// build or a bad config isn't an error here: watch mode reports it and
     /// keeps watching.
-    fn build_for_watch(&self, verbosity: Verbosity) -> Result<Vec<String>, Exit> {
+    fn build_for_watch(
+        &self,
+        arenas: &mut [Allocator],
+        verbosity: Verbosity,
+    ) -> Result<Vec<String>, Exit> {
         let Ok(configs) = self.resolved_configs() else {
             return Ok(Vec::new());
         };
 
         let mut all_source_files = Vec::new();
         for config in &configs {
-            match self.build_one(config, verbosity) {
+            match self.build_one(arenas, config, verbosity) {
                 Ok(source_files) | Err(BuildFailure::Failed { source_files }) => {
                     all_source_files.extend(source_files);
                 }
@@ -218,10 +225,15 @@ impl BuildArgs {
     /// replace a bundled file.
     fn build_one(
         &self,
+        arenas: &mut [Allocator],
         config: &BuildConfig,
         verbosity: Verbosity,
     ) -> Result<Vec<String>, BuildFailure> {
         let start = Instant::now();
+        // The arenas outlive each build, so a rebuild reuses their memory.
+        for arena in &mut *arenas {
+            arena.reset();
+        }
         let version = config.target.lua_version();
         let options = BundleOptions {
             version,
@@ -246,7 +258,7 @@ impl BuildArgs {
         // A minified build compares its size with the sources', since it
         // never writes the bundle unminified.
         let (bundled, source_files, original_size) = if config.minify {
-            let minified = bundle_minified(&config.entry, &options, &config.transforms)
+            let minified = bundle_minified(arenas, &config.entry, &options, &config.transforms)
                 .map_err(bundle_failure)?;
             check_output(&minified.source_files)?;
             if verbosity != Verbosity::Quiet {
@@ -254,7 +266,7 @@ impl BuildArgs {
             }
             (minified.output, minified.source_files, Some(minified.source_byte_count))
         } else {
-            let result = bundle(&config.entry, &options).map_err(bundle_failure)?;
+            let result = bundle(arenas, &config.entry, &options).map_err(bundle_failure)?;
             check_output(&result.source_files)?;
             if verbosity != Verbosity::Quiet {
                 print_diags(&result.warnings, version);
@@ -443,7 +455,9 @@ mod tests {
             watch: true,
         };
 
-        let source_files = args.build_for_watch(Verbosity::Quiet).expect("watch keeps going");
+        let source_files = args
+            .build_for_watch(&mut bundle_arenas(), Verbosity::Quiet)
+            .expect("watch keeps going");
         let directories = args.watched_directories(&source_files);
 
         let canonical_sources = sources.canonicalize().expect("canonicalize sources");

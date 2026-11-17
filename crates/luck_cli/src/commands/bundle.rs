@@ -10,7 +10,8 @@ use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::write_output;
 use crate::project::{
-    config_for_one_shot, entry_and_root, resolve_configured_target, resolve_dynamic_require,
+    bundle_arenas, config_for_one_shot, entry_and_root, resolve_configured_target,
+    resolve_dynamic_require,
 };
 use crate::render::print_diags;
 use crate::verbosity::Verbosity;
@@ -74,8 +75,9 @@ impl BundleArgs {
             dynamic_require,
         };
 
+        let mut arenas = bundle_arenas();
         if self.minify {
-            let minified = bundle_minified(entry_path, &options, &transforms)
+            let minified = bundle_minified(&mut arenas, entry_path, &options, &transforms)
                 .map_err(|errors| fail_with_diags(&errors, version))?;
             check_output_paths(&minified.source_files, self.output.iter()).map_err(usage_error)?;
             if verbosity != Verbosity::Quiet {
@@ -84,8 +86,8 @@ impl BundleArgs {
             return write_output(self.output.as_deref(), &minified.output);
         }
 
-        let result =
-            bundle(entry_path, &options).map_err(|errors| fail_with_diags(&errors, version))?;
+        let result = bundle(&mut arenas, entry_path, &options)
+            .map_err(|errors| fail_with_diags(&errors, version))?;
 
         check_output_paths(&result.source_files, self.output.iter().chain(&self.line_map))
             .map_err(usage_error)?;

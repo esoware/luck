@@ -1,7 +1,6 @@
 //! Library crates only produce diagnostics, and the CLI prints them.
 
 use core::fmt;
-use core::iter;
 use core::ops::Range;
 use std::io::{self, Write};
 
@@ -36,24 +35,32 @@ impl CachedFile {
 /// whose own set adds VT, FF, NEL, LS, and PS and counts LFCR as two. Every
 /// byte offset stays the same.
 fn with_only_lua_line_breaks(text: &str, version: LuaVersion) -> String {
+    let bytes = text.as_bytes();
     let mut rendered = String::with_capacity(text.len());
-    let mut characters = text.chars().peekable();
-    while let Some(character) = characters.next() {
-        match character {
-            '\x0B' | '\x0C' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
-                rendered.extend(iter::repeat_n(' ', character.len_utf8()));
-            }
+    let mut copied_to = 0;
+    let mut index = 0;
+    while let Some(&b) = bytes.get(index) {
+        let next = |ahead: usize| bytes.get(index.saturating_add(ahead)).copied();
+        let replacement = match b {
+            0x0B | 0x0C => " ",
+            // NEL
+            0xC2 if next(1) == Some(0x85) => "  ",
+            // LS and PS
+            0xE2 if next(1) == Some(0x80) && matches!(next(2), Some(0xA8 | 0xA9)) => "   ",
             // Luau
-            '\r' if !version.has_lfcr_line_break() && characters.peek() != Some(&'\n') => {
-                rendered.push(' ');
+            b'\r' if !version.has_lfcr_line_break() && next(1) != Some(b'\n') => " ",
+            b'\n' if version.has_lfcr_line_break() && next(1) == Some(b'\r') => "\r\n",
+            _ => {
+                index = index.saturating_add(1);
+                continue;
             }
-            '\n' if version.has_lfcr_line_break() && characters.peek() == Some(&'\r') => {
-                characters.next();
-                rendered.push_str("\r\n");
-            }
-            _ => rendered.push(character),
-        }
+        };
+        rendered.push_str(text.get(copied_to..index).unwrap_or_default());
+        rendered.push_str(replacement);
+        index = index.saturating_add(replacement.len());
+        copied_to = index;
     }
+    rendered.push_str(text.get(copied_to..).unwrap_or_default());
     rendered
 }
 
@@ -318,6 +325,23 @@ local \u{e9}b = 1
         let lines = LineIndex::new(source, LuaVersion::Lua54);
         assert_eq!(line_and_column(&lines, source, 3), (1, 1));
         assert_eq!(line_and_column(&lines, source, 9), (1, 7));
+    }
+
+    #[test]
+    fn only_lua_line_breaks_still_end_a_line_at_the_same_offsets() {
+        assert_eq!(
+            with_only_lua_line_breaks("a\x0Bb\x0Cc\u{85}d\u{2028}e\u{2029}f", LuaVersion::Lua54),
+            "a b c  d   e   f"
+        );
+        assert_eq!(
+            with_only_lua_line_breaks("a\n\rb\r\nc\rd", LuaVersion::Lua54),
+            "a\r\nb\r\nc\rd"
+        );
+        assert_eq!(with_only_lua_line_breaks("a\n\rb\r\nc\rd", LuaVersion::Luau), "a\n b\r\nc d");
+        assert_eq!(
+            with_only_lua_line_breaks("\u{e9}\u{2027}\u{c5}", LuaVersion::Lua54),
+            "\u{e9}\u{2027}\u{c5}"
+        );
     }
 
     #[test]

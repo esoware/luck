@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Args;
+use luck_allocator::Allocator;
 use luck_core::LuaTarget;
 use luck_resolver::read_source_file;
 
@@ -59,7 +60,7 @@ impl MinifyArgs {
         let original_size = source.len();
 
         let version = target.lua_version();
-        let minified = luck_minifier::minify(&source, version, &transforms)
+        let minified = luck_minifier::minify(&Allocator::new(), &source, version, &transforms)
             .map_err(|errors| fail_with_source_errors(file_path, &source, &errors, version))?;
 
         if self.stats {
