@@ -59,7 +59,7 @@ impl<'ast> Formatter<'ast> {
                 self.space();
                 self.token("function");
                 self.space();
-                self.text(local_function.name.text);
+                self.name(local_function.name);
                 self.write_function_body(&local_function.body);
             }
             // Lua 5.5
@@ -68,7 +68,7 @@ impl<'ast> Formatter<'ast> {
                 self.space();
                 self.token("function");
                 self.space();
-                self.text(global_function.name.text);
+                self.name(global_function.name);
                 self.write_function_body(&global_function.body);
             }
             Statement::DoBlock(do_block) => {
@@ -96,12 +96,12 @@ impl<'ast> Formatter<'ast> {
             Statement::Goto(goto) => {
                 self.token("goto");
                 self.space();
-                self.text(goto.name.text);
+                self.name(goto.name);
             }
             // Lua 5.2+
             Statement::Label(label) => {
                 self.token("::");
-                self.text(label.name.text);
+                self.name(label.name);
                 self.token("::");
             }
             // Lua 5.5
@@ -122,7 +122,7 @@ impl<'ast> Formatter<'ast> {
                 self.space();
                 if let Some(attribute) = &global_star.attribute {
                     self.token("<");
-                    self.text(attribute.name.text);
+                    self.name(attribute.name);
                     self.token(">");
                     self.space();
                 }
@@ -272,7 +272,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     fn write_attributed_name(&mut self, name: &AttributedName<'ast>) {
-        self.text(name.name.text);
+        self.name(name.name);
         if let Some(annotation) = &name.type_annotation {
             self.token(":");
             self.space();
@@ -281,7 +281,7 @@ impl<'ast> Formatter<'ast> {
         if let Some(attribute) = &name.attribute {
             self.space();
             self.token("<");
-            self.text(attribute.name.text);
+            self.name(attribute.name);
             self.token(">");
         }
     }
@@ -399,7 +399,7 @@ impl<'ast> Formatter<'ast> {
     fn write_numeric_for(&mut self, numeric_for: &NumericFor<'ast>) {
         self.token("for");
         self.space();
-        self.text(numeric_for.name.text);
+        self.name(numeric_for.name);
         // Luau: `: T` on the loop variable.
         if let Some(annotation) = &numeric_for.type_annotation {
             self.token(":");
@@ -459,11 +459,11 @@ impl<'ast> Formatter<'ast> {
             if i > 0 {
                 self.token(".");
             }
-            self.text(part.text);
+            self.name(*part);
         }
         if let Some(method_name) = &name.method {
             self.token(":");
-            self.text(method_name.text);
+            self.name(*method_name);
         }
     }
 
@@ -476,7 +476,7 @@ impl<'ast> Formatter<'ast> {
         match &declaration.value {
             TypeDeclarationValue::Alias(annotation) => {
                 self.space();
-                self.text(declaration.name.text);
+                self.name(declaration.name);
                 if let Some(generics) = &declaration.generics {
                     self.write_generic_type_list(generics);
                 }
@@ -489,7 +489,7 @@ impl<'ast> Formatter<'ast> {
                 self.space();
                 self.token("function");
                 self.space();
-                self.text(declaration.name.text);
+                self.name(declaration.name);
                 self.without_sorting_requires(|f| f.write_function_body(body));
             }
         }

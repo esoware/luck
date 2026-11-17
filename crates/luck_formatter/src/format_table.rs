@@ -156,7 +156,7 @@ impl<'ast> Formatter<'ast> {
     fn write_field(&mut self, field: &Field<'ast>) {
         match field {
             Field::Named { name, value } => {
-                self.text(name.text);
+                self.name(*name);
                 self.space();
                 self.token("=");
                 self.space();

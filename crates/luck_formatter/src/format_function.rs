@@ -92,7 +92,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn write_parameter(&mut self, param: &Parameter<'ast>) {
-        self.text(param.name.text);
+        self.name(param.name);
         // Luau: `: T` annotation.
         if let Some(type_annotation) = &param.type_annotation {
             self.token(":");
@@ -105,7 +105,7 @@ impl<'ast> Formatter<'ast> {
         self.token("...");
         // Lua 5.5: `...name`.
         if let Some(name) = &vararg.name {
-            self.text(name.text);
+            self.name(*name);
         }
         // Luau: `: T` annotation (may be a pack, e.g. `...number`).
         if let Some(type_annotation) = &vararg.type_annotation {
@@ -119,11 +119,11 @@ impl<'ast> Formatter<'ast> {
     pub(crate) fn write_function_attribute(&mut self, attribute: &FunctionAttribute<'ast>) {
         self.token("@");
         let Some(args) = &attribute.args else {
-            self.text(attribute.name.text);
+            self.name(attribute.name);
             return;
         };
         self.token("[");
-        self.text(attribute.name.text);
+        self.name(attribute.name);
         self.token("(");
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {

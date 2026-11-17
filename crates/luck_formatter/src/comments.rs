@@ -315,8 +315,13 @@ impl<'ast> Comments<'ast> {
         };
         let pending = sourced.pending();
         // Sorted by position, so the first one at or past `start` is found
-        // without walking the comments before it.
-        let first_index = pending.partition_point(|c| c.span.start < start);
+        // without walking the comments before it. It's nearly always the
+        // first pending one, since the cursor rarely stalls.
+        let first_index = if pending.first().is_none_or(|c| c.span.start >= start) {
+            0
+        } else {
+            pending.partition_point(|c| c.span.start < start)
+        };
         pending.get(first_index).is_some_and(|c| c.span.start < end)
     }
 

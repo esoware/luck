@@ -13,7 +13,8 @@ use crate::Allocator;
 /// A list in the arena: a pointer, a length, and a capacity, in 16 bytes.
 ///
 /// Build a list in an ordinary [`Vec`] or from an iterator or array of known length, and it's frozen
-/// into the arena in one allocation of exactly its size. [`push`](List::push) and
+/// into the arena in one allocation of exactly its size, or reserve room for one up front with
+/// [`with_capacity_in`](List::with_capacity_in). [`push`](List::push) and
 /// [`insert`](List::insert) grow it, moving it to an arena allocation of twice the capacity when
 /// it's full, so a list built an item at a time takes amortized constant time per item and less
 /// than four times its final size in the arena. [`truncate`](List::truncate) shortens it in place.
@@ -59,6 +60,22 @@ impl<'alloc, T> List<'alloc, T> {
             capacity: Self::EMPTY_CAPACITY,
             marker: PhantomData,
         }
+    }
+
+    /// An empty list with room for `capacity` items before a push moves it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `capacity` is more than `u32::MAX`.
+    pub fn with_capacity_in(capacity: usize, allocator: &'alloc Allocator) -> Self {
+        const { Self::ASSERT_T_IS_NOT_DROP };
+        if capacity == 0 || size_of::<T>() == 0 {
+            return Self::new();
+        }
+        let capacity = u32::try_from(capacity).expect("a list holds at most u32::MAX items");
+        let layout = Layout::array::<T>(capacity as usize).expect("the list fits in memory");
+        let ptr = allocator.alloc_layout(layout).cast::<T>();
+        Self { ptr, len: 0, capacity, marker: PhantomData }
     }
 
     /// # Panics

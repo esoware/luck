@@ -96,6 +96,23 @@ fn push_grows_an_item_at_a_time_by_doubling() {
 }
 
 #[test]
+fn with_capacity_in_pushes_without_moving_until_full() {
+    let allocator = Allocator::new();
+    let mut list = List::with_capacity_in(3, &allocator);
+    assert!(list.is_empty());
+    assert_eq!(list.capacity(), 3);
+    list.push(1_u64, &allocator);
+    let first = list.as_ptr();
+    list.push(2, &allocator);
+    list.push(3, &allocator);
+    assert_eq!(list.as_ptr(), first);
+    assert_eq!(allocator.used_bytes(), size_of::<u64>() * 3);
+    list.push(4, &allocator);
+    assert_eq!(*list, [1, 2, 3, 4]);
+    assert_eq!(List::<u64>::with_capacity_in(0, &allocator).capacity(), 0);
+}
+
+#[test]
 fn push_onto_a_frozen_list_keeps_its_items() {
     let allocator = Allocator::new();
     let mut list = List::from_array_in([1, 2, 3], &allocator);

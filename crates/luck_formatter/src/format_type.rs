@@ -53,14 +53,14 @@ fn flat_leading_name<'ast>(ty: &Type<'ast>) -> Option<&'ast str> {
 impl<'ast> Formatter<'ast> {
     pub(crate) fn write_type(&mut self, ty: &Type<'ast>) {
         match ty {
-            Type::Name(name) => self.text(name.text),
+            Type::Name(name) => self.name(**name),
             // Qualification and generics are tight against the name.
             Type::Named(named) => {
                 if let Some(module) = &named.prefix {
-                    self.text(module.text);
+                    self.name(*module);
                     self.token(".");
                 }
-                self.text(named.name.text);
+                self.name(named.name);
                 if let Some(generics) = &named.generics {
                     self.write_delimited_types("<", ">", &generics.args);
                 }
@@ -101,7 +101,7 @@ impl<'ast> Formatter<'ast> {
             Type::True(_) => self.token("true"),
             Type::False(_) => self.token("false"),
             Type::StringLiteral(literal) => self.write_string(literal.text),
-            Type::Number(literal) => self.text(literal.text),
+            Type::Number(literal) => self.ascii(literal.text),
             // Luau: `...T`.
             Type::Variadic(variadic) => {
                 self.token("...");
@@ -109,7 +109,7 @@ impl<'ast> Formatter<'ast> {
             }
             // Luau: `T...`.
             Type::GenericPack(generic_pack) => {
-                self.text(generic_pack.name.text);
+                self.name(generic_pack.name);
                 self.token("...");
             }
             // A parse-recovery placeholder has no text to print.
@@ -158,7 +158,7 @@ impl<'ast> Formatter<'ast> {
                     self.token(modifier.as_str());
                     self.space();
                 }
-                self.text(name.text);
+                self.name(*name);
                 self.token(":");
                 self.space();
                 self.write_type(value);
@@ -254,7 +254,7 @@ impl<'ast> Formatter<'ast> {
 
     pub(crate) fn write_generic_type_list(&mut self, generics: &GenericTypeList<'ast>) {
         self.write_delimited("<", ">", &generics.params, |f, param| {
-            f.text(param.name.text);
+            f.name(param.name);
             // Luau: `T...` marks a generic pack parameter.
             if param.is_pack {
                 f.token("...");
@@ -271,7 +271,7 @@ impl<'ast> Formatter<'ast> {
 
     fn write_function_type_param(&mut self, param: &FunctionTypeParam<'ast>) {
         if let Some(name) = &param.name {
-            self.text(name.text);
+            self.name(*name);
             self.token(":");
             self.space();
             self.write_type(&param.ty);

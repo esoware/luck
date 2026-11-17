@@ -78,7 +78,7 @@ impl<'ast> Formatter<'ast> {
                 self.write_number(literal.text);
             }
             Expression::StringLiteral(literal) => self.write_string(literal.text),
-            Expression::Name(name) => self.text(name.text),
+            Expression::Name(name) => self.name(**name),
             Expression::Suffixed(chain) => self.write_suffixed(chain),
             Expression::BinaryOp(binary_op) => self.write_binary_chain(binary_op, true),
             Expression::UnaryOp(unary_op) => self.write_unary(unary_op),
@@ -116,7 +116,7 @@ impl<'ast> Formatter<'ast> {
         } else {
             text
         };
-        self.text(normalized);
+        self.ascii(normalized);
     }
 
     pub(crate) fn write_string(&mut self, text: &'ast str) {
@@ -141,7 +141,7 @@ impl<'ast> Formatter<'ast> {
 
     pub(crate) fn write_var(&mut self, var: &Var<'ast>) {
         match var {
-            Var::Name(name) => self.text(name.text),
+            Var::Name(name) => self.name(**name),
             Var::Suffixed(chain) => self.write_suffixed(chain),
         }
     }
@@ -190,7 +190,7 @@ impl<'ast> Formatter<'ast> {
                             if let Suffix::Field(name) = suffix {
                                 f.soft_line();
                                 f.token(".");
-                                f.text(name.text);
+                                f.name(*name);
                             }
                         }
                     });
@@ -208,13 +208,13 @@ impl<'ast> Formatter<'ast> {
         match suffix {
             Suffix::Field(name) => {
                 self.token(".");
-                self.text(name.text);
+                self.name(*name);
             }
             Suffix::Index { index, .. } => self.write_bracketed_key(index),
             Suffix::Call(args) => self.write_function_args(args),
             Suffix::MethodCall(call) => {
                 self.token(":");
-                self.text(call.name.text);
+                self.name(call.name);
                 // Luau rejects a method call whose `(` is on a later line
                 // than its name.
                 if let Some(type_args) = &call.type_args {

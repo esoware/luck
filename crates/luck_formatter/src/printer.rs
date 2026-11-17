@@ -1,12 +1,14 @@
-//! Two passes.
+//! One pass over the stream, guided by the [`Layout`] the formatter records.
 //!
-//! `propagate_expand` first marks every group that contains a
-//! forced break (a hard or empty line, `ExpandParent`, or multi-line text) as
-//! expanded, since such a group can never print flat and isn't worth
-//! measuring. The print loop then walks the stream with a mode stack.
-//! Entering an undecided group measures whether its content fits the
-//! remaining width and commits to `Flat` or `Expanded`, and each decision is
-//! recorded by `GroupId` so conditional content elsewhere can look it up.
+//! As the formatter writes, every group that contains a forced break (a hard
+//! or empty line, `ExpandParent`, or multi-line text) is marked expanded as
+//! the break goes in, since such a group can never print flat and isn't worth
+//! measuring.
+//!
+//! The print loop then walks the stream once with a mode stack. Entering an
+//! undecided group measures whether its content fits the remaining width and
+//! commits to `Flat` or `Expanded`, and each decision is recorded by `GroupId`
+//! so conditional content elsewhere can look it up.
 //!
 //! A group holding hugged groups has two more layouts, tried when it doesn't
 //! fit flat. It stays flat while hugged groups expand in its place: first
@@ -45,19 +47,151 @@ struct Hug {
 
 #[derive(Debug, Clone, Copy)]
 struct Group {
-    /// Pre-seeded with `Expanded` for a group containing a forced break, and
-    /// filled in as the group is entered.
+    /// `Expanded` for a group a forced break expands, and filled in as the
+    /// printer enters the group otherwise.
     mode: Option<PrintMode>,
-    /// The hugged groups this one holds, in order, in `Printer::hugs`.
+    /// The hugged groups this one holds, in order, in `Layout::hugs`.
     hugs_start: u32,
     hugs_end: u32,
 }
 
+#[derive(Debug)]
+struct OpenGroup {
+    id: GroupId,
+    /// Index of the group's first element.
+    content_start: usize,
+    is_hugged: bool,
+    /// Where its hugs start in `Layout::pending`.
+    pending_hugs: usize,
+    /// For a hugged group, the first and last lines directly inside it, as
+    /// the group around it counts them.
+    hug_lines: Option<(usize, usize)>,
+}
+
+/// What the printer has to know about each group before it reaches it, kept
+/// up to date as the stream is written.
+#[derive(Debug, Default)]
+pub(crate) struct Layout {
+    groups: Vec<Group>,
+    hugs: Vec<Hug>,
+    open: Vec<OpenGroup>,
+    /// The finished hugs of each open group, innermost last. A group's are
+    /// contiguous, since each group inside it moves its own out as it closes,
+    /// before its parent's hug of it goes in.
+    pending: Vec<Hug>,
+    /// Each group a forced break marked, so a restore can take back the marks
+    /// made since its checkpoint.
+    marked: Vec<GroupId>,
+}
+
+/// Where the layout stood when the stream was at a checkpoint.
+///
+/// Every group opened since has closed by the time it's restored, so only the
+/// marks, the hugs, and the lines the innermost open group has seen can have
+/// moved.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LayoutCheckpoint {
+    marked: usize,
+    hugs: usize,
+    pending: usize,
+    hug_lines: Option<(usize, usize)>,
+}
+
+impl Layout {
+    pub(crate) fn new_group(&mut self) -> GroupId {
+        let id = GroupId::new(self.groups.len());
+        self.groups.push(Group { mode: None, hugs_start: 0, hugs_end: 0 });
+        id
+    }
+
+    /// `content_start` is the index of the group's first element.
+    pub(crate) fn open(&mut self, id: GroupId, content_start: usize, is_hugged: bool) {
+        let pending_hugs = self.pending.len();
+        self.open.push(OpenGroup { id, content_start, is_hugged, pending_hugs, hug_lines: None });
+    }
+
+    pub(crate) fn close(&mut self) {
+        let Some(closed) = self.open.pop() else {
+            return;
+        };
+        if closed.pending_hugs < self.pending.len()
+            && let Some(group) = self.groups.get_mut(closed.id.index())
+        {
+            group.hugs_start = index_to_offset(self.hugs.len());
+            self.hugs.extend(self.pending.drain(closed.pending_hugs..));
+            group.hugs_end = index_to_offset(self.hugs.len());
+        }
+        if let Some((first_line, last_line)) = closed.hug_lines {
+            self.pending.push(Hug { child: closed.id, first_line, last_line });
+        }
+    }
+
+    /// A line at element `index`. One directly inside a hugged group marks
+    /// where the group's lines start and end.
+    pub(crate) fn line(&mut self, index: usize, mode: LineMode) {
+        if let [.., parent, child] = self.open.as_mut_slice()
+            && child.is_hugged
+        {
+            let line = index.saturating_sub(parent.content_start);
+            let first_line = child.hug_lines.map_or(line, |(first_line, _)| first_line);
+            child.hug_lines = Some((first_line, line));
+        }
+        if matches!(mode, LineMode::Hard | LineMode::Empty) {
+            self.force_break();
+        }
+    }
+
+    /// A forced break marks every open group, from the innermost out, and
+    /// stops at one already marked.
+    ///
+    /// The exception is the group right around a hugged group the break is
+    /// in, which can stay flat while the hugged group breaks. The break that
+    /// marked a group settled every group around it, and each of those is
+    /// still open around the same inner group, so the same hug still exempts
+    /// it.
+    pub(crate) fn force_break(&mut self) {
+        let mut is_inner_hugged = false;
+        for open in self.open.iter().rev() {
+            if !is_inner_hugged && let Some(group) = self.groups.get_mut(open.id.index()) {
+                if group.mode == Some(PrintMode::Expanded) {
+                    return;
+                }
+                group.mode = Some(PrintMode::Expanded);
+                self.marked.push(open.id);
+            }
+            is_inner_hugged = open.is_hugged;
+        }
+    }
+
+    pub(crate) fn checkpoint(&self) -> LayoutCheckpoint {
+        LayoutCheckpoint {
+            marked: self.marked.len(),
+            hugs: self.hugs.len(),
+            pending: self.pending.len(),
+            hug_lines: self.open.last().and_then(|open| open.hug_lines),
+        }
+    }
+
+    pub(crate) fn restore(&mut self, checkpoint: LayoutCheckpoint) {
+        for id in self.marked.drain(checkpoint.marked..) {
+            if let Some(group) = self.groups.get_mut(id.index()) {
+                group.mode = None;
+            }
+        }
+        self.hugs.truncate(checkpoint.hugs);
+        self.pending.truncate(checkpoint.pending);
+        if let Some(open) = self.open.last_mut() {
+            open.hug_lines = checkpoint.hug_lines;
+        }
+    }
+}
+
 pub(crate) fn print(
     elements: &[FormatElement<'_>],
-    group_count: u32,
+    layout: Layout,
     options: &FormatOptions,
     base_indent: &str,
+    capacity: usize,
 ) -> String {
     let columns_per_indent = usize::from(options.indent_width);
     let (indent_byte, bytes_per_indent) = match options.indent_style {
@@ -68,10 +202,6 @@ pub(crate) fn print(
         .bytes()
         .map(|b| if b == b'\t' { columns_per_indent } else { 1 })
         .fold(0usize, usize::saturating_add);
-    let unset = Group { mode: None, hugs_start: 0, hugs_end: 0 };
-    let mut groups = vec![unset; offset_to_index(group_count)];
-    let mut hugs = Vec::new();
-    let text_bytes = propagate_expand(elements, &mut groups, &mut hugs);
     let mut printer = Printer {
         line_width: usize::from(options.line_width),
         indent_byte,
@@ -79,13 +209,13 @@ pub(crate) fn print(
         columns_per_indent,
         base_indent,
         base_indent_columns,
-        output: CodeBuffer::with_capacity(text_bytes),
+        output: CodeBuffer::with_capacity(capacity),
         line_start: 0,
         display_column: 0,
         indent_level: 0,
         modes: Vec::new(),
-        groups,
-        hugs,
+        groups: layout.groups,
+        hugs: layout.hugs,
         next_line_moves: Vec::new(),
         suffixes: Vec::new(),
         is_pending_space: false,
@@ -100,18 +230,6 @@ pub(crate) fn print(
 enum Region {
     Group,
     Entry,
-}
-
-struct OpenGroup {
-    id: GroupId,
-    /// Index of the group's first element.
-    content_start: usize,
-    is_hugged: bool,
-    /// Where its hugs start in the pending stack.
-    pending_hugs: usize,
-    /// For a hugged group, the first and last lines directly inside it, as
-    /// the group around it counts them.
-    hug_lines: Option<(usize, usize)>,
 }
 
 struct Printer<'ast> {
@@ -142,114 +260,6 @@ struct Printer<'ast> {
     is_pending_indent: bool,
 }
 
-/// A forced break marks every group on the stack of enclosing groups.
-///
-/// The exception is the group right around a hugged group the break is in,
-/// which can stay flat while the hugged group breaks. Breaks inside a line
-/// suffix don't force anything outside it.
-///
-/// Returns how many bytes the elements' text, spaces, and lines take, which
-/// the output takes at least.
-fn propagate_expand(
-    elements: &[FormatElement<'_>],
-    groups: &mut [Group],
-    hugs: &mut Vec<Hug>,
-) -> usize {
-    let mut open_groups: Vec<OpenGroup> = Vec::new();
-    // The finished hugs of each open group, innermost last. A group's are
-    // contiguous, since each group inside it moves its own out as it closes,
-    // before its parent's hug of it goes in.
-    let mut pending: Vec<Hug> = Vec::new();
-    let mut text_bytes = 0usize;
-
-    for (index, element) in elements.iter().enumerate() {
-        match *element {
-            FormatElement::StartGroup(id)
-            | FormatElement::StartHuggedGroup(id)
-            | FormatElement::StartNextLineGroup(id) => {
-                open_groups.push(OpenGroup {
-                    id,
-                    content_start: index.saturating_add(1),
-                    is_hugged: matches!(element, FormatElement::StartHuggedGroup(_)),
-                    pending_hugs: pending.len(),
-                    hug_lines: None,
-                });
-            }
-            FormatElement::EndGroup | FormatElement::EndNextLineGroup => {
-                let Some(closed) = open_groups.pop() else {
-                    continue;
-                };
-                if closed.pending_hugs < pending.len()
-                    && let Some(group) = groups.get_mut(closed.id.index())
-                {
-                    group.hugs_start = index_to_offset(hugs.len());
-                    hugs.extend(pending.drain(closed.pending_hugs..));
-                    group.hugs_end = index_to_offset(hugs.len());
-                }
-                if let Some((first_line, last_line)) = closed.hug_lines {
-                    pending.push(Hug { child: closed.id, first_line, last_line });
-                }
-            }
-            FormatElement::Line(mode) => {
-                text_bytes = text_bytes.saturating_add(1);
-                if let [.., parent, child] = open_groups.as_mut_slice()
-                    && child.is_hugged
-                {
-                    let line = index.saturating_sub(parent.content_start);
-                    let first_line = child.hug_lines.map_or(line, |(first_line, _)| first_line);
-                    child.hug_lines = Some((first_line, line));
-                }
-                if matches!(mode, LineMode::Hard | LineMode::Empty) {
-                    mark_expanded(&open_groups, groups);
-                }
-            }
-            FormatElement::ExpandParent => mark_expanded(&open_groups, groups),
-            FormatElement::Text(content, width) | FormatElement::Verbatim(content, width) => {
-                text_bytes = text_bytes.saturating_add(content.len());
-                if width.columns().is_none() {
-                    mark_expanded(&open_groups, groups);
-                }
-            }
-            FormatElement::LineSuffix(content, _) => {
-                text_bytes = text_bytes.saturating_add(content.len()).saturating_add(1);
-            }
-            FormatElement::Space => text_bytes = text_bytes.saturating_add(1),
-            FormatElement::LineSuffixBoundary
-            | FormatElement::StartIndent
-            | FormatElement::EndIndent
-            | FormatElement::StartIndentIfGroupBreaks(_)
-            | FormatElement::EndIndentIfGroupBreaks(_)
-            | FormatElement::StartIfGroupBreaks(_)
-            | FormatElement::EndIfGroupBreaks
-            | FormatElement::StartFlat
-            | FormatElement::EndFlat
-            | FormatElement::StartFill
-            | FormatElement::EndFill
-            | FormatElement::StartEntry
-            | FormatElement::EndEntry => {}
-        }
-    }
-    text_bytes
-}
-
-/// Marks from the innermost group out, and stops at one already marked.
-///
-/// The break that marked it settled every group around it, and each of those
-/// is still open around the same inner group, so the same hug still exempts
-/// it.
-fn mark_expanded(open_groups: &[OpenGroup], groups: &mut [Group]) {
-    let mut is_inner_hugged = false;
-    for open in open_groups.iter().rev() {
-        if !is_inner_hugged && let Some(group) = groups.get_mut(open.id.index()) {
-            if group.mode == Some(PrintMode::Expanded) {
-                return;
-            }
-            group.mode = Some(PrintMode::Expanded);
-        }
-        is_inner_hugged = open.is_hugged;
-    }
-}
-
 impl<'ast> Printer<'ast> {
     fn current_mode(&self) -> PrintMode {
         *self.modes.last().unwrap_or(&PrintMode::Expanded)
@@ -274,6 +284,11 @@ impl<'ast> Printer<'ast> {
 
     /// Print `element`, returning the elements left after it and after any
     /// region it consumed from `rest`, e.g. a skipped conditional body.
+    #[expect(
+        clippy::inline_always,
+        reason = "measured: a call per element costs the print loop 7%"
+    )]
+    #[inline(always)]
     fn print_element(
         &mut self,
         element: &FormatElement<'ast>,
@@ -291,7 +306,7 @@ impl<'ast> Printer<'ast> {
                 }
             }
             FormatElement::StartGroup(id) | FormatElement::StartHuggedGroup(id) => {
-                // A mode already set was forced by `propagate_expand`, or by
+                // A mode already set was forced by a break in it, or by
                 // the group around a hugged one.
                 let mode = self.group_mode(id).unwrap_or_else(|| self.decide_mode(id, rest));
                 self.set_group_mode(id, mode);
@@ -356,7 +371,7 @@ impl<'ast> Printer<'ast> {
                 }
             }
             FormatElement::StartFill => return self.print_fill(rest),
-            // `ExpandParent` only steers `propagate_expand`, and a taken
+            // `ExpandParent` only steers the `Layout`, and a taken
             // conditional's end is a no-op. `print_fill` consumes the other
             // elements listed here, so only malformed IR reaches this arm
             // with one of them.

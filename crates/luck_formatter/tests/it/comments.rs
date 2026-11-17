@@ -1113,6 +1113,28 @@ fn conditional_collapse_options() -> FormatOptions {
 }
 
 #[test]
+fn a_verbatim_statement_forces_only_its_own_breaks() {
+    // Formatted, the call would break around the function body, which it
+    // never prints, so the `if` still collapses.
+    let collapsed = "if a then g --[[c]] (function() return 1 end) end\n";
+    let options = conditional_collapse_options();
+    assert_format_with(collapsed, collapsed, LuaVersion::Lua54, &options);
+    assert_format(
+        "\
+local t = f(function() return 1 end, x --[[e]] .y)
+local u = f(function() local z = q --[[k]] (r) return z end, 2)
+",
+        "\
+local t = f(function() return 1 end, x --[[e]] .y)
+local u = f(function()
+\tlocal z = q --[[k]] (r)
+\treturn z
+end, 2)
+",
+    );
+}
+
+#[test]
 fn collapse_leaves_a_body_with_a_comment_expanded() {
     let options = conditional_collapse_options();
     for (input, expected) in [

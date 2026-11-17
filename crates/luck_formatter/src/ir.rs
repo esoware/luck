@@ -12,12 +12,14 @@
 use core::mem;
 use core::ops::Range;
 
-use luck_allocator::Allocator;
-use luck_token::offset_to_index;
+use luck_allocator::{Allocator, List};
+use luck_ast::Name;
+use luck_token::{index_to_offset, offset_to_index};
 use unicode_width::UnicodeWidthStr as _;
 
+use crate::FormatOptions;
 use crate::comments::{Comments, CommentsCheckpoint};
-use crate::{FormatOptions, printer};
+use crate::printer::{self, Layout, LayoutCheckpoint};
 
 /// Lets conditional content follow the break decision of a group other than
 /// the innermost one around it. Doubles as the group's index into the
@@ -26,6 +28,10 @@ use crate::{FormatOptions, printer};
 pub(crate) struct GroupId(u32);
 
 impl GroupId {
+    pub(crate) fn new(index: usize) -> Self {
+        Self(index_to_offset(index))
+    }
+
     pub(crate) fn index(self) -> usize {
         offset_to_index(self.0)
     }
@@ -101,12 +107,21 @@ impl TextWidth {
     const MULTILINE: Self = Self(u32::MAX);
 
     fn of(text: &str) -> Self {
+        // Without a line break, `width` counts every ASCII character as one
+        // column. A short text, the usual kind, takes one pass to tell, and a
+        // long one goes to the vectorized scans.
+        let is_one_ascii_line = if text.len() <= 64 {
+            text.bytes().all(|b| b.is_ascii() && b != b'\n')
+        } else {
+            text.is_ascii() && !text.contains('\n')
+        };
+        if is_one_ascii_line {
+            return Self::of_columns(text.len());
+        }
         if text.contains('\n') {
             return Self::MULTILINE;
         }
-        // Without a line break, `width` counts every ASCII character as one
-        // column.
-        Self::of_columns(if text.is_ascii() { text.len() } else { text.width() })
+        Self::of_columns(text.width())
     }
 
     /// Any width past the line's compares the same, and `MULTILINE` takes
@@ -119,20 +134,28 @@ impl TextWidth {
     pub(crate) fn columns(self) -> Option<usize> {
         (self != Self::MULTILINE).then(|| offset_to_index(self.0))
     }
+
+    const fn is_multiline(self) -> bool {
+        self.0 == Self::MULTILINE.0
+    }
 }
 
-/// Restoring rewinds the element stream and the comment cursor but not the
-/// group counter, so no id is ever handed out twice.
+/// Restoring rewinds the element stream, the layout, and the comment cursor
+/// but not the group counter, so no id is ever handed out twice.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Checkpoint {
     element_count: usize,
+    layout: LayoutCheckpoint,
     comments: CommentsCheckpoint,
 }
 
 #[derive(Debug)]
 pub(crate) struct Formatter<'ast> {
-    elements: Vec<FormatElement<'ast>>,
-    group_count: u32,
+    elements: List<'ast, FormatElement<'ast>>,
+    layout: Layout,
+    /// How many bytes of text the stream holds, which the output takes at
+    /// least.
+    text_bytes: usize,
     options: FormatOptions,
     allocator: &'ast Allocator,
     comments: Comments<'ast>,
@@ -155,13 +178,14 @@ impl<'ast> Formatter<'ast> {
         options: FormatOptions,
         comments: Comments<'ast>,
     ) -> Self {
-        // Roughly one element per 8 source bytes; a mild undershoot that
-        // still removes most realloc copies. Synthetic ASTs have no source
-        // and start empty.
-        let capacity = comments.source_text().map_or(0, |source| source.len().div_ceil(8));
+        // Code runs about one element to two source bytes, so this room
+        // seldom has to grow. Synthetic ASTs have no source and start empty.
+        let capacity =
+            comments.source_text().map_or(0, |source| source.len().div_ceil(5).saturating_mul(3));
         Self {
-            elements: Vec::with_capacity(capacity),
-            group_count: 0,
+            elements: List::with_capacity_in(capacity, allocator),
+            layout: Layout::default(),
+            text_bytes: 0,
             options,
             allocator,
             comments,
@@ -189,7 +213,7 @@ impl<'ast> Formatter<'ast> {
 
     /// Where the next element goes, which an emitter notes to find what it
     /// wrote.
-    pub(crate) const fn element_count(&self) -> usize {
+    pub(crate) fn element_count(&self) -> usize {
         self.elements.len()
     }
 
@@ -242,45 +266,73 @@ impl<'ast> Formatter<'ast> {
         (&mut self.scratch, self.allocator)
     }
 
-    pub(crate) const fn group_id(&mut self) -> GroupId {
-        let id = GroupId(self.group_count);
-        self.group_count = self.group_count.saturating_add(1);
-        id
+    pub(crate) fn group_id(&mut self) -> GroupId {
+        self.layout.new_group()
     }
 
     #[inline]
     fn push(&mut self, element: FormatElement<'ast>) {
-        self.elements.push(element);
+        self.elements.push(element, self.allocator);
+    }
+
+    #[inline]
+    fn push_text(&mut self, text: &'ast str, width: TextWidth) {
+        self.text_bytes = self.text_bytes.wrapping_add(text.len());
+        if width.is_multiline() {
+            self.layout.force_break();
+        }
+        self.push(FormatElement::Text(text, width));
     }
 
     /// ASCII with no line break, so as many columns wide as it is long.
     #[inline]
     pub(crate) fn token(&mut self, text: &'static str) {
         debug_assert!(text.is_ascii() && !text.contains('\n'), "a token is measured by its length");
-        self.push(FormatElement::Text(text, TextWidth::of_columns(text.len())));
+        self.push_text(text, TextWidth::of_columns(text.len()));
     }
 
     #[inline]
     pub(crate) fn text(&mut self, text: &'ast str) {
-        self.push(FormatElement::Text(text, TextWidth::of(text)));
+        self.push_text(text, TextWidth::of(text));
+    }
+
+    /// An identifier or a numeral, which the lexer and `Synth` only ever make
+    /// of ASCII on one line, so it's measured by its length too.
+    #[inline]
+    pub(crate) fn ascii(&mut self, text: &'ast str) {
+        self.push_text(text, TextWidth::of_columns(text.len()));
+    }
+
+    #[inline]
+    pub(crate) fn name(&mut self, name: Name<'ast>) {
+        self.ascii(name.text);
     }
 
     pub(crate) fn verbatim(&mut self, text: &'ast str) {
-        self.push(FormatElement::Verbatim(text, TextWidth::of(text)));
+        let width = TextWidth::of(text);
+        self.text_bytes = self.text_bytes.wrapping_add(text.len());
+        if width.is_multiline() {
+            self.layout.force_break();
+        }
+        self.push(FormatElement::Verbatim(text, width));
     }
 
-    /// See [`FormatElement::LineSuffix`].
+    /// See [`FormatElement::LineSuffix`]. A break in one forces nothing.
     pub(crate) fn line_suffix(&mut self, text: &'ast str) {
+        self.text_bytes = self.text_bytes.wrapping_add(text.len()).wrapping_add(1);
         self.push(FormatElement::LineSuffix(text, TextWidth::of(text)));
     }
 
     #[inline]
     pub(crate) fn space(&mut self) {
+        self.text_bytes = self.text_bytes.wrapping_add(1);
         self.push(FormatElement::Space);
     }
 
     #[inline]
     pub(crate) fn line(&mut self, mode: LineMode) {
+        self.text_bytes = self.text_bytes.wrapping_add(1);
+        self.layout.line(self.elements.len(), mode);
         self.push(FormatElement::Line(mode));
     }
 
@@ -311,6 +363,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn expand_parent(&mut self) {
+        self.layout.force_break();
         self.push(FormatElement::ExpandParent);
     }
 
@@ -337,7 +390,9 @@ impl<'ast> Formatter<'ast> {
     #[inline]
     pub(crate) fn group_with_id(&mut self, id: GroupId, content: impl FnOnce(&mut Self)) {
         self.push(FormatElement::StartGroup(id));
+        self.layout.open(id, self.elements.len(), false);
         content(self);
+        self.layout.close();
         self.push(FormatElement::EndGroup);
     }
 
@@ -345,7 +400,9 @@ impl<'ast> Formatter<'ast> {
     #[inline]
     pub(crate) fn hugged_group_with_id(&mut self, id: GroupId, content: impl FnOnce(&mut Self)) {
         self.push(FormatElement::StartHuggedGroup(id));
+        self.layout.open(id, self.elements.len(), true);
         content(self);
+        self.layout.close();
         self.push(FormatElement::EndGroup);
     }
 
@@ -354,7 +411,9 @@ impl<'ast> Formatter<'ast> {
     pub(crate) fn next_line_group(&mut self, content: impl FnOnce(&mut Self)) {
         let id = self.group_id();
         self.push(FormatElement::StartNextLineGroup(id));
+        self.layout.open(id, self.elements.len(), false);
         content(self);
+        self.layout.close();
         self.push(FormatElement::EndNextLineGroup);
     }
 
@@ -413,16 +472,24 @@ impl<'ast> Formatter<'ast> {
         &self.elements
     }
 
-    pub(crate) const fn checkpoint(&self) -> Checkpoint {
-        Checkpoint { element_count: self.elements.len(), comments: self.comments.checkpoint() }
+    pub(crate) fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            element_count: self.elements.len(),
+            layout: self.layout.checkpoint(),
+            comments: self.comments.checkpoint(),
+        }
     }
 
     pub(crate) fn restore(&mut self, checkpoint: Checkpoint) {
         self.elements.truncate(checkpoint.element_count);
+        self.layout.restore(checkpoint.layout);
         self.comments.restore(checkpoint.comments);
     }
 
     pub(crate) fn print(self, base_indent: &str) -> String {
-        printer::print(&self.elements, self.group_count, &self.options, base_indent)
+        // Indentation comes on top of the text, and seldom reaches a quarter
+        // of it.
+        let capacity = self.text_bytes.saturating_add(self.text_bytes.div_ceil(4));
+        printer::print(&self.elements, self.layout, &self.options, base_indent, capacity)
     }
 }
