@@ -4,7 +4,6 @@ use luck_token::{LuaVersion, Span};
 
 use crate::config::LintConfig;
 use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
-use crate::nodes::Nodes;
 use crate::rule::{LintContext, Rule};
 use crate::rules::{RULES, RuleEntry};
 use crate::{bus, driver, fix};
@@ -61,9 +60,9 @@ fn check(
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, source, target.lua_version());
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
-    let semantic = driver::analyze(&parse, target, config);
-    let nodes = Nodes::collect(&parse.block);
-    let context = LintContext::new(&parse, &semantic, &nodes, config);
+    let analysis = driver::analyze(&parse, target, config);
+    let nodes = analysis.nodes();
+    let context = LintContext::new(&parse, analysis.semantic(), nodes, config);
     let entry = RULES
         .iter()
         .find(|entry| entry.rule().name() == rule.name())

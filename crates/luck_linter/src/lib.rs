@@ -58,7 +58,7 @@ pub use config::{
     RuleLevel, RuleSetting, RuleSettings,
 };
 pub use diagnostic::{Category, LintDiagnostic, Severity};
-pub use driver::{lint, lint_analyzed, lint_parsed};
+pub use driver::{Analysis, analyze, lint, lint_analyzed, lint_parsed};
 pub use fix::{
     FIXPOINT_BUDGET, Fix, FixpointError, TextEdit, apply_fixes, apply_fixes_fixpoint,
     non_overlapping_edits,

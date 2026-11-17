@@ -2,10 +2,10 @@ use luck_allocator::Allocator;
 use luck_core::LuaTarget;
 use luck_linter::{
     Category, CyclomaticComplexityOptions, LintConfig, LintDiagnostic,
-    RestrictedModulePathsOptions, RuleLevel, RuleSetting, Severity, lint_analyzed, lint_parsed,
-    unknown_rule_names,
+    RestrictedModulePathsOptions, RuleLevel, RuleSetting, Severity, analyze, lint_analyzed,
+    lint_parsed, unknown_rule_names,
 };
-use luck_token::{LuaVersion, StdlibEnvironment};
+use luck_token::LuaVersion;
 
 use crate::common::{disable, enable, lint};
 
@@ -37,17 +37,17 @@ fn lint_distinguishes_luau_flavors() {
 }
 
 #[test]
-fn lint_analyzed_reads_extra_globals_from_the_given_analysis() {
+fn analyze_defines_the_extra_globals_of_its_config() {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, "return vim", LuaVersion::Lua54);
-    let mut semantic =
-        luck_semantic::analyze(&parse.block, LuaVersion::Lua54, StdlibEnvironment::Standalone);
     let config = LintConfig::default();
-    let flagged = lint_analyzed(&parse, &semantic, &config);
+    let flagged = lint_analyzed(&parse, &analyze(&parse, LuaTarget::Lua54, &config), &config);
     assert!(flagged.iter().any(|diag| diag.rule == "undefined_variable"), "{flagged:?}");
 
-    semantic.add_extra_globals(["vim"]);
-    let quiet = lint_analyzed(&parse, &semantic, &config);
+    let with_vim = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
+    let analysis = analyze(&parse, LuaTarget::Lua54, &with_vim);
+    assert!(analysis.semantic().is_known_global("vim"));
+    let quiet = lint_analyzed(&parse, &analysis, &with_vim);
     assert!(quiet.iter().all(|diag| diag.rule != "undefined_variable"), "{quiet:?}");
 }
 
@@ -55,9 +55,8 @@ fn lint_analyzed_reads_extra_globals_from_the_given_analysis() {
 fn lint_analyzed_reports_parse_errors_without_running_rules() {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, "local x =", LuaVersion::Lua54);
-    let semantic =
-        luck_semantic::analyze(&parse.block, LuaVersion::Lua54, StdlibEnvironment::Standalone);
-    let diags = lint_analyzed(&parse, &semantic, &LintConfig::default());
+    let config = LintConfig::default();
+    let diags = lint_analyzed(&parse, &analyze(&parse, LuaTarget::Lua54, &config), &config);
     assert!(!diags.is_empty(), "{diags:?}");
     assert!(diags.iter().all(|diag| diag.rule == "parse_error"), "{diags:?}");
 }

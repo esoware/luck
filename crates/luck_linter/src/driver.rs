@@ -7,7 +7,7 @@ use rayon::prelude::*;
 
 use crate::config::{LintConfig, RuleLevel};
 use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
-use crate::nodes::Nodes;
+use crate::nodes::{NodeCollector, Nodes};
 use crate::rule::{LintContext, NodeRule, Rule, WholeRule};
 use crate::rules::{PARSE_ERROR_PSEUDO_RULE, RULES, RuleEntry};
 use crate::{bus, suppression};
@@ -24,8 +24,8 @@ pub fn lint(
     lint_parsed(&luck_parser::parse(allocator, source, target.lua_version()), target, config)
 }
 
-/// Analyzes `parse` for `target` and lints it. A parse with errors yields
-/// one `parse_error` diagnostic per error, and no rules run.
+/// [`analyze`]s `parse` for `target` and lints it. A parse with errors
+/// yields one `parse_error` diagnostic per error, and no rules run.
 ///
 /// # Panics
 ///
@@ -42,12 +42,11 @@ pub fn lint_parsed(
     lint_analyzed(parse, &analyze(parse, target, config), config)
 }
 
-/// Lints an existing parse and analysis, so hosts like the LSP don't build
-/// either twice.
+/// Lints an existing parse and its analysis, so hosts like the LSP don't
+/// build either twice. `config` must be the one `analysis` was built with.
 ///
-/// `semantic` must be `parse`'s and already hold `config.extra_globals`,
-/// because rules read them from it. A parse with errors yields one
-/// `parse_error` diagnostic per error, and no rules run.
+/// A parse with errors yields one `parse_error` diagnostic per error, and no
+/// rules run.
 ///
 /// # Panics
 ///
@@ -55,31 +54,57 @@ pub fn lint_parsed(
 #[must_use]
 pub fn lint_analyzed(
     parse: &ParseResult<'_>,
-    semantic: &SemanticAnalysis<'_>,
+    analysis: &Analysis<'_>,
     config: &LintConfig,
 ) -> Vec<LintDiagnostic> {
     if !parse.errors.is_empty() {
         return parse_error_diags(parse);
     }
 
-    let nodes = Nodes::collect(&parse.block);
-    let context = LintContext::new(parse, semantic, &nodes, config);
+    let (semantic, nodes) = (analysis.semantic(), analysis.nodes());
+    let context = LintContext::new(parse, semantic, nodes, config);
 
-    let mut diags = run_rules(&context, &nodes);
-    suppression::apply(&mut diags, context.comments, context.source, &nodes, semantic.version());
+    let mut diags = run_rules(&context, nodes);
+    suppression::apply(&mut diags, context.comments, context.source, nodes, semantic.version());
     diags.sort_by_key(|diag| diag.span.start);
     diags
 }
 
-pub(crate) fn analyze<'ast>(
+/// A parse's semantic analysis and the linter's table of its nodes, which
+/// [`analyze`] builds in one walk.
+#[derive(Debug)]
+pub struct Analysis<'ast> {
+    semantic: SemanticAnalysis<'ast>,
+    nodes: Nodes<'ast>,
+}
+
+impl<'ast> Analysis<'ast> {
+    #[must_use]
+    pub const fn semantic(&self) -> &SemanticAnalysis<'ast> {
+        &self.semantic
+    }
+
+    pub(crate) const fn nodes(&self) -> &Nodes<'ast> {
+        &self.nodes
+    }
+}
+
+/// `parse`'s analysis for `target`, with `config`'s extra globals defined.
+#[must_use]
+pub fn analyze<'ast>(
     parse: &'ast ParseResult<'_>,
     target: LuaTarget,
     config: &LintConfig,
-) -> SemanticAnalysis<'ast> {
-    let mut semantic =
-        luck_semantic::analyze(&parse.block, target.lua_version(), target.stdlib_environment());
+) -> Analysis<'ast> {
+    let mut collector = NodeCollector::new(&parse.block);
+    let mut semantic = luck_semantic::analyze_with(
+        &parse.block,
+        target.lua_version(),
+        target.stdlib_environment(),
+        &mut collector,
+    );
     semantic.add_extra_globals(config.extra_globals.iter().map(String::as_str));
-    semantic
+    Analysis { semantic, nodes: collector.finish() }
 }
 
 fn parse_error_diags(parse: &ParseResult<'_>) -> Vec<LintDiagnostic> {

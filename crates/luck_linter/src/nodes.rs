@@ -1,12 +1,14 @@
-//! The bus iterates the node table once, and whole-document rules read it
-//! and the block tables, instead of each rule re-walking the tree.
+//! The semantic walk builds the node table, which the bus iterates once and
+//! whole-document rules read with the block tables, so no rule walks the
+//! tree again.
 
 use core::ptr;
 
 use luck_ast::{
     Block, Call, Expression, FunctionBody, LastStatement, Statement, Suffix, SuffixedExpression,
-    TableConstructor, Var, Visitor,
+    TableConstructor,
 };
+use luck_semantic::NodeSink;
 use luck_token::offset_to_index;
 
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -77,23 +79,6 @@ pub(crate) struct Nodes<'ast> {
 }
 
 impl<'ast> Nodes<'ast> {
-    pub(crate) fn collect(block: &'ast Block<'ast>) -> Self {
-        let mut collector = NodeCollector {
-            nodes: Self {
-                // Code takes about a node per 16 bytes.
-                table: Vec::with_capacity(offset_to_index(block.span.len() >> 4)),
-                blocks: Vec::new(),
-                function_blocks: vec![block],
-                uninitialized_locals: UninitializedLocals::default(),
-                present_types: NodeTypeSet::new(),
-            },
-            call_statement: None,
-        };
-        collector.visit_block(block);
-        collector.nodes.uninitialized_locals.sort();
-        collector.nodes
-    }
-
     pub(crate) fn as_slice(&self) -> &[AstNode<'ast>] {
         &self.table
     }
@@ -125,7 +110,8 @@ pub(crate) fn adjacent_stmts<'ast>(
     stmts.clone().zip(stmts.skip(1))
 }
 
-struct NodeCollector<'ast> {
+/// Builds a document's [`Nodes`] as the semantic walk hands it each node.
+pub(crate) struct NodeCollector<'ast> {
     nodes: Nodes<'ast>,
     /// The call statement being walked, and its chain. Its node is the
     /// chain's last call, and follows the chain's other calls, so the bus
@@ -134,36 +120,65 @@ struct NodeCollector<'ast> {
 }
 
 impl<'ast> NodeCollector<'ast> {
+    pub(crate) fn new(block: &'ast Block<'ast>) -> Self {
+        Self {
+            nodes: Nodes {
+                // Code takes about a node per 16 bytes.
+                table: Vec::with_capacity(offset_to_index(block.span.len() >> 4)),
+                blocks: Vec::new(),
+                function_blocks: vec![block],
+                uninitialized_locals: UninitializedLocals::default(),
+                present_types: NodeTypeSet::new(),
+            },
+            call_statement: None,
+        }
+    }
+
+    pub(crate) fn finish(mut self) -> Nodes<'ast> {
+        self.nodes.uninitialized_locals.sort();
+        self.nodes
+    }
+
     fn push_node(&mut self, kind: NodeKind<'ast>, node_type: NodeType) {
         self.nodes.present_types.insert(node_type);
         self.nodes.table.push(AstNode { kind, node_type });
     }
 }
 
-impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
-    fn visit_block(&mut self, block: &'ast Block<'ast>) {
+impl<'ast> NodeSink<'ast> for NodeCollector<'ast> {
+    fn block(&mut self, block: &'ast Block<'ast>) {
         self.nodes.blocks.push(block);
-        self.walk_block(block);
     }
 
-    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
+    fn function_body(&mut self, body: &'ast FunctionBody<'ast>) {
+        self.nodes.function_blocks.push(&body.block);
+    }
+
+    fn stmt(&mut self, stmt: &'ast Statement<'ast>) {
         if let Statement::FunctionCall(chain) = stmt {
             self.call_statement = Some((stmt, chain));
         } else {
             self.push_node(NodeKind::Statement(stmt), NodeType::of_stmt(stmt));
         }
         self.nodes.uninitialized_locals.record(stmt);
-        self.walk_stmt(stmt);
     }
 
-    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
+    fn last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
+        self.push_node(NodeKind::LastStatement(last), NodeType::of_last_stmt(last));
+    }
+
+    fn expr(&mut self, expr: &'ast Expression<'ast>) {
         if !matches!(expr, Expression::TableConstructor(_) | Expression::Suffixed(_)) {
             self.push_node(NodeKind::Expression(expr), NodeType::of_expr(expr));
         }
-        self.walk_expr(expr);
     }
 
-    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression<'ast>) {
+    fn chain(&mut self, chain: &'ast SuffixedExpression<'ast>, is_target: bool) {
+        if is_target {
+            let kind = NodeKind::Chain(chain, ChainPosition::AssignmentTarget);
+            self.push_node(kind, NodeType::Suffixed);
+            return;
+        }
         self.push_node(NodeKind::Chain(chain, ChainPosition::Value), NodeType::Suffixed);
         let statement = self
             .call_statement
@@ -182,52 +197,44 @@ impl<'ast> Visitor<'ast> for NodeCollector<'ast> {
         if let Some(stmt) = statement {
             self.push_node(NodeKind::Statement(stmt), NodeType::FunctionCallStmt);
         }
-        self.walk_suffixed(chain);
     }
 
-    fn visit_assignment_target(&mut self, target: &'ast Var<'ast>) {
-        if let Var::Suffixed(chain) = target {
-            let kind = NodeKind::Chain(chain, ChainPosition::AssignmentTarget);
-            self.push_node(kind, NodeType::Suffixed);
-            self.walk_suffixed(chain);
-        }
-    }
-
-    fn visit_table_constructor(&mut self, table: &'ast TableConstructor<'ast>) {
+    fn table(&mut self, table: &'ast TableConstructor<'ast>) {
         self.push_node(NodeKind::Table(table), NodeType::TableConstructor);
-        self.walk_table_constructor(table);
-    }
-
-    fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
-        self.nodes.function_blocks.push(&body.block);
-        self.walk_function_body(body);
-    }
-
-    fn visit_last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
-        self.push_node(NodeKind::LastStatement(last), NodeType::of_last_stmt(last));
-        self.walk_last_stmt(last);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_token::LuaVersion;
+    use luck_token::{LuaVersion, StdlibEnvironment};
 
     use super::*;
 
+    fn collect<'ast>(block: &'ast Block<'ast>) -> Nodes<'ast> {
+        let mut collector = NodeCollector::new(block);
+        let _semantic = luck_semantic::analyze_with(
+            block,
+            LuaVersion::Lua54,
+            StdlibEnvironment::Standalone,
+            &mut collector,
+        );
+        collector.finish()
+    }
+
     #[test]
-    fn table_matches_visitor_preorder() {
+    fn table_is_in_evaluation_order() {
         let allocator = Allocator::new();
         let parse = luck_parser::parse(
             &allocator,
             "\
 local a = 1 + 2
-print(a)",
+print(a)
+t.x = a",
             LuaVersion::Lua54,
         );
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
-        let nodes = Nodes::collect(&parse.block);
+        let nodes = collect(&parse.block);
         let node_types: Vec<NodeType> =
             nodes.as_slice().iter().map(|node| node.node_type).collect();
         assert_eq!(
@@ -240,6 +247,10 @@ print(a)",
                 NodeType::Suffixed,
                 NodeType::FunctionCallStmt,
                 NodeType::Name,
+                NodeType::Name,
+                NodeType::Assignment,
+                NodeType::Name,
+                NodeType::Suffixed,
                 NodeType::Name,
             ]
         );
@@ -254,7 +265,7 @@ print(a)",
     }
 
     #[test]
-    fn blocks_match_visitor_preorder() {
+    fn blocks_are_in_preorder() {
         let source = "\
 do local a = 1 end
 local function f()
@@ -263,12 +274,15 @@ end";
         let allocator = Allocator::new();
         let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
-        let nodes = Nodes::collect(&parse.block);
+        let nodes = collect(&parse.block);
         assert_eq!(nodes.blocks().first().map(|first| first.span), Some(parse.block.span));
         // The chunk, the `do` body, the function body, then the `if` and
         // `else` bodies.
         let stmt_counts: Vec<usize> =
             nodes.blocks().iter().map(|block| block.stmts.len()).collect();
         assert_eq!(stmt_counts, [2, 1, 1, 1, 0]);
+        let function_stmt_counts: Vec<usize> =
+            nodes.function_blocks().iter().map(|block| block.stmts.len()).collect();
+        assert_eq!(function_stmt_counts, [2, 1]);
     }
 }
