@@ -4,13 +4,7 @@ use memchr::memmem;
 use super::Lexer;
 use crate::cursor::Cursor;
 use crate::lex_error::{LexError, lex_error};
-use crate::search::{ByteMatchTable, byte_match_table, find_match};
-
-// Stop bytes for the short-string body scan: either quote form (the
-// non-delimiter quote falls through as ordinary content), escapes, and
-// the line breaks that make a string unterminated.
-static SHORT_STRING_STOP: ByteMatchTable =
-    byte_match_table!(|b| matches!(b, b'"' | b'\'' | b'\\' | b'\n' | b'\r'));
+use crate::search::{ByteMatchTable, byte_match_table, find_match, short_string_length};
 
 // Stop bytes for raw interpolated-string text: escape lead, interpolation
 // opener, closing backtick, and the line breaks Luau rejects.
@@ -35,6 +29,7 @@ impl Lexer<'_> {
     /// follows on later lines lexes as it would have.
     pub(super) fn lex_short_string(&mut self, start: usize, quote: u8) -> Token {
         loop {
+            self.cursor.advance_by(short_string_length(self.cursor.rest(), quote));
             match self.cursor.peek() {
                 None | Some(b'\n' | b'\r') => {
                     self.reject(start, "unterminated string");
@@ -49,25 +44,10 @@ impl Lexer<'_> {
                         self.errors.push(error);
                     }
                 }
-                Some(c) if c == quote => {
-                    self.cursor.advance_by(1);
-                    return self.token(TokenKind::StringLiteral, start);
-                }
+                // The scan stops only at those bytes and at `quote`.
                 Some(_) => {
                     self.cursor.advance_by(1);
-                    // Most strings end within 8 bytes, so the table checks those
-                    // before `memchr` takes over.
-                    let bytes = self.cursor.rest();
-                    let (prefix, rest) = bytes.split_at(bytes.len().min(8));
-                    let prefix_stop = find_match(prefix, &SHORT_STRING_STOP);
-                    self.cursor.advance_by(prefix_stop);
-                    if prefix_stop == prefix.len() {
-                        // Stopping at LF bounds an unterminated string to its
-                        // line; the second scan finds any CR before that stop.
-                        let end = memchr::memchr3(quote, b'\\', b'\n', rest).unwrap_or(rest.len());
-                        let (line, _) = rest.split_at(end);
-                        self.cursor.advance_by(memchr::memchr(b'\r', line).unwrap_or(end));
-                    }
+                    return self.token(TokenKind::StringLiteral, start);
                 }
             }
         }
