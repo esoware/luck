@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use luck_allocator::Allocator;
 use luck_bundler::{BundleOptions, BundleResult, bundle, bundle_minified};
 use luck_core::Diagnostic;
 use luck_minifier::TransformConfig;
@@ -22,11 +23,12 @@ pub(crate) fn bundle_both(
     options: &BundleOptions<'_>,
 ) -> Result<BundleResult, Vec<Diagnostic>> {
     let transforms = TransformConfig::default();
-    let text_result = bundle(entry, options);
-    match (&text_result, bundle_minified(entry, options, &transforms)) {
+    let text_result = bundle(&Allocator::new(), entry, options);
+    match (&text_result, bundle_minified(&Allocator::new(), entry, options, &transforms)) {
         (Ok(text), Ok(minified)) => {
             let output = &text.output;
-            let expected = luck_minifier::minify(output, options.version, &transforms)
+            let allocator = Allocator::new();
+            let expected = luck_minifier::minify(&allocator, output, options.version, &transforms)
                 .unwrap_or_else(|errors| panic!("the bundle must parse: {errors:?}\n{output}"));
             assert_eq!(
                 minified.output, expected,

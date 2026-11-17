@@ -1,6 +1,7 @@
 use alloc::collections::VecDeque;
 use std::path::Path;
 
+use luck_allocator::Allocator;
 use luck_core::Diagnostic;
 use luck_resolver::{
     ResolveRequest, ResolvedModule, Resolver, native_path, normalize_path, read_source_file,
@@ -9,12 +10,13 @@ use luck_token::{CommentKind, LuaVersion, Span, leading_hot_comments};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::dynamic_require::DynamicRequire;
+use crate::loader::PREFIX_STEM;
 use crate::module::{Dependency, ModuleId, ModuleInfo};
 use crate::relative_path::{absolute_project_root, make_relative};
-use crate::require_extraction::{ExtractedRequires, extract_requires};
+use crate::require_extraction::{ExtractedRequires, RequireSite, extract_requires};
 
 const MAX_MODULE_COUNT: usize = 10_000;
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
@@ -32,208 +34,293 @@ pub struct BundleOptions<'input> {
 }
 
 #[derive(Debug)]
-pub struct DependencyGraph {
+pub struct DependencyGraph<'ast> {
     /// In discovery order, so the entry comes first.
-    pub modules: Vec<ModuleInfo>,
+    pub modules: Vec<ModuleInfo<'ast>>,
     /// Leaves first, or discovery order when there's a cycle.
     pub topological_order: Vec<ModuleId>,
     pub entry_id: ModuleId,
     pub warnings: Vec<Diagnostic>,
 }
 
-impl DependencyGraph {
+impl<'ast> DependencyGraph<'ast> {
+    /// Reads and parses every module the entry reaches into `allocator`.
+    ///
     /// # Errors
     ///
     /// Returns every error found during discovery, such as unreadable,
     /// oversized, or unparsable files, the entry included, and unresolved or
     /// ambiguous requires.
-    pub fn build(entry_path: &Path, options: &BundleOptions<'_>) -> Result<Self, Vec<Diagnostic>> {
-        let BundleOptions { version, search_paths, project_root, dynamic_require } = *options;
+    pub fn build(
+        allocator: &'ast Allocator,
+        entry_path: &Path,
+        options: &BundleOptions<'_>,
+    ) -> Result<Self, Vec<Diagnostic>> {
         // Emitted paths are made relative to this, so it must be absolute
         // and normalized. `luck bundle main.lua` passes the entry's parent,
         // which is empty for a bare file name.
-        let root = absolute_project_root(project_root);
-
-        let mut builder = GraphBuilder {
-            version,
-            project_root: &root,
-            dynamic_require,
-            resolver: Resolver::new(version, search_paths, Path::new(&root)),
-            modules: Vec::new(),
-            path_to_id: FxHashMap::default(),
-            queue: VecDeque::new(),
-            errors: Vec::new(),
-            warnings: Vec::new(),
-        };
-        let entry_id = builder.module_id(normalize_path(entry_path));
-        builder.discover_dependencies();
-        builder.finish(entry_id)
+        let root = absolute_project_root(options.project_root);
+        let mut discoverer = Discoverer::new(options, &root);
+        let entry = normalize_path(entry_path);
+        let mut by_path = discover_reachable(allocator, &mut discoverer, &entry);
+        number_modules(entry, &mut by_path, |path| discoverer.discover(allocator, path))
     }
 }
 
-struct GraphBuilder<'input> {
-    version: LuaVersion,
-    /// From [`absolute_project_root`].
-    project_root: &'input str,
-    dynamic_require: DynamicRequire,
-    resolver: Resolver<'input>,
-    /// By `ModuleId`. `None` means not read yet or, on the slots left after
-    /// discovery, an error was recorded for it.
-    modules: Vec<Option<ModuleInfo>>,
-    path_to_id: FxHashMap<String, ModuleId>,
-    queue: VecDeque<(ModuleId, String)>,
+/// Everything one module's discovery finds, which depends on no other
+/// module.
+struct Discovered<'ast> {
     errors: Vec<Diagnostic>,
     warnings: Vec<Diagnostic>,
+    /// `None` when the file can't be read or is too large.
+    module: Option<ResolvedModuleInfo<'ast>>,
 }
 
-impl GraphBuilder<'_> {
-    fn module_id(&mut self, file_path: String) -> ModuleId {
-        if let Some(&id) = self.path_to_id.get(&file_path) {
-            return id;
+struct ResolvedModuleInfo<'ast> {
+    /// Every field but the dependencies, which need module ids.
+    info: ModuleInfo<'ast>,
+    /// Each require and the path it resolves to, in source order. `None`
+    /// when it doesn't resolve.
+    requires: Vec<(RequireSite<'ast>, Option<String>)>,
+}
+
+impl Discovered<'_> {
+    fn resolved_paths(&self) -> impl Iterator<Item = &String> {
+        self.module.iter().flat_map(|module| &module.requires).filter_map(|(_, path)| path.as_ref())
+    }
+}
+
+/// What discovering a module takes, apart from the module, on one thread.
+struct Discoverer<'input> {
+    version: LuaVersion,
+    dynamic_require: DynamicRequire,
+    /// From [`absolute_project_root`].
+    project_root: &'input str,
+    resolver: Resolver<'input>,
+}
+
+impl<'input> Discoverer<'input> {
+    fn new(options: &BundleOptions<'input>, project_root: &'input str) -> Self {
+        Self {
+            version: options.version,
+            dynamic_require: options.dynamic_require,
+            project_root,
+            resolver: Resolver::new(options.version, options.search_paths, Path::new(project_root)),
         }
-        let id = ModuleId(self.modules.len());
-        self.modules.push(None);
-        self.path_to_id.insert(file_path.clone(), id);
-        self.queue.push_back((id, file_path));
-        id
     }
 
-    /// Walks breadth-first from the modules queued so far, stopping with E009
-    /// at the module limit.
-    fn discover_dependencies(&mut self) {
-        while let Some((id, file_path)) = self.queue.pop_front() {
-            if id.0 >= MAX_MODULE_COUNT {
-                self.errors.push(Diagnostic::e009(&file_path, Span::default(), MAX_MODULE_COUNT));
-                return;
-            }
-            self.add_module(id, file_path);
-        }
-    }
-
-    /// Reads and parses one module and fills its slot with its resolved
-    /// requires. A file that can't be read or is too large records the error
-    /// and leaves the slot empty.
-    fn add_module(&mut self, id: ModuleId, file_path: String) {
-        let source = match read_source_file(native_path(&file_path)) {
-            Ok(source) => source,
+    /// Reads and parses the module at `path` into `allocator` and resolves
+    /// its requires. A file that can't be read or is too large records the
+    /// error and nothing else.
+    fn discover<'ast>(&mut self, allocator: &'ast Allocator, path: &str) -> Discovered<'ast> {
+        let unreadable =
+            |error| Discovered { errors: vec![error], warnings: Vec::new(), module: None };
+        let file = match read_source_file(native_path(path)) {
+            Ok(file) => file,
             Err(io_error) => {
-                self.errors.push(Diagnostic::e010(
-                    &file_path,
-                    Span::default(),
-                    &io_error.to_string(),
-                ));
-                return;
+                return unreadable(Diagnostic::e010(path, Span::default(), &io_error.to_string()));
             }
         };
-
-        if source.len() > MAX_FILE_SIZE {
-            self.errors.push(Diagnostic::e012(
-                &file_path,
-                Span::default(),
-                source.len(),
-                MAX_FILE_SIZE,
-            ));
-            return;
+        if file.len() > MAX_FILE_SIZE {
+            return unreadable(Diagnostic::e012(path, Span::default(), file.len(), MAX_FILE_SIZE));
         }
+        let source = allocator.alloc_str(&file);
+        drop(file);
 
-        let parsed = luck_parser::parse(source, self.version);
-        for error in &parsed.errors {
-            self.errors.push(Diagnostic::e008(&file_path, error));
-        }
-
-        let ExtractedRequires {
-            sites,
-            dynamic_callees,
-            diags,
-            has_vararg_read,
-            has_global_arg_read,
-            has_env_rebinding,
-            max_function_upvalues,
-        } = extract_requires(&parsed.block, &file_path, self.version, self.dynamic_require);
-        for diag in diags {
-            if diag.is_error() {
-                self.errors.push(diag);
-            } else {
-                self.warnings.push(diag);
-            }
-        }
-
-        let mut dependencies = Vec::with_capacity(sites.len());
-        for site in sites {
-            match self.resolver.resolve(&ResolveRequest {
-                module: &site.require_string,
-                from_file: &file_path,
-                span: site.call_span,
-            }) {
-                Ok(ResolvedModule { path, warnings }) => {
-                    let target = self.module_id(path);
-                    self.warnings.extend(warnings);
-                    dependencies.push(Dependency {
-                        require_string: site.require_string,
-                        target,
-                        call_span: site.call_span,
-                    });
-                }
-                Err(diag) => self.errors.push(diag),
-            }
-        }
-
-        let relative_path = make_relative(&file_path, self.project_root);
-        let hot_comments = if self.version.is_luau() {
-            leading_hot_comments(&parsed.comments, &parsed.source)
-                .map(|comment| comment.span)
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let shebang = parsed
-            .comments
-            .iter()
-            .find(|comment| comment.kind == CommentKind::Shebang)
-            .map(|comment| comment.span);
-        let module = ModuleInfo {
-            path: file_path,
-            source: parsed.source,
-            dependencies,
+        let relative_path = make_relative(path, self.project_root);
+        let ParsedModule { info, sites, mut errors, mut warnings } = parse_module(
+            allocator,
+            path.to_owned(),
             relative_path,
-            dynamic_callees,
-            hot_comments,
-            shebang,
-            has_vararg_read,
-            has_global_arg_read,
-            has_env_rebinding,
-            max_function_upvalues,
-            block: parsed.block,
-            nesting_depth: parsed.nesting_depth,
-        };
-        if let Some(slot) = self.modules.get_mut(id.0) {
-            *slot = Some(module);
+            source,
+            self.version,
+            self.dynamic_require,
+        );
+        let mut requires = Vec::with_capacity(sites.len());
+        for site in sites {
+            let request = ResolveRequest {
+                module: site.require_string,
+                from_file: path,
+                span: site.call_span,
+            };
+            let resolved = match self.resolver.resolve(&request) {
+                Ok(ResolvedModule { path: target, warnings: resolve_warnings }) => {
+                    warnings.extend(resolve_warnings);
+                    Some(target)
+                }
+                Err(diag) => {
+                    errors.push(diag);
+                    None
+                }
+            };
+            requires.push((site, resolved));
+        }
+        Discovered { errors, warnings, module: Some(ResolvedModuleInfo { info, requires }) }
+    }
+}
+
+/// A module parsed and analyzed, before its requires resolve.
+pub(crate) struct ParsedModule<'ast> {
+    /// Every field but the dependencies.
+    pub info: ModuleInfo<'ast>,
+    /// In source order.
+    pub sites: Vec<RequireSite<'ast>>,
+    /// Parse errors, then the analysis's.
+    pub errors: Vec<Diagnostic>,
+    pub warnings: Vec<Diagnostic>,
+}
+
+/// Parses `source`, the module at `path`, into `allocator` and analyzes its
+/// tree.
+pub(crate) fn parse_module<'ast>(
+    allocator: &'ast Allocator,
+    path: String,
+    relative_path: String,
+    source: &'ast str,
+    version: LuaVersion,
+    dynamic_require: DynamicRequire,
+) -> ParsedModule<'ast> {
+    let parsed = luck_parser::parse(allocator, source, version);
+    let mut errors: Vec<Diagnostic> =
+        parsed.errors.iter().map(|error| Diagnostic::e008(&path, error)).collect();
+    let mut warnings = Vec::new();
+    let ExtractedRequires {
+        sites,
+        dynamic_callees,
+        diags,
+        has_vararg_read,
+        has_global_arg_read,
+        has_env_rebinding,
+        max_function_upvalues,
+        exports,
+    } = extract_requires(allocator, &parsed.block, source, &path, version, dynamic_require);
+    for diag in diags {
+        if diag.is_error() {
+            errors.push(diag);
+        } else {
+            warnings.push(diag);
         }
     }
+    let hot_comments = if version.is_luau() {
+        leading_hot_comments(&parsed.comments, source).map(|comment| comment.span).collect()
+    } else {
+        Vec::new()
+    };
+    let shebang = parsed
+        .comments
+        .first()
+        .filter(|comment| comment.kind == CommentKind::Shebang)
+        .map(|comment| comment.span);
+    let info = ModuleInfo {
+        path,
+        relative_path,
+        source,
+        block: parsed.block,
+        nesting_depth: parsed.nesting_depth,
+        dependencies: Vec::new(),
+        dynamic_callees,
+        hot_comments,
+        shebang,
+        has_vararg_read,
+        has_global_arg_read,
+        has_env_rebinding,
+        max_function_upvalues,
+        has_prefix_stem: source.contains(PREFIX_STEM),
+        exports,
+    };
+    ParsedModule { info, sites, errors, warnings }
+}
 
-    /// # Errors
-    ///
-    /// Returns the errors collected during discovery.
-    fn finish(self, entry_id: ModuleId) -> Result<DependencyGraph, Vec<Diagnostic>> {
-        let Self { modules: module_slots, errors, mut warnings, .. } = self;
-        if !errors.is_empty() {
-            return Err(errors);
+/// Discovers every module `entry` reaches, by canonical path, stopping once
+/// more modules are known than a graph may hold.
+fn discover_reachable<'ast>(
+    allocator: &'ast Allocator,
+    discoverer: &mut Discoverer<'_>,
+    entry: &str,
+) -> FxHashMap<String, Discovered<'ast>> {
+    let mut by_path = FxHashMap::default();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    seen.insert(entry.to_owned());
+    let mut queue = VecDeque::from([entry.to_owned()]);
+    while let Some(path) = queue.pop_front() {
+        let module = discoverer.discover(allocator, &path);
+        for target in module.resolved_paths() {
+            if seen.len() <= MAX_MODULE_COUNT && !seen.contains(target) {
+                seen.insert(target.clone());
+                queue.push_back(target.clone());
+            }
         }
-
-        // No errors, so every slot was filled and each index is its `ModuleId`.
-        let modules: Vec<ModuleInfo> = module_slots.into_iter().flatten().collect();
-        let topological_order = topological_order(&modules, &mut warnings);
-        warn_inert_hot_comments(&modules, entry_id, &mut warnings);
-
-        Ok(DependencyGraph { modules, topological_order, entry_id, warnings })
+        by_path.insert(path, module);
     }
+    by_path
+}
+
+/// Numbers the modules breadth-first from `entry`, in require order.
+///
+/// The diagnostics are gathered in that order too, so neither depends on how
+/// discovery was scheduled. A module that discovery skipped is discovered
+/// now. Stops with E009 at the module limit.
+///
+/// # Errors
+///
+/// Returns the errors discovery found.
+fn number_modules<'ast>(
+    entry: String,
+    by_path: &mut FxHashMap<String, Discovered<'ast>>,
+    mut discover: impl FnMut(&str) -> Discovered<'ast>,
+) -> Result<DependencyGraph<'ast>, Vec<Diagnostic>> {
+    let mut ids: FxHashMap<String, ModuleId> = FxHashMap::default();
+    ids.insert(entry.clone(), ModuleId(0));
+    let mut paths = vec![entry];
+    let mut modules: Vec<ModuleInfo<'ast>> = Vec::new();
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let mut next = 0;
+    while let Some(path) = paths.get(next) {
+        if next >= MAX_MODULE_COUNT {
+            errors.push(Diagnostic::e009(path, Span::default(), MAX_MODULE_COUNT));
+            break;
+        }
+        let Discovered { errors: module_errors, warnings: module_warnings, module } =
+            by_path.remove(path).unwrap_or_else(|| discover(path));
+        errors.extend(module_errors);
+        warnings.extend(module_warnings);
+        if let Some(ResolvedModuleInfo { mut info, requires }) = module {
+            info.dependencies = requires
+                .into_iter()
+                .filter_map(|(site, resolved)| {
+                    let next_id = ModuleId(paths.len());
+                    let id = *ids.entry(resolved?).or_insert_with_key(|target| {
+                        paths.push(target.clone());
+                        next_id
+                    });
+                    Some(Dependency {
+                        require_string: site.require_string,
+                        target: id,
+                        call_span: site.call_span,
+                    })
+                })
+                .collect();
+            modules.push(info);
+        }
+        next = next.saturating_add(1);
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+
+    // No errors, so every module was read and each index is its `ModuleId`.
+    let topological_order = topological_order(&modules, &mut warnings);
+    let entry_id = ModuleId(0);
+    warn_inert_hot_comments(&modules, entry_id, &mut warnings);
+    Ok(DependencyGraph { modules, topological_order, entry_id, warnings })
 }
 
 /// Luau hot comments only take effect at the top of a chunk. The emitter
 /// hoists the entry module's leading run above the loader; any other module's
 /// hot comments become inert in the bundle.
 fn warn_inert_hot_comments(
-    modules: &[ModuleInfo],
+    modules: &[ModuleInfo<'_>],
     entry_id: ModuleId,
     warnings: &mut Vec<Diagnostic>,
 ) {
@@ -242,7 +329,7 @@ fn warn_inert_hot_comments(
             continue;
         }
         if let Some(span) = module.hot_comments.first() {
-            warnings.push(Diagnostic::w006(&module.path, *span, span.text(&module.source)));
+            warnings.push(Diagnostic::w006(&module.path, *span, span.text(module.source)));
         }
     }
 }
@@ -252,10 +339,10 @@ fn warn_inert_hot_comments(
 ///
 /// A deferred cycle works as in real Lua, and a load-time cycle fails at
 /// runtime the way the target version fails.
-fn topological_order(modules: &[ModuleInfo], warnings: &mut Vec<Diagnostic>) -> Vec<ModuleId> {
+fn topological_order(modules: &[ModuleInfo<'_>], warnings: &mut Vec<Diagnostic>) -> Vec<ModuleId> {
     // Node `i` is `modules[i]`. Insertion order breaks toposort's ties, so the
     // edges go in require order.
-    let mut graph: DiGraph<(), ()> = DiGraph::new();
+    let mut graph: DiGraph<(), ()> = DiGraph::with_capacity(modules.len(), 0);
     for _ in modules {
         graph.add_node(());
     }

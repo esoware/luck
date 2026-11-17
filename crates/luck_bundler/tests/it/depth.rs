@@ -6,6 +6,7 @@
 use std::fs;
 use std::path::Path;
 
+use luck_allocator::Allocator;
 use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_bundler::{BundleOptions, BundleResult, DynamicRequire};
 use luck_core::Diagnostic;
@@ -156,7 +157,8 @@ fn deepest_module_that_fits_bundles_to_the_cap_for_every_wrapper() {
         let parentheses = MAX_NESTING_DEPTH - shape.wrapper_levels - 1;
         let (_, result) = shape.bundle(parentheses);
         let output = result.unwrap_or_else(|errors| panic!("{}: {errors:?}", shape.name)).output;
-        let reparsed = luck_parser::parse(&output, shape.version);
+        let allocator = Allocator::new();
+        let reparsed = luck_parser::parse(&allocator, &output, shape.version);
         assert!(reparsed.errors.is_empty(), "{}: {:?}", shape.name, reparsed.errors);
         assert_eq!(
             block_nesting_depth(&reparsed.block),
@@ -267,7 +269,8 @@ print(x)
     let literal = luau_table_export_module(MAX_NESTING_DEPTH - 3, "1");
     let output = bundle_export_module(&literal).expect("a literal at the cap fits").output;
     assert!(output.contains("__luck_exports.value"), "{output}");
-    let reparsed = luck_parser::parse(&output, LuaVersion::Luau);
+    let allocator = Allocator::new();
+    let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Luau);
     assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
 
     // Lowering reads `value` as a field of the export table, one level deeper.

@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+use luck_allocator::Allocator;
 use luck_bundler::{BundleOptions, BundleResult, DependencyGraph, DynamicRequire};
 use luck_core::Diagnostic;
 use luck_token::LuaVersion;
@@ -378,8 +379,7 @@ fn luau_export_type_is_stripped_inside_module_wrappers() {
         "export must be stripped inside module wrappers:\n{output}"
     );
     assert!(output.contains("type Adder"), "the alias itself must survive:\n{output}");
-    let reparsed = luck_parser::parse(&output, LuaVersion::Luau);
-    assert!(reparsed.errors.is_empty(), "bundle must reparse: {:?}", reparsed.errors);
+    assert_reparses(&output, LuaVersion::Luau);
 }
 
 /// The bundle must name no directory on the build host. Provenance comments
@@ -479,7 +479,8 @@ print(util)
 const RETURN_ONE: &[u8] = b"return 1\n";
 
 fn assert_reparses(output: &str, version: LuaVersion) {
-    let parsed = luck_parser::parse(output, version);
+    let allocator = Allocator::new();
+    let parsed = luck_parser::parse(&allocator, output, version);
     assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
 }
 
@@ -809,7 +810,9 @@ require(\"b\")
         ("b.lua", RETURN_ONE),
     ])
     .expect("project");
+    let allocator = Allocator::new();
     let graph = DependencyGraph::build(
+        &allocator,
         &directory.path().join("main.lua"),
         &BundleOptions {
             version: LuaVersion::Lua54,

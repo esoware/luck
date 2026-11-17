@@ -1,6 +1,7 @@
 use core::mem;
 use std::path::Path;
 
+use luck_allocator::Allocator;
 use luck_core::Diagnostic;
 use luck_minifier::TransformConfig;
 
@@ -29,17 +30,21 @@ pub struct MinifiedBundle {
     pub source_byte_count: usize,
 }
 
+/// Bundles the modules `entry_path` reaches, whose sources and trees go in
+/// `allocator`.
+///
 /// # Errors
 ///
 /// Returns every diagnostic that stopped the graph from building, as
 /// [`DependencyGraph::build`] does, or an E013 for each construct that a
 /// module's wrapper would nest past [`luck_ast::MAX_NESTING_DEPTH`].
 pub fn bundle(
+    allocator: &Allocator,
     entry_path: &Path,
     options: &BundleOptions<'_>,
 ) -> Result<BundleResult, Vec<Diagnostic>> {
-    let graph = DependencyGraph::build(entry_path, options)?;
-    let (output, line_map) = emitter::emit(&graph, options.version)?;
+    let mut graph = DependencyGraph::build(allocator, entry_path, options)?;
+    let (output, line_map) = emitter::emit(allocator, &mut graph, options.version)?;
     Ok(BundleResult {
         output,
         warnings: graph.warnings,
@@ -56,22 +61,27 @@ pub fn bundle(
 /// Returns what [`bundle`] does.
 #[expect(clippy::missing_panics_doc, reason = "the emitter refuses a tree past the cap")]
 pub fn bundle_minified(
+    allocator: &Allocator,
     entry_path: &Path,
     options: &BundleOptions<'_>,
     transforms: &TransformConfig,
 ) -> Result<MinifiedBundle, Vec<Diagnostic>> {
-    let mut graph = DependencyGraph::build(entry_path, options)?;
+    let mut graph = DependencyGraph::build(allocator, entry_path, options)?;
     let warnings = mem::take(&mut graph.warnings);
     let source_files = graph.modules.iter().map(|module| module.path.clone()).collect();
     let source_byte_count = graph.modules.iter().map(|module| module.source.len()).sum();
-    let (block, mut output) = block_emitter::emit_block(graph, options.version)?;
+    let (mut block, mut output) = block_emitter::emit_block(allocator, graph, options.version)?;
     #[expect(
         clippy::expect_used,
         clippy::unwrap_in_result,
         reason = "the emitter refuses a tree past the cap"
     )]
-    let code = luck_minifier::minify_block(block, options.version, transforms)
+    let code = luck_minifier::minify_block(allocator, &mut block, options.version, transforms)
         .expect("a bundle nests within the cap");
-    output.push_str(&code);
+    if output.is_empty() {
+        output = code;
+    } else {
+        output.push_str(&code);
+    }
     Ok(MinifiedBundle { output, warnings, source_files, source_byte_count })
 }

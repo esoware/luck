@@ -1,35 +1,45 @@
 use luck_ast::Block;
 use luck_token::Span;
 
+use crate::exports::Exports;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ModuleId(pub usize);
 
-#[derive(Debug, Clone)]
-pub struct Dependency {
+#[derive(Debug, Clone, Copy)]
+pub struct Dependency<'ast> {
     /// The require string with escapes decoded, as real `require` would
     /// receive it.
-    pub require_string: String,
+    pub require_string: &'ast str,
     pub target: ModuleId,
     /// The `require(...)` call in source. The emitter splices the loader call
     /// over it, and cycle warnings point at it.
     pub call_span: Span,
 }
 
-#[derive(Debug, Clone)]
-pub struct ModuleInfo {
+/// One module as discovery found it. Its source and tree live in one of the
+/// arenas the graph was built in.
+#[derive(Debug)]
+#[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the module")]
+pub struct ModuleInfo<'ast> {
     /// The canonical path, in the [`normalize_path`](luck_resolver::normalize_path)
     /// form, which keys the graph.
     pub path: String,
-    pub source: String,
-    pub dependencies: Vec<Dependency>,
     /// Project-relative path, built against the graph's project root.
     ///
     /// It's the only path the bundle may carry, in `-- module` comments and
     /// in the loader data 5.2+ chunks receive.
     pub relative_path: String,
+    pub source: &'ast str,
+    pub block: Block<'ast>,
+    /// `block`'s depth as its parse counted it, never below what
+    /// [`luck_ast::block_nesting_depth`] finds.
+    pub nesting_depth: usize,
+    /// In source order.
+    pub dependencies: Vec<Dependency<'ast>>,
     /// The `require` identifier in each of this module's `require(expr)`
     /// calls, which the emitter retargets at the loader's dynamic entry
-    /// point. Always empty on Luau targets.
+    /// point, in source order. Always empty on Luau targets.
     pub dynamic_callees: Vec<Span>,
     /// This module's leading `--!` hot comments. Empty except on Luau targets.
     pub hot_comments: Vec<Span>,
@@ -47,9 +57,8 @@ pub struct ModuleInfo {
     /// Lua 5.1: the most locals any one of the module's functions captures,
     /// which decides whether the loader fits as an upvalue. Zero elsewhere.
     pub max_function_upvalues: usize,
-    /// The AST from graph construction, kept so the emitter doesn't reparse.
-    pub block: Block,
-    /// `block`'s depth as its parse counted it, never below what
-    /// [`luck_ast::block_nesting_depth`] finds.
-    pub nesting_depth: usize,
+    /// Whether the source holds `__luck`, the stem of every prefix the
+    /// bundle's generated names can take.
+    pub has_prefix_stem: bool,
+    pub exports: Exports<'ast>,
 }

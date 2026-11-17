@@ -860,6 +860,7 @@ name = "luck_bundler"
 version = "0.6.0"
 dependencies = [
  "insta",
+ "luck_allocator",
  "luck_ast",
  "luck_core",
  "luck_lexer",

@@ -13,16 +13,18 @@
 //! ```no_run
 //! use std::path::Path;
 //!
+//! use luck_allocator::Allocator;
 //! use luck_bundler::{BundleOptions, DynamicRequire};
 //! use luck_token::LuaVersion;
 //!
+//! let allocator = Allocator::new();
 //! let options = BundleOptions {
 //!     version: LuaVersion::Lua54,
 //!     search_paths: &[],
 //!     project_root: Path::new("."),
 //!     dynamic_require: DynamicRequire::default(),
 //! };
-//! let bundle = luck_bundler::bundle(Path::new("main.lua"), &options).unwrap();
+//! let bundle = luck_bundler::bundle(&allocator, Path::new("main.lua"), &options).unwrap();
 //! assert!(!bundle.output.is_empty());
 //! ```
 
@@ -50,5 +52,6 @@ mod require_extraction;
 pub use bundle::{BundleResult, MinifiedBundle, bundle, bundle_minified};
 pub use dynamic_require::DynamicRequire;
 pub use emitter::LineMapEntry;
+pub use exports::Exports;
 pub use graph::{BundleOptions, DependencyGraph};
 pub use module::{Dependency, ModuleId, ModuleInfo};
