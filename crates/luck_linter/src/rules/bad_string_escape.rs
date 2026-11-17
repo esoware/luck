@@ -41,9 +41,7 @@ impl NodeRule for BadStringEscape {
         if let Expression::StringLiteral(literal) = expr {
             check_literal(literal, version, findings);
         }
-        if let Expression::InterpolatedString(interpolated) = expr
-            && !interpolated.segments.is_empty()
-        {
+        if let Expression::InterpolatedString(interpolated) = expr {
             for segment in &interpolated.segments {
                 check_piece(&segment.text, version, findings);
             }
@@ -260,6 +258,20 @@ local x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e
         let diags = run(source, LuaVersion::Luau);
         let flagged: Vec<&str> = diags.iter().map(|diag| diag.span.text(source)).collect();
         assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");
+    }
+
+    #[test]
+    fn flags_unknown_escapes_in_a_backtick_string_without_holes() {
+        let source = "local x = `a\\qb\\{c}\\w`";
+        let diags = run(source, LuaVersion::Luau);
+        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span.text(source)).collect();
+        assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_valid_escapes_in_a_backtick_string_without_holes() {
+        let diags = run(r"local x = `\{\}\`\n\x41\z  \u{41}\065`", LuaVersion::Luau);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
