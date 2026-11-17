@@ -87,12 +87,12 @@ use crate::leaf::{Literal, Name};
 ///   as bytecode debug info or obfuscated names fails fast instead of
 ///   producing output that won't re-parse. Every constructor that takes a
 ///   name goes through it and says so under `# Panics`.
-/// - **Runs.** A run of suffixes, of binary operators at one level, or of
-///   `?`s on a type is one level of nesting however long it gets, and the
-///   constructors join a run they extend rather than nest it. Extending a
-///   run at its end takes amortized constant time and arena space. Extending
-///   a right-associative run (`..` or `^`) at its start shifts the run, so
-///   build a long one from the left, as a binary operator's operands come.
+/// - **Runs.** A run of suffixes, or of binary operators at one level, is one
+///   level of nesting however long it gets, and the constructors join a run
+///   they extend rather than nest it. Extending a run at its end takes
+///   amortized constant time and arena space, and extending a
+///   right-associative one (`..` or `^`) at its start shifts every link it
+///   holds.
 ///
 /// # What the caller still owes
 ///

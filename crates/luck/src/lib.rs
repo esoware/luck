@@ -9,7 +9,7 @@
 //!
 //! - `token` - Spans, `LuaVersion`, tokens, literal value semantics (always on)
 //! - `lexer` - Tokenizer (always on)
-//! - `ast` - AST nodes, `Visitor`, `Transform`, `span()` accessors (always on)
+//! - `ast` - AST nodes, `Visitor`, `VisitorMut`, `span()` accessors (always on)
 //! - `parser` - Pratt + recursive-descent parser (always on)
 //! - `core` - Dialect targets, diagnostics (always on)
 //! - `codegen` - Compact printer (feature `codegen`)
