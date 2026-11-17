@@ -229,7 +229,7 @@ impl ResolvedCallee<'_> {
         match self.path {
             CalleePath::Method { base, method } => format!("{base}:{method}"),
             CalleePath::Dotted(head) => {
-                head.dotted_path().map(|path| path.segments.join(".")).unwrap_or_default()
+                head.dotted_path().map(|path| path.to_string()).unwrap_or_default()
             }
         }
     }

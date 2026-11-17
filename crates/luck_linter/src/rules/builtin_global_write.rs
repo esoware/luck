@@ -1,4 +1,4 @@
-use luck_ast::{DottedPath, FunctionName, Name, Statement, Suffix, Var};
+use luck_ast::{FunctionName, Name, Statement, Suffix, Var};
 use luck_semantic::{SemanticAnalysis, StdlibEntry};
 use luck_token::Span;
 
@@ -69,17 +69,16 @@ impl FieldWriteChecker<'_> {
     /// A field of a stdlib value, such as `package.loaded` or a Roblox
     /// instance's property, isn't the library. Neither is a `path` that no
     /// longer reaches the host's global.
-    fn writes_namespace_member(&self, path: &[&str], root_span: Span, leaf: Option<&str>) -> bool {
-        let Some(&root) = path.first() else {
-            return false;
-        };
+    fn writes_namespace_member<'path>(
+        &self,
+        root: &Name<'_>,
+        path: impl IntoIterator<Item = &'path str>,
+        leaf: Option<&str>,
+    ) -> bool {
         // Writing through a writable base (`_G.x = 1`, Roblox's
         // `shared.score = 1`) is intended.
-        if !is_overwritable_builtin(self.semantic, root)
-            || !self
-                .semantic
-                .scope_tree()
-                .reaches_host_global(&Name { text: root, span: root_span })
+        if !is_overwritable_builtin(self.semantic, root.text)
+            || !self.semantic.scope_tree().reaches_host_global(root)
         {
             return false;
         }
@@ -104,13 +103,13 @@ impl FieldWriteChecker<'_> {
             Suffix::Call(_) | Suffix::MethodCall(_) | Suffix::TypeInstantiation { .. } => return,
         };
         let span = chain.span;
-        let Some(DottedPath { segments, root_span, .. }) = container.dotted_path() else {
+        let Some(path) = container.dotted_path() else {
             return;
         };
-        if !self.writes_namespace_member(&segments, root_span, leaf) {
+        if !self.writes_namespace_member(path.root(), path.segments(), leaf) {
             return;
         }
-        let mut display = segments.join(".");
+        let mut display = path.to_string();
         if let Some(name) = leaf {
             display.push('.');
             display.push_str(name);
@@ -134,7 +133,7 @@ impl FieldWriteChecker<'_> {
             return;
         };
         let leaf_name = leaf.text;
-        if !self.writes_namespace_member(&segments, root.span, Some(leaf_name)) {
+        if !self.writes_namespace_member(root, segments.iter().copied(), Some(leaf_name)) {
             return;
         }
         let display = format!("{}{separator}{leaf_name}", segments.join("."));

@@ -1,11 +1,11 @@
-use core::mem;
+use core::iter::once;
+use core::{fmt, mem};
 
 use luck_allocator::{Allocator, Box, ListIntoIter};
 use luck_token::{Associativity, BinOp, OperandSide, Span};
 
 use crate::expr::{BinaryLink, BinaryOp, Expression, FunctionArgs, Suffix, SuffixedExpression};
 use crate::leaf::Name;
-use crate::query::DottedPath;
 use crate::types::TypeArgs;
 
 /// A chain's prefix and its first few suffixes, read as one expression: what
@@ -36,17 +36,8 @@ impl<'ast> ChainHead<'ast> {
         let Expression::Name(root) = self.prefix else {
             return None;
         };
-        let mut segments = Vec::with_capacity(self.suffixes.len().saturating_add(1));
-        segments.push(root.text);
-        let mut leaf_span = root.span;
-        for suffix in self.suffixes {
-            let Suffix::Field(name) = suffix else {
-                return None;
-            };
-            segments.push(name.text);
-            leaf_span = name.span;
-        }
-        Some(DottedPath { segments, root_span: root.span, leaf_span })
+        let is_dotted = self.suffixes.iter().all(|suffix| matches!(suffix, Suffix::Field(_)));
+        is_dotted.then_some(DottedPath { root, fields: self.suffixes })
     }
 
     #[must_use]
@@ -71,6 +62,47 @@ impl<'ast> From<&'ast Expression<'ast>> for ChainHead<'ast> {
         } else {
             Self { prefix: expr, suffixes: &[] }
         }
+    }
+}
+
+/// A `Name(.Name)*` chain, which displays as `a.b.c`.
+#[derive(Debug, Clone, Copy)]
+pub struct DottedPath<'ast> {
+    root: &'ast Name<'ast>,
+    /// Every one a [`Suffix::Field`].
+    fields: &'ast [Suffix<'ast>],
+}
+
+impl<'ast> DottedPath<'ast> {
+    #[must_use]
+    pub const fn root(self) -> &'ast Name<'ast> {
+        self.root
+    }
+
+    /// The names' texts, root first.
+    pub fn segments(self) -> impl Iterator<Item = &'ast str> + Clone {
+        let fields = self.fields.iter().filter_map(|suffix| {
+            if let Suffix::Field(name) = suffix { Some(name.text) } else { None }
+        });
+        once(self.root.text).chain(fields)
+    }
+
+    /// How many names it has, the root's included.
+    #[must_use]
+    pub const fn segment_count(self) -> usize {
+        self.fields.len().saturating_add(1)
+    }
+}
+
+impl fmt::Display for DottedPath<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut separator = "";
+        for segment in self.segments() {
+            f.write_str(separator)?;
+            f.write_str(segment)?;
+            separator = ".";
+        }
+        Ok(())
     }
 }
 
@@ -266,6 +298,27 @@ mod tests {
         let links = OneOrMore::new(BinaryLink { op, operand }, allocator);
         let run = BinaryOp { span: Span::default(), first, links };
         Expression::BinaryOp(Box::new_in(run, allocator))
+    }
+
+    #[test]
+    fn dotted_path_reads_a_name_and_its_fields_only() {
+        let fixture = Fixture::default();
+        let synth = fixture.synth();
+        let path = synth.field(synth.field(synth.name_expr("a"), "b"), "c");
+        let Expression::Suffixed(dotted_chain) = &path else {
+            panic!("expected a suffixed expression");
+        };
+        let dotted = dotted_chain.head(2).dotted_path().expect("a.b.c is dotted");
+        assert_eq!(dotted.root().text, "a");
+        assert_eq!(dotted.segments().collect::<Vec<_>>(), ["a", "b", "c"]);
+        assert_eq!(dotted.segment_count(), 3);
+        assert_eq!(dotted.to_string(), "a.b.c");
+
+        let called = synth.field(synth.call(synth.name_expr("f"), []), "x");
+        let Expression::Suffixed(called_chain) = &called else {
+            panic!("expected a suffixed expression");
+        };
+        assert!(called_chain.head(2).dotted_path().is_none());
     }
 
     #[test]

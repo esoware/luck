@@ -1,4 +1,4 @@
-use luck_ast::{ChainHead, Expression, Suffix, SuffixedExpression};
+use luck_ast::{ChainHead, DottedPath, Expression, Suffix, SuffixedExpression};
 use luck_token::Span;
 
 use crate::diagnostic::Finding;
@@ -67,9 +67,9 @@ impl NodeRule for RobloxUnknownEnumMember {
 
 /// `prefix` is the dotted path from `Enum` that has no `last_segment`.
 fn unknown_member(prefix: ChainHead<'_>, last_segment: &str, span: Span) -> Finding {
-    let segments = prefix.dotted_path().map(|path| path.segments).unwrap_or_default();
-    let prefix_path = segments.join(".");
-    let message = match segments.len() {
+    let path = prefix.dotted_path();
+    let prefix_path = path.map(|dotted| dotted.to_string()).unwrap_or_default();
+    let message = match path.map_or(0, DottedPath::segment_count) {
         1 => format!("unknown enum type `Enum.{last_segment}`"),
         2 => format!("`{last_segment}` is not an item of `{prefix_path}`"),
         _ => format!("`{last_segment}` is not a member of `{prefix_path}`"),

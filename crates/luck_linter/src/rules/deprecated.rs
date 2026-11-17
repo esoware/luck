@@ -287,7 +287,7 @@ fn check_field_accesses(
         if let Some(deprecation) = entry.deprecation()
             && !semantic.scope_tree().resolves_to_local(root)
         {
-            let path = chain.head(read_index).dotted_path().map(|path| path.segments.join("."));
+            let path = chain.head(read_index).dotted_path().map(|path| path.to_string());
             findings.push(
                 Finding::new(format!("`{}` is deprecated", path.unwrap_or_default()), name.span)
                     .with_help(deprecation.message),

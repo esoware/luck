@@ -422,7 +422,7 @@ fn core_luau_entries_in_both_environments() {
     for segments in checks {
         for library in [luau(), roblox()] {
             assert!(
-                library.lookup(segments).is_some(),
+                library.lookup(*segments).is_some(),
                 "{segments:?} missing from {:?}/{:?}",
                 library.version,
                 library.environment

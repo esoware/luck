@@ -387,11 +387,15 @@ impl StdlibLibrary {
     /// property or constant, so `["game", "GetService"]` resolves through
     /// `game`'s shape.
     #[must_use]
-    pub fn lookup(&self, path: &[&str]) -> Option<&'static StdlibEntry> {
-        let (root, members) = path.split_first()?;
-        let mut current = self.globals.get(root)?;
-        for segment in members {
-            current = self.child(current, segment)?;
+    pub fn lookup<Path>(&self, path: Path) -> Option<&'static StdlibEntry>
+    where
+        Path: IntoIterator,
+        Path::Item: AsRef<str>,
+    {
+        let mut segments = path.into_iter();
+        let mut current = self.globals.get(segments.next()?.as_ref())?;
+        for segment in segments {
+            current = self.child(current, segment.as_ref())?;
         }
         Some(current)
     }

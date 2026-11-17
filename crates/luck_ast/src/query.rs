@@ -1,17 +1,5 @@
-use luck_token::Span;
-
 use crate::expr::{Expression, Var};
 use crate::stmt::Statement;
-
-/// A `Name(.Name)*` chain's names, root first, and where its first and last
-/// names sit. [`ChainHead::dotted_path`](crate::ChainHead::dotted_path)
-/// finds one.
-#[derive(Debug)]
-pub struct DottedPath<'ast> {
-    pub segments: Vec<&'ast str>,
-    pub root_span: Span,
-    pub leaf_span: Span,
-}
 
 #[must_use]
 pub fn unwrap_parentheses<'tree, 'ast>(expr: &'tree Expression<'ast>) -> &'tree Expression<'ast> {

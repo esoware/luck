@@ -67,7 +67,7 @@ mod types;
 mod visitor;
 mod visitor_mut;
 
-pub use chain::{Call, ChainHead};
+pub use chain::{Call, ChainHead, DottedPath};
 pub use depth::{
     MAX_NESTING_DEPTH, block_nesting_depth, expr_nesting_depth, spans_past_nesting_cap,
     type_nesting_depth,
@@ -81,7 +81,7 @@ pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
 pub use leaf::{Literal, Name};
 pub use one_or_more::OneOrMore;
 pub use query::{
-    DottedPath, expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,
+    expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,
     unwrap_parentheses,
 };
 pub use stmt::{
