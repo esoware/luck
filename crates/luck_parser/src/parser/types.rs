@@ -365,12 +365,15 @@ impl<'ast> Parser<'ast> {
         } else {
             (None, first_name)
         };
-        let generics = self.is_at(TokenKind::Less).then(|| self.parse_type_args());
-        self.exit_depth();
         let start_span = prefix.map_or(name.span, |module| module.span);
-        let end_span = generics.as_ref().map_or(name.span, |args| args.span);
-        let span = start_span.merge(end_span);
-        Type::Named(self.alloc(NamedType { span, prefix, name, generics }))
+        let span = start_span.merge(name.span);
+        let mut node = self.alloc(NamedType { span, prefix, name, generics: None });
+        if self.is_at(TokenKind::Less) {
+            let generics = node.generics.insert(self.parse_type_args());
+            node.span = start_span.merge(generics.span);
+        }
+        self.exit_depth();
+        Type::Named(node)
     }
 
     pub(super) fn parse_type_args(&mut self) -> TypeArgs<'ast> {
@@ -660,20 +663,20 @@ impl<'ast> Parser<'ast> {
         if self.eat(TokenKind::Arrow) {
             let params =
                 List::split_off_in(&mut self.scratch.function_type_params, start, self.allocator);
-            let return_type = self.parse_return_type();
-            let span = open.merge(return_type.span());
-            return Type::Function(self.alloc(FunctionType {
-                span,
-                generics: None,
-                params,
-                return_type,
-            }));
+            let return_type = Type::Error(open);
+            let mut node =
+                self.alloc(FunctionType { span: open, generics: None, params, return_type });
+            node.return_type = self.parse_return_type();
+            node.span = open.merge(node.return_type.span());
+            return Type::Function(node);
         }
         self.finish_paren_or_pack(open.merge(close), start, is_pack_allowed)
     }
 
     /// No arrow followed the members from `start`, so they're a
-    /// parenthesized type or a pack, and neither takes parameter names.
+    /// parenthesized type or a pack, and neither takes parameter names. Out of
+    /// line, so the members' recursive frame holds none of this.
+    #[inline(never)]
     fn finish_paren_or_pack(
         &mut self,
         span: Span,
