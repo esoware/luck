@@ -67,6 +67,10 @@ pub(crate) struct Compressor<'ast> {
     /// The ids of the declared locals and parameters in scope, upvalues
     /// included.
     locals: Vec<usize>,
+    /// The ids of the locals the block being merged declares, in order, and
+    /// the names of the group being merged.
+    block_locals: Vec<usize>,
+    group_names: Vec<&'ast str>,
     live_registers: usize,
     /// Lua 5.5: every name a `global` statement has declared so far, which
     /// stops counting as a local even past that statement's block.
@@ -100,6 +104,8 @@ impl<'ast> Compressor<'ast> {
             landed_counts: Vec::new(),
             local_facts: Vec::new(),
             locals: Vec::new(),
+            block_locals: Vec::new(),
+            group_names: Vec::new(),
             live_registers: 0,
             global_names: FxHashSet::default(),
             extracted_calls: Vec::new(),
@@ -271,40 +277,27 @@ impl<'ast> Compressor<'ast> {
     /// Records the locals a kept statement declares, for the assignments
     /// after it that merging has to prove assign locals.
     fn declare_locals(&mut self, stmt: &Statement<'ast>) {
-        let declared = match stmt {
-            Statement::LocalAssignment(local) => {
-                for attributed in &local.names {
-                    let id = self.names.intern_text(attributed.name.text);
-                    self.locals.push(id);
-                }
-                local.names.len()
-            }
-            Statement::LocalFunction(local_function) => {
-                let id = self.names.intern_text(local_function.name.text);
+        if let Statement::LocalAssignment(local) = stmt {
+            for attributed in &local.names {
+                let id = self.names.intern_text(attributed.name.text);
                 self.locals.push(id);
-                1
             }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => 0,
-        };
-        self.live_registers = self.live_registers.saturating_add(declared);
+        }
+        if let Statement::LocalFunction(local_function) = stmt {
+            let id = self.names.intern_text(local_function.name.text);
+            self.locals.push(id);
+        }
+        self.live_registers = self.live_registers.saturating_add(declared_count(stmt));
+    }
+
+    /// [`Self::declare_locals`] again for the block being merged, from the
+    /// ids its walk found, the next of which is at `next_local`.
+    fn redeclare_locals(&mut self, stmt: &Statement<'ast>, next_local: &mut usize) {
+        let count = declared_count(stmt);
+        let end = next_local.saturating_add(count);
+        self.locals.extend_from_slice(self.block_locals.get(*next_local..end).unwrap_or_default());
+        *next_local = end;
+        self.live_registers = self.live_registers.saturating_add(count);
     }
 
     /// Walks a run's operands, landing an inlined value bare wherever it
@@ -452,6 +445,33 @@ impl<'ast> Compressor<'ast> {
     }
 }
 
+/// How many locals `stmt` declares.
+fn declared_count(stmt: &Statement<'_>) -> usize {
+    match stmt {
+        Statement::LocalAssignment(local) => local.names.len(),
+        Statement::LocalFunction(_) => 1,
+        Statement::Assignment(_)
+        | Statement::FunctionCall(_)
+        | Statement::DoBlock(_)
+        | Statement::WhileLoop(_)
+        | Statement::RepeatLoop(_)
+        | Statement::IfStatement(_)
+        | Statement::NumericFor(_)
+        | Statement::GenericFor(_)
+        | Statement::FunctionDecl(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Label(_)
+        | Statement::GlobalDeclaration(_)
+        | Statement::GlobalFunction(_)
+        | Statement::GlobalStar(_)
+        | Statement::Break(_)
+        | Statement::CompoundAssignment(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::Error(_) => 0,
+    }
+}
+
 impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
@@ -476,6 +496,8 @@ impl<'ast> VisitorMut<'ast> for Compressor<'ast> {
         if self.config.merge_locals {
             // Merging proves each assignment's target local as of its own
             // statement, so the block's locals are counted again in order.
+            self.block_locals.clear();
+            self.block_locals.extend_from_slice(self.locals.get(scope_start..).unwrap_or_default());
             self.locals.truncate(scope_start);
             self.live_registers = outer_registers;
             self.merge_stmts(&mut block.stmts);

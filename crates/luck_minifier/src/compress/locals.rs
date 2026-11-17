@@ -413,7 +413,8 @@ impl<'ast> Compressor<'ast> {
     pub(super) fn merge_stmts(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
         let mut kept = 0usize;
         let mut index = 0usize;
-        let mut group_names: Vec<&'ast str> = Vec::new();
+        let mut next_local = 0usize;
+        let mut group_names = mem::take(&mut self.group_names);
         while index < stmts.len() {
             let group_end = self.merge_group_end(stmts, index, &mut group_names);
             if group_end > index.saturating_add(1) {
@@ -422,11 +423,12 @@ impl<'ast> Compressor<'ast> {
             }
             stmts.swap(kept, index);
             if let Some(stmt) = stmts.get(kept) {
-                self.declare_locals(stmt);
+                self.redeclare_locals(stmt, &mut next_local);
             }
             kept = kept.saturating_add(1);
             index = group_end;
         }
+        self.group_names = group_names;
         stmts.truncate(kept);
         self.fuse_bare_locals(stmts);
     }
