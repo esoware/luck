@@ -243,17 +243,20 @@ impl StdlibFunction {
         &self,
         index: usize,
         count: usize,
-    ) -> Option<Vec<&'static [StdlibConstant]>> {
-        let sets: Vec<&'static [StdlibConstant]> = self
-            .matching_signatures(count)
-            .map(|signature| {
+    ) -> Option<impl Iterator<Item = &'static [StdlibConstant]> + Clone> {
+        let signatures: &'static [StdlibSignature] = self.signatures;
+        let sets = signatures.iter().filter(move |signature| signature.accepts(count)).map(
+            move |signature| {
                 let StdlibArgKind::Constant(values) = signature.params.get(index)?.kind else {
                     return None;
                 };
                 Some(values)
-            })
-            .collect::<Option<_>>()?;
-        (!sets.is_empty()).then_some(sets)
+            },
+        );
+        let mut checked = sets.clone();
+        let is_constrained =
+            checked.next().is_some_and(|set| set.is_some()) && checked.all(|set| set.is_some());
+        is_constrained.then(|| sets.flatten())
     }
 
     #[must_use]

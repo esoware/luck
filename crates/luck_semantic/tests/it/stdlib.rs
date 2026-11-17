@@ -637,8 +637,10 @@ fn lua55_collectgarbage_param_form_replaces_setpause() {
 #[test]
 fn allowed_constants_need_every_matching_signature_constrained() {
     let function = function_at(standalone_library(LuaVersion::Lua55), &["collectgarbage"]);
-    let names =
-        function.allowed_constants(1, 3).expect("the 3-arg `param` form takes a constant name");
+    let names: Vec<_> = function
+        .allowed_constants(1, 3)
+        .expect("the 3-arg `param` form takes a constant name")
+        .collect();
     assert_eq!(names.len(), 1);
     assert!(names[0].iter().any(|constant| constant.value == "pause"));
     assert!(function.allowed_constants(2, 3).is_none(), "the `param` value is a number");
