@@ -5,7 +5,7 @@ use luck_ast::{Block, LastStatement, Statement};
 
 /// How many locals `repeat_body` declares after its first `continue`, which
 /// are the top-level locals the `until` condition may not read.
-pub(super) fn skipped_local_count(repeat_body: &Block) -> usize {
+pub(super) fn skipped_local_count(repeat_body: &Block<'_>) -> usize {
     let Some(continue_index) = earliest_continue_stmt(repeat_body) else {
         return 0;
     };
@@ -45,19 +45,18 @@ pub(super) fn skipped_local_count(repeat_body: &Block) -> usize {
 ///
 /// Continues inside nested loops and function bodies don't count. A trailing
 /// `continue` returns `block.stmts.len()`.
-fn earliest_continue_stmt(block: &Block) -> Option<usize> {
+fn earliest_continue_stmt(block: &Block<'_>) -> Option<usize> {
     block.stmts.iter().position(stmt_has_binding_continue).or_else(|| {
-        matches!(block.last_stmt.as_deref(), Some(LastStatement::Continue(_)))
-            .then_some(block.stmts.len())
+        matches!(block.last_stmt, Some(LastStatement::Continue(_))).then_some(block.stmts.len())
     })
 }
 
-fn block_has_binding_continue(block: &Block) -> bool {
-    matches!(block.last_stmt.as_deref(), Some(LastStatement::Continue(_)))
+fn block_has_binding_continue(block: &Block<'_>) -> bool {
+    matches!(block.last_stmt, Some(LastStatement::Continue(_)))
         || block.stmts.iter().any(stmt_has_binding_continue)
 }
 
-fn stmt_has_binding_continue(stmt: &Statement) -> bool {
+fn stmt_has_binding_continue(stmt: &Statement<'_>) -> bool {
     match stmt {
         Statement::DoBlock(do_block) => block_has_binding_continue(&do_block.block),
         Statement::IfStatement(if_stmt) => {

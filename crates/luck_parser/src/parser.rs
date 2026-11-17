@@ -6,47 +6,80 @@ mod stmt;
 mod types;
 
 use core::mem;
-use core::ops::Range;
 
-use luck_ast::{BinaryLink, Block, Expression, Literal, MAX_NESTING_DEPTH, Suffix};
+use luck_allocator::{Allocator, Box, List};
+use luck_ast::{
+    AttributedName, BinaryLink, Block, ElseIfClause, ElseIfExprClause, Expression, Field,
+    FunctionAttribute, FunctionTypeParam, GenericTypeParam, InterpolatedSegment, Literal,
+    MAX_NESTING_DEPTH, Name, Parameter, Statement, Suffix, Type, TypeField, Var,
+};
 use luck_lexer::Lexer;
-use luck_token::{Comment, CompactString, LuaVersion, Span, Token, TokenKind, has_line_break};
+use luck_token::{LuaVersion, Span, Token, TokenKind};
 use rustc_hash::FxHashSet;
 
 use crate::validate::check_type_functions;
 use crate::{ParseError, ParseResult};
 
-/// An owned `String` moves into `ParseResult::source` without a copy; a
-/// `&str` is copied once.
+/// The tree and every list in it go in `allocator`, and its names and
+/// literals borrow `source`.
 #[must_use]
-pub fn parse<Source>(source: Source, version: LuaVersion) -> ParseResult
-where
-    Source: Into<String>,
-{
-    parse_owned(source.into(), version)
-}
-
-fn parse_owned(source: String, version: LuaVersion) -> ParseResult {
-    let (block, comments, errors, nesting_depth) = match Parser::new(&source, version) {
-        Ok(parser) => parser.parse_chunk(),
-        Err(error) => (
-            Block { span: Span::new(0, 0), stmts: Vec::new(), last_stmt: None },
-            Vec::new(),
-            vec![error],
+pub fn parse<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    version: LuaVersion,
+) -> ParseResult<'ast> {
+    let lexer = match Lexer::new(source, version) {
+        Ok(lexer) => lexer,
+        Err(error) => {
+            let block = Block { span: Span::new(0, 0), stmts: List::new(), last_stmt: None };
             // The empty block's own level.
-            1,
-        ),
+            let errors = vec![error];
+            return ParseResult { source, block, comments: Vec::new(), errors, nesting_depth: 1 };
+        }
     };
-    ParseResult { block, comments, errors, source, nesting_depth }
+    let placeholder = Token {
+        span: Span::new(0, 0),
+        kind: TokenKind::Eof,
+        has_line_break_before: true,
+        is_unterminated: false,
+    };
+    let mut parser = Parser {
+        allocator,
+        source,
+        lexer,
+        token: placeholder,
+        next: placeholder,
+        previous_span: Span::new(0, 0),
+        version,
+        nesting_depth: 0,
+        deepest_level: 0,
+        block_depth: 0,
+        scratch: Scratch::default(),
+        function_scope: FunctionScope { is_chunk: true, is_vararg: true, is_in_loop: false },
+        has_module_return: false,
+        has_value_exports: false,
+        exported_names: FxHashSet::default(),
+        has_type_function: false,
+        open: OpenConstructs::default(),
+        has_syntax_error: false,
+        settled_unterminated: 0,
+        errors: Vec::new(),
+    };
+    // `advance` is the lexer's one caller, so it's inlined there alone.
+    parser.advance();
+    parser.advance();
+    parser.previous_span = Span::new(0, 0);
+    parser.parse_chunk()
 }
 
-/// Lua needs only one token of lookahead, so `current` and `next` stand in
-/// for a materialized token stream.
+/// Lua needs only one token of lookahead, so `token` and `next` stand in for
+/// a materialized token stream, which measured slower to write and read back.
 #[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the parse")]
-struct Parser<'source> {
-    lexer: Lexer<'source>,
-    source: &'source str,
-    current: Token,
+struct Parser<'ast> {
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    lexer: Lexer<'ast>,
+    token: Token,
     next: Token,
     previous_span: Span,
     version: LuaVersion,
@@ -58,19 +91,11 @@ struct Parser<'source> {
     deepest_level: usize,
     /// The chunk's own block is 1.
     block_depth: u32,
-    /// The links of every binary run being parsed, innermost last. Each run
-    /// takes its own off the end when it closes, so each gets one exact
-    /// allocation however long it grows.
-    binary_links: Vec<BinaryLink>,
-    /// The suffix runs being parsed, kept like `binary_links`.
-    suffixes: Vec<Suffix>,
-    /// The expression lists of two or more being parsed, kept like
-    /// `binary_links`.
-    exprs: Vec<Expression>,
+    scratch: Scratch<'ast>,
     function_scope: FunctionScope,
     has_module_return: bool,
     has_value_exports: bool,
-    exported_names: FxHashSet<CompactString>,
+    exported_names: FxHashSet<&'ast str>,
     /// Whether a `type function` appeared, so its body needs the scope check
     /// the parser can't do without tracking locals.
     has_type_function: bool,
@@ -82,6 +107,32 @@ struct Parser<'source> {
     /// before that statement.
     settled_unterminated: usize,
     errors: Vec<ParseError>,
+}
+
+/// The items of every list being parsed, innermost list last.
+///
+/// Each list takes its own off the end when it closes, so it gets one exact
+/// allocation in the arena however long it grows, and nesting costs no
+/// stack.
+#[derive(Default)]
+struct Scratch<'ast> {
+    stmts: Vec<Statement<'ast>>,
+    exprs: Vec<Expression<'ast>>,
+    binary_links: Vec<BinaryLink<'ast>>,
+    suffixes: Vec<Suffix<'ast>>,
+    fields: Vec<Field<'ast>>,
+    vars: Vec<Var<'ast>>,
+    names: Vec<Name<'ast>>,
+    params: Vec<Parameter<'ast>>,
+    attributed_names: Vec<AttributedName<'ast>>,
+    attributes: Vec<FunctionAttribute<'ast>>,
+    elseif_clauses: Vec<ElseIfClause<'ast>>,
+    elseif_exprs: Vec<ElseIfExprClause<'ast>>,
+    segments: Vec<InterpolatedSegment<'ast>>,
+    types: Vec<Type<'ast>>,
+    type_fields: Vec<TypeField<'ast>>,
+    function_type_params: Vec<FunctionTypeParam<'ast>>,
+    generic_params: Vec<GenericTypeParam<'ast>>,
 }
 
 /// A token that closes a construct, or continues it, as `else` does an `if`.
@@ -102,12 +153,12 @@ enum Closer {
 
 impl Closer {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token closes nothing")]
-    const fn of(kind: &TokenKind) -> Option<Self> {
+    const fn of(kind: TokenKind) -> Option<Self> {
         Some(match kind {
             TokenKind::RightParen => Self::Paren,
             TokenKind::RightBracket => Self::Bracket,
             TokenKind::RightBrace => Self::Brace,
-            TokenKind::InterpolatedStringMiddle(_) | TokenKind::InterpolatedStringEnd(_) => {
+            TokenKind::InterpolatedStringMiddle | TokenKind::InterpolatedStringEnd => {
                 Self::StringSegment
             }
             TokenKind::End | TokenKind::Until => Self::BlockEnd,
@@ -180,46 +231,14 @@ struct FunctionScope {
     is_in_loop: bool,
 }
 
-impl<'source> Parser<'source> {
-    /// # Errors
-    ///
-    /// Returns the lexer's refusal of a source too large for `u32` spans.
-    fn new(source: &'source str, version: LuaVersion) -> Result<Self, ParseError> {
-        let mut lexer = Lexer::new(source, version)?;
-        let current = lexer.next_token();
-        let next = lexer.next_token();
-        Ok(Self {
-            lexer,
-            source,
-            current,
-            next,
-            previous_span: Span::new(0, 0),
-            version,
-            nesting_depth: 0,
-            deepest_level: 0,
-            block_depth: 0,
-            binary_links: Vec::new(),
-            suffixes: Vec::new(),
-            exprs: Vec::new(),
-            function_scope: FunctionScope { is_chunk: true, is_vararg: true, is_in_loop: false },
-            has_module_return: false,
-            has_value_exports: false,
-            exported_names: FxHashSet::default(),
-            has_type_function: false,
-            open: OpenConstructs::default(),
-            has_syntax_error: false,
-            settled_unterminated: 0,
-            errors: Vec::new(),
-        })
-    }
-
+impl<'ast> Parser<'ast> {
     /// Nothing is open around the chunk's block, so it reads to the end of
     /// the source, and the lexer is drained by then.
-    fn parse_chunk(mut self) -> (Block, Vec<Comment>, Vec<ParseError>, usize) {
-        let start_span = self.current_span();
+    fn parse_chunk(mut self) -> ParseResult<'ast> {
+        let start_span = self.token.span;
         let block = self.parse_block().unwrap_or(Block {
             span: start_span,
-            stmts: Vec::new(),
+            stmts: List::new(),
             last_stmt: None,
         });
         let (comments, mut errors) = self.lexer.finish();
@@ -228,63 +247,107 @@ impl<'source> Parser<'source> {
             errors = check_type_functions(&block, self.version);
         }
         errors.sort_by_key(|e| e.span.start);
-        (block, comments, errors, self.deepest_level)
-    }
-
-    /// Whether the source between the previous token and the current one
-    /// contains a line break. Drives the 5.1/Luau "ambiguous syntax"
-    /// check for `(` call suffixes.
-    fn has_newline_before_current(&self) -> bool {
-        let between = Span::new(self.previous_span.end, self.current.span.start);
-        self.source
-            .get(Range::<usize>::from(between))
-            .is_some_and(|text| has_line_break(text, self.version))
+        ParseResult {
+            source: self.source,
+            block,
+            comments,
+            errors,
+            nesting_depth: self.deepest_level,
+        }
     }
 
     #[inline]
-    const fn peek(&self) -> &TokenKind {
-        &self.current.kind
+    const fn peek(&self) -> TokenKind {
+        self.token.kind
     }
 
     #[inline]
-    const fn peek_next(&self) -> &TokenKind {
-        &self.next.kind
+    const fn peek_next(&self) -> TokenKind {
+        self.next.kind
     }
 
     #[inline]
-    const fn current_span(&self) -> Span {
-        self.current.span
+    fn is_at(&self, kind: TokenKind) -> bool {
+        self.token.kind == kind
     }
 
     #[inline]
-    const fn is_at_eof(&self) -> bool {
-        matches!(self.peek(), TokenKind::Eof)
+    fn is_at_eof(&self) -> bool {
+        self.is_at(TokenKind::Eof)
     }
 
-    const fn is_at_identifier(&self) -> bool {
-        matches!(self.peek(), TokenKind::Identifier(_))
-    }
-
-    /// Whether the current token is a `kind`, whatever its payload.
     #[inline]
-    fn is_at(&self, kind: &TokenKind) -> bool {
-        mem::discriminant(self.peek()) == mem::discriminant(kind)
+    fn is_at_identifier(&self) -> bool {
+        self.is_at(TokenKind::Identifier)
     }
 
-    /// Consume the current token if it is a `kind`, whatever its payload.
+    /// The current token's text, for a contextual keyword.
     #[inline]
-    fn eat(&mut self, kind: &TokenKind) -> bool {
+    fn current_text(&self) -> &'ast str {
+        self.token.span.text(self.source)
+    }
+
+    /// The next token's text, for a contextual keyword.
+    fn next_text(&self) -> &'ast str {
+        self.next.span.text(self.source)
+    }
+
+    /// Whether the current token is the identifier `text`.
+    #[inline]
+    fn is_at_name(&self, text: &str) -> bool {
+        self.is_at_identifier() && self.current_text() == text
+    }
+
+    /// Out of line, so the lexer it inlines is inlined once.
+    #[inline(never)]
+    fn advance(&mut self) -> Token {
+        let token = self.token;
+        self.previous_span = token.span;
+        self.token = self.next;
+        self.next = self.lexer.next_token();
+        token
+    }
+
+    #[inline]
+    fn advance_span(&mut self) -> Span {
+        self.advance().span
+    }
+
+    /// Consume the current token if it is a `kind`.
+    #[inline]
+    fn eat(&mut self, kind: TokenKind) -> bool {
         let is_at_kind = self.is_at(kind);
         if is_at_kind {
-            self.advance_span();
+            self.advance();
         }
         is_at_kind
     }
 
+    /// Consume the current identifier, number, or string as a leaf. The
+    /// caller has already matched its kind.
     #[inline]
-    fn advance(&mut self) -> Token {
-        self.previous_span = self.current.span;
-        mem::replace(&mut self.current, mem::replace(&mut self.next, self.lexer.next_token()))
+    fn advance_leaf(&mut self) -> Literal<'ast> {
+        let token = self.advance();
+        Literal { text: token.span.text(self.source), span: token.span }
+    }
+
+    #[inline]
+    fn advance_literal(&mut self) -> Box<'ast, Literal<'ast>> {
+        let literal = self.advance_leaf();
+        Box::new_in(literal, self.allocator)
+    }
+
+    /// Consume the current identifier as a name. The caller has already
+    /// matched its kind.
+    #[inline]
+    fn advance_name(&mut self) -> Name<'ast> {
+        let token = self.advance();
+        Name { text: token.span.text(self.source), span: token.span }
+    }
+
+    #[inline]
+    fn alloc<T>(&self, value: T) -> Box<'ast, T> {
+        Box::new_in(value, self.allocator)
     }
 
     /// Whether a syntax error was reported, or a string or block comment cut
@@ -293,8 +356,6 @@ impl<'source> Parser<'source> {
     /// only echo it: a cut-off string took the rest of its line, and a
     /// cut-off comment the rest of the source, often with the closer of what
     /// holds it.
-    ///
-    /// Worked out when asked rather than as each token is consumed.
     #[inline]
     fn is_recovering(&self) -> bool {
         self.has_syntax_error
@@ -302,32 +363,14 @@ impl<'source> Parser<'source> {
                 .lexer
                 .unterminated()
                 .get(self.settled_unterminated)
-                .is_some_and(|span| span.start < self.current.span.start)
-    }
-
-    #[inline]
-    fn advance_span(&mut self) -> Span {
-        self.advance().span
-    }
-
-    /// Consume the current number or string token as a [`Literal`]. The
-    /// caller has already matched its kind.
-    fn advance_literal(&mut self) -> Literal {
-        let token = self.advance();
-        #[expect(clippy::unreachable, reason = "the caller has already matched this token kind")]
-        let (TokenKind::Number(text) | TokenKind::Integer(text) | TokenKind::StringLiteral(text)) =
-            token.kind
-        else {
-            unreachable!("caller matched a literal token kind");
-        };
-        Literal { text, span: token.span }
+                .is_some_and(|span| span.start < self.token.span.start)
     }
 
     /// Consume a token of `kind` and return its span. On a mismatch, record
     /// an "expected X, found Y" error, leave the token in place, and return
     /// its span so parsing can go on.
     #[inline]
-    fn expect(&mut self, kind: &TokenKind) -> Span {
+    fn expect(&mut self, kind: TokenKind) -> Span {
         if self.is_at(kind) { self.advance_span() } else { self.report_expected(kind) }
     }
 
@@ -344,7 +387,7 @@ impl<'source> Parser<'source> {
     /// Close the bracket `opened` and consume its `kind` closer, as
     /// [`Self::expect`] does.
     #[inline]
-    fn expect_closer(&mut self, kind: &TokenKind, opened: Closer) -> Span {
+    fn expect_closer(&mut self, kind: TokenKind, opened: Closer) -> Span {
         self.close(opened);
         if self.is_at(kind) { self.advance_span() } else { self.report_missing_closer(kind) }
     }
@@ -353,7 +396,7 @@ impl<'source> Parser<'source> {
     /// for the missing `kind`, so it closes the bracket too.
     #[cold]
     #[inline(never)]
-    fn report_missing_closer(&mut self, kind: &TokenKind) -> Span {
+    fn report_missing_closer(&mut self, kind: TokenKind) -> Span {
         let span = self.report_expected(kind);
         if matches!(
             self.peek(),
@@ -378,36 +421,35 @@ impl<'source> Parser<'source> {
     /// Consume the current token if it's an identifier. Otherwise record an
     /// "expected identifier" error and leave the token in place.
     #[inline]
-    fn expect_identifier(&mut self) -> Option<Token> {
+    fn expect_identifier(&mut self) -> Option<Name<'ast>> {
         if self.is_at_identifier() {
-            Some(self.advance())
+            Some(self.advance_name())
         } else {
             self.report_expected_identifier();
             None
         }
     }
 
-    /// Like [`Self::expect_identifier`], but a missing name becomes
-    /// [`Self::recovery_identifier`] at the current token.
+    /// Like [`Self::expect_identifier`], but a missing name is an empty one
+    /// at the current token.
     #[inline]
-    fn expect_identifier_recover(&mut self) -> Token {
-        self.expect_identifier().unwrap_or_else(|| Self::recovery_identifier(self.current_span()))
-    }
-
-    /// An identifier with an empty name at `span`, standing in for a missing
-    /// name or an invalid assignment target so parsing can go on.
-    fn recovery_identifier(span: Span) -> Token {
-        Token::new(TokenKind::Identifier(String::new().into()), span)
+    fn expect_identifier_recover(&mut self) -> Name<'ast> {
+        if self.is_at_identifier() {
+            self.advance_name()
+        } else {
+            self.report_expected_identifier();
+            Name { text: "", span: self.token.span }
+        }
     }
 
     /// The message is only built when it's reported.
     #[cold]
     #[inline(never)]
-    fn report_expected(&mut self, kind: &TokenKind) -> Span {
-        let span = self.current_span();
+    fn report_expected(&mut self, kind: TokenKind) -> Span {
+        let span = self.token.span;
         if !self.is_recovering() {
             self.has_syntax_error = true;
-            let message = format!("expected {kind}, found {}", self.peek());
+            let message = format!("expected {kind}, found {}", self.token.display(self.source));
             self.error(span, message);
         }
         span
@@ -418,20 +460,28 @@ impl<'source> Parser<'source> {
     fn report_expected_identifier(&mut self) {
         if !self.is_recovering() {
             self.has_syntax_error = true;
-            let span = self.current_span();
-            let message = format!("expected identifier, found {}", self.peek());
+            let span = self.token.span;
+            let message = format!("expected identifier, found {}", self.token.display(self.source));
             self.error(span, message);
         }
     }
 
     #[cold]
-    fn error(&mut self, span: Span, message: impl Into<String>) {
+    #[inline(never)]
+    fn error<Message>(&mut self, span: Span, message: Message)
+    where
+        Message: Into<String>,
+    {
         self.errors.push(ParseError { span, message: message.into() });
     }
 
     /// Record a syntax error unless one is already being recovered from.
     #[cold]
-    fn syntax_error(&mut self, span: Span, message: impl Into<String>) {
+    #[inline(never)]
+    fn syntax_error<Message>(&mut self, span: Span, message: Message)
+    where
+        Message: Into<String>,
+    {
         if !self.is_recovering() {
             self.has_syntax_error = true;
             self.error(span, message);
@@ -441,19 +491,21 @@ impl<'source> Parser<'source> {
     /// Count one more level of nesting, or at [`MAX_NESTING_DEPTH`], stop
     /// the parse there and return false, leaving the count unchanged.
     #[must_use]
+    #[inline]
     fn enter_depth(&mut self) -> bool {
         // A host-stack budget, independent of target VM compiler limits.
         if self.nesting_depth >= MAX_NESTING_DEPTH {
             self.stop_at_depth_limit();
             return false;
         }
-        self.nesting_depth = self.nesting_depth.saturating_add(1);
+        self.nesting_depth = self.nesting_depth.wrapping_add(1);
         self.deepest_level = self.deepest_level.max(self.nesting_depth);
         true
     }
 
+    #[inline]
     const fn exit_depth(&mut self) {
-        self.nesting_depth = self.nesting_depth.saturating_sub(1);
+        self.nesting_depth = self.nesting_depth.wrapping_sub(1);
     }
 
     /// The cap is fatal: one error at the current token, and the rest of the
@@ -462,7 +514,7 @@ impl<'source> Parser<'source> {
     #[cold]
     #[inline(never)]
     fn stop_at_depth_limit(&mut self) {
-        let span = self.current_span();
+        let span = self.token.span;
         self.syntax_error(
             span,
             format!(
@@ -477,11 +529,13 @@ impl<'source> Parser<'source> {
     /// Start measuring an operand at the current level, returning the
     /// deepest level of the operand around it. Hand that to
     /// [`Self::end_operand`] once the operand is whole.
+    #[inline]
     const fn begin_operand(&mut self) -> usize {
         mem::replace(&mut self.deepest_level, self.nesting_depth)
     }
 
     /// Fold the finished operand's depth into that of the operand around it.
+    #[inline]
     fn end_operand(&mut self, outer_deepest_level: usize) {
         self.deepest_level = self.deepest_level.max(outer_deepest_level);
     }
@@ -494,13 +548,14 @@ impl<'source> Parser<'source> {
     /// On success the parser stands one level in, where the wrapper's other
     /// children go, and the caller steps back to `level` after them.
     #[must_use]
+    #[inline]
     fn enter_wrapper(&mut self, level: usize) -> bool {
         if self.deepest_level >= MAX_NESTING_DEPTH {
             self.stop_at_depth_limit();
             return false;
         }
-        self.deepest_level = self.deepest_level.saturating_add(1);
-        self.nesting_depth = level.saturating_add(1);
+        self.deepest_level = self.deepest_level.wrapping_add(1);
+        self.nesting_depth = level.wrapping_add(1);
         true
     }
 
@@ -516,7 +571,7 @@ impl<'source> Parser<'source> {
             self.skip_to_statement();
             return false;
         }
-        let start = self.current.span.start;
+        let start = self.token.span.start;
         self.has_syntax_error = false;
         self.settled_unterminated =
             self.lexer.unterminated().partition_point(|span| span.start < start);
@@ -533,11 +588,11 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn is_at_reliable_stmt_start(&self) -> bool {
+    const fn is_at_reliable_stmt_start(&self) -> bool {
         let kind = self.peek();
         stmt::is_stmt_start(kind)
-            && (!matches!(kind, TokenKind::Identifier(_) | TokenKind::LeftParen)
-                || self.has_newline_before_current())
+            && (!matches!(kind, TokenKind::Identifier | TokenKind::LeftParen)
+                || self.token.has_line_break_before)
     }
 }
 
@@ -557,10 +612,10 @@ mod tests {
 
     /// The depth the parser counted and the depth of the tree it built.
     fn counted_and_built(source: &str, version: LuaVersion) -> (usize, usize) {
-        let mut parser = Parser::new(source, version).expect("source fits in u32 spans");
-        let block = parser.parse_block().expect("the source is under the depth cap");
-        assert!(parser.errors.is_empty(), "{:?}\n{source}", parser.errors.first());
-        (parser.deepest_level, block_nesting_depth(&block))
+        let allocator = Allocator::new();
+        let result = parse(&allocator, source, version);
+        assert!(result.errors.is_empty(), "{:?}\n{source}", result.errors.first());
+        (result.nesting_depth, block_nesting_depth(&result.block))
     }
 
     #[test]

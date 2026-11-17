@@ -17,7 +17,7 @@ use crate::ParseError;
 /// Run it only on a clean parse, since a recovered AST produces misleading
 /// follow-on errors.
 #[must_use]
-pub fn validate(block: &Block, version: LuaVersion) -> Vec<ParseError> {
+pub fn validate(block: &Block<'_>, version: LuaVersion) -> Vec<ParseError> {
     if version.has_goto() || version.has_read_only_bindings() || version.has_continue() {
         scope::check(block, version)
     } else {

@@ -101,10 +101,11 @@ impl<'ast> GotoTracker<'ast> {
 
     /// Record a label whose scope starts at `active_vars`, solving the gotos
     /// pending in this block with its name.
-    pub(super) fn add_label(&mut self, label: &'ast LabelStatement, active_vars: usize) {
-        let Some(name) = label.name.identifier() else {
+    pub(super) fn add_label(&mut self, label: &'ast LabelStatement<'ast>, active_vars: usize) {
+        let name = label.name.text;
+        if name.is_empty() {
             return;
-        };
+        }
         let function = &mut self.function;
         let block = &mut function.block;
         let is_defined = if self.version.has_label_shadowing() {
@@ -134,10 +135,11 @@ impl<'ast> GotoTracker<'ast> {
 
     /// Record a goto at `active_vars` active variables, a backward jump if
     /// this block already has its label.
-    pub(super) fn add_goto(&mut self, goto: &'ast GotoStatement, active_vars: usize) {
-        let Some(name) = goto.name.identifier() else {
+    pub(super) fn add_goto(&mut self, goto: &'ast GotoStatement<'ast>, active_vars: usize) {
+        let name = goto.name.text;
+        if name.is_empty() {
             return;
-        };
+        }
         let block = &mut self.function.block;
         if !block.labels.contains(name) {
             block

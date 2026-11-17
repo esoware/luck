@@ -9,22 +9,22 @@
 use core::mem;
 
 use luck_ast::{
-    Attribute, AttributedName, Block, Expression, FunctionBody, FunctionDecl, GenericFor,
-    NumericFor, Punctuated, RepeatLoop, Statement, Type, TypeDeclarationValue, Var, Visitor,
+    Attribute, AttributedName, Block, Expression, FunctionBody, FunctionDecl, GenericFor, Name,
+    NumericFor, RepeatLoop, Statement, Type, TypeDeclarationValue, Var, Visitor,
 };
-use luck_token::{LuaVersion, Span, Token};
+use luck_token::{LuaVersion, Span};
 
 use super::continue_until::skipped_local_count;
 use super::gotos::{BlockStart, FunctionGotos, GotoTracker};
 use crate::ParseError;
 
-pub(super) fn check(block: &Block, version: LuaVersion) -> Vec<ParseError> {
+pub(super) fn check(block: &Block<'_>, version: LuaVersion) -> Vec<ParseError> {
     ScopeChecker::run(block, version, false)
 }
 
 /// Report type functions that reference an outer local, a check Luau's parser
 /// makes as it reads the body. `parse` runs this because it tracks no locals.
-pub(crate) fn check_type_functions(block: &Block, version: LuaVersion) -> Vec<ParseError> {
+pub(crate) fn check_type_functions(block: &Block<'_>, version: LuaVersion) -> Vec<ParseError> {
     ScopeChecker::run(block, version, true)
 }
 
@@ -59,13 +59,13 @@ struct ScopeChecker<'ast> {
     errors: Vec<ParseError>,
 }
 
-fn is_readonly_attribute(attribute: &Attribute) -> bool {
-    matches!(attribute.name.identifier(), Some("const" | "close"))
+fn is_readonly_attribute(attribute: &Attribute<'_>) -> bool {
+    matches!(attribute.name.text, "const" | "close")
 }
 
 impl<'ast> ScopeChecker<'ast> {
     fn run(
-        block: &'ast Block,
+        block: &'ast Block<'ast>,
         version: LuaVersion,
         is_type_function_pass: bool,
     ) -> Vec<ParseError> {
@@ -89,9 +89,9 @@ impl<'ast> ScopeChecker<'ast> {
         errors
     }
 
-    fn declare_local(&mut self, token: &'ast Token, is_readonly: bool) {
-        if let Some(name) = token.identifier() {
-            self.push_binding(Some(name), false, is_readonly);
+    fn declare_local(&mut self, name: &Name<'ast>, is_readonly: bool) {
+        if !name.text.is_empty() {
+            self.push_binding(Some(name.text), false, is_readonly);
         }
     }
 
@@ -101,15 +101,15 @@ impl<'ast> ScopeChecker<'ast> {
 
     fn declare_attributed_names(
         &mut self,
-        names: &'ast Punctuated<AttributedName>,
+        names: &'ast [AttributedName<'ast>],
         is_const_stmt: bool,
         is_global: bool,
     ) {
-        for attributed in names.iter() {
+        for attributed in names {
             let is_readonly =
                 is_const_stmt || attributed.attribute.as_deref().is_some_and(is_readonly_attribute);
-            if let Some(name) = attributed.name.identifier() {
-                self.push_binding(Some(name), is_global, is_readonly);
+            if !attributed.name.text.is_empty() {
+                self.push_binding(Some(attributed.name.text), is_global, is_readonly);
             }
         }
     }
@@ -140,10 +140,11 @@ impl<'ast> ScopeChecker<'ast> {
         self.version.has_global() || self.type_function_base > 0 || self.has_skipped_locals
     }
 
-    fn check_name(&mut self, token: &Token, is_write: bool) {
-        let Some(name) = token.identifier() else {
+    fn check_name(&mut self, token: &Name<'_>, is_write: bool) {
+        let name = token.text;
+        if name.is_empty() {
             return;
-        };
+        }
         let index = match self.resolve(name) {
             Resolved::ImplicitGlobal => return,
             Resolved::Undeclared => {
@@ -180,7 +181,7 @@ impl<'ast> ScopeChecker<'ast> {
         }
     }
 
-    fn check_target(&mut self, target: &'ast Var) {
+    fn check_target(&mut self, target: &'ast Var<'ast>) {
         match target {
             Var::Name(token) => self.check_name(token, true),
             // `t.x = 1` and `t[k] = 1` mutate the table, not the binding, and
@@ -203,7 +204,7 @@ impl<'ast> ScopeChecker<'ast> {
     /// end resolves, as if its locals had already closed.
     fn walk_statements(
         &mut self,
-        block: &'ast Block,
+        block: &'ast Block<'ast>,
         is_repeat_body: bool,
         outer_active_vars: usize,
     ) {
@@ -238,7 +239,7 @@ impl<'ast> ScopeChecker<'ast> {
 
     /// The `until` condition sits inside the body's scope, so the body's
     /// locals stay active for it.
-    fn visit_repeat_loop(&mut self, repeat_loop: &'ast RepeatLoop) {
+    fn visit_repeat_loop(&mut self, repeat_loop: &'ast RepeatLoop<'ast>) {
         let start = self.open_block();
         self.walk_statements(&repeat_loop.block, true, start.active_vars());
         let skipped_count =
@@ -255,7 +256,7 @@ impl<'ast> ScopeChecker<'ast> {
         self.close_block(start);
     }
 
-    fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor) {
+    fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor<'ast>) {
         if let Some(annotation) = &numeric_for.type_annotation {
             self.visit_type(annotation);
         }
@@ -271,13 +272,13 @@ impl<'ast> ScopeChecker<'ast> {
         self.close_block(start);
     }
 
-    fn visit_generic_for(&mut self, generic_for: &'ast GenericFor) {
-        for binding in generic_for.names.iter() {
+    fn visit_generic_for(&mut self, generic_for: &'ast GenericFor<'ast>) {
+        for binding in &generic_for.names {
             if let Some(annotation) = &binding.type_annotation {
                 self.visit_type(annotation);
             }
         }
-        for expr in generic_for.exprs.iter() {
+        for expr in &generic_for.exprs {
             self.visit_expr(expr);
         }
         let start = self.open_block();
@@ -289,7 +290,7 @@ impl<'ast> ScopeChecker<'ast> {
         self.close_block(start);
     }
 
-    fn visit_function_decl(&mut self, function_decl: &'ast FunctionDecl) {
+    fn visit_function_decl(&mut self, function_decl: &'ast FunctionDecl<'ast>) {
         let name = &function_decl.name;
         // `function a()` writes the variable; `function a.b.c()` reads it and
         // writes a field.
@@ -309,19 +310,19 @@ impl<'ast> ScopeChecker<'ast> {
 }
 
 impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
-    fn visit_block(&mut self, block: &'ast Block) {
+    fn visit_block(&mut self, block: &'ast Block<'ast>) {
         let start = self.open_block();
         self.walk_statements(block, false, start.active_vars());
         self.close_block(start);
     }
 
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             Statement::Assignment(assignment) => {
-                for v in assignment.values.iter() {
-                    self.visit_expr(v);
+                for value in &assignment.values {
+                    self.visit_expr(value);
                 }
-                for target in assignment.targets.iter() {
+                for target in &assignment.targets {
                     self.check_target(target);
                 }
             }
@@ -340,26 +341,22 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
             }
             Statement::LocalAssignment(local) => {
                 self.walk_attributed_names(&local.names);
-                if let Some(exprs) = &local.exprs {
-                    for expr in exprs.iter() {
-                        self.visit_expr(expr);
-                    }
+                for expr in &local.exprs {
+                    self.visit_expr(expr);
                 }
                 self.declare_attributed_names(&local.names, local.kind.is_const(), false);
             }
             // Lua 5.5
             Statement::GlobalDeclaration(global) => {
-                if let Some(exprs) = &global.exprs {
-                    for expr in exprs.iter() {
-                        self.visit_expr(expr);
-                    }
+                for expr in &global.exprs {
+                    self.visit_expr(expr);
                 }
                 self.declare_attributed_names(&global.names, false, true);
             }
             // Lua 5.5
             Statement::GlobalFunction(global_function) => {
-                if let Some(name) = global_function.name.identifier() {
-                    self.push_binding(Some(name), true, false);
+                if !global_function.name.text.is_empty() {
+                    self.push_binding(Some(global_function.name.text), true, false);
                 }
                 self.visit_function_body(&global_function.body);
             }
@@ -370,7 +367,7 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
             }
             // Luau
             Statement::TypeDeclaration(type_declaration) => {
-                if matches!(type_declaration.type_value, TypeDeclarationValue::TypeFunction(_)) {
+                if matches!(type_declaration.value, TypeDeclarationValue::TypeFunction(_)) {
                     let enclosing = mem::replace(&mut self.type_function_base, self.bindings.len());
                     self.walk_stmt(stmt);
                     self.type_function_base = enclosing;
@@ -390,9 +387,9 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
         }
     }
 
-    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+    fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
         let bindings_base = self.bindings.len();
-        for param in body.params.iter() {
+        for param in &body.params {
             self.declare_local(&param.name, false);
         }
         // 5.5 manual: a vararg's name "denotes a read-only local variable".
@@ -407,20 +404,20 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
         self.bindings.truncate(bindings_base);
     }
 
-    fn visit_expr(&mut self, expr: &'ast Expression) {
-        if let Expression::Name(token) = expr
+    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
+        if let Expression::Name(name) = expr
             && self.checks_reads()
         {
-            self.check_name(token, false);
+            self.check_name(name, false);
         }
         self.walk_expr(expr);
     }
 
     // Types generate no code, so outside the type-function pass a `typeof`
     // doesn't read or write anything.
-    fn visit_type(&mut self, type_value: &'ast Type) {
+    fn visit_type(&mut self, ty: &'ast Type<'ast>) {
         if self.is_type_function_pass {
-            self.walk_type(type_value);
+            self.walk_type(ty);
         }
     }
 }

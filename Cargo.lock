@@ -1042,6 +1042,7 @@ dependencies = [
 name = "luck_parser"
 version = "0.6.0"
 dependencies = [
+ "luck_allocator",
  "luck_ast",
  "luck_lexer",
  "luck_testgen",

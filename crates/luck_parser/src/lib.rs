@@ -1,7 +1,8 @@
 //! # `luck_parser`
 //!
 //! Pratt expression parser with recursive descent statement parsing for Lua
-//! 5.1-5.5 and Luau.
+//! 5.1-5.5 and Luau, which builds a `luck_ast` tree in a `luck_allocator`
+//! arena.
 //!
 //! Every tree it returns, with errors or without, is at most
 //! [`luck_ast::MAX_NESTING_DEPTH`] levels deep, measured as
@@ -13,12 +14,13 @@
 //! # Usage
 //!
 //! ```
+//! use luck_allocator::Allocator;
 //! use luck_token::LuaVersion;
 //!
-//! let result = luck_parser::parse("local x = 1 + 2", LuaVersion::Lua54);
-//! // result.block - the AST
-//! // result.errors - any parse errors
+//! let allocator = Allocator::new();
+//! let result = luck_parser::parse(&allocator, "local x = 1 + 2", LuaVersion::Lua54);
 //! assert!(result.errors.is_empty());
+//! assert_eq!(result.block.stmts.len(), 1);
 //! ```
 
 #![cfg_attr(
