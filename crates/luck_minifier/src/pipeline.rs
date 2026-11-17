@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::{Block, MAX_NESTING_DEPTH};
 use luck_token::{
     Comment, CommentKind, LuaVersion, SourceError, chunk_header, leading_hot_comments,
 };
@@ -41,7 +41,8 @@ pub fn minify<'ast>(
         shebang,
         leading_hot_comments(hot_comments, source).map(|comment| comment.span),
     );
-    minify_tree(allocator, &mut result.block, version, config);
+    let compressor = Compressor::new(allocator, version, *config);
+    minify_tree(compressor, allocator, &mut result.block, version, config);
     let code = luck_codegen::compact(&result.block);
     if output.is_empty() {
         return Ok(code);
@@ -66,7 +67,8 @@ pub fn minify_block<'ast>(
     version: LuaVersion,
     config: &TransformConfig,
 ) -> Result<String, SourceError> {
-    if block_nesting_depth(block) > MAX_NESTING_DEPTH {
+    let mut compressor = Compressor::new(allocator, version, *config);
+    if !compressor.fits_nesting_cap(block) {
         return Err(SourceError {
             span: block.span,
             message: format!(
@@ -74,17 +76,17 @@ pub fn minify_block<'ast>(
             ),
         });
     }
-    minify_tree(allocator, block, version, config);
+    minify_tree(compressor, allocator, block, version, config);
     Ok(luck_codegen::compact(block))
 }
 
 fn minify_tree<'ast>(
+    mut compressor: Compressor<'ast>,
     allocator: &'ast Allocator,
     block: &mut Block<'ast>,
     version: LuaVersion,
     config: &TransformConfig,
 ) {
-    let mut compressor = Compressor::new(allocator, version, *config);
     let mut renamer = Renamer::new(allocator, version);
     let mut lifter = Lifter::new(allocator, version);
     let should_rename = config.rename_locals;

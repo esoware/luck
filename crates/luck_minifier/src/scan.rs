@@ -11,7 +11,8 @@
 use core::{iter, mem};
 
 use luck_ast::{
-    Block, Expression, FunctionBody, LocalAssignment, LocalFunction, Statement, Var, VisitorMut,
+    Block, Expression, FunctionBody, LocalAssignment, LocalFunction, MAX_NESTING_DEPTH, Statement,
+    Var, VisitorMut,
 };
 use luck_token::LuaVersion;
 use rustc_hash::FxHashMap;
@@ -60,13 +61,15 @@ struct NameFacts {
 }
 
 impl<'ast> Scan<'ast> {
+    /// Scans `block`, and says how many levels deep it nests, or
+    /// `MAX_NESTING_DEPTH + 1` for anything deeper, where the scan stops.
     pub(crate) fn run(
         &mut self,
         block: &mut Block<'ast>,
         version: LuaVersion,
         should_find_dead: bool,
         should_find_inlinable: bool,
-    ) {
+    ) -> usize {
         self.entries.clear();
         self.names.clear();
         self.nodes.clear();
@@ -79,9 +82,12 @@ impl<'ast> Scan<'ast> {
             should_find_inlinable,
             owner: None,
             depth: 0,
+            deepest: 0,
         };
         scanner.visit_block(block);
+        let deepest = scanner.deepest;
         self.propagate();
+        deepest
     }
 
     fn facts(&self, name: &str) -> Option<&NameFacts> {
@@ -94,11 +100,14 @@ impl<'ast> Scan<'ast> {
         self.facts(name).is_some_and(|facts| self.is_live_node(facts.node))
     }
 
-    /// The depth of the one read of a local that inlines.
-    pub(crate) fn inline_read_depth(&self, name: &str) -> Option<usize> {
-        self.facts(name)
-            .filter(|facts| facts.reads == 1 && facts.is_declared && !facts.is_shadowed)
-            .map(|facts| facts.read_depth)
+    /// Whether code the round keeps uses `name`, and the depth of its one
+    /// read if it's a local that inlines.
+    pub(crate) fn local(&self, name: &str) -> (bool, Option<usize>) {
+        let Some(facts) = self.facts(name) else {
+            return (false, None);
+        };
+        let is_inlinable = facts.reads == 1 && facts.is_declared && !facts.is_shadowed;
+        (self.is_live_node(facts.node), is_inlinable.then_some(facts.read_depth))
     }
 
     fn entry(&mut self, name: &'ast str) -> usize {
@@ -235,8 +244,10 @@ struct Scanner<'scan, 'ast> {
     should_find_inlinable: bool,
     /// The innermost droppable `local` whose dropped parts the walk is in.
     owner: Option<usize>,
-    /// Levels of nesting open where the walk is.
+    /// Levels of nesting open where the walk is, and the most there have
+    /// been.
     depth: usize,
+    deepest: usize,
 }
 
 impl<'ast> Scanner<'_, 'ast> {
@@ -347,7 +358,8 @@ impl<'ast> Scanner<'_, 'ast> {
 impl<'ast> VisitorMut<'ast> for Scanner<'_, 'ast> {
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
-        true
+        self.deepest = self.deepest.max(self.depth);
+        self.depth <= MAX_NESTING_DEPTH
     }
 
     fn ascend(&mut self) {

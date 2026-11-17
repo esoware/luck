@@ -49,6 +49,16 @@ struct Binding<'ast> {
     last_reference_scope: usize,
 }
 
+/// What the walk knows of a name where it is.
+#[derive(Clone, Copy)]
+struct NameState {
+    /// The innermost binding in scope.
+    innermost: usize,
+    /// The scope of the latest global read, so a run of them in one scope
+    /// records it once.
+    last_global_read_scope: usize,
+}
+
 struct Scope {
     parent: Option<usize>,
     /// One past the last scope inside this one. Scope ids are in preorder,
@@ -79,8 +89,7 @@ pub(crate) struct Renamer<'ast> {
     open_bindings: Vec<usize>,
     open_scope_starts: Vec<usize>,
     name_ids: FxHashMap<&'ast str, usize>,
-    /// Each name's innermost binding in scope where the walk is.
-    innermost: Vec<usize>,
+    names: Vec<NameState>,
     /// Each reference's binding, in walk order.
     resolutions: Vec<usize>,
     /// Each binding and a scope below its own it's read in.
@@ -141,7 +150,7 @@ impl<'ast> Renamer<'ast> {
             open_bindings: Vec::new(),
             open_scope_starts: Vec::new(),
             name_ids: FxHashMap::default(),
-            innermost: Vec::new(),
+            names: Vec::new(),
             resolutions: Vec::new(),
             reference_scopes: Vec::new(),
             global_reads: Vec::new(),
@@ -173,7 +182,7 @@ impl<'ast> Renamer<'ast> {
         self.open_bindings.clear();
         self.open_scope_starts.clear();
         self.name_ids.clear();
-        self.innermost.clear();
+        self.names.clear();
         self.resolutions.clear();
         self.reference_scopes.clear();
         self.global_reads.clear();
@@ -219,18 +228,19 @@ impl<'ast> Renamer<'ast> {
         let start = self.open_scope_starts.pop().unwrap_or(0);
         for binding in self.open_bindings.drain(start..).rev() {
             if let Some(closing) = self.bindings.get(binding)
-                && let Some(innermost) = self.innermost.get_mut(closing.name_id)
+                && let Some(state) = self.names.get_mut(closing.name_id)
             {
-                *innermost = closing.shadowed;
+                state.innermost = closing.shadowed;
             }
         }
     }
 
     fn name_id(&mut self, name: &'ast str) -> usize {
-        let next_id = self.innermost.len();
+        let next_id = self.names.len();
         let id = *self.name_ids.entry(name).or_insert(next_id);
         if id == next_id {
-            self.innermost.push(UNRESOLVED);
+            self.names
+                .push(NameState { innermost: UNRESOLVED, last_global_read_scope: UNRESOLVED });
         }
         id
     }
@@ -247,11 +257,11 @@ impl<'ast> Renamer<'ast> {
         let name_id = self.name_id(name);
         let id = self.bindings.len();
         let scope = self.current_scope;
-        let Some(innermost) = self.innermost.get_mut(name_id) else {
+        let Some(state) = self.names.get_mut(name_id) else {
             return;
         };
-        let shadowed = *innermost;
-        *innermost = id;
+        let shadowed = state.innermost;
+        state.innermost = id;
         self.bindings.push(Binding {
             name,
             name_id,
@@ -305,13 +315,10 @@ impl<'ast> Renamer<'ast> {
     /// The binding a read of the name here reaches.
     fn resolve(&mut self, name_id: usize) -> usize {
         let current_scope = self.current_scope;
-        let Some((id, binding)) = self
-            .innermost
-            .get(name_id)
-            .copied()
-            .and_then(|id| self.bindings.get_mut(id).map(|binding| (id, binding)))
-        else {
-            self.global_reads.push((name_id, current_scope));
+        let Some((id, binding)) = self.names.get(name_id).and_then(|state| {
+            self.bindings.get_mut(state.innermost).map(|binding| (state.innermost, binding))
+        }) else {
+            self.read_globally(name_id);
             return UNRESOLVED;
         };
         binding.references = binding.references.saturating_add(1);
@@ -321,9 +328,19 @@ impl<'ast> Renamer<'ast> {
         }
         // A binding that keeps its name holds that name wherever it's read.
         if binding.kind != BindingKind::Renamable {
-            self.global_reads.push((name_id, current_scope));
+            self.read_globally(name_id);
         }
         id
+    }
+
+    fn read_globally(&mut self, name_id: usize) {
+        let current_scope = self.current_scope;
+        if let Some(state) = self.names.get_mut(name_id)
+            && state.last_global_read_scope != current_scope
+        {
+            state.last_global_read_scope = current_scope;
+            self.global_reads.push((name_id, current_scope));
+        }
     }
 
     /// Luau: a function's signature annotations, before anything the
@@ -395,11 +412,11 @@ impl<'ast> Renamer<'ast> {
 
     /// Sorts and dedups the global reads, and finds each name's run of them.
     fn group_global_reads(&mut self) {
-        let Self { global_reads, choice, innermost, .. } = self;
+        let Self { global_reads, choice, names, .. } = self;
         global_reads.sort_unstable();
         global_reads.dedup();
         choice.read_ranges.clear();
-        choice.read_ranges.resize(innermost.len(), (0, 0));
+        choice.read_ranges.resize(names.len(), (0, 0));
         choice.read_scopes.clear();
         for &(name_id, scope) in &*global_reads {
             let index = choice.read_scopes.len();

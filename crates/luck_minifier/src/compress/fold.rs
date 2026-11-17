@@ -415,8 +415,8 @@ fn extract_string_bytes<'text>(
 
 /// Strings compare by decoded bytes, since `"\65"` and `"A"` are the same string.
 fn fold_equality(lhs: &Expression<'_>, rhs: &Expression<'_>, version: LuaVersion) -> Option<bool> {
-    if let (Some(left), Some(right)) =
-        (extract_string_bytes(lhs, version), extract_string_bytes(rhs, version))
+    if let Some(left) = extract_string_bytes(lhs, version)
+        && let Some(right) = extract_string_bytes(rhs, version)
     {
         return Some(left == right);
     }
@@ -431,8 +431,11 @@ fn fold_concat<'ast>(
     rhs: &Expression<'_>,
     version: LuaVersion,
 ) -> Option<Expression<'ast>> {
-    let mut joined = extract_string_bytes(lhs, version)?.into_owned();
-    joined.extend_from_slice(&extract_string_bytes(rhs, version)?);
+    let left = extract_string_bytes(lhs, version)?;
+    let right = extract_string_bytes(rhs, version)?;
+    let mut joined = Vec::with_capacity(left.len().saturating_add(right.len()));
+    joined.extend_from_slice(&left);
+    joined.extend_from_slice(&right);
     let mut text = String::new();
     encode_string(&joined, &mut text);
     let literal = Literal { text: allocator.alloc_str(&text), span: lhs.span().merge(rhs.span()) };
@@ -448,8 +451,8 @@ fn fold_binary<'ast>(
 ) -> Option<BinaryFold<'ast>> {
     let subtypes = NumberSubtypes::from(version);
     let span = lhs.span().merge(rhs.span());
-    if let (Some(left), Some(right)) =
-        (extract_lua_number(lhs, subtypes), extract_lua_number(rhs, subtypes))
+    if let Some(left) = extract_lua_number(lhs, subtypes)
+        && let Some(right) = extract_lua_number(rhs, subtypes)
     {
         if let Some(value) = fold_numeric(left, op, right, version)
             && let Some(folded) = make_lua_number_expr(allocator, value, subtypes, span)

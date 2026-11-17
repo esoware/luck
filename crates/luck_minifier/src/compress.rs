@@ -20,8 +20,8 @@ use core::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
-    BinaryOp, Block, Expression, FunctionArgs, FunctionBody, Statement, Suffix, SuffixedExpression,
-    TableConstructor, VisitorMut, is_prefix_expr,
+    BinaryOp, Block, Expression, FunctionArgs, FunctionBody, MAX_NESTING_DEPTH, Statement, Suffix,
+    SuffixedExpression, TableConstructor, VisitorMut, block_nesting_depth, is_prefix_expr,
 };
 use luck_token::{LuaVersion, NumberSubtypes};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -47,6 +47,8 @@ pub(crate) struct Compressor<'ast> {
     /// Levels of nesting open where the walk is.
     depth: usize,
     scan: Scan<'ast>,
+    /// Whether `scan` already holds the next walk's facts.
+    is_scanned: bool,
     /// Each inlined local's value, waiting for its one read.
     values: FxHashMap<&'ast str, Value<'ast>>,
     /// Whether a value has landed bare as an operand since the run being
@@ -55,8 +57,10 @@ pub(crate) struct Compressor<'ast> {
     /// The inlined locals taken in by the values landed since the
     /// initializer being walked began.
     landed_locals: usize,
-    /// Each initializer's `landed_locals`, for the `local` being walked.
+    /// Each initializer's `landed_locals`, and each name's scan facts, for
+    /// the `local`s being walked, innermost last.
     landed_counts: Vec<usize>,
+    local_facts: Vec<(bool, Option<usize>)>,
     /// Declared locals and parameters in scope, upvalues included.
     locals: Vec<&'ast str>,
     live_registers: usize,
@@ -84,10 +88,12 @@ impl<'ast> Compressor<'ast> {
             has_changed: false,
             depth: 0,
             scan: Scan::default(),
+            is_scanned: false,
             values: FxHashMap::default(),
             has_bare_operand: false,
             landed_locals: 0,
             landed_counts: Vec::new(),
+            local_facts: Vec::new(),
             locals: Vec::new(),
             live_registers: 0,
             global_names: FxHashSet::default(),
@@ -109,10 +115,23 @@ impl<'ast> Compressor<'ast> {
         has_changed
     }
 
+    /// Whether `block` nests within [`MAX_NESTING_DEPTH`], found by the first
+    /// walk's scan where there is one.
+    pub(crate) fn fits_nesting_cap(&mut self, block: &mut Block<'ast>) -> bool {
+        let should_find_dead = self.config.remove_dead_code;
+        let should_find_inlinable = self.config.inline_locals;
+        if !should_find_dead && !should_find_inlinable {
+            return block_nesting_depth(block) <= MAX_NESTING_DEPTH;
+        }
+        self.is_scanned = true;
+        self.scan.run(block, self.version, should_find_dead, should_find_inlinable)
+            <= MAX_NESTING_DEPTH
+    }
+
     fn walk(&mut self, block: &mut Block<'ast>) -> bool {
         let should_find_dead = self.config.remove_dead_code;
         let should_find_inlinable = self.config.inline_locals;
-        if should_find_dead || should_find_inlinable {
+        if (should_find_dead || should_find_inlinable) && !mem::take(&mut self.is_scanned) {
             self.scan.run(block, self.version, should_find_dead, should_find_inlinable);
         }
         self.has_changed = false;

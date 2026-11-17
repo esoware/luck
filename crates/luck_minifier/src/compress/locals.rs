@@ -228,18 +228,41 @@ impl<'ast> Compressor<'ast> {
     /// statement, or in one that gives each name its own value, a name and
     /// its value. Says whether anything of it stays.
     pub(super) fn visit_local(&mut self, stmt: &mut Statement<'ast>) -> bool {
+        // An initializer can hold `local`s of its own, so each list is a
+        // stack that every `local` leaves as it found it.
+        let facts_start = self.local_facts.len();
+        let landed_start = self.landed_counts.len();
+        let is_kept = self.visit_local_from(stmt, facts_start, landed_start);
+        self.local_facts.truncate(facts_start);
+        self.landed_counts.truncate(landed_start);
+        is_kept
+    }
+
+    fn visit_local_from(
+        &mut self,
+        stmt: &mut Statement<'ast>,
+        facts_start: usize,
+        landed_start: usize,
+    ) -> bool {
         let Statement::LocalAssignment(boxed) = stmt else {
             return true;
         };
         let local = &mut **boxed;
         let should_remove_dead = self.config.remove_dead_code;
+        let scan = &self.scan;
+        self.local_facts
+            .extend(local.names.iter().map(|attributed| scan.local(attributed.name.text)));
         let is_dead = should_remove_dead
-            && !local.names.iter().any(|attributed| self.scan.is_live(attributed.name.text));
+            && !self
+                .local_facts
+                .get(facts_start..)
+                .unwrap_or_default()
+                .iter()
+                .any(|&(is_live, _)| is_live);
         if is_dead && unused_local_action(local, self.version) == DeadLocalAction::Remove {
             return false;
         }
         self.walk_attributed_names(&mut local.names);
-        self.landed_counts.clear();
         for expr in &mut local.exprs {
             let outer_landed_locals = mem::replace(&mut self.landed_locals, 0);
             self.visit_expr(expr);
@@ -268,25 +291,33 @@ impl<'ast> Compressor<'ast> {
         }
         let mut kept = 0usize;
         for index in 0..local.names.len() {
-            let (Some(attributed), Some(value), Some(&landed_locals)) =
-                (local.names.get(index), local.exprs.get_mut(index), self.landed_counts.get(index))
+            let (
+                Some(attributed),
+                Some(value),
+                Some(&landed_locals),
+                Some(&(is_live, inline_read_depth)),
+            ) = (
+                local.names.get(index),
+                local.exprs.get_mut(index),
+                self.landed_counts.get(landed_start.saturating_add(index)),
+                self.local_facts.get(facts_start.saturating_add(index)),
+            )
             else {
                 break;
             };
             let name = attributed.name.text;
-            let is_dropped =
-                if should_remove_dead && !self.scan.is_live(name) && is_pure_expr(value) {
-                    true
-                } else if self.config.inline_locals
-                    && let Some(read_depth) = self.scan.inline_read_depth(name)
-                    && can_inline(value, landed_locals, read_depth)
-                {
-                    let locals = landed_locals.saturating_add(1);
-                    self.values.insert(name, Value { expr: value.take(), locals });
-                    true
-                } else {
-                    false
-                };
+            let is_dropped = if should_remove_dead && !is_live && is_pure_expr(value) {
+                true
+            } else if self.config.inline_locals
+                && let Some(read_depth) = inline_read_depth
+                && can_inline(value, landed_locals, read_depth)
+            {
+                let locals = landed_locals.saturating_add(1);
+                self.values.insert(name, Value { expr: value.take(), locals });
+                true
+            } else {
+                false
+            };
             if is_dropped {
                 self.has_changed = true;
             } else {

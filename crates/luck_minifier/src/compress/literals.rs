@@ -42,6 +42,8 @@ impl Literals {
             return false;
         }
         literal.text = allocator.alloc_str(&self.scratch);
+        // Every respelling is already as short as its value gets.
+        self.settled.insert((literal.text.as_ptr().addr(), literal.text.len()));
         true
     }
 
