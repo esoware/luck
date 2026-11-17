@@ -52,7 +52,9 @@ pub use number::{LuaNumber, NumberSubtypes, parse_lua_number};
 pub use op::{Associativity, BinOp, CompoundOp, OperandSide, UnOp};
 pub use source_error::SourceError;
 pub use span::{Span, index_to_offset, offset_to_index};
-pub use string::{decode_string, encode_string, short_string_body, unicode_escape_codepoint};
+pub use string::{
+    decode_string, encode_string, encodes_to_at_least, short_string_body, unicode_escape_codepoint,
+};
 pub use token::{Token, TokenKind};
 pub use version::{LuaVersion, MAX_ACTIVE_LOCALS, StdlibEnvironment};
 pub use whitespace::{

@@ -8,7 +8,7 @@
 
 use luck_allocator::Allocator;
 use luck_ast::Literal;
-use luck_token::{LuaVersion, NumberSubtypes, decode_string, encode_string};
+use luck_token::{LuaVersion, NumberSubtypes, decode_string, encode_string, encodes_to_at_least};
 use rustc_hash::FxHashSet;
 
 use crate::expr::int_to_float;
@@ -62,6 +62,9 @@ impl Literals {
             let Some(bytes) = decode_string(text, version) else {
                 return false;
             };
+            if encodes_to_at_least(&bytes, text.len()) {
+                return false;
+            }
             encode_string(&bytes, respelled);
             true
         })

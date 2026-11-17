@@ -1,7 +1,8 @@
 use alloc::borrow::Cow;
 
 use luck_token::{
-    LuaVersion, decode_string, encode_string, short_string_body, unicode_escape_codepoint,
+    LuaVersion, decode_string, encode_string, encodes_to_at_least, short_string_body,
+    unicode_escape_codepoint,
 };
 
 fn decode(raw: &str) -> Option<Vec<u8>> {
@@ -268,6 +269,30 @@ fn encode_string_round_trips_through_decode_string() {
             "round trip failed for {bytes:?} (encoded {encoded:?})"
         );
     }
+}
+
+#[test]
+fn encodes_to_at_least_never_claims_more_than_the_encoding_holds() {
+    let cases: &[&[u8]] = &[
+        b"",
+        b"hello",
+        b"a\nb\tc\"d\\e",
+        &[0x01, b'2', 0xFF, 0x7F],
+        "\u{e9}\u{6f22}\n\u{1f600}".as_bytes(),
+        &[b'x'; 40],
+        &[0x1A; 12],
+    ];
+    for bytes in cases {
+        let encoded_length = encode(bytes).len();
+        for length in 0..encoded_length.saturating_add(8) {
+            if encodes_to_at_least(bytes, length) {
+                assert!(encoded_length >= length, "{bytes:?} {length}");
+            }
+        }
+        assert!(encodes_to_at_least(bytes, bytes.len() + 2), "{bytes:?}");
+    }
+    assert!(encodes_to_at_least(&[0x1A; 12], 14 + 12), "every escape counts");
+    assert!(!encodes_to_at_least(b"hello", 8), "nothing in it is escaped");
 }
 
 #[test]
