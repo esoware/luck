@@ -9,7 +9,7 @@ use std::{env, thread};
 
 use globset::GlobSet;
 use ignore::{DirEntry, WalkBuilder, WalkState};
-use luck_allocator::{Allocator, AllocatorPool};
+use luck_allocator::{Allocator, AllocatorPool, ThreadAllocators};
 use luck_ast::MIN_STACK_BYTES;
 use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_config::{CONFIG_FILE_NAME, Project, ProjectFilter, find_config, glob_set};
@@ -37,11 +37,11 @@ pub(crate) fn existing_file(input: &str) -> Result<&Path, Exit> {
     if path.is_file() { Ok(path) } else { Err(usage_error(format!("file not found: `{input}`"))) }
 }
 
-/// An arena for each thread the machine runs at once, since the bundler reads
-/// modules on one thread per arena. An arena no reader takes costs nothing.
-pub(crate) fn bundle_arenas() -> Vec<Allocator> {
-    let thread_count = thread::available_parallelism().map_or(1, NonZero::get);
-    iter::repeat_with(Allocator::new).take(thread_count).collect()
+/// The arenas the bundler reads modules into, each thread of rayon's pool its
+/// own, once that pool is built with the stack a deep module needs.
+pub(crate) fn bundle_arenas() -> ThreadAllocators {
+    let _already_built = ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global();
+    ThreadAllocators::new()
 }
 
 /// How `bundle` and `graph` resolve and read modules: as `project` says, with

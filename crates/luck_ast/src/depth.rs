@@ -31,10 +31,10 @@ pub const MAX_NESTING_DEPTH: usize = 2001;
 /// 2 MiB, so give this to every thread that parses, prints, formats,
 /// minifies, analyzes, lints, or bundles, with
 /// `std::thread::Builder::stack_size`. The linter runs a large file's rules
-/// on rayon's pool, so build that with `ThreadPoolBuilder::stack_size` too.
-/// `luck_lsp` serves requests on the thread that polls it and on tokio's
-/// blocking pool, which takes it from `Builder::thread_stack_size`.
-/// `luck_bundler` starts its own threads with it.
+/// on rayon's pool, and `luck_bundler` reads modules there, so build that
+/// with `ThreadPoolBuilder::stack_size` too. `luck_lsp` serves requests on
+/// the thread that polls it and on tokio's blocking pool, which takes it from
+/// `Builder::thread_stack_size`.
 ///
 /// A stack is reserved address space, and a thread takes memory only for the
 /// pages it touches.

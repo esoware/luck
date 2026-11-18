@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use clap::Args;
-use luck_allocator::Allocator;
+use luck_allocator::ThreadAllocators;
 use luck_bundler::{bundle, bundle_minified};
 use luck_config::{BuildConfig, Project, check_output_paths, find_config};
 use luck_core::Diagnostic;
@@ -171,7 +171,7 @@ impl BuildArgs {
     /// keeps watching.
     fn build_for_watch(
         &self,
-        arenas: &mut [Allocator],
+        arenas: &mut ThreadAllocators,
         verbosity: Verbosity,
     ) -> Result<Vec<PathBuf>, Exit> {
         let Ok(config_path) = self.config_path() else {
@@ -210,16 +210,14 @@ impl BuildArgs {
     /// replace a bundled file.
     fn build_one(
         &self,
-        arenas: &mut [Allocator],
+        arenas: &mut ThreadAllocators,
         project: &Project,
         config: &BuildConfig,
         verbosity: Verbosity,
     ) -> Result<Vec<PathBuf>, BuildFailure> {
         let start = Instant::now();
         // The arenas outlive each build, so a rebuild reuses their memory.
-        for arena in &mut *arenas {
-            arena.reset();
-        }
+        arenas.reset();
         let version = config.target.lua_version();
         let options = project.bundle_options(version);
         let bundle_failure = |errors: Vec<Diagnostic>| {

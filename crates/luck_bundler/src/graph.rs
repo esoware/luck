@@ -1,7 +1,7 @@
 use alloc::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use luck_allocator::Allocator;
+use luck_allocator::ThreadAllocators;
 use luck_core::Diagnostic;
 use luck_resolver::{FileSystem as _, FileSystemOs, ResolveOptions, Resolver, to_slash_lossy};
 use luck_token::{LuaVersion, Span};
@@ -40,61 +40,38 @@ pub struct DependencyGraph<'ast> {
 }
 
 impl<'ast> DependencyGraph<'ast> {
-    /// Reads and parses every module the entry reaches, each into the arena
-    /// of the thread that reads it.
+    /// Reads and parses every module the entry reaches, each on rayon's pool
+    /// into the arena of the thread that reads it.
     ///
-    /// Each arena backs a thread that reads modules and resolves requires,
-    /// the first the calling thread, which reads the entry. Another thread
-    /// starts only when more tasks are queued than the running threads can
-    /// take, so the calling thread does all the work when there's one arena
-    /// or one task at a time. The graph and its diagnostics are the same
-    /// however many arenas there are.
+    /// The calling thread keeps the graph. On a thread of the pool, it runs
+    /// queued modules while it waits, so a pool of one thread reads them all
+    /// there. The graph and its diagnostics are the same however many threads
+    /// read them.
     ///
     /// # Errors
     ///
     /// Returns every error found during discovery, such as unreadable,
     /// oversized, or unparsable files, the entry included, and unresolved or
     /// ambiguous requires.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `arenas` is empty.
     pub fn build(
-        arenas: &'ast mut [Allocator],
+        arenas: &'ast ThreadAllocators,
         entry_path: &Path,
         options: &BundleOptions<'_>,
     ) -> Result<Self, Vec<Diagnostic>> {
-        build_graph(arenas, entry_path, options).1
+        // Emitted paths are made relative to this, so it must be canonical like
+        // the modules' paths.
+        let root = absolute_project_root(options.project_root);
+        let resolver = Resolver::new(ResolveOptions {
+            version: options.version,
+            search_paths: options.search_paths.to_vec(),
+            root: root.clone(),
+        });
+        let reader = Reader::new(options, &root, &resolver);
+        let entry =
+            FileSystemOs.canonicalize(entry_path).unwrap_or_else(|_| entry_path.to_path_buf());
+        let found = discover_reachable(arenas, reader, &entry);
+        number_modules(entry, found, |path| reader.discover(arenas.get(), path))
     }
-}
-
-/// [`DependencyGraph::build`], and the first of `arenas`, which the calling
-/// thread keeps.
-///
-/// # Panics
-///
-/// Panics if `arenas` is empty.
-pub(crate) fn build_graph<'ast>(
-    arenas: &'ast mut [Allocator],
-    entry_path: &Path,
-    options: &BundleOptions<'_>,
-) -> (&'ast Allocator, Result<DependencyGraph<'ast>, Vec<Diagnostic>>) {
-    #[expect(clippy::expect_used, reason = "the caller gives the calling thread an arena")]
-    let (first, spare_arenas) = arenas.split_first_mut().expect("an arena for the calling thread");
-    let allocator: &'ast Allocator = first;
-    // Emitted paths are made relative to this, so it must be canonical like
-    // the modules' paths.
-    let root = absolute_project_root(options.project_root);
-    let resolver = Resolver::new(ResolveOptions {
-        version: options.version,
-        search_paths: options.search_paths.to_vec(),
-        root: root.clone(),
-    });
-    let reader = Reader::new(options, &root, &resolver);
-    let entry = FileSystemOs.canonicalize(entry_path).unwrap_or_else(|_| entry_path.to_path_buf());
-    let mut found = discover_reachable(allocator, spare_arenas, reader, &entry);
-    let graph = number_modules(entry, &mut found, |path| reader.discover(allocator, path));
-    (allocator, graph)
 }
 
 /// Numbers the modules breadth-first from `entry`, in require order.
@@ -108,7 +85,7 @@ pub(crate) fn build_graph<'ast>(
 /// Returns the errors discovery found.
 fn number_modules<'ast>(
     entry: PathBuf,
-    found: &mut FxHashMap<PathBuf, Discovered<'ast>>,
+    mut found: FxHashMap<PathBuf, Discovered<'ast>>,
     mut discover: impl FnMut(&Path) -> Discovered<'ast>,
 ) -> Result<DependencyGraph<'ast>, Vec<Diagnostic>> {
     let mut ids: FxHashMap<PathBuf, ModuleId> = FxHashMap::default();

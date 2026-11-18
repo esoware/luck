@@ -66,9 +66,9 @@ impl BundleArgs {
         let transforms = self.minify_flags.apply_to(project.transforms());
         let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
 
-        let mut arenas = bundle_arenas();
+        let arenas = bundle_arenas();
         if self.minify {
-            let minified = bundle_minified(&mut arenas, entry_path, &options, &transforms)
+            let minified = bundle_minified(&arenas, entry_path, &options, &transforms)
                 .map_err(|errors| fail_with_diags(&errors, version))?;
             check_output_paths(&minified.source_files, self.output.iter()).map_err(usage_error)?;
             if verbosity != Verbosity::Quiet {
@@ -77,7 +77,7 @@ impl BundleArgs {
             return write_output(self.output.as_deref(), &minified.output);
         }
 
-        let result = bundle(&mut arenas, entry_path, &options)
+        let result = bundle(&arenas, entry_path, &options)
             .map_err(|errors| fail_with_diags(&errors, version))?;
 
         check_output_paths(&result.source_files, self.output.iter().chain(&self.line_map))

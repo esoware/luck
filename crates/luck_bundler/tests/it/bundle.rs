@@ -6,14 +6,14 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use luck_allocator::Allocator;
+use luck_allocator::{Allocator, ThreadAllocators};
 use luck_bundler::{BundleOptions, BundleResult, DependencyGraph, DynamicRequire};
 use luck_core::Diagnostic;
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::LuaVersion;
 use tempfile::TempDir;
 
-use crate::common::{arenas, bundle_both};
+use crate::common::{bundle_both, off_pool, on_pool};
 
 fn fixture_directory(dialect: &str, name: &str) -> PathBuf {
     let manifest_directory = env!("CARGO_MANIFEST_DIR");
@@ -916,8 +916,8 @@ require(\"b\")
 /// same directories.
 ///
 /// Each module requires every module of its own directory, the first of the
-/// next, and, when `has_missing_requires`, one that doesn't exist, which is
-/// more than one task resolves, while the entry requires few.
+/// next, and, when `has_missing_requires`, one that doesn't exist, while the
+/// entry requires few.
 ///
 /// # Errors
 ///
@@ -968,14 +968,15 @@ fn threads_sharing_one_resolver_find_what_one_thread_does() {
                 project_root: directory.path(),
                 dynamic_require: DynamicRequire::default(),
             };
-            let one_thread = luck_bundler::bundle(&mut arenas(1), &entry, &options);
+            let bundle = || luck_bundler::bundle(&ThreadAllocators::new(), &entry, &options);
+            let one_thread = on_pool(1, bundle);
             match &one_thread {
                 Ok(bundled) => assert_eq!(bundled.source_files.len(), 161, "{version:?}"),
                 Err(errors) => assert_eq!(codes(errors), ["E004"; 160], "{version:?}"),
             }
             assert_eq!(one_thread.is_err(), has_missing_requires, "{version:?}");
             for _ in 0u8..4 {
-                let threaded = luck_bundler::bundle(&mut arenas(16), &entry, &options);
+                let threaded = on_pool(16, bundle);
                 assert_eq!(format!("{threaded:?}"), format!("{one_thread:?}"), "{version:?}");
             }
         }
@@ -996,18 +997,17 @@ require(\"b\")
         ("b.lua", RETURN_ONE),
     ])
     .expect("project");
-    let mut arenas = arenas(2);
-    let graph = DependencyGraph::build(
-        &mut arenas,
-        &directory.path().join("main.lua"),
-        &BundleOptions {
-            version: LuaVersion::Lua54,
-            search_paths: &["?.lua".to_owned()],
-            project_root: directory.path(),
-            dynamic_require: DynamicRequire::default(),
-        },
-    )
-    .expect("graph failed");
+    let arenas = ThreadAllocators::new();
+    let search_paths = ["?.lua".to_owned()];
+    let options = BundleOptions {
+        version: LuaVersion::Lua54,
+        search_paths: &search_paths,
+        project_root: directory.path(),
+        dynamic_require: DynamicRequire::default(),
+    };
+    let graph =
+        off_pool(|| DependencyGraph::build(&arenas, &directory.path().join("main.lua"), &options))
+            .expect("graph failed");
 
     let relative_paths: Vec<&str> =
         graph.modules.iter().map(|module| module.relative_path.as_str()).collect();

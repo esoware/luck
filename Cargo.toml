@@ -70,6 +70,7 @@ simdutf8              = { version = "0.1.5", features = ["aarch64_neon"] }
 syn                   = { version = "3", default-features = false, features = ["full", "parsing", "printing"] }
 tar                   = "0.4"
 tempfile              = "3"
+thread_local          = "1.1"
 tokio                 = "1"
 toml                  = { version = "1.2", default-features = false, features = ["parse", "serde", "std"] }
 tower-lsp-server      = "0.23"

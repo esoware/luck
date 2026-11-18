@@ -55,8 +55,8 @@ impl GraphArgs {
         let version = target.lua_version();
         let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
 
-        let mut arenas = bundle_arenas();
-        let dependency_graph = DependencyGraph::build(&mut arenas, entry_path, &options)
+        let arenas = bundle_arenas();
+        let dependency_graph = DependencyGraph::build(&arenas, entry_path, &options)
             .map_err(|errors| fail_with_diags(&errors, version))?;
 
         if verbosity != Verbosity::Quiet {

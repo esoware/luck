@@ -38,7 +38,7 @@ luck is a workspace of small crates around one syntax tree. This file covers the
 1. The caller owns an arena and the source text, and both outlive the tree.
 2. `luck_parser` pulls tokens from `luck_lexer` one at a time and builds a `Block` in the arena. A token holds no text, and the lexer keeps comments in a separate list. The tree's leaves borrow their text from the source, and the parser gives each name a `NameIndex` in reading order. The `ParseResult` holds the tree, the comments, every error, and the `TreeCounts` that size the analysis tables.
 3. A stage takes the tree. `luck_codegen` prints it compactly, `luck_minifier` rewrites it in place and prints it with `luck_codegen`, and `luck_formatter` lays it out with its comments. `luck_semantic` resolves its names in one walk and matches globals against a stdlib catalog. `luck_linter` builds its own table of the tree's nodes during that walk and runs its rules over both.
-4. `luck_bundler` parses every module an entry reaches, on one thread per arena. It finds their requires with `luck_semantic`, resolves them with `luck_resolver`, and writes one file whose lazy loader works like the target's own `require`. For a minified bundle, it builds one tree from the modules' trees and minifies that, so no text is parsed twice.
+4. `luck_bundler` parses every module an entry reaches, each as a task on rayon's pool that reports to the one thread that keeps the graph, as `oxc_linter`'s service does. It finds their requires with `luck_semantic`, resolves them with `luck_resolver`, and writes one file whose lazy loader works like the target's own `require`. For a minified bundle, it builds one tree from the modules' trees and minifies that, so no text is parsed twice.
 5. `luck_cli` and `luck_lsp` drive the stages. They load each `luck.json` once into a `luck_config::Project`, ask it for each file's dialect, lint settings, format options, and module resolution, and own the arenas.
 
 ## Arenas
@@ -48,7 +48,7 @@ Every tree lives in a `luck_allocator::Allocator` the caller owns, and every ent
 Three crates manage arenas:
 
 - `luck_cli` runs `lint`, `fmt`, and `check` on rayon's pool. Each file gets an arena from an `AllocatorPool`, and the CLI resets it as soon as the file's work is done.
-- `luck_bundler` takes a slice of arenas, one per discovery thread, the caller's thread included. Each module's source and tree stay in the arena of the thread that read it, and the result borrows none of them.
+- `luck_bundler` takes a `ThreadAllocators`, which gives each thread of rayon's pool that reads a module an arena of its own. Each module's source and tree stay in the arena of the thread that read it, the nodes a bundle builds go in the calling thread's, and the result borrows none of them.
 - `luck_lsp` copies each version of an open document into an arena of its own and shares the parse and analysis there read-only across threads. Once nothing holds a replaced version, the server empties its arena and reuses it.
 
 ## Dialects
@@ -77,7 +77,7 @@ Every traversal recurses on the thread's stack, once per level of nesting, so lu
 
 - The parser refuses the node that would pass the cap with one error that ends the parse, so every tree it returns, with errors or without, fits.
 - `minify_block` and `format_block` return an error for a deeper tree. A minifier rewrite that nests an expression deeper checks that it still fits, and the bundler reports E013 where a module's wrapper would push it past the cap. `compact` takes only trees its callers keep within the cap. So no stage writes output the parser would refuse.
-- `luck_ast::MIN_STACK_BYTES`, 16 MiB, is the stack any stage needs on a tree at the cap. The CLI runs each command on a thread of that size and gives rayon's pool and the language server's tokio threads the same. The bundler starts its discovery threads with it, and code that embeds luck gives it to its own threads. A stack is reserved address space, and only the pages a thread touches take memory.
+- `luck_ast::MIN_STACK_BYTES`, 16 MiB, is the stack any stage needs on a tree at the cap. The CLI runs each command on a thread of that size and gives rayon's pool, where the linter and the bundler run, and the language server's tokio threads the same. Code that embeds luck gives it to its own threads. A stack is reserved address space, and only the pages a thread touches take memory.
 
 ## Output guarantees
 
