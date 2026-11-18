@@ -5,16 +5,16 @@
 use alloc::collections::BTreeMap;
 use core::iter;
 
+use ls_types::{
+    Position, Range, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
+    SemanticTokensLegend, SemanticTokensRangeResult, SemanticTokensResult,
+};
 use luck_ast::{
     ChainHead, Expression, Field, GenericTypeList, Statement, Suffix, SuffixedExpression,
     TableConstructor, Type, TypeDeclarationValue, TypeField, Visit,
 };
 use luck_semantic::{SemanticAnalysis, StdlibEntry, SymbolKind};
-use luck_token::{Span, Token, TokenKind, index_to_offset, offset_to_index};
-use tower_lsp_server::ls_types::{
-    Position, Range, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
-    SemanticTokensLegend, SemanticTokensRangeResult, SemanticTokensResult,
-};
+use luck_token::{Span, Token, TokenKind, index_to_offset};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::identifier;
@@ -155,7 +155,7 @@ fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> Semantic
         data.push(SemanticToken {
             delta_line,
             delta_start,
-            length: utf16_length(document.text(), span),
+            length: document.length(span),
             token_type: classification.token_type,
             token_modifiers_bitset: classification.modifiers,
         });
@@ -687,20 +687,10 @@ const fn member_classify(entry: &StdlibEntry) -> Classification {
     classification
 }
 
-fn utf16_length(source: &str, span: Span) -> u32 {
-    let end = offset_to_index(span.end).min(source.len());
-    source.get(offset_to_index(span.start)..end).map_or(0, |text| {
-        if text.is_ascii() {
-            index_to_offset(text.len())
-        } else {
-            index_to_offset(text.encode_utf16().count())
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
+    use luck_token::offset_to_index;
 
     use super::*;
     use crate::fixtures::document;

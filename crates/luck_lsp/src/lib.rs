@@ -3,8 +3,8 @@
 //! Language Server Protocol implementation for the luck toolchain.
 //!
 //! Capabilities:
-//! - text document sync (open, change, save, close)
-//! - lint diagnostics on open, change, and save, backed by [`luck_linter`]
+//! - text document sync (open, change, close)
+//! - lint diagnostics on open and change, backed by [`luck_linter`]
 //! - formatting + range formatting, backed by [`luck_formatter`]
 //! - hover, completion, signature help, go-to-definition, references,
 //!   rename, document and workspace symbols, code actions (per-diagnostic
@@ -12,35 +12,25 @@
 //!   tokens, document highlights, folding ranges, selection ranges, and
 //!   document links
 //! - custom requests: `luck/syntaxTree`, `luck/fixAllWorkspace`
+//! - positions in UTF-8, UTF-16, or UTF-32, whichever `positionEncoding`
+//!   settles
 //!
-//! Each open document is parsed and analyzed once per version, in an arena
-//! of its own that is freed when the version is replaced or closed, and
-//! every request reads that version's tree and analysis.
+//! One main loop takes the client's messages in order and touches no tree.
+//! Each version of an open document is parsed and analyzed once, in an arena
+//! of its own, by the first job on the worker pool that needs it, and every
+//! request runs on that pool against the version current when it arrived.
+//! A version an edit or a close replaces stops its lint, and a request the
+//! client cancels before it starts never runs. Each project keeps one
+//! resolver per scheme, which the client's file watcher clears.
 //!
-//! `luck lsp` serves it over stdio, or over TCP with `--socket <port>` for
-//! debugging.
+//! [`serve_stdio`] serves over stdio, as `luck lsp` does, [`serve_socket`]
+//! over TCP for debugging, and [`serve`] over any `lsp_server` connection.
 //!
 //! # Usage
 //!
-//! Requests are served on the thread that polls the server, on tokio's
-//! blocking pool, and, for a large file's lint, on rayon's pool, so each
-//! needs [`luck_ast::MIN_STACK_BYTES`]:
-//!
-//! ```no_run
-//! use std::thread;
-//!
-//! use luck_ast::MIN_STACK_BYTES;
-//!
-//! let runtime = tokio::runtime::Builder::new_multi_thread()
-//!     .thread_stack_size(MIN_STACK_BYTES)
-//!     .enable_all()
-//!     .build()?;
-//! let server = thread::Builder::new()
-//!     .stack_size(MIN_STACK_BYTES)
-//!     .spawn(move || runtime.block_on(luck_lsp::serve_stdio()))?;
-//! server.join().expect("the server doesn't panic");
-//! # Ok::<(), std::io::Error>(())
-//! ```
+//! The server starts its own workers with [`luck_ast::MIN_STACK_BYTES`] of
+//! stack. A large file's lint runs on rayon's global pool, so a host builds
+//! that pool with `ThreadPoolBuilder::stack_size(MIN_STACK_BYTES)` first.
 
 #![cfg_attr(
     test,
@@ -53,14 +43,16 @@
 extern crate alloc;
 
 mod analyzed;
-mod backend;
 mod document;
 #[cfg(test)]
 mod fixtures;
 mod line_index;
+mod pool;
 mod providers;
+mod server;
+mod session;
 mod settings;
 mod transport;
 
-pub use backend::{Backend, Notifier};
+pub use server::serve;
 pub use transport::{serve_socket, serve_stdio};

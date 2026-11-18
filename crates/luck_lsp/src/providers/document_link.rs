@@ -1,15 +1,16 @@
 //! A `require("path")` string becomes a clickable link resolved through
-//! [`luck_resolver`], the resolver the bundler uses.
+//! [`luck_resolver`], the resolver the bundler uses, which the project keeps
+//! for every request until the file watcher clears it.
 //!
 //! Links follow Lua template search paths, Luau relative and `@alias` imports,
 //! and the `init` parent-parent rule exactly as a build does.
 
 use std::path::PathBuf;
 
+use ls_types::{DocumentLink, Position, Uri};
 use luck_ast::{Block, Call, Expression, FunctionArgs, GetSpan as _, SuffixedExpression, Visit};
-use luck_resolver::{ResolveOptions, Resolver};
+use luck_resolver::Resolver;
 use luck_token::decode_string;
-use tower_lsp_server::ls_types::{DocumentLink, Position, Uri};
 
 use crate::document::{DocumentState, file_path};
 use crate::providers::cursor::{statements_touching, touches};
@@ -36,17 +37,12 @@ fn collect_links(
     };
     // A document with no `luck.json` above it is under the defaults rooted
     // at its own directory, so bare siblings link as they bundle.
-    let project = &document.settings().project;
     let mut collector = LinkCollector {
         document,
         position,
         offset: position.map(|at| document.offset(at)),
         document_path,
-        resolver: Resolver::new(ResolveOptions {
-            version: document.lua_version(),
-            search_paths: project.search_paths().to_vec(),
-            root: project.root().to_path_buf(),
-        }),
+        resolver: document.settings().project.resolver(document.lua_version()),
         links: Vec::new(),
     };
     collector.visit_block(&document.parse().block);
@@ -60,7 +56,7 @@ struct LinkCollector<'document> {
     /// reads only what does.
     offset: Option<u32>,
     document_path: PathBuf,
-    resolver: Resolver,
+    resolver: &'document Resolver,
     links: Vec<DocumentLink>,
 }
 

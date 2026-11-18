@@ -81,7 +81,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - `luck_allocator`, `luck_token`, `luck_ast_macros`, and `luck_ast_tools` depend on nothing in the workspace. `luck_lexer`, `luck_core`, and `luck_resolver` depend on `luck_token` only, `luck_ast` on `luck_token`, `luck_allocator`, and `luck_ast_macros`, `luck_testgen` on `luck_token` and `luck_ast`, `luck_parser` on `luck_token`, `luck_lexer`, `luck_ast`, and `luck_allocator`, and `luck_codegen` and `luck_semantic` on `luck_token` and `luck_ast`.
 - `luck_codegen`, `luck_formatter`, and `luck_minifier` never depend on `luck_semantic`, `luck_resolver`, `luck_linter`, `luck_bundler`, or `luck_config`.
 - `luck_cli` is the only crate that depends on `luck_lsp`, only `luck_cli`, `luck_lsp`, and the `luck` facade's opt-in `config` feature depend on `luck_config`, nothing depends on `luck_cli` or on the `luck` facade, and only `luck_allocs` turns on `luck_allocator`'s `track_allocations` feature.
-- Only `luck_allocator`, `luck_token`'s `code_buffer.rs`, `luck_lexer`'s `cursor.rs`, `luck_resolver`'s `file_system.rs`, `luck_lsp`'s `analyzed.rs`, `luck_benchmark`, `luck_allocs`'s `heap.rs`, and `luck_conformance`'s `execute.rs` may use `unsafe`.
+- Only `luck_allocator`, `luck_token`'s `code_buffer.rs`, `luck_lexer`'s `cursor.rs`, `luck_resolver`'s `file_system.rs`, `luck_benchmark`, `luck_allocs`'s `heap.rs`, and `luck_conformance`'s `execute.rs` may use `unsafe`.
 - `luck_allocator` is a port of `oxc_allocator`, kept close enough to diff against the commit its `lib.rs` names. It keeps oxc's lints and style, so the naming, comment, lint, copy, and test rules here bind only the files luck added to it, such as `list.rs`.
 - `LuaVersion` and `StdlibEnvironment` in `luck_token` hold what differs between dialects. `LuaTarget` in `luck_core` is the dialect a user names, and each entry point converts it to those two once. The parser, codegen, formatter, and minifier read only `LuaVersion`, so `-t roblox` and `-t luau` minify identically.
 - Check a version's syntax with a `LuaVersion::has_<feature>` predicate, never by comparing `LuaVersion` variants. The only `is_` forms are `is_luau` and `is_roblox`.
@@ -95,7 +95,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - A transform or visitor matches every variant with no wildcard arm, so a new variant makes the compiler point at every consumer. The same goes for a helper that classifies its own enum, such as `category()` or a `has_<feature>` predicate. List every variant, so a new one has to pick its own answer. Where only one variant matters, use `if let` or `matches!` rather than a `match` with a wildcard.
 - An error reaches the user as a `Diagnostic` built with a numbered constructor such as `Diagnostic::e008`, never with an inline code. A lex, parse, or format error is a `SourceError`, and a parse failure is always E008.
 - A token holds no text. No global string interner, because its lock would serialize rayon's workers.
-- Every spawned task has an owner that can stop it. That's a `TaskTracker` with a `CancellationToken`, a `JoinSet`, or a `JoinHandle` someone holds. No detached `tokio::spawn`.
+- Every thread the code starts has an owner that joins it, through a `JoinHandle` or a scope, and every job on the language server's pool stops once its version goes stale or the client cancels its request. Only a test that times a call out leaves a thread behind.
 
 ### Imports
 

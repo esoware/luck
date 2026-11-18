@@ -76,11 +76,14 @@ fn check(
     let findings = match RULES[slot] {
         RuleEntry::Whole(whole_rule) => whole_rule.check(&context),
         RuleEntry::Node(node_rule) => {
-            bus::run(&[node_rule], analysis.nodes().as_slice(), &context).pop().unwrap_or_default()
+            bus::run(&[node_rule], analysis.nodes().as_slice(), &context, &|| false)
+                .and_then(|mut findings| findings.pop())
+                .unwrap_or_default()
         }
         // It reads what the others reported, so the whole lint runs.
         RuleEntry::UnusedLintFilter(_) => {
-            return driver::lint_analyzed(&parse, &analysis, config, FixKind::all())
+            return driver::lint_analyzed(&parse, &analysis, config, FixKind::all(), &|| false)
+                .unwrap_or_default()
                 .into_iter()
                 .filter(|diag| diag.rule == rule.name())
                 .collect();

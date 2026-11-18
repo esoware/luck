@@ -53,7 +53,8 @@ pub fn lint_parsed(
     if !parse.errors.is_empty() {
         return parse_error_diags(parse);
     }
-    lint_analyzed(parse, &analyze(parse, target, config), config, fixes)
+    lint_analyzed(parse, &analyze(parse, target, config), config, fixes, &|| false)
+        .unwrap_or_default()
 }
 
 /// Lints an existing parse and its analysis, so hosts like the LSP don't
@@ -61,7 +62,8 @@ pub fn lint_parsed(
 /// must be the one `analysis` was built with.
 ///
 /// A parse with errors yields one `parse_error` diagnostic per error, and no
-/// rules run.
+/// rules run. `is_cancelled` is asked between rules and between runs of
+/// nodes, and once it says so, the lint stops and returns `None`.
 ///
 /// # Panics
 ///
@@ -73,13 +75,14 @@ pub fn lint_analyzed(
     analysis: &Analysis<'_>,
     config: &LintConfig,
     fixes: FixKind,
-) -> Vec<LintDiagnostic> {
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<LintDiagnostic>> {
     if !parse.errors.is_empty() {
-        return parse_error_diags(parse);
+        return Some(parse_error_diags(parse));
     }
-    let mut diags = run_rules(&LintContext::new(parse, analysis, config, fixes));
+    let mut diags = run_rules(&LintContext::new(parse, analysis, config, fixes), is_cancelled)?;
     diags.sort_by_key(|diag| diag.span.start);
-    diags
+    Some(diags)
 }
 
 /// A parse's semantic analysis, the linter's table of its nodes, which
@@ -158,7 +161,14 @@ fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
 /// Results go back into registry order, so the caller's stable sort breaks
 /// ties the way a sequential run would. A node rule is skipped when none of
 /// its node types occur in this file.
-fn run_rules(context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+///
+/// `None` once `is_cancelled` says so, which it's asked before each
+/// whole-tree rule, between runs of nodes, and before `unused_lint_filter`,
+/// so a stopped lint never passes for a whole one.
+fn run_rules(
+    context: &LintContext<'_>,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<LintDiagnostic>> {
     let (config, directives, nodes) = (context.config, context.directives, context.nodes);
     let severities: Vec<Option<Severity>> =
         RULES.iter().map(|entry| rule_severity(entry.rule(), config)).collect();
@@ -189,16 +199,23 @@ fn run_rules(context: &LintContext<'_>) -> Vec<LintDiagnostic> {
         }
     }
 
-    let check_whole = |&(slot, rule): &(usize, &dyn WholeRule)| (slot, rule.check(context));
-    let ast_nodes = nodes.as_slice();
-    let (node_results, whole_results): (_, Vec<_>) = if ast_nodes.len() < bus::MIN_PARALLEL_NODES {
-        (bus::run(&node_rules, ast_nodes, context), whole_rules.iter().map(check_whole).collect())
-    } else {
-        rayon::join(
-            || bus::run_in_parallel(&node_rules, ast_nodes, context),
-            || whole_rules.par_iter().map(check_whole).collect(),
-        )
+    let check_whole = |&(slot, rule): &(usize, &dyn WholeRule)| {
+        (!is_cancelled()).then(|| (slot, rule.check(context)))
     };
+    let ast_nodes = nodes.as_slice();
+    let (bus_results, whole_rule_results): (_, Option<Vec<_>>) =
+        if ast_nodes.len() < bus::MIN_PARALLEL_NODES {
+            (
+                bus::run(&node_rules, ast_nodes, context, is_cancelled),
+                whole_rules.iter().map(check_whole).collect(),
+            )
+        } else {
+            rayon::join(
+                || bus::run_in_parallel(&node_rules, ast_nodes, context, is_cancelled),
+                || whole_rules.par_iter().map(check_whole).collect(),
+            )
+        };
+    let (node_results, whole_results) = (bus_results?, whole_rule_results?);
 
     #[cfg(debug_assertions)]
     bus::assert_dispatch_is_pure(
@@ -229,11 +246,14 @@ fn run_rules(context: &LintContext<'_>) -> Vec<LintDiagnostic> {
     // It reads which `allow`s the other rules' diagnostics met, so it runs
     // last, as it comes last in the registry.
     if let Some((slot, rule)) = unused_lint_filter {
+        if is_cancelled() {
+            return None;
+        }
         let rule_findings = rule.check(context, &used, runs);
         let severity = severities.get(slot).copied().flatten();
         report(slot, rule_findings, severity, directives, None, &mut diags);
     }
-    diags
+    Some(diags)
 }
 
 /// Makes the findings of the rule at `slot` its diagnostics.
@@ -297,6 +317,8 @@ pub(crate) fn rule_severity(rule: &dyn Rule, config: &LintConfig) -> Option<Seve
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
     use luck_token::LuaVersion;
 
     use super::*;
@@ -314,12 +336,16 @@ mod tests {
         let silent = silent();
         let unlinted = analyze(&parse, LuaTarget::Lua54, &silent);
         assert!(unlinted.nodes().as_slice().is_empty());
-        assert_eq!(lint_analyzed(&parse, &unlinted, &silent, FixKind::all()), []);
+        assert_eq!(
+            lint_analyzed(&parse, &unlinted, &silent, FixKind::all(), &|| false),
+            Some(Vec::new())
+        );
         let mut one_rule = silent;
         one_rule.rules.set_level("redundant_nil_init", RuleLevel::Warn);
         let linted = analyze(&parse, LuaTarget::Lua54, &one_rule);
         assert!(!linted.nodes().as_slice().is_empty());
-        let diags = lint_analyzed(&parse, &linted, &one_rule, FixKind::all());
+        let diags = lint_analyzed(&parse, &linted, &one_rule, FixKind::all(), &|| false)
+            .expect("nothing cancels it");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
@@ -334,9 +360,52 @@ print(x, y)";
         let silent = silent();
         let analysis = analyze(&parse, LuaTarget::Lua54, &silent);
         assert!(!analysis.nodes().as_slice().is_empty());
-        let diags = lint_analyzed(&parse, &analysis, &silent, FixKind::empty());
+        let diags = lint_analyzed(&parse, &analysis, &silent, FixKind::empty(), &|| false)
+            .expect("nothing cancels it");
         let found: Vec<(&str, u32, Severity)> =
             diags.iter().map(|diag| (diag.rule, diag.span.start, diag.severity)).collect();
         assert_eq!(found, [("redundant_nil_init", 0, Severity::Error)], "{diags:?}");
+    }
+
+    #[test]
+    fn a_cancelled_lint_returns_nothing() {
+        let allocator = Allocator::new();
+        let source = "local x = nil -- luck: deny(redundant_nil_init)";
+        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
+        let silent = silent();
+        let analysis = analyze(&parse, LuaTarget::Lua54, &silent);
+        let cancelled = lint_analyzed(&parse, &analysis, &silent, FixKind::empty(), &|| true);
+        assert_eq!(cancelled, None, "a rule only a directive runs stops too");
+    }
+
+    #[test]
+    fn a_lint_cancelled_before_unused_lint_filter_returns_nothing() {
+        let allocator = Allocator::new();
+        let source = "\
+-- luck: allow(undefined_variable)
+local x = 1
+print(x)";
+        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
+        let questions = |config: &LintConfig| {
+            let analysis = analyze(&parse, LuaTarget::Lua54, config);
+            let asked = AtomicUsize::new(0);
+            let counted = || asked.fetch_add(1, Ordering::Relaxed) == usize::MAX;
+            let whole = lint_analyzed(&parse, &analysis, config, FixKind::empty(), &counted)
+                .expect("nothing cancels it");
+            (asked.load(Ordering::Relaxed), whole)
+        };
+        let config = LintConfig::default();
+        let (asked, whole) = questions(&config);
+        assert!(whole.iter().any(|diag| diag.rule == "unused_lint_filter"), "{whole:?}");
+        let mut without_filter = LintConfig::default();
+        without_filter.rules.set_level("unused_lint_filter", RuleLevel::Off);
+        let (asked_without, _) = questions(&without_filter);
+        assert_eq!(asked, asked_without.saturating_add(1), "one more, just before the filter");
+
+        let analysis = analyze(&parse, LuaTarget::Lua54, &config);
+        let answered = AtomicUsize::new(0);
+        let cancels_last = || answered.fetch_add(1, Ordering::Relaxed).saturating_add(1) == asked;
+        let stopped = lint_analyzed(&parse, &analysis, &config, FixKind::empty(), &cancels_last);
+        assert_eq!(stopped, None, "diagnostics missing the unused `allow` would pass for whole");
     }
 }

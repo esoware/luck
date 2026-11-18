@@ -1,8 +1,8 @@
+use ls_types::{Position, SelectionRange};
 use luck_ast::{
     Block, Expression, GetSpan as _, LastStatement, Statement, SuffixedExpression, Visit,
 };
 use luck_token::{Associativity, Span};
-use tower_lsp_server::ls_types::{Position, SelectionRange};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::{statements_touching, touches};
@@ -113,8 +113,8 @@ impl<'ast> Visit<'ast> for SpanStack {
 
 #[cfg(test)]
 mod tests {
+    use ls_types::Range;
     use luck_core::LuaTarget;
-    use tower_lsp_server::ls_types::Range;
 
     use super::*;
     use crate::fixtures::document;

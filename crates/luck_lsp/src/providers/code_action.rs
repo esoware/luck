@@ -1,15 +1,15 @@
 use core::ops;
 
+use ls_types::{
+    CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
+    CodeActionResponse, Diagnostic, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
+};
 use luck_ast::{Block, Expression, GetSpan as _, LastStatement, Statement, Visit};
 use luck_linter::{Fix, FixKind, LintDiagnostic};
 use luck_token::{Span, has_line_break, is_lua_whitespace, offset_to_index};
 use rustc_hash::FxHashMap;
-use tower_lsp_server::ls_types::{
-    CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
-    CodeActionResponse, Diagnostic, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
-};
 
-use crate::document::{DocumentState, OpenDocument};
+use crate::document::DocumentState;
 
 /// A client drops an action that isn't inside the kind it asked for, and this
 /// most specific kind is inside `source`, `source.fixAll`, and itself.
@@ -287,20 +287,17 @@ fn should_offer_fix_all(context: &CodeActionContext) -> bool {
     })
 }
 
-/// Every included document's fixes, from the lints it last published, or
-/// from a lint where it has published none yet.
-///
-/// A document the project leaves out publishes nothing to fix.
-pub(crate) fn fix_all_open(documents: &[(Uri, OpenDocument)]) -> WorkspaceEdit {
+/// The fixes of every document in `documents`, from the lints of the version
+/// given, the same ones it publishes, so a document the project leaves out
+/// has none.
+pub(crate) fn fix_all<'document, I>(documents: I) -> WorkspaceEdit
+where
+    I: IntoIterator<Item = (&'document Uri, &'document DocumentState, &'document [LintDiagnostic])>,
+{
     let changes = documents
-        .iter()
-        .filter(|(_, open)| open.state.settings().is_included)
-        .filter_map(|(uri, open)| {
-            let document = &open.state;
-            let edits = open.published_lints.as_ref().map_or_else(
-                || all_fix_edits(document, &document.lint()),
-                |lints| all_fix_edits(document, lints),
-            );
+        .into_iter()
+        .filter_map(|(uri, document, lints)| {
+            let edits = all_fix_edits(document, lints);
             (!edits.is_empty()).then(|| (uri.clone(), edits))
         })
         .collect();
@@ -309,11 +306,9 @@ pub(crate) fn fix_all_open(documents: &[(Uri, OpenDocument)]) -> WorkspaceEdit {
 
 #[cfg(test)]
 mod tests {
+    use ls_types::{PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams};
     use luck_core::LuaTarget;
     use luck_linter::{Category, LintConfig, RuleLevel, Severity, TextEdit as LinterTextEdit};
-    use tower_lsp_server::ls_types::{
-        PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams,
-    };
 
     use super::*;
     use crate::fixtures::document_linted_by;
@@ -333,7 +328,7 @@ mod tests {
     /// `text` linted under `config`, and its lints.
     fn linted(text: &str, config: &LintConfig) -> (DocumentState, Vec<LintDiagnostic>) {
         let document = document_linted_by(text, LuaTarget::Lua54, config.clone());
-        let lints = document.lint();
+        let lints = document.lint(&|| false).expect("nothing cancels it");
         (document, lints)
     }
 

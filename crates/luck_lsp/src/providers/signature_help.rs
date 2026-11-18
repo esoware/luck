@@ -1,9 +1,9 @@
-use luck_semantic::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
-use luck_token::index_to_offset;
-use tower_lsp_server::ls_types::{
+use ls_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, Position,
     SignatureHelp, SignatureInformation,
 };
+use luck_semantic::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
+use luck_token::index_to_offset;
 
 use crate::document::DocumentState;
 use crate::providers::cursor::{TextKind, find_call_site_at, text_kind_at};

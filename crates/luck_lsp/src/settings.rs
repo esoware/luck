@@ -1,20 +1,89 @@
-//! Discovery walks up from the document's directory. Results, misses and
-//! configs that don't load included, stay cached until a watched config file
-//! changes.
+//! Discovery walks up from the document's directory.
+//!
+//! Results, misses and configs that don't load included, stay cached until a
+//! watched config file changes. A lookup reads the disk, so only workers make
+//! one.
 
 use alloc::sync::Arc;
 use core::mem;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use luck_config::{CONFIG_FILE_NAME, Editorconfigs, Project, find_config};
-use luck_core::Diagnostic;
+use luck_core::{Diagnostic, LuaTarget};
+use luck_formatter::FormatOptions;
+use luck_linter::LintConfig;
+use luck_resolver::{ResolveOptions, Resolver};
+use luck_token::LuaVersion;
+use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
-use tokio::sync::RwLock;
-use tokio::task::spawn_blocking;
 
-/// The other files whose change can change a document's settings.
-const SETTINGS_FILE_NAMES: [&str; 2] = [".editorconfig", ".luaurc"];
+/// The other file whose change can change a document's settings.
+const EDITORCONFIG_FILE_NAME: &str = ".editorconfig";
+
+/// What a document's path and the project around it fix, which every
+/// version of the document shares until the settings change.
+#[derive(Debug)]
+pub(crate) struct DocumentSettings {
+    pub project: Arc<LoadedProject>,
+    pub target: LuaTarget,
+    /// The project's lint settings, with the overrides the path matches.
+    /// Publishing, code actions, and fix-all all lint with these, so none of
+    /// them fixes a diagnostic the user was never shown.
+    pub lint: Arc<LintConfig>,
+    pub format: FormatOptions,
+    /// Whether the project's `include` and `exclude` take the document in.
+    /// One they leave out gets no diagnostics and no fixes.
+    pub is_included: bool,
+}
+
+/// A project, and the resolvers its files' requires go through, so each
+/// request answers from what the ones before it read.
+#[derive(Debug)]
+pub(crate) struct LoadedProject {
+    project: Project,
+    lua: OnceLock<Resolver>,
+    luau: OnceLock<Resolver>,
+}
+
+impl LoadedProject {
+    pub(crate) const fn new(project: Project) -> Self {
+        Self { project, lua: OnceLock::new(), luau: OnceLock::new() }
+    }
+
+    pub(crate) const fn project(&self) -> &Project {
+        &self.project
+    }
+
+    /// The resolver for a file of `version`. Every Lua version searches the
+    /// same templates, so they share one.
+    pub(crate) fn resolver(&self, version: LuaVersion) -> &Resolver {
+        let resolver = if version.is_luau() { &self.luau } else { &self.lua };
+        resolver.get_or_init(|| {
+            Resolver::new(ResolveOptions {
+                version,
+                search_paths: self.project.search_paths().to_vec(),
+                root: self.project.root().to_path_buf(),
+            })
+        })
+    }
+
+    fn clear_resolvers(&self) {
+        for resolver in [&self.lua, &self.luau].into_iter().filter_map(OnceLock::get) {
+            resolver.clear_cache();
+        }
+    }
+}
+
+/// A `luck.json` that doesn't load, which the first document under it
+/// reports.
+#[derive(Debug)]
+pub(crate) struct ConfigError {
+    pub diag: Diagnostic,
+    /// The cache's [`SettingsCache::generation`] when the lookup read it.
+    pub generation: u64,
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct SettingsCache {
@@ -23,15 +92,20 @@ pub(crate) struct SettingsCache {
     lookups: RwLock<Lookups>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Lookups {
+    /// Bumped by each clear, so a lookup that read the disk before one
+    /// neither keeps nor reports what it read.
+    generation: u64,
     /// Shared by every document without a file path.
-    untitled: Arc<Project>,
+    untitled: Option<Arc<LoadedProject>>,
     /// By the directory a document is in.
-    by_directory: FxHashMap<PathBuf, Arc<Project>>,
+    by_directory: FxHashMap<PathBuf, Arc<LoadedProject>>,
     /// By the path of their `luck.json`, so documents in several of a
     /// project's directories share it.
-    by_config: FxHashMap<PathBuf, Arc<Project>>,
+    by_config: FxHashMap<PathBuf, Arc<LoadedProject>>,
+    /// Every project above, once each.
+    projects: Vec<Arc<LoadedProject>>,
     /// The `.editorconfig` files formatting has read, each read once until a
     /// watched config file changes.
     editorconfigs: Arc<Editorconfigs>,
@@ -43,153 +117,185 @@ struct Lookups {
     broken: Vec<PathBuf>,
 }
 
-impl Default for Lookups {
-    fn default() -> Self {
-        Self {
-            untitled: Arc::new(Project::defaults(PathBuf::from("."))),
-            by_directory: FxHashMap::default(),
-            by_config: FxHashMap::default(),
-            editorconfigs: Arc::default(),
-            config_names: FxHashSet::default(),
-            broken: Vec::new(),
+impl Lookups {
+    fn cached(&self, directory: Option<&Path>) -> Option<&Arc<LoadedProject>> {
+        directory.map_or(self.untitled.as_ref(), |known| self.by_directory.get(known))
+    }
+
+    /// Keeps `project` for documents in `directory`, unless another document
+    /// found the same project meanwhile and kept it, and reported its error.
+    /// The error comes back only with a project kept for the first time.
+    fn keep(
+        &mut self,
+        directory: Option<&Path>,
+        config_path: Option<PathBuf>,
+        project: Arc<LoadedProject>,
+        diag: Option<Diagnostic>,
+    ) -> (Arc<LoadedProject>, Option<Diagnostic>) {
+        let found_meanwhile = match &config_path {
+            Some(config) => self.by_config.get(config),
+            None => self.cached(directory),
+        };
+        if let Some(existing) = found_meanwhile.cloned() {
+            self.remember(directory, &existing);
+            return (existing, None);
+        }
+        let names = project.project().files().iter().filter_map(|file| file.file_name());
+        self.config_names.extend(names.map(OsString::from));
+        if let Some(error) = &diag {
+            let file = PathBuf::from(&error.file_path);
+            self.config_names.extend(file.file_name().map(OsString::from));
+            self.broken.push(file);
+        }
+        if let Some(config) = config_path {
+            self.by_config.insert(config, Arc::clone(&project));
+        }
+        self.projects.push(Arc::clone(&project));
+        self.remember(directory, &project);
+        (project, diag)
+    }
+
+    /// Makes `project` the one documents in `directory` get.
+    fn remember(&mut self, directory: Option<&Path>, project: &Arc<LoadedProject>) {
+        match directory {
+            Some(found) => {
+                self.by_directory.insert(found.to_path_buf(), Arc::clone(project));
+            }
+            None => self.untitled = Some(Arc::clone(project)),
         }
     }
 }
 
-/// A document's project, and why its `luck.json` didn't load the first time
-/// a document asks, so the problem is reported once.
-#[derive(Debug)]
-pub(crate) struct Discovered {
-    pub project: Arc<Project>,
-    pub error: Option<Diagnostic>,
-}
-
 impl SettingsCache {
+    /// The settings of the document at `path`, or of an untitled document,
+    /// and why its `luck.json` doesn't load, if this is the first document
+    /// to ask.
+    pub(crate) fn document_settings(
+        &self,
+        path: Option<&Path>,
+    ) -> (DocumentSettings, Option<ConfigError>) {
+        let (project, error) = self.project_for(path);
+        let editorconfigs = Arc::clone(&self.lookups.read().editorconfigs);
+        let loaded = project.project();
+        let settings = DocumentSettings {
+            project: Arc::clone(&project),
+            target: loaded.target_for(path),
+            lint: loaded.lint_for(path),
+            format: loaded.format_options(path, Some(&editorconfigs)),
+            is_included: path.is_none_or(|file| loaded.filter().is_included(file)),
+        };
+        (settings, error)
+    }
+
     /// The project of the nearest `luck.json` above the document at
     /// `document_path`, or the defaults rooted at its directory when there's
     /// none. A `luck.json` that doesn't load gives the defaults rooted at its
     /// directory, with the error.
-    pub(crate) async fn project_for(&self, document_path: Option<&Path>) -> Discovered {
-        let Some(directory) = document_path.and_then(Path::parent) else {
-            return Discovered {
-                project: Arc::clone(&self.lookups.read().await.untitled),
-                error: None,
-            };
-        };
-        if let Some(project) = self.lookups.read().await.by_directory.get(directory) {
-            return Discovered { project: Arc::clone(project), error: None };
-        }
-        // Discovery stats every directory up to the root, and the defaults'
-        // filter canonicalizes theirs.
-        let search = directory.to_path_buf();
-        let found = spawn_blocking(move || {
-            find_config(&search).ok_or_else(|| Arc::new(Project::defaults(search)))
-        })
-        .await;
-        let config_path = match found {
-            Ok(Ok(config_path)) => config_path,
-            Ok(Err(defaults)) => {
-                let by_directory = &mut self.lookups.write().await.by_directory;
-                by_directory.insert(directory.to_path_buf(), Arc::clone(&defaults));
-                return Discovered { project: defaults, error: None };
+    fn project_for(
+        &self,
+        document_path: Option<&Path>,
+    ) -> (Arc<LoadedProject>, Option<ConfigError>) {
+        let directory = document_path.and_then(Path::parent);
+        let generation = {
+            let lookups = self.lookups.read();
+            if let Some(project) = lookups.cached(directory) {
+                return (Arc::clone(project), None);
             }
-            // A lookup that dies is tried again by the next document.
-            Err(_) => {
-                let project = Arc::clone(&self.lookups.read().await.untitled);
-                return Discovered { project, error: None };
+            lookups.generation
+        };
+        // Discovery stats every directory up to the root, loading reads every
+        // file in the `extends` chain, and the defaults' filter canonicalizes
+        // their root.
+        let config_path = directory.and_then(find_config);
+        let shared = config_path
+            .as_ref()
+            .and_then(|config| self.lookups.read().by_config.get(config).cloned());
+        let (project, diag) = match (shared, &config_path) {
+            (Some(project), _) => (project, None),
+            (None, Some(config)) => match Project::load(config) {
+                Ok(loaded) => (Arc::new(LoadedProject::new(loaded)), None),
+                Err(problem) => {
+                    let root = config.parent().map_or_else(PathBuf::new, Path::to_path_buf);
+                    (Arc::new(LoadedProject::new(Project::defaults(root))), Some(problem))
+                }
+            },
+            (None, None) => {
+                let root = directory.map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+                (Arc::new(LoadedProject::new(Project::defaults(root))), None)
             }
         };
-        let shared = self.lookups.read().await.by_config.get(&config_path).cloned();
-        if let Some(project) = shared {
-            let by_directory = &mut self.lookups.write().await.by_directory;
-            by_directory.insert(directory.to_path_buf(), Arc::clone(&project));
-            return Discovered { project, error: None };
+        let mut lookups = self.lookups.write();
+        if lookups.generation != generation {
+            return (project, None);
         }
-        // Loading reads every file in the `extends` chain.
-        let loaded_path = config_path.clone();
-        let loaded = spawn_blocking(move || match Project::load(&loaded_path) {
-            Ok(project) => (Arc::new(project), None),
-            Err(diag) => {
-                let root = loaded_path.parent().map_or_else(PathBuf::new, Path::to_path_buf);
-                (Arc::new(Project::defaults(root)), Some(diag))
-            }
-        })
-        .await;
-        let Ok((project, error)) = loaded else {
-            let untitled = Arc::clone(&self.lookups.read().await.untitled);
-            return Discovered { project: untitled, error: None };
-        };
-        let mut lookups = self.lookups.write().await;
-        // Another document may have loaded it meanwhile, and reported it.
-        if let Some(known) = lookups.by_config.get(&config_path).cloned() {
-            lookups.by_directory.insert(directory.to_path_buf(), Arc::clone(&known));
-            drop(lookups);
-            return Discovered { project: known, error: None };
-        }
-        let names = project.files().iter().filter_map(|file| file.file_name()).map(OsString::from);
-        lookups.config_names.extend(names);
-        if let Some(diag) = &error {
-            let file = PathBuf::from(&diag.file_path);
-            lookups.config_names.extend(file.file_name().map(OsString::from));
-            lookups.broken.push(file);
-        }
-        lookups.by_config.insert(config_path, Arc::clone(&project));
-        lookups.by_directory.insert(directory.to_path_buf(), Arc::clone(&project));
+        let (kept, reported) = lookups.keep(directory, config_path, project, diag);
         drop(lookups);
-        Discovered { project, error }
+        (kept, reported.map(|problem| ConfigError { diag: problem, generation }))
     }
 
-    pub(crate) async fn editorconfigs(&self) -> Arc<Editorconfigs> {
-        Arc::clone(&self.lookups.read().await.editorconfigs)
+    /// Bumped by each [`clear`](Self::clear).
+    pub(crate) fn generation(&self) -> u64 {
+        self.lookups.read().generation
     }
 
     /// Whether a change to the file at `path` can change a document's
     /// settings.
-    pub(crate) async fn is_settings_file(&self, path: &Path) -> bool {
+    pub(crate) fn is_settings_file(&self, path: &Path) -> bool {
         let Some(name) = path.file_name() else {
             return false;
         };
-        let lookups = self.lookups.read().await;
+        let lookups = self.lookups.read();
         name == CONFIG_FILE_NAME
-            || SETTINGS_FILE_NAMES.iter().any(|settings_name| name == *settings_name)
+            || name == EDITORCONFIG_FILE_NAME
             || lookups.config_names.contains(name)
             || (!lookups.broken.is_empty()
                 && path.extension().is_some_and(|extension| extension == "json"))
     }
 
-    /// Forgets every lookup and every `.editorconfig` read, and returns each
-    /// config file a load error was reported in.
-    pub(crate) async fn clear(&self) -> Vec<PathBuf> {
-        let Lookups { broken, .. } = mem::take(&mut *self.lookups.write().await);
+    /// Forgets every lookup, every `.editorconfig` read, and every resolver,
+    /// and returns each config file a load error was reported in.
+    pub(crate) fn clear(&self) -> Vec<PathBuf> {
+        let mut lookups = self.lookups.write();
+        let generation = lookups.generation.wrapping_add(1);
+        let Lookups { broken, .. } =
+            mem::replace(&mut *lookups, Lookups { generation, ..Lookups::default() });
         broken
+    }
+
+    /// Makes every project's resolvers read the disk again, as a module
+    /// created or deleted, or a `.luaurc` edited, needs.
+    pub(crate) fn clear_resolvers(&self) {
+        for project in &self.lookups.read().projects {
+            project.clear_resolvers();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use core::ptr;
     use std::fs;
-
-    use luck_core::LuaTarget;
 
     use super::*;
 
-    #[tokio::test]
-    async fn a_document_with_no_config_takes_the_defaults_rooted_at_its_directory() {
+    #[test]
+    fn a_document_with_no_config_takes_the_defaults_rooted_at_its_directory() {
         let directory = tempfile::tempdir().expect("tempdir");
         let file = directory.path().join("foo.lua");
         let cache = SettingsCache::default();
-        let Discovered { project, error } = cache.project_for(Some(&file)).await;
+        let (project, error) = cache.project_for(Some(&file));
         assert!(error.is_none());
-        assert_eq!(project.target_for(Some(&file)), LuaTarget::Lua54);
+        assert_eq!(project.project().target_for(Some(&file)), LuaTarget::Lua54);
         if find_config(directory.path()).is_none() {
-            assert_eq!(project.root(), directory.path());
+            assert_eq!(project.project().root(), directory.path());
         }
-        let untitled = cache.project_for(None).await.project;
-        assert_eq!(untitled.target_for(None), LuaTarget::Lua54);
+        let (untitled, _) = cache.project_for(None);
+        assert_eq!(untitled.project().target_for(None), LuaTarget::Lua54);
+        assert!(Arc::ptr_eq(&untitled, &cache.project_for(None).0));
     }
 
-    #[tokio::test]
-    async fn cache_keeps_projects_until_cleared() {
+    #[test]
+    fn cache_keeps_projects_until_cleared() {
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
         fs::write(&config_path, r#"{ "lua": "lua53" }"#).expect("write luck.json");
@@ -198,40 +304,43 @@ mod tests {
         let nested = directory.path().join("sub/nested.lua");
         let cache = SettingsCache::default();
 
-        let project = cache.project_for(Some(&first)).await.project;
-        assert_eq!(project.target_for(Some(&first)), LuaTarget::Lua53);
-        assert!(Arc::ptr_eq(&project, &cache.project_for(Some(&nested)).await.project));
+        let (project, _) = cache.project_for(Some(&first));
+        assert_eq!(project.project().target_for(Some(&first)), LuaTarget::Lua53);
+        assert!(Arc::ptr_eq(&project, &cache.project_for(Some(&nested)).0));
 
         fs::write(&config_path, r#"{ "lua": "lua51" }"#).expect("rewrite luck.json");
-        let cached = cache.project_for(Some(&first)).await.project;
-        assert_eq!(cached.target_for(Some(&first)), LuaTarget::Lua53);
-        cache.clear().await;
-        let reloaded = cache.project_for(Some(&first)).await.project;
-        assert_eq!(reloaded.target_for(Some(&first)), LuaTarget::Lua51);
+        let (cached, _) = cache.project_for(Some(&first));
+        assert_eq!(cached.project().target_for(Some(&first)), LuaTarget::Lua53);
+        let generation = cache.generation();
+        cache.clear();
+        assert_ne!(cache.generation(), generation, "a clear starts a new generation");
+        let (reloaded, _) = cache.project_for(Some(&first));
+        assert_eq!(reloaded.project().target_for(Some(&first)), LuaTarget::Lua51);
     }
 
-    #[tokio::test]
-    async fn a_broken_config_is_reported_once_and_its_files_take_the_defaults() {
+    #[test]
+    fn a_broken_config_is_reported_once_and_its_files_take_the_defaults() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("luck.json"), r#"{ "lua": "lua99" }"#)
             .expect("write luck.json");
         let file = directory.path().join("a.lua");
         let cache = SettingsCache::default();
 
-        let Discovered { project, error } = cache.project_for(Some(&file)).await;
-        let diag = error.expect("the error comes with the first lookup");
-        assert_eq!(diag.code, "E014");
-        assert_eq!(project.target_for(Some(&file)), LuaTarget::Lua54);
-        assert!(cache.project_for(Some(&file)).await.error.is_none(), "reported once");
+        let (project, first_error) = cache.project_for(Some(&file));
+        let error = first_error.expect("the error comes with the first lookup");
+        assert_eq!(error.diag.code, "E014");
+        assert_eq!(error.generation, cache.generation());
+        assert_eq!(project.project().target_for(Some(&file)), LuaTarget::Lua54);
+        assert!(cache.project_for(Some(&file)).1.is_none(), "reported once");
 
-        assert!(cache.is_settings_file(&directory.path().join("other.json")).await);
-        let broken = cache.clear().await;
+        assert!(cache.is_settings_file(&directory.path().join("other.json")));
+        let broken = cache.clear();
         assert_eq!(broken.len(), 1, "{broken:?}");
-        assert!(!cache.is_settings_file(&directory.path().join("other.json")).await);
+        assert!(!cache.is_settings_file(&directory.path().join("other.json")));
     }
 
-    #[tokio::test]
-    async fn a_file_a_project_extends_is_a_settings_file() {
+    #[test]
+    fn a_file_a_project_extends_is_a_settings_file() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("shared.json"), "{}").expect("write shared.json");
         fs::write(directory.path().join("luck.json"), r#"{ "extends": ["shared.json"] }"#)
@@ -239,12 +348,33 @@ mod tests {
         let cache = SettingsCache::default();
         let sourcemap = directory.path().join("sourcemap.json");
         let shared = directory.path().join("shared.json");
-        assert!(!cache.is_settings_file(&shared).await);
+        assert!(!cache.is_settings_file(&shared));
 
-        let _discovered = cache.project_for(Some(&directory.path().join("a.lua"))).await;
-        assert!(cache.is_settings_file(&shared).await);
-        assert!(cache.is_settings_file(&directory.path().join("luck.json")).await);
-        assert!(cache.is_settings_file(&directory.path().join(".editorconfig")).await);
-        assert!(!cache.is_settings_file(&sourcemap).await, "Rojo rewrites it on every change");
+        let _discovered = cache.project_for(Some(&directory.path().join("a.lua")));
+        assert!(cache.is_settings_file(&shared));
+        assert!(cache.is_settings_file(&directory.path().join("luck.json")));
+        assert!(cache.is_settings_file(&directory.path().join(".editorconfig")));
+        assert!(!cache.is_settings_file(&sourcemap), "Rojo rewrites it on every change");
+        assert!(
+            !cache.is_settings_file(&directory.path().join(".luaurc")),
+            "a `.luaurc` changes how requires resolve, not settings"
+        );
+    }
+
+    #[test]
+    fn a_project_resolves_through_one_resolver_until_its_cache_is_cleared() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+        let main = directory.path().join("main.lua");
+        let cache = SettingsCache::default();
+        let (project, _) = cache.project_for(Some(&main));
+        let resolver = project.resolver(LuaVersion::Lua54);
+        assert!(ptr::eq(resolver, project.resolver(LuaVersion::Lua51)));
+        assert!(resolver.resolve(&main, "late").is_err(), "nothing named `late` exists yet");
+
+        fs::write(directory.path().join("late.lua"), "return {}\n").expect("write late.lua");
+        assert!(resolver.resolve(&main, "late").is_err(), "the listing is cached");
+        cache.clear_resolvers();
+        assert!(resolver.resolve(&main, "late").is_ok(), "the cleared resolver reads the disk");
     }
 }

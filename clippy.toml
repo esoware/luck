@@ -24,7 +24,7 @@ disallowed-names = [
 disallowed-types = [
   { path = "std::collections::HashMap", reason = "RandomState makes iteration order differ per run; use rustc_hash::FxHashMap" },
   { path = "std::collections::HashSet", reason = "RandomState makes iteration order differ per run; use rustc_hash::FxHashSet" },
-  { path = "std::sync::Mutex", reason = "poisoning; use parking_lot::Mutex or tokio::sync::Mutex" },
-  { path = "std::sync::RwLock", reason = "poisoning; use parking_lot::RwLock or tokio::sync::RwLock" },
-  { path = "std::sync::Condvar", reason = "use tokio::sync::Notify" },
+  { path = "std::sync::Mutex", reason = "poisoning; use parking_lot::Mutex" },
+  { path = "std::sync::RwLock", reason = "poisoning; use parking_lot::RwLock" },
+  { path = "std::sync::Condvar", reason = "poisoning; use parking_lot::Condvar" },
 ]

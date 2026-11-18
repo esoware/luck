@@ -1,6 +1,6 @@
+use ls_types::FoldingRange;
 use luck_ast::{FunctionBody, GetSpan as _, Statement, TableConstructor, Visit};
 use luck_token::Span;
-use tower_lsp_server::ls_types::FoldingRange;
 
 use crate::document::DocumentState;
 use crate::line_index::Positions;

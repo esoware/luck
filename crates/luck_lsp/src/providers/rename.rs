@@ -7,13 +7,10 @@
 //! anywhere in the document. Refusing is safer than silently capturing a
 //! shadowed name.
 
+use ls_types::{Position, PrepareRenameResponse, RenameParams, TextEdit, WorkspaceEdit};
 use luck_ast::is_valid_identifier_in;
 use luck_semantic::{SymbolId, SymbolKind};
 use luck_token::Span;
-use tower_lsp_server::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
-use tower_lsp_server::ls_types::{
-    Position, PrepareRenameResponse, RenameParams, TextEdit, WorkspaceEdit,
-};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::local_at;
@@ -62,21 +59,20 @@ fn rename_target(
 
 /// # Errors
 ///
-/// Returns an invalid-params error carrying the refusal to show the user when
-/// `params.new_name` could change what the document means.
+/// Returns the refusal to show the user when `params.new_name` could change
+/// what the document means.
 pub(crate) fn rename(
     document: &DocumentState,
     params: &RenameParams,
-) -> JsonRpcResult<Option<WorkspaceEdit>> {
+) -> Result<Option<WorkspaceEdit>, String> {
     let text_document_position = &params.text_document_position;
     let Some((symbol_id, _)) =
-        rename_target(document, document.offset(text_document_position.position))
-            .map_err(JsonRpcError::invalid_params)?
+        rename_target(document, document.offset(text_document_position.position))?
     else {
         return Ok(None);
     };
     let new_name = params.new_name.as_str();
-    validate_new_name(document, new_name).map_err(JsonRpcError::invalid_params)?;
+    validate_new_name(document, new_name)?;
 
     let tree = document.tree();
     let mut spans: Vec<Span> = tree
@@ -125,10 +121,10 @@ fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
-    use tower_lsp_server::ls_types::{
+    use ls_types::{
         Range, TextDocumentIdentifier, TextDocumentPositionParams, Uri, WorkDoneProgressParams,
     };
+    use luck_core::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;
@@ -145,7 +141,7 @@ mod tests {
         line: u32,
         utf16_column: u32,
         new_name: &str,
-    ) -> JsonRpcResult<Option<WorkspaceEdit>> {
+    ) -> Result<Option<WorkspaceEdit>, String> {
         rename(
             document,
             &RenameParams {

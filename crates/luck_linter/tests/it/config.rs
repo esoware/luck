@@ -41,13 +41,15 @@ fn analyze_defines_the_extra_globals_of_its_config() {
     let parse = luck_parser::parse(&allocator, "return vim", LuaVersion::Lua54);
     let config = LintConfig::default();
     let without_vim = analyze(&parse, LuaTarget::Lua54, &config);
-    let flagged = lint_analyzed(&parse, &without_vim, &config, FixKind::empty());
+    let flagged = lint_analyzed(&parse, &without_vim, &config, FixKind::empty(), &|| false)
+        .expect("nothing cancels it");
     assert!(flagged.iter().any(|diag| diag.rule == "undefined_variable"), "{flagged:?}");
 
     let with_vim = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
     let analysis = analyze(&parse, LuaTarget::Lua54, &with_vim);
     assert!(analysis.semantic().is_known_global("vim"));
-    let quiet = lint_analyzed(&parse, &analysis, &with_vim, FixKind::empty());
+    let quiet = lint_analyzed(&parse, &analysis, &with_vim, FixKind::empty(), &|| false)
+        .expect("nothing cancels it");
     assert!(quiet.iter().all(|diag| diag.rule != "undefined_variable"), "{quiet:?}");
 }
 
@@ -57,7 +59,8 @@ fn lint_analyzed_reports_parse_errors_without_running_rules() {
     let parse = luck_parser::parse(&allocator, "local x =", LuaVersion::Lua54);
     let config = LintConfig::default();
     let analysis = analyze(&parse, LuaTarget::Lua54, &config);
-    let diags = lint_analyzed(&parse, &analysis, &config, FixKind::empty());
+    let diags = lint_analyzed(&parse, &analysis, &config, FixKind::empty(), &|| true)
+        .expect("a parse error is reported before any rule could be cancelled");
     assert!(!diags.is_empty(), "{diags:?}");
     assert!(diags.iter().all(|diag| diag.rule == "parse_error"), "{diags:?}");
 }

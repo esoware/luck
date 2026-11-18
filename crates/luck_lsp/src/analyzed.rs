@@ -1,108 +1,79 @@
 #![expect(
-    unsafe_code,
-    reason = "a parse borrows its arena and an analysis its parse, which one value can't say"
+    clippy::mem_forget,
+    reason = "`self_cell!`'s builders forget their drop guard once the cell is built"
 )]
 
-use core::fmt;
-use core::mem::ManuallyDrop;
-use core::ptr::{self, NonNull};
+use alloc::sync::Arc;
+use core::{fmt, mem};
 
 use luck_allocator::Allocator;
 use luck_core::LuaTarget;
 use luck_linter::{Analysis, LintConfig};
 use luck_parser::ParseResult;
 use luck_token::Token;
+use parking_lot::Mutex;
+use self_cell::{MutBorrow, self_cell};
 
-/// A text's arena, its parse there, and the analysis of that parse, which
-/// nothing changes once they're built.
+/// A text, its parse in an arena of its own, and the analysis of that parse,
+/// which nothing changes once they're built.
 ///
-/// The parse and the analysis are lent out only behind `&self`, and the arena
-/// never is, so nothing allocates in it again and every borrow ends before it
-/// drops. The fields drop in order, each before what it borrows.
-pub(crate) struct Analyzed {
-    analysis: Analysis<'static>,
-    parse: ArenaParse,
-    allocator: Allocator,
+/// A parse borrows its arena and an analysis its parse, so they're two cells,
+/// as `oxc_semantic` holds its arena and scoping. The arena sits in a
+/// [`MutBorrow`], which lends it once, to the parse, so nothing can reach it
+/// again from another thread, and the whole is `Sync` with no `unsafe`.
+pub(crate) struct Analyzed(AnalyzedCell);
+
+struct Source {
+    text: Arc<str>,
+    arena: MutBorrow<Arena>,
 }
 
-/// A parse kept in its own arena, where it stays put however the
-/// [`Analyzed`] holding it moves, as the analysis needs it to.
-struct ArenaParse(NonNull<ParseResult<'static>>);
-
-// SAFETY: It owns the parse it points to, as a `Box` would, and a parse is
-// `Send`.
-unsafe impl Send for ArenaParse {}
-
-// SAFETY: `&Self` reaches only `&ParseResult`, and a parse is `Sync`.
-unsafe impl Sync for ArenaParse {}
-
-impl Drop for ArenaParse {
-    fn drop(&mut self) {
-        // SAFETY: The analysis that borrowed the parse dropped before this,
-        // and the arena the parse lives in drops after it.
-        unsafe {
-            ptr::drop_in_place(self.0.as_ptr());
-        }
+self_cell!(
+    struct ParsedCell {
+        owner: Source,
+        #[covariant]
+        dependent: ParseResult,
     }
-}
+);
 
-/// The parts other threads can reach, which makes the impls below hold.
-const _: () = {
-    const fn assert_shareable<T>()
-    where
-        T: Send + Sync,
-    {
+self_cell!(
+    struct AnalyzedCell {
+        owner: ParsedCell,
+        #[covariant]
+        dependent: Analysis,
     }
-    assert_shareable::<ParseResult<'static>>();
-    assert_shareable::<Analysis<'static>>();
-};
-
-// SAFETY: The arena is the one part that isn't `Sync`, and `&Self` never
-// reaches it, only the parse and the analysis, so no two threads can
-// allocate in it. They hold the arena's chunks as a `Box` holds its value,
-// so moving them with it to another thread moves nothing they borrow.
-unsafe impl Sync for Analyzed {}
+);
 
 impl Analyzed {
-    /// Copies the pieces of `text`, joined, into `allocator`, then parses and
-    /// analyzes them there for `target`, with `config`'s extra globals
-    /// defined. The tokens the parse read come back beside it.
-    pub(crate) fn new<const PIECES: usize>(
-        text: [&str; PIECES],
+    /// Parses and analyzes `text` in `arena` for `target`, with `config`'s
+    /// extra globals defined. The tokens the parse read come back beside it.
+    pub(crate) fn new(
+        text: Arc<str>,
         target: LuaTarget,
         config: &LintConfig,
-        allocator: Allocator,
+        arena: Arena,
     ) -> (Self, Vec<Token>) {
-        // SAFETY: What's built here lives in the arena's chunks, which stay
-        // where they are when `allocator` moves into `Self`, and which drop
-        // only after the parse and the analysis do. Nothing built keeps this
-        // reference to `allocator` itself.
-        let arena: &'static Allocator = unsafe { NonNull::from(&allocator).as_ref() };
-        let source = arena.alloc_concat_strs_array(text);
-        let (parsed, tokens) = luck_parser::parse_with_tokens(arena, source, target.lua_version());
-        let parse = NonNull::from(arena.alloc(ManuallyDrop::new(parsed))).cast::<ParseResult<'_>>();
-        // SAFETY: `parse` was just written, and only `ArenaParse` drops it.
-        let analysis = luck_linter::analyze(unsafe { parse.as_ref() }, target, config);
-        (Self { analysis, parse: ArenaParse(parse), allocator }, tokens)
+        let mut tokens = Vec::new();
+        let owner = Source { text, arena: MutBorrow::new(arena) };
+        let parsed = ParsedCell::new(owner, |source| {
+            let lent: &Arena = source.arena.borrow_mut();
+            let (parse, read) =
+                luck_parser::parse_with_tokens(&lent.allocator, &source.text, target.lua_version());
+            tokens = read;
+            parse
+        });
+        let analyzed = AnalyzedCell::new(parsed, |cell| {
+            luck_linter::analyze(cell.borrow_dependent(), target, config)
+        });
+        (Self(analyzed), tokens)
     }
 
-    pub(crate) const fn parse(&self) -> &ParseResult<'_> {
-        // SAFETY: The parse lives until `self` drops, and the borrow shortens
-        // the arena's lifetime to `self`'s.
-        unsafe { self.parse.0.as_ref() }
+    pub(crate) fn parse(&self) -> &ParseResult<'_> {
+        self.0.borrow_owner().borrow_dependent()
     }
 
-    pub(crate) const fn analysis(&self) -> &Analysis<'_> {
-        &self.analysis
-    }
-
-    /// The arena, emptied for another text once what lived in it is gone.
-    pub(crate) fn into_arena(self) -> Allocator {
-        let Self { analysis, parse, mut allocator } = self;
-        drop(analysis);
-        drop(parse);
-        allocator.reset();
-        allocator
+    pub(crate) fn analysis(&self) -> &Analysis<'_> {
+        self.0.borrow_dependent()
     }
 }
 
@@ -112,5 +83,97 @@ impl fmt::Debug for Analyzed {
             .field("parse", self.parse())
             .field("analysis", self.analysis())
             .finish_non_exhaustive()
+    }
+}
+
+/// The arena one version parses into, which goes back to the [`SpareArena`]
+/// emptied once the version drops, on whatever thread drops it last.
+#[derive(Debug)]
+pub(crate) struct Arena {
+    allocator: Allocator,
+    spare: Arc<SpareArena>,
+}
+
+impl Arena {
+    /// The spare's arena, or a new one when there's none to reuse.
+    pub(crate) fn from_spare(spare: &Arc<SpareArena>) -> Self {
+        let allocator = spare.slot.lock().take().unwrap_or_default();
+        Self { allocator, spare: Arc::clone(spare) }
+    }
+}
+
+impl Drop for Arena {
+    fn drop(&mut self) {
+        let mut allocator = mem::take(&mut self.allocator);
+        allocator.reset();
+        let mut slot = self.spare.slot.lock();
+        if slot.is_none() {
+            *slot = Some(allocator);
+        }
+    }
+}
+
+/// The emptied arena of the last version dropped, kept so the next version
+/// parses into memory that's already mapped. A close frees it, so a closed
+/// document's memory doesn't stay with the next.
+#[derive(Debug, Default)]
+pub(crate) struct SpareArena {
+    slot: Mutex<Option<Allocator>>,
+}
+
+impl SpareArena {
+    pub(crate) fn clear(&self) {
+        drop(self.slot.lock().take());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.slot.lock().is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+
+    use super::*;
+
+    fn analyzed(text: &str, spare: &Arc<SpareArena>) -> Analyzed {
+        let config = LintConfig::default();
+        Analyzed::new(Arc::from(text), LuaTarget::Lua54, &config, Arena::from_spare(spare)).0
+    }
+
+    #[test]
+    fn a_dropped_version_leaves_its_arena_to_the_next_and_a_clear_frees_it() {
+        let spare = Arc::new(SpareArena::default());
+        let first = analyzed("local one = 1\n", &spare);
+        assert!(spare.is_empty(), "nothing was dropped yet");
+        drop(first);
+        assert!(!spare.is_empty(), "the first version left its arena");
+        let second = analyzed("local two = 2\n", &spare);
+        assert!(spare.is_empty(), "the second version took it");
+        assert_eq!(second.parse().source, "local two = 2\n");
+        drop(second);
+        spare.clear();
+        assert!(spare.is_empty(), "a clear frees the spare arena");
+    }
+
+    #[test]
+    fn an_analysis_moved_to_another_thread_keeps_its_tree() {
+        let spare = Arc::new(SpareArena::default());
+        let shared = Arc::new(analyzed("local answer = 42", &spare));
+        let reader = Arc::clone(&shared);
+        let names = thread::spawn(move || {
+            let tree = reader.analysis().semantic().scope_tree();
+            tree.symbols()
+                .iter()
+                .map(|symbol| tree.name(symbol.name).to_owned())
+                .collect::<Vec<_>>()
+        })
+        .join()
+        .expect("the reader thread finishes");
+        assert_eq!(names, ["answer"]);
+        drop(shared);
+        assert!(!spare.is_empty(), "the last holder's drop returned the arena");
     }
 }

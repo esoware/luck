@@ -1,8 +1,8 @@
+use ls_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Range};
 use luck_linter::{LintDiagnostic, Severity};
-use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Range};
 
 use crate::document::DocumentState;
-use crate::line_index::LineIndex;
+use crate::line_index::{LineIndex, PositionEncoding};
 
 /// The source string in `Diagnostic.source`; VS Code shows it in tooltips.
 const DIAGNOSTIC_SOURCE: &str = "luck";
@@ -24,12 +24,16 @@ pub(crate) fn to_lsp(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<
 
 /// A problem in `text`, a config file that isn't open, such as a `luck.json`
 /// that doesn't load.
-pub(crate) fn config_to_lsp(diag: &luck_core::Diagnostic, text: &str) -> Diagnostic {
+pub(crate) fn config_to_lsp(
+    diag: &luck_core::Diagnostic,
+    text: &str,
+    encoding: PositionEncoding,
+) -> Diagnostic {
     let message = diag
         .help
         .as_ref()
         .map_or_else(|| diag.message.clone(), |help| format!("{}\n\nhelp: {help}", diag.message));
-    let range = LineIndex::new(text).range(text, diag.span);
+    let range = LineIndex::new(text, encoding).range(text, diag.span);
     diagnostic(range, diag.severity, diag.code, message)
 }
 

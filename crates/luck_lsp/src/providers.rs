@@ -24,28 +24,25 @@ pub(crate) mod workspace_symbol;
 /// past it, broken at every level, or holding long runs and lists.
 #[cfg(test)]
 mod tests {
-    use alloc::sync::Arc;
-
+    use ls_types::{
+        CodeActionContext, CodeActionParams, GotoDefinitionParams, PartialResultParams,
+        ReferenceContext, ReferenceParams, RenameParams, TextDocumentIdentifier,
+        TextDocumentPositionParams, Uri, WorkDoneProgressParams,
+    };
     use luck_core::LuaTarget;
     use luck_testgen::{
         broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
     };
     use luck_token::LuaVersion;
-    use tower_lsp_server::ls_types::{
-        CodeActionContext, CodeActionParams, GotoDefinitionParams, PartialResultParams,
-        ReferenceContext, ReferenceParams, RenameParams, TextDocumentIdentifier,
-        TextDocumentPositionParams, Uri, WorkDoneProgressParams,
-    };
 
     use super::*;
-    use crate::document::OpenDocument;
     use crate::fixtures::document;
 
     fn serve_every_request(source: &str, version: LuaVersion) {
         let target = if version.is_luau() { LuaTarget::LuauRoblox } else { LuaTarget::Lua54 };
         let uri: Uri = "file:///main.lua".parse().expect("a valid URI");
         let document = document(source, target);
-        let lints = document.lint();
+        let lints = document.lint(&|| false).expect("nothing cancels it");
         let diagnostics = diagnostics::to_lsp(&document, &lints);
         let full_range = document.full_range();
         let text_document = TextDocumentIdentifier { uri: uri.clone() };
@@ -105,11 +102,8 @@ mod tests {
         let _links = document_link::document_links(&document, &uri);
         let _formatted = document.format(None);
         let _range_formatted = document.format(Some(0..source.len()));
-        let shared = Arc::new(document);
-        let _workspace_symbols =
-            workspace_symbol::workspace_symbols(&[(uri.clone(), Arc::clone(&shared))], "a");
-        let open = OpenDocument { state: shared, published_lints: None };
-        let _fixed = code_action::fix_all_open(&[(uri, open)]);
+        let _workspace_symbols = workspace_symbol::workspace_symbols([(&uri, &document)], "a");
+        let _fixed = code_action::fix_all([(&uri, &document, lints.as_slice())]);
     }
 
     #[test]

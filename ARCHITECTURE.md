@@ -49,7 +49,7 @@ Three crates manage arenas:
 
 - `luck_cli` runs `lint`, `fmt`, and `check` on rayon's pool. Each file gets an arena from an `AllocatorPool`, and the CLI resets it as soon as the file's work is done.
 - `luck_bundler` takes a `ThreadAllocators`, which gives each thread of rayon's pool that reads a module an arena of its own. Each module's source and tree stay in the arena of the thread that read it, the nodes a bundle builds go in the calling thread's, and the result borrows none of them.
-- `luck_lsp` copies each version of an open document into an arena of its own and shares the parse and analysis there read-only across threads. Once nothing holds a replaced version, the server empties its arena and reuses it.
+- `luck_lsp` parses each version of an open document into an arena of its own and shares the parse and analysis there read-only across threads, through `self_cell` with no `unsafe`. The text stays in an `Arc<str>` the version and the parse share. Once nothing holds a replaced version, its arena empties into a spare slot the next version parses into, and a close frees it.
 
 ## Dialects
 
@@ -77,7 +77,7 @@ Every traversal recurses on the thread's stack, once per level of nesting, so lu
 
 - The parser refuses the node that would pass the cap with one error that ends the parse, so every tree it returns, with errors or without, fits.
 - `minify_block` and `format_block` return an error for a deeper tree. A minifier rewrite that nests an expression deeper checks that it still fits, and the bundler reports E013 where a module's wrapper would push it past the cap. `compact` takes only trees its callers keep within the cap. So no stage writes output the parser would refuse.
-- `luck_ast::MIN_STACK_BYTES`, 16 MiB, is the stack any stage needs on a tree at the cap. The CLI runs each command on a thread of that size and gives rayon's pool, where the linter and the bundler run, and the language server's tokio threads the same. Code that embeds luck gives it to its own threads. A stack is reserved address space, and only the pages a thread touches take memory.
+- `luck_ast::MIN_STACK_BYTES`, 16 MiB, is the stack any stage needs on a tree at the cap. The CLI runs each command on a thread of that size and gives rayon's pool, where the linter and the bundler run, the same. The language server starts its own workers with it, and code that embeds luck gives it to its own threads. A stack is reserved address space, and only the pages a thread touches take memory.
 
 ## Output guarantees
 
@@ -104,3 +104,4 @@ Every traversal recurses on the thread's stack, once per level of nesting, so lu
 - **Each tool defines its own config types.** A tool's option types derive their `luck.json` form behind its `serde` feature, which `luck_config` turns on, and check their own values as they deserialize, so the linter rejects a rule name it doesn't have. The extension's schema is generated from these types.
 - **Per-file settings layer.** A file's lint settings are the `lint` section, then the `overrides` its path matches, in order, as oxlint's are. Its format options are the defaults, then `.editorconfig`, then the `format` section, then the matching `overrides`.
 - **A file's dialect comes from its extension and the config.** A `.luau` file takes the `luau` key and any other file the `lua` key, and either key can name any dialect, so a Roblox project that keeps Luau in `.lua` files sets `"lua": "roblox"`. The CLI and the language server both choose through `Project::target_for`.
+- **The language server's main loop touches no tree, as rust-analyzer's doesn't.** It runs on `lsp_server`, applies each notification in the order it arrives, and hands every request to a pool of its own workers with the document versions current at that moment. A version is parsed, analyzed, and linted once, by the first job that needs it, and a job that needs it meanwhile waits. An edit or a close stops the replaced version's lint between rules, and the loop sends a job's answer or diagnostics only if nothing newer replaced what they describe. Requests go ahead of diagnostics, a request the client cancels before it starts never runs, and the client's `positionEncoding` picks UTF-8, UTF-16, or UTF-32 columns.

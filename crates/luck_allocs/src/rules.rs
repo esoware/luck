@@ -32,7 +32,13 @@ pub(crate) fn run(allocator: &mut Allocator, files: &[TestFile]) -> io::Result<(
                 let config = only(rule.name());
                 let arena_bytes_before = allocator.used_bytes();
                 let ((), mut stats) = record_stats_in(allocator, || {
-                    drop(luck_linter::lint_analyzed(&parse, &analysis, &config, FixKind::empty()));
+                    drop(luck_linter::lint_analyzed(
+                        &parse,
+                        &analysis,
+                        &config,
+                        FixKind::empty(),
+                        &|| false,
+                    ));
                 });
                 stats.arena_used_bytes = allocator.used_bytes().saturating_sub(arena_bytes_before);
                 (rule.name(), stats)

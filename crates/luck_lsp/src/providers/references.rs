@@ -2,9 +2,9 @@
 //! a local can't be referenced from another file, so one document is the
 //! whole answer.
 
+use ls_types::{Location, ReferenceParams};
 use luck_semantic::SymbolKind;
 use luck_token::Span;
-use tower_lsp_server::ls_types::{Location, ReferenceParams};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::local_at;
@@ -39,11 +39,11 @@ pub(crate) fn references(document: &DocumentState, params: &ReferenceParams) -> 
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
-    use tower_lsp_server::ls_types::{
+    use ls_types::{
         PartialResultParams, Position, ReferenceContext, TextDocumentIdentifier,
         TextDocumentPositionParams, WorkDoneProgressParams,
     };
+    use luck_core::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;
