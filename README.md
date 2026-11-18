@@ -40,7 +40,7 @@ Every tool is also a library crate (`luck_parser`, `luck_formatter`, `luck_linte
 
 ## Contribute
 
-Issues and pull requests are welcome. `ARCHITECTURE.md` documents the pipeline, crate layout, and design decisions. `AGENTS.md` lists the conventions and invariants the code follows.
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup and pull requests, and `AGENTS.md` lists the conventions and invariants the code follows.
 
 ## License
 
