@@ -34,6 +34,8 @@ schemars   = { workspace = true, optional = true }
 serde      = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The tests write configs as `luck.json` text.
+luck_linter  = { path = ".", features = ["serde"] }
 luck_testgen = { workspace = true }
 
 serde_json = { workspace = true }

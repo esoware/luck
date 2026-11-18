@@ -958,6 +958,7 @@ dependencies = [
  "luck_allocator",
  "luck_ast",
  "luck_core",
+ "luck_linter",
  "luck_parser",
  "luck_semantic",
  "luck_testgen",
