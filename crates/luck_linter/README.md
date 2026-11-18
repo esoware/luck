@@ -1,74 +1,33 @@
 # luck_linter
 
-Rule-based linter for Lua and Luau with scope-aware analysis.
+The Lua and Luau linter, with scope-aware rules, auto-fixes, and suppression comments.
 
 ## Overview
 
-`luck_linter` runs a configurable set of rules against a parsed AST, using semantic analysis from `luck_semantic` for scope-aware diagnostics. Rules can attach safe auto-fixes, which `luck lint --fix` and the language server's code actions apply. Comment directives can suppress a rule or change its severity for one statement, a region, or the whole file.
+`analyze` runs `luck_semantic` over a parse, with the configured extra globals defined, and builds the linter's table of the tree's nodes in the same walk. The rules then read both. Rules that look at one node at a time share a single dispatch over the node table, and rules that need the whole document, such as scope or statement order, run beside it, on rayon's pool for a large file. Each finding becomes a `LintDiagnostic` carrying its rule's name, category, and severity. A parse with errors gives one `parse_error` diagnostic per error and runs no rules.
 
-## Key features
+A diagnostic may carry a `Fix`, a set of text edits. `apply_fixes` applies the edits that don't overlap and returns the fixed source's parse, or `None` when it doesn't parse, so a broken fix never lands.
 
-- **Four categories.** Correctness, Suspicious, Style, and Performance (`Category`). Correctness rules run by default, each at its own severity, and the other three are opt-in. In `luck.json`, `categories` sets a category to `off`, `warn`, or `error`, which every rule in it then reports at, and `rules` sets one rule, which wins over its category.
-- **Auto-fix.** Rules with a safe fix attach `TextEdit`s to their diagnostic, and `apply_fixes` applies them in a single pass, dropping a fix whole when it overlaps another.
-- **Suppression comments.** `-- luck: allow(rule_name)` suppresses the rule for the statement that follows, or for the statement it trails on the same line. `deny(...)` and `warn(...)` set the severity instead, `allow(...) start` and `allow(...) end` bound a region, `-- #luck: allow(...)` covers the whole file, and `*` matches every rule.
-- **Semantic-aware.** Unused/undefined variable, incorrect stdlib usage, and similar rules query `luck_semantic`'s `ScopeTree` and stdlib resolution instead of tracking scopes themselves.
+## Features
 
-## Rules
+- Rules fall into four categories: correctness, suspicious, style, and performance. Only correctness rules run by default. `LintConfig` sets a level per category or per rule, a rule's options, and extra globals.
+- A comment such as `-- luck: allow(unused_variable)` silences a rule for one statement, `deny` and `warn` change its severity, `start` and `end` after it mark a region, and `-- #luck: allow(...)` covers the whole file.
+- The `serde` feature derives `Deserialize` and `Serialize` for `LintConfig`, in the shape of `luck.json`'s `lint` section, and `schemars` derives `JsonSchema` too.
 
-Each rule lives in its own file under `src/rules/`, one module per rule (`unused_variable.rs`, `deprecated.rs`, ...), and is registered in the `RULES` array in `src/rules.rs`. Each rule's category and default severity come from its `impl_rule!` invocation, and `luck_linter::rules()` lists every registered rule.
+## Public surface
 
-`global_usage` warns about the global environment tables: `_G` everywhere, and `shared` only under the Roblox stdlib, where it's a global rather than an ordinary name. `no_implicit_globals` is the separate, broader policy: it flags every unresolved name, stdlib globals included, except configured `extra_globals`. Both are opt-in Style rules.
+- `lint(allocator, source, target, config)` parses and lints.
+- `lint_parsed` lints a parse the caller holds. A host that also keeps the analysis, as the language server does, calls `analyze` and then `lint_analyzed`.
+- `apply_fixes` fixes one round, and `apply_fixes_fixpoint` lints and fixes until no fix is left.
+- `rules()` lists every rule as a `&dyn Rule` with its name, category, default severity, and description, and `unknown_rule_names` checks a config's rule names.
 
-Migrating from 0.2.x: `global_usage` named that broader policy through 0.2 and now has the narrow `_G`/`shared` meaning above. A `luck.json` that enables `global_usage` keeps linting, with the narrower rule. Configs that want the old behavior must rename the override to `no_implicit_globals`. The old name is still registered, so `unknown_rule_names` can't flag it for you.
+```rust
+use luck_allocator::Allocator;
+use luck_core::LuaTarget;
+use luck_linter::LintConfig;
 
-## Architecture
-
-### Pipeline
-
-`lint()` parses the source. If it doesn't parse, each parse error comes back as a `parse_error` diagnostic and no rules run. Otherwise it runs `luck_semantic` analysis to build the scope tree and resolve stdlib symbols, flattens the AST into node and block tables, runs every enabled rule, turns each rule's findings into diagnostics with the rule's name, its category, and its severity from the config override or the rule's default, applies suppression directives, and sorts the diagnostics by position. `lint_target()` takes a `LuaTarget` so Roblox globals resolve, `lint_parsed()` lints a parse the caller already has, and `lint_analyzed()` lints a parse and analysis the caller already has, which the language server uses.
-
-### Rules
-
-Every rule implements the `Rule` trait through `impl_rule!`, which holds its identity: `name`, `category`, `default_severity`, and `description`. It also implements exactly one of two checking traits, and its `RULES` entry (`RuleEntry::Whole` or `RuleEntry::Node`) names which.
-
-Rules that need state across nodes (scope stacks, statement sequences, the scope tree's symbols) implement `WholeRule`, whose `fn check(&self, context: &LintContext<'_>) -> Vec<Finding>` sees the whole document at once. A rule that checks each block's statement list reads `context.blocks` instead of walking the tree, and any other walk goes through `Visitor`. The `LintContext` bundles the block, every block in pre-order, each function's block, the locals declared without a value, the flow facts about locals computed on first use, the semantic analysis, the source text, the comment array, and the resolved config.
-
-Rules whose logic is node-local implement `NodeRule` instead: per-node hooks (`on_stmt`, `on_expr`, `on_table`, which gets every table constructor including `f{...}` arguments, `on_chain`, which gets every run of suffixes and marks whether it's a value or an assignment target, and `on_call`, which gets every call in either position as a `CallSite` that marks which and holds the stdlib entry it calls) that push onto a `Vec<Finding>`, and a `NodeTypeSet` of the `NodeType`s they act on. The `bus` makes one pass over the node table and calls each node rule only for the node types it declared, so every node rule shares a single traversal, and a node rule whose types don't occur in a file is skipped. It resolves each call's callee once for every rule, carrying the chain's resolution from one call to the next, so a chain's calls cost one pass over it. In debug builds the driver re-runs every node rule on every node and asserts the results match, which catches a `node_types` set that misses a type.
-
-A `Finding` holds only what differs per report: the message, span, optional help, and optional fix. The driver turns it into a public `LintDiagnostic` by adding the reporting rule's name and category and the severity the config resolves for it, so a rule can't report under another rule's name or set its own severity.
-
-### Auto-fix
-
-A rule with an always-safe transformation attaches a `Fix` to its finding. `Fix` holds a description and a list of `TextEdit`s, each a span and its replacement. `non_overlapping_edits` drops any fix with an edit that overlaps a fix already taken, so a fix applies whole or not at all, and the language server's fix-all shares it. `apply_fixes` applies what remains in a single pass and returns the original source if the result doesn't parse. `apply_fixes_fixpoint` re-lints and repeats until no fixes remain. Fixes that are sometimes wrong aren't shipped. There is no unsafe-fix tier.
-
-### Module layout
-
-| File | Purpose |
-|------|---------|
-| `lib.rs` | Crate root: the module list and the public re-exports |
-| `driver.rs` | `lint()` and the other entry points, and the rule driver |
-| `rule.rs` | `Rule`, `WholeRule`, and `NodeRule` traits, the `impl_rule!` macro, `ChainPosition`, `CallPosition`, `CallSite`, `LintContext` |
-| `rules.rs` | `RULES` registry, `rules()`, and the registered rule names |
-| `bus.rs` | The single-pass dispatch that drives every `NodeRule` in one shared walk |
-| `nodes.rs` | Flat pre-order node table (`Nodes::collect`) of borrowed `NodeKind` views that the bus walks, with the set of node types present, the pre-order block table whole rules read, the block of the chunk and each function, the `UninitializedLocals` built in the same walk, and `adjacent_stmts` for the rules that match neighboring statements |
-| `node_type.rs` | `NodeType`, one discriminant per statement, last-statement, and expression variant, and the `NodeTypeSet` bitset node rules declare |
-| `cfg.rs` | `FlowGraph`, the control-flow graph of a block that rules ask how it ends and what can run, and the decision points `cyclomatic_complexity` counts |
-| `local_flow.rs` | `LocalFlow`, what each function's control flow says about its locals, shared by the rules that follow a local's value and computed once per chunk |
-| `diagnostic.rs` | `LintDiagnostic`, the `Finding` rules report, `Severity` (`luck_core`'s `DiagnosticSeverity`), `Category`, and the `line_column` positions that messages quote |
-| `config.rs` | `LintConfig`, the `lint` section of `luck.json`: category and rule levels, typed options for the rules that take them, `extra_globals`, and the serde impls that keep option errors specific. The `schemars` feature derives `JsonSchema` for `luck_config`'s schema tests |
-| `suppression.rs` | `-- luck:` directive parsing, shared with `invalid_lint_filter`, and suppression |
-| `fix.rs` | `Fix` and `TextEdit`, and auto-fix application |
-| `format_pattern.rs` | Validators for `string.format`, pattern, `string.pack`, `gsub` replacement, and `os.date` literals |
-| `binary.rs` | Each operator of a binary run with the operands it applies to in the pairs the run groups into, outermost first, shared by the rules that match one operator at a time |
-| `call.rs` | Whether a call still names the host's global, a `root.field(...)` callee's parts, plus positional arguments, argument count, and raw string-argument text, shared by the rules that match calls |
-| `number.rs` | Values and digits of number literals, shared by `for_range`, `reversed_for_loop`, `manual_table_clone`, `table_operations`, `compare_nan`, `divide_by_zero`, `integer_parsing`, and the Roblox rules |
-| `function_node.rs` | `FunctionNode`, one view of function statements and function expressions, for the node rules that check every function |
-| `roblox.rs` | Shared helpers for the Roblox `<Global>.new(...)` constructor rules |
-| `suggest.rs` | Levenshtein distance and the nearest-candidate search behind "did you mean" suggestions |
-| `underscore_fix.rs` | The `_name` rename that `unused_variable`, `unused_argument`, and `unused_loop_variable` share, and when it's refused |
-| `uninitialized.rs` | Locals declared without a value and field writes through a bare name, shared by the rules that track a local before its first assignment |
-| `rules/*.rs` | Individual rule implementations |
-
-### Testing
-
-Each rule file carries its own `#[cfg(test)] mod tests` (positive cases named `flags_*`, negative cases `ignores_*`) built through `fixtures::run_rule` and its variants, which run the rule through the same analysis and dispatch as the driver. Fix tests apply the edits with `fixtures::fix_and_reparse`, which uses the same edit application as `--fix` and asserts the result re-parses. The `tests/it` binary drives the public API: config resolution (`config.rs`), directives (`directives.rs`), auto-fix (`fixes.rs`), rules firing end to end (`rules.rs`), and the shared `tests/fixtures/idiomatic/` corpus staying lint-clean (`idiomatic.rs`).
+let allocator = Allocator::new();
+let config = LintConfig::default();
+let diags = luck_linter::lint(&allocator, "print(undefined_name)", LuaTarget::Lua54, &config);
+assert_eq!(diags[0].rule, "undefined_variable");
+```

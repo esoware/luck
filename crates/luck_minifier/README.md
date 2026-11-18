@@ -1,48 +1,47 @@
 # luck_minifier
 
-AST-level minification for Lua and Luau.
+The Lua and Luau minifier, which rewrites a tree in place in the caller's arena and prints it with `luck_codegen`.
 
 ## Overview
 
-`luck_minifier` runs a sequence of AST transforms on a parsed program and emits the result through `luck_codegen` in compact mode. Each pass takes and returns a `Block` and shares no state with the others, so passes compose and can be tested on their own. `minify` parses source, and `minify_block` takes a tree, such as the bundle `luck_bundler::bundle_minified` builds, and refuses one nested past `luck_ast::MAX_NESTING_DEPTH`.
+The work runs in three phases, each once:
 
-## Key features
+1. **Binding**: one walk resolves every name to its binding with the target's scoping rules, writes the binding into the name, so later phases tell two same-named locals apart however the tree changes, and counts each binding's references.
+2. **Compression**: one in-place walk runs every rewrite as it leaves each node. Each rewrite keeps the counts true, so the walk reaches the fixpoint itself, walking again only for a rewrite it exposed too late to make.
+3. **Renaming**: every local gets the shortest name its scopes allow.
 
-- **Twelve transform passes.** The classic minifier optimizations plus a few specific to Lua's semantics. Eleven toggle individually through `TransformConfig` (`remove_dead_code`, `simplify_statements`, `fold_constants`, `inline_locals`, `merge_locals`, `simplify_indexes`, `shorten_strings`, `shorten_numbers`, `simplify_parens`, `rename_locals`, `lift_locals`), and `explicit_self` runs whenever `rename_locals` does. The opt-in, off-by-default `rename_globals` flag extends renaming to globals the file defines.
-- **Fixpoint pipeline.** `fold_constants` and `remove_dead_code` each run twice within a round, since inlining exposes new folds and folding exposes new dead branches. The whole chain then repeats on the tree until the emitted output stops changing.
-- **Scope-aware renaming.** `rename_locals` resolves every reference to its binding and lets bindings whose live scopes don't overlap share the same short name.
-- **Metamethod-safe.** Purity checks treat a variable read, and arithmetic, comparison, concatenation, or indexing involving one, as impure, because any of them can dispatch through a metamethod with side effects. A literal operation that can raise, such as `1 // 0`, counts as impure too.
-- **Idempotent output.** `minify(minify(x)) == minify(x)` is a hard invariant, enforced by tests. Every pass builds nodes in the shape the parser gives their printed text, so the tree the rounds settle on is the one its output parses to, and nothing is printed and parsed back.
-- **Output within the nesting cap.** A rewrite that nests an expression deeper, such as inlining a local, chaining `if`/`return` guards into `and`/`or`, merging conditions, or negating one, first checks that the result stays within `luck_ast::MAX_NESTING_DEPTH`, and leaves the code as written when it wouldn't. Input the parser accepts always minifies to output it accepts.
+Then `luck_codegen::compact` prints the tree once. Every rewrite assumes a metamethod can run wherever one could, so only literal arithmetic folds, and folding reproduces the target's float arithmetic exactly. The output parses, and minifying it again changes nothing. A shebang and Luau `--!` hot comments are kept on top, and every other comment is dropped.
 
-## Architecture
+## Features
 
-### Pipeline
+`TransformConfig` turns each rewrite on or off. All are on by default but `rename_globals`.
 
-`minify_block()` runs the chain to a fixpoint: each outer round runs the core passes below in order, then the tail, on the tree the last round left, and emits the result. The loop stops once the emitted text stops changing (bounded by a small round cap for a pass that never settles).
+- `remove_dead_code`: constant branches, loops that never run or run once, unused locals, and statements that do nothing.
+- `simplify_statements`: unwraps `do` blocks that scope nothing, merges nested `if`s, and turns `if ... return` runs into `and`/`or`.
+- `fold_constants`: evaluates operators over literals.
+- `inline_locals`: replaces a local read once with its value, when that's a literal expression that can't raise an error.
+- `merge_locals`: joins neighboring `local`s, and neighboring assignments to locals, into one statement.
+- `simplify_indexes`: `t["x"]` to `t.x`, and `{[1] = a, [2] = b}` to `{a, b}`.
+- `shorten_strings` and `shorten_numbers`: the shortest spelling of the same value.
+- `simplify_parens`: drops parentheses that change neither grouping nor how many values an expression yields.
+- `lift_locals`: hoists a function's declarations to one `local` at its top.
+- `rename_locals`: gives locals the shortest names.
+- `rename_globals`: renames globals the file defines too. It's off by default, because other chunks and `_G["name"]` lookups still use the old names, and it needs `rename_locals`.
 
-Core passes, one round, in order:
+The `serde` feature derives `Deserialize` for `TransformConfig`, the shape of `luck.json`'s `transforms`, and `schemars` derives `JsonSchema` too.
 
-1. `remove_dead_code` drops unused locals, resolves branches with constant conditions, and trims redundant code such as `local x = nil`, a `for` step of `1`, or a trailing bare `return`.
-2. `simplify_statements` merges nested `if`s into one `and` condition and turns trailing `if c then return X end` guards into an `and`/`or` return.
-3. `fold_constants` evaluates constant expressions at compile time.
-4. `inline_locals` replaces a single-use local whose initializer is a literal expression with that expression. It decides each local where it's declared, with the values declared before it already in its initializer, so a chain of locals inlines whole in one walk, up to the `luck_token::MAX_ACTIVE_LOCALS` one function can hold.
-5. `fold_constants` runs a second time, because inlining exposes new folds.
-6. `remove_dead_code` runs a second time, because the newly exposed folds, such as `local DEBUG = false` inlined into `if DEBUG then`, expose new dead branches.
-7. `merge_locals` combines adjacent single-name `local` declarations, or adjacent assignments to proven locals, into one statement. A merged assignment stores right to left, so a global or field store, which can run `__newindex`, stays on its own.
-8. `simplify_indexes` converts `t["key"]` into `t.key` and `{["key"] = v}` into `{key = v}` when the string is a valid identifier on the target, and drops `[1]`, `[2]`, ... keys that run in sequence.
-9. `shorten_strings` re-encodes each string literal as a double-quoted string and keeps whichever spelling is shorter.
-10. `shorten_numbers` picks the shortest spelling of each number literal that keeps its value and subtype.
-11. `simplify_parens` removes parentheses that precedence already makes redundant, and the call parentheses around a lone string or table argument.
+## Public surface
 
-Tail (runs only when `rename_locals` or `lift_locals` is enabled): when renaming, `explicit_self` first rewrites `function X:Y(...)` to `function X.Y(self, ...)` in methods that use `self` at least twice, so the renamer can shorten the parameter. Then `rename_locals`, `lift_locals`, and a `merge_locals` that fuses lifted declarations repeat to their own fixpoint before the outer round continues.
+- `minify(allocator, source, version, &config)` parses into the arena and returns the minified source, or the parse errors.
+- `minify_block(allocator, &mut block, version, &config)` minifies a tree the caller holds. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`, and leaves the shebang and hot comments to the caller.
 
-### Transforms
+```rust
+use luck_allocator::Allocator;
+use luck_minifier::TransformConfig;
+use luck_token::LuaVersion;
 
-Every transform implements `Transform` from `luck_ast`, overriding only the hooks it needs and delegating to `self.walk_*` for the default recursion. Matches over AST variants are exhaustive, so a new variant can't silently bypass a pass. A pass that moves an expression deeper tracks how deep its walk is through the `descend`/`ascend` hooks and asks `fits_at_depth` in `expr.rs` before it rewrites.
-
-### Scope and naming
-
-The renamer does its own scope analysis in `rename_locals/analyzer.rs`. It resolves each reference to a binding (a reference that resolves to none is a global), records the scopes each binding is live in, including closures that capture it, and lets bindings whose live scopes don't overlap share a name. The most-referenced bindings get the shortest names. `rename_locals/scope_claims.rs` records which slots and candidate names each scope has taken, with the first free one per scope, so a claim costs a hash insert per live scope whatever the scope count.
-
-`rename_locals/candidate_pool.rs` maps an index to a candidate identifier via a single `name_for_index` function, shortest names first. The first characters tried spell `luck`/`LUCK` before falling through the rest of the alphabet (`l`, `u`, `c`, `k`, `L`, `U`, `C`, `K`, `a`, `b`, `d`, ...), and multi-character names mix in digits from the second character on. The renamer's `CandidatePool` walks that sequence, skipping keywords, globals read where the binding is live, and names another binding already wears in an overlapping scope.
+let allocator = Allocator::new();
+let config = TransformConfig::default();
+let output = luck_minifier::minify(&allocator, "return 1 + 2", LuaVersion::Lua54, &config);
+assert_eq!(output.as_deref(), Ok("return 3"));
+```

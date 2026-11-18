@@ -8,8 +8,6 @@ edition.workspace      = true
 homepage.workspace     = true
 keywords.workspace     = true
 license.workspace      = true
-# The repository's until this crate has its own.
-readme                 = "../../README.md"
 repository.workspace   = true
 rust-version.workspace = true
 

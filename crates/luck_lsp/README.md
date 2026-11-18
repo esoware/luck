@@ -1,67 +1,39 @@
 # luck_lsp
 
-Language Server Protocol implementation for the luck Lua/Luau toolchain.
+The language server for Lua and Luau, which `luck lsp` serves and the VS Code extension starts.
 
-## Capabilities
+## Overview
 
-Text-document features:
-- text document sync (open / change / save / close), incremental
-- push diagnostics on open / change / save (`luck_linter`)
-- formatting + range formatting (`luck_formatter`)
-- hover with stdlib signatures (every overload), deprecation, and must-use / pure / rebindable markers
-- completion (stdlib globals + namespace and shape members + locals declared before the cursor + keywords, and constant values such as Roblox service names inside string arguments)
-- signature help (active-parameter tracking, typed parameter labels)
-- document symbols (outline view for functions, methods, locals) and workspace symbols (substring search over open documents' outlines)
-- go-to-definition (local symbols through the scope tree, and `require("path")` strings jump to the resolved module file)
-- find references and rename (local symbols only, and rename refuses globals, stdlib names, a method's implicit `self`, a local `_ENV`, exported bindings, and any new name that would change meaning)
-- code actions: per-diagnostic auto-fix, `source.fixAll.luck`, "disable rule for this statement"
-- semantic tokens (full document and range)
-- document highlights (reads and writes of the name under the cursor)
-- folding ranges (blocks, functions, and table constructors)
-- selection ranges (smart-expand selection)
-- document links (clickable `require()` paths, resolved through `luck_resolver` so Lua search paths, Luau relative / `@alias` imports, and the `init` parent-parent rule all match the bundler)
+Each version of an open document is copied into an arena of its own, parsed, and analyzed once, and every request reads that version's tree and analysis, shared read-only across threads. A replaced version's arena, once nothing holds it, is emptied for the next version to parse into, and a close frees it. A document's settings come from the nearest `luck.json` and `.editorconfig`, through `luck_config`, and are cached until a watched config file changes. Linting is opt-in: without a `lint` section, only parse errors show.
 
-Custom requests:
-- `luck/syntaxTree` returns a debug AST dump for the requested document
-- `luck/fixAllWorkspace` returns one `WorkspaceEdit` holding every available fix across every open document the project's `include` and `exclude` cover
+## Features
 
-## Config
+- Lint diagnostics on open, change, and save, from `luck_linter`.
+- Formatting and range formatting, from `luck_formatter`.
+- Hover, completion, signature help, go to definition, references, rename, document and workspace symbols, semantic tokens, document highlights, folding ranges, selection ranges, and document links.
+- Code actions: each diagnostic's fix, `source.fixAll.luck`, and comments that disable a rule.
+- Custom requests: `luck/syntaxTree` and `luck/fixAllWorkspace`.
 
-The server reads the nearest `luck.json` in or above an open file's directory for its `lua`, `luau`, `format`, `lint`, `include` / `exclude`, and `search_paths` settings, and rereads it when a config file changes. Formatting also honors `.editorconfig`, with `luck.json`'s `format` taking precedence. With no config it falls back to Lua 5.4 (or Luau if the file extension is `.luau`), the formatter defaults, linting off, and the default Lua search paths. Document-link resolution uses the config root as the Lua template base, or the requiring file's own directory when no config is found.
+## Public surface
 
-## Build
+- `serve_stdio()` serves over stdin and stdout, and `serve_socket(port)` over TCP, for debugging.
+- `Backend` is the server, and `Notifier` the part of the client it talks to.
 
-`luck_lsp` is a library crate with no binary of its own. The `luck` binary from `luck_cli` runs it through its `lsp` subcommand, which calls `luck_lsp::serve_stdio` or `luck_lsp::serve_socket`.
+Requests run on the thread that polls the server, on tokio's blocking pool, and, for a large file's lint, on rayon's pool, so each needs `luck_ast::MIN_STACK_BYTES` of stack:
 
-```sh
-cargo build -p luck_cli --release
+```rust,no_run
+use std::thread;
+
+use luck_ast::MIN_STACK_BYTES;
+
+let runtime = tokio::runtime::Builder::new_multi_thread()
+    .thread_stack_size(MIN_STACK_BYTES)
+    .enable_all()
+    .build()
+    .expect("a runtime");
+let server = thread::Builder::new()
+    .stack_size(MIN_STACK_BYTES)
+    .spawn(move || runtime.block_on(luck_lsp::serve_stdio()))
+    .expect("a server thread");
+server.join().expect("the server doesn't panic");
 ```
-
-## Transports
-
-```sh
-luck lsp                    # stdio (the default, and what every editor uses)
-luck lsp --socket 9257      # TCP on 127.0.0.1:9257, useful for debugging
-```
-
-## Editor integration
-
-### VS Code
-
-Use the bundled `luck.luck` extension under `editors/vscode/`. It ships the server binary, wires every capability above, and registers commands for restart, show output, view syntax tree, and apply-all-fixes.
-
-### Neovim (nvim-lspconfig)
-
-```lua
-require("lspconfig.configs").luck_lsp = {
-  default_config = {
-    cmd = { "luck", "lsp" },
-    filetypes = { "lua", "luau" },
-    root_dir = require("lspconfig.util").root_pattern("luck.json", ".luaurc", ".git"),
-    single_file_support = true,
-  },
-}
-require("lspconfig").luck_lsp.setup({})
-```
-
-Format-on-save is then a one-liner with `vim.lsp.buf.format` in a `BufWritePre` autocommand.

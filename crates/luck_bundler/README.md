@@ -1,53 +1,42 @@
 # luck_bundler
 
-Dependency graph construction and single-file bundling for Lua/Luau projects.
+Bundles a multi-file Lua or Luau project into one self-contained file.
 
 ## Overview
 
-The bundler takes a multi-file Lua project and produces one self-contained output file. It walks the dependency graph from an entry module, resolves every `require()` through `luck_resolver`, and registers each module with a small memoizing loader that mirrors the target version's own `require` implementation. Modules load lazily, on first require, with real `require` semantics.
+Discovery starts at the entry file. Each module is read and parsed, and its `require` calls are found through `luck_semantic`, so only a call that reaches the global `require` counts. Each require string is resolved with `luck_resolver`. Modules are read on one thread per arena the caller passes, the caller's own thread included, and their trees stay in those arenas. The modules are numbered in require order into a `DependencyGraph`, so the result is the same however many threads read them, and a cycle is a warning.
 
-`bundle` runs the whole pipeline and returns the output, the warnings, the bundled files, and the line map. `bundle_minified` returns the same bundle minified, for `luck bundle --minify` and `luck build`: it builds the bundle as a tree and hands it to `luck_minifier::minify_block`, so the bundle's text is never parsed again. `DependencyGraph::build` stops after the graph, for `luck graph`. Both take a `BundleOptions` with the target's `LuaVersion`, the search paths, the project root, and the `dynamic_require` mode.
+The bundle opens with a small loader, and each module registers as a function that runs on its first `require`. The loader mirrors the target's own `require`: on Lua, `package.loaded` and `package.preload` work as they do there, and on Luau a module is cached by file and must return exactly one value. Every name the bundler generates shares a prefix no module's source contains, and every path in the output is relative to the project root.
 
-## Key features
+`bundle` splices the loader into each module's text, so a line in the bundle maps back to a line of its module. `bundle_minified` instead builds the bundle as one tree from the modules' own parses and minifies it with `luck_minifier`, so no text is parsed twice.
 
-- **Position-independent requires.** A `require("string_literal")` resolves from anywhere: any statement, any expression position, any function body. The lazy loader makes require order irrelevant, so bare side-effect requires and requires below other code all bundle. A `require(name)` with a non-literal argument can't name a module at build time, so by default the bundler keeps the call for the runtime (see the next item). Require strings decode like real Lua string literals, so `require("a\46b")` and `require("a.b")` are the same module.
-- **Dynamic requires degrade instead of aborting.** The `dynamic_require` key in `luck.json`, or `--dynamic-require`, governs `require(expr)`. The default `warn` keeps the call and reports W007, `allow` keeps it silently, and `error` makes it a hard failure with E002. On Lua targets the emitter retargets a kept call at the loader's `__luck_dynamic`, which serves any name that is bundled or in `package.preload`, since the cache is keyed by module name. Anything else falls through to the host's own `require`, looked up at call time. Luau keys its cache by resolved file, and a Roblox `require` takes an Instance, so on Luau targets the call is left exactly as written.
-- **Scope-aware rewriting.** Only calls that reach the host's global `require` get bundled. A call through a local binding named `require`, under a local `_ENV`, or in a file that replaces the global keeps its user semantics (W005 makes it visible), and any other reference to the global (`local r = require`, `_G.require`, `_ENV.require`) warns that those call sites escape bundling. A standard library's name, such as `require("string")`, is never a module: it's served by `package.loaded` before any file, so the call stays as written.
-- **Version-exact loader.** The emitted loader reproduces the observable behavior of the target's own `require`. Lua targets key the cache by module name and back it with `package.loaded` itself when available: preseeded entries win, `package.preload` beats bundled files, a module returning `false` reloads on the next require, a module returning nil caches as `true`, and two require strings reaching one file execute it twice, each under its own name. 5.1 keeps the "loop or previous error" sentinel, a function value so `module()` doesn't adopt it. 5.2+ retries failed loads, and its chunks receive `(name, path)`. 5.2 and 5.3 call a preload loader with `(name, nil)`. 5.4+ returns the loader data as a second result on first load. Luau uses a private file-keyed cache, calls chunks with no arguments, errors unless a module returns exactly one value, and caches only a non-nil result, so a raising or nil-returning module runs again. A load-time cycle of return-style modules recurses until the stack overflows, and a value-export module caught in one hands out a placeholder that errors on field access until the module finishes.
-- **Cycles bundle with a warning.** A cycle emits W003 with the full cycle path. Deferred cycles (mutual requires inside function bodies) work exactly as in real Lua, and a load-time cycle fails at runtime the same way the target version fails. A cycle through the entry works too: the entry's function is registered as a module, so a module requiring the entry re-executes it as a fresh instance, exactly like real Lua loading the main file a second time as a module.
-- **Entry wrapper.** The emitter wraps the entry body in a function invoked with the chunk's varargs (`return __luck_entry(...)`), so CLI args and chunk returns flow through unchanged. A wrapper is a vararg function only where that costs nothing or the body reads `...`, because 5.1's hidden `arg` and 5.5's vararg table each take a local slot, so a body that doesn't read `...` keeps its full 200-local budget everywhere.
-- **Collision-proof identifiers.** Every generated name shares one prefix chosen to appear nowhere in any module source (`__luck_`, falling back to `__luck1_`, `__luck2_`, ...), so user code can never capture or shadow loader internals.
-- **No 200-locals ceiling.** Modules live as table slots, not one local per module, so bundles scale past Lua's 200-locals-per-function limit.
-- **Output luck reads back.** Every module registers in a top-level statement, so its code nests only as many levels deeper as its own wrapper adds: two for the loader function, and three where a `do` block gives the module a private `_ENV`. A construct that this would push past `luck_ast::MAX_NESTING_DEPTH` fails the bundle with E013, at that construct in the module's own file, so every bundle parses, and luck's minifier, formatter, and linter read it back.
-- **No host paths in the output.** Every path the bundle carries, in module provenance comments and the file path 5.2+ chunks receive as loader data, is project-relative. A module above the project root gets `..` segments, so the directories leading to the project root are never named. When a module shares no root with the project at all, such as one on another Windows drive or a UNC share, only its file name is emitted.
-- **No runtime dependencies.** The loader is plain inline Lua, with no external helper library and no monkey-patched `require`.
+## Features
 
-## Architecture
+- `DynamicRequire` decides what a `require` whose argument isn't a string literal does: fail the bundle (E002), stay for the runtime with a warning (W007), which is the default, or stay silently.
+- The `serde` feature derives `Deserialize` for `DynamicRequire`, the shape `luck.json` gives it, and `schemars` derives `JsonSchema` too.
 
-### Pipeline
+## Public surface
 
-1. **Require extraction.** `require_extraction.rs` walks each module's entire AST for `require()` calls, using `luck_semantic` scope analysis to skip calls that resolve to local bindings, and decodes each string literal to its runtime value. It produces a list of require sites (decoded string plus call span), the callee spans of the dynamic requires the emitter retargets, and validation diagnostics (W007/E002 non-string-literal argument, E006 `package.loaded` write on Luau, W001 duplicate require, W005 shadowed/aliased require).
+- `bundle(&mut arenas, entry, &options)` returns a `BundleResult`: the output, the warnings, the bundled files, and the line map. It needs at least one arena, and the result borrows none, so they can be reset right after.
+- `bundle_minified(&mut arenas, entry, &options, &transforms)` returns a `MinifiedBundle`.
+- `BundleOptions` holds the target version, the Lua search paths, the project root, and the `DynamicRequire` mode.
+- `DependencyGraph::build` builds the graph alone.
 
-2. **Graph construction.** `graph.rs` starts at the entry file and does a breadth-first walk, resolving each require through `luck_resolver` and enqueuing newly discovered modules. A `GraphBuilder` holds the in-progress graph: module slots by id, the path-to-id map, the queue, the resolver, and the collected diagnostics. An unreadable file, a missing entry included, reports E010, an oversized one E012, a parse failure E008, and more than 10,000 modules E009, while resolver failures pass through as E004 and E007. An inert hot comment in a non-entry Luau module reports W006. `luck_token::leading_hot_comments` finds each module's leading hot comments, stored on `ModuleInfo` for this warning and the emitter's hoisting. A module gets its `ModuleId` when it's first queued, so a file that can't be read reports one error however many modules require it.
+```rust,no_run
+use std::iter;
+use std::path::Path;
 
-3. **Topological sort.** Once discovery succeeds, the modules and their require edges go into a `petgraph` graph in discovery order. Its standard toposort orders roots first. The bundler reverses the result so leaves come first, which is cosmetic, since the loader doesn't depend on it. A cycle falls back to discovery order and records W003.
+use luck_allocator::Allocator;
+use luck_bundler::{BundleOptions, DynamicRequire};
+use luck_token::LuaVersion;
 
-4. **Loader emission.** `emitter.rs` picks the collision-free identifier prefix, emits the version-specific loader from `loader.rs`, and registers modules. Lua targets get one slot per unique require string, keyed by name like `package.loaded`. Strings reaching the same file share its function but keep separate cache entries. Luau targets get one numeric slot per resolved file. The entry body becomes `local __luck_entry = function(...) ... end`, registered in the module table when something requires it, and invoked last with the chunk's varargs. The emitter splices a loader call over every resolved `require()`, preserving the call's newline count, and produces a line map (`LineMapEntry`: `bundle_start_line`/`bundle_end_line`/`path`) that stays 1:1 so runtime tracebacks map back to source files. A shebang is only valid on a chunk's first line, so the entry's moves to the bundle's first line and every other module's is dropped, leaving its line blank. A BOM is dropped from every wrapped body. The statements a wrapper puts before a body end in `;`, so a body that opens with `(` can't continue them as a call. When a module's depth, as its parse counted it, plus its wrapper's levels, and the one level export lowering can add, could pass the cap, the emitter measures the module's tree as the bundle holds it, requires retargeted and exports lowered, with `luck_ast::spans_past_nesting_cap`, and reports E013 for each construct past the cap, at its place in the module's source.
-
-5. **Tree emission.** `block_emitter.rs` builds the bundle `emitter.rs` writes as a tree, for `bundle_minified`. The emitter writes the bundle's text with a call of a prefixed hole in place of each module's body, the loader, wrappers, and registrations spelled out once for both forms, and the tree is that text's parse with each hole replaced by the module's own tree, each require and export rewritten in place of the text's splices. The modules' spans index their own sources, so the tree never leaves the crate: `bundle_minified` hands it to `luck_minifier::minify_block` and writes the entry's shebang and Luau hot comments above the result, since a tree holds no comments.
-
-### Module identity
-
-`module.rs` defines `ModuleId` (an index into the graph's module list), `Dependency` (a resolved require edge: decoded require string, target `ModuleId`, and call span), and `ModuleInfo`, which carries a module's path, source text, discovered dependencies, project-relative path, the callee spans of its dynamic requires, the spans of its leading hot comments and shebang, and the parsed `Block` from graph construction, kept so the emitter doesn't reparse.
-
-`ModuleInfo::path` is the canonical absolute path and the graph's identity key. `ModuleInfo::relative_path` is the only path the emitted bundle may name. `relative_path::make_relative` builds it against the project root, which is normalized once per build and resolved against the working directory when it's empty or relative. `BundleResult::source_files` and the `LineMapEntry` paths stay canonical, because they're local build and debug data that never reach the bundle.
-
-### Span-based rewriting
-
-Require rewriting splices over the exact byte ranges the require scan recorded, so the extractor and the emitter can never disagree about which calls are bundled. The loader is a local on every target, so bundles sharing a Lua state stay independent. The one exception is a 5.1 bundle with a function that has no room for the loader among 5.1's 60 upvalues per function, where the loader becomes a global, because a global read costs no upvalue. It's declared inside `do ... end`, off the bundle's top level, so the minifier's `rename_globals` keeps its prefixed name, which no host global shares. On 5.2+, a module that assigns `_ENV` or calls `module` gets a private `_ENV`, a local of a `do` block around its wrapper, as upvalue 1 of the wrapper, as a real chunk has it. Unusually formatted requires survive bundling too: multi-line calls, long-bracket arguments, escaped strings, Luau type casts. `require(...)` text inside string literals stays untouched, and shadowed calls stay exactly as written.
-
-When a Luau value-export module goes inside a generated loader wrapper, the emitter lowers its top-level `export` declarations through `exports.rs` and appends the frozen export table the module would otherwise return implicitly. An export stays a plain local, as the export RFC allows, unless a closure writes it or a later local hides it at module scope. Then it lives in the export table itself, so a write after the module returns raises as a frozen table does. Type-only exports become private inside wrappers.
-
-### Testing
-
-Inline unit tests cover individual modules, and `tests/it/bundle.rs` bundles fixture projects end-to-end and asserts on the emitted output via `insta` snapshots under `tests/it/snapshots/`. Every integration test bundles through `common::bundle_both`, which also bundles minified and checks that it's what minifying the text gives.
+let mut arenas: Vec<Allocator> = iter::repeat_with(Allocator::new).take(8).collect();
+let options = BundleOptions {
+    version: LuaVersion::Lua54,
+    search_paths: &[],
+    project_root: Path::new("."),
+    dynamic_require: DynamicRequire::default(),
+};
+let bundle = luck_bundler::bundle(&mut arenas, Path::new("main.lua"), &options).unwrap();
+assert!(!bundle.output.is_empty());
+```

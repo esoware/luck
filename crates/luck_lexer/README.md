@@ -1,46 +1,23 @@
 # luck_lexer
 
-Single-pass tokenizer for Lua 5.1-5.5 and Luau.
+The single-pass lexer for Lua 5.1 to 5.5 and Luau.
 
 ## Overview
 
-The lexer reads source bytes once and produces a flat `Vec<Token>` plus a separate `Vec<Comment>`. It never backtracks and never panics: malformed input becomes a `SourceError`, the cursor advances, and lexing continues.
+Source text goes in and two streams come out: the tokens, and the comments between them, which stay out of the syntax tree. A token holds no text, only its kind, span, and flags, so `Token::text` slices it from the source. A token that only some versions have, such as floor division, a hex float, or Luau's interpolated strings, is recognized only for those versions. An error is recorded and lexing goes on, so one pass reports them all.
 
-Two entry points share the same machine:
+## Public surface
 
-- `lex(source, version) -> LexResult` materializes the whole token stream, the comment array, and any errors. One-shot consumers such as the LSP, the formatter, and the benches call this.
-- `Lexer::new(source, version)` then `next_token()` pulls tokens on demand. The parser drives it this way, so it never allocates a full token vector. Comments and errors accumulate on the lexer and are drained with `finish()` once the caller reaches EOF.
+- `lex(source, version)` lexes a whole source into a `LexResult`: every token, ending in `Eof`, the comments, the errors, and the spans of strings and comments left unterminated.
+- `Lexer` hands out one token at a time with `next_token`, as the parser pulls them, and `finish` returns the comments and errors once the source is drained.
+- `LexError` is `luck_token::SourceError`. A source over 4 GiB is refused with one.
 
-## Key features
+```rust
+use luck_token::{LuaVersion, TokenKind};
 
-- **Version-gated tokens.** Keyword and operator recognition queries `LuaVersion` predicates. `//` is floor division in Lua 5.3+ and Luau. `goto` is a keyword in 5.2+ (not Luau). `global` lexes as a name in every dialect, because stock Lua 5.5 builds keep it unreserved, and the parser recognizes a declaration by context. `&`, `|`, `~`, `<<`, `>>` arrive with bitwise ops in 5.3+, and Luau also lexes `&` and `|` for its type syntax. Compound assignment, `->`, `@`, `?`, backtick strings, and binary/underscore-separated numbers are Luau-only. In Luau, standalone `~` is invalid (`~=` remains valid), and `<<` and `>>` stay two angle tokens each, which the parser reads as explicit type instantiation.
-- **Complete number literals.** Decimal, hexadecimal, hex floats (5.2+), binary literals and underscore separators (Luau), plus Luau's 64-bit integer literals with an `i` suffix, which lex as their own `Integer` token and must fit an `i64` in decimal but may use all 64 bits in hex and binary. A letter touching a decimal numeral makes it malformed, except that 5.2 and 5.3 read only hex digits past a numeral and split before any other letter.
-- **Complete string literals.** Short strings with single or double quotes, long brackets (`[==[...]==]`) at any equals-sign depth, and the full escape repertoire (`\x`, `\z`, `\u{}`, decimal escapes), each escape gated to the versions that accept it. Malformed text keeps the string's token: a bad escape is reported and stays text, a quoted string the line breaks off ends there, and a long one with no closer runs to the end of the source. `LexResult::unterminated` and `Lexer::unterminated` list the strings cut off, whose end is still inside them for a cursor, and the block comments, which keep their place in the comment array and run to the end of the source.
-- **Luau interpolated strings.** Backtick-delimited strings with `{expr}` segments, split into `InterpolatedStringBegin` / `InterpolatedStringMiddle` / `InterpolatedStringEnd` tokens. A brace-depth stack finds the `}` that closes each expression, and a string with no expressions still lexes as an empty `InterpolatedStringBegin` plus an `InterpolatedStringEnd`, so the parser always sees a begin/end pair. Malformed text keeps the string's tokens: a bad escape or a `{{` is reported and stays text, and unterminated text ends the string at its line break. A `{}` that holds no expression lexes as the segments around it, and the parser reports it.
-- **Shebang and BOM.** On Lua 5.2+, where the loader does, the lexer skips a leading UTF-8 BOM. A `#`-prefixed first line, or in Luau only a `#!` one, is captured as a shebang comment rather than parsed as the length operator, and runs up to the line feed whatever carriage returns it holds.
-
-## Architecture
-
-### Cursor (`cursor.rs`)
-
-A zero-copy forward-only byte cursor: `peek`, `peek_next`, `advance`, `eat`, and `rest`, all tracking a single byte position. Scanners take a token's text and span from it with `text_since` and `span_since`, and the batched search in `search.rs` runs over `rest`.
-
-### Body scanning (`search.rs`, `string.rs`)
-
-Interpolated-string text is scanned through a 256-entry stop-byte table (`ByteMatchTable`, built at compile time by `byte_match_table!`). `find_match` walks a scalar prefix, then fixed-size batches of scalar table lookups, so long runs stay branch-light without relying on vectorization. Short strings check the same kind of table over their first 8 bytes, where most strings end, then switch to `memchr` for the closing quote, escape, or line feed, with a second `memchr` for a carriage return bounded to that run. Comments and long brackets scan with `memchr` directly. This is the crate's hot path, and its design comes from measurement.
-
-### Token production
-
-`lexer.rs` is the state machine: lead-byte dispatch, comment classification, shebang handling, and interpolated-string brace tracking. Its `lex_*` methods each consume one token or comment. Keywords come from `luck_token`'s `TokenKind::keyword`, which the AST synthesizer and the linter share. `number.rs` and `string.rs` hold the literal sub-grammars as `scan_*` functions over the cursor, each returning the token kind or a `LexError`: numbers and short and long strings with their escapes. The raw segments of an interpolated string scan the same way but always return the segment, pushing their errors to the lexer's list. The long-bracket close scan is shared between long strings and block comments.
-
-### Comment stream
-
-The lexer buffers comments as it encounters them and emits them into the comment array with surrounding-whitespace metadata. A comment on the same line as a preceding token (no newline between) is `Trailing`. Anything at the start of a line, or before the first token, is `Leading`. The lexer sets each comment's `attached_to` byte offset directly: the start of the following token for leading comments, the start of the preceding token for trailing ones.
-
-### Error recovery
-
-On a malformed token the lexer pushes a `SourceError`, advances past the offending byte (consuming a full UTF-8 sequence so a multi-byte character yields one error), and resumes. The parser sees whatever tokens were produced and reports downstream errors against them. The only fatal case is input over 4 GiB, which `u32` spans can't address: `Lexer::new` refuses it, and `lex` returns that one error and no tokens.
-
-## Testing
-
-Public-API tests live in `tests/it/` as a single binary, split by concern (`tokens.rs`, `numbers.rs`, `strings.rs`, `interpolation.rs`, `comments.rs`), with each file covering its tokens' version gating too. `streaming.rs` checks that `next_token` streams exactly what `lex` materializes, over the shared `tests/fixtures/` corpus. The batched `find_match` scan has white-box tests in `search.rs`.
+let source = "local x = 42";
+let result = luck_lexer::lex(source, LuaVersion::Lua54);
+assert!(result.errors.is_empty());
+let name = result.tokens[1];
+assert_eq!((name.kind, name.text(source)), (TokenKind::Identifier, "x"));
+```

@@ -1,52 +1,52 @@
-# luck
+# luck_lua
 
-Umbrella crate re-exporting the luck toolchain as a single dependency.
+The whole luck toolchain behind one dependency, for a build tool or editor that would rather not track each `luck_*` crate. The package is `luck_lua` and the library is `luck`, so code imports `luck::`.
 
-## Overview
+## Features
 
-Add `luck` once instead of tracking each `luck_*` crate. It has no logic of its own. Every module is a re-export of the matching `luck_*` crate.
+The parse core is always present: `luck::allocator`, `luck::token`, `luck::lexer`, `luck::ast`, `luck::parser`, and `luck::core`. Every other stage is behind a feature of its name, and none is on by default.
 
-The parse core (`token`, `lexer`, `ast`, `parser`, and `core`) is always present. Every other stage sits behind its own Cargo feature, off by default, and the `full` feature turns all of them on.
+| Feature | Adds |
+| --- | --- |
+| `codegen` | `luck::codegen`, the compact printer |
+| `minifier` | `luck::minifier` |
+| `formatter` | `luck::formatter` |
+| `semantic` | `luck::semantic`, scope analysis and the stdlib catalogs |
+| `linter` | `luck::linter`, and `semantic` |
+| `resolver` | `luck::resolver`, module resolution and source reading |
+| `bundler` | `luck::bundler`, and `resolver` and `minifier` |
+| `config` | `luck::config`, `luck.json` and `.editorconfig` loading, and the stages it configures |
+| `full` | All of them |
 
-## Re-exports
+The language server is not part of it. `luck::VERSION` is the toolchain's version.
 
-| Path | Source | Feature |
-|------|--------|---------|
-| `luck::token` | [`luck_token`](../luck_token) | always on |
-| `luck::lexer` | [`luck_lexer`](../luck_lexer) | always on |
-| `luck::ast` | [`luck_ast`](../luck_ast) | always on |
-| `luck::parser` | [`luck_parser`](../luck_parser) | always on |
-| `luck::core` | [`luck_core`](../luck_core) | always on |
-| `luck::codegen` | [`luck_codegen`](../luck_codegen) | `codegen` |
-| `luck::resolver` | [`luck_resolver`](../luck_resolver) | `resolver` |
-| `luck::bundler` | [`luck_bundler`](../luck_bundler) | `bundler` (pulls in `resolver` and `minifier`) |
-| `luck::minifier` | [`luck_minifier`](../luck_minifier) | `minifier` |
-| `luck::formatter` | [`luck_formatter`](../luck_formatter) | `formatter` |
-| `luck::semantic` | [`luck_semantic`](../luck_semantic) | `semantic` |
-| `luck::linter` | [`luck_linter`](../luck_linter) | `linter` (pulls in `semantic`) |
-| `luck::config` | [`luck_config`](../luck_config) | `config` (pulls in `bundler`, `minifier`, `formatter`, and `linter`) |
-| `luck::VERSION` | Crate version string | always on |
+## Arenas
 
-## Usage
-
-The package publishes as `luck_lua` (the `luck` name on crates.io belongs to an unrelated project), but the library it ships is named `luck`, so code still imports `luck::...`. Enable the features for the stages you need, or `full` for all of them:
-
-```toml
-[dependencies]
-luck = { package = "luck_lua", version = "0.5", features = ["bundler", "minifier"] }
-```
+A tree lives in a `luck::allocator::Allocator` the caller owns, and borrows the source it was parsed from, so both outlive it. Every stage that builds nodes takes the arena first. `reset` frees everything in it at once and keeps the memory, so one arena serves file after file, and threads each take an arena from an `AllocatorPool`. The bundler takes a slice of arenas and reads modules on one thread per arena.
 
 ```rust
-use luck::bundler;
-use luck::minifier::TransformConfig;
+use luck::allocator::Allocator;
+use luck::token::LuaVersion;
 
-let options = bundler::BundleOptions {
-    version: target.lua_version(),
-    search_paths: &search_paths,
-    project_root: &project_root,
-    dynamic_require,
-};
-let minified = bundler::bundle_minified(&entry_path, &options, &TransformConfig::default())?;
+let mut allocator = Allocator::new();
+for source in ["local x = 1", "return x"] {
+    let parsed = luck::parser::parse(&allocator, source, LuaVersion::Lua54);
+    assert!(parsed.errors.is_empty());
+    // The parse borrows the arena, so it goes first.
+    drop(parsed);
+    allocator.reset();
+}
 ```
 
-The underlying crates stay published, so you can depend on a single one if that's all you need.
+With the `formatter` feature:
+
+```rust
+use luck::allocator::Allocator;
+use luck::formatter::FormatOptions;
+use luck::token::LuaVersion;
+
+let allocator = Allocator::new();
+let formatted =
+    luck::formatter::format(&allocator, "local x=1", LuaVersion::Lua54, &FormatOptions::default());
+assert_eq!(formatted.output, "local x = 1\n");
+```
