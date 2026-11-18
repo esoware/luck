@@ -1,9 +1,12 @@
 use luck_semantic::SymbolKind;
 
 use crate::diagnostic::Finding;
+use crate::fix::FixKind;
 use crate::rule::{LintContext, WholeRule, impl_rule};
-use crate::underscore_fix::UnderscoreFixes;
+use crate::underscore_fix::prefix_underscore;
 
+/// The `_` prefix is a suggestion, because it silences the warning rather
+/// than answering it, and an unused variable is often a misspelled use.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnusedVariable;
 
@@ -12,14 +15,14 @@ impl_rule!(
     "unused_variable",
     Correctness,
     Warning,
-    "variable is declared but never read"
+    "variable is declared but never read",
+    Suggestion
 );
 
 impl WholeRule for UnusedVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
         let tree = semantic.scope_tree();
-        let fixes = UnderscoreFixes::new(semantic);
         let mut findings = Vec::new();
 
         for symbol in tree.symbols() {
@@ -58,7 +61,9 @@ impl WholeRule for UnusedVariable {
             findings.push(
                 Finding::new(format!("unused {kind_name} `{name}`"), symbol.definition_span)
                     .with_help("prefix with `_` to suppress this warning")
-                    .with_optional_fix(fixes.fix_for(symbol)),
+                    .with_fix(context, FixKind::Suggestion, |fixer| {
+                        prefix_underscore(fixer, semantic, symbol)
+                    }),
             );
         }
 
@@ -72,8 +77,7 @@ mod tests {
 
     use super::*;
     use crate::diagnostic::LintDiagnostic;
-    use crate::fix::apply_one_pass;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::{applied, fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
         run_rule(&UnusedVariable, source, LuaVersion::Luau)
@@ -136,12 +140,9 @@ local x = 2
 print(_x)";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_ne!(
-            apply_one_pass(source, &diags),
-            "\
-local _x = 1
-local _x = 2
-print(_x)",
+        assert_eq!(
+            applied(source, &diags),
+            source,
             "the rename shouldn't make `print(_x)` read the second local"
         );
     }
@@ -163,11 +164,18 @@ print(1)";
     }
 
     #[test]
-    fn flags_with_fix_when_prefixed_name_is_free() {
-        let diags = run("\
+    fn flags_with_suggestion_when_prefixed_name_is_free() {
+        let source = "\
 local x = 2
-print(_y)");
+print(_y)";
+        let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_some(), "{diags:?}");
+        assert_eq!(diags[0].fix.as_ref().map(|fix| fix.kind), Some(FixKind::Suggestion));
+        assert_eq!(
+            fix_and_reparse(source, &diags, LuaVersion::Luau),
+            "\
+local _x = 2
+print(_y)"
+        );
     }
 }

@@ -175,17 +175,44 @@ fn lint_stdin_fix_renders_spans_past_the_end_of_the_original() {
         .args(["lint", "--fix", "--stdin-filepath", "buffer.lua"])
         .write_stdin(
             "\
-local unused = 1
-return missingglobal",
+local t = unpack({})
+return t, missingglobal",
         )
         .assert()
         .code(1i32)
         .stdout(
             "\
-local _unused = 1
-return missingglobal",
+local t = table.unpack({})
+return t, missingglobal",
         )
-        .stderr(predicate::str::contains("buffer.lua:2:8"));
+        .stderr(predicate::str::contains("buffer.lua:2:11"));
+}
+
+/// `--fix` leaves a suggestion, which may change what the code does, and
+/// `--fix-suggestions` applies it.
+#[test]
+fn lint_stdin_fix_applies_suggestions_only_when_asked() {
+    let directory = TempDir::new().unwrap();
+    let source = "\
+local unused = 1
+return 1";
+
+    luck_in(directory.path())
+        .args(["lint", "--fix", "--stdin-filepath", "buffer.lua"])
+        .write_stdin(source)
+        .assert()
+        .code(0i32)
+        .stdout(source);
+    luck_in(directory.path())
+        .args(["lint", "--fix-suggestions", "--stdin-filepath", "buffer.lua"])
+        .write_stdin(source)
+        .assert()
+        .code(0i32)
+        .stdout(
+            "\
+local _unused = 1
+return 1",
+        );
 }
 
 /// A fix that shrinks the file keeps every span in bounds of the original, so

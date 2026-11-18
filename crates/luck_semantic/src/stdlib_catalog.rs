@@ -8,7 +8,8 @@ use luck_token::{LuaVersion, StdlibEnvironment};
 
 use crate::stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
-    StdlibNamespace, StdlibParam, StdlibShape, StdlibSignature, StdlibValue, stdlib_map,
+    StdlibNamespace, StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature, StdlibValue,
+    stdlib_map,
 };
 
 static LUA51: StdlibLibrary = include!("stdlib_catalog/lua51.rs");

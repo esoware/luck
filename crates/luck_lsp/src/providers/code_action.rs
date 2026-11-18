@@ -1,7 +1,7 @@
 use core::ops;
 
 use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
-use luck_linter::{Fix, LintDiagnostic};
+use luck_linter::{Fix, FixKind, LintDiagnostic};
 use luck_token::{Span, has_line_break, is_lua_whitespace, offset_to_index};
 use rustc_hash::FxHashMap;
 use tower_lsp_server::ls_types::{
@@ -59,11 +59,13 @@ pub(crate) fn code_action(
     for (index, &(diag, rule, lint)) in matched.iter().enumerate() {
         if let Some(fix) = &lint.fix {
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                title: fix.description.clone(),
+                title: fix.message.clone().into_owned(),
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![diag.clone()]),
                 edit: Some(workspace_edit(uri, fix_edits(document, fix))),
-                is_preferred: Some(true),
+                // The client's auto-fix applies a preferred action unasked,
+                // which a suggestion never is.
+                is_preferred: Some(fix.kind == FixKind::Fix),
                 disabled: None,
                 command: None,
                 data: None,
@@ -130,20 +132,23 @@ fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
         .iter()
         .map(|edit| TextEdit {
             range: document.range(edit.span),
-            new_text: edit.replacement.clone(),
+            new_text: edit.replacement.clone().into_owned(),
         })
         .collect()
 }
 
-/// LSP forbids overlapping edits in one change list, and a dropped fix
-/// reappears on the next pass.
+/// The edits of every fix in `lints` that keeps what the code does, which
+/// is all that fix-all applies, as `--fix` does.
+///
+/// LSP forbids overlapping edits in one change list, and a dropped fix is
+/// published again once the client applies these.
 fn all_fix_edits(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<TextEdit> {
     let mut positions = document.positions();
-    luck_linter::non_overlapping_edits(lints)
+    luck_linter::non_overlapping_edits(lints, FixKind::Fix)
         .into_iter()
         .map(|edit| TextEdit {
             range: positions.range(edit.span),
-            new_text: edit.replacement.clone(),
+            new_text: edit.replacement.clone().into_owned(),
         })
         .collect()
 }
@@ -501,12 +506,49 @@ local u = second_missing
             message: "bad".into(),
             span: Span::new(0, 0),
             help: None,
-            fix: Some(Fix { description: "fix".to_owned(), edits }),
+            fix: Some(Fix { kind: FixKind::Fix, message: "fix".into(), edits: edits.into() }),
         }
     }
 
     fn linter_edit(start: u32, end: u32) -> LinterTextEdit {
-        LinterTextEdit { span: Span::new(start, end), replacement: "x".to_owned() }
+        LinterTextEdit { span: Span::new(start, end), replacement: "x".into() }
+    }
+
+    /// An unused variable, whose rename is a suggestion, beside a redundant
+    /// `nil`, whose deletion is a fix.
+    fn suggestion_and_fix() -> (DocumentState, Vec<LintDiagnostic>) {
+        let mut config = LintConfig::default();
+        config.rules.set_level("redundant_nil_init", RuleLevel::Warn);
+        linted("local unused = nil\n", &config)
+    }
+
+    #[test]
+    fn fix_all_leaves_suggestions_out() {
+        let (document, lints) = suggestion_and_fix();
+        let edits = all_fix_edits(&document, &lints);
+        assert_eq!(applied(&document, edits), "local unused\n");
+    }
+
+    #[test]
+    fn a_suggestion_is_a_quick_fix_the_client_never_prefers() {
+        let (document, lints) = suggestion_and_fix();
+        let diags = diagnostics::to_lsp(&document, &lints);
+        let range = Range::new(Position::new(0, 0), Position::new(0, 18));
+        let quick_fixes = Some(vec![CodeActionKind::QUICKFIX]);
+        let actions = code_action(&document, &params(range, diags, quick_fixes), &lints);
+        let fixes: Vec<(&str, Option<bool>)> = actions
+            .iter()
+            .map(only_action)
+            .filter(|action| !action.title.starts_with("Disable"))
+            .map(|action| (action.title.as_str(), action.is_preferred))
+            .collect();
+        assert_eq!(
+            fixes,
+            [
+                ("drop redundant `= nil` initializer", Some(true)),
+                ("prefix `unused` with `_`", Some(false)),
+            ]
+        );
     }
 
     #[test]

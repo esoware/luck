@@ -11,7 +11,7 @@ The server copies each version of an open document into an arena of its own and 
 - Lint diagnostics on open, change, and save, from `luck_linter`.
 - Formatting and range formatting, from `luck_formatter`.
 - Hover, completion, signature help, go to definition, references, rename, document and workspace symbols, semantic tokens, document highlights, folding ranges, selection ranges, and document links.
-- Code actions: each diagnostic's fix, `source.fixAll.luck`, and comments that disable a rule.
+- Code actions: each diagnostic's fix or suggestion, `source.fixAll.luck`, which applies the fixes and leaves the suggestions, and comments that disable a rule.
 - Custom requests: `luck/syntaxTree` and `luck/fixAllWorkspace`.
 
 ## Usage

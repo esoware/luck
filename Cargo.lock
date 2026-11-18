@@ -1051,6 +1051,7 @@ dependencies = [
 name = "luck_linter"
 version = "0.6.0"
 dependencies = [
+ "bitflags",
  "luck_allocator",
  "luck_ast",
  "luck_core",

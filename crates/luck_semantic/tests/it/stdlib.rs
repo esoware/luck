@@ -54,10 +54,10 @@ fn table_getn_deprecated_in_51_and_fixes_to_length_from_52() {
         let function = function_at(standalone_library(newer), &["table", "getn"]);
         let deprecation =
             function.deprecated.as_ref().expect("table.getn must be deprecated in 5.2+");
-        let template = deprecation
-            .replace_template
-            .expect("table.getn deprecation must carry a replace template");
-        assert_eq!(template, "#%1");
+        let replacement =
+            deprecation.replacement.expect("table.getn deprecation must carry a replacement");
+        assert_eq!(replacement.template, "#%1");
+        assert!(!replacement.is_exact, "{newer:?}: `#` calls `__len`, which `table.getn` ignores");
     }
 }
 
@@ -70,8 +70,8 @@ fn unpack_deprecated_from_52() {
     for newer in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let function = function_at(standalone_library(newer), &["unpack"]);
         let deprecation = function.deprecated.as_ref().expect("unpack deprecated in 5.2+");
-        let template = deprecation.replace_template.expect("unpack has a replace template");
-        assert_eq!(template, "table.unpack(%1)");
+        let replacement = deprecation.replacement.expect("unpack has a replacement");
+        assert_eq!((replacement.template, replacement.is_exact), ("table.unpack(%1)", true));
     }
 }
 
@@ -110,8 +110,8 @@ fn utf8_only_53_plus() {
 fn loadstring_deprecated_in_52_fixes_to_load() {
     let function = function_at(standalone_library(LuaVersion::Lua52), &["loadstring"]);
     let deprecation = function.deprecated.as_ref().expect("loadstring is deprecated");
-    let template = deprecation.replace_template.expect("loadstring has a replace template");
-    assert_eq!(template, "load(%1)");
+    let replacement = deprecation.replacement.expect("loadstring has a replacement");
+    assert_eq!((replacement.template, replacement.is_exact), ("load(%1)", true));
 }
 
 #[test]
@@ -387,7 +387,22 @@ fn legacy_roblox_globals_are_deprecated() {
     }
     let deprecation =
         function_at(roblox(), &["ypcall"]).deprecated.as_ref().expect("ypcall deprecated");
-    assert_eq!(deprecation.replace_template, Some("pcall(%1)"), "ypcall fixes to pcall");
+    let replacement = deprecation.replacement.expect("ypcall fixes to pcall");
+    assert_eq!((replacement.template, replacement.is_exact), ("pcall(%1)", true));
+}
+
+#[test]
+fn roblox_task_replacements_change_scheduling() {
+    for name in ["wait", "spawn", "delay"] {
+        let deprecation =
+            function_at(roblox(), &[name]).deprecated.as_ref().expect("legacy scheduling");
+        let replacement = deprecation.replacement.expect("a `task` replacement");
+        assert!(
+            !replacement.is_exact,
+            "`{name}` runs on the legacy scheduler, so `{}` changes when the code runs",
+            replacement.template
+        );
+    }
 }
 
 #[test]
@@ -1411,7 +1426,7 @@ fn table_maxn_has_no_length_operator_fix() {
         let function = function_at(standalone_library(version), &["table", "maxn"]);
         let deprecation = function.deprecated.as_ref().expect("table.maxn is deprecated");
         assert!(
-            deprecation.replace_template.is_none(),
+            deprecation.replacement.is_none(),
             "{version:?}: table.maxn({{[5] = 1}}) is 5 but #{{[5] = 1}} is 0, so `#` can't \
              replace it automatically"
         );
@@ -1420,7 +1435,7 @@ fn table_maxn_has_no_length_operator_fix() {
 
 fn lua53_bit32_replacement(name: &str) -> Option<&'static str> {
     let function = function_at(standalone_library(LuaVersion::Lua53), &["bit32", name]);
-    function.deprecated.as_ref()?.replace_template
+    Some(function.deprecated.as_ref()?.replacement?.template)
 }
 
 #[test]
@@ -1476,7 +1491,7 @@ fn fix_template<'library>(
     library: &'library StdlibLibrary,
     path: &[&str],
 ) -> Option<&'library str> {
-    function_at(library, path).deprecated.as_ref()?.replace_template
+    Some(function_at(library, path).deprecated.as_ref()?.replacement?.template)
 }
 
 /// Whether `text`, read as a returned value, is out of its parentheses what

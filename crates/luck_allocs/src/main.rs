@@ -20,7 +20,7 @@ use luck_allocator::Allocator;
 use luck_ast::MIN_STACK_BYTES;
 use luck_benchmark_files::{TestFile, test_files};
 use luck_formatter::FormatOptions;
-use luck_linter::{CategoryLevels, LintConfig, RuleLevel};
+use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
 use luck_minifier::TransformConfig;
 use rayon::ThreadPoolBuilder;
 
@@ -127,8 +127,9 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
         ));
     });
     let config = every_rule();
-    let ((), linter) =
-        record_stats_in(allocator, || drop(luck_linter::lint_parsed(&parse, target, &config)));
+    let ((), linter) = record_stats_in(allocator, || {
+        drop(luck_linter::lint_parsed(&parse, target, &config, FixKind::empty()));
+    });
     let ((), codegen) = record_stats_in(allocator, || drop(luck_codegen::compact(&parse.block)));
     let options = FormatOptions::default();
     let ((), formatter) = record_stats_in(allocator, || {

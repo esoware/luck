@@ -342,9 +342,18 @@ pub struct StdlibConstant {
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibDeprecation {
     pub message: &'static str,
-    /// Auto-fix replacement; see [`expand_replace_template`] for its
-    /// placeholders.
-    pub replace_template: Option<&'static str>,
+    pub replacement: Option<StdlibReplacement>,
+}
+
+/// The call that replaces a call to a deprecated function.
+#[derive(Debug, Clone, Copy)]
+pub struct StdlibReplacement {
+    /// The new call, with placeholders for the old call's arguments, as
+    /// [`expand_replace_template`] reads them.
+    pub template: &'static str,
+    /// Whether the new call returns what the old one did for every argument
+    /// the old one accepts. Only then can a fix make it without asking.
+    pub is_exact: bool,
 }
 
 #[derive(Debug, Clone, Copy)]

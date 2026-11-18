@@ -1,7 +1,7 @@
 use luck_ast::{Block, LastStatement};
 
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
+use crate::fix::FixKind;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -12,31 +12,36 @@ impl_rule!(
     "redundant_return",
     Style,
     Warning,
-    "trailing bare `return` has no effect"
+    "trailing bare `return` has no effect",
+    Fix
 );
 
 /// Only the chunk and function bodies are checked, since in a nested block a
 /// bare `return` is an early exit.
 impl WholeRule for RedundantReturn {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        context.nodes.function_blocks().iter().filter_map(|block| check_tail(block)).collect()
+        context
+            .nodes
+            .function_blocks()
+            .iter()
+            .filter_map(|block| check_tail(block, context))
+            .collect()
     }
 }
 
-fn check_tail(block: &Block<'_>) -> Option<Finding> {
+fn check_tail(block: &Block<'_>, context: &LintContext<'_>) -> Option<Finding> {
     let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
         return None;
     };
     if !return_stmt.exprs.is_empty() {
         return None;
     }
-    Some(
-        Finding::new("bare `return` at the end of the function has no effect", return_stmt.span)
-            .with_fix(Fix {
-                description: "remove the redundant `return`".to_owned(),
-                edits: vec![TextEdit { span: return_stmt.span, replacement: String::new() }],
-            }),
-    )
+    let span = return_stmt.span;
+    Some(Finding::new("bare `return` at the end of the function has no effect", span).with_fix(
+        context,
+        FixKind::Fix,
+        |fixer| fixer.delete("remove the redundant `return`", span),
+    ))
 }
 
 #[cfg(test)]

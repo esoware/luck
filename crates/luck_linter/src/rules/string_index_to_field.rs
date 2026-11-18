@@ -1,8 +1,8 @@
 use luck_ast::{ChainHead, Expression, Suffix, SuffixedExpression};
-use luck_token::{LuaVersion, Span, TokenKind, short_string_body};
+use luck_token::{Span, TokenKind, short_string_body};
 
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
+use crate::fix::FixKind;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{ChainPosition, LintContext, NodeRule, impl_rule};
 
@@ -14,7 +14,8 @@ impl_rule!(
     "string_index_to_field",
     Style,
     Warning,
-    "use of string-key index for an identifier-safe key; prefer dot syntax"
+    "use of string-key index for an identifier-safe key; prefer dot syntax",
+    Fix
 );
 
 impl NodeRule for StringIndexToField {
@@ -29,12 +30,16 @@ impl NodeRule for StringIndexToField {
         findings: &mut Vec<Finding>,
     ) {
         for (position, suffix) in chain.suffixes.iter().enumerate() {
-            findings.extend(check_index(chain.head(position), suffix, context.semantic.version()));
+            findings.extend(check_index(chain.head(position), suffix, context));
         }
     }
 }
 
-fn check_index(head: ChainHead<'_>, suffix: &Suffix<'_>, version: LuaVersion) -> Option<Finding> {
+fn check_index(
+    head: ChainHead<'_>,
+    suffix: &Suffix<'_>,
+    context: &LintContext<'_>,
+) -> Option<Finding> {
     let Suffix::Index { span: index_span, index: Expression::StringLiteral(literal) } = suffix
     else {
         return None;
@@ -42,24 +47,28 @@ fn check_index(head: ChainHead<'_>, suffix: &Suffix<'_>, version: LuaVersion) ->
     // The body is the raw spelling. The shape check rejects the `\` of any
     // escape, which could make the key differ from that spelling.
     let name = short_string_body(literal.text)?;
-    if !TokenKind::is_identifier_shaped(name) || TokenKind::is_reserved(name, version) {
+    if !TokenKind::is_identifier_shaped(name)
+        || TokenKind::is_reserved(name, context.semantic.version())
+    {
         return None;
     }
 
     // Replace everything after the head, brackets included.
     let span = Span::new(head.span().end, index_span.end);
+    let key = literal.text;
     Some(
-        Finding::new(format!("`[\"{name}\"]` is equivalent to `.{name}`"), span)
+        Finding::new(format!("`[{key}]` is equivalent to `.{name}`"), span)
             .with_help("prefer dot access for identifier-safe keys")
-            .with_fix(Fix {
-                description: format!("rewrite `[\"{name}\"]` as `.{name}`"),
-                edits: vec![TextEdit { span, replacement: format!(".{name}") }],
+            .with_fix(context, FixKind::Fix, |fixer| {
+                fixer.replace(format!("rewrite `[{key}]` as `.{name}`"), span, format!(".{name}"))
             }),
     )
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::{fix_and_reparse, run_rule};
@@ -75,6 +84,20 @@ mod tests {
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert_eq!(fixed, "local x = t.foo");
+    }
+
+    #[test]
+    fn flags_key_quoted_as_written() {
+        let diags = run("local x = t['foo']");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "`['foo']` is equivalent to `.foo`");
+    }
+
+    #[test]
+    fn flags_without_fix_for_comment_inside_brackets() {
+        let diags = run("local x = t[--[[why]] \"foo\"]");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_none(), "the fix would delete the comment: {diags:?}");
     }
 
     #[test]

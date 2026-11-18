@@ -7,62 +7,74 @@ use rayon::prelude::*;
 
 use crate::config::{LintConfig, RuleLevel};
 use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
+use crate::fix::FixKind;
 use crate::nodes::{NodeCollector, Nodes};
 use crate::rule::{LintContext, NodeRule, Rule, WholeRule};
 use crate::rules::{PARSE_ERROR_PSEUDO_RULE, RULES, RuleEntry};
 use crate::{bus, suppression};
 
 /// Parses `source` into `allocator` and lints it for `target`, whose stdlib
-/// environment decides which globals exist.
+/// environment decides which globals exist. A diagnostic carries a fix only
+/// of the kinds `fixes` holds, so an empty set builds none.
+///
+/// # Panics
+///
+/// In debug builds, as [`lint_analyzed`] does.
 #[must_use]
 pub fn lint(
     allocator: &Allocator,
     source: &str,
     target: LuaTarget,
     config: &LintConfig,
+    fixes: FixKind,
 ) -> Vec<LintDiagnostic> {
-    lint_parsed(&luck_parser::parse(allocator, source, target.lua_version()), target, config)
+    lint_parsed(&luck_parser::parse(allocator, source, target.lua_version()), target, config, fixes)
 }
 
-/// [`analyze`]s `parse` for `target` and lints it. A parse with errors
-/// yields one `parse_error` diagnostic per error, and no rules run.
+/// [`analyze`]s `parse` for `target` and lints it, building the fixes of
+/// the kinds `fixes` holds. A parse with errors yields one `parse_error`
+/// diagnostic per error, and no rules run.
 ///
 /// # Panics
 ///
-/// In debug builds, when a rule's `node_types()` omits a type its hooks act on.
+/// In debug builds, as [`lint_analyzed`] does.
 #[must_use]
 pub fn lint_parsed(
     parse: &ParseResult<'_>,
     target: LuaTarget,
     config: &LintConfig,
+    fixes: FixKind,
 ) -> Vec<LintDiagnostic> {
     if !parse.errors.is_empty() {
         return parse_error_diags(parse);
     }
-    lint_analyzed(parse, &analyze(parse, target, config), config)
+    lint_analyzed(parse, &analyze(parse, target, config), config, fixes)
 }
 
 /// Lints an existing parse and its analysis, so hosts like the LSP don't
-/// build either twice. `config` must be the one `analysis` was built with.
+/// build either twice, building the fixes of the kinds `fixes` holds. `config`
+/// must be the one `analysis` was built with.
 ///
 /// A parse with errors yields one `parse_error` diagnostic per error, and no
 /// rules run.
 ///
 /// # Panics
 ///
-/// In debug builds, when a rule's `node_types()` omits a type its hooks act on.
+/// In debug builds, when a rule's `node_types()` omits a type its hooks act
+/// on, or when a rule offers a fix of a kind its `fix_kind()` leaves out.
 #[must_use]
 pub fn lint_analyzed(
     parse: &ParseResult<'_>,
     analysis: &Analysis<'_>,
     config: &LintConfig,
+    fixes: FixKind,
 ) -> Vec<LintDiagnostic> {
     if !parse.errors.is_empty() {
         return parse_error_diags(parse);
     }
 
     let (semantic, nodes) = (analysis.semantic(), analysis.nodes());
-    let context = LintContext::new(parse, semantic, nodes, config);
+    let context = LintContext::new(parse, semantic, nodes, config, fixes);
 
     let mut diags = run_rules(&context, nodes);
     // A directive only drops or retunes a diagnostic, so with none it reads
@@ -215,9 +227,15 @@ pub(crate) fn into_diagnostics(
     findings: Vec<Finding>,
     severity: Severity,
 ) -> impl Iterator<Item = LintDiagnostic> {
-    let name = rule.name();
-    let category = rule.category();
-    findings.into_iter().map(move |finding| finding.into_diagnostic(name, category, severity))
+    let (name, category, fix_kind) = (rule.name(), rule.category(), rule.fix_kind());
+    findings.into_iter().map(move |finding| {
+        let diag = finding.into_diagnostic(name, category, severity);
+        debug_assert!(
+            diag.fix.as_ref().is_none_or(|fix| fix_kind.contains(fix.kind)),
+            "rule `{name}` offers a fix of a kind its `fix_kind()` leaves out: {diag:?}"
+        );
+        diag
+    })
 }
 
 /// The severity `rule` runs at, or `None` when it's off. The rule's own
@@ -248,12 +266,12 @@ mod tests {
         silent.categories.set_level(Category::Correctness, RuleLevel::Off);
         let unlinted = analyze(&parse, LuaTarget::Lua54, &silent);
         assert!(unlinted.nodes().as_slice().is_empty());
-        assert_eq!(lint_analyzed(&parse, &unlinted, &silent), []);
+        assert_eq!(lint_analyzed(&parse, &unlinted, &silent, FixKind::all()), []);
         let mut one_rule = silent;
         one_rule.rules.set_level("redundant_nil_init", RuleLevel::Warn);
         let linted = analyze(&parse, LuaTarget::Lua54, &one_rule);
         assert!(!linted.nodes().as_slice().is_empty());
-        let diags = lint_analyzed(&parse, &linted, &one_rule);
+        let diags = lint_analyzed(&parse, &linted, &one_rule, FixKind::all());
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }

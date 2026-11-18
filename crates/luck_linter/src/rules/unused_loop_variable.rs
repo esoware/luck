@@ -1,8 +1,9 @@
 use luck_semantic::SymbolKind;
 
 use crate::diagnostic::Finding;
+use crate::fix::FixKind;
 use crate::rule::{LintContext, WholeRule, impl_rule};
-use crate::underscore_fix::UnderscoreFixes;
+use crate::underscore_fix::prefix_underscore;
 
 /// Flags a `for` loop variable that's never read (Luacheck 213).
 ///
@@ -17,14 +18,14 @@ impl_rule!(
     "unused_loop_variable",
     Style,
     Warning,
-    "for-loop variable is declared but never read in the loop body"
+    "for-loop variable is declared but never read in the loop body",
+    Suggestion
 );
 
 impl WholeRule for UnusedLoopVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
         let tree = semantic.scope_tree();
-        let fixes = UnderscoreFixes::new(semantic);
         let mut findings = Vec::new();
 
         for symbol in tree.symbols() {
@@ -48,7 +49,9 @@ impl WholeRule for UnusedLoopVariable {
             findings.push(
                 Finding::new(format!("unused loop variable `{name}`"), symbol.definition_span)
                     .with_help("prefix with `_` to suppress this warning")
-                    .with_optional_fix(fixes.fix_for(symbol)),
+                    .with_fix(context, FixKind::Suggestion, |fixer| {
+                        prefix_underscore(fixer, semantic, symbol)
+                    }),
             );
         }
 
@@ -62,8 +65,7 @@ mod tests {
 
     use super::*;
     use crate::diagnostic::LintDiagnostic;
-    use crate::fix::apply_one_pass;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::fixtures::{applied, fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
         run_rule(&UnusedLoopVariable, source, LuaVersion::Lua54)
@@ -117,11 +119,9 @@ local _k = 1
 for k, v in pairs({}) do print(_k, v) end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_ne!(
-            apply_one_pass(source, &diags),
-            "\
-local _k = 1
-for _k, v in pairs({}) do print(_k, v) end",
+        assert_eq!(
+            applied(source, &diags),
+            source,
             "the rename shouldn't make `print(_k)` read the loop variable"
         );
     }

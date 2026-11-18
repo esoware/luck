@@ -1,8 +1,8 @@
 use luck_ast::{Expression, LocalAssignment, Statement, is_multi_value};
-use luck_token::{Comment, Span};
+use luck_token::Span;
 
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit, comments_within};
+use crate::fix::FixKind;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
@@ -16,7 +16,8 @@ impl_rule!(
     "redundant_nil_init",
     Style,
     Warning,
-    "local variable initialized to `nil` (the default value)"
+    "local variable initialized to `nil` (the default value)",
+    Fix
 );
 
 impl NodeRule for RedundantNilInit {
@@ -30,12 +31,12 @@ impl NodeRule for RedundantNilInit {
         findings: &mut Vec<Finding>,
     ) {
         if let Statement::LocalAssignment(local) = stmt {
-            findings.extend(check_local(local, context.source, context.comments));
+            findings.extend(check_local(local, context));
         }
     }
 }
 
-fn check_local(local: &LocalAssignment<'_>, source: &str, comments: &[Comment]) -> Option<Finding> {
+fn check_local(local: &LocalAssignment<'_>, context: &LintContext<'_>) -> Option<Finding> {
     // Luau requires a `const` to have an initializer.
     if local.kind.is_const() {
         return None;
@@ -48,17 +49,19 @@ fn check_local(local: &LocalAssignment<'_>, source: &str, comments: &[Comment]) 
     }
 
     let Some(last_kept_expr) = exprs.iter().rev().nth(trailing_nil_count) else {
+        let first_expr = exprs.first()?;
         return Some(
             Finding::new(
                 "redundant `= nil` initializer, because uninitialized locals are `nil`",
                 local.span,
             )
             .with_help("drop the `= nil` to rely on the default value")
-            .with_optional_fix(deletion_fix(
-                "drop redundant `= nil` initializer",
-                whole_initializer_span(local, exprs.first()?, source, comments),
-                comments,
-            )),
+            .with_fix(context, FixKind::Fix, |fixer| {
+                fixer.delete(
+                    "drop redundant `= nil` initializer",
+                    whole_initializer_span(local, first_expr, context),
+                )
+            }),
         );
     };
 
@@ -81,34 +84,25 @@ fn check_local(local: &LocalAssignment<'_>, source: &str, comments: &[Comment]) 
             local.span,
         )
         .with_help("drop trailing `nil` values, because the locals default to `nil`")
-        .with_optional_fix(deletion_fix(
-            "drop trailing `nil` initializers",
-            Span::new(delete_start, delete_end),
-            comments,
-        )),
+        .with_fix(context, FixKind::Fix, |fixer| {
+            fixer.delete("drop trailing `nil` initializers", Span::new(delete_start, delete_end))
+        }),
     )
-}
-
-fn deletion_fix(description: &str, span: Span, comments: &[Comment]) -> Option<Fix> {
-    comments_within(comments, span).is_empty().then(|| Fix {
-        description: description.to_owned(),
-        edits: vec![TextEdit { span, replacement: String::new() }],
-    })
 }
 
 /// The ` = nil` part of a local, starting after any comments before the `=`.
 fn whole_initializer_span(
     local: &LocalAssignment<'_>,
     first_expr: &Expression<'_>,
-    source: &str,
-    comments: &[Comment],
+    context: &LintContext<'_>,
 ) -> Span {
     let binding_end = last_binding_end(local);
     let gap = Span::new(binding_end, first_expr.span().start);
-    let delete_start = comments_within(comments, gap)
+    let delete_start = context
+        .comments_within(gap)
         .iter()
         .take_while(|comment| {
-            !Span::new(binding_end, comment.span.start).text(source).contains('=')
+            !Span::new(binding_end, comment.span.start).text(context.source).contains('=')
         })
         .last()
         .map_or(binding_end, |comment| comment.span.end);

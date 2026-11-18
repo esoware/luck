@@ -6,7 +6,7 @@
 use luck_allocator::Allocator;
 use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use luck_benchmark_files::{test_files, test_projects};
-use luck_linter::{CategoryLevels, LintConfig, RuleLevel};
+use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
 use rayon::ThreadPoolBuilder;
 
 /// Each iteration analyzes and lints a parse made once, since the linter's
@@ -34,8 +34,14 @@ fn bench_linter(criterion: &mut Criterion) {
         let allocator = Allocator::new();
         let parse_result = file.parse(&allocator);
         group.bench_function(id, |bencher| {
-            bencher
-                .iter(|| luck_linter::lint_parsed(black_box(&parse_result), file.target, &config));
+            bencher.iter(|| {
+                luck_linter::lint_parsed(
+                    black_box(&parse_result),
+                    file.target,
+                    &config,
+                    FixKind::empty(),
+                )
+            });
         });
     }
 
@@ -50,6 +56,7 @@ fn bench_linter(criterion: &mut Criterion) {
                         black_box(parse_result),
                         project.target,
                         &config,
+                        FixKind::empty(),
                     ));
                 }
             });

@@ -7,8 +7,10 @@ use std::path::{self, Path, PathBuf};
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
 use luck_allocator::Allocator;
 use luck_config::Project;
-use luck_core::Diagnostic;
-use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
+use luck_core::{Diagnostic, LuaTarget};
+use luck_linter::{
+    Category, FixError, FixKind, Fixed, LintConfig, LintDiagnostic, RuleLevel, Severity,
+};
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::{LineIndex, LuaVersion};
 
@@ -138,9 +140,14 @@ pub(crate) struct LintArgs {
     #[arg(long = "global", value_name = "NAME")]
     globals: Vec<String>,
 
-    /// Apply auto-fixes and write them back to source files.
+    /// Apply fixes until none is left, and write them back to source files.
     #[arg(long)]
     fix: bool,
+
+    /// Like --fix, but apply suggestions too, which may change what the code
+    /// does, as renaming an unused variable to `_x` does.
+    #[arg(long)]
+    fix_suggestions: bool,
 
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = LintFormat::Default)]
@@ -162,7 +169,7 @@ pub(crate) struct LintArgs {
     #[arg(long)]
     no_error_on_unmatched_pattern: bool,
 
-    /// Print the registered rule names and categories, then exit.
+    /// Print the registered rule names, categories, and fix kinds, then exit.
     #[arg(long)]
     rules: bool,
 
@@ -268,7 +275,7 @@ impl LintArgs {
             )
         }?;
 
-        if !self.silent && self.fix && total_fixed > 0 && !is_quiet {
+        if !self.silent && total_fixed > 0 && !is_quiet {
             eprintln!("Fixed {total_fixed} file(s)");
         }
 
@@ -288,29 +295,30 @@ impl LintArgs {
     ///
     /// # Errors
     ///
-    /// Returns [`Exit::Failure`] when stdin can't be read or the findings fail
-    /// the run under the exit-code policy.
+    /// Returns [`Exit::Failure`] when stdin can't be read, the fixes don't
+    /// converge, or the findings fail the run under the exit-code policy.
     fn run_stdin(&self, stdin_path: &str, project: &Project, is_quiet: bool) -> Result<(), Exit> {
         let source = read_stdin_source()?;
 
         let path = Some(Path::new(stdin_path));
         let (target, lint_config) = (project.target_for(path), project.lint_for(path));
-        let version = target.lua_version();
         let allocator = Allocator::new();
-        let mut diags = luck_linter::lint(&allocator, &source, target, &lint_config);
-        let mut current_source = source.as_str();
+        let fixes = self.fixes();
+        let (current_source, diags, fix_error) =
+            fixed_or_linted(&allocator, &source, target, &lint_config, fixes);
 
-        if self.fix {
-            if let Some(fixed) = luck_linter::apply_fixes(&allocator, &source, &diags, version) {
-                diags = luck_linter::lint_parsed(&fixed, target, &lint_config);
-                current_source = fixed.source;
-            }
+        if !fixes.is_empty() {
             // Echo the source even with nothing to fix, since editors and
             // pipelines take stdout as the new file content.
             print!("{current_source}");
         }
+        if let Some(error) = &fix_error {
+            eprintln!("error: cannot fix `{stdin_path}`: {error}");
+        }
 
-        let (total_errors, total_warnings) = severity_counts(&diags);
+        let (finding_errors, total_warnings) = severity_counts(&diags);
+        let total_errors = finding_errors.saturating_add(usize::from(fix_error.is_some()));
+        let version = target.lua_version();
 
         if let Some(rendered) = self.rendered(stdin_path, current_source, diags, version, is_quiet)
         {
@@ -318,12 +326,23 @@ impl LintArgs {
                 Rendered::Pretty(pretty) => {
                     let _unused = io::stderr().write_all(&pretty);
                 }
-                Rendered::Lines(lines) if self.fix => eprint!("{lines}"),
+                Rendered::Lines(lines) if !fixes.is_empty() => eprint!("{lines}"),
                 Rendered::Lines(lines) => print!("{lines}"),
             }
         }
 
         self.exit_status(total_errors, total_warnings, is_quiet)
+    }
+
+    /// The kinds of fix the run applies.
+    const fn fixes(&self) -> FixKind {
+        if self.fix_suggestions {
+            FixKind::all()
+        } else if self.fix {
+            FixKind::Fix
+        } else {
+            FixKind::empty()
+        }
     }
 
     /// # Errors
@@ -372,28 +391,29 @@ impl LintArgs {
 
         let target = file.project.target_for(Some(file_path));
         let lint_config = file.project.lint_for(Some(file_path));
-        let version = target.lua_version();
-        let mut diags = luck_linter::lint(allocator, &source, target, &lint_config);
-        let mut current_source = source.as_str();
+        let (fixed, fixed_diags, fix_error) =
+            fixed_or_linted(allocator, &source, target, &lint_config, self.fixes());
+        let mut note =
+            fix_error.map(|error| format!("error: cannot fix `{}`: {error}", file_path.display()));
         let mut is_fixed = false;
-        let mut note = None;
-
-        if self.fix
-            && let Some(fixed) = luck_linter::apply_fixes(allocator, &source, &diags, version)
-        {
-            if let Err(error) = fs::write(file_path, fixed.source) {
-                note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
-            } else {
-                is_fixed = true;
-                diags = luck_linter::lint_parsed(&fixed, target, &lint_config);
-                current_source = fixed.source;
-            }
-        }
+        let (current_source, diags) = if fixed == source {
+            (fixed, fixed_diags)
+        } else if let Err(error) = fs::write(file_path, fixed) {
+            note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
+            let unfixed =
+                luck_linter::lint(allocator, &source, target, &lint_config, FixKind::empty());
+            (source.as_str(), unfixed)
+        } else {
+            is_fixed = true;
+            (fixed, fixed_diags)
+        };
 
         let (finding_errors, warning_count) = severity_counts(&diags);
+        let version = target.lua_version();
         let rendered =
             self.rendered(&file_path.to_string_lossy(), current_source, diags, version, is_quiet);
-        // A fix that couldn't be written fails the run, as an unread file does.
+        // Fixes that couldn't be made or written fail the run, as an unread
+        // file does.
         let error_count = finding_errors.saturating_add(usize::from(note.is_some()));
         LintOutcome { error_count, warning_count, is_fixed, note, rendered }
     }
@@ -517,18 +537,48 @@ fn annotation_property(text: &str) -> String {
     annotation_data(text).replace(':', "%3A").replace(',', "%2C")
 }
 
+/// `source` with its fixes of the kinds `fixes` holds applied, the fixed
+/// text's diagnostics, and why fixing failed, if it did. A failure leaves
+/// `source` as it was, with its own diagnostics.
+fn fixed_or_linted<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    target: LuaTarget,
+    lint_config: &LintConfig,
+    fixes: FixKind,
+) -> (&'ast str, Vec<LintDiagnostic>, Option<FixError>) {
+    let fix_error = if fixes.is_empty() {
+        None
+    } else {
+        match luck_linter::fix(allocator, source, target, lint_config, fixes) {
+            Ok(Fixed { parse, diags }) => return (parse.source, diags, None),
+            Err(error) => Some(error),
+        }
+    };
+    let diags = luck_linter::lint(allocator, source, target, lint_config, FixKind::empty());
+    (source, diags, fix_error)
+}
+
 /// Count `diags` by severity, as `(errors, warnings)`.
 fn severity_counts(diags: &[LintDiagnostic]) -> (usize, usize) {
     let count = |severity: Severity| diags.iter().filter(|diag| diag.severity == severity).count();
     (count(Severity::Error), count(Severity::Warning))
 }
 
+/// One line per rule: its name, its category, and the kinds its fixes come
+/// in, comma-separated and empty for a rule with none.
 fn print_lint_rules() {
-    let mut rules: Vec<(&str, &str)> =
-        luck_linter::rules().map(|rule| (rule.name(), rule.category().name())).collect();
-    rules.sort_unstable();
-    for (name, category) in rules {
-        println!("{name}\t{category}");
+    let mut rules: Vec<(&str, &str, FixKind)> = luck_linter::rules()
+        .map(|rule| (rule.name(), rule.category().name(), rule.fix_kind()))
+        .collect();
+    rules.sort_unstable_by_key(|&(name, ..)| name);
+    for (name, category, fix_kind) in rules {
+        let kinds: Vec<&str> = [(FixKind::Fix, "fix"), (FixKind::Suggestion, "suggestion")]
+            .into_iter()
+            .filter(|&(kind, _)| fix_kind.contains(kind))
+            .map(|(_, kind_name)| kind_name)
+            .collect();
+        println!("{name}\t{category}\t{}", kinds.join(","));
     }
 }
 
@@ -547,7 +597,6 @@ mod tests {
 
     use clap::Parser as _;
     use clap::error::ErrorKind;
-    use luck_core::LuaTarget;
 
     use super::*;
     use crate::cli::{Cli, Command};
@@ -580,7 +629,7 @@ mod tests {
         target: LuaTarget,
         lint_config: &LintConfig,
     ) -> Vec<LintDiagnostic> {
-        luck_linter::lint(&Allocator::new(), source, target, lint_config)
+        luck_linter::lint(&Allocator::new(), source, target, lint_config, FixKind::empty())
     }
 
     fn rendered_lines(format: &str, file_label: &str, source: &str) -> String {
@@ -657,6 +706,14 @@ mod tests {
         assert!(print_config);
         assert!(matches!(format, LintFormat::Json));
         assert!(matches!(lint_args(&["-f", "github"]).format, LintFormat::Github));
+    }
+
+    #[test]
+    fn fix_flags_pick_the_kinds_of_fix_to_apply() {
+        assert_eq!(lint_args(&[]).fixes(), FixKind::empty());
+        assert_eq!(lint_args(&["--fix"]).fixes(), FixKind::Fix);
+        assert_eq!(lint_args(&["--fix-suggestions"]).fixes(), FixKind::all());
+        assert_eq!(lint_args(&["--fix", "--fix-suggestions"]).fixes(), FixKind::all());
     }
 
     #[test]

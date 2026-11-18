@@ -174,8 +174,8 @@ fn lint_stdin_fix_json_keeps_findings_out_of_the_fixed_source() {
         .args(["lint", "--fix", "--format", "json", "--stdin-filepath", "buffer.lua"])
         .write_stdin(
             "\
-local unused = 1
-return missingglobal",
+local t = unpack({})
+return t, missingglobal",
         )
         .output()
         .expect("luck runs");
@@ -183,9 +183,39 @@ return missingglobal",
     assert_eq!(
         stdout_text(&output),
         "\
-local _unused = 1
-return missingglobal",
+local t = table.unpack({})
+return t, missingglobal",
         "`--fix` over stdin writes the fixed source to stdout, and nothing else may follow it"
+    );
+}
+
+/// The outer fix overlaps the inner one, so only a second round can apply it.
+#[test]
+fn lint_fix_leaves_no_fixable_problem() {
+    let directory = TempDir::new().unwrap();
+    write_file(
+        directory.path(),
+        "luck.json",
+        r#"{ "lint": { "rules": { "unnecessary_negation": "warn" } } }"#,
+    );
+    let path = write_file(
+        directory.path(),
+        "main.lua",
+        "\
+local a, b, c = 1, 2, 3
+return not (a == (not (b == c)))
+",
+    );
+
+    let output = run(directory.path(), &["lint", "--fix", "main.lua"]);
+
+    assert_eq!(output.status.code(), Some(0i32), "{}", stderr_text(&output));
+    assert_eq!(
+        fs::read_to_string(&path).expect("main.lua reads"),
+        "\
+local a, b, c = 1, 2, 3
+return (a ~= ((b ~= c)))
+"
     );
 }
 
@@ -196,8 +226,8 @@ fn lint_fix_exits_failure_when_a_file_cannot_be_written() {
         directory.path(),
         "main.lua",
         "\
-local unused = 1
-return 1
+local t = unpack({})
+return t
 ",
     );
     make_read_only(&path);

@@ -4,9 +4,10 @@ use luck_token::{LuaVersion, Span};
 
 use crate::config::LintConfig;
 use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
+use crate::fix::{self, FixKind};
 use crate::rule::{LintContext, Rule};
 use crate::rules::{RULES, RuleEntry};
-use crate::{bus, driver, fix};
+use crate::{bus, driver};
 
 pub(crate) fn run_rule(rule: &dyn Rule, source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
     run_rule_with_config(rule, source, version, &LintConfig::default())
@@ -25,19 +26,25 @@ pub(crate) fn run_rule_with_config(
     check(rule, source, standalone(version), config)
 }
 
-/// Applies the diagnostics' fixes the way `--fix` does, asserting that each
-/// diagnostic carries one and that the result re-parses.
+/// Applies one round of the diagnostics' fixes, whatever their kind, as
+/// `--fix-suggestions` does, asserting that each diagnostic carries one and
+/// that the result re-parses.
 pub(crate) fn fix_and_reparse(
     source: &str,
     diags: &[LintDiagnostic],
     version: LuaVersion,
 ) -> String {
     assert!(diags.iter().all(|diag| diag.fix.is_some()), "{diags:?}");
-    let fixed = fix::apply_one_pass(source, diags);
+    let fixed = applied(source, diags);
     let allocator = Allocator::new();
     let reparse = luck_parser::parse(&allocator, &fixed, version);
     assert!(reparse.errors.is_empty(), "reparse: {:?}", reparse.errors);
     fixed
+}
+
+/// `source` after one round of the diagnostics' fixes, whatever their kind.
+pub(crate) fn applied(source: &str, diags: &[LintDiagnostic]) -> String {
+    fix::apply(source, diags, FixKind::all()).unwrap_or_else(|| source.to_owned())
 }
 
 const fn standalone(version: LuaVersion) -> LuaTarget {
@@ -62,7 +69,7 @@ fn check(
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
     let analysis = driver::analyze(&parse, target, config);
     let nodes = analysis.nodes();
-    let context = LintContext::new(&parse, analysis.semantic(), nodes, config);
+    let context = LintContext::new(&parse, analysis.semantic(), nodes, config, FixKind::all());
     let entry = RULES
         .iter()
         .find(|entry| entry.rule().name() == rule.name())

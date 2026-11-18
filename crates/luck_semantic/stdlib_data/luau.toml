@@ -497,7 +497,8 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_must_use = true
-deprecated = { message = "use the '#' length operator instead", replace_template = "#%1" }
+# `#` calls a table's `__len`, which `table.getn` ignores.
+deprecated = { message = "use the '#' length operator instead", replacement = { template = "#%1", is_exact = false } }
 params = [{ kind = "table" }]
 
 [globals.table.members.insert]

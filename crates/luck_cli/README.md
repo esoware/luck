@@ -15,7 +15,7 @@ cargo install luck_cli
 | `luck bundle <entry>` | Bundles one entry into a single file |
 | `luck minify <file>` | Minifies one file, or stdin |
 | `luck graph <entry>` | Prints an entry's dependency graph, as JSON or DOT |
-| `luck lint [paths]` | Lints files, and with `--fix` applies the fixes |
+| `luck lint [paths]` | Lints files, and with `--fix` applies the fixes until none is left, or with `--fix-suggestions` the suggestions too |
 | `luck fmt [paths]` | Formats files, or with `--check` lists the ones that would change |
 | `luck check [paths]` | Reports syntax and compile errors |
 | `luck lsp` | Runs the language server over stdio, or over TCP with `--socket` |

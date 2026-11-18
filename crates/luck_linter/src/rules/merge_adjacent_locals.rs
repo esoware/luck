@@ -2,7 +2,7 @@ use luck_ast::{Attribute, LocalAssignment, LocalAssignmentKind, Statement};
 use luck_token::Span;
 
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit, comments_within};
+use crate::fix::FixKind;
 use crate::nodes::adjacent_stmts;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
@@ -14,7 +14,8 @@ impl_rule!(
     "merge_adjacent_locals",
     Style,
     Warning,
-    "adjacent simple `local` declarations can be merged"
+    "adjacent simple `local` declarations can be merged",
+    Fix
 );
 
 impl WholeRule for MergeAdjacentLocals {
@@ -30,18 +31,19 @@ impl WholeRule for MergeAdjacentLocals {
                 else {
                     continue;
                 };
-                let Some(merged) = merged_local(first_local, second_local, context) else {
+                let Some((first, second)) = mergeable(first_local, second_local, context) else {
                     continue;
                 };
+                let span = Span::new(first_local.span.start, second_local.span.end);
                 findings.push(
                     Finding::new("adjacent `local` declarations can be merged", first_local.span)
                         .with_help("combine into a single multi-binding `local`")
-                        .with_fix(Fix {
-                            description: "merge adjacent `local` declarations".to_owned(),
-                            edits: vec![TextEdit {
-                                span: Span::new(first_local.span.start, second_local.span.end),
-                                replacement: merged,
-                            }],
+                        .with_fix(context, FixKind::Fix, |fixer| {
+                            fixer.replace(
+                                "merge adjacent `local` declarations",
+                                span,
+                                build_merged(context.source, &first, &second),
+                            )
                         }),
                 );
                 // Skip the window that starts at `second_local`, so no two
@@ -53,21 +55,20 @@ impl WholeRule for MergeAdjacentLocals {
     }
 }
 
-/// The one `local` that declares both bindings, unless merging them could
-/// change what the code does or drop a comment.
-fn merged_local(
-    first_local: &LocalAssignment<'_>,
-    second_local: &LocalAssignment<'_>,
+/// Both bindings, unless merging them could change what the code does, or a
+/// comment in the pair, such as one trailing the first, sets them apart.
+fn mergeable<'ast>(
+    first_local: &'ast LocalAssignment<'ast>,
+    second_local: &'ast LocalAssignment<'ast>,
     context: &LintContext<'_>,
-) -> Option<String> {
+) -> Option<(SimpleBinding<'ast>, SimpleBinding<'ast>)> {
     let first = simple_binding(first_local)?;
     let second = simple_binding(second_local)?;
-    let rewritten_span = Span::new(first_local.span.start, second_local.span.end);
-    if !comments_within(context.comments, rewritten_span).is_empty() {
+    let pair_span = Span::new(first_local.span.start, second_local.span.end);
+    if !context.comments_within(pair_span).is_empty() {
         return None;
     }
-    let source = context.source;
-    if !annotations_match(source, &first, &second) {
+    if !annotations_match(context.source, &first, &second) {
         return None;
     }
     // Lua allows only one `<close>` variable per local list.
@@ -83,7 +84,7 @@ fn merged_local(
             .resolved
             .is_some_and(|symbol| tree.symbol(symbol).definition_span == first.name)
     });
-    (!reads_first).then(|| build_merged(source, &first, &second))
+    (!reads_first).then_some((first, second))
 }
 
 struct SimpleBinding<'ast> {
@@ -152,7 +153,6 @@ mod tests {
 
     use super::*;
     use crate::diagnostic::LintDiagnostic;
-    use crate::fix::apply_one_pass;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
@@ -298,40 +298,48 @@ local b = 2");
 local a: number = 1
 local b: string = \"x\"";
         let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
-        let fixed = apply_one_pass(source, &diags);
-        assert!(
-            fixed.contains(": number") && fixed.contains(": string"),
-            "the merge shouldn't drop the annotations: {fixed}"
-        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
+        assert_eq!(fixed, "local a: number, b: string = 1, \"x\"");
     }
 
     #[test]
     fn ignores_export() {
-        let source = "\
+        let diags = run_rule(
+            &MergeAdjacentLocals,
+            "\
 export local a = 1
-export local b = 2";
-        let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
-        let fixed = apply_one_pass(source, &diags);
-        assert!(fixed.contains("export"), "the merge shouldn't drop `export`: {fixed}");
+export local b = 2",
+            LuaVersion::Luau,
+        );
+        assert!(diags.is_empty(), "the merge would drop `export`: {diags:?}");
     }
 
     #[test]
     fn ignores_const() {
-        let source = "\
+        let diags = run_rule(
+            &MergeAdjacentLocals,
+            "\
 const a = 1
-const b = 2";
-        let diags = run_rule(&MergeAdjacentLocals, source, LuaVersion::Luau);
-        let fixed = apply_one_pass(source, &diags);
-        assert!(fixed.contains("const"), "the merge shouldn't make the bindings mutable: {fixed}");
+const b = 2",
+            LuaVersion::Luau,
+        );
+        assert!(diags.is_empty(), "the merge would make the bindings mutable: {diags:?}");
     }
 
     #[test]
     fn ignores_comment_inside_first_local() {
-        let source = "\
+        let diags = run("\
 local a --[[why]] = 1
-local b = 2";
-        let diags = run(source);
-        let fixed = apply_one_pass(source, &diags);
-        assert!(fixed.contains("--[[why]]"), "the merge shouldn't delete the comment: {fixed}");
+local b = 2");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_comment_trailing_first_local() {
+        let diags = run("\
+local a = 1 -- the count
+local b = 2");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

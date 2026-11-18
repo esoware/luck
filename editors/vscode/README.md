@@ -9,7 +9,7 @@ Lua/Luau language support powered by the luck toolchain:
 - **Signature help** with active-parameter tracking
 - **Go to definition**, find references, and rename for locals, and `require` paths jump to the module file
 - **Document and workspace symbols**
-- **Code actions**: per-fix quickfix, `source.fixAll.luck`, "disable rule for this statement"
+- **Code actions**: a quick fix per fix or suggestion, `source.fixAll.luck` for every fix that keeps what the code does (suggestions, such as renaming an unused variable to `_x`, stay quick fixes), "disable rule for this statement"
 - **JS/TS-style highlighting** for Lua and Luau: variables, globals, properties, functions, types, and word operators use standard theme scopes, and semantic tokens add scope-aware classification and stdlib deprecation strikethrough
 - **Document highlights**, folding ranges, selection ranges, document links
 - **Snippets** for common Lua patterns

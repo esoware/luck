@@ -8,7 +8,7 @@ use luck_allocator::Allocator;
 use luck_config::Project;
 use luck_core::LuaTarget;
 use luck_formatter::{FormatOptions, FormatResult};
-use luck_linter::{Analysis, LintConfig, LintDiagnostic};
+use luck_linter::{Analysis, FixKind, LintConfig, LintDiagnostic};
 use luck_parser::ParseResult;
 use luck_semantic::{ScopeTree, SemanticAnalysis};
 use luck_token::{LuaVersion, Span, Token};
@@ -168,9 +168,15 @@ impl DocumentState {
         self.line_index.full_document_range(self.text())
     }
 
-    /// Lints with the config the analysis was built under.
+    /// Lints with the config the analysis was built under, building every
+    /// kind of fix, since a suggestion is still a quick fix.
     pub(crate) fn lint(&self) -> Vec<LintDiagnostic> {
-        luck_linter::lint_analyzed(self.parse(), self.analysis(), &self.settings.lint)
+        luck_linter::lint_analyzed(
+            self.parse(),
+            self.analysis(),
+            &self.settings.lint,
+            FixKind::all(),
+        )
     }
 
     /// Formats the whole text, or with `range`, the statements it touches.

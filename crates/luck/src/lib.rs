@@ -113,20 +113,23 @@
 //! ```
 //!
 //! Lint, with feature `linter`. `linter::lint_parsed` lints a parse a caller
-//! already holds, and `linter::apply_fixes` returns the fixed source's parse,
-//! ready to lint again:
+//! already holds, and `linter::fix` applies the fixes of the kinds asked for
+//! until none is left, returning the fixed source's parse and diagnostics:
 //!
 //! ```
 //! # #[cfg(feature = "linter")] {
 //! use luck::allocator::Allocator;
 //! use luck::core::LuaTarget;
-//! use luck::linter::LintConfig;
+//! use luck::linter::{FixKind, LintConfig};
 //!
 //! let allocator = Allocator::new();
 //! let config = LintConfig::default();
 //! let source = "print(undefined_name)";
-//! let diags = luck::linter::lint(&allocator, source, LuaTarget::Lua54, &config);
+//! let diags = luck::linter::lint(&allocator, source, LuaTarget::Lua54, &config, FixKind::empty());
 //! assert_eq!(diags[0].rule, "undefined_variable");
+//!
+//! let fixed = luck::linter::fix(&allocator, "unpack(t)", LuaTarget::Lua54, &config, FixKind::Fix);
+//! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok("table.unpack(t)"));
 //! # }
 //! ```
 //!
