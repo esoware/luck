@@ -85,7 +85,9 @@ impl<'ast> Formatter<'ast> {
             }
             Type::Optional(optional) => {
                 self.write_type(&optional.ty);
-                self.token("?");
+                for _ in 0..optional.question_count {
+                    self.token("?");
+                }
             }
             Type::Union(union) => self.write_alternation(&union.types, "|", Placement::AfterText),
             Type::Intersection(intersection) => {

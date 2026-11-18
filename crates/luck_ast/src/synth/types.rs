@@ -88,10 +88,15 @@ impl<'ast> Synth<'ast> {
         }
     }
 
+    /// An optional `inner` takes one more `?` instead of a wrapper.
     #[must_use]
     pub fn ty_optional(&self, inner: Type<'ast>) -> Type<'ast> {
+        if let Type::Optional(mut optional) = inner {
+            optional.question_count = optional.question_count.saturating_add(1);
+            return Type::Optional(optional);
+        }
         let ty = self.parenthesize_if_composite(inner);
-        Type::Optional(self.boxed(OptionalType { span: self.next_span(), ty }))
+        Type::Optional(self.boxed(OptionalType { span: self.next_span(), ty, question_count: 1 }))
     }
 
     #[must_use]
@@ -389,6 +394,18 @@ mod tests {
         assert!(function.generics.is_some());
         assert!(function.params.iter().all(|param| param.name.is_some()));
         assert!(matches!(function.return_type, Type::Pack(_)));
+    }
+
+    #[test]
+    fn ty_optional_over_an_optional_adds_a_question_mark() {
+        let fixture = Fixture::default();
+        let synth = fixture.synth();
+        let Type::Optional(optional) = synth.ty_optional(synth.ty_optional(synth.ty_named("T")))
+        else {
+            panic!("expected an optional");
+        };
+        assert_eq!(optional.question_count, 2);
+        assert!(matches!(optional.ty, Type::Name(_)));
     }
 
     #[test]

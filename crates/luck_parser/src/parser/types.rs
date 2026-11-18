@@ -120,8 +120,9 @@ impl<'ast> Parser<'ast> {
     /// [`Self::parse_type_or_pack`] takes one.
     ///
     /// A type that holds others is a level of nesting, which each such type
-    /// counts where it's built. A union, an intersection, or a `?` wraps a
-    /// member already parsed, so it counts from that member's deepest level.
+    /// counts where it's built. A union, an intersection, or a run of `?`
+    /// wraps a member already parsed, so it counts from that member's deepest
+    /// level.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_type(&mut self) -> Type<'ast> {
         let outer = self.begin_operand();
@@ -255,20 +256,28 @@ impl<'ast> Parser<'ast> {
         List::split_off_in(&mut self.scratch.types, start, self.allocator)
     }
 
-    /// `?` stacks (`T??`), which Luau also accepts, each one a level.
+    /// A run of `?` is one node and one level. A run after an optional, as
+    /// [`Self::parse_return_type`] folds onto a pack's first element, joins it.
     fn parse_postfix_type(&mut self, primary: Type<'ast>) -> Type<'ast> {
-        let level = self.nesting_depth;
-        let mut result = primary;
-        while self.is_at(TokenKind::Question) {
+        if !self.is_at(TokenKind::Question) {
+            return primary;
+        }
+        let mut optional = if let Type::Optional(optional) = primary {
+            optional
+        } else {
+            let level = self.nesting_depth;
             if !self.enter_wrapper(level) {
-                return Type::Error(result.span());
+                return Type::Error(primary.span());
             }
             self.nesting_depth = level;
+            self.alloc(OptionalType { span: primary.span(), ty: primary, question_count: 0 })
+        };
+        while self.is_at(TokenKind::Question) {
             let question = self.advance();
-            let span = result.span().merge(question);
-            result = Type::Optional(self.alloc(OptionalType { span, ty: result }));
+            optional.span = optional.span.merge(question);
+            optional.question_count = optional.question_count.saturating_add(1);
         }
-        result
+        Type::Optional(optional)
     }
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]

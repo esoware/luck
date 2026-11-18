@@ -46,7 +46,9 @@ impl Printer {
             }
             Type::Optional(optional) => {
                 self.print_type(&optional.ty);
-                self.piece("?");
+                for _ in 0..optional.question_count {
+                    self.piece("?");
+                }
             }
             Type::Union(union) => {
                 if union.has_leading_pipe {

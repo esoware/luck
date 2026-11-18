@@ -111,34 +111,25 @@ fn optional_type() {
     assert!(matches!(alias_type(&allocator, "type X = number?"), Type::Optional(_)));
 }
 
-/// How many optionals wrap `ty`, and the type they wrap.
-fn unwrap_optionals<'tree, 'ast>(mut ty: &'tree Type<'ast>) -> (usize, &'tree Type<'ast>) {
-    let mut count = 0usize;
-    while let Type::Optional(optional) = ty {
-        count = count.saturating_add(1);
-        ty = &optional.ty;
-    }
-    (count, ty)
-}
-
-/// Each `?` wraps the type before it, and the outermost spans all of them.
 #[test]
-fn each_question_mark_is_an_optional() {
+fn a_run_of_question_marks_is_one_optional() {
     let allocator = Allocator::new();
     for (source, question_count) in
         [("type X = number?", 1), ("type X = number??", 2), ("type X = number? ? ?", 3)]
     {
         let alias = alias_type(&allocator, source);
         assert_eq!(source.get(Range::<usize>::from(alias.span())), source.get(9..), "{source}");
-        let (count, inner) = unwrap_optionals(&alias);
-        assert_eq!(count, question_count, "{source}");
-        assert!(matches!(inner, Type::Name { .. }), "{source}");
+        let Type::Optional(optional) = alias else {
+            panic!("expected Optional, got {alias:?}");
+        };
+        assert_eq!(optional.question_count, question_count, "{source}");
+        assert!(matches!(optional.ty, Type::Name(_)), "{source}");
     }
 }
 
 /// `parseReturnType` folds a suffix after `(T, ...U)` onto `T`.
 #[test]
-fn a_question_mark_folded_into_a_return_pack_wraps_its_first_element() {
+fn question_marks_folded_into_a_return_pack_join_its_first_elements_run() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local function f(): (T?, ...U)?? end");
     assert_no_errors(&result);
@@ -148,9 +139,11 @@ fn a_question_mark_folded_into_a_return_pack_wraps_its_first_element() {
     let Some(Type::Pack(pack)) = &function.body.return_type else {
         panic!("expected a pack");
     };
-    let (count, inner) = unwrap_optionals(pack.types.first().expect("an element"));
-    assert_eq!(count, 3);
-    assert!(matches!(inner, Type::Name { .. }));
+    let Some(Type::Optional(optional)) = pack.types.first() else {
+        panic!("expected an optional first element, got {:?}", pack.types.first());
+    };
+    assert_eq!(optional.question_count, 3);
+    assert!(matches!(optional.ty, Type::Name(_)));
 }
 
 #[test]

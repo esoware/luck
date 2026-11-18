@@ -232,11 +232,11 @@ mod tests {
     }
 
     #[test]
-    fn each_question_mark_is_one_level() {
+    fn a_run_of_question_marks_is_one_level() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let twice = synth.ty_optional(synth.ty_optional(synth.ty_named("T")));
-        assert_eq!(type_nesting_depth(&twice), 2);
+        assert_eq!(type_nesting_depth(&twice), 1);
     }
 
     #[test]

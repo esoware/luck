@@ -92,7 +92,7 @@ fn ast_node_layouts() {
         TypeField<'_> => 56,
         FunctionType<'_> => 48,
         FunctionTypeParam<'_> => 40,
-        OptionalType<'_> => 24,
+        OptionalType<'_> => 32,
         UnionType<'_> => 32,
         IntersectionType<'_> => 32,
         ParenthesizedType<'_> => 24,

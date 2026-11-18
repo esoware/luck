@@ -110,11 +110,14 @@ pub struct FunctionTypeParam<'ast> {
     pub ty: Type<'ast>,
 }
 
-/// One `?`, so `T??` is an optional of an optional.
+/// Luau also accepts `T??`. The parser and `Synth` build one node for a run
+/// of `?`, so `ty` is never itself an optional.
 #[derive(Debug, PartialEq, Eq)]
 pub struct OptionalType<'ast> {
     pub span: Span,
     pub ty: Type<'ast>,
+    /// At least one.
+    pub question_count: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]

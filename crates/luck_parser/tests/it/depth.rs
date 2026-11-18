@@ -264,7 +264,9 @@ fn shapes() -> Vec<Shape> {
             format!("type X = {}T{}", "(A & ".repeat(n), ")".repeat(n))
         }),
         luau("variadic return types", 1, 2, |n| format!("type X = {}T", "() -> ...".repeat(n))),
-        luau("optionals", 1, 1, |n| format!("type X = T{}", "?".repeat(n))),
+        luau("optionals in parentheses", 1, 2, |n| {
+            format!("type X = {}T{}", "(".repeat(n), "?)".repeat(n))
+        }),
         luau("optional over table types", 2, 1, |n| {
             format!("type X = {}T{}?", "{".repeat(n), "}".repeat(n))
         }),
@@ -394,6 +396,10 @@ fn a_run_counts_once_from_its_first_operand() {
         let optionals =
             format!("type X = {}T{}{}", "{".repeat(groups), "}".repeat(groups), "?".repeat(300));
         assert!(has_depth_limit_error(&parse(&allocator, &optionals, LuaVersion::Luau)));
+        let bare_optionals = format!("type X = T{}", "?".repeat(5000));
+        let optional_run = parse(&allocator, &bare_optionals, LuaVersion::Luau);
+        assert!(optional_run.errors.is_empty(), "{:?}", optional_run.errors.first());
+        assert_eq!(block_nesting_depth(&optional_run.block), 2);
 
         let later_operand =
             format!("return 1+{}x{}{}", "(".repeat(tables), ")".repeat(tables), "+1".repeat(300));
