@@ -53,12 +53,11 @@ pub(crate) fn entry_and_root(entry: &str) -> Result<(&Path, &Path), Exit> {
     Ok((entry_path, entry_path.parent().unwrap_or_else(|| Path::new(""))))
 }
 
-/// One more arena than the machine has threads, since the bundler's readers
-/// spend much of their time waiting on the disk. An arena no reader takes
-/// costs nothing.
+/// An arena for each thread the machine runs at once, since the bundler reads
+/// modules on one thread per arena. An arena no reader takes costs nothing.
 pub(crate) fn bundle_arenas() -> Vec<Allocator> {
     let thread_count = thread::available_parallelism().map_or(1, NonZero::get);
-    iter::repeat_with(Allocator::new).take(thread_count.saturating_add(1)).collect()
+    iter::repeat_with(Allocator::new).take(thread_count).collect()
 }
 
 /// An explicit `-t/--target` wins. Otherwise `config` picks by extension,
