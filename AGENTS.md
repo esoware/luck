@@ -8,7 +8,7 @@ Don't add anything to this file unless asked to. When a change makes something h
 
 Use `just`. `just --list` shows every recipe. Run `just ready` before you call a change done.
 
-- CI runs `just ready` on macOS and Linux and fails if it leaves a file changed, so commit what it formats.
+- CI runs `just ready` on Windows, macOS, and Linux and fails if it leaves a file changed, so commit what it formats.
 - There are no extension tests.
 
 ## Commits and pull requests
