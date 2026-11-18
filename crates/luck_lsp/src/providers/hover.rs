@@ -14,21 +14,21 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
     let node = find_node_at(&document.parse().block, offset)?;
     let path = node.path();
     let semantic = document.semantic();
-    // Resolving from the root's span lets shaped locals (`f:read` after
+    let tree = semantic.scope_tree();
+    // Resolving from the root's reference lets shaped locals (`f:read` after
     // `local f = io.open(...)`) resolve through their shape, and gives a
     // shadowed base (`local string = 1; string.format`) no stdlib hover
     // instead of the wrong docs.
     let entry = match &node {
         CursorNode::Identifier(name, _) => {
-            if semantic.scope_tree().resolves_to_local(name) {
+            if tree.resolves_to_local(name) {
                 return None;
             }
             semantic.stdlib().lookup(path)?
         }
-        CursorNode::DottedPath { root_span, .. } => {
-            semantic.resolve_stdlib_path(path, *root_span)?
+        CursorNode::DottedPath { root, .. } | CursorNode::Call { root, .. } => {
+            semantic.resolve_stdlib_path(path, tree.reference(tree.reference_of((*root)?)?))?
         }
-        CursorNode::Call { root_span, .. } => semantic.resolve_stdlib_path(path, (*root_span)?)?,
     };
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {

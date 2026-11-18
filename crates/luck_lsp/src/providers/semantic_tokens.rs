@@ -3,6 +3,7 @@
 //! keys from superficially identical value expressions.
 
 use alloc::collections::BTreeMap;
+use core::iter;
 
 use luck_ast::{
     Call, ChainHead, Expression, Field, GenericTypeList, Statement, Suffix, TableConstructor, Type,
@@ -350,6 +351,12 @@ impl Classifier<'_> {
     fn classify_members(&mut self) {
         let Self { source, tokens, semantic, .. } = *self;
         let library = semantic.stdlib();
+        let tree = semantic.scope_tree();
+        // By where they start, so a root's is found by walking on in step
+        // with the tokens.
+        let whole_source = Span::new(0, index_to_offset(source.len()));
+        let mut references =
+            tree.references_within(whole_source).map(|id| tree.reference(id)).peekable();
         // A name's path continues the one two tokens back, past the separator.
         let (mut link_two_back, mut link_one_back): (Option<ChainLink>, Option<ChainLink>) =
             (None, None);
@@ -374,7 +381,14 @@ impl Classifier<'_> {
             let entry = chain_before.and_then(|(before, link)| match link {
                 ChainLink::Root => {
                     let root = before.text(source);
-                    semantic.resolve_stdlib_path(&[root, name], before.span)
+                    let start = before.span.start;
+                    let reference = iter::from_fn(|| {
+                        references.next_if(|reference| reference.span.start <= start)
+                    })
+                    .find(|reference| {
+                        reference.span == before.span && tree.name(reference.name) == root
+                    })?;
+                    semantic.resolve_stdlib_path(&[root, name], reference)
                 }
                 ChainLink::Member(entry) => library.child(entry?, name),
             });

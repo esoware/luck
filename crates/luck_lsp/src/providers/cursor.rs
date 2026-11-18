@@ -114,35 +114,31 @@ pub(crate) fn is_unterminated(document: &DocumentState, literal: &Literal<'_>) -
         .is_some_and(|token| token.is_unterminated)
 }
 
-/// The plain-name path `head` ends with (`a.b.c`), root first, and the
-/// root's span: a name, or the fields it ends in and the name before them.
+/// The plain-name path `head` ends with (`a.b.c`), root first, and the name
+/// it starts from, when a name and not a field roots it.
 ///
 /// A chain broken by an index expression, a call, or a non-name prefix
 /// yields only the trailing fields that are plain names. `None` when `head`
 /// ends in nothing named by an identifier.
-fn name_path(head: ChainHead<'_>) -> Option<(Vec<&str>, Span)> {
+fn name_path(head: ChainHead<'_>) -> Option<(Vec<&str>, Option<&Name<'_>>)> {
     let Some((mut before, Suffix::Field(last))) = head.split_last() else {
         let name = head.as_name()?;
-        return Some((vec![identifier(name)?], name.span));
+        return Some((vec![identifier(name)?], Some(name)));
     };
     let mut path = vec![identifier(last)?];
-    let mut root_span = last.span;
     while let Some((earlier, Suffix::Field(inner))) = before.split_last() {
         let Some(segment) = identifier(inner) else {
             break;
         };
         path.push(segment);
-        root_span = inner.span;
         before = earlier;
     }
-    if let Some(root) = before.as_name()
-        && let Some(segment) = identifier(root)
-    {
-        path.push(segment);
-        root_span = root.span;
-    }
+    let root = before.as_name().and_then(|name| {
+        path.push(identifier(name)?);
+        Some(name)
+    });
     path.reverse();
-    Some((path, root_span))
+    Some((path, root))
 }
 
 /// The `Name(.Name)*` chain `tokens` ends with, root first, and the root's
@@ -174,15 +170,17 @@ pub(crate) enum CursorNode<'ast> {
     /// A dotted path like `string.format`, of name-only segments.
     DottedPath {
         path: Vec<&'ast str>,
-        root_span: Span,
+        /// The name the path starts from, when a name and not a field roots
+        /// it. Lets consumers resolve shaped and shadowed roots.
+        root: Option<&'ast Name<'ast>>,
         full_span: Span,
     },
     /// Path is empty for indirect callees.
     Call {
         path: Vec<&'ast str>,
-        /// Span of the root name, when the callee is a plain dotted chain.
-        /// Lets consumers resolve shaped/shadowed roots.
-        root_span: Option<Span>,
+        /// As for [`Self::DottedPath`], when the callee is a plain dotted
+        /// chain.
+        root: Option<&'ast Name<'ast>>,
         full_span: Span,
     },
 }
@@ -248,8 +246,8 @@ impl<'ast> NodeFinder<'ast> {
             }
             match suffix {
                 Suffix::Field(_) => {
-                    if let Some((path, root_span)) = name_path(head) {
-                        self.try_set(CursorNode::DottedPath { path, root_span, full_span });
+                    if let Some((path, root)) = name_path(head) {
+                        self.try_set(CursorNode::DottedPath { path, root, full_span });
                     }
                 }
                 Suffix::Call(_) | Suffix::MethodCall(_) => {
@@ -264,8 +262,7 @@ impl<'ast> NodeFinder<'ast> {
     }
 
     fn record_call(&mut self, call: Call<'ast>) {
-        let (mut path, mut root_span) = name_path(call.callee)
-            .map_or_else(|| (Vec::new(), None), |(path, span)| (path, Some(span)));
+        let (mut path, mut root) = name_path(call.callee).unwrap_or_default();
         // The method name is a path segment too: `game:GetService(...)`
         // resolves as `["game", "GetService"]` through shaped lookup.
         if let Some(method) = call.method {
@@ -275,10 +272,10 @@ impl<'ast> NodeFinder<'ast> {
                 path.push(name);
             } else {
                 path.clear();
-                root_span = None;
+                root = None;
             }
         }
-        self.try_set(CursorNode::Call { path, root_span, full_span: call.span() });
+        self.try_set(CursorNode::Call { path, root, full_span: call.span() });
     }
 }
 

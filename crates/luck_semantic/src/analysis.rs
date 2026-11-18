@@ -1,5 +1,5 @@
-use luck_ast::{Block, Call, Name, SuffixedExpression, TreeCounts};
-use luck_token::{LuaVersion, Span, StdlibEnvironment};
+use luck_ast::{Block, Call, SuffixedExpression, TreeCounts};
+use luck_token::{LuaVersion, StdlibEnvironment};
 
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
 use crate::scope::{NameId, Reference, ScopeTree, Symbol, SymbolId, build_with_initializers};
@@ -177,6 +177,9 @@ impl<'ast> SemanticAnalysis<'ast> {
         ShapeResolver::new(&self.scope_tree, self.stdlib, &self.symbol_shapes)
     }
 
+    /// The entry `segments` names, where `root` is the reference their first
+    /// makes.
+    ///
     /// With `local f = io.open(...)`, `["f", "read"]` resolves through the
     /// `file` shape. A root that reaches the host's global is a plain library
     /// lookup. Any other root resolves to nothing unless it's a local of
@@ -186,16 +189,10 @@ impl<'ast> SemanticAnalysis<'ast> {
     pub fn resolve_stdlib_path(
         &self,
         segments: &[&str],
-        root_span: Span,
+        root: &Reference,
     ) -> Option<&'static StdlibEntry> {
-        let (&text, members) = segments.split_first()?;
-        let tree = &self.scope_tree;
-        let reference = tree.reference(tree.reference_of(&Name {
-            text: text.into(),
-            index: None,
-            span: root_span,
-        })?);
-        match reference.resolved {
+        let members = segments.get(1..)?;
+        match root.resolved {
             Some(symbol) => {
                 let (first, rest) = members.split_first()?;
                 let mut current = self.stdlib.shape_member(self.symbol_shape(symbol)?, first)?;
@@ -204,7 +201,7 @@ impl<'ast> SemanticAnalysis<'ast> {
                 }
                 Some(current)
             }
-            None if tree.is_host_global(reference) => self.stdlib.lookup(segments),
+            None if self.scope_tree.is_host_global(root) => self.stdlib.lookup(segments),
             None => None,
         }
     }
@@ -228,7 +225,7 @@ impl<'ast> SemanticAnalysis<'ast> {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_ast::{Expression, FunctionBody, LastStatement, Statement, TableConstructor};
+    use luck_ast::{Expression, FunctionBody, LastStatement, Name, Statement, TableConstructor};
 
     use super::*;
     use crate::fixtures::parse;
@@ -455,16 +452,17 @@ table.insert(f)",
             LuaVersion::Lua54,
         );
         let tree = &analysis.scope_tree;
-        let span_of = |name: &str| {
+        let reference_to = |name: &str| {
             tree.references()
                 .iter()
                 .find(|reference| tree.name(reference.name) == name)
-                .map(|reference| reference.span)
                 .expect("the source references the name")
         };
-        assert!(analysis.resolve_stdlib_path(&["f", "read"], span_of("f")).is_some());
-        assert!(analysis.resolve_stdlib_path(&["io", "open"], span_of("io")).is_some());
-        assert!(analysis.resolve_stdlib_path(&["table", "insert"], span_of("table")).is_none());
+        assert!(analysis.resolve_stdlib_path(&["f", "read"], reference_to("f")).is_some());
+        assert!(analysis.resolve_stdlib_path(&["io", "open"], reference_to("io")).is_some());
+        assert!(
+            analysis.resolve_stdlib_path(&["table", "insert"], reference_to("table")).is_none()
+        );
     }
 
     #[test]
