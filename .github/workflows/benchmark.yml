@@ -8,6 +8,7 @@ on:
     types: [opened, synchronize]
     paths: &paths
       - "crates/**/*.rs"
+      - "crates/**/Cargo.toml"
       - "crates/luck_benchmark/**"
       - "crates/luck_benchmark_files/**"
       - "crates/luck_allocs/**"
