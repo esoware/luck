@@ -8,7 +8,7 @@ An `Allocator` hands out memory from chunks it grows as needed and frees it all 
 
 Everything but `List` and `ThinStr` is ported from `oxc_allocator`, whose notices are in `LICENSE`.
 
-## Public surface
+## Usage
 
 - `Allocator`: the arena. `alloc` and `alloc_str` copy a value or a string into it, and `reset` empties it.
 - `Box`: one value in the arena, never dropped. `Box::new_in` refuses to compile for a type that needs `Drop`.

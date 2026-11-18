@@ -20,7 +20,7 @@ The parse core is always present: `luck::allocator`, `luck::token`, `luck::lexer
 
 The language server is not part of it. `luck::VERSION` is the toolchain's version.
 
-## Arenas
+## Usage
 
 A tree lives in a `luck::allocator::Allocator` the caller owns, and borrows the source it was parsed from, so both outlive it. Every stage that builds nodes takes the arena first. `reset` frees everything in it at once and keeps the memory, so one arena serves file after file, and threads each take an arena from an `AllocatorPool`. The bundler takes a slice of arenas and reads modules on one thread per arena.
 

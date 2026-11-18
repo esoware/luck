@@ -22,7 +22,7 @@ cargo install luck_cli
 
 `luck <command> --help` lists each command's flags.
 
-## Overview
+## How it works
 
 Every command runs on a thread with `luck_ast::MIN_STACK_BYTES` of stack. `lint`, `fmt`, and `check` give each file the nearest `luck.json` above it, or the one `-c` names, and work through the files in parallel on rayon's pool, each file in an arena from a pool, printing each file's results in input order. `build` takes the `luck.json` above the working directory. `bundle`, `minify`, and `graph` take the one above their input. A command-line flag wins over the config.
 

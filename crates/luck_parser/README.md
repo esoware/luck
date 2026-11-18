@@ -8,7 +8,7 @@ Statements are parsed by recursive descent and expressions by Pratt parsing, alo
 
 An error doesn't stop the parse: it recovers and reports every error in one pass, sorted by position. Two limits end it early instead, with one error each: a source over 4 GiB, and nesting past `luck_ast::MAX_NESTING_DEPTH`. So every tree it returns, with errors or without, can be walked on a thread with `luck_ast::MIN_STACK_BYTES`.
 
-## Public surface
+## Usage
 
 - `parse(allocator, source, version)` returns a `ParseResult`: the source, the `Block`, the comments, the errors, the nesting depth, and the `TreeCounts`.
 - `parse_with_tokens` also returns every token it read, so a host that needs both lexes the source once.

@@ -10,7 +10,7 @@ Discovery walks up from a directory to the nearest `luck.json`, which governs wh
 
 The VS Code extension's schema is generated from `LuckConfig`, with the doc comments as its descriptions.
 
-## Public surface
+## Usage
 
 - `parse_luck_config` reads one file's text, `load_with_extends` loads a file and what it extends, and `discover_config` and `load_or_discover_config` find one.
 - `LuckConfig::target_for_path` picks a file's dialect, through `DialectKey`.

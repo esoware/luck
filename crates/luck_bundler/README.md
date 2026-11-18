@@ -15,7 +15,7 @@ The bundle opens with a small loader, and each module registers as a function th
 - `DynamicRequire` decides what a `require` whose argument isn't a string literal does: fail the bundle (E002), stay for the runtime with a warning (W007), which is the default, or stay silently.
 - The `serde` feature derives `Deserialize` for `DynamicRequire`, the shape `luck.json` gives it, and `schemars` derives `JsonSchema` too.
 
-## Public surface
+## Usage
 
 - `bundle(&mut arenas, entry, &options)` returns a `BundleResult`: the output, the warnings, the bundled files, and the line map. It needs at least one arena, and the result borrows none, so they can be reset right after.
 - `bundle_minified(&mut arenas, entry, &options, &transforms)` returns a `MinifiedBundle`.

@@ -13,7 +13,7 @@ On a parse, comments come from the parse's comment list and are placed by byte p
 - `FormatOptions` sets the line width, indent style and width, quote style, hex digit case, call parentheses, collapsing of simple `if` statements, line endings, blank lines at the edges of blocks, `require` sorting, a space after function names, and the magic trailing comma.
 - The `serde` feature derives `Deserialize` for the option enums, the shape `luck.json` gives them, and `schemars` derives `JsonSchema` too.
 
-## Public surface
+## Usage
 
 - `format(allocator, source, version, &options)` parses and formats, returning a `FormatResult` with the output and any parse errors.
 - `format_parsed` formats a parse the caller holds, and `format_range` formats only the statements a byte range overlaps and copies the rest.

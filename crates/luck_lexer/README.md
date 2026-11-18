@@ -6,7 +6,7 @@ The single-pass lexer for Lua 5.1 to 5.5 and Luau.
 
 Source text goes in and two streams come out: the tokens, and the comments between them, which stay out of the syntax tree. A token holds no text, only its kind, span, and flags, so `Token::text` slices it from the source. A token that only some versions have, such as floor division, a hex float, or Luau's interpolated strings, is recognized only for those versions. An error is recorded and lexing goes on, so one pass reports them all.
 
-## Public surface
+## Usage
 
 - `lex(source, version)` lexes a whole source into a `LexResult`: every token, ending in `Eof`, the comments, the errors, and the spans of strings and comments left unterminated.
 - `Lexer` hands out one token at a time with `next_token`, as the parser pulls them, and `finish` returns the comments and errors once the source is drained.

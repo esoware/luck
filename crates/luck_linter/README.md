@@ -14,7 +14,7 @@ A diagnostic may carry a `Fix`, a set of text edits. `apply_fixes` applies the e
 - A comment such as `-- luck: allow(unused_variable)` silences a rule for one statement, `deny` and `warn` change its severity, `start` and `end` after it mark a region, and `-- #luck: allow(...)` covers the whole file.
 - The `serde` feature derives `Deserialize` and `Serialize` for `LintConfig`, in the shape of `luck.json`'s `lint` section, and `schemars` derives `JsonSchema` too.
 
-## Public surface
+## Usage
 
 - `lint(allocator, source, target, config)` parses and lints.
 - `lint_parsed` lints a parse the caller holds. A host that also keeps the analysis, as the language server does, calls `analyze` and then `lint_analyzed`.

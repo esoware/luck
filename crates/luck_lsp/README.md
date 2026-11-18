@@ -14,7 +14,7 @@ Each version of an open document is copied into an arena of its own, parsed, and
 - Code actions: each diagnostic's fix, `source.fixAll.luck`, and comments that disable a rule.
 - Custom requests: `luck/syntaxTree` and `luck/fixAllWorkspace`.
 
-## Public surface
+## Usage
 
 - `serve_stdio()` serves over stdin and stdout, and `serve_socket(port)` over TCP, for debugging.
 - `Backend` is the server, and `Notifier` the part of the client it talks to.

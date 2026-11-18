@@ -8,7 +8,7 @@ Prints a Lua or Luau syntax tree as the shortest source that reads back as the s
 
 It recurses once per level of nesting, so it takes a tree within `luck_ast::MAX_NESTING_DEPTH`, as `luck_parser` builds. Measure a tree built some other way with `luck_ast::block_nesting_depth` first.
 
-## Public surface
+## Usage
 
 - `compact(&block)` returns the source.
 - `compact_with_capacity(&block, capacity)` reserves the output up front. A parsed tree's source length is a good hint.

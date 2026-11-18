@@ -11,7 +11,7 @@ A `Resolver` caches the directory listings it reads and what each require resolv
 
 This is the lowest luck crate that touches the filesystem, so it also holds what every file-reading consumer shares: `read_source_file`, and the forward-slash path form modules are keyed on, `normalize_path` and `native_path`.
 
-## Public surface
+## Usage
 
 - `Resolver::new(version, search_paths, project_root)`, where an empty `search_paths` means the default templates. Luau ignores both.
 - `Resolver::resolve(&ResolveRequest)` returns a `ResolvedModule`, its path and any warnings, or the `Diagnostic`.

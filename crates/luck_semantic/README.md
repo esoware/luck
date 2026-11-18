@@ -8,7 +8,7 @@ Scope analysis and standard library knowledge for Lua and Luau.
 
 `analyze` reads that tree against one environment's standard library. Each of Lua 5.1 to 5.5, Luau, and Roblox has a static catalog built into the crate, with signatures, overloads, value shapes, and deprecations, so a caller can ask whether a name is a known global or which stdlib function a call reaches.
 
-## Public surface
+## Usage
 
 - `analyze(block, counts, version, environment)` returns a `SemanticAnalysis`, and `analyze_with` shows a `NodeSink` the walk. `SemanticAnalysis` answers `is_known_global` and `resolve_callee`, and holds the `ScopeTree`.
 - `ScopeTree`: `scopes()`, `symbols()`, and `references()`, with `Scope`, `Symbol`, and `Reference` and their ids. `reference_of` takes a tree's `Name` to its reference, `Reference::resolved` holds the symbol it reaches, and `resolved_references` lists a symbol's references. `build_for_names` records only the names a caller asks about.

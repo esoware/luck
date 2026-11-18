@@ -2,7 +2,7 @@
 
 The types and rules every other luck crate builds on, except `luck_allocator`: positions, tokens, dialects, and how Lua reads literals and line breaks.
 
-## Public surface
+## Usage
 
 - `Span`: a byte range with `u32` offsets, which caps a source at 4 GiB.
 - `Token` and `TokenKind`: a token holds only its kind, its span, and two flags. `Token::text` slices its text from the source.

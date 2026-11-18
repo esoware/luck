@@ -30,7 +30,7 @@ Then `luck_codegen::compact` prints the tree once. Every rewrite assumes a metam
 
 The `serde` feature derives `Deserialize` for `TransformConfig`, the shape of `luck.json`'s `transforms`, and `schemars` derives `JsonSchema` too.
 
-## Public surface
+## Usage
 
 - `minify(allocator, source, version, &config)` parses into the arena and returns the minified source, or the parse errors.
 - `minify_block(allocator, &mut block, version, &config)` minifies a tree the caller holds. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`, and leaves the shebang and hot comments to the caller.
