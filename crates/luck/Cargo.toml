@@ -48,5 +48,9 @@ luck_resolver  = { workspace = true, optional = true }
 luck_semantic  = { workspace = true, optional = true }
 luck_token     = { workspace = true }
 
+[dev-dependencies]
+# Every stage's doctest runs.
+luck_lua = { path = ".", features = ["full"] }
+
 [package.metadata.docs.rs]
 all-features = true
