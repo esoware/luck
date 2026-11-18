@@ -9,7 +9,7 @@ Maps the string a `require` call names to the file it loads.
 
 A `Resolver` caches the directory listings it reads and what each require resolved to, and never invalidates them, so make one per build and share it across that build's threads. A require that names no file, or more than one, gets a `Diagnostic` saying why.
 
-This is the lowest luck crate that touches the filesystem, so it also holds what every file-reading consumer shares: `read_source_file`, and the forward-slash path form modules are keyed on, `normalize_path` and `native_path`.
+It is the lowest luck crate that reads the filesystem, so it also holds the helpers every crate that reads files shares. That is `read_source_file`, plus `normalize_path` and `native_path` for the forward-slash path form that modules are keyed on.
 
 ## Usage
 

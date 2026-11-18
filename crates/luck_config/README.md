@@ -4,9 +4,9 @@ Loads `luck.json` and `.editorconfig` into the options each luck tool takes.
 
 ## Overview
 
-`luck.json` is JSON5, and `LuckConfig` is its top level. Each tool owns the shape of its own section, so `transforms`, `dynamic_require`, and `lint` deserialize straight into `TransformConfig`, `DynamicRequire`, and `LintConfig`, through the `serde` features this crate turns on. The `format` section is a `FormatConfig`, which leaves each option unset unless the config sets it, so it layers over `.editorconfig`: built-in defaults, then `.editorconfig`, then `format`. It converts into `luck_formatter::FormatOptions` with `From`. An unknown key or an invalid value is an error.
+`luck.json` is JSON5, and `LuckConfig` is its top level. Each tool defines the type of its own section, so `transforms`, `dynamic_require`, and `lint` deserialize straight into `TransformConfig`, `DynamicRequire`, and `LintConfig`, through the `serde` features this crate turns on. The `format` section is a `FormatConfig`, which leaves each option unset unless the config sets it, so it layers over `.editorconfig`: built-in defaults, then `.editorconfig`, then `format`. It converts into `luck_formatter::FormatOptions` with `From`. An unknown key or an invalid value is an error.
 
-Discovery walks up from a directory to the nearest `luck.json`, which governs whole: a config takes nothing from one above it unless it `extends` it, and `root: true` keeps an `extends` chain inside its directory. The `lua` and `luau` keys name the dialect of `.lua` and `.luau` files, and either can name any dialect. `include` and `exclude` choose the project's files, and the build keys, `entry`, `entries`, `output`, and `profiles` among them, resolve into one `BuildConfig` per entry.
+Discovery walks up from a directory to the nearest `luck.json`, and only that file applies. A config takes nothing from one above it unless it `extends` it, and `root: true` keeps an `extends` chain inside its directory. The `lua` and `luau` keys name the dialect of `.lua` and `.luau` files, and either can name any dialect. `include` and `exclude` choose the project's files, and the build keys, `entry`, `entries`, `output`, and `profiles` among them, resolve into one `BuildConfig` per entry.
 
 The VS Code extension's schema is generated from `LuckConfig`, with the doc comments as its descriptions.
 

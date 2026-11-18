@@ -4,9 +4,9 @@ The Prettier-style formatter for Lua 5.1 to 5.5 and Luau.
 
 ## Overview
 
-The formatter writes the tree into one flat stream of layout elements, text, line breaks, indents, and groups, in the caller's arena, borrowing every text from the tree, the source, or the arena. A printer then walks the stream once: a group prints on one line if it fits the line width and breaks if it doesn't.
+The formatter writes the tree into one flat stream of layout elements in the caller's arena. The elements are text, line breaks, indents, and groups, and each text borrows from the tree, the source, or the arena. A printer then walks the stream once. A group prints on one line if it fits the line width and breaks if it doesn't.
 
-On a parse, comments come from the parse's comment list and are placed by byte position, blank lines between statements are kept, and `-- luck: format off` to `-- luck: format on` regions and statements after `-- luck: ignore` are copied as written. So is a statement holding a comment that can't be placed without moving it past code. A tree built in code takes its comments from `SyntheticComment`s instead. The output parses, and formatting it again changes nothing.
+For a parse, the formatter takes comments from the parse's comment list and places them by byte position. It keeps blank lines between statements, and copies `-- luck: format off` to `-- luck: format on` regions and statements after `-- luck: ignore` as written. It also copies a statement as written when the statement holds a comment it can't place without moving it past code. A tree built in code takes its comments from `SyntheticComment`s instead. The output parses, and formatting it again changes nothing.
 
 ## Features
 

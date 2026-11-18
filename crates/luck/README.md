@@ -4,7 +4,7 @@ The whole luck toolchain behind one dependency, for a build tool or editor that 
 
 ## Features
 
-The parse core is always present: `luck::allocator`, `luck::token`, `luck::lexer`, `luck::ast`, `luck::parser`, and `luck::core`. Every other stage is behind a feature of its name, and none is on by default.
+The parsing crates are always present: `luck::allocator`, `luck::token`, `luck::lexer`, `luck::ast`, `luck::parser`, and `luck::core`. Every other stage is behind a feature of its name, and none is on by default.
 
 | Feature | Adds |
 | --- | --- |

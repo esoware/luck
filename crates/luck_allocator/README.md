@@ -4,7 +4,7 @@ The bump arena that luck's syntax trees live in.
 
 ## Overview
 
-An `Allocator` hands out memory from chunks it grows as needed and frees it all at once, when it is reset or dropped. Nothing in it is dropped on its own, so a whole tree goes in one step, and `reset` keeps the largest chunk for the next file. An arena serves one thread at a time: it is `Send` but not `Sync`, so threads each take their own, from an `AllocatorPool` or a slice the caller holds.
+An `Allocator` hands out memory from chunks it grows as needed and frees it all at once, when it is reset or dropped. Nothing in it is dropped on its own, so freeing a whole tree takes one step, and `reset` keeps the largest chunk for the next file. An arena serves one thread at a time. It is `Send` but not `Sync`, so each thread takes its own, from an `AllocatorPool` or a slice the caller holds.
 
 Everything but `List` and `ThinStr` is ported from `oxc_allocator`, whose notices are in `LICENSE`.
 

@@ -6,11 +6,11 @@ The Lua and Luau minifier, which rewrites a tree in place in the caller's arena 
 
 The work runs in three phases, each once:
 
-1. **Binding**: one walk resolves every name to its binding with the target's scoping rules, writes the binding into the name, so later phases tell two same-named locals apart however the tree changes, and counts each binding's references.
-2. **Compression**: one in-place walk runs every rewrite as it leaves each node. Each rewrite keeps the counts true, so the walk reaches the fixpoint itself, walking again only for a rewrite it exposed too late to make.
-3. **Renaming**: every local gets the shortest name its scopes allow.
+1. **Binding.** One walk resolves every name to its binding with the target's scoping rules and counts each binding's references. It writes the binding into the name, so later phases tell two same-named locals apart however the tree changes.
+2. **Compression.** One in-place walk runs every rewrite as it leaves each node. Each rewrite keeps the counts accurate, so one walk reaches the fixpoint. It walks again only when it exposes a rewrite too late in the walk to make it.
+3. **Renaming.** Every local gets the shortest name its scopes allow.
 
-Then `luck_codegen::compact` prints the tree once. Every rewrite assumes a metamethod can run wherever one could, so only literal arithmetic folds, and folding reproduces the target's float arithmetic exactly. The output parses, and minifying it again changes nothing. A shebang and Luau `--!` hot comments are kept on top, and every other comment is dropped.
+Then `luck_codegen::compact` prints the tree once. Every rewrite assumes a metamethod can run wherever Lua allows one, so only literal arithmetic folds, and folding reproduces the target's float arithmetic exactly. The output parses, and minifying it again changes nothing. The minifier keeps a shebang and Luau `--!` hot comments on top and drops every other comment.
 
 ## Features
 

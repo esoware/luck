@@ -1,6 +1,6 @@
 # luck_benchmark
 
-Internal and unpublished: a criterion bench for each pipeline stage, the lexer, parser, semantic analysis, linter, codegen, formatter, minifier, and bundler, over a pinned corpus of real files and projects. The corpus is downloaded on the first run into the gitignored `corpus/` directory. CI runs the benches on CodSpeed with the `codspeed` feature.
+Internal and unpublished: a criterion bench for each pipeline stage, the lexer, parser, semantic analysis, linter, codegen, formatter, minifier, and bundler, over a pinned corpus of real files and projects. The first run downloads the corpus into the gitignored `corpus/` directory. CI runs the benches on CodSpeed with the `codspeed` feature.
 
 ```sh
 just bench                 # every stage

@@ -67,4 +67,4 @@ To release, run the Prepare release workflow from the Actions tab. It picks the 
 
 Merging the PR changes the version in `Cargo.toml`, which starts the Release workflow. Once CI passes on the merge commit, it publishes every publishable crate to crates.io in dependency order, tags `vscode-vX.Y.Z` to start the VS Code workflow, and then creates the `vX.Y.Z` tag and a GitHub release with the same notes. It does nothing for a version that's already tagged. If it fails, fix the cause and run it again from the Actions tab. It skips whatever already shipped.
 
-crates.io only lets a workflow publish a crate that's already there, so a new publishable crate has to be published once by hand, then given a trusted publisher for `release.yml` and the `release` environment.
+crates.io only lets a workflow publish a crate that's already there, so publish a new crate once by hand, then give it a trusted publisher for `release.yml` and the `release` environment.
