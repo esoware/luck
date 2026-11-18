@@ -122,7 +122,7 @@ pub(crate) static RULES: &[RuleEntry] = &[
     RuleEntry::Node(&must_use::MustUse),
     RuleEntry::Node(&placeholder_read::PlaceholderRead),
     RuleEntry::Node(&mixed_table::MixedTable),
-    RuleEntry::Node(&loop_executes_once::LoopExecutesOnce),
+    RuleEntry::Whole(&loop_executes_once::LoopExecutesOnce),
     RuleEntry::Whole(&shadowing::Shadowing),
     RuleEntry::Node(&parenthesized_conditions::ParenthesizedConditions),
     RuleEntry::Node(&redundant_nil_init::RedundantNilInit),
