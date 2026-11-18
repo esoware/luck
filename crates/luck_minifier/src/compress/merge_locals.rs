@@ -112,6 +112,16 @@ impl<'ast> Compressor<'_, 'ast> {
     /// becomes `local a, b`, and `local a, b` and then `a, b = X, Y` becomes
     /// `local a, b = X, Y`.
     pub(super) fn merge_stmts(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
+        let outer_registers = self.live_registers;
+        self.merge_groups(stmts);
+        // A local a fuse initializes can merge with its neighbors.
+        while self.fuse_bare_locals(stmts) {
+            self.live_registers = outer_registers;
+            self.merge_groups(stmts);
+        }
+    }
+
+    fn merge_groups(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
         let mut kept = 0usize;
         let mut index = 0usize;
         let mut group = mem::take(&mut self.group);
@@ -130,7 +140,6 @@ impl<'ast> Compressor<'_, 'ast> {
         }
         self.group = group;
         stmts.truncate(kept);
-        self.fuse_bare_locals(stmts);
     }
 
     /// The end of the run of statements from `start` that merge into it.
@@ -270,8 +279,10 @@ impl<'ast> Compressor<'_, 'ast> {
         None
     }
 
-    /// Fuses `local a, b` plus `a, b = X, Y` into `local a, b = X, Y`.
-    pub(super) fn fuse_bare_locals(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
+    /// Fuses `local a, b` plus `a, b = X, Y` into `local a, b = X, Y`, and
+    /// says whether it fused any.
+    fn fuse_bare_locals(&mut self, stmts: &mut List<'ast, Statement<'ast>>) -> bool {
+        let mut has_fused = false;
         let mut kept = 0usize;
         let mut index = 0usize;
         while index < stmts.len() {
@@ -291,7 +302,14 @@ impl<'ast> Compressor<'_, 'ast> {
                 // A bare local is never const or exported, so fusing only adds
                 // the values.
                 local.exprs = mem::take(&mut assignment.values);
-                self.has_changed = true;
+                // The walk is past the initialized local this makes, which
+                // goes or inlines if it's read once or never.
+                self.needs_revisit |= local.names.iter().any(|attributed| {
+                    local_of(&attributed.name)
+                        .and_then(|id| self.bindings.get(id))
+                        .is_some_and(|binding| binding.reads <= 1)
+                });
+                has_fused = true;
                 stmts.swap(kept, index);
                 kept = kept.saturating_add(1);
                 index = index.saturating_add(2);
@@ -302,6 +320,8 @@ impl<'ast> Compressor<'_, 'ast> {
             index = index.saturating_add(1);
         }
         stmts.truncate(kept);
+        self.has_changed |= has_fused;
+        has_fused
     }
 }
 
@@ -430,6 +450,27 @@ mod tests {
         assert_eq!(
             minify_with("local a=1 local b=a::number print(b)", LuaVersion::Luau, &MERGING),
             "local a=1 local b=a::number print(b)"
+        );
+    }
+
+    /// A fuse runs as the walk leaves a block, so what the local it
+    /// initializes allows next, a merge or an inline, has to happen in the
+    /// same minify for the output to minify to itself.
+    #[test]
+    fn a_fused_local_takes_what_it_allows_in_one_minify() {
+        let every_pass =
+            |source: &str| minify_with(source, LuaVersion::Lua54, &TransformConfig::default());
+        assert_outputs(
+            every_pass,
+            &[
+                ("local u = tive local util util = require", "local l,u=tive,require"),
+                ("local q = f local b b = g print(b, b)", "local u,l=f,g print(l,l)"),
+                ("local a a = 1 print(a)", "print(1)"),
+                ("local a local b a, b = 1, 2 print(a, b)", "print(1,2)"),
+                ("local a local z = 1 a = 2 print(a)", "print(2)"),
+                ("local a a = 1", ""),
+                ("local a a = {} a.x = 1 return a", "local l={}l.x=1 return l"),
+            ],
         );
     }
 
