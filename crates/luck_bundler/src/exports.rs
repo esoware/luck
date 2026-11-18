@@ -274,7 +274,7 @@ impl TextLowerer<'_> {
             if i > 0 {
                 targets.push(',');
             }
-            targets.extend([self.prefix, "exports.", binding.name.text]);
+            targets.extend([self.prefix, "exports.", binding.name.text.as_str()]);
         }
         if local.exprs.is_empty() {
             targets.push_str(" = nil");
@@ -291,7 +291,7 @@ impl TextLowerer<'_> {
             return (keyword, "local".to_owned());
         }
         let signature = Span::new(keyword.start, function.name.span.end);
-        let mut replacement = format!("function {}", self.table_field(function.name.text));
+        let mut replacement = format!("function {}", self.table_field(function.name.text.as_str()));
         self.push_line_breaks(signature, &mut replacement);
         (signature, replacement)
     }

@@ -60,9 +60,9 @@ impl<'ast> Visitor<'ast> for LabelScope<'ast> {
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             // Lua 5.2+
-            Statement::Label(label) => self.labels.push((label.name.text, label.span)),
+            Statement::Label(label) => self.labels.push((label.name.text.as_str(), label.span)),
             // Lua 5.2+
-            Statement::Goto(goto) => self.goto_names.push(goto.name.text),
+            Statement::Goto(goto) => self.goto_names.push(goto.name.text.as_str()),
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::DoBlock(_)

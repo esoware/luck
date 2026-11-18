@@ -28,6 +28,7 @@ mod pool;
 mod quickcheck;
 mod quickchecks;
 mod tests;
+mod thin_str;
 mod tree;
 
 fn main() {}

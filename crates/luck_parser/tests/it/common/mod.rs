@@ -58,7 +58,7 @@ pub(crate) fn target_chain<'tree, 'ast>(var: &'tree Var<'ast>) -> &'tree Suffixe
 /// `[]`, `()`, `:name()`, or `<<>>`.
 pub(crate) fn chain_shape(chain: &SuffixedExpression<'_>) -> String {
     let mut shape = if let Expression::Name(name) = &chain.prefix {
-        name.text.to_owned()
+        name.text.to_string()
     } else if let Expression::Parenthesized(_) = &chain.prefix {
         "()".to_owned()
     } else {

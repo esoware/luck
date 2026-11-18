@@ -58,7 +58,8 @@ pub fn minify<'ast>(
 /// # Errors
 ///
 /// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
-/// which `luck_parser` never builds, and leaves the tree as it was.
+/// which `luck_parser` never builds, and leaves the tree as it was but for
+/// its names' indexes.
 pub fn minify_block<'ast>(
     allocator: &'ast Allocator,
     block: &mut Block<'ast>,
@@ -82,10 +83,10 @@ fn nesting_error(block: &Block<'_>) -> SourceError {
 
 /// Binds the tree once, compresses it to its fixpoint, and names its locals
 /// once, as each phase is on, or leaves a tree nested deeper than
-/// [`MAX_NESTING_DEPTH`] as it was and says so.
+/// [`MAX_NESTING_DEPTH`] as [`minify_block`] does and says so.
 ///
 /// Without `can_nest_too_deep`, for a tree `luck_parser` built, which never
-/// nests that deep, it spares the work of keeping the tree as it was.
+/// nests that deep, it spares measuring a tree it doesn't bind.
 fn minify_tree<'ast>(
     allocator: &'ast Allocator,
     block: &mut Block<'ast>,
@@ -111,7 +112,7 @@ fn minify_tree<'ast>(
     let mut bindings = Bindings::default();
     let mut names = NameTable::default();
     let fits = if needs_bindings {
-        bind(block, version, can_nest_too_deep, &mut bindings, &mut names)
+        bind(block, version, &mut bindings, &mut names)
     } else {
         !can_nest_too_deep || block_nesting_depth(block) <= MAX_NESTING_DEPTH
     };

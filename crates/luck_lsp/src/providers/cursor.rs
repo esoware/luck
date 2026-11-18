@@ -17,7 +17,7 @@ pub(crate) const fn touches(span: Span, offset: u32) -> bool {
 
 /// `name`'s text, or `None` for a name the parser found missing.
 pub(crate) const fn identifier<'ast>(name: &Name<'ast>) -> Option<&'ast str> {
-    if name.text.is_empty() { None } else { Some(name.text) }
+    if name.text.as_str().is_empty() { None } else { Some(name.text.as_str()) }
 }
 
 /// The statements of `block` that touch `offset`, which are at most the two
@@ -170,7 +170,7 @@ pub(crate) fn dotted_chain_ending_tokens<'source>(
 
 #[derive(Debug)]
 pub(crate) enum CursorNode<'ast> {
-    Identifier(&'ast Name<'ast>),
+    Identifier(&'ast Name<'ast>, &'ast str),
     /// A dotted path like `string.format`, of name-only segments.
     DottedPath {
         path: Vec<&'ast str>,
@@ -191,14 +191,14 @@ impl<'ast> CursorNode<'ast> {
     /// The path segments; a single entry for a plain identifier.
     pub(crate) fn path(&self) -> &[&'ast str] {
         match self {
-            Self::Identifier(name) => slice::from_ref(&name.text),
+            Self::Identifier(_, text) => slice::from_ref(text),
             Self::DottedPath { path, .. } | Self::Call { path, .. } => path,
         }
     }
 
     pub(crate) const fn span(&self) -> Span {
         match self {
-            Self::Identifier(name) => name.span,
+            Self::Identifier(name, _) => name.span,
             Self::DottedPath { full_span, .. } | Self::Call { full_span, .. } => *full_span,
         }
     }
@@ -233,7 +233,7 @@ impl<'ast> NodeFinder<'ast> {
 
     fn record_name(&mut self, name: &'ast Name<'ast>) {
         if identifier(name).is_some() {
-            self.try_set(CursorNode::Identifier(name));
+            self.try_set(CursorNode::Identifier(name, name.text.as_str()));
         }
     }
 

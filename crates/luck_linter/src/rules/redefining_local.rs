@@ -79,7 +79,7 @@ impl<'ast> RedefineChecker<'ast> {
     }
 
     fn declare(&mut self, declared: &Name<'ast>) {
-        let name = declared.text;
+        let name = declared.text.as_str();
         if self.declarations.len() > MAX_ACTIVE_LOCALS {
             return;
         }

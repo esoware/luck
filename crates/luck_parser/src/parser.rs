@@ -7,11 +7,12 @@ mod types;
 
 use core::mem;
 
-use luck_allocator::{Allocator, Box, List};
+use luck_allocator::{Allocator, Box, List, ThinStr};
 use luck_ast::{
     AttributedName, BinaryLink, Block, ElseIfClause, ElseIfExprClause, Expression, Field,
     FunctionAttribute, FunctionTypeParam, GenericTypeParam, InterpolatedSegment, Literal,
-    MAX_NESTING_DEPTH, Name, Parameter, Statement, Suffix, TreeCounts, Type, TypeField, Var,
+    MAX_NESTING_DEPTH, Name, NameIndex, Parameter, Statement, Suffix, TreeCounts, Type, TypeField,
+    Var,
 };
 use luck_lexer::Lexer;
 use luck_token::{LuaVersion, Span, Token, TokenKind};
@@ -386,7 +387,13 @@ impl<'ast> Parser<'ast> {
     #[inline]
     fn advance_name(&mut self) -> Name<'ast> {
         let span = self.advance();
-        Name { text: span.text(self.source), span }
+        let index = self.counts.names;
+        self.counts.names = index.wrapping_add(1);
+        Name {
+            text: ThinStr::new(span.text(self.source)),
+            index: Some(NameIndex::new(index)),
+            span,
+        }
     }
 
     #[inline]
@@ -482,7 +489,7 @@ impl<'ast> Parser<'ast> {
             self.advance_name()
         } else {
             self.report_expected_identifier();
-            Name { text: "", span: self.token.span }
+            Name { text: ThinStr::new(""), index: None, span: self.token.span }
         }
     }
 

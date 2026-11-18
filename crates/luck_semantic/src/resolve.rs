@@ -87,7 +87,7 @@ impl<'input> ShapeResolver<'input> {
         match reference.resolved {
             Some(symbol) => HeadState { shape: self.symbol_shape(symbol), global: None },
             None if self.tree.is_host_global(reference) => {
-                let global = self.library.globals.get(name.text);
+                let global = self.library.globals.get(name.text.as_str());
                 HeadState { shape: global.and_then(StdlibEntry::shape), global }
             }
             None => HeadState::default(),
@@ -122,12 +122,13 @@ impl<'input> ShapeResolver<'input> {
     fn after_suffix(self, suffix: &Suffix<'_>, state: HeadState) -> HeadState {
         let callee = match suffix {
             Suffix::Field(name) => {
-                let member = state.global.and_then(|parent| self.library.child(parent, name.text));
+                let member =
+                    state.global.and_then(|parent| self.library.child(parent, name.text.as_str()));
                 return HeadState { shape: member.and_then(StdlibEntry::shape), global: member };
             }
             Suffix::Call(_) => state.global,
             Suffix::MethodCall(call) => {
-                state.shape.and_then(|shape| self.shape_method(shape, call.name.text))
+                state.shape.and_then(|shape| self.shape_method(shape, call.name.text.as_str()))
             }
             Suffix::Index { .. } | Suffix::TypeInstantiation { .. } => None,
         };
@@ -165,9 +166,12 @@ impl<'input> ShapeResolver<'input> {
             return Some(ResolvedCallee { path: CalleePath::Dotted(head), entry });
         };
         let shape = state.shape?;
-        let entry = self.shape_method(shape, method_name)?;
-        let base = head.as_name().map_or(shape, |name| name.text);
-        Some(ResolvedCallee { path: CalleePath::Method { base, method: method_name }, entry })
+        let entry = self.shape_method(shape, method_name.as_str())?;
+        let base = head.as_name().map_or(shape, |name| name.text.as_str());
+        Some(ResolvedCallee {
+            path: CalleePath::Method { base, method: method_name.as_str() },
+            entry,
+        })
     }
 
     /// What `call` calls, read from its callee's prefix.

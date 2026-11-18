@@ -56,8 +56,8 @@ impl NodeRule for RobloxUnknownEnumMember {
             let segment = name.text;
             // Past the first unknown segment, nothing resolves, so the chain
             // warns once.
-            let Some(member) = stdlib.child(entry, segment) else {
-                findings.push(unknown_member(chain.head(read_index), segment, name.span));
+            let Some(member) = stdlib.child(entry, segment.as_str()) else {
+                findings.push(unknown_member(chain.head(read_index), segment.as_str(), name.span));
                 return;
             };
             entry = member;

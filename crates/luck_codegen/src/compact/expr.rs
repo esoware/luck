@@ -17,7 +17,7 @@ impl Printer {
     #[inline(always)]
     pub(super) fn print_expr(&mut self, expr: &Expression<'_>) {
         match expr {
-            Expression::Name(name) => self.name(name.text),
+            Expression::Name(name) => self.name(name.text.as_str()),
             Expression::Number(literal) | Expression::Integer(literal) => {
                 self.number(literal.text);
             }
@@ -114,7 +114,7 @@ impl Printer {
 
     pub(super) fn print_var(&mut self, var: &Var<'_>) {
         match var {
-            Var::Name(name) => self.name(name.text),
+            Var::Name(name) => self.name(name.text.as_str()),
             Var::Suffixed(chain) => self.print_suffixed(chain),
         }
     }
@@ -130,7 +130,7 @@ impl Printer {
             match suffix {
                 Suffix::Field(name) => {
                     self.piece(".");
-                    self.name(name.text);
+                    self.name(name.text.as_str());
                 }
                 Suffix::Index { index, .. } => {
                     self.piece("[");
@@ -140,7 +140,7 @@ impl Printer {
                 Suffix::Call(args) => self.print_args(args),
                 Suffix::MethodCall(call) => {
                     self.piece(":");
-                    self.name(call.name.text);
+                    self.name(call.name.text.as_str());
                     if let Some(type_args) = &call.type_args {
                         self.print_type_instantiation(type_args);
                     }
@@ -183,7 +183,7 @@ impl Printer {
                 self.print_expr(value);
             }
             Field::Named { name, value } => {
-                self.name(name.text);
+                self.name(name.text.as_str());
                 self.piece("=");
                 self.print_expr(value);
             }

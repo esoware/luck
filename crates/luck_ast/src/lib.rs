@@ -9,8 +9,10 @@
 //! all at once. [`Expression`], [`Statement`], and [`Type`] are two words
 //! each. A leaf, a [`Name`] or a [`Literal`], holds its text as written: a
 //! parsed tree's borrows the source, and a built tree's lives in the arena,
-//! so a printer never needs the source. A tree is `Send` and `Sync`, and
-//! may join nodes from any number of arenas that outlive it.
+//! so a printer never needs the source. A name also holds a [`NameIndex`],
+//! a plain field that the parser numbers and a pass that holds the tree
+//! mutably may renumber. A tree is `Send` and `Sync`, and may join nodes from
+//! any number of arenas that outlive it.
 //!
 //! Two traversals share one walk: [`Visitor`] borrows the tree, and
 //! [`VisitorMut`] rewrites it in place. Override the `visit_*` method you
@@ -81,7 +83,7 @@ pub use expr::{
     Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
-pub use leaf::{Literal, Name};
+pub use leaf::{Literal, Name, NameIndex};
 pub use one_or_more::OneOrMore;
 pub use query::{
     expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,

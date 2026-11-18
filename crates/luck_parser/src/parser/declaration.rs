@@ -441,7 +441,7 @@ impl<'ast> Parser<'ast> {
     }
 
     fn register_exported_name(&mut self, name: Name<'ast>) {
-        if !self.exported_names.insert(name.text) {
+        if !self.exported_names.insert(name.text.as_str()) {
             self.error(name.span, format!("duplicate exported identifier `{}`", name.text));
         }
     }

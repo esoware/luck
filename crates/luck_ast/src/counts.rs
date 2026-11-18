@@ -11,4 +11,6 @@ pub struct TreeCounts {
     pub declarations: u32,
     /// Names an expression reads, and each function statement's first name.
     pub name_uses: u32,
+    /// Names the parser read, each indexed by its place among them.
+    pub names: u32,
 }

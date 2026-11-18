@@ -63,9 +63,16 @@ pub struct ScopeTree<'ast> {
     /// Every reference by where it starts, sorted.
     positions: Vec<Position>,
     /// For each bucket of source bytes, where its run of `positions` starts,
-    /// and then where the last one ends. Empty when the references are too
-    /// sparse for it to pay, and then a lookup searches them all.
+    /// and then where the last one ends. Empty for an indexed tree, or when
+    /// the references are too sparse for it to pay, and then a lookup
+    /// searches them all.
     buckets: Vec<u32>,
+    /// Each reference by its name's [`NameIndex`](luck_ast::NameIndex).
+    by_index: Vec<Option<ReferenceId>>,
+    /// Whether every reference's name has an index of its own in
+    /// `by_index`, as the parser numbers them, so it answers for every name
+    /// of the tree.
+    is_indexed: bool,
     names: Vec<NameEntry<'ast>>,
     name_ids: FxHashMap<&'ast str, NameId>,
     is_env_assigned: bool,
@@ -190,7 +197,9 @@ impl ReferenceKind {
 
 impl<'ast> ScopeTree<'ast> {
     /// One walk over `block`, which recurses once per level of nesting, into
-    /// tables sized from `counts`, the parse's or the default.
+    /// tables sized from `counts`, the parse's or the default. With the
+    /// parse's, [`Self::reference_of`] finds a name's reference by its
+    /// [`NameIndex`](luck_ast::NameIndex).
     #[must_use]
     pub fn build(block: &'ast Block<'ast>, counts: TreeCounts, version: LuaVersion) -> Self {
         Self::build_with(block, counts, version, &mut ())
@@ -309,6 +318,18 @@ impl<'ast> ScopeTree<'ast> {
     /// as a field, a declaration, or a name from another tree.
     #[must_use]
     pub fn reference_of(&self, name: &Name<'_>) -> Option<ReferenceId> {
+        let is_made_by = |id: ReferenceId| {
+            let reference = self.reference(id);
+            reference.span == name.span && self.name(reference.name) == name.text.as_str()
+        };
+        if let Some(&slot) =
+            name.index.and_then(|index| self.by_index.get(offset_to_index(index.get())))
+        {
+            let found = slot.filter(|&id| is_made_by(id));
+            if found.is_some() || self.is_indexed {
+                return found;
+            }
+        }
         let start = name.span.start;
         let bucket = offset_to_index(start >> BUCKET_SHIFT);
         let candidates =
@@ -326,10 +347,7 @@ impl<'ast> ScopeTree<'ast> {
             .iter()
             .take_while(|position| position.start == start)
             .map(|position| position.reference)
-            .find(|&id| {
-                let reference = self.reference(id);
-                reference.span == name.span && self.name(reference.name) == name.text
-            })
+            .find(|&id| is_made_by(id))
     }
 
     /// The reference whose name holds `offset`, either end included, so an

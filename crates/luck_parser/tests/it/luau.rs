@@ -593,7 +593,7 @@ local after = 1",
     else {
         panic!("{:?}", result.block.stmts);
     };
-    assert_eq!(after.names.first().map(|name| name.name.text), Some("after"));
+    assert_eq!(after.names.first().map(|name| name.name.text.as_str()), Some("after"));
 }
 
 #[test]

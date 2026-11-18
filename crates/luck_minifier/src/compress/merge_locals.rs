@@ -263,7 +263,7 @@ impl<'ast> Compressor<'_, 'ast> {
     ) -> Option<(usize, &'tree Expression<'ast>)> {
         if let ([Var::Name(name)], [expr]) = (&*assignment.targets, &*assignment.values)
             && is_single_register_value(expr)
-            && !is_env_binding(name.text, self.version)
+            && !is_env_binding(name.text.as_str(), self.version)
         {
             return local_of(name).map(|id| (id, expr));
         }

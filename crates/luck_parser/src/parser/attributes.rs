@@ -84,7 +84,7 @@ impl<'ast> Parser<'ast> {
         let name = self.expect_identifier_recover();
         // 5.4 manual section 3.3.7: "There are two possible attributes"; Lua
         // rejects any other name at parse time.
-        if !matches!(name.text, "" | "const" | "close") {
+        if !matches!(name.text.as_str(), "" | "const" | "close") {
             self.error(name.span, format!("unknown attribute `{}`", name.text));
         }
         let close = self.expect(TokenKind::Greater);
@@ -192,7 +192,7 @@ impl<'ast> Parser<'ast> {
         if name.text.is_empty() {
             return;
         }
-        if !matches!(name.text, "checked" | "native" | "deprecated") {
+        if !matches!(name.text.as_str(), "checked" | "native" | "deprecated") {
             self.error(name.span, format!("invalid attribute `@{}`", name.text));
             return;
         }
@@ -237,7 +237,7 @@ impl<'ast> Parser<'ast> {
         for field in &table.fields {
             match field {
                 Field::Named { name, value } => {
-                    if !matches!(name.text, "use" | "reason") {
+                    if !matches!(name.text.as_str(), "use" | "reason") {
                         self.error(
                             name.span,
                             "unknown `@deprecated` argument, only `use` and `reason` are allowed",

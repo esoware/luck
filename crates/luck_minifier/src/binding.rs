@@ -2,18 +2,17 @@
 //! passes know of each binding.
 //!
 //! Every name that declares or refers to a local holds the local's id in its
-//! span, and every name that refers to a global holds the global's name id,
+//! index, and every name that refers to a global holds the global's name id,
 //! so a pass reads identity from the name itself however the tree has been
-//! edited, moved, or built, and two locals that share a name never meet. No
-//! pass reads a name's span for anything else, and codegen prints none.
+//! edited, moved, or built, and two locals that share a name never meet.
 
 use core::mem;
 
 use luck_ast::{
-    Expression, FunctionBody, LocalAssignment, LocalAssignmentKind, LocalFunction, Name, Statement,
-    Type, Var, Visitor,
+    Expression, FunctionBody, LocalAssignment, LocalAssignmentKind, LocalFunction, Name, NameIndex,
+    Statement, Type, Var, Visitor,
 };
-use luck_token::{LuaVersion, Span};
+use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 
 pub(crate) const METHOD_RECEIVER_NAME: &str = "self";
 
@@ -24,49 +23,33 @@ pub(crate) const IMPLICIT_VARARG_TABLE_NAME: &str = "arg";
 pub(crate) const RECEIVER_NAME_ID: usize = 0;
 pub(crate) const VARARG_TABLE_NAME_ID: usize = 1;
 
-/// A span start no source reaches, since a span holds offsets into at most
-/// 4 GiB, marking a span that holds a local's id or a global's name id.
-const LOCAL_MARK: u32 = u32::MAX;
-const GLOBAL_MARK: u32 = u32::MAX - 1;
-
-/// What a name holds once the bind walk has marked it.
-#[derive(Clone, Copy)]
-pub(crate) enum Identity {
-    Local(usize),
-    Global(usize),
-}
-
-pub(crate) fn identity_of(name: &Name<'_>) -> Option<Identity> {
-    let id = usize::try_from(name.span.end).ok()?;
-    match name.span.start {
-        LOCAL_MARK => Some(Identity::Local(id)),
-        GLOBAL_MARK => Some(Identity::Global(id)),
-        _ => None,
-    }
-}
+/// Where the indexes of locals and of globals start. The parser's are below
+/// both, so a name the bind walk never reached holds neither.
+const LOCAL_INDEX: u32 = 1 << 31;
+const GLOBAL_INDEX: u32 = 3 << 30;
 
 /// The local `name` declares or refers to, before any merge.
 pub(crate) fn local_of(name: &Name<'_>) -> Option<usize> {
-    (name.span.start == LOCAL_MARK).then(|| usize::try_from(name.span.end).unwrap_or(usize::MAX))
+    let index = name.index?.get();
+    (LOCAL_INDEX..GLOBAL_INDEX)
+        .contains(&index)
+        .then(|| offset_to_index(index.wrapping_sub(LOCAL_INDEX)))
 }
 
 /// The name id of the global `name` refers to.
 pub(crate) fn global_of(name: &Name<'_>) -> Option<usize> {
-    (name.span.start == GLOBAL_MARK).then(|| usize::try_from(name.span.end).unwrap_or(usize::MAX))
+    name.index?.get().checked_sub(GLOBAL_INDEX).map(offset_to_index)
 }
 
-/// The span a name that declares or refers to the local `id` holds.
-pub(crate) fn local_span(id: usize) -> Span {
-    Span::new(LOCAL_MARK, u32::try_from(id).unwrap_or(u32::MAX))
+/// The index of a name that declares or refers to the local `id`.
+pub(crate) fn local_index(id: usize) -> NameIndex {
+    let index = LOCAL_INDEX.saturating_add(index_to_offset(id));
+    NameIndex::new(index.min(GLOBAL_INDEX.wrapping_sub(1)))
 }
 
-/// The span a name that refers to the global with name id `name_id` holds.
-pub(crate) fn global_span(name_id: usize) -> Span {
-    Span::new(GLOBAL_MARK, u32::try_from(name_id).unwrap_or(u32::MAX))
-}
-
-pub(crate) fn mark_local(name: &mut Name<'_>, id: usize) {
-    name.span = local_span(id);
+/// The index of a name that refers to the global with name id `name_id`.
+pub(crate) fn global_index(name_id: usize) -> NameIndex {
+    NameIndex::new(GLOBAL_INDEX.saturating_add(index_to_offset(name_id)))
 }
 
 pub(crate) const fn has_implicit_arg(body: &FunctionBody<'_>, version: LuaVersion) -> bool {
@@ -85,7 +68,7 @@ pub(crate) fn is_env_binding(name: &str, version: LuaVersion) -> bool {
 /// `_ENV`, which redirects global lookup for everything after it.
 pub(crate) fn has_attributed_or_env_name(local: &LocalAssignment<'_>, version: LuaVersion) -> bool {
     local.names.iter().any(|attributed| {
-        attributed.attribute.is_some() || is_env_binding(attributed.name.text, version)
+        attributed.attribute.is_some() || is_env_binding(attributed.name.text.as_str(), version)
     })
 }
 
@@ -100,7 +83,8 @@ pub(crate) fn is_droppable_function(
     local_function: &LocalFunction<'_>,
     version: LuaVersion,
 ) -> bool {
-    !local_function.kind.is_exported() && !is_env_binding(local_function.name.text, version)
+    !local_function.kind.is_exported()
+        && !is_env_binding(local_function.name.text.as_str(), version)
 }
 
 /// What every pass knows of one local.
@@ -241,10 +225,10 @@ impl Bindings {
 
     /// Counts, or uncounts, a reference by `name`, whatever it refers to.
     pub(crate) fn count_name(&mut self, name: &Name<'_>, reference: Reference, is_retracted: bool) {
-        match identity_of(name) {
-            Some(Identity::Local(id)) => self.count(id, reference, is_retracted),
-            Some(Identity::Global(global)) => self.count_global(global, reference, is_retracted),
-            None => {}
+        match (local_of(name), global_of(name)) {
+            (Some(id), _) => self.count(id, reference, is_retracted),
+            (None, Some(global)) => self.count_global(global, reference, is_retracted),
+            (None, None) => {}
         }
     }
 

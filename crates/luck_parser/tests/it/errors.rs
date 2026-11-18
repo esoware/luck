@@ -125,7 +125,7 @@ local after = 1"
         let Some(Statement::LocalAssignment(after)) = result.block.stmts.last() else {
             panic!("{broken:?}: {:?}", result.block.stmts.last());
         };
-        assert_eq!(after.names.first().map(|name| name.name.text), Some("after"));
+        assert_eq!(after.names.first().map(|name| name.name.text.as_str()), Some("after"));
     }
 }
 
@@ -334,7 +334,7 @@ local b = 2",
     };
     assert!(wrapped.block.stmts.is_empty(), "{:?}", wrapped.block.stmts);
     assert!(matches!(wrapped.block.last_stmt.as_ref(), Some(LastStatement::Return(_))));
-    assert_eq!(b.names.first().map(|name| name.name.text), Some("b"));
+    assert_eq!(b.names.first().map(|name| name.name.text.as_str()), Some("b"));
     assert!(result.block.last_stmt.is_none());
 }
 

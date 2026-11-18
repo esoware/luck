@@ -328,7 +328,7 @@ impl<'ast> Formatter<'ast> {
 
     #[inline]
     pub(crate) fn name(&mut self, name: Name<'ast>) {
-        self.ascii(name.text);
+        self.ascii(name.text.as_str());
     }
 
     pub(crate) fn verbatim(&mut self, text: &'ast str) {

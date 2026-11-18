@@ -47,7 +47,7 @@ pub(crate) fn sortable_require<'ast>(stmt: &Statement<'ast>) -> Option<Require<'
         return None;
     };
     let (callee, path_root) = pure_require_reads(value)?;
-    Some(Require { key: binding.name.text, callee, path_root })
+    Some(Require { key: binding.name.text.as_str(), callee, path_root })
 }
 
 struct Member<'ast> {
@@ -111,11 +111,11 @@ fn pure_require_reads<'ast>(expr: &Expression<'ast>) -> Option<(&'ast str, Optio
     match &*chain.suffixes {
         [Suffix::MethodCall(call)] => {
             let is_get_service = call.name.text == "GetService" && is_single_string_arg(&call.args);
-            is_get_service.then_some((callee.text, None))
+            is_get_service.then_some((callee.text.as_str(), None))
         }
         [Suffix::Call(args)] if callee.text == "require" => {
             if is_single_string_arg(args) {
-                return Some((callee.text, None));
+                return Some((callee.text.as_str(), None));
             }
             let FunctionArgs::Parenthesized { args: path_args, .. } = args else {
                 return None;
@@ -123,7 +123,7 @@ fn pure_require_reads<'ast>(expr: &Expression<'ast>) -> Option<(&'ast str, Optio
             let [path] = &**path_args else {
                 return None;
             };
-            Some((callee.text, Some(dotted_path_root(path)?)))
+            Some((callee.text.as_str(), Some(dotted_path_root(path)?)))
         }
         _ => None,
     }
@@ -139,7 +139,7 @@ fn dotted_path_root<'ast>(path: &Expression<'ast>) -> Option<&'ast str> {
     let Expression::Name(root) = prefix else {
         return None;
     };
-    suffixes.iter().all(|suffix| matches!(suffix, Suffix::Field(_))).then_some(root.text)
+    suffixes.iter().all(|suffix| matches!(suffix, Suffix::Field(_))).then_some(root.text.as_str())
 }
 
 fn is_single_string_arg(call_args: &FunctionArgs<'_>) -> bool {

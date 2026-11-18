@@ -19,7 +19,7 @@ use luck_token::LuaVersion;
 
 use self::candidate_pool::CandidatePool;
 use self::choose_names::Choice;
-use crate::binding::{Bindings, Identity, NONE, global_of, identity_of, local_of};
+use crate::binding::{Bindings, NONE, global_of, local_of};
 use crate::name_table::NameTable;
 use crate::rename_globals::renamable_globals;
 
@@ -149,10 +149,10 @@ impl<'ast> Renamer<'_, 'ast> {
     /// The renamed binding a name declares or refers to, if it's a local or
     /// a renamed global.
     fn renamed_of(&self, name: &Name<'_>) -> usize {
-        let slot = match identity_of(name) {
-            Some(Identity::Local(id)) => self.of_local.get(self.bindings.resolve(id)),
-            Some(Identity::Global(global)) => self.of_global.get(global),
-            None => None,
+        let slot = match (local_of(name), global_of(name)) {
+            (Some(id), _) => self.of_local.get(self.bindings.resolve(id)),
+            (None, Some(global)) => self.of_global.get(global),
+            (None, None) => None,
         };
         slot.and_then(|&renamed| usize::try_from(renamed).ok()).unwrap_or(UNRESOLVED)
     }
@@ -206,12 +206,11 @@ impl<'ast> Renamer<'_, 'ast> {
         }
         // A binding that keeps its name holds that name wherever it's read,
         // as a global does.
-        let held_name = match identity_of(name) {
-            Some(Identity::Local(id)) => {
+        let held_name = match local_of(name) {
+            Some(id) => {
                 self.bindings.get(id).and_then(|binding| usize::try_from(binding.name).ok())
             }
-            Some(Identity::Global(global)) => Some(global),
-            None => None,
+            None => global_of(name),
         };
         if let Some(read_name) = held_name {
             self.read_globally(read_name);
@@ -222,10 +221,10 @@ impl<'ast> Renamer<'_, 'ast> {
         let renamed = self.renamed_of(name);
         if let Some(&new_name) = self.new_names.get(renamed)
             && !new_name.is_empty()
-            && !ptr::eq(name.text, new_name)
+            && !ptr::eq(name.text.as_str(), new_name)
             && name.text != new_name
         {
-            name.text = new_name;
+            name.text = new_name.into();
         }
     }
 

@@ -12,13 +12,13 @@ use super::Printer;
 impl Printer {
     pub(super) fn print_type(&mut self, ty: &Type<'_>) {
         match ty {
-            Type::Name(name) => self.name(name.text),
+            Type::Name(name) => self.name(name.text.as_str()),
             Type::Named(named) => {
                 if let Some(prefix) = &named.prefix {
-                    self.name(prefix.text);
+                    self.name(prefix.text.as_str());
                     self.piece(".");
                 }
-                self.name(named.name.text);
+                self.name(named.name.text.as_str());
                 if let Some(generics) = &named.generics {
                     self.piece("<");
                     self.list(&generics.args, ",", Self::print_type);
@@ -80,7 +80,7 @@ impl Printer {
                 self.print_type(&variadic.ty);
             }
             Type::GenericPack(pack) => {
-                self.name(pack.name.text);
+                self.name(pack.name.text.as_str());
                 self.piece("...");
             }
             Type::Error(_) => {}
@@ -91,7 +91,7 @@ impl Printer {
         match field {
             TypeField::Named { access, name, value, .. } => {
                 self.print_access(*access);
-                self.name(name.text);
+                self.name(name.text.as_str());
                 self.piece(":");
                 self.print_type(value);
             }
@@ -120,7 +120,7 @@ impl Printer {
 
     fn print_function_type_param(&mut self, param: &FunctionTypeParam<'_>) {
         if let Some(name) = &param.name {
-            self.name(name.text);
+            self.name(name.text.as_str());
             self.piece(":");
         }
         self.print_type(&param.ty);
@@ -133,7 +133,7 @@ impl Printer {
     }
 
     fn print_generic_type_param(&mut self, param: &GenericTypeParam<'_>) {
-        self.name(param.name.text);
+        self.name(param.name.text.as_str());
         if param.is_pack {
             self.piece("...");
         }

@@ -26,7 +26,7 @@ use rustc_hash::FxHashMap;
 use super::Compressor;
 use super::merge_locals::is_bare_local;
 use crate::binding::{
-    Bindings, RECEIVER_NAME_ID, VARARG_TABLE_NAME_ID, has_fixed_binding, local_of, mark_local,
+    Bindings, RECEIVER_NAME_ID, VARARG_TABLE_NAME_ID, has_fixed_binding, local_index, local_of,
 };
 use crate::limits::{
     GENERIC_FOR_STATE_LOCALS, MAX_REGISTERS, NUMERIC_FOR_STATE_LOCALS, parameter_locals,
@@ -260,7 +260,7 @@ impl<'ast> Collector<'_, 'ast> {
         };
         let hoisted = existing.unwrap_or_else(|| {
             let index = lifter.hoisted.len();
-            lifter.hoisted.push(Hoisted { binding: id, text: name.text });
+            lifter.hoisted.push(Hoisted { binding: id, text: name.text.as_str() });
             index
         });
         match name_id {
@@ -422,8 +422,11 @@ impl<'ast> Compressor<'_, 'ast> {
         self.rewrite_block(&mut body.block, &mut cursor, registers);
         let allocator = self.allocator;
         let names = self.lifter.hoisted.iter().map(|hoisted| {
-            let mut name = Name { text: hoisted.text, span: body.span };
-            mark_local(&mut name, hoisted.binding);
+            let name = Name {
+                text: hoisted.text.into(),
+                index: Some(local_index(hoisted.binding)),
+                span: body.span,
+            };
             AttributedName { name, type_annotation: None, attribute: None }
         });
         let local = LocalAssignment {

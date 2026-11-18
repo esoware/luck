@@ -8,7 +8,7 @@
 use luck_allocator::Allocator;
 use luck_ast::{Expression, FunctionBody, FunctionDecl, Name, Parameter, Var, Visitor};
 
-use crate::binding::{Bindings, METHOD_RECEIVER_NAME, RECEIVER_NAME_ID, local_of, mark_local};
+use crate::binding::{Bindings, METHOD_RECEIVER_NAME, RECEIVER_NAME_ID, local_index, local_of};
 
 pub(super) fn rewrite<'ast>(
     allocator: &'ast Allocator,
@@ -35,8 +35,11 @@ pub(super) fn rewrite<'ast>(
     if let Some(binding) = bindings.entries.get_mut(receiver) {
         binding.merged_into = u32::try_from(parameter).unwrap_or(binding.merged_into);
     }
-    let mut name = Name { text: METHOD_RECEIVER_NAME, span: method.span };
-    mark_local(&mut name, parameter);
+    let name = Name {
+        text: METHOD_RECEIVER_NAME.into(),
+        index: Some(local_index(parameter)),
+        span: method.span,
+    };
     function_declaration.body.params.insert(
         0,
         Parameter { name, type_annotation: None },

@@ -321,8 +321,8 @@ impl<'ast> GraphBuilder<'ast> {
                 && !name.is_empty()
             {
                 let node = self.new_node();
-                self.labels.entry(name).or_default().push(node);
-                self.label_names.push(name);
+                self.labels.entry(name.as_str()).or_default().push(node);
+                self.label_names.push(name.as_str());
             }
         }
         for stmt in &block.stmts {
@@ -341,7 +341,7 @@ impl<'ast> GraphBuilder<'ast> {
     }
 
     fn label_node(&self, name: &Name<'_>) -> Option<usize> {
-        self.labels.get(name.text)?.last().copied()
+        self.labels.get(name.text.as_str())?.last().copied()
     }
 
     fn stmt(&mut self, stmt: &'ast Statement<'ast>) {

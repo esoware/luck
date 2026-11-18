@@ -57,14 +57,14 @@ fn var_name<'ast>(var: &Var<'ast>) -> Option<&'ast str> {
     let Var::Name(name) = var else {
         return None;
     };
-    Some(name.text)
+    Some(name.text.as_str())
 }
 
 fn expr_var_name<'ast>(expr: &Expression<'ast>) -> Option<&'ast str> {
     let Expression::Name(name) = expr else {
         return None;
     };
-    Some(name.text)
+    Some(name.text.as_str())
 }
 
 #[cfg(test)]

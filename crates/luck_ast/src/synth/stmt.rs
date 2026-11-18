@@ -757,9 +757,10 @@ mod tests {
         let Statement::FunctionDecl(function_decl) = &stmt else {
             panic!("expected function declaration");
         };
-        let names: Vec<&str> = function_decl.name.names.iter().map(|name| name.text).collect();
+        let names: Vec<&str> =
+            function_decl.name.names.iter().map(|name| name.text.as_str()).collect();
         assert_eq!(names, ["a", "b"]);
-        assert_eq!(function_decl.name.method.map(|method| method.text), Some("greet"));
+        assert_eq!(function_decl.name.method.map(|method| method.text.as_str()), Some("greet"));
     }
 
     #[test]

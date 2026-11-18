@@ -4,7 +4,7 @@ use crate::expr::{
     Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 use crate::function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
-use crate::leaf::{Literal, Name};
+use crate::leaf::{Literal, Name, NameIndex};
 use crate::stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
     ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
@@ -35,6 +35,7 @@ fn ast_node_layouts() {
         Option<Expression<'_>> => 16,
         Option<Type<'_>> => 16,
         Name<'_> => 24,
+        Option<NameIndex> => 4,
         Literal<'_> => 24,
         Var<'_> => 16,
         SuffixedExpression<'_> => 40,

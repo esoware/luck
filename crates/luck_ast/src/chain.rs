@@ -82,9 +82,9 @@ impl<'ast> DottedPath<'ast> {
     /// The names' texts, root first.
     pub fn segments(self) -> impl Iterator<Item = &'ast str> + Clone {
         let fields = self.fields.iter().filter_map(|suffix| {
-            if let Suffix::Field(name) = suffix { Some(name.text) } else { None }
+            if let Suffix::Field(name) = suffix { Some(name.text.as_str()) } else { None }
         });
-        once(self.root.text).chain(fields)
+        once(self.root.text.as_str()).chain(fields)
     }
 
     /// How many names it has, the root's included.

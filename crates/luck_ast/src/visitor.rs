@@ -652,7 +652,7 @@ mod tests {
         impl<'ast> Visitor<'ast> for NameCollector<'ast> {
             fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
                 if let Expression::Name(name) = expr {
-                    self.0.push(name.text);
+                    self.0.push(name.text.as_str());
                 }
                 self.walk_expr(expr);
             }

@@ -50,7 +50,7 @@ fn the_tree_borrows_its_leaves_from_the_source() {
         panic!("{concat:?}");
     };
     for (leaf, span) in [
-        (local.names[0].name.text, local.names[0].name.span),
+        (local.names[0].name.text.as_str(), local.names[0].name.span),
         (text.text, text.span),
         (number.text, number.span),
     ] {

@@ -269,7 +269,7 @@ fn check_field_accesses(
     };
     let root_name = root.text;
     let stdlib = semantic.stdlib();
-    let Some(mut entry) = stdlib.globals.get(root_name) else {
+    let Some(mut entry) = stdlib.globals.get(root_name.as_str()) else {
         return;
     };
     for (read_index, suffix) in (1usize..).zip(reads) {
@@ -277,7 +277,7 @@ fn check_field_accesses(
             return;
         };
         // Nothing past an unknown path resolves either.
-        let Some(member) = stdlib.child(entry, name.text) else {
+        let Some(member) = stdlib.child(entry, name.text.as_str()) else {
             return;
         };
         entry = member;

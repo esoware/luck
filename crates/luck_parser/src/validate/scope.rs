@@ -60,7 +60,7 @@ struct ScopeChecker<'ast> {
 }
 
 fn is_readonly_attribute(attribute: &Attribute<'_>) -> bool {
-    matches!(attribute.name.text, "const" | "close")
+    matches!(attribute.name.text.as_str(), "const" | "close")
 }
 
 impl<'ast> ScopeChecker<'ast> {
@@ -91,7 +91,7 @@ impl<'ast> ScopeChecker<'ast> {
 
     fn declare_local(&mut self, name: &Name<'ast>, is_readonly: bool) {
         if !name.text.is_empty() {
-            self.push_binding(Some(name.text), false, is_readonly);
+            self.push_binding(Some(name.text.as_str()), false, is_readonly);
         }
     }
 
@@ -109,7 +109,7 @@ impl<'ast> ScopeChecker<'ast> {
             let is_readonly =
                 is_const_stmt || attributed.attribute.as_deref().is_some_and(is_readonly_attribute);
             if !attributed.name.text.is_empty() {
-                self.push_binding(Some(attributed.name.text), is_global, is_readonly);
+                self.push_binding(Some(attributed.name.text.as_str()), is_global, is_readonly);
             }
         }
     }
@@ -145,7 +145,7 @@ impl<'ast> ScopeChecker<'ast> {
         if name.is_empty() {
             return;
         }
-        let index = match self.resolve(name) {
+        let index = match self.resolve(name.as_str()) {
             Resolved::ImplicitGlobal => return,
             Resolved::Undeclared => {
                 self.errors.push(ParseError {
@@ -356,7 +356,7 @@ impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
             // Lua 5.5
             Statement::GlobalFunction(global_function) => {
                 if !global_function.name.text.is_empty() {
-                    self.push_binding(Some(global_function.name.text), true, false);
+                    self.push_binding(Some(global_function.name.text.as_str()), true, false);
                 }
                 self.visit_function_body(&global_function.body);
             }

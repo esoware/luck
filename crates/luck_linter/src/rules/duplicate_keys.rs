@@ -36,7 +36,7 @@ impl NodeRule for DuplicateKeys {
         for field in &table.fields {
             let keyed = match field {
                 Field::Named { name, .. } => {
-                    Some((Key::String(Cow::Borrowed(name.text)), name.span))
+                    Some((Key::String(Cow::Borrowed(name.text.as_str())), name.span))
                 }
                 // Compare decoded values, since `["\97"]` and `["a"]` are the
                 // same key.

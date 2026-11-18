@@ -19,7 +19,7 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
     // shadowed base (`local string = 1; string.format`) no stdlib hover
     // instead of the wrong docs.
     let entry = match &node {
-        CursorNode::Identifier(name) => {
+        CursorNode::Identifier(name, _) => {
             if semantic.scope_tree().resolves_to_local(name) {
                 return None;
             }

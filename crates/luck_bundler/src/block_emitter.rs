@@ -226,7 +226,7 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
         let Some(key) = self.plan.key(dependency) else {
             return;
         };
-        callee.text = self.names.require;
+        callee.text = self.names.require.into();
         let key_expr = self.key_expr(key);
         *args = FunctionArgs::Parenthesized {
             span: args_span,
@@ -258,7 +258,7 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
 
     /// The export table's field `name`, spanning it.
     fn table_field(&self, name: Name<'ast>) -> SuffixedExpression<'ast> {
-        let table = Name { text: self.names.exports, span: name.span };
+        let table = Name { text: self.names.exports.into(), index: None, span: name.span };
         SuffixedExpression {
             span: name.span,
             prefix: Expression::Name(Box::new_in(table, self.allocator)),
@@ -313,7 +313,7 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
                     return Statement::LocalFunction(function);
                 }
                 let LocalFunction { span, attributes, name, body, .. } = Box::unbox(function);
-                let table = Name { text: self.names.exports, span: name.span };
+                let table = Name { text: self.names.exports.into(), index: None, span: name.span };
                 let function_name = FunctionName {
                     span: name.span,
                     names: List::from_array_in([table, name], self.allocator),
@@ -357,7 +357,7 @@ impl<'ast> VisitorMut<'ast> for ModuleRewriter<'_, 'ast> {
             && let Some(root) = function_decl.name.names.first()
             && self.module.exports.is_field_reference(root.span)
         {
-            let table = Name { text: self.names.exports, span: root.span };
+            let table = Name { text: self.names.exports.into(), index: None, span: root.span };
             function_decl.name.names.insert(0, table, self.allocator);
         }
         self.walk_stmt(stmt);
@@ -383,7 +383,7 @@ impl<'ast> VisitorMut<'ast> for ModuleRewriter<'_, 'ast> {
                 return;
             }
             if contains_span(&self.module.dynamic_callees, name.span) {
-                name.text = self.names.dynamic;
+                name.text = self.names.dynamic.into();
             }
             return;
         }

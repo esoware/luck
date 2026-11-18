@@ -17,7 +17,7 @@ pub use types::TypeFieldSpec;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use luck_allocator::{Allocator, Box, List};
+use luck_allocator::{Allocator, Box, List, ThinStr};
 use luck_token::{LuaVersion, Span};
 
 use crate::leaf::{Literal, Name};
@@ -247,7 +247,11 @@ impl<'ast> Synth<'ast> {
             |version| is_valid_identifier_in(text, version),
         );
         assert!(is_valid, "synth: {text:?} is not a valid identifier");
-        Name { text: self.allocator.alloc_str(text), span: self.next_span() }
+        Name {
+            text: ThinStr::new(self.allocator.alloc_str(text)),
+            index: None,
+            span: self.next_span(),
+        }
     }
 
     /// Whether `name` works as a `.name` field or `name =` key: an identifier

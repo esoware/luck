@@ -791,7 +791,7 @@ mod tests {
             let Expression::Name(name) = expr else {
                 panic!("expected a name, got {expr:?}");
             };
-            name.text.to_owned()
+            name.text.as_str().to_owned()
         };
         let operand_names = |expr: &Expression<'_>| {
             let run = run(expr);
@@ -825,7 +825,7 @@ mod tests {
                 let Suffix::Field(name) = suffix else {
                     panic!("expected a field, got {suffix:?}");
                 };
-                name.text
+                name.text.as_str()
             })
             .collect();
         assert_eq!(fields, names);

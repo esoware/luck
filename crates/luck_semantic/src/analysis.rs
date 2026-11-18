@@ -190,7 +190,11 @@ impl<'ast> SemanticAnalysis<'ast> {
     ) -> Option<&'static StdlibEntry> {
         let (&text, members) = segments.split_first()?;
         let tree = &self.scope_tree;
-        let reference = tree.reference(tree.reference_of(&Name { text, span: root_span })?);
+        let reference = tree.reference(tree.reference_of(&Name {
+            text: text.into(),
+            index: None,
+            span: root_span,
+        })?);
         match reference.resolved {
             Some(symbol) => {
                 let (first, rest) = members.split_first()?;
@@ -261,7 +265,7 @@ mod tests {
             .iter()
             .rfind(|reference| tree.name(reference.name) == "print")
             .expect("the source references print");
-        tree.reaches_host_global(&Name { text: "print", span: print.span })
+        tree.reaches_host_global(&Name { text: "print".into(), index: None, span: print.span })
     }
 
     #[test]

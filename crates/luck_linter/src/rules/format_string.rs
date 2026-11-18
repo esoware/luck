@@ -62,10 +62,10 @@ enum DslKind {
 impl DslKind {
     fn of_call(call: Call<'_>) -> Option<Self> {
         if let Some(method) = call.method {
-            return Self::of_string_function(method.text);
+            return Self::of_string_function(method.text.as_str());
         }
         let (root, field) = dotted_callee(call)?;
-        match (root.text, field) {
+        match (root.text.as_str(), field) {
             ("string", _) => Self::of_string_function(field),
             ("os", "date") => Some(Self::OsDate),
             _ => None,

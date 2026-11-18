@@ -1,6 +1,6 @@
 use core::mem;
 
-use luck_allocator::List;
+use luck_allocator::{List, ThinStr};
 use luck_ast::{
     Assignment, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause, Expression,
     GenericFor, GotoStatement, IfStatement, LabelStatement, LastStatement, MAX_NESTING_DEPTH, Name,
@@ -696,7 +696,9 @@ impl<'ast> Parser<'ast> {
         match expr {
             Expression::Name(name) => Var::Name(name),
             Expression::Suffixed(chain) if chain.is_var() => Var::Suffixed(chain),
-            Expression::Error(span) => Var::Name(self.alloc(Name { text: "", span })),
+            Expression::Error(span) => {
+                Var::Name(self.alloc(Name { text: ThinStr::new(""), index: None, span }))
+            }
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -715,7 +717,7 @@ impl<'ast> Parser<'ast> {
             | Expression::TypeCast(_) => {
                 let span = expr.span();
                 self.error(span, "invalid assignment target");
-                Var::Name(self.alloc(Name { text: "", span }))
+                Var::Name(self.alloc(Name { text: ThinStr::new(""), index: None, span }))
             }
         }
     }

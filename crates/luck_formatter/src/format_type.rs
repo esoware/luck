@@ -24,9 +24,9 @@ fn flat_leading_name<'ast>(ty: &Type<'ast>) -> Option<&'ast str> {
     let mut current = ty;
     loop {
         current = match current {
-            Type::Name(name) => return Some(name.text),
-            Type::Named(named) => return Some(named.prefix.unwrap_or(named.name).text),
-            Type::GenericPack(pack) => return Some(pack.name.text),
+            Type::Name(name) => return Some(name.text.as_str()),
+            Type::Named(named) => return Some(named.prefix.unwrap_or(named.name).text.as_str()),
+            Type::GenericPack(pack) => return Some(pack.name.text.as_str()),
             Type::Optional(optional) => &optional.ty,
             Type::Union(union) => union.types.first()?,
             Type::Intersection(intersection) => intersection.types.first()?,

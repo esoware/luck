@@ -22,7 +22,7 @@ pub(crate) fn dotted_callee(call: Call<'_>) -> Option<(&Name<'_>, &str)> {
     else {
         return None;
     };
-    (!field.text.is_empty()).then_some((root, field.text))
+    (!field.text.is_empty()).then_some((root, field.text.as_str()))
 }
 
 /// `f"..."` and `f{...}` pass one argument, which isn't in the list.

@@ -121,6 +121,8 @@ where
             resolved_offsets,
             positions: Vec::with_capacity(name_uses),
             buckets: Vec::new(),
+            by_index: vec![None; offset_to_index(counts.names)],
+            is_indexed: true,
             names: Vec::with_capacity(names),
             name_ids: FxHashMap::with_capacity_and_hasher(names, FxBuildHasher),
             is_env_assigned: false,
@@ -201,8 +203,15 @@ where
     Filter: NameFilter,
 {
     fn finish(mut self) -> (ScopeTree<'ast>, InitializedLocals<'ast>) {
-        let ScopeTree { references, resolved, resolved_offsets, positions, buckets, .. } =
-            &mut self.tree;
+        let ScopeTree {
+            references,
+            resolved,
+            resolved_offsets,
+            positions,
+            buckets,
+            is_indexed,
+            ..
+        } = &mut self.tree;
         // Each symbol's count, one slot along, becomes the start of its run,
         // which then fills in reference order up to where the next starts.
         let mut total = 0u32;
@@ -229,7 +238,8 @@ where
         let bucket_count = positions
             .last()
             .map_or(0, |last| offset_to_index(last.start >> BUCKET_SHIFT).saturating_add(1));
-        if bucket_count <= positions.len().saturating_mul(MAX_BUCKETS_PER_REFERENCE) {
+        if bucket_count <= positions.len().saturating_mul(MAX_BUCKETS_PER_REFERENCE) && !*is_indexed
+        {
             buckets.reserve_exact(bucket_count.saturating_add(1));
             for (i, position) in (0u32..).zip(positions.iter()) {
                 let bucket = offset_to_index(position.start >> BUCKET_SHIFT);
@@ -337,7 +347,7 @@ where
         if name.text.is_empty() {
             return None;
         }
-        self.declare_local(name.text, name.span, kind)
+        self.declare_local(name.text.as_str(), name.span, kind)
     }
 
     fn symbol_mut(&mut self, id: SymbolId) -> Option<&mut Symbol> {
@@ -350,7 +360,7 @@ where
         if name.text.is_empty() {
             return;
         }
-        let Some(id) = self.intern(name.text) else {
+        let Some(id) = self.intern(name.text.as_str()) else {
             return;
         };
         if let Some(entry) = self.tree.names.get_mut(id.index()) {
@@ -368,7 +378,7 @@ where
         if name.text.is_empty() {
             return;
         }
-        let Some(name_id) = self.intern(name.text) else {
+        let Some(name_id) = self.intern(name.text.as_str()) else {
             return;
         };
         let binding = self.binding(name_id);
@@ -377,7 +387,7 @@ where
         // inside a type function they're no references of this chunk.
         if resolved.is_none()
             && self.is_in_type_function
-            && (name.text == "types" || self.type_names.contains(name.text))
+            && (name.text == "types" || self.type_names.contains(name.text.as_str()))
         {
             return;
         }
@@ -397,6 +407,11 @@ where
         }
         let reference = ReferenceId::from_index(self.tree.references.len());
         self.tree.positions.push(Position { start: name.span.start, reference });
+        match name.index.and_then(|index| self.tree.by_index.get_mut(offset_to_index(index.get())))
+        {
+            Some(slot @ None) => *slot = Some(reference),
+            Some(Some(_)) | None => self.tree.is_indexed = false,
+        }
         let ScopeTree { scopes, symbols, resolved_offsets, .. } = &mut self.tree;
         if let Some(symbol) = resolved.or(env).and_then(|symbol| symbols.get_mut(symbol.index())) {
             if scopes
@@ -428,9 +443,9 @@ where
     fn record_type_names(&mut self, block: &'ast Block<'ast>) {
         for stmt in &block.stmts {
             if let Statement::TypeDeclaration(declaration) = stmt
-                && self.filter.keeps(declaration.name.text)
+                && self.filter.keeps(declaration.name.text.as_str())
             {
-                self.type_names.insert(declaration.name.text);
+                self.type_names.insert(declaration.name.text.as_str());
             }
         }
     }
@@ -729,6 +744,7 @@ where
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
+    use luck_ast::{NameIndex, Suffix, VisitorMut};
 
     use super::*;
     use crate::fixtures::parse;
@@ -1258,9 +1274,101 @@ print(x)
 t[x], x = x, function() y = x end",
         );
         for (i, reference) in tree.references().iter().enumerate() {
-            let name = Name { text: tree.name(reference.name), span: reference.span };
+            let name =
+                Name { text: tree.name(reference.name).into(), index: None, span: reference.span };
             assert_eq!(tree.reference_of(&name), Some(ReferenceId::from_index(i)));
         }
+    }
+
+    /// Names that make references and names that make none.
+    struct SomeNames<'ast>(Vec<&'ast Name<'ast>>);
+
+    impl<'ast> Visitor<'ast> for SomeNames<'ast> {
+        fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
+            if let Statement::LocalAssignment(local) = stmt {
+                self.0.extend(local.names.iter().map(|attributed| &attributed.name));
+            }
+            self.walk_stmt(stmt);
+        }
+
+        fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
+            if let Expression::Name(name) = expr {
+                self.0.push(name);
+            }
+            self.walk_expr(expr);
+        }
+
+        fn visit_assignment_target(&mut self, target: &'ast Var<'ast>) {
+            if let Var::Name(name) = target {
+                self.0.push(name);
+            }
+            self.walk_assignment_target(target);
+        }
+
+        fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression<'ast>) {
+            for suffix in &chain.suffixes {
+                if let Suffix::Field(name) = suffix {
+                    self.0.push(name);
+                }
+            }
+            self.walk_suffixed(chain);
+        }
+
+        fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
+            self.0.extend(body.params.iter().map(|param| &param.name));
+            self.walk_function_body(body);
+        }
+    }
+
+    /// Each reference a tree built from `counts` finds from the names of
+    /// `block`, and then each one a tree that searches positions finds.
+    fn found_by_index_and_by_search(
+        block: &Block<'_>,
+        counts: TreeCounts,
+    ) -> (Vec<Option<ReferenceId>>, Vec<Option<ReferenceId>>) {
+        let indexed = ScopeTree::build(block, counts, LuaVersion::Lua54);
+        let searched = ScopeTree::build(block, TreeCounts::default(), LuaVersion::Lua54);
+        let mut names = SomeNames(Vec::new());
+        names.visit_block(block);
+        (
+            names.0.iter().map(|name| indexed.reference_of(name)).collect(),
+            names.0.iter().map(|name| searched.reference_of(name)).collect(),
+        )
+    }
+
+    const NAMES_OF_EVERY_KIND: &str = "\
+local x, y = 1
+print(x, t.x)
+t[x], x = x, function(x) y = x.y end";
+
+    #[test]
+    fn a_parsed_tree_finds_a_name_s_reference_by_its_index() {
+        let allocator = Allocator::new();
+        let parsed = luck_parser::parse(&allocator, NAMES_OF_EVERY_KIND, LuaVersion::Lua54);
+        let (by_index, by_search) = found_by_index_and_by_search(&parsed.block, parsed.counts);
+        assert_eq!(by_index, by_search);
+        assert_eq!(by_index.iter().flatten().count(), 9, "{by_index:?}");
+    }
+
+    #[test]
+    fn a_tree_whose_names_share_an_index_searches_for_their_references() {
+        struct Renumber;
+
+        impl<'ast> VisitorMut<'ast> for Renumber {
+            fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
+                if let Expression::Name(name) = expr {
+                    name.index = Some(NameIndex::new(0));
+                }
+                self.walk_expr(expr);
+            }
+        }
+
+        let allocator = Allocator::new();
+        let mut parsed = luck_parser::parse(&allocator, NAMES_OF_EVERY_KIND, LuaVersion::Lua54);
+        Renumber.visit_block(&mut parsed.block);
+        let (by_index, by_search) = found_by_index_and_by_search(&parsed.block, parsed.counts);
+        assert_eq!(by_index, by_search);
+        assert_eq!(by_index.iter().flatten().count(), 9, "{by_index:?}");
     }
 
     #[test]
@@ -1328,9 +1436,9 @@ print(y)",
         );
         let local_x = references(&tree, "x")[0].span;
         let global_y = references(&tree, "y")[0].span;
-        assert!(tree.resolves_to_local(&Name { text: "x", span: local_x }));
-        assert!(!tree.resolves_to_local(&Name { text: "y", span: local_x }));
-        assert!(!tree.resolves_to_local(&Name { text: "y", span: global_y }));
+        assert!(tree.resolves_to_local(&Name { text: "x".into(), index: None, span: local_x }));
+        assert!(!tree.resolves_to_local(&Name { text: "y".into(), index: None, span: local_x }));
+        assert!(!tree.resolves_to_local(&Name { text: "y".into(), index: None, span: global_y }));
     }
 
     #[test]

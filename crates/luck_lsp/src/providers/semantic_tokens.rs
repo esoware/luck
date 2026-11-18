@@ -577,7 +577,7 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
         match ty {
             Type::Name(name) => {
                 if matches!(
-                    name.text,
+                    name.text.as_str(),
                     "any"
                         | "unknown"
                         | "never"

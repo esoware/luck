@@ -77,7 +77,7 @@ impl FieldWriteChecker<'_> {
     ) -> bool {
         // Writing through a writable base (`_G.x = 1`, Roblox's
         // `shared.score = 1`) is intended.
-        if !is_overwritable_builtin(self.semantic, root.text)
+        if !is_overwritable_builtin(self.semantic, root.text.as_str())
             || !self.semantic.scope_tree().reaches_host_global(root)
         {
             return false;
@@ -98,7 +98,7 @@ impl FieldWriteChecker<'_> {
             return;
         };
         let leaf = match last {
-            Suffix::Field(name) => Some(name.text),
+            Suffix::Field(name) => Some(name.text.as_str()),
             Suffix::Index { .. } => None,
             Suffix::Call(_) | Suffix::MethodCall(_) | Suffix::TypeInstantiation { .. } => return,
         };
@@ -128,12 +128,12 @@ impl FieldWriteChecker<'_> {
             };
             (container, leaf, '.')
         };
-        let segments: Vec<&str> = container.iter().map(|name| name.text).collect();
+        let segments: Vec<&str> = container.iter().map(|name| name.text.as_str()).collect();
         let Some(root) = container.first() else {
             return;
         };
         let leaf_name = leaf.text;
-        if !self.writes_namespace_member(root, segments.iter().copied(), Some(leaf_name)) {
+        if !self.writes_namespace_member(root, segments.iter().copied(), Some(leaf_name.as_str())) {
             return;
         }
         let display = format!("{}{separator}{leaf_name}", segments.join("."));

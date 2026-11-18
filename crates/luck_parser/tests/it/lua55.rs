@@ -247,7 +247,7 @@ fn trailing_attribute_replaces_the_leading_one_on_its_name() {
     let attribute_names: Vec<_> = local
         .names
         .iter()
-        .map(|attributed| Some(attributed.attribute.as_ref()?.name.text))
+        .map(|attributed| Some(attributed.attribute.as_ref()?.name.text.as_str()))
         .collect();
     assert_eq!(attribute_names, [Some("const"), Some("close")]);
 }

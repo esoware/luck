@@ -84,7 +84,7 @@ impl Printer {
             }
             Statement::NumericFor(numeric_for) => {
                 self.piece("for");
-                self.name(numeric_for.name.text);
+                self.name(numeric_for.name.text.as_str());
                 if let Some(ty) = &numeric_for.type_annotation {
                     self.piece(":");
                     self.print_type(ty);
@@ -113,10 +113,12 @@ impl Printer {
             Statement::FunctionDecl(declaration) => {
                 self.print_function_attributes(&declaration.attributes);
                 self.piece("function");
-                self.list(&declaration.name.names, ".", |printer, name| printer.name(name.text));
+                self.list(&declaration.name.names, ".", |printer, name| {
+                    printer.name(name.text.as_str());
+                });
                 if let Some(method) = &declaration.name.method {
                     self.piece(":");
-                    self.name(method.text);
+                    self.name(method.text.as_str());
                 }
                 self.print_function_body(&declaration.body);
             }
@@ -127,7 +129,7 @@ impl Printer {
                     LocalFunctionKind::Const => self.piece("const function"),
                     LocalFunctionKind::Export => self.piece("export function"),
                 }
-                self.name(local_function.name.text);
+                self.name(local_function.name.text.as_str());
                 self.print_function_body(&local_function.body);
             }
             Statement::LocalAssignment(local) => {
@@ -146,12 +148,12 @@ impl Printer {
             // Lua 5.2+
             Statement::Goto(goto) => {
                 self.piece("goto");
-                self.name(goto.name.text);
+                self.name(goto.name.text.as_str());
             }
             // Lua 5.2+
             Statement::Label(label) => {
                 self.piece("::");
-                self.name(label.name.text);
+                self.name(label.name.text.as_str());
                 self.piece("::");
             }
             // Lua 5.5
@@ -163,7 +165,7 @@ impl Printer {
             // Lua 5.5
             Statement::GlobalFunction(function) => {
                 self.piece("global function");
-                self.name(function.name.text);
+                self.name(function.name.text.as_str());
                 self.print_function_body(&function.body);
             }
             // Lua 5.5
@@ -191,7 +193,7 @@ impl Printer {
                 if matches!(declaration.value, TypeDeclarationValue::TypeFunction(_)) {
                     self.piece("function");
                 }
-                self.name(declaration.name.text);
+                self.name(declaration.name.text.as_str());
                 if let Some(generics) = &declaration.generics {
                     self.print_generic_type_list(generics);
                 }
@@ -215,7 +217,7 @@ impl Printer {
     }
 
     fn print_attributed_name(&mut self, attributed: &AttributedName<'_>) {
-        self.name(attributed.name.text);
+        self.name(attributed.name.text.as_str());
         if let Some(ty) = &attributed.type_annotation {
             self.piece(":");
             self.print_type(ty);
@@ -227,7 +229,7 @@ impl Printer {
 
     fn print_attribute(&mut self, attribute: &Attribute<'_>) {
         self.piece("<");
-        self.name(attribute.name.text);
+        self.name(attribute.name.text.as_str());
         self.piece(">");
     }
 
@@ -237,7 +239,7 @@ impl Printer {
         for attribute in attributes {
             if let Some(args) = &attribute.args {
                 self.piece("@[");
-                self.name(attribute.name.text);
+                self.name(attribute.name.text.as_str());
                 if let [arg @ (Expression::TableConstructor(_) | Expression::StringLiteral(_))] =
                     &**args
                 {
@@ -250,7 +252,7 @@ impl Printer {
                 self.piece("]");
             } else {
                 self.piece("@");
-                self.name(attribute.name.text);
+                self.name(attribute.name.text.as_str());
             }
         }
     }
@@ -267,7 +269,7 @@ impl Printer {
             }
             self.piece("...");
             if let Some(name) = &vararg.name {
-                self.name(name.text);
+                self.name(name.text.as_str());
             }
             if let Some(ty) = &vararg.type_annotation {
                 self.piece(":");
@@ -284,7 +286,7 @@ impl Printer {
     }
 
     fn print_param(&mut self, param: &Parameter<'_>) {
-        self.name(param.name.text);
+        self.name(param.name.text.as_str());
         if let Some(ty) = &param.type_annotation {
             self.piece(":");
             self.print_type(ty);
