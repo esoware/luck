@@ -1,5 +1,7 @@
 use luck_lexer::lex;
-use luck_token::{Comment, CommentKind, CommentPosition, LuaVersion, SourceError, Span, TokenKind};
+use luck_token::{
+    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, SourceError, Span, TokenKind,
+};
 
 use crate::common::lex_lua51;
 
@@ -75,8 +77,8 @@ y = 2
                 attached_to,
                 kind,
                 position,
-                is_preceded_by_newline: position == CommentPosition::Leading,
                 is_followed_by_newline: true,
+                content: CommentContent::Plain,
             }],
             "{source:?}"
         );
@@ -104,8 +106,8 @@ local x",
             attached_to: 19,
             kind: CommentKind::Shebang,
             position: CommentPosition::Leading,
-            is_preceded_by_newline: false,
             is_followed_by_newline: true,
+            content: CommentContent::Plain,
         }]
     );
 }
@@ -135,7 +137,6 @@ fn trailing_comment_attaches_to_the_previous_token() {
     let comment = &result.comments[0];
     assert_eq!(comment.position, CommentPosition::Trailing);
     assert_eq!(comment.attached_to, result.tokens[1].span.start);
-    assert!(!comment.is_preceded_by_newline);
 }
 
 #[test]
@@ -163,7 +164,6 @@ y",
     assert_eq!(result.comments.len(), 1);
     let comment = &result.comments[0];
     assert_eq!(comment.position, CommentPosition::Leading);
-    assert!(comment.is_preceded_by_newline);
 }
 
 #[test]
@@ -188,7 +188,6 @@ fn comment_before_the_first_token_on_its_line_leads_it() {
     let comment = &result.comments[0];
     assert_eq!(comment.position, CommentPosition::Leading);
     assert_eq!(comment.attached_to, 10);
-    assert!(comment.is_preceded_by_newline);
     assert!(!comment.is_followed_by_newline);
 }
 
@@ -238,10 +237,8 @@ y",
     assert_eq!(result.comments.len(), 2);
     assert_eq!(result.comments[0].position, CommentPosition::Trailing);
     assert_eq!(result.comments[0].attached_to, 0);
-    assert!(!result.comments[0].is_preceded_by_newline);
     assert_eq!(result.comments[1].position, CommentPosition::Leading);
     assert_eq!(result.comments[1].attached_to, 15);
-    assert!(result.comments[1].is_preceded_by_newline);
 }
 
 #[test]
@@ -252,7 +249,6 @@ x --[[ a ]] -- c
 y",
     );
     assert_eq!(result.comments[1].position, CommentPosition::Trailing);
-    assert!(!result.comments[1].is_preceded_by_newline);
 }
 
 #[test]
@@ -282,4 +278,26 @@ return 1",
         "Luau skips only a `#!` first line, so `#x` should stay code"
     );
     assert_eq!(result.tokens[0].kind, TokenKind::Hash);
+}
+
+#[test]
+fn each_comment_carries_what_it_tells_a_tool() {
+    let source = "--!strict
+-- luck: format off
+--[[ luck: allow(x) ]]
+-- luck: alow(x)
+-- prose
+local x";
+    let contents: Vec<CommentContent> =
+        lex(source, LuaVersion::Luau).comments.iter().map(|comment| comment.content).collect();
+    assert_eq!(
+        contents,
+        [
+            CommentContent::HotComment,
+            CommentContent::FormatOff,
+            CommentContent::LintDirective,
+            CommentContent::InvalidDirective,
+            CommentContent::Plain,
+        ]
+    );
 }

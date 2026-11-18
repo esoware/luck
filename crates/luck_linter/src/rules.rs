@@ -60,11 +60,10 @@ mod unnecessary_negation;
 mod unreachable_code;
 mod unused_argument;
 mod unused_label;
+mod unused_lint_filter;
 mod unused_loop_variable;
 mod unused_variable;
 mod value_overwritten_before_read;
-
-use core::iter;
 
 use crate::rule::{NodeRule, Rule, WholeRule};
 use crate::suggest::closest;
@@ -73,6 +72,9 @@ use crate::suggest::closest;
 pub(crate) enum RuleEntry {
     Whole(&'static dyn WholeRule),
     Node(&'static dyn NodeRule),
+    /// It reads which `allow`s the other rules' diagnostics met, so it runs
+    /// once they all have.
+    UnusedLintFilter(&'static unused_lint_filter::UnusedLintFilter),
 }
 
 impl RuleEntry {
@@ -80,6 +82,7 @@ impl RuleEntry {
         match *self {
             Self::Whole(rule) => rule,
             Self::Node(rule) => rule,
+            Self::UnusedLintFilter(rule) => rule,
         }
     }
 }
@@ -155,22 +158,8 @@ pub(crate) static RULES: &[RuleEntry] = &[
     RuleEntry::Node(&roblox_suspicious_udim2_new::RobloxSuspiciousUdim2New),
     RuleEntry::Node(&roblox_manual_fromscale_or_fromoffset::RobloxManualFromScaleOrFromOffset),
     RuleEntry::Node(&roblox_unknown_enum_member::RobloxUnknownEnumMember),
+    RuleEntry::UnusedLintFilter(&unused_lint_filter::UnusedLintFilter),
 ];
-
-/// Rule name on parse-error diagnostics. It isn't a `Rule`, but it's
-/// registered so directives and config that name it aren't flagged as
-/// unknown.
-pub(crate) const PARSE_ERROR_PSEUDO_RULE: &str = "parse_error";
-
-/// Every rule name in registration order, then `parse_error`, which
-/// `invalid_lint_filter` checks directive names against.
-pub(crate) fn registered_rule_names() -> impl Iterator<Item = &'static str> {
-    RULES.iter().map(|entry| entry.rule().name()).chain(iter::once(PARSE_ERROR_PSEUDO_RULE))
-}
-
-pub(crate) fn is_registered_rule_name(name: &str) -> bool {
-    registered_rule_names().any(|registered| registered == name)
-}
 
 pub fn rules() -> impl Iterator<Item = &'static dyn Rule> {
     RULES.iter().map(RuleEntry::rule)
@@ -237,23 +226,21 @@ mod tests {
     }
 
     #[test]
-    fn registered_names_are_every_rule_then_parse_error() {
-        let mut expected_names: Vec<&str> = RULES.iter().map(|entry| entry.rule().name()).collect();
-        expected_names.push(PARSE_ERROR_PSEUDO_RULE);
-        assert_eq!(registered_rule_names().collect::<Vec<_>>(), expected_names);
-    }
-
-    #[test]
     fn rule_count_locked() {
         // If this changes, update the rule count in the root README.md.
-        assert_eq!(RULES.len(), 65);
+        assert_eq!(RULES.len(), 66);
     }
 
     #[test]
-    fn registered_names_unique() {
+    fn rule_names_are_unique() {
         let mut seen_names = FxHashSet::default();
-        for name in registered_rule_names() {
-            assert!(seen_names.insert(name), "duplicate name `{name}` in registered list");
+        for name in rules().map(Rule::name) {
+            assert!(seen_names.insert(name), "duplicate rule name `{name}`");
         }
+    }
+
+    #[test]
+    fn unused_lint_filter_comes_last_since_it_runs_last() {
+        assert!(matches!(RULES.last(), Some(RuleEntry::UnusedLintFilter(_))));
     }
 }

@@ -3,8 +3,8 @@ mod string;
 use core::mem;
 
 use luck_token::{
-    Comment, CommentKind, CommentPosition, LuaVersion, Span, Token, TokenKind, chunk_start,
-    has_line_break, has_shebang,
+    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, Token, TokenKind,
+    chunk_start, has_line_break, has_shebang,
 };
 
 use crate::cursor::Cursor;
@@ -302,8 +302,8 @@ impl<'source> Lexer<'source> {
             attached_to: 0,
             kind: CommentKind::Shebang,
             position: CommentPosition::Leading,
-            is_preceded_by_newline: false,
             is_followed_by_newline: self.cursor.is_at_line_end(self.version),
+            content: CommentContent::Plain,
         });
     }
 
@@ -342,8 +342,7 @@ impl<'source> Lexer<'source> {
         // A comment with no line break since the previous token trails it,
         // and any other leads the next token. The start of the source counts
         // as a line break, so a trailing comment always has a token.
-        let is_preceded_by_newline = self.has_line_break;
-        let (attached_to, position) = if is_preceded_by_newline {
+        let (attached_to, position) = if self.has_line_break {
             (0, CommentPosition::Leading)
         } else {
             (self.last_token_start, CommentPosition::Trailing)
@@ -353,8 +352,8 @@ impl<'source> Lexer<'source> {
             attached_to,
             kind,
             position,
-            is_preceded_by_newline,
             is_followed_by_newline: self.cursor.is_at_line_end(self.version),
+            content: CommentContent::of(self.cursor.text_since(start), kind, self.version),
         });
         if position == CommentPosition::Trailing {
             self.attached_comment_count = self.comments.len();

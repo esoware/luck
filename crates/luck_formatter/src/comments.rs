@@ -28,12 +28,11 @@ use core::ops::Range;
 use luck_allocator::Allocator;
 use luck_ast::SyntheticComment;
 use luck_token::{
-    Comment, CommentKind, CommentPosition, LuaVersion, Span, has_line_break, index_to_offset,
-    is_lua_whitespace, line_breaks, offset_to_index, strip_line_break,
+    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, has_line_break,
+    index_to_offset, is_lua_whitespace, line_breaks, offset_to_index, strip_line_break,
 };
 use rustc_hash::FxHashSet;
 
-use crate::directive::{Directive, format_off_regions};
 use crate::format_block::{has_blank_line, has_leading_edge_blank};
 use crate::ir::{Formatter, LineMode};
 
@@ -90,15 +89,33 @@ impl<'ast> Comments<'ast> {
         source: &'ast str,
         version: LuaVersion,
     ) -> Self {
-        let source_end = index_to_offset(source.len());
-        let disabled_ranges = format_off_regions(comments, source)
-            .into_iter()
-            .map(|(off, on)| {
-                let start = own_line_start(source, off.start)
-                    .unwrap_or_else(|| after_line_break(source, off.end, version));
-                start..on.map_or(source_end, |close| close.end)
-            })
-            .collect();
+        let region_start = |off: &Comment| {
+            own_line_start(source, off.span.start)
+                .unwrap_or_else(|| after_line_break(source, off.span.end, version))
+        };
+        // An `off` inside an open region changes nothing.
+        let mut disabled_ranges = Vec::new();
+        let mut open_off: Option<&Comment> = None;
+        for comment in comments {
+            match comment.content {
+                CommentContent::FormatOff => {
+                    open_off.get_or_insert(comment);
+                }
+                CommentContent::FormatOn => {
+                    if let Some(off) = open_off.take() {
+                        disabled_ranges.push(region_start(off)..comment.span.end);
+                    }
+                }
+                CommentContent::Plain
+                | CommentContent::HotComment
+                | CommentContent::FormatIgnore
+                | CommentContent::LintDirective
+                | CommentContent::InvalidDirective => {}
+            }
+        }
+        if let Some(off) = open_off {
+            disabled_ranges.push(region_start(off)..index_to_offset(source.len()));
+        }
         let sourced = Sourced { comments, source, version, printed_count: 0, disabled_ranges };
         let next_start = sourced.next_start();
         Self { store: Store::Sourced(sourced), next_start }
@@ -525,8 +542,8 @@ impl<'ast> Formatter<'ast> {
             if is_line_ending && starts_line(source, comment.span.start, version) {
                 self.hard_line();
             }
+            has_ignore |= comment.content == CommentContent::FormatIgnore;
             let text = self.sourced_text(comment);
-            has_ignore |= Directive::parse(text) == Some(Directive::Ignore);
             self.text(text);
             if is_line_ending {
                 self.line_break(has_blank_line(source, comment.span.end, next_start, version));
@@ -710,20 +727,20 @@ impl<'ast> Formatter<'ast> {
 
     /// Writes the comments that lead a statement starting at `anchor`.
     ///
-    /// Returns true when one of them is a `luck: ignore` directive.
+    /// Returns true when one of them is a `luck: ignore` directive, which only
+    /// a parsed comment can be, since a tree built in code has no source to
+    /// keep a statement as written from.
     pub(crate) fn write_stmt_leading_comments(&mut self, anchor: u32) -> bool {
         if self.comments().source().is_some() {
             return self.write_leading_comments(anchor);
         }
         let lines =
             self.take_synthetic(anchor, |comment| comment.position == CommentPosition::Leading);
-        let mut has_ignore = false;
         for text in lines {
-            has_ignore |= Directive::parse(text) == Some(Directive::Ignore);
             self.text(text);
             self.hard_line();
         }
-        has_ignore
+        false
     }
 
     /// Writes the comments after a statement on its line, at the line's end,
@@ -1061,8 +1078,8 @@ mod tests {
             attached_to: 0,
             kind,
             position: CommentPosition::Leading,
-            is_preceded_by_newline: true,
             is_followed_by_newline: true,
+            content: CommentContent::Plain,
         }
     }
 
@@ -1107,7 +1124,7 @@ local x = 1";
         let source = "\
 -- luck: ignore
 local x = 1";
-        let comments = [make_comment(0, 15, CommentKind::Line)];
+        let comments = luck_lexer::lex(source, LuaVersion::Lua54).comments;
         let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
         let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
         assert!(f.write_stmt_leading_comments(16));
@@ -1274,8 +1291,7 @@ local x = 1";
 local x=1
 -- luck: format on
 local y = 2";
-        let source_comments =
-            [make_comment(0, 19, CommentKind::Line), make_comment(30, 49, CommentKind::Line)];
+        let source_comments = luck_lexer::lex(source, LuaVersion::Lua54).comments;
         let comments = Comments::from_source(&source_comments, source, LuaVersion::Lua54);
         assert!(comments.overlaps_disabled_region(Span::new(25, 26)));
         assert!(!comments.overlaps_disabled_region(Span::new(55, 56)));

@@ -2,16 +2,21 @@ use luck_allocator::Allocator;
 use luck_core::LuaTarget;
 use luck_parser::ParseResult;
 use luck_semantic::SemanticAnalysis;
-use luck_token::SourceError;
+use luck_token::{LintVerb, SourceError};
 use rayon::prelude::*;
 
+use crate::bus;
 use crate::config::{LintConfig, RuleLevel};
 use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
+use crate::directives::Directives;
 use crate::fix::FixKind;
 use crate::nodes::{NodeCollector, Nodes};
 use crate::rule::{LintContext, NodeRule, Rule, WholeRule};
-use crate::rules::{PARSE_ERROR_PSEUDO_RULE, RULES, RuleEntry};
-use crate::{bus, suppression};
+use crate::rules::{RULES, RuleEntry};
+
+/// The rule a parse error's diagnostic names. No rule has the name, so
+/// neither config nor a directive can turn one off.
+const PARSE_ERROR_RULE: &str = "parse_error";
 
 /// Parses `source` into `allocator` and lints it for `target`, whose stdlib
 /// environment decides which globals exist. A diagnostic carries a fix only
@@ -72,26 +77,18 @@ pub fn lint_analyzed(
     if !parse.errors.is_empty() {
         return parse_error_diags(parse);
     }
-
-    let (semantic, nodes) = (analysis.semantic(), analysis.nodes());
-    let context = LintContext::new(parse, semantic, nodes, config, fixes);
-
-    let mut diags = run_rules(&context, nodes);
-    // A directive only drops or retunes a diagnostic, so with none it reads
-    // no comment.
-    if !diags.is_empty() {
-        suppression::apply(&mut diags, context.comments, context.source, nodes, semantic.version());
-        diags.sort_by_key(|diag| diag.span.start);
-    }
+    let mut diags = run_rules(&LintContext::new(parse, analysis, config, fixes));
+    diags.sort_by_key(|diag| diag.span.start);
     diags
 }
 
-/// A parse's semantic analysis and the linter's table of its nodes, which
-/// [`analyze`] builds in one walk.
+/// A parse's semantic analysis, the linter's table of its nodes, which
+/// [`analyze`] builds in one walk, and its lint directives.
 #[derive(Debug)]
 pub struct Analysis<'ast> {
     semantic: SemanticAnalysis<'ast>,
     nodes: Nodes<'ast>,
+    directives: Directives,
 }
 
 impl<'ast> Analysis<'ast> {
@@ -103,12 +100,17 @@ impl<'ast> Analysis<'ast> {
     pub(crate) const fn nodes(&self) -> &Nodes<'ast> {
         &self.nodes
     }
+
+    pub(crate) const fn directives(&self) -> &Directives {
+        &self.directives
+    }
 }
 
 /// `parse`'s analysis for `target`, with `config`'s extra globals defined.
 ///
-/// Every rule reads the node table, so a config that runs none, as the
-/// language server's default does, gets an empty one and skips building it.
+/// Every rule reads the node table, so a file where neither config nor a
+/// `deny` or `warn` runs a rule, as under the language server's default
+/// config, gets an empty one and skips building it.
 #[must_use]
 pub fn analyze<'ast>(
     parse: &'ast ParseResult<'_>,
@@ -117,10 +119,10 @@ pub fn analyze<'ast>(
 ) -> Analysis<'ast> {
     let (version, environment) = (target.lua_version(), target.stdlib_environment());
     let block = &parse.block;
-    let (mut semantic, nodes) = if RULES
-        .iter()
-        .any(|entry| rule_severity(entry.rule(), config).is_some())
-    {
+    let mut directives = Directives::new(&parse.comments, parse.source);
+    let (mut semantic, nodes) = if RULES.iter().enumerate().any(|(slot, entry)| {
+        rule_severity(entry.rule(), config).is_some() || directives.enables(slot)
+    }) {
         let mut collector = NodeCollector::new(block);
         let semantic =
             luck_semantic::analyze_with(block, parse.counts, version, environment, &mut collector);
@@ -128,8 +130,9 @@ pub fn analyze<'ast>(
     } else {
         (luck_semantic::analyze(block, parse.counts, version, environment), Nodes::default())
     };
+    directives.cover_statements(&nodes, parse.source, version);
     semantic.add_extra_globals(config.extra_globals.iter().map(String::as_str));
-    Analysis { semantic, nodes }
+    Analysis { semantic, nodes, directives }
 }
 
 fn parse_error_diags(parse: &ParseResult<'_>) -> Vec<LintDiagnostic> {
@@ -138,7 +141,7 @@ fn parse_error_diags(parse: &ParseResult<'_>) -> Vec<LintDiagnostic> {
 
 fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
     LintDiagnostic {
-        rule: PARSE_ERROR_PSEUDO_RULE,
+        rule: PARSE_ERROR_RULE,
         category: Category::Correctness,
         severity: Severity::Error,
         message: error.message.clone().into(),
@@ -149,23 +152,26 @@ fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
 }
 
 /// Node rules share one bus pass while whole-tree rules run beside it, on
-/// the rayon pool for a file large enough to gain from it.
+/// the rayon pool for a file large enough to gain from it. A rule runs where
+/// config turns it on, or where a `deny` or `warn` names it.
 ///
 /// Results go back into registry order, so the caller's stable sort breaks
 /// ties the way a sequential run would. A node rule is skipped when none of
 /// its node types occur in this file.
-fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic> {
-    let config = context.config;
-    let mut severities: Vec<Option<Severity>> = Vec::with_capacity(RULES.len());
+fn run_rules(context: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    let (config, directives, nodes) = (context.config, context.directives, context.nodes);
+    let severities: Vec<Option<Severity>> =
+        RULES.iter().map(|entry| rule_severity(entry.rule(), config)).collect();
+    let runs =
+        |slot: usize| severities.get(slot).copied().flatten().is_some() || directives.enables(slot);
     let mut whole_rules: Vec<(usize, &dyn WholeRule)> = Vec::new();
     let mut node_slots: Vec<usize> = Vec::new();
     let mut node_rules: Vec<&dyn NodeRule> = Vec::new();
+    let mut unused_lint_filter = None;
     #[cfg(debug_assertions)]
     let mut skipped_node_rules: Vec<&dyn NodeRule> = Vec::new();
     for (slot, entry) in RULES.iter().enumerate() {
-        let severity = rule_severity(entry.rule(), config);
-        severities.push(severity);
-        if severity.is_none() {
+        if !runs(slot) {
             continue;
         }
         match *entry {
@@ -179,6 +185,7 @@ fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic
                 node_slots.push(slot);
                 node_rules.push(rule);
             }
+            RuleEntry::UnusedLintFilter(rule) => unused_lint_filter = Some((slot, rule)),
         }
     }
 
@@ -211,31 +218,67 @@ fn run_rules(context: &LintContext<'_>, nodes: &Nodes<'_>) -> Vec<LintDiagnostic
         }
     }
 
+    let mut used = vec![false; directives.entries().len()];
     let mut diags = Vec::with_capacity(findings_by_slot.iter().map(Vec::len).sum());
-    for ((entry, rule_findings), slot_severity) in
-        RULES.iter().zip(findings_by_slot).zip(severities)
-    {
-        if let Some(severity) = slot_severity {
-            diags.extend(into_diagnostics(entry.rule(), rule_findings, severity));
+    for (slot, rule_findings) in findings_by_slot.into_iter().enumerate() {
+        if !rule_findings.is_empty() {
+            let severity = severities.get(slot).copied().flatten();
+            report(slot, rule_findings, severity, directives, Some(&mut used), &mut diags);
         }
+    }
+    // It reads which `allow`s the other rules' diagnostics met, so it runs
+    // last, as it comes last in the registry.
+    if let Some((slot, rule)) = unused_lint_filter {
+        let rule_findings = rule.check(context, &used, runs);
+        let severity = severities.get(slot).copied().flatten();
+        report(slot, rule_findings, severity, directives, None, &mut diags);
     }
     diags
 }
 
-pub(crate) fn into_diagnostics(
-    rule: &dyn Rule,
-    findings: Vec<Finding>,
-    severity: Severity,
-) -> impl Iterator<Item = LintDiagnostic> {
+/// Makes the findings of the rule at `slot` its diagnostics.
+///
+/// Each takes the level the directive that wins over it sets, or else
+/// `severity`, which is `None` for a rule only a directive runs. An `allow`
+/// drops a finding, and one that does is marked in `used`, when given.
+pub(crate) fn report(
+    slot: usize,
+    mut findings: Vec<Finding>,
+    severity: Option<Severity>,
+    directives: &Directives,
+    mut used: Option<&mut [bool]>,
+    diags: &mut Vec<LintDiagnostic>,
+) {
+    let Some(rule) = RULES.get(slot).map(RuleEntry::rule) else {
+        return;
+    };
     let (name, category, fix_kind) = (rule.name(), rule.category(), rule.fix_kind());
-    findings.into_iter().map(move |finding| {
-        let diag = finding.into_diagnostic(name, category, severity);
+    let mut cover = directives.cover_of(slot);
+    if !cover.is_empty() && !findings.is_sorted_by_key(|finding| finding.span().start) {
+        findings.sort_by_key(|finding| finding.span().start);
+    }
+    for finding in findings {
+        let level = match cover.at(finding.span().start) {
+            Some((LintVerb::Allow, entry)) => {
+                if let Some(is_used) = used.as_deref_mut().and_then(|marks| marks.get_mut(entry)) {
+                    *is_used = true;
+                }
+                continue;
+            }
+            Some((LintVerb::Deny, _)) => Severity::Error,
+            Some((LintVerb::Warn, _)) => Severity::Warning,
+            None => match severity {
+                Some(level) => level,
+                None => continue,
+            },
+        };
+        let diag = finding.into_diagnostic(name, category, level);
         debug_assert!(
             diag.fix.as_ref().is_none_or(|fix| fix_kind.contains(fix.kind)),
             "rule `{name}` offers a fix of a kind its `fix_kind()` leaves out: {diag:?}"
         );
-        diag
-    })
+        diags.push(diag);
+    }
 }
 
 /// The severity `rule` runs at, or `None` when it's off. The rule's own
@@ -258,12 +301,17 @@ mod tests {
 
     use super::*;
 
+    fn silent() -> LintConfig {
+        let mut config = LintConfig::default();
+        config.categories.set_level(Category::Correctness, RuleLevel::Off);
+        config
+    }
+
     #[test]
     fn a_config_that_runs_no_rule_builds_no_node_table() {
         let allocator = Allocator::new();
         let parse = luck_parser::parse(&allocator, "local x = nil print(x)", LuaVersion::Lua54);
-        let mut silent = LintConfig::default();
-        silent.categories.set_level(Category::Correctness, RuleLevel::Off);
+        let silent = silent();
         let unlinted = analyze(&parse, LuaTarget::Lua54, &silent);
         assert!(unlinted.nodes().as_slice().is_empty());
         assert_eq!(lint_analyzed(&parse, &unlinted, &silent, FixKind::all()), []);
@@ -273,5 +321,22 @@ mod tests {
         assert!(!linted.nodes().as_slice().is_empty());
         let diags = lint_analyzed(&parse, &linted, &one_rule, FixKind::all());
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn a_deny_runs_its_rule_where_config_runs_none() {
+        let allocator = Allocator::new();
+        let source = "\
+local x = nil -- luck: deny(redundant_nil_init)
+local y = nil
+print(x, y)";
+        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
+        let silent = silent();
+        let analysis = analyze(&parse, LuaTarget::Lua54, &silent);
+        assert!(!analysis.nodes().as_slice().is_empty());
+        let diags = lint_analyzed(&parse, &analysis, &silent, FixKind::empty());
+        let found: Vec<(&str, u32, Severity)> =
+            diags.iter().map(|diag| (diag.rule, diag.span.start, diag.severity)).collect();
+        assert_eq!(found, [("redundant_nil_init", 0, Severity::Error)], "{diags:?}");
     }
 }

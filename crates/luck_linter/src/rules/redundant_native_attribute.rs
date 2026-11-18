@@ -1,5 +1,5 @@
-use luck_ast::{Expression, FunctionAttribute, GetSpan as _, LastStatement, Statement};
-use luck_token::{CommentKind, Span, offset_to_index};
+use luck_ast::{Expression, FunctionAttribute, Statement};
+use luck_token::{Span, leading_hot_comments, offset_to_index};
 
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
@@ -74,12 +74,7 @@ fn check_attributes(
     context: &LintContext<'_>,
     findings: &mut Vec<Finding>,
 ) {
-    // Check for attributes first, since the directive scan reads the
-    // comments.
-    if attributes.is_empty()
-        || !context.semantic.version().is_luau()
-        || !has_native_directive(context)
-    {
+    if attributes.is_empty() || !has_native_directive(context) {
         return;
     }
     for attribute in attributes {
@@ -143,26 +138,9 @@ fn removal_span(
 /// Whether a `--!native` hot comment comes before any code. Luau ignores one
 /// placed later.
 fn has_native_directive(context: &LintContext<'_>) -> bool {
-    let block = context.block;
-    let first_code_start = block
-        .stmts
-        .first()
-        .map(Statement::span)
-        .or_else(|| block.last_stmt.as_ref().map(LastStatement::span))
-        .map(|span| span.start);
-    // Comments come in source order, so the scan stops at the first code.
-    context
-        .comments
-        .iter()
-        .take_while(|comment| first_code_start.is_none_or(|start| comment.span.start <= start))
-        .any(|comment| {
-            comment.kind == CommentKind::Line
-                && comment
-                    .span
-                    .text(context.source)
-                    .strip_prefix("--!")
-                    .is_some_and(|body| body.trim_end() == "native")
-        })
+    leading_hot_comments(context.comments, context.block.span.start).any(|comment| {
+        comment.span.text(context.source).get(3..).is_some_and(|word| word.trim_end() == "native")
+    })
 }
 
 #[cfg(test)]

@@ -138,11 +138,9 @@ pub(crate) fn parse_module<'ast>(
             warnings.push(diag);
         }
     }
-    let hot_comments = if version.is_luau() {
-        leading_hot_comments(&parsed.comments, source).map(|comment| comment.span).collect()
-    } else {
-        Vec::new()
-    };
+    let hot_comments = leading_hot_comments(&parsed.comments, parsed.block.span.start)
+        .map(|comment| comment.span)
+        .collect();
     let shebang = parsed
         .comments
         .first()

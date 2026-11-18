@@ -36,6 +36,7 @@ mod call;
 mod cfg;
 mod config;
 mod diagnostic;
+mod directives;
 mod driver;
 mod fix;
 #[cfg(test)]
@@ -50,7 +51,6 @@ mod roblox;
 mod rule;
 mod rules;
 mod suggest;
-mod suppression;
 mod underscore_fix;
 mod uninitialized;
 

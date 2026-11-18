@@ -68,21 +68,29 @@ fn check(
     let parse = luck_parser::parse(&allocator, source, target.lua_version());
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
     let analysis = driver::analyze(&parse, target, config);
-    let nodes = analysis.nodes();
-    let context = LintContext::new(&parse, analysis.semantic(), nodes, config, FixKind::all());
-    let entry = RULES
+    let context = LintContext::new(&parse, &analysis, config, FixKind::all());
+    let slot = RULES
         .iter()
-        .find(|entry| entry.rule().name() == rule.name())
+        .position(|entry| entry.rule().name() == rule.name())
         .expect("only registered rules are tested");
-    let findings = match *entry {
+    let findings = match RULES[slot] {
         RuleEntry::Whole(whole_rule) => whole_rule.check(&context),
         RuleEntry::Node(node_rule) => {
-            bus::run(&[node_rule], nodes.as_slice(), &context).pop().unwrap_or_default()
+            bus::run(&[node_rule], analysis.nodes().as_slice(), &context).pop().unwrap_or_default()
+        }
+        // It reads what the others reported, so the whole lint runs.
+        RuleEntry::UnusedLintFilter(_) => {
+            return driver::lint_analyzed(&parse, &analysis, config, FixKind::all())
+                .into_iter()
+                .filter(|diag| diag.rule == rule.name())
+                .collect();
         }
     };
     // A rule the config leaves off still runs here, at its own severity.
     let severity = driver::rule_severity(rule, config).unwrap_or_else(|| rule.default_severity());
-    driver::into_diagnostics(entry.rule(), findings, severity).collect()
+    let mut diags = Vec::new();
+    driver::report(slot, findings, Some(severity), analysis.directives(), None, &mut diags);
+    diags
 }
 
 pub(crate) fn diagnostic(rule: &'static str, span: Span) -> LintDiagnostic {

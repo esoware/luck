@@ -1610,6 +1610,38 @@ local   x  =  1
     }
 }
 
+#[test]
+fn directives_take_the_linter_s_comment_forms() {
+    for (input, expected) in [
+        (
+            "\
+--[[ luck: format off ]]
+local   x  =  1
+--[==[ luck: format on ]==]
+local   y  =  2
+",
+            "\
+--[[ luck: format off ]]
+local   x  =  1
+--[==[ luck: format on ]==]
+local y = 2
+",
+        ),
+        (
+            "\
+--luck:ignore
+local   x  =  1
+",
+            "\
+--luck:ignore
+local   x  =  1
+",
+        ),
+    ] {
+        assert_format(input, expected);
+    }
+}
+
 fn range_of(input: &str, needle: &str) -> Range<usize> {
     let start = input.find(needle).unwrap_or(input.len());
     start..start.saturating_add(needle.len())

@@ -1,7 +1,6 @@
 use core::mem;
 
-use luck_ast::{Block, GetSpan as _};
-use luck_token::{CommentKind, Span};
+use luck_token::{CommentContent, Span};
 
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -23,31 +22,22 @@ impl_rule!(
 
 impl WholeRule for CommentDirective {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        if !context.semantic.version().is_luau() {
-            return Vec::new();
-        }
-        let first_code_start = first_code_start(context.block);
+        let first_token_start = context.block.span.start;
         let mut has_seen_mode = false;
         let mut findings = Vec::new();
         for comment in context.comments {
-            if comment.kind != CommentKind::Line {
+            if comment.content != CommentContent::HotComment {
                 continue;
             }
-            let Some(body) = comment.span.text(context.source).strip_prefix("--!") else {
-                continue;
-            };
-            // Luau reserves `--!` and `--! ...` for plain comments.
-            if body.is_empty() || body.starts_with([' ', '\t']) {
-                continue;
-            }
-            // Luau ignores hot comments after the first statement.
-            if first_code_start.is_some_and(|start| comment.span.start > start) {
+            // Luau ignores hot comments after the first token.
+            if comment.span.start > first_token_start {
                 findings.push(Finding::new(
                     "comment directive after the first statement has no effect",
                     comment.span,
                 ));
                 continue;
             }
+            let body = comment.span.text(context.source).get(3..).unwrap_or_default();
             let hot_comment = HotComment::split(body, comment.span.start.saturating_add(3));
             if hot_comment.sets_mode() {
                 if mem::replace(&mut has_seen_mode, true) {
@@ -62,12 +52,6 @@ impl WholeRule for CommentDirective {
         }
         findings
     }
-}
-
-fn first_code_start(block: &Block<'_>) -> Option<u32> {
-    let stmt_start = block.stmts.first().map(|stmt| stmt.span().start);
-    let last_start = block.last_stmt.as_ref().map(|last| last.span().start);
-    stmt_start.into_iter().chain(last_start).min()
 }
 
 struct HotComment<'body> {

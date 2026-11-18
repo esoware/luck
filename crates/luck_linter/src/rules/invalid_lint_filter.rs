@@ -1,10 +1,10 @@
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
-use crate::rules::{closest_rule_name, is_registered_rule_name, registered_rule_names};
-use crate::suppression::{DirectiveRule, parse_directive};
+use crate::directives::Target;
+use crate::rule::{LintContext, Rule, WholeRule, impl_rule};
+use crate::rules::{closest_rule_name, rules};
 
-/// Flags unknown rule names in lint directives. A typo like
-/// `-- luck: allow(unsued_variable)` would otherwise do nothing.
+/// Flags a `luck:` comment that's no directive, and a directive's rule name
+/// no rule has, such as `parse_error`. Either would otherwise do nothing.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InvalidLintFilter;
 
@@ -13,30 +13,21 @@ impl_rule!(
     "invalid_lint_filter",
     Correctness,
     Warning,
-    "lint directive names a rule that doesn't exist"
+    "malformed `luck:` directive, or a rule name in one that no rule has"
 );
 
 impl WholeRule for InvalidLintFilter {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut findings = Vec::new();
-
-        for comment in context.comments {
-            // A directive that a bad trailing word disables still has its
-            // names checked.
-            let Some(directive) =
-                parse_directive(comment.span.text(context.source), comment.span.start)
-            else {
-                continue;
-            };
-            for (rule, name_span) in directive.rules {
-                let DirectiveRule::Named(name) = rule else {
-                    continue;
-                };
-                if is_registered_rule_name(name) {
-                    continue;
-                }
-
-                let (message, help) = closest_rule_name(name, registered_rule_names()).map_or_else(
+        let directives = context.directives;
+        let malformed =
+            directives.errors().iter().map(|error| Finding::new(error.message.clone(), error.span));
+        let unknown = directives
+            .entries()
+            .iter()
+            .filter(|entry| entry.target == Target::Unknown)
+            .map(|entry| {
+                let name = entry.name.text(context.source);
+                let (message, help) = closest_rule_name(name, rules().map(Rule::name)).map_or_else(
                     || {
                         (
                             format!("unknown lint rule `{name}`"),
@@ -50,12 +41,9 @@ impl WholeRule for InvalidLintFilter {
                         )
                     },
                 );
-
-                findings.push(Finding::new(message, name_span).with_help(help));
-            }
-        }
-
-        findings
+                Finding::new(message, entry.name).with_help(help)
+            });
+        malformed.chain(unknown).collect()
     }
 }
 
@@ -64,54 +52,78 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
+
+    fn run(source: &str) -> Vec<LintDiagnostic> {
+        run_rule(&InvalidLintFilter, source, LuaVersion::Lua54)
+    }
 
     #[test]
     fn flags_unknown_name() {
-        let diags = run_rule(
-            &InvalidLintFilter,
-            "\
+        let diags = run("\
 -- luck: allow(not_a_real_rule)
-local _x = 1",
-            LuaVersion::Lua54,
-        );
+local _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("not_a_real_rule"));
     }
 
     #[test]
-    fn flags_unknown_name_in_disabled_directive() {
-        let diags = run_rule(
-            &InvalidLintFilter,
-            "\
--- luck: allow(not_a_real_rule) strat
-local _x = 1",
-            LuaVersion::Lua54,
-        );
+    fn flags_parse_error_which_no_directive_can_silence() {
+        let diags = run("\
+-- #luck: allow(parse_error)
+local _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "unknown lint rule `parse_error`");
+    }
+
+    #[test]
+    fn flags_a_misspelled_region_word() {
+        let source = "\
+-- luck: allow(unused_variable) strat
+local _x = 1";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].span.text(source), "strat");
+    }
+
+    #[test]
+    fn flags_a_luck_comment_that_is_no_directive() {
+        let diags = run("\
+-- luck: alow(unused_variable)
+-- luck: format offf
+local _x = 1");
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        assert!(diags[0].message.starts_with("unknown directive `alow(unused_variable)`"));
+        assert!(diags[1].message.contains("after `format`"));
+    }
+
+    #[test]
+    fn flags_an_end_that_closes_no_region() {
+        let diags = run("\
+local _x = 1
+-- luck: deny(unused_variable) end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "no `deny(unused_variable) start` for this `end` to close");
     }
 
     #[test]
     fn ignores_wildcard() {
-        let diags = run_rule(
-            &InvalidLintFilter,
-            "\
+        let diags = run("\
 -- luck: allow(*)
-local _x = 1",
-            LuaVersion::Lua54,
-        );
+local _x = 1");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
-    fn ignores_known_name() {
-        let diags = run_rule(
-            &InvalidLintFilter,
-            "\
+    fn ignores_known_name_and_formatter_directives() {
+        let diags = run("\
 -- luck: allow(unused_variable)
-local _x = 1",
-            LuaVersion::Lua54,
-        );
+-- luck: format off
+local _x = 1
+-- luck: format on
+-- luck: ignore because aligned
+local _y = 2");
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

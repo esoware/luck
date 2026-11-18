@@ -1,4 +1,4 @@
-use crate::{Span, is_lua_whitespace};
+use crate::{CommentContent, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Comment {
@@ -9,10 +9,10 @@ pub struct Comment {
     pub attached_to: u32,
     pub kind: CommentKind,
     pub position: CommentPosition,
-    pub is_preceded_by_newline: bool,
     /// Whether this comment ends its line, with only spaces or tabs between it
     /// and the newline or end of file.
     pub is_followed_by_newline: bool,
+    pub content: CommentContent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,29 +23,24 @@ pub enum CommentKind {
     Shebang,
 }
 
+/// A comment leads the next token unless no line break comes between it and
+/// the token before it, which it trails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentPosition {
     Leading,
     Trailing,
 }
 
-/// The `--!` hot comments in the comment run that opens `source`.
-///
-/// Luau honours them only before the first token. Other comments, block
-/// comments included, don't end the run, and `comments` must be sorted.
-pub fn leading_hot_comments<'comments>(
-    comments: &'comments [Comment],
-    source: &str,
-) -> impl Iterator<Item = &'comments Comment> {
-    let mut run_end = 0;
+/// The hot comments before `first_token_start`, the start of a chunk's first
+/// token, which are the only ones Luau honours. `comments` must be sorted.
+pub fn leading_hot_comments(
+    comments: &[Comment],
+    first_token_start: u32,
+) -> impl Iterator<Item = &Comment> {
     comments
         .iter()
-        .take_while(move |comment| {
-            let gap = Span::new(run_end, comment.span.start).text(source);
-            run_end = comment.span.end;
-            gap.bytes().all(is_lua_whitespace)
-        })
-        .filter(move |comment| comment.span.text(source).starts_with("--!"))
+        .take_while(move |comment| comment.span.start < first_token_start)
+        .filter(|comment| comment.content == CommentContent::HotComment)
 }
 
 /// The lines a chunk printed without its comments has to open with, each

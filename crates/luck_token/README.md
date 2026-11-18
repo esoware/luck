@@ -8,7 +8,8 @@ The types and rules every other luck crate builds on, except `luck_allocator`: p
 - `Token` and `TokenKind`: a token holds only its kind, its span, and two flags. `Token::text` slices its text from the source.
 - `LuaVersion`: the syntax of Lua 5.1 to 5.5 or Luau. Each difference between versions is a `has_<feature>` predicate, such as `has_goto`.
 - `StdlibEnvironment`: standalone or Roblox, which only Luau's standard library tells apart.
-- `Comment`: a comment the lexer found, with its kind, whether it leads or trails a token, and the token it attaches to.
+- `Comment`: a comment the lexer found, with its kind, whether it leads or trails a token, the token it attaches to, and its `CommentContent`, what it tells a tool: prose, a Luau hot comment, or a `luck:` directive.
+- `CommentContent::of` and `LintDirective::parse`: the one grammar of `luck:` directives, which the lexer reads each comment's content with, and the linter each lint directive's rules.
 - `BinOp`, `UnOp`, and `CompoundOp`: the operators, and each binary operator's precedence and associativity.
 - `SourceError`: the one error type of lexing, parsing, and formatting, a span and a message.
 - `parse_lua_number`, `decode_string`, and `encode_string`: what a numeral or a string literal means, shared by every stage that reads or writes one.

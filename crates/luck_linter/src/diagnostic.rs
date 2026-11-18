@@ -119,6 +119,27 @@ impl Finding {
         self
     }
 
+    /// [`Self::with_fix`] for a [`FixKind::Fix`] that removes all or part of
+    /// a directive comment, which the comment check would drop.
+    #[must_use]
+    pub(crate) fn with_directive_fix<Build>(
+        mut self,
+        context: &LintContext<'_>,
+        build: Build,
+    ) -> Self
+    where
+        Build: FnOnce(RuleFixer) -> Fix,
+    {
+        if context.fixes.contains(FixKind::Fix) {
+            self.fix = Some(build(RuleFixer::new(FixKind::Fix)));
+        }
+        self
+    }
+
+    pub(crate) const fn span(&self) -> Span {
+        self.span
+    }
+
     pub(crate) fn into_diagnostic(
         self,
         rule: &'static str,

@@ -22,9 +22,9 @@ gen_full_luau.luau:
 
 idiomatic.lua:
   file size: 2124 # 2.12 kB
-  sys allocs: 160
+  sys allocs: 164
   sys reallocs: 94
-  sys deallocs: 160
+  sys deallocs: 164
   sys alloc bytes: 43983 # 43.98 kB
   sys peak growth: 27635 # 27.64 kB
   arena allocs: 0

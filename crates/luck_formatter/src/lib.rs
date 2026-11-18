@@ -41,7 +41,6 @@
 extern crate alloc;
 
 mod comments;
-mod directive;
 #[cfg(test)]
 mod fixtures;
 mod format;

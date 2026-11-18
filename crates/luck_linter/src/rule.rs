@@ -7,6 +7,8 @@ use luck_token::{Comment, LineIndex, Span};
 
 use crate::config::LintConfig;
 use crate::diagnostic::{Category, Finding, Severity};
+use crate::directives::Directives;
+use crate::driver::Analysis;
 use crate::fix::FixKind;
 use crate::local_flow::LocalFlow;
 use crate::node_type::NodeTypeSet;
@@ -19,6 +21,7 @@ pub(crate) struct LintContext<'ast> {
     pub block: &'ast Block<'ast>,
     pub nodes: &'ast Nodes<'ast>,
     pub semantic: &'ast SemanticAnalysis<'ast>,
+    pub directives: &'ast Directives,
     pub source: &'ast str,
     pub comments: &'ast [Comment],
     pub config: &'ast LintConfig,
@@ -32,15 +35,15 @@ pub(crate) struct LintContext<'ast> {
 impl<'ast> LintContext<'ast> {
     pub(crate) fn new(
         parse: &'ast ParseResult<'_>,
-        semantic: &'ast SemanticAnalysis<'ast>,
-        nodes: &'ast Nodes<'ast>,
+        analysis: &'ast Analysis<'ast>,
         config: &'ast LintConfig,
         fixes: FixKind,
     ) -> Self {
         Self {
             block: &parse.block,
-            nodes,
-            semantic,
+            nodes: analysis.nodes(),
+            semantic: analysis.semantic(),
+            directives: analysis.directives(),
             source: parse.source,
             comments: &parse.comments,
             config,

@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use luck_allocator::Allocator;
 use luck_ast::MAX_NESTING_DEPTH;
 use luck_core::Diagnostic;
-use luck_token::{LuaVersion, Span, chunk_start, encode_string, ends_with_line_break, line_breaks};
+use luck_token::{
+    LuaVersion, Span, chunk_header, chunk_start, encode_string, ends_with_line_break, line_breaks,
+};
 use rustc_hash::FxHashSet;
 
 use crate::block_emitter::{LoaderNames, overflow_errors, rewrite_module};
@@ -556,16 +558,7 @@ fn write<'plan, 'ast>(
     let prefix = plan.prefix.as_str();
 
     if let Some(entry) = graph.modules.get(graph.entry_id.0) {
-        if let Some(shebang) = entry.shebang {
-            writer.push(shebang.text(entry.source));
-            writer.push("\n");
-        }
-        // Luau only honors hot comments before any code, so the entry's
-        // leading ones go above the loader.
-        for hot_comment in &entry.hot_comments {
-            writer.push(hot_comment.text(entry.source));
-            writer.push("\n");
-        }
+        writer.push(&chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied()));
     }
 
     writer.generate(|output| write_prelude(prefix, plan.loader, output));
