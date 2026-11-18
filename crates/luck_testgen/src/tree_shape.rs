@@ -5,7 +5,8 @@
 //! spelling, whether a lone string or table argument has parentheses, and every
 //! parenthesis that changes nothing. Precedence and associativity are in the
 //! tree, so the only parentheses that change something keep a call or `...`
-//! at the end of a list to one value.
+//! at the end of a list to one value, or keep a Luau integer literal under `-`
+//! from reading as a negative literal.
 
 use luck_ast::{
     Attribute, AttributedName, BinaryLink, BinaryOp, Block, Expression, Field, FunctionArgs,
@@ -14,7 +15,7 @@ use luck_ast::{
     SuffixedExpression, TableConstructor, Type, TypeArgs, TypeDeclaration, TypeDeclarationValue,
     TypeField, Var, is_multi_value, unwrap_parentheses,
 };
-use luck_token::{Associativity, LuaNumber, LuaVersion, decode_string, parse_lua_number};
+use luck_token::{Associativity, LuaNumber, LuaVersion, UnOp, decode_string, parse_lua_number};
 
 /// `block` as one node per line, its children indented below it.
 ///
@@ -288,7 +289,17 @@ impl Printer {
             Expression::BinaryOp(binary) => self.binary(binary),
             Expression::UnaryOp(unary) => {
                 self.open(&format!("UnaryOp {:?}", unary.op));
-                self.expr(&unary.operand);
+                // Luau: `-1i` is a negative integer literal, while `-(1i)`
+                // negates an integer, which raises.
+                if unary.op == UnOp::Neg
+                    && let Expression::Parenthesized(parenthesized) = &unary.operand
+                    && let Expression::Integer(literal) = unwrap_parentheses(&parenthesized.expr)
+                {
+                    let number = self.number(literal);
+                    self.line(&format!("Parenthesized Number {number}"));
+                } else {
+                    self.expr(&unary.operand);
+                }
                 self.close();
             }
             // Luau
@@ -709,6 +720,7 @@ mod tests {
         assert_ne!(shape("return {f()}", version), shape("return {(f())}", version));
         assert_ne!(shape("x = a .. b .. c", version), shape("x = (a .. b) .. c", version));
         assert_ne!(shape(r#"x = "\xFE""#, version), shape(r#"x = "\xFF""#, version));
+        assert_ne!(shape("x = -(1i)", LuaVersion::Luau), shape("x = -1i", LuaVersion::Luau));
     }
 
     #[test]

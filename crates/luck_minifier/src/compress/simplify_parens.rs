@@ -5,15 +5,15 @@ use luck_allocator::Allocator;
 use luck_ast::{
     Expression, FunctionArgs, Suffix, SuffixedExpression, is_multi_value, is_prefix_expr,
 };
-use luck_token::{BinOp, OperandSide};
+use luck_token::{BinOp, OperandSide, UnOp};
 
 use crate::expr::{
     binds_looser_than_unary, can_unwrap_in_binop, ends_in_if_expr, inner_operand_side,
 };
 
 /// Strips the parentheses around `expr`, its operands, or a unary
-/// operator's operand, wherever printing them bare reparses as the same
-/// tree. Says whether it did.
+/// operator's or a cast's operand, wherever printing them bare reparses as
+/// the same tree. Says whether it did.
 pub(super) fn strip<'ast>(allocator: &'ast Allocator, expr: &mut Expression<'ast>) -> bool {
     match expr {
         Expression::Parenthesized(paren) if can_remove_parens(&paren.expr) => {
@@ -38,10 +38,21 @@ pub(super) fn strip<'ast>(allocator: &'ast Allocator, expr: &mut Expression<'ast
             stripped != Stripped::Nothing
         }
         Expression::UnaryOp(unop) => {
+            let op = unop.op;
             if let Expression::Parenthesized(paren) = &mut unop.operand
-                && can_unwrap_in_unary(&paren.expr)
+                && can_unwrap_in_unary(op, &paren.expr)
             {
                 unop.operand = paren.expr.take();
+                return true;
+            }
+            false
+        }
+        // Luau
+        Expression::TypeCast(cast) => {
+            if let Expression::Parenthesized(paren) = &mut cast.expr
+                && matches!(paren.expr, Expression::Integer(_))
+            {
+                cast.expr = paren.expr.take();
                 return true;
             }
             false
@@ -60,7 +71,6 @@ pub(super) fn strip<'ast>(allocator: &'ast Allocator, expr: &mut Expression<'ast
         | Expression::TableConstructor(_)
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
         | Expression::Error(_) => false,
     }
 }
@@ -155,7 +165,6 @@ pub(super) fn strip_call_args(args: &mut FunctionArgs<'_>) -> bool {
 fn can_remove_parens(inner: &Expression<'_>) -> bool {
     match inner {
         Expression::Number(_)
-        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)
@@ -167,7 +176,10 @@ fn can_remove_parens(inner: &Expression<'_>) -> bool {
         // Calls and `...` aren't safe: dropping the parens restores multiple
         // values.
         Expression::Suffixed(chain) => !chain.is_call(),
-        Expression::BinaryOp(_)
+        // Luau: under `-` the parens decide whether it's a literal, so only
+        // its operator's own check, which knows the operator, drops them.
+        Expression::Integer(_)
+        | Expression::BinaryOp(_)
         | Expression::UnaryOp(_)
         | Expression::IfExpression(_)
         | Expression::VarArg(_)
@@ -177,10 +189,12 @@ fn can_remove_parens(inner: &Expression<'_>) -> bool {
     }
 }
 
-fn can_unwrap_in_unary(inner: &Expression<'_>) -> bool {
+fn can_unwrap_in_unary(op: UnOp, inner: &Expression<'_>) -> bool {
     match inner {
+        // Luau: `-1i` is a negative integer literal, while `-(1i)` negates
+        // an integer, which raises.
+        Expression::Integer(_) => op != UnOp::Neg,
         Expression::Number(_)
-        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)
@@ -298,6 +312,11 @@ mod tests {
                 ("return -(a + b)", "return-(a+b)"),
                 ("return (\"s\"):rep(2)", "return(\"s\"):rep(2)"),
             ],
+        );
+        // `-(1i)` negates an integer, which raises, and `-1i` is a literal.
+        assert_outputs(
+            LuaVersion::Luau,
+            &[("return -(1i), not (1i), (1i) + x, (1i) :: T", "return-(1i),not 1i,1i+x,1i::T")],
         );
     }
 

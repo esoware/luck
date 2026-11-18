@@ -27,6 +27,7 @@ luck is a workspace of small crates around one syntax tree. This file covers the
 | `luck_benchmark_files` | Unpublished: the pinned files and projects the benches and allocation snapshots measure | allocator, token, core, parser |
 | `luck_benchmark` | Unpublished: a bench per stage | |
 | `luck_allocs` | Unpublished: committed allocation counts for each stage, behind `luck_allocator`'s `track_allocations` feature | allocator, lexer, ast, parser, codegen, formatter, minifier, semantic, linter, benchmark_files |
+| `luck_conformance` | Unpublished: each dialect's official test suite through every stage and the reference interpreter, with committed results | allocator, token, core, ast, parser, codegen, formatter, minifier, linter, testgen |
 
 "Depends on" leaves out dev-dependencies and the `luck_` prefix. `luck_codegen`, `luck_formatter`, and `luck_minifier` depend on nothing that analyzes, resolves, bundles, or configures. No tool depends on `luck_config`, which depends on them. The VS Code extension in `editors/vscode` holds no language logic. It starts `luck lsp`, and everything that has to understand Lua runs in `luck_lsp`.
 
@@ -79,6 +80,7 @@ Every traversal recurses on the thread's stack, once per level of nesting, so lu
 ## Output guarantees
 
 - `minify(minify(x)) == minify(x)` and `format(format(x)) == format(x)`, and both outputs parse with no errors. Tests check both.
+- A formatted or minified program ends as the original does. `luck_conformance` runs the official Lua and Luau suites both ways in the reference interpreters, and lists each test that reads what a printer changes, such as its own line numbers.
 - Purity analysis assumes metamethods. A variable read, an index, arithmetic, a comparison, or a concatenation can each call one, so only literal arithmetic is pure. `#"str"` is never folded, because escape sequences make its raw length unreliable.
 - Constant folding reproduces the target's float arithmetic exactly, so it never fuses or reorders an operation.
 - Emitters never read source text. Codegen and the formatter read it only for trivia and verbatim regions, and work without it, so a tree built in code still prints.

@@ -44,6 +44,42 @@ jobs:
       - name: Fail if just ready changed or added a file
         run: git add --all && git diff --cached --exit-code
 
+  conformance:
+    name: Conformance
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: conformance
+          save-if: ${{ github.ref_name == 'main' }}
+
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: just@1.59.0
+
+      # The pins and the cache layout live in suite.rs, so keying on it refetches only when one changes.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/luck_conformance/cache
+          key: conformance-suites-${{ hashFiles('crates/luck_conformance/src/suite.rs') }}
+
+      - name: Run the suites
+        run: just conformance
+
+      - name: Fail if a snapshot changed
+        run: |
+          git add --all crates/luck_conformance/snapshots
+          git diff --cached --exit-code crates/luck_conformance/snapshots ||
+            (echo 'The conformance snapshots are stale. Run `just conformance` and commit what it writes, or fix the regression.' && exit 1)
+
   msrv:
     name: MSRV
     runs-on: ubuntu-26.04

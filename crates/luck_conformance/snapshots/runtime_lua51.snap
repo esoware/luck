@@ -1,0 +1,16 @@
+runtime_lua51 Summary:
+AST Parsed     : 15/21 (71.43%)
+Positive Passed: 15/21 (71.43%)
+
+Not UTF-8: lua5.1-tests/db.lua
+
+Not UTF-8: lua5.1-tests/files.lua
+
+Not UTF-8: lua5.1-tests/literals.lua
+
+Not UTF-8: lua5.1-tests/pm.lua
+
+Not UTF-8: lua5.1-tests/sort.lua
+
+Not UTF-8: lua5.1-tests/strings.lua
+

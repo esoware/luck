@@ -6,5 +6,8 @@ REARCHITECTURE.md
 # downloaded benchmark files (see luck_benchmark_files)
 crates/luck_benchmark_files/cache/
 
+# downloaded test suites (see luck_conformance)
+crates/luck_conformance/cache/
+
 # the per-rule report `just allocs rules` writes
 crates/luck_allocs/allocs_linter_rules.yaml

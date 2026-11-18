@@ -419,7 +419,8 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Expression::BinaryOp(run) => self.walk_run(run),
             Expression::UnaryOp(unary_op) => {
                 if self.descend() {
-                    self.visit_operand(&mut unary_op.operand, OperandPosition::Unary);
+                    let position = OperandPosition::Unary(unary_op.op);
+                    self.visit_operand(&mut unary_op.operand, position);
                 }
                 self.ascend();
             }
@@ -507,6 +508,12 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     self.has_changed = true;
                 }
             }
+            // Luau
+            Expression::TypeCast(_) => {
+                if self.config.simplify_parens && simplify_parens::strip(allocator, expr) {
+                    self.has_changed = true;
+                }
+            }
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -517,7 +524,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
             | Expression::Error(_) => {}
         }
     }
