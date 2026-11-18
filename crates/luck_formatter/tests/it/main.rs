@@ -8,6 +8,7 @@
 
 mod common;
 
+mod comment_gaps;
 mod comments;
 mod exprs;
 mod fixtures;

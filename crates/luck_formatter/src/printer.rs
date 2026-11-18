@@ -15,7 +15,8 @@
 //! flat, and what follows it counts in the mode it will print in, up to the
 //! first line break that mode prints. A group there that no break has decided
 //! counts in the mode of the region around it, so in an expanded region the
-//! line can end at that group's first break.
+//! line can end at that group's first break, and it ends before a next-line
+//! group.
 //!
 //! A group holding hugged groups has two more layouts, tried when it doesn't
 //! fit flat. It stays flat while hugged groups expand in its place: first
@@ -264,8 +265,8 @@ struct MeasuredLine<'elements> {
     columns: usize,
     /// A space printed before the next text, which a line break drops.
     is_pending_space: bool,
-    /// A line suffix waiting for the end of the line, which a
-    /// `LineSuffixBoundary` brings forward.
+    /// A line suffix waiting for the end of the line, which the next text
+    /// other than a separator brings forward.
     has_line_suffix: bool,
 }
 
@@ -286,6 +287,13 @@ impl<'elements> MeasuredLine<'elements> {
             .saturating_add(usize::from(self.is_pending_space))
             .saturating_add(width.columns());
         self.is_pending_space = width.has_space_after();
+        self.columns <= line_width
+    }
+
+    /// Adds a line suffix that counts toward the line, after the space it
+    /// prints with, and returns whether the line still fits `line_width`.
+    fn push_suffix(&mut self, width: TextWidth, line_width: usize) -> bool {
+        self.columns = self.columns.saturating_add(1).saturating_add(width.columns());
         self.columns <= line_width
     }
 }
@@ -361,18 +369,17 @@ impl<'ast> Printer<'ast, '_> {
     ) -> &'ast [FormatElement<'ast>] {
         match *element {
             FormatElement::Text(content, width) => {
+                self.end_suffixed_line(content);
                 self.emit_text(content, width);
                 self.is_pending_space |= width.has_space_after();
             }
-            FormatElement::Verbatim(content, width) => self.emit_verbatim(content, width),
-            FormatElement::LineSuffix(content, width) => self.suffixes.push((content, width)),
+            FormatElement::Verbatim(content, width) => {
+                self.end_suffixed_line(content);
+                self.emit_verbatim(content, width);
+            }
+            FormatElement::LineSuffix(content, width, _) => self.suffixes.push((content, width)),
             FormatElement::Space => self.is_pending_space = true,
             FormatElement::Line(mode) => self.print_line(mode),
-            FormatElement::LineSuffixBoundary => {
-                if !self.suffixes.is_empty() {
-                    self.emit_newline(false);
-                }
-            }
             FormatElement::StartGroup(id) | FormatElement::StartHuggedGroup(id) => {
                 // A mode already set was forced by a break in it, or by
                 // the group around a hugged one.
@@ -485,6 +492,17 @@ impl<'ast> Printer<'ast, '_> {
         PrintMode::Expanded
     }
 
+    /// A comment held back to the end of its line ended its line in the
+    /// source, so the line ends before the next text, unless that's a
+    /// separator, which goes ahead of the comment as in `a, -- c`. Code moved
+    /// past it would make the comment trail different code on the next
+    /// format.
+    fn end_suffixed_line(&mut self, content: &str) {
+        if !self.suffixes.is_empty() && !is_separator(content) {
+            self.emit_newline(false);
+        }
+    }
+
     fn print_line(&mut self, mode: LineMode) {
         match (self.current_mode(), mode) {
             (PrintMode::Flat, LineMode::Soft) => {}
@@ -549,7 +567,6 @@ impl<'ast> Printer<'ast, '_> {
                 | FormatElement::LineSuffix(..)
                 | FormatElement::Space
                 | FormatElement::ExpandParent
-                | FormatElement::LineSuffixBoundary
                 | FormatElement::StartGroup(_)
                 | FormatElement::StartHuggedGroup(_)
                 | FormatElement::EndGroup
@@ -659,22 +676,29 @@ impl<'ast> Printer<'ast, '_> {
         while let Some((element, rest)) = line.remaining.split_first() {
             line.remaining = rest;
             match *element {
-                FormatElement::Text(_, width) | FormatElement::Verbatim(_, width) => {
-                    if width.is_multiline() || !line.push_text(width, self.line_width) {
+                // Text a pending line suffix ends the line before can't print
+                // flat.
+                FormatElement::Text(content, width) | FormatElement::Verbatim(content, width) => {
+                    if width.is_multiline()
+                        || (line.has_line_suffix && !is_separator(content))
+                        || !line.push_text(width, self.line_width)
+                    {
                         return Some(false);
                     }
                 }
                 FormatElement::Space | FormatElement::Line(LineMode::SoftOrSpace) => {
                     line.is_pending_space = true;
                 }
-                // A line suffix prints past the line's end, so it takes no
-                // width here.
-                FormatElement::LineSuffix(..) => line.has_line_suffix = true,
-                // A forced break, and a boundary a pending line suffix breaks
-                // the line at, can't print flat.
+                FormatElement::LineSuffix(_, width, is_measured) => {
+                    line.has_line_suffix = true;
+                    if is_measured
+                        && (width.is_multiline() || !line.push_suffix(width, self.line_width))
+                    {
+                        return Some(false);
+                    }
+                }
                 FormatElement::Line(LineMode::Hard | LineMode::Empty)
                 | FormatElement::ExpandParent => return Some(false),
-                FormatElement::LineSuffixBoundary if line.has_line_suffix => return Some(false),
                 FormatElement::StartIfGroupBreaks(id) => {
                     // A decided group answers with its decision. An undecided
                     // one is being measured now, and prints flat if this
@@ -698,7 +722,6 @@ impl<'ast> Printer<'ast, '_> {
                     }
                 }
                 FormatElement::Line(LineMode::Soft)
-                | FormatElement::LineSuffixBoundary
                 | FormatElement::StartIndent
                 | FormatElement::EndIndent
                 | FormatElement::StartIndentIfGroupBreaks(_)
@@ -719,7 +742,10 @@ impl<'ast> Printer<'ast, '_> {
         while let Some((element, rest)) = line.remaining.split_first() {
             line.remaining = rest;
             let opened_region = match *element {
-                FormatElement::Text(_, width) | FormatElement::Verbatim(_, width) => {
+                FormatElement::Text(content, width) | FormatElement::Verbatim(content, width) => {
+                    if line.has_line_suffix && !is_separator(content) {
+                        return Some(true);
+                    }
                     if !line.push_text(width, self.line_width) {
                         return Some(false);
                     }
@@ -739,26 +765,34 @@ impl<'ast> Printer<'ast, '_> {
                 }
                 FormatElement::Line(LineMode::Soft) if is_flat => None,
                 FormatElement::Line(_) => return Some(true),
-                FormatElement::LineSuffix(..) => {
+                FormatElement::LineSuffix(_, width, is_measured) => {
                     line.has_line_suffix = true;
+                    if is_measured {
+                        if !line.push_suffix(width, self.line_width) {
+                            return Some(false);
+                        }
+                        if width.is_multiline() {
+                            return Some(true);
+                        }
+                    }
                     None
                 }
-                FormatElement::LineSuffixBoundary if line.has_line_suffix => return Some(true),
                 FormatElement::StartIfGroupBreaks(id) => {
                     if self.group_mode(id) != Some(PrintMode::Expanded) {
                         line.remaining = skip_conditional(rest);
                     }
                     None
                 }
-                FormatElement::StartGroup(id) | FormatElement::StartHuggedGroup(id) => {
+                // It can move to the next line, which ends this one. A forced
+                // break keeps it here instead, but it counts the same, since
+                // breaking it for width can print a trailing comma that forces
+                // it on the next format.
+                FormatElement::StartNextLineGroup(_) if !is_flat => return Some(true),
+                FormatElement::StartGroup(id)
+                | FormatElement::StartHuggedGroup(id)
+                | FormatElement::StartNextLineGroup(id) => {
                     Some(self.group_mode(id).unwrap_or(mode))
                 }
-                FormatElement::StartNextLineGroup(id) => match self.group_mode(id) {
-                    Some(forced) => Some(forced),
-                    None if is_flat => Some(PrintMode::Flat),
-                    // It can move to the next line, which ends this one.
-                    None => return Some(true),
-                },
                 FormatElement::StartFlat => Some(PrintMode::Flat),
                 FormatElement::StartEntry => Some(mode),
                 FormatElement::EndGroup
@@ -766,7 +800,6 @@ impl<'ast> Printer<'ast, '_> {
                 | FormatElement::EndFlat
                 | FormatElement::EndEntry => return None,
                 FormatElement::ExpandParent
-                | FormatElement::LineSuffixBoundary
                 | FormatElement::StartIndent
                 | FormatElement::EndIndent
                 | FormatElement::StartIndentIfGroupBreaks(_)
@@ -855,18 +888,26 @@ impl<'ast> Printer<'ast, '_> {
         }
     }
 
+    /// A plain line break on a line nothing is written on yet adds nothing, so
+    /// one that only has to start a line, as before a comment alone on its
+    /// line, can't leave a blank one.
     fn emit_newline(&mut self, is_blank_line: bool) {
         self.flush_suffixes();
         self.is_pending_space = false;
         self.trim_trailing_whitespace();
-        if self.is_crlf {
-            self.print_crlf_line_break(is_blank_line);
-        } else {
-            // Blank lines never stack, so a break right after one adds nothing.
-            while !self.output.as_bytes().ends_with(b"\n\n") {
-                self.output.print_ascii_byte(b'\n');
-                if !is_blank_line {
-                    break;
+        let is_line_empty = self.output.len() == self.line_start
+            && (self.is_pending_indent || self.output.is_empty());
+        if is_blank_line || !is_line_empty {
+            if self.is_crlf {
+                self.print_crlf_line_break(is_blank_line);
+            } else {
+                // Blank lines never stack, so a break right after one adds
+                // nothing.
+                while !self.output.as_bytes().ends_with(b"\n\n") {
+                    self.output.print_ascii_byte(b'\n');
+                    if !is_blank_line {
+                        break;
+                    }
                 }
             }
         }
@@ -926,6 +967,11 @@ impl<'ast> Printer<'ast, '_> {
         self.output.print_ascii_repeat(self.indent_byte, indent_bytes);
         self.display_column = self.display_column.saturating_add(self.indent_columns());
     }
+}
+
+/// Text that goes ahead of a pending line suffix rather than ending its line.
+fn is_separator(content: &str) -> bool {
+    matches!(content, "," | ";")
 }
 
 fn skip_conditional<'elements, 'ast>(
@@ -1027,12 +1073,12 @@ mod tests {
             },
             80,
         );
-        // Both the inner and outer group must expand.
+        // Both the inner and outer group must expand, and the hard line right
+        // after the soft one adds no blank line.
         assert_eq!(
             output,
             "\
 a(
-
 )
 b"
         );
@@ -1107,7 +1153,7 @@ b"
         let output = print_document(
             |f| {
                 f.token("local x = 1");
-                f.line_suffix("-- trailing");
+                f.line_suffix("-- trailing", false);
                 f.hard_line();
                 f.token("local y = 2");
             },

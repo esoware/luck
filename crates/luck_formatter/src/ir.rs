@@ -14,7 +14,7 @@ use core::ops::Range;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::Name;
-use luck_token::{index_to_offset, offset_to_index};
+use luck_token::{Span, index_to_offset, offset_to_index};
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::FormatOptions;
@@ -58,16 +58,21 @@ pub(crate) enum FormatElement<'ast> {
     /// Source copied as written. Text ending in a line break leaves the next
     /// line to the printer's indent, and any other starts at its own column.
     Verbatim(&'ast str, TextWidth),
-    /// A space and the text, held back until just before the next line
-    /// break, which is how a trailing comment stays at its line's end.
-    LineSuffix(&'ast str, TextWidth),
+    /// A space and the text, held back to the end of its line, which is how a
+    /// comment that ended its line in the source ends it in the output. The
+    /// line ends at the next line break, or before the next text other than
+    /// a separator the comment was written after, as in `a, -- c`.
+    ///
+    /// The flag says whether the text counts toward the line's width. A block
+    /// comment's does, as it does with code after it, so a line break that
+    /// comes to follow it changes no layout on the next format. A line
+    /// comment's doesn't, since it always ends its line and may run past the
+    /// width, as in Prettier.
+    LineSuffix(&'ast str, TextWidth, bool),
     Space,
     Line(LineMode),
     /// Force every enclosing group to expand without printing anything.
     ExpandParent,
-    /// Break the line here if a line suffix is pending, so a trailing comment
-    /// can't swallow what follows.
-    LineSuffixBoundary,
     /// Content that prints flat if it fits the remaining line width.
     StartGroup(GroupId),
     /// A group that may break while the group right around it stays flat, as
@@ -177,6 +182,10 @@ pub(crate) struct Formatter<'ast> {
     options: FormatOptions,
     allocator: &'ast Allocator,
     comments: Comments<'ast>,
+    /// Where the node being written ends, past which no node inside it may
+    /// take a comment as its trailing one: a comment after the last child
+    /// trails the node itself, or one around it.
+    enclosing_end: u32,
     /// Whether a block printed here sorts its runs of requires. A whole tree
     /// starts with `sort_requires`, a range starts with it off, and a block
     /// inherits it from the one around it.
@@ -209,6 +218,7 @@ impl<'ast> Formatter<'ast> {
             options,
             allocator,
             comments,
+            enclosing_end: u32::MAX,
             sorts_requires: false,
             scratch: String::new(),
         }
@@ -281,6 +291,63 @@ impl<'ast> Formatter<'ast> {
         &mut self.comments
     }
 
+    /// Writes a node at `span`: its leading comments, `content`, and its
+    /// trailing comments. Any comment inside it that no node inside takes is
+    /// `content`'s to place.
+    ///
+    /// When the next comment starts past the node around this one, the node
+    /// has none, nothing inside takes one either, and the cursor doesn't move
+    /// while it's written, so the bound it would set for them can't matter.
+    /// That's nearly every node, which then needs no span, so `span` is only
+    /// worked out otherwise.
+    #[inline]
+    pub(crate) fn node(&mut self, span: impl FnOnce() -> Span, content: impl FnOnce(&mut Self)) {
+        self.write_node(span, true, content);
+    }
+
+    /// [`Formatter::node`] for a node whose `content` writes its leading
+    /// comments itself, after the line break it may open with.
+    #[inline]
+    pub(crate) fn node_placing_leading_comments(
+        &mut self,
+        span: impl FnOnce() -> Span,
+        content: impl FnOnce(&mut Self),
+    ) {
+        self.write_node(span, false, content);
+    }
+
+    /// `content` is written in one place only, since it's inlined into every
+    /// node's emitter.
+    #[inline]
+    fn write_node(
+        &mut self,
+        span_of: impl FnOnce() -> Span,
+        should_lead: bool,
+        content: impl FnOnce(&mut Self),
+    ) {
+        let bounds = self.comments.has_pending_before(self.enclosing_end).then(|| {
+            let span = span_of();
+            if should_lead {
+                self.write_leading_comments(span.start);
+            }
+            (span.end, mem::replace(&mut self.enclosing_end, span.end))
+        });
+        content(self);
+        if let Some((end, enclosing_end)) = bounds {
+            self.enclosing_end = enclosing_end;
+            self.write_trailing_comments(end, enclosing_end);
+        }
+    }
+
+    /// Writes `content`, the inside of a node ending at `end` that places its
+    /// own comments, as a statement does.
+    #[inline]
+    pub(crate) fn inside(&mut self, end: u32, content: impl FnOnce(&mut Self)) {
+        let enclosing_end = mem::replace(&mut self.enclosing_end, end);
+        content(self);
+        self.enclosing_end = enclosing_end;
+    }
+
     /// The scratch buffer, emptied, and the arena its text moves to.
     pub(crate) fn scratch(&mut self) -> (&mut String, &'ast Allocator) {
         self.scratch.clear();
@@ -324,9 +391,10 @@ impl<'ast> Formatter<'ast> {
         self.push_text(text, TextWidth::of_columns(text.len()));
     }
 
+    /// A name is a node of its own, which comments can lead and trail.
     #[inline]
     pub(crate) fn name(&mut self, name: Name<'ast>) {
-        self.ascii(name.text.as_str());
+        self.node(|| name.span, |f| f.ascii(name.text.as_str()));
     }
 
     pub(crate) fn verbatim(&mut self, text: &'ast str) {
@@ -339,9 +407,9 @@ impl<'ast> Formatter<'ast> {
     }
 
     /// See [`FormatElement::LineSuffix`]. A break in one forces nothing.
-    pub(crate) fn line_suffix(&mut self, text: &'ast str) {
+    pub(crate) fn line_suffix(&mut self, text: &'ast str, is_measured: bool) {
         self.text_bytes = self.text_bytes.wrapping_add(text.len()).wrapping_add(1);
-        self.push(FormatElement::LineSuffix(text, TextWidth::of(text)));
+        self.push(FormatElement::LineSuffix(text, TextWidth::of(text), is_measured));
     }
 
     #[inline]
@@ -392,11 +460,6 @@ impl<'ast> Formatter<'ast> {
     pub(crate) fn expand_parent(&mut self) {
         self.layout.force_break(self.elements.len());
         self.push(FormatElement::ExpandParent);
-    }
-
-    #[inline]
-    pub(crate) fn line_suffix_boundary(&mut self) {
-        self.push(FormatElement::LineSuffixBoundary);
     }
 
     #[inline]

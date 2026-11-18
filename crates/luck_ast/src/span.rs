@@ -8,7 +8,7 @@ use luck_token::Span;
 
 use crate::expr::{Expression, Field, FunctionArgs, Suffix, Var};
 use crate::function::Parameter;
-use crate::stmt::{Block, LastStatement, Statement};
+use crate::stmt::{AttributedName, Block, LastStatement, Statement};
 use crate::types::{FunctionTypeParam, Type, TypeField};
 
 impl Block<'_> {
@@ -157,6 +157,17 @@ impl Parameter<'_> {
     #[must_use]
     pub fn span(&self) -> Span {
         self.type_annotation.as_ref().map_or(self.name.span, |ty| self.name.span.merge(ty.span()))
+    }
+}
+
+impl AttributedName<'_> {
+    #[must_use]
+    pub fn span(&self) -> Span {
+        let annotated = self
+            .type_annotation
+            .as_ref()
+            .map_or(self.name.span, |ty| self.name.span.merge(ty.span()));
+        self.attribute.as_ref().map_or(annotated, |attribute| annotated.merge(attribute.span))
     }
 }
 

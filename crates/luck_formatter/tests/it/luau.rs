@@ -494,8 +494,7 @@ x = 1 -- a
         "\
 f(
 \ta, -- x
-\t--[[y]]
-\tb
+\t--[[y]] b
 )
 ",
     );
@@ -508,8 +507,9 @@ fn lone_crs_ending_a_line_go_as_spaces_do() {
     assert_luau(
         "x = -- c\r\r\n1\n",
         "\
-x = -- c
-1
+x =
+\t-- c
+\t1
 ",
     );
     assert_luau(

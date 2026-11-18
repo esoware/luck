@@ -11,8 +11,19 @@ use crate::common::{assert_format, assert_format_range, assert_format_with};
 const INTERIOR_COMMENT_CASES: [(&str, &str, &str); 24] = [
     (
         "if (first --[[ condition ]] and second) then run() end",
-        "if (first --[[ condition ]] and second) then run() end\n",
-        "if (first --[[ condition ]] and second) then run() end\n",
+        "\
+if
+\tfirst --[[ condition ]]
+\tand second
+then
+\trun()
+end
+",
+        "\
+if first --[[ condition ]] and second then
+\trun()
+end
+",
     ),
     (
         "if first then run() elseif second --[[ branch ]] then stop() else finish() end",
@@ -56,8 +67,17 @@ end
     ),
     (
         "repeat run() until first --[[ condition ]] and second",
-        "repeat run() until first --[[ condition ]] and second\n",
-        "repeat run() until first --[[ condition ]] and second\n",
+        "\
+repeat
+\trun()
+until first --[[ condition ]]
+\tand second
+",
+        "\
+repeat
+\trun()
+until first --[[ condition ]] and second
+",
     ),
     (
         "local function call() if first --[[ nested ]] then run() end end",
@@ -82,40 +102,43 @@ end
         "local values = {first, --[[ item ]] second}",
         "\
 local values = {
-\tfirst, --[[ item ]]
-\tsecond,
+\tfirst,
+\t--[[ item ]] second,
 }
 ",
-        "\
-local values = {
-\tfirst, --[[ item ]]
-\tsecond,
-}
-",
+        "local values = { first, --[[ item ]] second }\n",
     ),
     (
         "call(first, --[[ argument ]] function() run() end)",
         "\
 call(
-\tfirst, --[[ argument ]]
-\tfunction()
+\tfirst,
+\t--[[ argument ]] function()
 \t\trun()
 \tend
 )
 ",
         "\
-call(
-\tfirst, --[[ argument ]]
-\tfunction()
-\t\trun()
-\tend
-)
+call(first, --[[ argument ]] function()
+\trun()
+end)
 ",
     ),
     (
         "local function call(first, --[[ parameter ]] second) return first end",
-        "local function call(first, --[[ parameter ]] second) return first end\n",
-        "local function call(first, --[[ parameter ]] second) return first end\n",
+        "\
+local function call(
+\tfirst,
+\t--[[ parameter ]] second
+)
+\treturn first
+end
+",
+        "\
+local function call(first, --[[ parameter ]] second)
+\treturn first
+end
+",
     ),
     (
         "\
@@ -208,14 +231,14 @@ end",
         "\
 do
 \tlocal t = {
-\t              a = (1 --[[why]]),
+\t\ta = (1 --[[why]]),
 \t}
 end
 ",
         "\
 do
 \tlocal t = {
-\t              a = (1 --[[why]]),
+\t\ta = (1 --[[why]]),
 \t}
 end
 ",
@@ -332,12 +355,16 @@ end
 local t = --[[ why ]] { a = 1, -- x
 \tb = 2 }",
         "\
-local t = --[[ why ]] { a = 1, -- x
-\tb = 2 }
+local t = --[[ why ]] {
+\ta = 1, -- x
+\tb = 2,
+}
 ",
         "\
-local t = --[[ why ]] { a = 1, -- x
-\tb = 2 }
+local t = --[[ why ]] {
+\ta = 1, -- x
+\tb = 2,
+}
 ",
     ),
     (
@@ -345,12 +372,16 @@ local t = --[[ why ]] { a = 1, -- x
 render --[[ why ]] (a, -- x
 \tb)",
         "\
-render --[[ why ]] (a, -- x
-\tb)
+render(
+\t--[[ why ]] a, -- x
+\tb
+)
 ",
         "\
-render --[[ why ]] (a, -- x
-\tb)
+render(
+\t--[[ why ]] a, -- x
+\tb
+)
 ",
     ),
     (
@@ -362,22 +393,32 @@ line2]], (1 --[[why]]) }
 end",
         "\
 do
-\tlocal t = { [[
+\tlocal t = {
+\t\t[[
 line1
-line2]], (1 --[[why]]) }
+line2]],
+\t\t(1 --[[why]]),
+\t}
 end
 ",
         "\
 do
-\tlocal t = { [[
+\tlocal t = {
+\t\t[[
 line1
-line2]], (1 --[[why]]) }
+line2]],
+\t\t(1 --[[why]]),
+\t}
 end
 ",
     ),
     (
         "function f(a --[[ param ]]) end",
-        "function f(a --[[ param ]]) end\n",
+        "\
+function f(
+\ta --[[ param ]]
+) end
+",
         "function f(a --[[ param ]]) end\n",
     ),
     (
@@ -424,7 +465,7 @@ until first --[[ until ]]
 ];
 
 #[test]
-fn interior_comments_never_cross_stmt_boundaries() {
+fn every_comment_formats_where_it_was_written() {
     for (source, narrowest, wider) in INTERIOR_COMMENT_CASES {
         for (line_width, expected) in [(1, narrowest), (60, wider), (80, wider), (120, wider)] {
             let options = FormatOptions { line_width, ..FormatOptions::default() };
@@ -467,9 +508,8 @@ end)()
 }
 
 #[test]
-fn table_claims_its_own_comments() {
-    // Per-field comments keep their lines and the table formats normally -
-    // no verbatim fallback, so the ragged `=` spacing is fixed up.
+fn table_fields_keep_their_comments() {
+    // The ragged `=` spacing is fixed up around them.
     assert_format(
         "\
 local config = {
@@ -500,8 +540,8 @@ local t = {
 }
 ",
     );
-    // A nested table claims its own comment; the hard breaks it needs expand
-    // the outer table too, which still uses its ordinary layout.
+    // A comment that ends its line in a nested table breaks the tables
+    // around it too.
     assert_format(
         "\
 local t = { a = {x=1, -- inner
@@ -519,7 +559,7 @@ local t = {
 }
 
 #[test]
-fn call_args_claim_their_own_comments() {
+fn call_args_keep_their_comments() {
     assert_format(
         "\
 render(a, b, -- why
@@ -537,9 +577,8 @@ render(
 
 #[test]
 fn header_comment_keeps_its_place_and_its_stmt_formatted() {
-    // The gap between a condition and its `then`/`do` belongs to no emitter.
-    // Printing the comment where it was written keeps the body formatted;
-    // stalling it would take the whole statement down the verbatim fallback.
+    // A comment between a condition and its `then` or `do` trails the
+    // condition.
     assert_format(
         "if a --[[c]] then run() end\n",
         "\
@@ -598,8 +637,8 @@ for k in pairs(t) --[[c]] do
 end
 ",
     );
-    // A line comment would swallow the keyword that follows it, so the
-    // statement still falls back to verbatim.
+    // A line comment ends its line, so the header breaks around it, and the
+    // `do` of a `for` loop, which has no group, goes on the next line.
     assert_format(
         "\
 if input -- why
@@ -608,8 +647,18 @@ then
 end
 ",
         "\
-if input -- why
+if
+\tinput -- why
 then
+\trun()
+end
+",
+    );
+    assert_format(
+        "for i = 1, 10 -- why\ndo run() end\n",
+        "\
+for i = 1, 10 -- why
+do
 \trun()
 end
 ",
@@ -617,36 +666,50 @@ end
 }
 
 #[test]
-fn a_list_claims_only_the_comments_written_inside_it() {
-    // `--[[ why ]]` sits before the `{`/`(`. Pulling it in with the comments
-    // that do belong to the list would carry it across the delimiter, so the
-    // statement goes verbatim instead.
+fn a_comment_before_a_list_leads_it() {
     assert_format(
         "\
 local t = --[[ why ]] { a = 1, -- x
 \tb = 2 }
 ",
         "\
-local t = --[[ why ]] { a = 1, -- x
-\tb = 2 }
+local t = --[[ why ]] {
+\ta = 1, -- x
+\tb = 2,
+}
 ",
     );
+    // Before call arguments it goes inside the parentheses, since a line
+    // break before a `(` would start a new statement in Lua 5.1 and Luau.
     assert_format(
         "\
 render --[[ why ]] (a, -- x
 \tb)
 ",
         "\
-render --[[ why ]] (a, -- x
-\tb)
+render(
+\t--[[ why ]] a, -- x
+\tb
+)
 ",
     );
+    assert_format_with(
+        "f --[[\n]] \"s\"\n",
+        "\
+f(
+\t--[[
+]] \"s\"
+)
+",
+        LuaVersion::Lua51,
+        &FormatOptions::default(),
+    );
+    assert_format("local function f -- why\n() end\n", "local function f(\n\t-- why\n) end\n");
 }
 
 #[test]
-fn an_empty_body_claims_only_the_comments_it_can_reach() {
-    // The comment is inside the parameter list; moving it into the body would
-    // carry it across the `)`.
+fn an_empty_body_takes_only_the_comments_after_its_parameters() {
+    // This one trails the last parameter, inside the parentheses.
     assert_format("function f(a --[[c]]) end\n", "function f(a --[[c]]) end\n");
     // Nothing but whitespace separates this one from the body, so it lands
     // inside, indented.
@@ -661,44 +724,21 @@ end
 }
 
 #[test]
-fn verbatim_stmt_keeps_long_string_contents() {
-    // The newlines inside `[[...]]` are the string's own bytes: re-anchoring
-    // the lines around them would indent the value.
-    assert_format(
-        "\
-do
-\tlocal t = { [[
-line1
-line2]], (1 --[[why]]) }
-end
-",
-        "\
-do
-\tlocal t = { [[
-line1
-line2]], (1 --[[why]]) }
-end
-",
-    );
-}
-
-#[test]
-fn verbatim_stmt_is_reindented_to_its_block() {
-    // A comment inside a field, which no list emitter can place, forces the
-    // whole statement verbatim; its continuation lines still move to the
-    // depth the `do` block dictates.
+fn a_comment_inside_a_field_value_stays_there() {
     assert_format(
         "\
 do
 local t = {
               a = (1 --[[why]]),
+              [k --[[key]]] = f(x --[[arg]]).y,
 }
 end
 ",
         "\
 do
 \tlocal t = {
-\t              a = (1 --[[why]]),
+\t\ta = (1 --[[why]]),
+\t\t[k --[[key]]] = f(x --[[arg]]).y,
 \t}
 end
 ",
@@ -706,7 +746,209 @@ end
 }
 
 #[test]
-fn stalled_comment_does_not_duplicate_a_format_off_region() {
+fn code_after_a_comment_ending_its_line_stays_on_the_next_line() {
+    // Moved up past the `]`, the comment would trail the `1` on the next
+    // format.
+    let input = "\
+t[a -- x
+] = 1
+";
+    assert_format(input, input);
+    // Two line comments can't share a line, so the parentheses around a
+    // condition stay when a comment needs the line breaks they hold.
+    assert_format(
+        "if (a -- x\n) -- y\nthen end\n",
+        "\
+if
+\t(a -- x
+\t) -- y
+then
+end
+",
+    );
+    // A `return`'s span takes its `;`, which the formatter drops.
+    assert_format(
+        "\
+local function f()
+return x -- a
+; -- b
+end
+",
+        "\
+local function f()
+\treturn x -- a
+\t-- b
+end
+",
+    );
+}
+
+#[test]
+fn a_comment_ending_its_line_before_an_operand_goes_above_its_operator() {
+    for input in ["x = a\n-- c\n+ b\n", "x = a + -- c\nb\n"] {
+        assert_format(
+            input,
+            "\
+x = a
+\t-- c
+\t+ b
+",
+        );
+    }
+    assert_format(
+        "x = obj\n-- c\n:method()\n",
+        "\
+x = obj
+-- c
+:method()
+",
+    );
+    assert_format("x = obj: -- c\nmethod()\n", "x = obj -- c\n:method()\n");
+    assert_format(
+        "x = obj:first():second()\n-- c\n:third()\n",
+        "\
+x = obj
+\t:first()
+\t:second()
+\t-- c
+\t:third()
+",
+    );
+}
+
+#[test]
+fn a_block_comment_counts_toward_its_line_once_it_ends_it() {
+    // The comment is the 31st column either way, whether `+` follows it or a
+    // line break does, as on the second format.
+    assert_format_with(
+        "local n = size(t) --[[ total ]] + size(u) + size(v)\n",
+        "\
+local n = size(
+\tt
+) --[[ total ]]
+\t+ size(u)
+\t+ size(v)
+",
+        LuaVersion::Lua54,
+        &FormatOptions { line_width: 30, ..FormatOptions::default() },
+    );
+}
+
+#[test]
+fn a_comment_ending_its_line_after_an_assignment_moves_its_value_down() {
+    assert_format(
+        "local x = -- c\n1\n",
+        "\
+local x =
+\t-- c
+\t1
+",
+    );
+    assert_format(
+        "local function f()\nreturn -- c\nx\nend\n",
+        "\
+local function f()
+\treturn
+\t\t-- c
+\t\tx
+end
+",
+    );
+    assert_format(
+        "t = { a = -- c\n1 }\n",
+        "\
+t = {
+\ta =
+\t\t-- c
+\t\t1,
+}
+",
+    );
+}
+
+#[test]
+fn an_empty_list_keeps_its_comments_inside() {
+    for source in ["f(--[[c]])\n", "local t = { --[[c]] }\n"] {
+        assert_format(source, source);
+    }
+    assert_format(
+        "function f(-- c\n) end\n",
+        "\
+function f(
+\t-- c
+) end
+",
+    );
+}
+
+#[test]
+fn a_comment_leading_an_alternation_goes_after_the_line_break_it_opens_with() {
+    let options = FormatOptions::default();
+    assert_format_with(
+        "type T = --[[c]] A | B\n",
+        "type T = --[[c]] A | B\n",
+        LuaVersion::Luau,
+        &options,
+    );
+    assert_format_with(
+        "type T = -- c\nA | B\n",
+        "\
+type T =
+\t-- c
+\t| A
+\t| B
+",
+        LuaVersion::Luau,
+        &options,
+    );
+    // An instantiation's comments go inside its doubled brackets.
+    assert_format_with(
+        "local x = convert --[[a]] < --[[b]] < integer > --[[e]] > (current)\n",
+        "local x = convert --[[a]]<<--[[b]] integer --[[e]]>>(current)\n",
+        LuaVersion::Luau,
+        &options,
+    );
+}
+
+#[test]
+fn a_comment_on_its_own_line_keeps_one_before_a_closer() {
+    assert_format(
+        "\
+local t = { a, (b
+-- in parens
+), c[d
+-- in brackets
+] }
+",
+        "\
+local t = {
+\ta,
+\t(b
+\t-- in parens
+\t),
+\tc[d
+\t-- in brackets
+\t],
+}
+",
+    );
+    assert_format(
+        "\
+function f(a
+-- after a parameter
+) end
+",
+        "\
+function f(
+\ta
+\t-- after a parameter
+) end
+",
+    );
+}
+
+#[test]
+fn a_comment_after_a_separator_does_not_duplicate_a_format_off_region() {
     assert_format(
         "\
 local x = 1; -- stalled
@@ -744,9 +986,8 @@ end
 }
 
 #[test]
-fn stalled_comment_stays_above_the_stmts_own_leading_comment() {
-    // The `;` carries the first comment; the second leads `local y`. The run
-    // is movable across the separator, so both stay above the statement.
+fn a_comment_after_a_separator_stays_above_the_next_stmts_own_comment() {
+    // Both lead `local y`, in the order they were written.
     assert_format(
         "\
 -- on the separator
@@ -1021,19 +1262,12 @@ local t = {
 
 #[test]
 fn comment_after_a_multi_line_block_comment_formats_stably() {
-    assert_format(
-        "\
+    let input = "\
 local x --[[
 ]] -- c
 local y
-",
-        "\
-local x --[[
-]]
--- c
-local y
-",
-    );
+";
+    assert_format(input, input);
 }
 
 #[test]
@@ -1130,21 +1364,30 @@ fn conditional_collapse_options() -> FormatOptions {
 }
 
 #[test]
-fn a_verbatim_statement_forces_only_its_own_breaks() {
-    // Formatted, the call would break around the function body, which it
-    // never prints, so the `if` still collapses.
-    let collapsed = "if a then g --[[c]] (function() return 1 end) end\n";
-    let options = conditional_collapse_options();
-    assert_format_with(collapsed, collapsed, LuaVersion::Lua54, &options);
+fn a_comment_beside_a_callback_keeps_it_hugged() {
+    assert_format_with(
+        "if a then g --[[c]] (function() return 1 end) end\n",
+        "\
+if a then
+\tg(--[[c]] function()
+\t\treturn 1
+\tend)
+end
+",
+        LuaVersion::Lua54,
+        &conditional_collapse_options(),
+    );
     assert_format(
         "\
 local t = f(function() return 1 end, x --[[e]] .y)
 local u = f(function() local z = q --[[k]] (r) return z end, 2)
 ",
         "\
-local t = f(function() return 1 end, x --[[e]] .y)
+local t = f(function()
+\treturn 1
+end, x --[[e]].y)
 local u = f(function()
-\tlocal z = q --[[k]] (r)
+\tlocal z = q(--[[k]] r)
 \treturn z
 end, 2)
 ",
@@ -1198,15 +1441,6 @@ end
             "\
 if a then
 \ti = 7 --[[c]]
-end
-",
-        ),
-        (
-            "if a then --[[c]] i = 7 end\n",
-            "\
-if a then
-\t--[[c]]
-\ti = 7
 end
 ",
         ),
@@ -1266,6 +1500,8 @@ end
         ),
         ("if a then i = --[[c]] 7 end\n", "if a then i = --[[c]] 7 end\n"),
         ("if a --[[c]] then i = 7 end\n", "if a --[[c]] then i = 7 end\n"),
+        ("if a then --[[c]] i = 7 end\n", "if a then --[[c]] i = 7 end\n"),
+        ("if a then b(1, --[[c]] 2) end\n", "if a then b(1, --[[c]] 2) end\n"),
         (
             "\
 if a then
@@ -1532,15 +1768,13 @@ f()
 }
 
 #[test]
-fn collapse_stays_idempotent_with_a_comment_in_a_list() {
-    // An argument list that claims a comment breaks across lines, so the
-    // `if` can't collapse around it.
+fn collapse_leaves_a_comment_ending_a_line_in_a_list_expanded() {
     assert_format_with(
-        "if a then b(1, --[[c]] 2) end\n",
+        "if a then b(1, -- c\n2) end\n",
         "\
 if a then
 \tb(
-\t\t1, --[[c]]
+\t\t1, -- c
 \t\t2
 \t)
 end
@@ -1662,25 +1896,20 @@ fn unix_line_endings_normalize_a_block_comment() {
 
 #[test]
 fn a_long_commented_argument_list_formats_without_rescanning_its_comments() {
-    // Each argument asks whether a comment falls inside it. Answered by
-    // walking the pending comments from the first, this takes minutes.
+    // Each argument looks for its leading and trailing comments. Answered by
+    // counting every comment left before the call's end, this takes minutes.
     let count = 450_000u32;
     let arguments: Vec<String> =
         (0..count).map(|index| format!("--[[c{index}]] {index}")).collect();
     let last = count.saturating_sub(1);
-    let mut expected = String::from(
-        "\
-f(
-\t--[[c0]]
-",
-    );
+    let mut expected = String::from("f(\n");
     for index in 0..last {
-        writeln!(expected, "\t{index}, --[[c{}]]", index.saturating_add(1)).unwrap();
+        writeln!(expected, "\t--[[c{index}]] {index},").unwrap();
     }
     writeln!(
         expected,
         "\
-\t{last}
+\t--[[c{last}]] {last}
 )"
     )
     .unwrap();

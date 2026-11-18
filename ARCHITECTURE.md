@@ -62,7 +62,7 @@ Each entry point converts a `LuaTarget` once. The parser, codegen, formatter, an
 
 The tree holds no comments. The lexer puts each in a sorted list beside the tokens, as `Leading` or `Trailing`, with the start of the token it attaches to, and whatever needs comments reads that list:
 
-- The formatter places each comment by byte position and keeps it between the same tokens, apart from separators such as `;`. It copies a statement as written when the statement holds a comment it can't place that way. A tree built in code carries `SyntheticComment`s, anchored to its nodes' spans, instead.
+- The formatter places each comment at the nearest node boundary, as `oxc_formatter` does. A node takes the comments before it as leading ones and those after it on its line as trailing ones, a container takes those before its closer, and a block those between its statements. A comment that ends its line in the source ends it in the output, so the next format reads it where this one put it. Only `format off` regions and statements under `ignore` go out as written. A tree built in code carries `SyntheticComment`s, anchored to its statements' and blocks' spans, instead.
 - The linter reads its suppression directives from the list, and the formatter its `format off`, `format on`, and `ignore` directives.
 - Codegen prints no comments, and the minifier keeps only a shebang and Luau's `--!` hot comments, which it writes above the code.
 

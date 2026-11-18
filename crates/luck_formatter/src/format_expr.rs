@@ -1,6 +1,8 @@
 //! Leaf text comes from the tree's leaves, never from source, so synthetic
 //! ASTs stay printable.
 
+use core::iter;
+
 use luck_ast::{
     BinaryOp, Expression, FunctionDef, IfExpression, InterpolatedString, Suffix,
     SuffixedExpression, UnaryOp, Var, expr_starts_with_brace,
@@ -69,43 +71,49 @@ fn is_double_minus_hazard(op: UnOp, operand: &Expression<'_>) -> bool {
 )]
 impl<'ast> Formatter<'ast> {
     pub(crate) fn write_expr(&mut self, expr: &Expression<'ast>) {
-        match expr {
-            Expression::Nil(_) => self.token("nil"),
-            Expression::False(_) => self.token("false"),
-            Expression::True(_) => self.token("true"),
-            Expression::VarArg(_) => self.token("..."),
-            Expression::Number(literal) | Expression::Integer(literal) => {
-                self.write_number(literal.text);
-            }
-            Expression::StringLiteral(literal) => self.write_string(literal.text),
-            Expression::Name(name) => self.name(**name),
-            Expression::Suffixed(chain) => self.write_suffixed(chain),
-            Expression::BinaryOp(binary_op) => self.write_binary_chain(binary_op, true),
-            Expression::UnaryOp(unary_op) => self.write_unary(unary_op),
-            Expression::Parenthesized(parenthesized) => {
-                self.token("(");
-                self.write_expr(&parenthesized.expr);
-                self.token(")");
-            }
-            Expression::TableConstructor(table) => self.write_table(table, false),
-            Expression::FunctionDef(function_def) => {
-                self.without_sorting_requires(|f| f.write_function_definition(function_def));
-            }
-            // Luau
-            Expression::IfExpression(if_expr) => self.write_if_expr(if_expr),
-            // Luau
-            Expression::InterpolatedString(interpolated) => self.write_interpolated(interpolated),
-            // Luau
-            Expression::TypeCast(cast) => {
-                self.write_expr(&cast.expr);
-                self.space();
-                self.token("::");
-                self.space();
-                self.write_type(&cast.ty);
-            }
-            // A parse-recovery placeholder has no text to print.
-            Expression::Error(_) => {}
-        }
+        self.node(
+            || expr.span(),
+            |f| match expr {
+                Expression::Nil(_) => f.token("nil"),
+                Expression::False(_) => f.token("false"),
+                Expression::True(_) => f.token("true"),
+                Expression::VarArg(_) => f.token("..."),
+                Expression::Number(literal) | Expression::Integer(literal) => {
+                    f.write_number(literal.text);
+                }
+                Expression::StringLiteral(literal) => f.write_string(literal.text),
+                Expression::Name(name) => f.ascii(name.text.as_str()),
+                Expression::Suffixed(chain) => f.write_suffixed(chain),
+                Expression::BinaryOp(binary_op) => f.write_binary_chain(binary_op, true),
+                Expression::UnaryOp(unary_op) => f.write_unary(unary_op),
+                Expression::Parenthesized(parenthesized) => {
+                    f.token("(");
+                    f.write_expr(&parenthesized.expr);
+                    f.write_closing_comments(parenthesized.span.end, false);
+                    f.token(")");
+                }
+                Expression::TableConstructor(table) => f.write_table(table, false),
+                Expression::FunctionDef(function_def) => {
+                    f.without_sorting_requires(|unsorted| {
+                        unsorted.write_function_definition(function_def);
+                    });
+                }
+                // Luau
+                Expression::IfExpression(if_expr) => f.write_if_expr(if_expr),
+                // Luau
+                Expression::InterpolatedString(interpolated) => f.write_interpolated(interpolated),
+                // Luau
+                Expression::TypeCast(cast) => {
+                    f.write_expr(&cast.expr);
+                    f.space();
+                    f.token("::");
+                    f.space();
+                    f.write_type(&cast.ty);
+                }
+                // A parse-recovery placeholder has no text to print.
+                Expression::Error(_) => {}
+            },
+        );
     }
 
     pub(crate) fn write_number(&mut self, text: &'ast str) {
@@ -142,19 +150,21 @@ impl<'ast> Formatter<'ast> {
     pub(crate) fn write_var(&mut self, var: &Var<'ast>) {
         match var {
             Var::Name(name) => self.name(**name),
-            Var::Suffixed(chain) => self.write_suffixed(chain),
+            Var::Suffixed(chain) => self.node(|| chain.span, |f| f.write_suffixed(chain)),
         }
     }
 
     /// Right after the opening `[`, a long-bracket string would lex as `[[`,
-    /// a long-string opener, so it's padded with spaces.
-    pub(crate) fn write_bracketed_key(&mut self, key: &Expression<'ast>) {
+    /// a long-string opener, so it's padded with spaces. `closer` is where
+    /// the `]` is.
+    pub(crate) fn write_bracketed_key(&mut self, key: &Expression<'ast>, closer: u32) {
         let is_padded = starts_with_bracket(key);
         self.token("[");
         if is_padded {
             self.space();
         }
         self.write_expr(key);
+        self.write_closing_comments(closer, false);
         if is_padded {
             self.space();
         }
@@ -168,6 +178,9 @@ impl<'ast> Formatter<'ast> {
     /// method, and three or more fields before each `.`, when the run doesn't
     /// fit. Each run breaks in a group of its own, so a break before it, as in
     /// a callback passed earlier, doesn't break it.
+    ///
+    /// A comment on a line of its own before a suffix goes above it, where
+    /// the chain breaks. One before call arguments goes inside them.
     pub(crate) fn write_suffixed(&mut self, chain: &SuffixedExpression<'ast>) {
         self.write_expr(&chain.prefix);
         for run in runs(&chain.suffixes) {
@@ -178,6 +191,7 @@ impl<'ast> Formatter<'ast> {
                             for suffix in run {
                                 if matches!(suffix, Suffix::MethodCall(_)) {
                                     f.soft_line();
+                                    f.write_hoisted_comments(suffix.span().start);
                                 }
                                 f.write_suffix(suffix);
                             }
@@ -189,6 +203,7 @@ impl<'ast> Formatter<'ast> {
                         for suffix in run {
                             if let Suffix::Field(name) = suffix {
                                 f.soft_line();
+                                f.write_hoisted_comments(name.span.start);
                                 f.token(".");
                                 f.name(*name);
                             }
@@ -197,6 +212,12 @@ impl<'ast> Formatter<'ast> {
                 }),
                 _ => {
                     for suffix in run {
+                        if !matches!(suffix, Suffix::Call(_))
+                            && self.comments().has_line_ending_comment_before(suffix.span().start)
+                        {
+                            self.space();
+                            self.write_leading_comments(suffix.span().start);
+                        }
                         self.write_suffix(suffix);
                     }
                 }
@@ -210,21 +231,22 @@ impl<'ast> Formatter<'ast> {
                 self.token(".");
                 self.name(*name);
             }
-            Suffix::Index { index, .. } => self.write_bracketed_key(index),
+            Suffix::Index { span, index } => self.write_bracketed_key(index, span.end),
             Suffix::Call(args) => self.write_function_args(args),
             Suffix::MethodCall(call) => {
                 self.token(":");
                 self.name(call.name);
                 // Luau rejects a method call whose `(` is on a later line
-                // than its name.
+                // than its name. The tree keeps no span for the outer `>`.
                 if let Some(type_args) = &call.type_args {
-                    self.flat(|f| f.write_delimited_types("<<", ">>", &type_args.args));
+                    let closer = self.comments().closer_offset(type_args.span.end, b'>');
+                    self.flat(|f| f.write_type_args(("<<", ">>"), type_args, closer));
                 }
                 self.write_function_args(&call.args);
             }
             // Luau
-            Suffix::TypeInstantiation { type_args, .. } => {
-                self.write_delimited_types("<<", ">>", &type_args.args);
+            Suffix::TypeInstantiation { span, type_args } => {
+                self.write_type_args(("<<", ">>"), type_args, span.end);
             }
         }
     }
@@ -236,10 +258,14 @@ impl<'ast> Formatter<'ast> {
     /// Unless `is_indented`, a broken chain keeps its operators level with
     /// its first operand, for a condition that already sits on an indented
     /// line of its own.
+    ///
+    /// A comment that ends its line before an operand goes above the operator,
+    /// which starts the operand's line when the chain breaks.
     pub(crate) fn write_binary_chain(&mut self, binary_op: &BinaryOp<'ast>, is_indented: bool) {
         let operators = |f: &mut Self| {
             for link in &binary_op.links {
                 f.soft_line_or_space();
+                f.write_hoisted_comments(link.operand.span().start);
                 f.token(link.op.static_text());
                 f.space();
                 f.write_expr(&link.operand);
@@ -255,17 +281,24 @@ impl<'ast> Formatter<'ast> {
         });
     }
 
+    /// `not` is a keyword operator, always separated from its operand, and a
+    /// comment right after `-` would start with `---`.
     fn write_unary(&mut self, unary_op: &UnaryOp<'ast>) {
         self.token(unary_op.op.static_text());
-        // `not` is a keyword operator: always separated from its operand.
-        if unary_op.op == UnOp::Not || is_double_minus_hazard(unary_op.op, &unary_op.operand) {
+        let operand = &unary_op.operand;
+        if unary_op.op == UnOp::Not
+            || is_double_minus_hazard(unary_op.op, operand)
+            || (unary_op.op == UnOp::Neg
+                && self.comments().has_comment_before(operand.span().start))
+        {
             self.space();
         }
-        self.write_expr(&unary_op.operand);
+        self.write_expr(operand);
     }
 
     /// Luau: one group, so a long if-expression starts an indented line at
-    /// each `then`, `elseif`, and `else`.
+    /// each `then`, `elseif`, and `else`, above which goes a comment ending
+    /// its line before the expression after it.
     fn write_if_expr(&mut self, if_expr: &IfExpression<'ast>) {
         self.group(|grouped| {
             grouped.token("if");
@@ -273,11 +306,13 @@ impl<'ast> Formatter<'ast> {
             grouped.write_expr(&if_expr.condition);
             grouped.indent(|f| {
                 f.soft_line_or_space();
+                f.write_hoisted_comments(if_expr.then_expr.span().start);
                 f.token("then");
                 f.space();
                 f.write_expr(&if_expr.then_expr);
                 for clause in &if_expr.elseif_clauses {
                     f.soft_line_or_space();
+                    f.write_hoisted_comments(clause.condition.span().start);
                     f.token("elseif");
                     f.space();
                     f.write_expr(&clause.condition);
@@ -287,6 +322,7 @@ impl<'ast> Formatter<'ast> {
                     f.write_expr(&clause.expr);
                 }
                 f.soft_line_or_space();
+                f.write_hoisted_comments(if_expr.else_expr.span().start);
                 f.token("else");
                 f.space();
                 f.write_expr(&if_expr.else_expr);
@@ -296,10 +332,16 @@ impl<'ast> Formatter<'ast> {
 
     /// Luau. Luau rejects `{{`, so an expression starting with `{` gets a
     /// space after the opening brace, and one before the closing brace to
-    /// match.
+    /// match. A hole's `}` comes right before the piece after it.
     fn write_interpolated(&mut self, interpolated: &InterpolatedString<'ast>) {
         self.token("`");
-        for segment in &interpolated.segments {
+        let closers = interpolated
+            .segments
+            .iter()
+            .skip(1)
+            .map(|segment| segment.text.span.start)
+            .chain(iter::once(interpolated.tail.span.start));
+        for (segment, closer) in interpolated.segments.iter().zip(closers) {
             if !segment.text.text.is_empty() {
                 self.text(segment.text.text);
             }
@@ -309,6 +351,7 @@ impl<'ast> Formatter<'ast> {
                 self.space();
             }
             self.write_expr(&segment.expr);
+            self.write_closing_comments(closer, false);
             if is_padded {
                 self.space();
             }

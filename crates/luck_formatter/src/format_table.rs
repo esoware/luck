@@ -1,14 +1,12 @@
-//! A table of simple positional values packs with `fill`, as many per line as
-//! fit.
+//! A table of simple positional values and no comments packs with `fill`, as
+//! many per line as fit.
 //!
-//! Any other table stays flat if it fits and otherwise breaks one field
-//! per line. A table whose comments all sit between fields claims them and
-//! breaks one field per line; any other comments are left to the block level.
+//! Any other table stays flat if it fits and otherwise breaks one field per
+//! line, keeping each comment with the field it leads or trails.
 
 use luck_ast::{Expression, Field, TableConstructor};
 use luck_token::{Span, has_line_break};
 
-use crate::comments::ListKind;
 use crate::ir::{Formatter, LineMode};
 
 fn is_fillable(table: &TableConstructor<'_>) -> bool {
@@ -62,37 +60,17 @@ impl<'ast> Formatter<'ast> {
 
     /// A hugged table breaks in its call's argument list's place.
     pub(crate) fn write_table(&mut self, table: &TableConstructor<'ast>, is_hugged: bool) {
-        if self.comments().has_claimable_comments(table.span, table.fields.iter().map(Field::span))
-        {
-            let list = |f: &mut Self| {
-                f.write_commented_list(
-                    ("{", "}"),
-                    table.span,
-                    &table.fields,
-                    ListKind::TableFields,
-                    Field::span,
-                    Self::write_field,
-                );
-            };
-            if is_hugged {
-                let group_id = self.group_id();
-                self.hugged_group_with_id(group_id, list);
-            } else {
-                list(self);
-            }
-            return;
-        }
-
         if table.fields.is_empty() {
-            self.token("{}");
+            self.write_dangling_list(("{", "}"), table.span.end, LineMode::SoftOrSpace);
             return;
         }
 
         // A trailing `,` or `;` after the last field keeps the table broken, one
         // field per line unless its values were packed.
         let has_magic_comma = self.options().magic_trailing_comma && table.has_trailing_separator;
-        let should_fill =
-            is_fillable(table) && (!has_magic_comma || self.is_packed_in_source(table));
+        let should_fill = is_fillable(table)
+            && (!has_magic_comma || self.is_packed_in_source(table))
+            && !self.comments().has_comment_in(table.span.start, table.span.end);
         let last_index = table.fields.len().saturating_sub(1);
 
         let group_id = self.group_id();
@@ -101,14 +79,15 @@ impl<'ast> Formatter<'ast> {
             grouped.indent(|indented| {
                 indented.soft_line_or_space();
 
-                // A blank line the source has above a field is kept.
+                // A blank line the source has above a field, or above the
+                // comments leading it, is kept.
                 if should_fill {
                     // Every entry but the last carries its own comma, so
                     // the fill measures widths with the comma included.
                     indented.fill(|f| {
                         for (i, field) in table.fields.iter().enumerate() {
                             let separator = (i > 0).then(|| {
-                                if f.has_blank_line_above(field.span().start) {
+                                if f.has_blank_line_before(field.span().start) {
                                     LineMode::Empty
                                 } else {
                                     LineMode::SoftOrSpace
@@ -126,7 +105,7 @@ impl<'ast> Formatter<'ast> {
                     for (i, field) in table.fields.iter().enumerate() {
                         if i > 0 {
                             indented.token(",");
-                            let is_blank = indented.has_blank_line_above(field.span().start);
+                            let is_blank = indented.has_blank_line_before(field.span().start);
                             indented.line(if is_blank {
                                 LineMode::Empty
                             } else {
@@ -141,9 +120,9 @@ impl<'ast> Formatter<'ast> {
                     indented.expand_parent();
                 }
                 indented.if_group_breaks(group_id, |f| f.token(","));
+                indented.write_closing_comments(table.span.end, true);
             });
             grouped.soft_line_or_space();
-            grouped.line_suffix_boundary();
             grouped.token("}");
         };
         if is_hugged {
@@ -154,23 +133,27 @@ impl<'ast> Formatter<'ast> {
     }
 
     fn write_field(&mut self, field: &Field<'ast>) {
-        match field {
-            Field::Named { name, value } => {
-                self.name(*name);
-                self.space();
-                self.token("=");
-                self.space();
-                self.write_expr(value);
-            }
-            Field::Bracketed { key, value, .. } => {
-                self.write_bracketed_key(key);
-                self.space();
-                self.token("=");
-                self.space();
-                self.write_expr(value);
-            }
-            Field::Positional(value) => self.write_expr(value),
-        }
+        self.node(
+            || field.span(),
+            |f| match field {
+                Field::Named { name, value } => {
+                    f.name(*name);
+                    f.space();
+                    f.token("=");
+                    f.space();
+                    f.write_after_operator(value.span().start, |inner| inner.write_expr(value));
+                }
+                Field::Bracketed { key, value, .. } => {
+                    let closer = f.comments().closer_offset(key.span().end, b']');
+                    f.write_bracketed_key(key, closer);
+                    f.space();
+                    f.token("=");
+                    f.space();
+                    f.write_after_operator(value.span().start, |inner| inner.write_expr(value));
+                }
+                Field::Positional(value) => f.write_expr(value),
+            },
+        );
     }
 }
 
