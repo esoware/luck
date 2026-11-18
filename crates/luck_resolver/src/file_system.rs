@@ -1,155 +1,118 @@
-use alloc::sync::Arc;
+use std::ffi::OsString;
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::{fs, io};
 
-use rustc_hash::FxHashMap;
+use simdutf8::basic::from_utf8;
 
-use crate::path::{canonical_path, normalize_path};
-use crate::shared_cache::SharedCache;
+#[cfg(windows)]
+use crate::path::strip_verbatim_prefix;
 
-/// The directories a build's requires look in, each listed once and shared by
-/// every thread.
-///
-/// A listing answers for the names in it, a module file's canonical path
-/// included, without a system call per file, since `canonicalize` takes a
-/// lock in the OS on Windows. A name the listing can't settle goes to the OS,
-/// such as a symlink or a name that matches an entry only ignoring case.
-#[derive(Debug, Default)]
-pub(crate) struct FileSystem {
-    directories: SharedCache<PathBuf, Arc<Directory>>,
-    /// The canonical paths only the OS could give.
-    canonical_files: SharedCache<PathBuf, String>,
+/// Everything a resolver reads goes through this, so a caller can resolve
+/// against files only it holds, such as an editor's unsaved buffers.
+pub trait FileSystem: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns what stopped `path` from being read, as [`fs::read`] does.
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+
+    /// # Errors
+    ///
+    /// Returns what [`Self::read`] does, or `InvalidData` with
+    /// [`fs::read_to_string`]'s message when the file isn't UTF-8.
+    #[expect(unsafe_code, reason = "the safe conversion would validate every source file twice")]
+    fn read_to_string(&self, path: &Path) -> io::Result<String> {
+        let bytes = self.read(path)?;
+        if from_utf8(&bytes).is_err() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            ));
+        }
+        // SAFETY: `bytes` was validated as UTF-8 above.
+        Ok(unsafe { String::from_utf8_unchecked(bytes) })
+    }
+
+    /// What `path` is once every link is followed.
+    ///
+    /// # Errors
+    ///
+    /// Returns what [`fs::metadata`] does, such as `NotFound`.
+    fn metadata(&self, path: &Path) -> io::Result<FileMetadata>;
+
+    /// # Errors
+    ///
+    /// Returns what stopped the directory from being listed, as
+    /// [`fs::read_dir`] does.
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>>;
+
+    /// `path` made absolute, with every link and `..` resolved, each name in
+    /// the case the file system stores it, and no Windows verbatim prefix, so
+    /// two paths to one file canonicalize alike.
+    ///
+    /// # Errors
+    ///
+    /// Returns what [`fs::canonicalize`] does, such as `NotFound`.
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
 }
 
-/// Each fact is found by the first thread that needs it, while any other
-/// waits for it.
-#[derive(Debug, Default)]
-struct Directory {
-    /// `None` when the directory can't be listed.
-    listing: OnceLock<Option<Listing>>,
-    /// `None` when the OS can't canonicalize it.
-    canonical_path: OnceLock<Option<String>>,
-}
-
-#[derive(Debug)]
-struct Listing {
-    /// By ASCII-lowercased name.
-    entries: FxHashMap<Box<str>, Entry>,
-    /// Every name in it is ASCII, so a name that matches none ignoring ASCII
-    /// case names nothing, whatever case and normalization rules the file
-    /// system follows.
-    is_ascii: bool,
-}
-
-#[derive(Debug)]
-struct Entry {
-    name: Box<str>,
-    /// `None` for what only the OS can look through, such as a symlink, and
-    /// for names that differ only in case.
-    kind: Option<Listed>,
-}
-
-/// What a listing says a name is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Listed {
-    File,
-    Directory,
-    Missing,
+pub struct FileMetadata {
+    pub is_file: bool,
+    pub is_dir: bool,
 }
 
-impl FileSystem {
-    pub(crate) fn is_file(&self, path: &Path) -> bool {
-        self.listed(path).map_or_else(|| path.is_file(), |listed| listed == Listed::File)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: OsString,
+    /// What the entry itself is, or `None` when only
+    /// [`FileSystem::metadata`] can say, as for a symlink or any other
+    /// Windows reparse point.
+    pub metadata: Option<FileMetadata>,
+}
+
+/// The OS's own file system.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FileSystemOs;
+
+impl FileSystem for FileSystemOs {
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        fs::read(path)
     }
 
-    pub(crate) fn is_dir(&self, path: &Path) -> bool {
-        self.listed(path).map_or_else(|| path.is_dir(), |listed| listed == Listed::Directory)
+    fn metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        let metadata = fs::metadata(path)?;
+        Ok(FileMetadata { is_file: metadata.is_file(), is_dir: metadata.is_dir() })
     }
 
-    /// The [`normalize_path`] form of `file`, which [`Self::is_file`] found.
-    pub(crate) fn canonical_file(&self, file: &Path) -> String {
-        if let Some((parent, name)) = split(file) {
-            let directory = self.directories.get_or_insert_with(parent, Arc::default);
-            if directory.listed(parent, name) == Some(Listed::File)
-                && let Some(canonical_parent) =
-                    directory.canonical_path.get_or_init(|| canonical_path(parent))
-            {
-                let separator = if canonical_parent.ends_with('/') { "" } else { "/" };
-                return format!("{canonical_parent}{separator}{name}");
-            }
-        }
-        self.canonical_files.get_or_insert_with(file, || normalize_path(file))
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
+        fs::read_dir(path)?
+            .map(|read_entry| {
+                let entry = read_entry?;
+                Ok(DirEntry { name: entry.file_name(), metadata: entry_metadata(&entry) })
+            })
+            .collect()
     }
 
-    /// What the listing of `path`'s directory says `path` is, or `None` when
-    /// only the OS can say.
-    fn listed(&self, path: &Path) -> Option<Listed> {
-        let (parent, name) = split(path)?;
-        self.directories.get_or_insert_with(parent, Arc::default).listed(parent, name)
+    #[cfg(windows)]
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        fs::canonicalize(path).map(strip_verbatim_prefix)
+    }
+
+    #[cfg(not(windows))]
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        fs::canonicalize(path)
     }
 }
 
-impl Directory {
-    /// What the listing of this directory, at `path`, says `name` is.
-    fn listed(&self, path: &Path, name: &str) -> Option<Listed> {
-        let listing = self.listing.get_or_init(|| read_listing(path).ok()).as_ref()?;
-        match listing.entries.get(name.to_ascii_lowercase().as_str()) {
-            Some(Entry { name: listed_name, kind }) if **listed_name == *name => *kind,
-            Some(_) => None,
-            None => listing.is_ascii.then_some(Listed::Missing),
-        }
-    }
-}
-
-/// `path`'s directory and name, when every file system reads the name as
-/// written.
-///
-/// That's an ASCII name with no `~`, which can start a Windows short name, no
-/// `:`, which can name a Windows stream, no trailing `.` or space, which
-/// Windows drops, and nothing after it, such as a separator or a `.`
-/// component.
-fn split(path: &Path) -> Option<(&Path, &str)> {
-    let name = path.file_name()?.to_str()?;
-    let is_plain = name.is_ascii() && !name.contains(['~', ':']) && !name.ends_with(['.', ' ']);
-    if !is_plain || !path.as_os_str().as_encoded_bytes().ends_with(name.as_bytes()) {
+fn entry_metadata(entry: &fs::DirEntry) -> Option<FileMetadata> {
+    let file_type = entry.file_type().ok()?;
+    if file_type.is_symlink() || is_reparse_point(entry) {
         return None;
     }
-    Some((path.parent()?, name))
-}
-
-/// A name that isn't ASCII is left out, since only the OS can match it.
-///
-/// # Errors
-///
-/// Returns the error that stopped the directory from being read.
-fn read_listing(path: &Path) -> io::Result<Listing> {
-    let mut entries = FxHashMap::default();
-    let mut is_ascii = true;
-    for read_entry in fs::read_dir(path)? {
-        let entry = read_entry?;
-        let file_name = entry.file_name();
-        let Some(name) = file_name.to_str().filter(|name| name.is_ascii()) else {
-            is_ascii = false;
-            continue;
-        };
-        let file_type = entry.file_type().ok().filter(|_| !is_reparse_point(&entry));
-        #[expect(clippy::filetype_is_file, reason = "`Path::is_file` means a regular file")]
-        let kind = file_type.and_then(|plain_type| {
-            if plain_type.is_file() {
-                Some(Listed::File)
-            } else if plain_type.is_dir() {
-                Some(Listed::Directory)
-            } else {
-                None
-            }
-        });
-        entries
-            .entry(name.to_ascii_lowercase().into_boxed_str())
-            .and_modify(|listed: &mut Entry| listed.kind = None)
-            .or_insert_with(|| Entry { name: name.into(), kind });
-    }
-    Ok(Listing { entries, is_ascii })
+    #[expect(clippy::filetype_is_file, reason = "`Path::is_file` means a regular file")]
+    let is_file = file_type.is_file();
+    Some(FileMetadata { is_file, is_dir: file_type.is_dir() })
 }
 
 /// Any reparse point, not just the symlinks `FileType` reports, since the OS
@@ -172,99 +135,32 @@ const fn is_reparse_point(_: &fs::DirEntry) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::os::unix::fs::symlink as symlink_file;
-    #[cfg(windows)]
-    use std::os::windows::fs::symlink_file;
-
     use super::*;
-    use crate::fixtures::project_with;
 
-    fn assert_answers_as_the_os(files: &FileSystem, directory: &Path, names: &[&str]) {
-        for name in names {
-            let path = directory.join(name);
-            assert_eq!(files.is_file(&path), path.is_file(), "is_file({name:?})");
-            assert_eq!(files.is_dir(&path), path.is_dir(), "is_dir({name:?})");
-            if path.is_file() {
-                assert_eq!(files.canonical_file(&path), normalize_path(&path), "{name:?}");
-            }
-        }
+    #[test]
+    fn read_to_string_reads_utf8() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ok.lua");
+        fs::write(&path, "local x = 1 -- \u{00e9}\n").unwrap();
+        assert_eq!(FileSystemOs.read_to_string(&path).unwrap(), "local x = 1 -- \u{00e9}\n");
     }
 
     #[test]
-    fn a_listing_answers_as_the_os_does() {
-        let project = project_with(&[
-            ("src/utils.lua", ""),
-            ("src/Mixed.luau", ""),
-            ("src/long_module_name.lua", ""),
-            ("src/pkg/init.lua", ""),
-            ("src/.luaurc", "{}"),
-            // A stream of `utils.lua` on NTFS, and a file of its own elsewhere.
-            ("src/utils.lua:stream", ""),
-        ]);
-        assert_answers_as_the_os(
-            &FileSystem::default(),
-            &project.path().join("src"),
-            &[
-                "utils.lua",
-                "UTILS.lua",
-                "utils.luau",
-                "Mixed.luau",
-                "mixed.luau",
-                "pkg",
-                "PKG",
-                "pkg/init.lua",
-                "pkg/init.luau",
-                ".luaurc",
-                "missing.lua",
-                "missing/init.lua",
-                "LONG_M~1.LUA",
-                "utils.lua.",
-                "utils.lua ",
-                "utils.lua/",
-                "utils.lua/.",
-                "utils.lua:stream",
-                "",
-                ".",
-                "..",
-            ],
-        );
+    fn read_to_string_fails_on_invalid_utf8_as_std_does() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bad.lua");
+        fs::write(&path, [0x6c, 0xff, 0xfe]).unwrap();
+        let simd_error = FileSystemOs.read_to_string(&path).unwrap_err();
+        let std_error = fs::read_to_string(&path).unwrap_err();
+        assert_eq!(simd_error.kind(), std_error.kind());
+        assert_eq!(simd_error.to_string(), std_error.to_string());
     }
 
     #[test]
-    fn a_name_beside_one_that_is_not_ascii_goes_to_the_os() {
-        let project = project_with(&[("src/\u{e9}.lua", ""), ("src/plain.lua", "")]);
-        assert_answers_as_the_os(
-            &FileSystem::default(),
-            &project.path().join("src"),
-            &["\u{e9}.lua", "\u{c9}.lua", "e\u{301}.lua", "e.lua", "plain.lua", "missing.lua"],
-        );
-    }
-
-    #[test]
-    fn a_symlink_goes_to_the_os() {
-        let project = project_with(&[("target/module.lua", ""), ("src/plain.lua", "")]);
-        let target = project.path().join("target/module.lua");
-        let link = project.path().join("src/link.lua");
-        // Windows lets only an administrator or developer mode make one.
-        if symlink_file(&target, &link).is_err() {
-            return;
-        }
-        let files = FileSystem::default();
-        assert_answers_as_the_os(&files, &project.path().join("src"), &["link.lua", "plain.lua"]);
-        assert_eq!(files.canonical_file(&link), normalize_path(&target));
-    }
-
-    #[test]
-    fn a_listing_is_never_reread() {
-        let project = project_with(&[("src/utils.lua", "")]);
-        let utils = project.path().join("src/utils.lua");
-        let files = FileSystem::default();
-        let canonical = files.canonical_file(&utils);
-        fs::remove_file(&utils).expect("remove utils");
-        fs::write(project.path().join("src/added.lua"), "").expect("write added");
-        assert!(files.is_file(&utils));
-        assert_eq!(files.canonical_file(&utils), canonical);
-        assert!(!files.is_file(&project.path().join("src/added.lua")));
+    fn read_to_string_of_a_missing_file_is_not_found() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing =
+            FileSystemOs.read_to_string(&directory.path().join("does_not_exist.lua")).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
     }
 }

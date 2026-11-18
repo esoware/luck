@@ -1,8 +1,9 @@
-use std::path::Path;
+use alloc::borrow::Cow;
+use std::path::{Path, PathBuf};
 
 use luck_allocator::Allocator;
 use luck_core::Diagnostic;
-use luck_resolver::{Resolver, normalize_path};
+use luck_resolver::{FileSystem as _, FileSystemOs, ResolveOptions, Resolver, to_slash_lossy};
 use luck_token::{LuaVersion, Span};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -81,13 +82,16 @@ pub(crate) fn build_graph<'ast>(
     #[expect(clippy::expect_used, reason = "the caller gives the calling thread an arena")]
     let (first, spare_arenas) = arenas.split_first_mut().expect("an arena for the calling thread");
     let allocator: &'ast Allocator = first;
-    // Emitted paths are made relative to this, so it must be absolute and
-    // normalized. `luck bundle main.lua` passes the entry's parent, which is
-    // empty for a bare file name.
+    // Emitted paths are made relative to this, so it must be canonical like
+    // the modules' paths.
     let root = absolute_project_root(options.project_root);
-    let resolver = Resolver::new(options.version, options.search_paths, Path::new(&root));
+    let resolver = Resolver::new(ResolveOptions {
+        version: options.version,
+        search_paths: options.search_paths.to_vec(),
+        root: root.clone(),
+    });
     let reader = Reader::new(options, &root, &resolver);
-    let entry = normalize_path(entry_path);
+    let entry = FileSystemOs.canonicalize(entry_path).unwrap_or_else(|_| entry_path.to_path_buf());
     let mut found = discover_reachable(allocator, spare_arenas, reader, &entry);
     let graph = number_modules(entry, &mut found, |path| reader.discover(allocator, path));
     (allocator, graph)
@@ -103,11 +107,11 @@ pub(crate) fn build_graph<'ast>(
 ///
 /// Returns the errors discovery found.
 fn number_modules<'ast>(
-    entry: String,
-    found: &mut FxHashMap<String, Discovered<'ast>>,
-    mut discover: impl FnMut(&str) -> Discovered<'ast>,
+    entry: PathBuf,
+    found: &mut FxHashMap<PathBuf, Discovered<'ast>>,
+    mut discover: impl FnMut(&Path) -> Discovered<'ast>,
 ) -> Result<DependencyGraph<'ast>, Vec<Diagnostic>> {
-    let mut ids: FxHashMap<String, ModuleId> = FxHashMap::default();
+    let mut ids: FxHashMap<PathBuf, ModuleId> = FxHashMap::default();
     ids.insert(entry.clone(), ModuleId(0));
     let mut paths = vec![entry];
     let mut modules: Vec<ModuleInfo<'ast>> = Vec::new();
@@ -116,7 +120,7 @@ fn number_modules<'ast>(
     let mut next = 0;
     while let Some(path) = paths.get(next) {
         if next >= MAX_MODULE_COUNT {
-            errors.push(Diagnostic::e009(path, Span::default(), MAX_MODULE_COUNT));
+            errors.push(Diagnostic::e009(&to_slash_lossy(path), Span::default(), MAX_MODULE_COUNT));
             break;
         }
         let Discovered { errors: module_errors, warnings: module_warnings, module } =
@@ -167,7 +171,11 @@ fn warn_inert_hot_comments(
             continue;
         }
         if let Some(span) = module.hot_comments.first() {
-            warnings.push(Diagnostic::w006(&module.path, *span, span.text(module.source)));
+            warnings.push(Diagnostic::w006(
+                &to_slash_lossy(&module.path),
+                *span,
+                span.text(module.source),
+            ));
         }
     }
 }
@@ -199,8 +207,11 @@ fn topological_order(modules: &[ModuleInfo<'_>], warnings: &mut Vec<Diagnostic>)
     };
 
     let cycle = find_cycle(&graph, cycle_node);
-    let cycle_paths: Vec<String> =
-        cycle.iter().filter_map(|id| modules.get(id.0)).map(|module| module.path.clone()).collect();
+    let cycle_paths: Vec<String> = cycle
+        .iter()
+        .filter_map(|id| modules.get(id.0))
+        .map(|module| to_slash_lossy(&module.path).into_owned())
+        .collect();
 
     // The require that closes the cycle: the last module in the path requiring
     // the first.
@@ -208,19 +219,21 @@ fn topological_order(modules: &[ModuleInfo<'_>], warnings: &mut Vec<Diagnostic>)
         [.., from, to] => modules.get(from.0).map(|module| (module, *to)),
         [] | [_] => None,
     };
-    let (file_path, closing_span) = closing_require.map_or_else(
-        || (modules.first().map_or("", |module| module.path.as_str()), None),
+    let (reporting_module, closing_span) = closing_require.map_or_else(
+        || (modules.first(), None),
         |(module, to)| {
             let closing_span = module
                 .dependencies
                 .iter()
                 .find(|dependency| dependency.target == to)
                 .map(|dependency| dependency.call_span);
-            (module.path.as_str(), closing_span)
+            (Some(module), closing_span)
         },
     );
+    let file_path =
+        reporting_module.map_or(Cow::Borrowed(""), |module| to_slash_lossy(&module.path));
 
-    warnings.push(Diagnostic::w003(file_path, closing_span.unwrap_or_default(), &cycle_paths));
+    warnings.push(Diagnostic::w003(&file_path, closing_span.unwrap_or_default(), &cycle_paths));
     (0..modules.len()).map(ModuleId).collect()
 }
 

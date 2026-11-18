@@ -4,10 +4,10 @@
 //! Links follow Lua template search paths, Luau relative and `@alias` imports,
 //! and the `init` parent-parent rule exactly as a build does.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use luck_ast::{Block, Call, Expression, FunctionArgs, Visitor};
-use luck_resolver::{ResolveRequest, Resolver, normalize_path};
+use luck_resolver::{ResolveOptions, Resolver};
 use luck_token::decode_string;
 use tower_lsp_server::ls_types::{DocumentLink, Position, Uri};
 
@@ -42,12 +42,17 @@ fn collect_links(
         .as_deref()
         .or_else(|| document_path.parent())
         .unwrap_or_else(|| Path::new("."));
+    let resolver = Resolver::new(ResolveOptions {
+        version: document.lua_version(),
+        search_paths: settings.search_paths.clone(),
+        root: project_root.to_path_buf(),
+    });
     let mut collector = LinkCollector {
         document,
         position,
         offset: position.map(|at| document.offset(at)),
-        from_file: normalize_path(&document_path),
-        resolver: Resolver::new(document.lua_version(), &settings.search_paths, project_root),
+        document_path,
+        resolver,
         links: Vec::new(),
     };
     collector.visit_block(&document.parse().block);
@@ -60,8 +65,8 @@ struct LinkCollector<'document> {
     /// Where `position` falls, which every link at it touches, so the walk
     /// reads only what does.
     offset: Option<u32>,
-    from_file: String,
-    resolver: Resolver<'document>,
+    document_path: PathBuf,
+    resolver: Resolver,
     links: Vec<DocumentLink>,
 }
 
@@ -127,14 +132,10 @@ impl LinkCollector<'_> {
         else {
             return;
         };
-        let Ok(resolved) = self.resolver.resolve(&ResolveRequest {
-            module: &module,
-            from_file: &self.from_file,
-            span: literal.span,
-        }) else {
+        let Ok(resolution) = self.resolver.resolve(&self.document_path, &module) else {
             return;
         };
-        let Some(target) = Uri::from_file_path(&resolved.path) else {
+        let Some(target) = Uri::from_file_path(&resolution.path) else {
             return;
         };
         self.links.push(DocumentLink {

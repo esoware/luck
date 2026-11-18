@@ -15,7 +15,6 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-luck_core  = { workspace = true }
 luck_token = { workspace = true }
 
 parking_lot = { workspace = true }

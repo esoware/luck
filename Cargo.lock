@@ -1138,7 +1138,6 @@ dependencies = [
 name = "luck_resolver"
 version = "0.6.0"
 dependencies = [
- "luck_core",
  "luck_token",
  "parking_lot",
  "rustc-hash",

@@ -1,6 +1,10 @@
+use alloc::borrow::Cow;
+use std::path::Path;
+
 use clap::{Args, ValueEnum};
 use luck_bundler::{BundleOptions, DependencyGraph, DynamicRequire, ModuleId};
 use luck_core::LuaTarget;
+use luck_resolver::to_slash_lossy;
 
 use crate::exit::{Exit, fail_with_diags};
 use crate::project::{
@@ -80,18 +84,19 @@ impl GraphArgs {
 fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
     use serde_json::{Map, Value, json};
 
-    let module_path =
-        |id: ModuleId| dependency_graph.modules.get(id.0).map(|module| module.path.as_str());
+    let module_path = |id: ModuleId| {
+        dependency_graph.modules.get(id.0).map(|module| to_slash_lossy(&module.path))
+    };
 
     let mut modules_map = Map::new();
     for module in &dependency_graph.modules {
         let requires: Vec<&str> =
             module.dependencies.iter().map(|dependency| dependency.require_string).collect();
-        let resolved_paths: Vec<Option<&str>> =
+        let resolved_paths: Vec<Option<Cow<'_, str>>> =
             module.dependencies.iter().map(|dependency| module_path(dependency.target)).collect();
 
         modules_map.insert(
-            module.path.clone(),
+            to_slash_lossy(&module.path).into_owned(),
             json!({
                 "requires": requires,
                 "resolved_deps": resolved_paths,
@@ -99,7 +104,7 @@ fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
         );
     }
 
-    let ordered_paths: Vec<Option<&str>> =
+    let ordered_paths: Vec<Option<Cow<'_, str>>> =
         dependency_graph.topological_order.iter().map(|id| module_path(*id)).collect();
 
     let output = json!({
@@ -112,11 +117,13 @@ fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
 }
 
 fn print_graph_dot(dependency_graph: &DependencyGraph<'_>) {
+    // A double quote is the only character a DOT string escapes.
+    let quoted = |path: &Path| to_slash_lossy(path).replace('"', "\\\"");
     println!("digraph dependencies {{");
     for module in &dependency_graph.modules {
         for dependency in &module.dependencies {
             if let Some(target) = dependency_graph.modules.get(dependency.target.0) {
-                println!("  \"{}\" -> \"{}\";", module.path, target.path);
+                println!("  \"{}\" -> \"{}\";", quoted(&module.path), quoted(&target.path));
             }
         }
     }

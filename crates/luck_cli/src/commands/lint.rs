@@ -9,7 +9,7 @@ use luck_allocator::Allocator;
 use luck_config::LuckConfig;
 use luck_core::{Diagnostic, LuaTarget};
 use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
-use luck_resolver::{normalize_path, read_source_file};
+use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::{LineIndex, LuaVersion};
 
 use crate::exit::{Exit, operation_error, usage_error};
@@ -343,7 +343,7 @@ impl LintArgs {
         lint_config: &LintConfig,
         is_quiet: bool,
     ) -> LintOutcome {
-        let source = match read_source_file(file_path) {
+        let source = match FileSystemOs.read_to_string(file_path) {
             Ok(text) => text,
             Err(error) => {
                 // A skipped file fails the run, so CI can't pass with files
@@ -459,7 +459,8 @@ impl LintArgs {
                 // relative to the workspace.
                 let label = Path::new(file_label);
                 let absolute = path::absolute(label).unwrap_or_else(|_| label.to_path_buf());
-                let file = annotation_property(&normalize_path(&absolute));
+                let canonical = FileSystemOs.canonicalize(&absolute).unwrap_or(absolute);
+                let file = annotation_property(&to_slash_lossy(&canonical));
                 let mut lines = String::new();
                 for diag in &diags {
                     let (line, column) = line_and_column(&line_index, source, diag.span.start);
@@ -815,7 +816,7 @@ print(a)",
         let working_directory = env::current_dir().expect("current directory");
         assert_eq!(
             file,
-            annotation_property(&normalize_path(&working_directory.join("src/a.lua")))
+            annotation_property(&to_slash_lossy(&working_directory.join(r"src\a.lua")))
         );
         assert_eq!(
             rest,

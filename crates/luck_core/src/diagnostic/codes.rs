@@ -77,7 +77,7 @@ impl Diagnostic {
     }
 
     #[must_use]
-    pub fn e004_luau_scheme(file_path: &str, span: Span, module_name: &str) -> Self {
+    pub fn e004_missing_prefix(file_path: &str, span: Span, module_name: &str) -> Self {
         Self::error_at(
             "E004",
             format!(
@@ -93,7 +93,7 @@ impl Diagnostic {
     }
 
     #[must_use]
-    pub fn e004_self_needs_subpath(file_path: &str, span: Span) -> Self {
+    pub fn e004_bare_self_alias(file_path: &str, span: Span) -> Self {
         Self::error_at(
             "E004",
             "`@self` can't be used alone, so use `@self/subpath`",

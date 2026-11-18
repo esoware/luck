@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Args;
 use luck_allocator::Allocator;
 use luck_core::LuaTarget;
-use luck_resolver::read_source_file;
+use luck_resolver::{FileSystem as _, FileSystemOs};
 
 use crate::exit::{Exit, fail_with_source_errors, operation_error};
 use crate::minify_flags::MinifyFlags;
@@ -52,7 +52,8 @@ impl MinifyArgs {
         let (source, file_path) = if self.input == "-" {
             (read_stdin_source()?, "<stdin>".to_owned())
         } else {
-            let source = read_source_file(existing_file(&self.input)?)
+            let source = FileSystemOs
+                .read_to_string(existing_file(&self.input)?)
                 .map_err(|e| operation_error(format!("failed to read `{}`: {e}", self.input)))?;
             (source, self.input)
         };

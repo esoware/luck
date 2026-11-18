@@ -1,27 +1,19 @@
-use std::env;
-use std::path::Path;
+use std::path::{self, Component, Path, PathBuf};
 
-use luck_resolver::normalize_path;
+use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 
-/// An empty or relative root resolves against the working directory. If that's
-/// unavailable too, the input comes back unchanged and the build goes on, even
-/// though host paths can then reach the output.
-pub(crate) fn absolute_project_root(project_root: &Path) -> String {
-    let normalized = normalize_path(project_root);
-    if Path::new(&normalized).is_absolute() {
-        return normalized;
-    }
-    match env::current_dir() {
-        Ok(current_directory) => {
-            let working_directory = normalize_path(&current_directory);
-            if normalized.is_empty() || normalized == "." {
-                working_directory
-            } else {
-                format!("{}/{normalized}", working_directory.trim_end_matches('/'))
-            }
-        }
-        Err(_) => normalized,
-    }
+/// `project_root` canonicalized, or made absolute when it doesn't exist.
+///
+/// An empty root, which `luck bundle main.lua` passes for the entry's parent,
+/// is the working directory. When that is unavailable too, the root comes back
+/// unchanged and the build goes on, though host paths can then reach the
+/// output.
+pub(crate) fn absolute_project_root(project_root: &Path) -> PathBuf {
+    let root = if project_root.as_os_str().is_empty() { Path::new(".") } else { project_root };
+    FileSystemOs
+        .canonicalize(root)
+        .or_else(|_| path::absolute(root))
+        .unwrap_or_else(|_| root.to_path_buf())
 }
 
 /// The project-relative form of `path`, which is what the bundle carries.
@@ -29,44 +21,58 @@ pub(crate) fn absolute_project_root(project_root: &Path) -> String {
 ///
 /// A module above the root gets `..` segments, so none of the names on the
 /// root's side reach the output. When the two share no root at all, as with
-/// another Windows drive or a UNC share, only the file name is kept.
-pub(crate) fn make_relative(path: &str, root: &str) -> String {
-    let root_directory = root.trim_end_matches('/');
-    if let Some(relative) =
-        path.strip_prefix(root_directory).and_then(|rest| rest.strip_prefix('/'))
-    {
-        return relative.to_owned();
+/// another Windows drive or UNC share, only the file name is kept.
+pub(crate) fn make_relative(path: &Path, root: &Path) -> String {
+    if let Ok(relative) = path.strip_prefix(root) {
+        return to_slash_lossy(relative).into_owned();
     }
 
-    let path_parts: Vec<&str> = path.split('/').collect();
-    let root_parts: Vec<&str> = root_directory.split('/').collect();
-    let shared = path_parts
+    let path_components: Vec<Component<'_>> = path.components().collect();
+    let root_components: Vec<Component<'_>> = root.components().collect();
+    let shared = path_components
         .iter()
-        .zip(&root_parts)
+        .zip(&root_components)
         .take_while(|(from_path, from_root)| from_path == from_root)
         .count();
 
-    // A UNC root is `//server/share`: both empty segments and those two
-    // names have to match before there is a shared root at all.
-    let shared_root_segments = if root_directory.starts_with("//") { 4 } else { 1 };
-    if shared < shared_root_segments {
-        return path_parts.last().unwrap_or(&path).to_string();
+    // A drive or share and the root after it have to match before there is
+    // a shared root at all.
+    let root_length = root_components
+        .iter()
+        .take_while(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+        .count();
+    if shared == 0 || shared < root_length {
+        return path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
     }
 
-    let mut relative = "../".repeat(root_parts.len().saturating_sub(shared));
-    relative.push_str(&path_parts.get(shared..).unwrap_or_default().join("/"));
+    let mut relative = "../".repeat(root_components.len().saturating_sub(shared));
+    let rest: Vec<_> = path_components
+        .get(shared..)
+        .unwrap_or_default()
+        .iter()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect();
+    relative.push_str(&rest.join("/"));
     relative
 }
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+
     use super::*;
 
     #[test]
     fn path_inside_the_project_root_loses_the_prefix() {
-        assert_eq!(make_relative("D:/proj/src/utils.lua", "D:/proj"), "src/utils.lua");
+        assert_eq!(
+            make_relative(Path::new("/proj/src/utils.lua"), Path::new("/proj")),
+            "src/utils.lua"
+        );
         // A trailing separator on the root must not survive into the path.
-        assert_eq!(make_relative("D:/proj/main.lua", "D:/proj/"), "main.lua");
+        assert_eq!(make_relative(Path::new("/proj/main.lua"), Path::new("/proj/")), "main.lua");
     }
 
     /// A vendored dependency above the root keeps its shape, but nothing from
@@ -74,36 +80,61 @@ mod tests {
     #[test]
     fn path_above_the_project_root_walks_up() {
         assert_eq!(
-            make_relative("D:/work/shared/util.lua", "D:/work/proj/src"),
+            make_relative(Path::new("/work/shared/util.lua"), Path::new("/work/proj/src")),
             "../../shared/util.lua"
         );
-        assert_eq!(make_relative("D:/work/sibling/a.lua", "D:/work/proj"), "../sibling/a.lua");
+        assert_eq!(
+            make_relative(Path::new("/work/sibling/a.lua"), Path::new("/work/proj")),
+            "../sibling/a.lua"
+        );
     }
 
     /// A path on another drive or share can't be made relative, and an
     /// absolute path must never reach the output.
+    #[cfg(windows)]
     #[test]
     fn path_without_a_shared_root_keeps_only_the_file_name() {
-        assert_eq!(make_relative("E:/elsewhere/lib.lua", "D:/proj"), "lib.lua");
+        assert_eq!(
+            make_relative(Path::new(r"E:\elsewhere\lib.lua"), Path::new(r"D:\proj")),
+            "lib.lua"
+        );
+        assert_eq!(
+            make_relative(Path::new(r"\\server-a\share\lib.lua"), Path::new(r"\\server-b\proj")),
+            "lib.lua"
+        );
+        assert_eq!(
+            make_relative(Path::new(r"\\server\other\lib.lua"), Path::new(r"\\server\share\proj")),
+            "lib.lua"
+        );
+        assert_eq!(make_relative(Path::new(r"D:\lib.lua"), Path::new(r"\proj")), "lib.lua");
     }
 
-    /// The root of a UNC path is `//server/share`, so another server or share
-    /// shares no root, and the leading empty segments don't count as one.
+    #[cfg(windows)]
     #[test]
-    fn path_on_another_unc_share_keeps_only_the_file_name() {
-        assert_eq!(make_relative("//server-a/share/lib.lua", "//server-b/proj"), "lib.lua");
-        assert_eq!(make_relative("//server/other/lib.lua", "//server/share/proj"), "lib.lua");
+    fn path_on_the_same_drive_walks_up() {
+        assert_eq!(
+            make_relative(Path::new(r"D:\work\shared\util.lua"), Path::new(r"D:\work\proj")),
+            "../shared/util.lua"
+        );
     }
 
     /// `luck bundle main.lua` passes the entry's parent, which is empty for a
     /// bare file name.
     #[test]
     fn empty_project_root_resolves_to_the_working_directory() {
-        let working_directory = normalize_path(&env::current_dir().expect("cwd"));
+        let working_directory =
+            FileSystemOs.canonicalize(&env::current_dir().expect("cwd")).expect("canonicalize");
         assert_eq!(absolute_project_root(Path::new("")), working_directory);
         assert_eq!(absolute_project_root(Path::new(".")), working_directory);
 
         let root = absolute_project_root(Path::new(""));
-        assert_eq!(make_relative(&format!("{root}/main.lua"), &root), "main.lua");
+        assert_eq!(make_relative(&root.join("main.lua"), &root), "main.lua");
+    }
+
+    #[test]
+    fn a_missing_project_root_is_made_absolute() {
+        let root = absolute_project_root(Path::new("missing/project"));
+        assert!(root.is_absolute(), "{}", root.display());
+        assert!(root.ends_with("missing/project"), "{}", root.display());
     }
 }

@@ -1,5 +1,5 @@
 use core::mem;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use luck_allocator::Allocator;
 use luck_core::Diagnostic;
@@ -15,7 +15,7 @@ pub struct BundleResult {
     pub output: String,
     pub warnings: Vec<Diagnostic>,
     /// Every bundled module's canonical path, in discovery order.
-    pub source_files: Vec<String>,
+    pub source_files: Vec<PathBuf>,
     pub line_map: Vec<LineMapEntry>,
 }
 
@@ -25,7 +25,7 @@ pub struct MinifiedBundle {
     pub output: String,
     pub warnings: Vec<Diagnostic>,
     /// Every bundled module's canonical path, in discovery order.
-    pub source_files: Vec<String>,
+    pub source_files: Vec<PathBuf>,
     /// The bundled modules' sources' total size.
     pub source_byte_count: usize,
 }

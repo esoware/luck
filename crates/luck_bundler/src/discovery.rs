@@ -1,14 +1,18 @@
 use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 use core::any::Any;
 use core::panic::AssertUnwindSafe;
 use core::slice::IterMut;
 use std::panic;
+use std::path::{Path, PathBuf};
 use std::thread::{self, Scope};
 
 use luck_allocator::Allocator;
 use luck_ast::MIN_STACK_BYTES;
 use luck_core::Diagnostic;
-use luck_resolver::{ResolveRequest, ResolvedModule, Resolver, native_path, read_source_file};
+use luck_resolver::{
+    FileSystem as _, FileSystemOs, Resolution, ResolveError, Resolver, to_slash_lossy,
+};
 use luck_token::{CommentKind, LuaVersion, Span, leading_hot_comments};
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -40,15 +44,15 @@ pub(crate) struct ResolvedModuleInfo<'ast> {
     pub info: ModuleInfo<'ast>,
     /// Each require and the path it resolves to, in source order. `None`
     /// when it doesn't resolve.
-    pub requires: Vec<(RequireSite<'ast>, Option<String>)>,
+    pub requires: Vec<(RequireSite<'ast>, Option<PathBuf>)>,
 }
 
 /// A module parsed and analyzed, before its requires resolve.
 pub(crate) struct ParsedModule<'ast> {
     /// Every field but the dependencies.
     pub info: ModuleInfo<'ast>,
-    /// `info.path` in the arena, for the requests that resolve its requires.
-    pub path: &'ast str,
+    /// `info.path`, for the requests that resolve its requires.
+    pub path: Arc<Path>,
     /// In source order.
     pub sites: Vec<RequireSite<'ast>>,
     /// Parse errors, then the analysis's.
@@ -60,19 +64,21 @@ impl<'ast> ParsedModule<'ast> {
     /// The module with each of its requires resolved, in source order.
     fn resolved(
         self,
-        resolutions: impl IntoIterator<Item = Result<ResolvedModule, Diagnostic>>,
+        resolutions: impl IntoIterator<Item = Result<Resolution, ResolveError>>,
     ) -> Discovered<'ast> {
-        let Self { info, sites, mut errors, mut warnings, .. } = self;
+        let Self { info, path, sites, mut errors, mut warnings } = self;
         let requires = sites
             .into_iter()
             .zip(resolutions)
             .map(|(site, resolution)| match resolution {
-                Ok(ResolvedModule { path, warnings: resolve_warnings }) => {
-                    warnings.extend(resolve_warnings);
-                    (site, Some(path))
+                Ok(Resolution { path: target, is_self_alias_shadowed }) => {
+                    if is_self_alias_shadowed {
+                        warnings.push(Diagnostic::w004(&to_slash_lossy(&path), site.call_span));
+                    }
+                    (site, Some(target))
                 }
-                Err(diag) => {
-                    errors.push(diag);
+                Err(error) => {
+                    errors.push(resolve_error_diagnostic(&to_slash_lossy(&path), &site, &error));
                     (site, None)
                 }
             })
@@ -81,19 +87,68 @@ impl<'ast> ParsedModule<'ast> {
     }
 }
 
+/// What reports `error`, which stopped `site`, a require in the module at
+/// `file_path`, from resolving.
+fn resolve_error_diagnostic(
+    file_path: &str,
+    site: &RequireSite<'_>,
+    error: &ResolveError,
+) -> Diagnostic {
+    let (span, module) = (site.call_span, site.require_string);
+    match error {
+        ResolveError::NotFound(searched) => {
+            let tried_paths: Vec<String> =
+                searched.iter().map(|path| to_slash_lossy(path).into_owned()).collect();
+            Diagnostic::e004(file_path, span, module, &tried_paths)
+        }
+        ResolveError::MissingPrefix => Diagnostic::e004_missing_prefix(file_path, span, module),
+        ResolveError::BareSelfAlias => Diagnostic::e004_bare_self_alias(file_path, span),
+        ResolveError::UnknownAlias(alias) => {
+            Diagnostic::e004_unknown_alias(file_path, span, module, alias)
+        }
+        ResolveError::MalformedLuaurc(luaurc) => {
+            Diagnostic::e004_malformed_luaurc(file_path, span, module, &to_slash_lossy(luaurc))
+        }
+        ResolveError::AliasCycle(cycle) => {
+            Diagnostic::e004_alias_cycle(file_path, span, module, cycle)
+        }
+        ResolveError::BothExtensions { luau, lua } => Diagnostic::e007_both_extensions(
+            file_path,
+            span,
+            &to_slash_lossy(luau),
+            &to_slash_lossy(lua),
+        ),
+        ResolveError::FileAndDirectory { file, init } => Diagnostic::e007_file_and_directory(
+            file_path,
+            span,
+            &to_slash_lossy(file),
+            &to_slash_lossy(init),
+        ),
+        ResolveError::FileBesideDirectory { file, directory } => {
+            Diagnostic::e007_file_beside_directory(
+                file_path,
+                span,
+                &to_slash_lossy(file),
+                &to_slash_lossy(directory),
+            )
+        }
+    }
+}
+
 /// Parses `source`, the module at `path`, into `allocator` and analyzes its
 /// tree.
 pub(crate) fn parse_module<'ast>(
     allocator: &'ast Allocator,
-    path: String,
+    path: PathBuf,
     relative_path: String,
     source: &'ast str,
     version: LuaVersion,
     dynamic_require: DynamicRequire,
 ) -> ParsedModule<'ast> {
     let parsed = luck_parser::parse(allocator, source, version);
+    let file_path = to_slash_lossy(&path);
     let mut errors: Vec<Diagnostic> =
-        parsed.errors.iter().map(|error| Diagnostic::e008(&path, error)).collect();
+        parsed.errors.iter().map(|error| Diagnostic::e008(&file_path, error)).collect();
     let mut warnings = Vec::new();
     let ExtractedRequires {
         sites,
@@ -109,10 +164,11 @@ pub(crate) fn parse_module<'ast>(
         &parsed.block,
         parsed.counts,
         source,
-        &path,
+        &file_path,
         version,
         dynamic_require,
     );
+    drop(file_path);
     for diag in diags {
         if diag.is_error() {
             errors.push(diag);
@@ -130,7 +186,7 @@ pub(crate) fn parse_module<'ast>(
         .first()
         .filter(|comment| comment.kind == CommentKind::Shebang)
         .map(|comment| comment.span);
-    let arena_path = allocator.alloc_str(&path);
+    let shared_path = Arc::from(path.as_path());
     let info = ModuleInfo {
         path,
         relative_path,
@@ -148,7 +204,7 @@ pub(crate) fn parse_module<'ast>(
         has_prefix_stem: source.contains(PREFIX_STEM),
         exports,
     };
-    ParsedModule { info, path: arena_path, sites, errors, warnings }
+    ParsedModule { info, path: shared_path, sites, errors, warnings }
 }
 
 /// What reading and resolving modules takes, which every thread shares.
@@ -157,8 +213,8 @@ pub(crate) struct Reader<'input> {
     version: LuaVersion,
     dynamic_require: DynamicRequire,
     /// From [`absolute_project_root`](crate::relative_path::absolute_project_root).
-    project_root: &'input str,
-    resolver: &'input Resolver<'input>,
+    project_root: &'input Path,
+    resolver: &'input Resolver,
 }
 
 /// Reading a module either parses it or fails with E010 or E012.
@@ -167,8 +223,8 @@ type Read<'ast> = Result<Box<ParsedModule<'ast>>, Diagnostic>;
 impl<'input> Reader<'input> {
     pub(crate) const fn new(
         options: &BundleOptions<'_>,
-        project_root: &'input str,
-        resolver: &'input Resolver<'input>,
+        project_root: &'input Path,
+        resolver: &'input Resolver,
     ) -> Self {
         Self {
             version: options.version,
@@ -184,17 +240,23 @@ impl<'input> Reader<'input> {
     ///
     /// Returns E010 when the file can't be read and E012 when it's too
     /// large.
-    fn read<'ast>(&self, allocator: &'ast Allocator, path: &str) -> Read<'ast> {
-        let file = read_source_file(native_path(path))
-            .map_err(|io_error| Diagnostic::e010(path, Span::default(), &io_error.to_string()))?;
+    fn read<'ast>(&self, allocator: &'ast Allocator, path: &Path) -> Read<'ast> {
+        let file = FileSystemOs.read_to_string(path).map_err(|io_error| {
+            Diagnostic::e010(&to_slash_lossy(path), Span::default(), &io_error.to_string())
+        })?;
         if file.len() > MAX_FILE_SIZE {
-            return Err(Diagnostic::e012(path, Span::default(), file.len(), MAX_FILE_SIZE));
+            return Err(Diagnostic::e012(
+                &to_slash_lossy(path),
+                Span::default(),
+                file.len(),
+                MAX_FILE_SIZE,
+            ));
         }
         let source = allocator.alloc_str(&file);
         drop(file);
         Ok(Box::new(parse_module(
             allocator,
-            path.to_owned(),
+            path.to_path_buf(),
             make_relative(path, self.project_root),
             source,
             self.version,
@@ -204,25 +266,20 @@ impl<'input> Reader<'input> {
 
     /// # Errors
     ///
-    /// Returns the resolver's diagnostic for a require that names no module,
-    /// or more than one.
+    /// Returns why `require` names no module, or more than one.
     fn resolve(
         &self,
         require: &RequireSite<'_>,
-        from_file: &str,
-    ) -> Result<ResolvedModule, Diagnostic> {
-        self.resolver.resolve(&ResolveRequest {
-            module: require.require_string,
-            from_file,
-            span: require.call_span,
-        })
+        from_file: &Path,
+    ) -> Result<Resolution, ResolveError> {
+        self.resolver.resolve(from_file, require.require_string)
     }
 
     /// Reads the module at `path` and resolves its requires on this thread.
     pub(crate) fn discover<'ast>(
         &self,
         allocator: &'ast Allocator,
-        path: &str,
+        path: &Path,
     ) -> Discovered<'ast> {
         match self.read(allocator, path) {
             Ok(module) => self.resolve_all(*module),
@@ -232,31 +289,30 @@ impl<'input> Reader<'input> {
 
     fn resolve_all<'ast>(&self, module: ParsedModule<'ast>) -> Discovered<'ast> {
         let resolutions: Vec<_> =
-            module.sites.iter().map(|site| self.resolve(site, module.path)).collect();
+            module.sites.iter().map(|site| self.resolve(site, &module.path)).collect();
         module.resolved(resolutions)
     }
 }
 
 /// The require at `site` in the module waiting on it in `slot`, which is in
 /// `from_file`.
-#[derive(Clone, Copy)]
 struct Request<'ast> {
     slot: usize,
     site: usize,
     require: RequireSite<'ast>,
-    from_file: &'ast str,
+    from_file: Arc<Path>,
 }
 
 enum Task<'ast> {
-    Read(String),
+    Read(PathBuf),
     Resolve(Vec<Request<'ast>>),
 }
 
 enum Done<'ast> {
-    Discovered(String, Box<Discovered<'ast>>),
+    Discovered(PathBuf, Box<Discovered<'ast>>),
     /// A module that makes more requires than one task resolves.
     Parsed(Box<ParsedModule<'ast>>),
-    Resolved(Vec<(Request<'ast>, Result<ResolvedModule, Diagnostic>)>),
+    Resolved(Vec<(Request<'ast>, Result<Resolution, ResolveError>)>),
 }
 
 impl<'ast> Task<'ast> {
@@ -274,7 +330,10 @@ impl<'ast> Task<'ast> {
             Self::Resolve(requests) => Done::Resolved(
                 requests
                     .into_iter()
-                    .map(|request| (request, reader.resolve(&request.require, request.from_file)))
+                    .map(|request| {
+                        let resolution = reader.resolve(&request.require, &request.from_file);
+                        (request, resolution)
+                    })
                     .collect(),
             ),
         }
@@ -284,18 +343,18 @@ impl<'ast> Task<'ast> {
 /// A module whose requires are resolving.
 struct Resolving<'ast> {
     module: ParsedModule<'ast>,
-    resolutions: Vec<Option<Result<ResolvedModule, Diagnostic>>>,
+    resolutions: Vec<Option<Result<Resolution, ResolveError>>>,
     remaining: usize,
 }
 
 /// Every module the entry reaches, read and resolved as separate tasks by one
 /// thread per arena, which share this behind one lock.
 struct Discovery<'ast> {
-    found: FxHashMap<String, Discovered<'ast>>,
+    found: FxHashMap<PathBuf, Discovered<'ast>>,
     /// Every path found, being read, or queued to be, which stops growing once
     /// more are known than a graph may hold.
-    seen: FxHashSet<String>,
-    reads: VecDeque<String>,
+    seen: FxHashSet<PathBuf>,
+    reads: VecDeque<PathBuf>,
     requests: VecDeque<Request<'ast>>,
     /// By slot, `None` once resolved.
     resolving: Vec<Option<Resolving<'ast>>>,
@@ -323,13 +382,13 @@ pub(crate) fn discover_reachable<'ast>(
     allocator: &'ast Allocator,
     spare_arenas: &'ast mut [Allocator],
     reader: Reader<'_>,
-    entry: &str,
-) -> FxHashMap<String, Discovered<'ast>> {
+    entry: &Path,
+) -> FxHashMap<PathBuf, Discovered<'ast>> {
     let shared = Shared {
         discovery: Mutex::new(Discovery {
             found: FxHashMap::default(),
-            seen: FxHashSet::from_iter([entry.to_owned()]),
-            reads: VecDeque::from([entry.to_owned()]),
+            seen: FxHashSet::from_iter([entry.to_path_buf()]),
+            reads: VecDeque::from([entry.to_path_buf()]),
             requests: VecDeque::new(),
             resolving: Vec::new(),
             spare_arenas: spare_arenas.iter_mut(),
@@ -434,15 +493,9 @@ impl<'ast> Discovery<'ast> {
             }
             Done::Parsed(module) => {
                 let slot = self.resolving.len();
-                let from_file = module.path;
-                self.requests.extend(
-                    module.sites.iter().enumerate().map(|(site, &require)| Request {
-                        slot,
-                        site,
-                        require,
-                        from_file,
-                    }),
-                );
+                self.requests.extend(module.sites.iter().enumerate().map(|(site, &require)| {
+                    Request { slot, site, require, from_file: Arc::clone(&module.path) }
+                }));
                 let resolutions = module.sites.iter().map(|_| None).collect();
                 let remaining = module.sites.len();
                 self.resolving.push(Some(Resolving { module: *module, resolutions, remaining }));
@@ -474,10 +527,10 @@ impl<'ast> Discovery<'ast> {
     }
 
     /// Queues `target` unless it's been seen.
-    fn queue_read(&mut self, target: &str) {
+    fn queue_read(&mut self, target: &Path) {
         if self.seen.len() <= MAX_MODULE_COUNT && !self.seen.contains(target) {
-            self.seen.insert(target.to_owned());
-            self.reads.push_back(target.to_owned());
+            self.seen.insert(target.to_path_buf());
+            self.reads.push_back(target.to_path_buf());
         }
     }
 }

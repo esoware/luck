@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use luck_allocator::Allocator;
 use luck_core::LuaTarget;
-use luck_resolver::read_source_file;
+use luck_resolver::{FileSystem as _, FileSystemOs};
 
 use crate::exit::Exit;
 use crate::output::OUTPUT_BUFFER_BYTES;
@@ -71,7 +71,7 @@ impl CheckArgs {
 }
 
 fn check_file(allocator: &Allocator, file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
-    let source = match read_source_file(file_path) {
+    let source = match FileSystemOs.read_to_string(file_path) {
         Ok(text) => text,
         Err(error) => {
             return Some(

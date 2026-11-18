@@ -8,6 +8,7 @@ use luck_ast::{
     spans_past_nesting_cap,
 };
 use luck_core::Diagnostic;
+use luck_resolver::to_slash_lossy;
 use luck_token::{LuaVersion, Span, chunk_header};
 
 use crate::emitter::{self, HOLE, Key, Plan, Wrapper};
@@ -182,9 +183,10 @@ pub(crate) fn overflow_errors(
     wrapper: Wrapper,
 ) -> Vec<Diagnostic> {
     let levels = wrapper.levels();
+    let file_path = to_slash_lossy(&module.path);
     spans_past_nesting_cap(block, levels)
         .into_iter()
-        .map(|span| Diagnostic::e013(&module.path, span, levels, MAX_NESTING_DEPTH))
+        .map(|span| Diagnostic::e013(&file_path, span, levels, MAX_NESTING_DEPTH))
         .collect()
 }
 

@@ -1,10 +1,10 @@
-#[cfg(test)]
+// Lets clippy.toml's allow-*-in-tests settings cover the shared helpers, not
+// just the `#[test]` functions.
+#![cfg(test)]
+
 mod common;
 
-#[cfg(test)]
 mod bugs;
 mod bundle;
-#[cfg(test)]
 mod depth;
-#[cfg(test)]
 mod stack;

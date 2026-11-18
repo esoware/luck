@@ -3,7 +3,7 @@ use core::num::NonZero;
 use core::panic::AssertUnwindSafe;
 use core::{iter, mem};
 use std::panic;
-use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
+use std::path::{Component, MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
 use std::sync::mpsc;
 use std::{env, thread};
 
@@ -17,7 +17,7 @@ use luck_config::{
     load_or_discover_config, load_with_extends,
 };
 use luck_core::LuaTarget;
-use luck_resolver::{native_path, normalize_path};
+use luck_resolver::{FileSystem as _, FileSystemOs};
 use rayon::ThreadPoolBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -250,7 +250,9 @@ pub(crate) fn project_files<Settings>(
     // One argument can't reach a file twice, so only several pay for this.
     if requested_args.len() > 1 {
         let mut seen_paths = FxHashSet::default();
-        found.retain(|(path, _)| seen_paths.insert(normalize_path(path)));
+        found.retain(|(path, _)| {
+            seen_paths.insert(FileSystemOs.canonicalize(path).unwrap_or_else(|_| path.clone()))
+        });
     }
 
     if found.is_empty() && !can_match_nothing {
@@ -282,9 +284,14 @@ fn split_glob(arg: &str) -> (PathBuf, String) {
     let segments: Vec<&str> = slashed.strip_prefix("./").unwrap_or(&slashed).split('/').collect();
     let literal_count = segments.iter().take_while(|segment| !is_glob(segment)).count();
     let (literal, pattern) = segments.split_at(literal_count);
-    // The trailing `/` keeps `/` and `C:/` roots instead of emptying them.
-    let base = if literal.is_empty() { ".".to_owned() } else { format!("{}/", literal.join("/")) };
-    (native_path(&base), pattern.join("/"))
+    // The trailing separator keeps `/` and `C:\` roots instead of emptying
+    // them.
+    let base = if literal.is_empty() {
+        ".".to_owned()
+    } else {
+        format!("{}{MAIN_SEPARATOR}", literal.join(MAIN_SEPARATOR_STR))
+    };
+    (PathBuf::from(base), pattern.join("/"))
 }
 
 /// `path` from `working_directory` with `.` and `..` resolved without touching

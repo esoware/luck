@@ -1,6 +1,7 @@
 use core::fmt::Write as _;
 use core::iter;
 use core::ops::Range;
+use std::path::PathBuf;
 
 use luck_allocator::Allocator;
 use luck_ast::MAX_NESTING_DEPTH;
@@ -33,7 +34,7 @@ pub struct LineMapEntry {
     pub bundle_end_line: usize,
     /// The module's canonical path. The line map is local debug data, so it
     /// may name the host.
-    pub path: String,
+    pub path: PathBuf,
 }
 
 /// What a bundle holds, which its text and its tree both follow.
@@ -782,6 +783,8 @@ fn choose_prefix(modules: &[ModuleInfo<'_>]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use rustc_hash::FxHashMap;
 
     use super::*;
@@ -790,7 +793,7 @@ mod tests {
 
     struct ModuleFixture<'ast> {
         info: ModuleInfo<'ast>,
-        resolved_paths: Vec<String>,
+        resolved_paths: Vec<PathBuf>,
     }
 
     fn module<'ast>(
@@ -802,7 +805,7 @@ mod tests {
     ) -> ModuleFixture<'ast> {
         let ParsedModule { mut info, sites, errors, .. } = parse_module(
             allocator,
-            path.to_owned(),
+            PathBuf::from(path),
             path.to_owned(),
             allocator.alloc_str(source),
             version,
@@ -817,7 +820,7 @@ mod tests {
                     .iter()
                     .find(|(require_string, _)| *require_string == site.require_string)
                     .unwrap_or_else(|| panic!("no resolution for {:?}", site.require_string));
-                resolved_paths.push(resolved.1.to_owned());
+                resolved_paths.push(PathBuf::from(resolved.1));
                 Dependency {
                     require_string: site.require_string,
                     target: ModuleId(usize::MAX),
@@ -832,7 +835,7 @@ mod tests {
     /// as entry, laid out as `DependencyGraph::build` lays it out, entry first.
     fn graph(mut fixtures: Vec<ModuleFixture<'_>>) -> DependencyGraph<'_> {
         fixtures.rotate_right(1);
-        let ids_by_path: FxHashMap<String, ModuleId> = fixtures
+        let ids_by_path: FxHashMap<PathBuf, ModuleId> = fixtures
             .iter()
             .enumerate()
             .map(|(i, fixture)| (fixture.info.path.clone(), ModuleId(i)))
@@ -1450,7 +1453,7 @@ print(x, y)
     fn find_line_entry<'map>(line_map: &'map [LineMapEntry], path: &str) -> &'map LineMapEntry {
         line_map
             .iter()
-            .find(|entry| entry.path == path)
+            .find(|entry| entry.path == Path::new(path))
             .unwrap_or_else(|| panic!("no line map entry for {path}"))
     }
 
@@ -1552,7 +1555,7 @@ print(\"c\")
             [LineMapEntry {
                 bundle_start_line: 1,
                 bundle_end_line: 3,
-                path: "src/main.lua".to_owned(),
+                path: PathBuf::from("src/main.lua"),
             }]
         );
     }

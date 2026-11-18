@@ -5,6 +5,7 @@ use clap::Args;
 use luck_bundler::{BundleOptions, DynamicRequire, LineMapEntry, bundle, bundle_minified};
 use luck_config::check_output_paths;
 use luck_core::LuaTarget;
+use luck_resolver::to_slash_lossy;
 
 use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
@@ -115,7 +116,7 @@ fn write_line_map(map_path: &Path, line_map: &[LineMapEntry]) -> Result<(), Exit
             serde_json::json!({
                 "bundleStartLine": entry.bundle_start_line,
                 "bundleEndLine": entry.bundle_end_line,
-                "path": entry.path,
+                "path": to_slash_lossy(&entry.path),
             })
         })
         .collect();

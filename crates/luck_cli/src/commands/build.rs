@@ -12,7 +12,6 @@ use luck_config::{
     resolve_build_config,
 };
 use luck_core::Diagnostic;
-use luck_resolver::{native_path, normalize_path};
 use luck_token::{LuaVersion, chunk_start, has_shebang};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
@@ -54,7 +53,7 @@ enum BuildFailure {
     /// Bundling failed and the diagnostics are already rendered. Watch mode
     /// keeps going and watches `source_files`, since an edit to one of them
     /// may fix the build.
-    Failed { source_files: Vec<String> },
+    Failed { source_files: Vec<PathBuf> },
     /// The output can't be written. The run ends with this exit code, even in
     /// watch mode.
     Fatal(Exit),
@@ -163,12 +162,10 @@ impl BuildArgs {
         }
     }
 
-    fn watched_directories(&self, source_files: &[String]) -> Vec<PathBuf> {
+    fn watched_directories(&self, source_files: &[PathBuf]) -> Vec<PathBuf> {
         let config_path = self.config.as_deref();
-        let mut directories: Vec<PathBuf> = source_files
-            .iter()
-            .filter_map(|file| native_path(file).parent().map(Path::to_path_buf))
-            .collect();
+        let mut directories: Vec<PathBuf> =
+            source_files.iter().filter_map(|file| file.parent().map(Path::to_path_buf)).collect();
         directories.extend(config_path.map(config_directory));
         // Watch the discovered config too, or editing it never triggers a
         // rebuild.
@@ -200,7 +197,7 @@ impl BuildArgs {
         &self,
         arenas: &mut [Allocator],
         verbosity: Verbosity,
-    ) -> Result<Vec<String>, Exit> {
+    ) -> Result<Vec<PathBuf>, Exit> {
         let Ok(configs) = self.resolved_configs() else {
             return Ok(Vec::new());
         };
@@ -228,7 +225,7 @@ impl BuildArgs {
         arenas: &mut [Allocator],
         config: &BuildConfig,
         verbosity: Verbosity,
-    ) -> Result<Vec<String>, BuildFailure> {
+    ) -> Result<Vec<PathBuf>, BuildFailure> {
         let start = Instant::now();
         // The arenas outlive each build, so a rebuild reuses their memory.
         for arena in &mut *arenas {
@@ -245,12 +242,12 @@ impl BuildArgs {
             print_diags(&errors, version);
             let source_files = errors
                 .iter()
-                .map(|diag| diag.file_path.clone())
-                .chain([normalize_path(&config.entry)])
+                .map(|diag| PathBuf::from(&diag.file_path))
+                .chain([config.entry.clone()])
                 .collect();
             BuildFailure::Failed { source_files }
         };
-        let check_output = |source_files: &[String]| {
+        let check_output = |source_files: &[PathBuf]| {
             check_output_paths(source_files, [&config.output])
                 .map_err(|message| BuildFailure::Fatal(usage_error(message)))
         };

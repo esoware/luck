@@ -7,7 +7,7 @@ use clap::Args;
 use luck_allocator::Allocator;
 use luck_config::{Editorconfigs, LuckConfig};
 use luck_formatter::FormatOptions;
-use luck_resolver::read_source_file;
+use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_token::LuaVersion;
 
 use crate::exit::{Exit, usage_error};
@@ -236,7 +236,7 @@ impl FmtArgs {
         file: &ProjectFile<()>,
     ) -> FileOutcome {
         let file_path = file.path.as_path();
-        let source = match read_source_file(file_path) {
+        let source = match FileSystemOs.read_to_string(file_path) {
             Ok(text) => text,
             Err(error) => {
                 return FileOutcome::Failed(
