@@ -3,11 +3,13 @@
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
-use core::future::ready;
+use core::future::{poll_fn, ready};
+use core::pin::pin;
+use core::task::Poll;
 
 use luck_allocator::Allocator;
 use luck_linter::LintDiagnostic;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::{spawn_blocking, yield_now};
 use tower_lsp_server::jsonrpc::{Error as JsonRpcError, Result as JsonRpcResult};
 use tower_lsp_server::ls_types::{
@@ -100,6 +102,9 @@ pub struct Backend<N: Notifier = Client> {
     /// it.
     sync: Mutex<Option<Allocator>>,
     settings_cache: SettingsCache,
+    /// Ends the wait on a request the client never answers, which
+    /// tower-lsp-server would otherwise wait for past `exit`.
+    shut_down: Notify,
 }
 
 impl<N: Notifier> Backend<N> {
@@ -109,6 +114,7 @@ impl<N: Notifier> Backend<N> {
             documents: RwLock::new(BTreeMap::new()),
             sync: Mutex::new(None),
             settings_cache: SettingsCache::default(),
+            shut_down: Notify::new(),
         }
     }
 
@@ -403,8 +409,18 @@ impl<N: Notifier> LanguageServer for Backend<N> {
                 .unwrap_or_default(),
             ),
         };
-        let () = self.notifier.register_capability(vec![watcher]).await;
-        self.notifier.log_message(MessageType::INFO, "luck_lsp initialized".to_owned()).await;
+        let mut registered = pin!(self.notifier.register_capability(vec![watcher]));
+        let mut shut_down = pin!(self.shut_down.notified());
+        let is_registered = poll_fn(|cx| {
+            if registered.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(true);
+            }
+            shut_down.as_mut().poll(cx).map(|()| false)
+        })
+        .await;
+        if is_registered {
+            self.notifier.log_message(MessageType::INFO, "luck_lsp initialized".to_owned()).await;
+        }
     }
 
     async fn did_change_watched_files(&self, _params: DidChangeWatchedFilesParams) {
@@ -435,6 +451,7 @@ impl<N: Notifier> LanguageServer for Backend<N> {
     }
 
     fn shutdown(&self) -> impl Future<Output = JsonRpcResult<()>> {
+        self.shut_down.notify_one();
         ready(Ok(()))
     }
 
