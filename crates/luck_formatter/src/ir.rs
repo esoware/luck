@@ -195,10 +195,6 @@ pub(crate) struct Formatter<'ast> {
     scratch: String,
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
     pub(crate) fn new(
         allocator: &'ast Allocator,

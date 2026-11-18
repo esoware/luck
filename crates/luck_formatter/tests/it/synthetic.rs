@@ -2,8 +2,8 @@
 //! on, as it always has in the source-based tests.
 
 use luck_ast::{
-    Block, FieldSpec, FunctionSignature, InterpolatedStringPart, MAX_NESTING_DEPTH, Synth,
-    SyntheticComment, Type, TypeFieldAccess, TypeFieldSpec, block_nesting_depth,
+    Block, FieldSpec, FunctionSignature, GetSpan as _, InterpolatedStringPart, MAX_NESTING_DEPTH,
+    Synth, SyntheticComment, Type, TypeFieldAccess, TypeFieldSpec, block_nesting_depth,
 };
 use luck_formatter::{CollapseSimpleStatement, Comments, FormatOptions, format_block};
 use luck_testgen::with_the_smallest_stack;

@@ -1,4 +1,4 @@
-use luck_ast::{Expression, LocalAssignment, Statement, is_multi_value};
+use luck_ast::{Expression, GetSpan as _, LocalAssignment, Statement, is_multi_value};
 use luck_token::Span;
 
 use crate::diagnostic::Finding;

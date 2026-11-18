@@ -8,8 +8,9 @@ use core::{iter, slice};
 
 use luck_ast::{
     Assignment, AttributedName, Block, CompoundAssignment, Expression, FunctionAttribute,
-    FunctionName, GenericFor, IfStatement, LastStatement, LocalAssignment, LocalFunctionKind,
-    NumericFor, Statement, Type, TypeDeclaration, TypeDeclarationValue, unwrap_parentheses,
+    FunctionName, GenericFor, GetSpan as _, IfStatement, LastStatement, LocalAssignment,
+    LocalFunctionKind, NumericFor, Statement, Type, TypeDeclaration, TypeDeclarationValue,
+    unwrap_parentheses,
 };
 
 use crate::CollapseSimpleStatement;
@@ -34,10 +35,6 @@ fn is_simple_block(block: &Block<'_>) -> bool {
     matches!((stmt_count, &block.last_stmt), (0, Some(_)) | (1, None))
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
     pub(crate) fn write_stmt(&mut self, stmt: &Statement<'ast>) {
         match stmt {

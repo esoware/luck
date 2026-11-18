@@ -1,4 +1,4 @@
-use luck_ast::{Block, Statement};
+use luck_ast::{Block, GetSpan as _, Statement};
 use rustc_hash::FxHashMap;
 
 use crate::cfg::{Exit, Exits, FlowGraph};

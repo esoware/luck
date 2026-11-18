@@ -4,9 +4,8 @@ use luck_allocator::Box;
 use luck_token::{BinOp, OperandSide, UnOp};
 
 use crate::expr::{
-    BinaryLink, BinaryOp, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionDef,
-    IfExpression, MethodCall, ParenthesizedExpression, Suffix, SuffixedExpression,
-    TableConstructor, TypeCast, UnaryOp, Var,
+    BinaryLink, BinaryOp, ElseIfExprClause, Expression, Field, FunctionArgs, Suffix,
+    SuffixedExpression, TableConstructor, Var,
 };
 use crate::function::FunctionAttribute;
 use crate::one_or_more::OneOrMore;
@@ -146,7 +145,7 @@ impl<'ast> Synth<'ast> {
             return chain;
         }
         let suffixes = OneOrMore::new(suffix, self.allocator);
-        self.boxed(SuffixedExpression { span: self.next_span(), prefix: wrapped, suffixes })
+        SuffixedExpression::boxed(self.next_span(), wrapped, suffixes, self.allocator)
     }
 
     /// `prefix.name` when `name` is a safe identifier (in the pinned dialect,
@@ -183,18 +182,18 @@ impl<'ast> Synth<'ast> {
         let run = match operands {
             (Expression::BinaryOp(mut run), operand) if run.precedence().0 == level => {
                 run.span = span;
-                run.links.push(BinaryLink { op, operand }, self.allocator);
+                run.links.push(BinaryLink::new(op, operand), self.allocator);
                 run
             }
             (first, Expression::BinaryOp(mut run)) if run.precedence().0 == level => {
                 let second = mem::replace(&mut run.first, first);
                 run.span = span;
-                run.links.insert(0, BinaryLink { op, operand: second }, self.allocator);
+                run.links.insert(0, BinaryLink::new(op, second), self.allocator);
                 run
             }
             (first, operand) => {
-                let links = OneOrMore::new(BinaryLink { op, operand }, self.allocator);
-                self.boxed(BinaryOp { span, first, links })
+                let links = OneOrMore::new(BinaryLink::new(op, operand), self.allocator);
+                BinaryOp::boxed(span, first, links, self.allocator)
             }
         };
         Expression::BinaryOp(run)
@@ -222,13 +221,12 @@ impl<'ast> Synth<'ast> {
             | Expression::TypeCast(_)
             | Expression::Error(_) => operand,
         };
-        Expression::UnaryOp(self.boxed(UnaryOp { span: self.next_span(), op, operand: wrapped }))
+        Expression::new_unary_op(self.next_span(), op, wrapped, self.allocator)
     }
 
     #[must_use]
     pub fn parenthesized(&self, expr: Expression<'ast>) -> Expression<'ast> {
-        let span = self.next_span();
-        Expression::Parenthesized(self.boxed(ParenthesizedExpression { span, expr }))
+        Expression::new_parenthesized(self.next_span(), expr, self.allocator)
     }
 
     /// Truncates a call or `...`, the only multi-value forms, to one value by
@@ -266,7 +264,7 @@ impl<'ast> Synth<'ast> {
             | Expression::InterpolatedString(_)
             | Expression::Error(_) => expr,
         };
-        Expression::TypeCast(self.boxed(TypeCast { span: self.next_span(), expr: wrapped, ty }))
+        Expression::new_type_cast(self.next_span(), wrapped, ty, self.allocator)
     }
 
     /// Luau: `expr<<T, U>>`.
@@ -290,7 +288,7 @@ impl<'ast> Synth<'ast> {
         Types: IntoIterator<Item = Type<'ast>>,
         Types::IntoIter: ExactSizeIterator,
     {
-        self.boxed(TypeArgs { span: self.next_span(), args: self.list(types) })
+        TypeArgs::boxed(self.next_span(), self.list(types), self.allocator)
     }
 
     fn wrap_binary_operand(
@@ -448,8 +446,8 @@ impl<'ast> Synth<'ast> {
         type_args: Option<Box<'ast, TypeArgs<'ast>>>,
         args: FunctionArgs<'ast>,
     ) -> Expression<'ast> {
-        let call = MethodCall { name: self.name(name), type_args, args };
-        Expression::Suffixed(self.suffixed(receiver, Suffix::MethodCall(self.boxed(call))))
+        let call = Suffix::new_method_call(self.name(name), type_args, args, self.allocator);
+        Expression::Suffixed(self.suffixed(receiver, call))
     }
 
     fn parenthesized_args<Args>(&self, args: Args) -> FunctionArgs<'ast>
@@ -510,7 +508,7 @@ impl<'ast> Synth<'ast> {
                 Field::Bracketed { span: self.next_span(), key, value }
             }
         }));
-        self.boxed(TableConstructor { span, fields, has_trailing_separator: false })
+        TableConstructor::boxed(span, fields, false, self.allocator)
     }
 
     /// For attributes, generics, typed parameters, varargs, or a return type, use
@@ -537,11 +535,12 @@ impl<'ast> Synth<'ast> {
         Attributes: IntoIterator<Item = FunctionAttribute<'ast>>,
         Attributes::IntoIter: ExactSizeIterator,
     {
-        Expression::FunctionDef(self.boxed(FunctionDef {
-            span: self.next_span(),
-            attributes: self.list(attributes),
-            body: self.function_body(signature, body),
-        }))
+        Expression::new_function_def(
+            self.next_span(),
+            self.list(attributes),
+            self.function_body(signature, body),
+            self.allocator,
+        )
     }
 
     /// Luau: `if condition then then_expr elseif ... else else_expr`.
@@ -559,15 +558,16 @@ impl<'ast> Synth<'ast> {
     {
         let span = self.next_span();
         let elseif_clauses = self.list(elseifs.into_iter().map(|(elseif_condition, expr)| {
-            ElseIfExprClause { span: self.next_span(), condition: elseif_condition, expr }
+            ElseIfExprClause::new(self.next_span(), elseif_condition, expr)
         }));
-        Expression::IfExpression(self.boxed(IfExpression {
+        Expression::new_if_expr(
             span,
             condition,
             then_expr,
             elseif_clauses,
             else_expr,
-        }))
+            self.allocator,
+        )
     }
 }
 

@@ -4,7 +4,7 @@
 //! Any other table stays flat if it fits and otherwise breaks one field per
 //! line, keeping each comment with the field it leads or trails.
 
-use luck_ast::{Expression, Field, TableConstructor};
+use luck_ast::{Expression, Field, GetSpan as _, TableConstructor};
 use luck_token::{Span, has_line_break};
 
 use crate::ir::{Formatter, LineMode};
@@ -26,10 +26,6 @@ fn is_fillable(table: &TableConstructor<'_>) -> bool {
     })
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
     /// Whether the source spreads the table over several lines with two
     /// fields sharing one of them. A synthetic table has no source and never

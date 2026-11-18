@@ -1,4 +1,4 @@
-use luck_ast::Expression;
+use luck_ast::{Expression, GetSpan as _};
 use luck_token::{BinOp, Span, UnOp};
 
 use crate::diagnostic::Finding;

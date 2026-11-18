@@ -1,7 +1,7 @@
 use core::ptr;
 
 use luck_allocator::Allocator;
-use luck_ast::{Call, Expression, FunctionArgs, Statement, Visitor};
+use luck_ast::{Expression, FunctionArgs, GetSpan as _, Statement, Visit};
 use luck_parser::{parse, parse_with_tokens};
 use luck_testgen::{broken_sources, sources_past_the_nesting_cap, with_the_smallest_stack};
 use luck_token::LuaVersion;
@@ -81,13 +81,13 @@ struct ArgLists<'ast> {
     lists: Vec<(Vec<&'ast str>, usize)>,
 }
 
-impl<'ast> Visitor<'ast> for ArgLists<'ast> {
-    fn visit_call(&mut self, call: Call<'ast>) {
-        if let FunctionArgs::Parenthesized { args, .. } = call.args {
+impl<'ast> Visit<'ast> for ArgLists<'ast> {
+    fn visit_function_args(&mut self, function_args: &'ast FunctionArgs<'ast>) {
+        if let FunctionArgs::Parenthesized { args, .. } = function_args {
             let texts = args.iter().map(|arg| arg.span().text(self.source)).collect();
             self.lists.push((texts, args.capacity()));
         }
-        self.walk_call(call);
+        self.walk_function_args(function_args);
     }
 }
 

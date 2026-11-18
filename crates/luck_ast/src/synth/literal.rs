@@ -1,6 +1,6 @@
 use luck_token::{BinOp, LuaVersion, UnOp, encode_string};
 
-use crate::expr::{Expression, InterpolatedSegment, InterpolatedString};
+use crate::expr::{Expression, InterpolatedSegment};
 use crate::leaf::Literal;
 use crate::synth::Synth;
 
@@ -12,10 +12,6 @@ pub enum InterpolatedStringPart<'text, 'ast> {
     Expr(Expression<'ast>),
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the synthesizer is one type with its constructors split by node family"
-)]
 impl<'ast> Synth<'ast> {
     /// Prefer [`Synth::number_f64`] / [`Synth::number_i64`] for runtime values.
     #[must_use]
@@ -182,14 +178,13 @@ impl<'ast> Synth<'ast> {
                 InterpolatedStringPart::Text(more) => text.push_str(more),
                 InterpolatedStringPart::Expr(expr) => {
                     let piece = self.literal(&escape_interpolated_text(&text));
-                    scratch.push(InterpolatedSegment { text: piece, expr });
+                    scratch.push(InterpolatedSegment::new(piece, expr));
                     text.clear();
                 }
             }
         }
         let tail = self.literal(&escape_interpolated_text(&text));
-        let segments = self.list(scratch);
-        Expression::InterpolatedString(self.boxed(InterpolatedString { span, segments, tail }))
+        Expression::new_interpolated_string(span, self.list(scratch), tail, self.allocator)
     }
 }
 

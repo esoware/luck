@@ -81,7 +81,7 @@ fn member_completions(
     // A reference at the root is exact. Text mid-typing often has none, so
     // that case falls back to the nearest declaration before the cursor.
     let (root_local, reaches_host_global) =
-        tree.reference_of(&Name { text: root.into(), index: None, span: *root_span }).map_or_else(
+        tree.reference_of(&Name::new(root.into(), None, *root_span)).map_or_else(
             || {
                 let local = semantic.nearest_local(root, offset).map(|symbol| symbol.id);
                 (local, local.is_none())

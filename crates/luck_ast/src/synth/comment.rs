@@ -1,5 +1,6 @@
 use luck_token::CommentPosition;
 
+use crate::span::GetSpan as _;
 use crate::stmt::{Block, Statement};
 
 /// Comments live outside the AST, keyed by `attached_to` (the anchor node's

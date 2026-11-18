@@ -225,7 +225,9 @@ impl<'ast> SemanticAnalysis<'ast> {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_ast::{Expression, FunctionBody, LastStatement, Name, Statement, TableConstructor};
+    use luck_ast::{
+        Expression, FunctionBody, GetSpan as _, LastStatement, Name, Statement, TableConstructor,
+    };
 
     use super::*;
     use crate::fixtures::parse;
@@ -262,7 +264,7 @@ mod tests {
             .iter()
             .rfind(|reference| tree.name(reference.name) == "print")
             .expect("the source references print");
-        tree.reaches_host_global(&Name { text: "print".into(), index: None, span: print.span })
+        tree.reaches_host_global(&Name::new("print".into(), None, print.span))
     }
 
     #[test]

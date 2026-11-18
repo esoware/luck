@@ -2,9 +2,11 @@ use core::mem;
 use std::collections::hash_map::Entry;
 
 use luck_ast::{
-    Assignment, Block, CompoundAssignment, Expression, FunctionBody, FunctionDecl, GenericFor,
-    GlobalDeclaration, IfStatement, LastStatement, LocalAssignment, Name, NumericFor, Statement,
-    SuffixedExpression, TableConstructor, TreeCounts, TypeDeclarationValue, Var, Visitor,
+    Assignment, Block, CompoundAssignment, DoBlock, Expression, FunctionAttribute, FunctionBody,
+    FunctionDecl, GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar, IfStatement,
+    LastStatement, LocalAssignment, LocalFunction, Name, NumericFor, RepeatLoop, Statement,
+    SuffixedExpression, TableConstructor, TreeCounts, TypeDeclaration, TypeDeclarationValue, Var,
+    Visit, WhileLoop,
 };
 use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
@@ -456,7 +458,7 @@ where
             Var::Name(name) => self.reference(name, kind),
             Var::Suffixed(chain) => {
                 self.sink.chain(chain, true);
-                self.walk_suffixed(chain);
+                self.walk_suffixed_expr(chain);
             }
         }
     }
@@ -468,27 +470,6 @@ where
         if let Some(statement) = self.tree.positions.get_mut(first_value..) {
             statement.rotate_left(first_target.saturating_sub(first_value));
         }
-    }
-
-    fn visit_assignment(&mut self, assignment: &'ast Assignment<'ast>) {
-        let first_value = self.tree.positions.len();
-        for expr in &assignment.values {
-            self.visit_expr(expr);
-        }
-        let first_target = self.tree.positions.len();
-        for var in &assignment.targets {
-            self.reference_var(var, ReferenceKind::Write);
-        }
-        self.reorder_positions(first_value, first_target);
-    }
-
-    // Luau
-    fn visit_compound_assignment(&mut self, compound: &'ast CompoundAssignment<'ast>) {
-        let first_value = self.tree.positions.len();
-        self.visit_expr(&compound.expr);
-        let first_target = self.tree.positions.len();
-        self.reference_var(&compound.var, ReferenceKind::ReadWrite);
-        self.reorder_positions(first_value, first_target);
     }
 
     /// Luau: the annotations of a function's signature. The parameters, and
@@ -530,22 +511,75 @@ where
         self.pop_scope();
     }
 
-    fn visit_local_assignment(&mut self, local: &'ast LocalAssignment<'ast>) {
+    fn visit_function_attributes(&mut self, attributes: &'ast [FunctionAttribute<'ast>]) {
+        for attribute in attributes {
+            self.visit_function_attribute(attribute);
+        }
+    }
+}
+
+impl<'ast, Sink, Filter> Visit<'ast> for Builder<'ast, '_, Sink, Filter>
+where
+    Sink: NodeSink<'ast>,
+    Filter: NameFilter,
+{
+    fn visit_block(&mut self, block: &'ast Block<'ast>) {
+        self.sink.block(block);
+        if self.tree.version.has_type_syntax() {
+            self.record_type_names(block);
+        }
+        self.walk_block(block);
+    }
+
+    fn visit_function_body(&mut self, function_body: &'ast FunctionBody<'ast>) {
+        self.visit_signature_annotations(function_body);
+        self.visit_function_scope(function_body, false);
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
+        self.sink.stmt(stmt);
+        self.walk_stmt(stmt);
+    }
+
+    fn visit_assignment(&mut self, assignment: &'ast Assignment<'ast>) {
+        let first_value = self.tree.positions.len();
+        for expr in &assignment.values {
+            self.visit_expr(expr);
+        }
+        let first_target = self.tree.positions.len();
+        for var in &assignment.targets {
+            self.reference_var(var, ReferenceKind::Write);
+        }
+        self.reorder_positions(first_value, first_target);
+    }
+
+    // Luau
+    fn visit_compound_assignment(&mut self, compound_assignment: &'ast CompoundAssignment<'ast>) {
+        let first_value = self.tree.positions.len();
+        self.visit_expr(&compound_assignment.expr);
+        let first_target = self.tree.positions.len();
+        self.reference_var(&compound_assignment.var, ReferenceKind::ReadWrite);
+        self.reorder_positions(first_value, first_target);
+    }
+
+    fn visit_local_assignment(&mut self, local_assignment: &'ast LocalAssignment<'ast>) {
         // Annotations and initializers can't see the names being declared.
-        for attributed in &local.names {
+        for attributed in &local_assignment.names {
             if let Some(annotation) = &attributed.type_annotation {
                 self.visit_type(annotation);
             }
         }
-        for expr in &local.exprs {
+        for expr in &local_assignment.exprs {
             self.visit_expr(expr);
         }
-        let has_one_initializer_per_name = local.exprs.len() == local.names.len();
-        for (i, attributed) in local.names.iter().enumerate() {
+        let has_one_initializer_per_name =
+            local_assignment.exprs.len() == local_assignment.names.len();
+        for (i, attributed) in local_assignment.names.iter().enumerate() {
             let Some(id) = self.declare_name(&attributed.name, SymbolKind::Local) else {
                 continue;
             };
-            if has_one_initializer_per_name && let Some(initializer) = local.exprs.get(i) {
+            if has_one_initializer_per_name && let Some(initializer) = local_assignment.exprs.get(i)
+            {
                 self.initialized_locals.push((id, initializer));
             }
             let is_close = attributed
@@ -553,14 +587,26 @@ where
                 .as_ref()
                 .is_some_and(|attribute| attribute.name.text == "close");
             if let Some(symbol) = self.symbol_mut(id) {
-                symbol.is_exported = local.kind.is_exported(); // Luau
+                symbol.is_exported = local_assignment.kind.is_exported(); // Luau
                 symbol.is_close = is_close;
             }
         }
     }
 
+    fn visit_local_function(&mut self, local_function: &'ast LocalFunction<'ast>) {
+        self.visit_function_attributes(&local_function.attributes);
+        self.visit_signature_annotations(&local_function.body);
+        // Declared before the body so the function can call itself.
+        if let Some(id) = self.declare_name(&local_function.name, SymbolKind::FunctionName)
+            && let Some(symbol) = self.symbol_mut(id)
+        {
+            symbol.is_exported = local_function.kind.is_exported(); // Luau
+        }
+        self.visit_function_scope(&local_function.body, false);
+    }
+
     fn visit_function_decl(&mut self, function_decl: &'ast FunctionDecl<'ast>) {
-        self.walk_function_attributes(&function_decl.attributes);
+        self.visit_function_attributes(&function_decl.attributes);
         // `function f()` writes `f`, but `function t.m()` and
         // `function t:m()` only read `t`. Recording a write would set off
         // unused and overwritten warnings on the usual module pattern
@@ -573,6 +619,23 @@ where
         }
         self.visit_signature_annotations(&function_decl.body);
         self.visit_function_scope(&function_decl.body, function_decl.name.method.is_some());
+    }
+
+    fn visit_do_block(&mut self, do_block: &'ast DoBlock<'ast>) {
+        self.visit_scoped_block(ScopeKind::Block, &do_block.block);
+    }
+
+    fn visit_while_loop(&mut self, while_loop: &'ast WhileLoop<'ast>) {
+        self.visit_expr(&while_loop.condition);
+        self.visit_scoped_block(ScopeKind::Loop, &while_loop.block);
+    }
+
+    fn visit_repeat_loop(&mut self, repeat_loop: &'ast RepeatLoop<'ast>) {
+        self.push_scope(ScopeKind::Loop);
+        self.visit_block(&repeat_loop.block);
+        // The `until` condition can see the body's locals.
+        self.visit_expr(&repeat_loop.condition);
+        self.pop_scope();
     }
 
     fn visit_if_stmt(&mut self, if_stmt: &'ast IfStatement<'ast>) {
@@ -631,94 +694,31 @@ where
             self.declare_global(&attributed.name, is_assigned);
         }
     }
-}
 
-impl<'ast, Sink, Filter> Visitor<'ast> for Builder<'ast, '_, Sink, Filter>
-where
-    Sink: NodeSink<'ast>,
-    Filter: NameFilter,
-{
-    fn visit_block(&mut self, block: &'ast Block<'ast>) {
-        self.sink.block(block);
-        if self.tree.version.has_type_syntax() {
-            self.record_type_names(block);
-        }
-        self.walk_block(block);
+    // Lua 5.5: declared before the body, so the body reads the global.
+    fn visit_global_function(&mut self, global_function: &'ast GlobalFunction<'ast>) {
+        self.declare_global(&global_function.name, true);
+        self.visit_function_body(&global_function.body);
     }
 
-    fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
-        self.visit_signature_annotations(body);
-        self.visit_function_scope(body, false);
+    // Lua 5.5
+    fn visit_global_star(&mut self, _global_star: &'ast GlobalStar<'ast>) {
+        self.is_global_star = true;
     }
 
-    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-        self.sink.stmt(stmt);
-        match stmt {
-            Statement::LocalAssignment(local) => self.visit_local_assignment(local),
-            Statement::Assignment(assignment) => self.visit_assignment(assignment),
-            Statement::LocalFunction(function) => {
-                self.walk_function_attributes(&function.attributes);
-                self.visit_signature_annotations(&function.body);
-                // Declared before the body so the function can call itself.
-                if let Some(id) = self.declare_name(&function.name, SymbolKind::FunctionName)
-                    && let Some(symbol) = self.symbol_mut(id)
-                {
-                    symbol.is_exported = function.kind.is_exported(); // Luau
-                }
-                self.visit_function_scope(&function.body, false);
-            }
-            Statement::FunctionDecl(function_decl) => self.visit_function_decl(function_decl),
-            Statement::DoBlock(do_block) => {
-                self.visit_scoped_block(ScopeKind::Block, &do_block.block);
-            }
-            Statement::WhileLoop(while_loop) => {
-                self.visit_expr(&while_loop.condition);
-                self.visit_scoped_block(ScopeKind::Loop, &while_loop.block);
-            }
-            Statement::RepeatLoop(repeat_loop) => {
-                self.push_scope(ScopeKind::Loop);
-                self.visit_block(&repeat_loop.block);
-                // The `until` condition can see the body's locals.
-                self.visit_expr(&repeat_loop.condition);
-                self.pop_scope();
-            }
-            Statement::IfStatement(if_stmt) => self.visit_if_stmt(if_stmt),
-            Statement::NumericFor(numeric_for) => self.visit_numeric_for(numeric_for),
-            Statement::GenericFor(generic_for) => self.visit_generic_for(generic_for),
-            Statement::CompoundAssignment(compound) => self.visit_compound_assignment(compound),
-            Statement::GlobalDeclaration(global_declaration) => {
-                self.visit_global_declaration(global_declaration);
-            }
-            // Lua 5.5: declared before the body, so the body reads the global.
-            Statement::GlobalFunction(global_function) => {
-                self.declare_global(&global_function.name, true);
-                self.visit_function_body(&global_function.body);
-            }
-            // Lua 5.5
-            Statement::GlobalStar(_) => self.is_global_star = true,
-            // Luau: the body of a type function, unlike a type alias, runs in
-            // the type runtime.
-            Statement::TypeDeclaration(declaration) => {
-                let is_enclosed_by_type_function = self.is_in_type_function;
-                self.is_in_type_function |=
-                    matches!(declaration.value, TypeDeclarationValue::TypeFunction(_));
-                self.walk_stmt(stmt);
-                self.is_in_type_function = is_enclosed_by_type_function;
-            }
-            // None of these declares a local, so the default walk records
-            // their references: call arguments, mostly.
-            Statement::FunctionCall(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Break(_)
-            | Statement::Error(_) => self.walk_stmt(stmt),
-        }
+    // Luau: the body of a type function, unlike a type alias, runs in the
+    // type runtime.
+    fn visit_type_declaration(&mut self, type_declaration: &'ast TypeDeclaration<'ast>) {
+        let is_enclosed_by_type_function = self.is_in_type_function;
+        self.is_in_type_function |=
+            matches!(type_declaration.value, TypeDeclarationValue::TypeFunction(_));
+        self.walk_type_declaration(type_declaration);
+        self.is_in_type_function = is_enclosed_by_type_function;
     }
 
-    fn visit_last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
-        self.sink.last_stmt(last);
-        self.walk_last_stmt(last);
+    fn visit_last_stmt(&mut self, last_stmt: &'ast LastStatement<'ast>) {
+        self.sink.last_stmt(last_stmt);
+        self.walk_last_stmt(last_stmt);
     }
 
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
@@ -730,21 +730,21 @@ where
         }
     }
 
-    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression<'ast>) {
-        self.sink.chain(chain, false);
-        self.walk_suffixed(chain);
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
+        self.sink.chain(suffixed_expr, false);
+        self.walk_suffixed_expr(suffixed_expr);
     }
 
-    fn visit_table_constructor(&mut self, table: &'ast TableConstructor<'ast>) {
-        self.sink.table(table);
-        self.walk_table_constructor(table);
+    fn visit_table_constructor(&mut self, table_constructor: &'ast TableConstructor<'ast>) {
+        self.sink.table(table_constructor);
+        self.walk_table_constructor(table_constructor);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_ast::{NameIndex, Suffix, VisitorMut};
+    use luck_ast::{NameIndex, VisitMut};
 
     use super::*;
     use crate::fixtures::parse;
@@ -1274,49 +1274,17 @@ print(x)
 t[x], x = x, function() y = x end",
         );
         for (i, reference) in tree.references().iter().enumerate() {
-            let name =
-                Name { text: tree.name(reference.name).into(), index: None, span: reference.span };
+            let name = Name::new(tree.name(reference.name).into(), None, reference.span);
             assert_eq!(tree.reference_of(&name), Some(ReferenceId::from_index(i)));
         }
     }
 
-    /// Names that make references and names that make none.
-    struct SomeNames<'ast>(Vec<&'ast Name<'ast>>);
+    /// Every name, those that make references and those that make none.
+    struct AllNames<'ast>(Vec<&'ast Name<'ast>>);
 
-    impl<'ast> Visitor<'ast> for SomeNames<'ast> {
-        fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-            if let Statement::LocalAssignment(local) = stmt {
-                self.0.extend(local.names.iter().map(|attributed| &attributed.name));
-            }
-            self.walk_stmt(stmt);
-        }
-
-        fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
-            if let Expression::Name(name) = expr {
-                self.0.push(name);
-            }
-            self.walk_expr(expr);
-        }
-
-        fn visit_assignment_target(&mut self, target: &'ast Var<'ast>) {
-            if let Var::Name(name) = target {
-                self.0.push(name);
-            }
-            self.walk_assignment_target(target);
-        }
-
-        fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression<'ast>) {
-            for suffix in &chain.suffixes {
-                if let Suffix::Field(name) = suffix {
-                    self.0.push(name);
-                }
-            }
-            self.walk_suffixed(chain);
-        }
-
-        fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
-            self.0.extend(body.params.iter().map(|param| &param.name));
-            self.walk_function_body(body);
+    impl<'ast> Visit<'ast> for AllNames<'ast> {
+        fn visit_name(&mut self, name: &'ast Name<'ast>) {
+            self.0.push(name);
         }
     }
 
@@ -1328,7 +1296,7 @@ t[x], x = x, function() y = x end",
     ) -> (Vec<Option<ReferenceId>>, Vec<Option<ReferenceId>>) {
         let indexed = ScopeTree::build(block, counts, LuaVersion::Lua54);
         let searched = ScopeTree::build(block, TreeCounts::default(), LuaVersion::Lua54);
-        let mut names = SomeNames(Vec::new());
+        let mut names = AllNames(Vec::new());
         names.visit_block(block);
         (
             names.0.iter().map(|name| indexed.reference_of(name)).collect(),
@@ -1354,12 +1322,9 @@ t[x], x = x, function(x) y = x.y end";
     fn a_tree_whose_names_share_an_index_searches_for_their_references() {
         struct Renumber;
 
-        impl<'ast> VisitorMut<'ast> for Renumber {
-            fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
-                if let Expression::Name(name) = expr {
-                    name.index = Some(NameIndex::new(0));
-                }
-                self.walk_expr(expr);
+        impl<'ast> VisitMut<'ast> for Renumber {
+            fn visit_name(&mut self, name: &mut Name<'ast>) {
+                name.index = Some(NameIndex::new(0));
             }
         }
 
@@ -1436,9 +1401,9 @@ print(y)",
         );
         let local_x = references(&tree, "x")[0].span;
         let global_y = references(&tree, "y")[0].span;
-        assert!(tree.resolves_to_local(&Name { text: "x".into(), index: None, span: local_x }));
-        assert!(!tree.resolves_to_local(&Name { text: "y".into(), index: None, span: local_x }));
-        assert!(!tree.resolves_to_local(&Name { text: "y".into(), index: None, span: global_y }));
+        assert!(tree.resolves_to_local(&Name::new("x".into(), None, local_x)));
+        assert!(!tree.resolves_to_local(&Name::new("y".into(), None, local_x)));
+        assert!(!tree.resolves_to_local(&Name::new("y".into(), None, global_y)));
     }
 
     #[test]

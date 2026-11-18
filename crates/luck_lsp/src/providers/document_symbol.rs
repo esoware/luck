@@ -5,7 +5,7 @@
 
 use luck_ast::{
     Assignment, Block, Expression, FunctionBody, FunctionName, Name, Statement, Suffix,
-    TypeDeclarationValue, Var, Visitor,
+    TypeDeclarationValue, Var, Visit,
 };
 use luck_token::Span;
 use tower_lsp_server::ls_types::{DocumentSymbol, SymbolKind};
@@ -28,7 +28,7 @@ struct SymbolEmitter<'document> {
     symbols: Vec<DocumentSymbol>,
 }
 
-impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
+impl<'ast> Visit<'ast> for SymbolEmitter<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             Statement::FunctionDecl(declaration) => {

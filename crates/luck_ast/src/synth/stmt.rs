@@ -3,19 +3,12 @@ use luck_token::CompoundOp;
 use crate::expr::{Expression, Var};
 use crate::function::{FunctionAttribute, Parameter};
 use crate::stmt::{
-    Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
-    ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
-    GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
-    LocalAssignmentKind, LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement,
-    Statement, TypeDeclaration, TypeDeclarationValue, WhileLoop,
+    Attribute, AttributedName, Block, ElseClause, ElseIfClause, FunctionName, LastStatement,
+    LocalAssignmentKind, LocalFunctionKind, Statement, TypeDeclarationValue,
 };
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{GenericTypeList, Type};
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the synthesizer is one type with its constructors split by node family"
-)]
 impl<'ast> Synth<'ast> {
     /// For attributes, generics, typed parameters, varargs, or a return
     /// type, use [`Synth::function_decl_full`].
@@ -53,17 +46,18 @@ impl<'ast> Synth<'ast> {
         Attributes: IntoIterator<Item = FunctionAttribute<'ast>>,
         Attributes::IntoIter: ExactSizeIterator,
     {
-        let name = FunctionName {
-            span: self.next_span(),
-            names: self.list(name_path.iter().map(|part| self.name(part))),
-            method: method.map(|method_name| self.name(method_name)),
-        };
-        Statement::FunctionDecl(self.boxed(FunctionDecl {
-            span: self.next_span(),
-            attributes: self.list(attributes),
+        let name = FunctionName::new(
+            self.next_span(),
+            self.list(name_path.iter().map(|part| self.name(part))),
+            method.map(|method_name| self.name(method_name)),
+        );
+        Statement::new_function_decl(
+            self.next_span(),
+            self.list(attributes),
             name,
-            body: self.function_body(signature, body),
-        }))
+            self.function_body(signature, body),
+            self.allocator,
+        )
     }
 
     /// For attributes or a full signature, use [`Synth::local_function_full`].
@@ -154,13 +148,14 @@ impl<'ast> Synth<'ast> {
         Attributes: IntoIterator<Item = FunctionAttribute<'ast>>,
         Attributes::IntoIter: ExactSizeIterator,
     {
-        Statement::LocalFunction(self.boxed(LocalFunction {
-            span: self.next_span(),
-            attributes: self.list(attributes),
-            name: self.name(name),
-            body: self.function_body(signature, body),
+        Statement::new_local_function(
+            self.next_span(),
+            self.list(attributes),
+            self.name(name),
+            self.function_body(signature, body),
             kind,
-        }))
+            self.allocator,
+        )
     }
 
     /// Lua 5.5: `global function name`.
@@ -175,11 +170,12 @@ impl<'ast> Synth<'ast> {
         signature: FunctionSignature<'ast>,
         body: Block<'ast>,
     ) -> Statement<'ast> {
-        Statement::GlobalFunction(self.boxed(GlobalFunction {
-            span: self.next_span(),
-            name: self.name(name),
-            body: self.function_body(signature, body),
-        }))
+        Statement::new_global_function(
+            self.next_span(),
+            self.name(name),
+            self.function_body(signature, body),
+            self.allocator,
+        )
     }
 
     /// For type annotations or Lua 5.4 attributes, use [`Synth::local_full`].
@@ -272,12 +268,13 @@ impl<'ast> Synth<'ast> {
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        Statement::LocalAssignment(self.boxed(LocalAssignment {
-            span: self.next_span(),
-            names: self.list(names),
-            exprs: self.list(exprs),
+        Statement::new_local_assignment(
+            self.next_span(),
+            self.list(names),
+            self.list(exprs),
             kind,
-        }))
+            self.allocator,
+        )
     }
 
     /// One declared name for [`Synth::local_full`] / [`Synth::global_declaration`],
@@ -294,15 +291,15 @@ impl<'ast> Synth<'ast> {
         ty: Option<Type<'ast>>,
         attribute: Option<&str>,
     ) -> AttributedName<'ast> {
-        AttributedName {
-            name: self.name(name),
-            type_annotation: ty,
-            attribute: attribute.map(|attribute_name| self.boxed(self.attribute(attribute_name))),
-        }
+        AttributedName::new(
+            self.name(name),
+            ty,
+            attribute.map(|attribute_name| self.boxed(self.attribute(attribute_name))),
+        )
     }
 
     fn attribute(&self, name: &str) -> Attribute<'ast> {
-        Attribute { span: self.next_span(), name: self.name(name) }
+        Attribute::new(self.next_span(), self.name(name))
     }
 
     /// Lua 5.5: `global names = exprs`, or with no `=` when `exprs` is empty.
@@ -314,11 +311,12 @@ impl<'ast> Synth<'ast> {
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        Statement::GlobalDeclaration(self.boxed(GlobalDeclaration {
-            span: self.next_span(),
-            names: self.list(names),
-            exprs: self.list(exprs),
-        }))
+        Statement::new_global_declaration(
+            self.next_span(),
+            self.list(names),
+            self.list(exprs),
+            self.allocator,
+        )
     }
 
     /// Lua 5.5: `global *`, or `global <attribute> *`.
@@ -328,10 +326,11 @@ impl<'ast> Synth<'ast> {
     /// Panics if `attribute` isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
     pub fn global_star(&self, attribute: Option<&str>) -> Statement<'ast> {
-        Statement::GlobalStar(self.boxed(GlobalStar {
-            span: self.next_span(),
-            attribute: attribute.map(|name| self.attribute(name)),
-        }))
+        Statement::new_global_star(
+            self.next_span(),
+            attribute.map(|name| self.attribute(name)),
+            self.allocator,
+        )
     }
 
     /// Build targets with [`Synth::name_var`], [`Synth::index_var`], [`Synth::field_var`].
@@ -343,11 +342,12 @@ impl<'ast> Synth<'ast> {
         Values: IntoIterator<Item = Expression<'ast>>,
         Values::IntoIter: ExactSizeIterator,
     {
-        Statement::Assignment(self.boxed(Assignment {
-            span: self.next_span(),
-            targets: self.list(targets),
-            values: self.list(values),
-        }))
+        Statement::new_assignment(
+            self.next_span(),
+            self.list(targets),
+            self.list(values),
+            self.allocator,
+        )
     }
 
     /// Luau: `target op= value`.
@@ -358,12 +358,7 @@ impl<'ast> Synth<'ast> {
         op: CompoundOp,
         value: Expression<'ast>,
     ) -> Statement<'ast> {
-        Statement::CompoundAssignment(self.boxed(CompoundAssignment {
-            span: self.next_span(),
-            var: target,
-            op,
-            expr: value,
-        }))
+        Statement::new_compound_assignment(self.next_span(), target, op, value, self.allocator)
     }
 
     /// # Panics
@@ -385,17 +380,17 @@ impl<'ast> Synth<'ast> {
 
     #[must_use]
     pub fn do_block(&self, block: Block<'ast>) -> Statement<'ast> {
-        Statement::DoBlock(self.boxed(DoBlock { span: self.next_span(), block }))
+        Statement::new_do_block(self.next_span(), block, self.allocator)
     }
 
     #[must_use]
     pub fn while_(&self, condition: Expression<'ast>, block: Block<'ast>) -> Statement<'ast> {
-        Statement::WhileLoop(self.boxed(WhileLoop { span: self.next_span(), condition, block }))
+        Statement::new_while_loop(self.next_span(), condition, block, self.allocator)
     }
 
     #[must_use]
     pub fn repeat_(&self, block: Block<'ast>, condition: Expression<'ast>) -> Statement<'ast> {
-        Statement::RepeatLoop(self.boxed(RepeatLoop { span: self.next_span(), block, condition }))
+        Statement::new_repeat_loop(self.next_span(), block, condition, self.allocator)
     }
 
     #[must_use]
@@ -412,16 +407,17 @@ impl<'ast> Synth<'ast> {
     {
         let span = self.next_span();
         let elseif_clauses = self.list(elseifs.into_iter().map(|(elseif_condition, block)| {
-            ElseIfClause { span: self.next_span(), condition: elseif_condition, block }
+            ElseIfClause::new(self.next_span(), elseif_condition, block)
         }));
-        let else_clause = else_block.map(|block| ElseClause { span: self.next_span(), block });
-        Statement::IfStatement(self.boxed(IfStatement {
+        let else_clause = else_block.map(|block| ElseClause::new(self.next_span(), block));
+        Statement::new_if_stmt(
             span,
             condition,
-            block: then_block,
+            then_block,
             elseif_clauses,
             else_clause,
-        }))
+            self.allocator,
+        )
     }
 
     /// Build `variable` with [`Synth::param`] or [`Synth::param_typed`].
@@ -434,15 +430,16 @@ impl<'ast> Synth<'ast> {
         step: Option<Expression<'ast>>,
         block: Block<'ast>,
     ) -> Statement<'ast> {
-        Statement::NumericFor(self.boxed(NumericFor {
-            span: self.next_span(),
-            name: variable.name,
-            type_annotation: variable.type_annotation,
+        Statement::new_numeric_for(
+            self.next_span(),
+            variable.name,
+            variable.type_annotation,
             start,
             limit,
             step,
             block,
-        }))
+            self.allocator,
+        )
     }
 
     /// Build names with [`Synth::param`] or [`Synth::param_typed`].
@@ -459,12 +456,13 @@ impl<'ast> Synth<'ast> {
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        Statement::GenericFor(self.boxed(GenericFor {
-            span: self.next_span(),
-            names: self.list(names),
-            exprs: self.list(exprs),
+        Statement::new_generic_for(
+            self.next_span(),
+            self.list(names),
+            self.list(exprs),
             block,
-        }))
+            self.allocator,
+        )
     }
 
     /// # Panics
@@ -472,9 +470,7 @@ impl<'ast> Synth<'ast> {
     /// Panics if `label` isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
     pub fn goto_(&self, label: &str) -> Statement<'ast> {
-        Statement::Goto(
-            self.boxed(GotoStatement { span: self.next_span(), name: self.name(label) }),
-        )
+        Statement::new_goto(self.next_span(), self.name(label), self.allocator)
     }
 
     /// # Panics
@@ -482,9 +478,7 @@ impl<'ast> Synth<'ast> {
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
     pub fn label(&self, name: &str) -> Statement<'ast> {
-        Statement::Label(
-            self.boxed(LabelStatement { span: self.next_span(), name: self.name(name) }),
-        )
+        Statement::new_label(self.next_span(), self.name(name), self.allocator)
     }
 
     /// Lua 5.1 and Luau only allow `break` as the last statement, so use [`Synth::break_`] there.
@@ -505,9 +499,7 @@ impl<'ast> Synth<'ast> {
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        LastStatement::Return(
-            self.boxed(ReturnStatement { span: self.next_span(), exprs: self.list(exprs) }),
-        )
+        LastStatement::new_return(self.next_span(), self.list(exprs), self.allocator)
     }
 
     #[must_use]
@@ -527,7 +519,7 @@ impl<'ast> Synth<'ast> {
         Stmts: IntoIterator<Item = Statement<'ast>>,
         Stmts::IntoIter: ExactSizeIterator,
     {
-        Block { span: self.next_span(), stmts: self.list(stmts), last_stmt: last }
+        Block::new(self.next_span(), self.list(stmts), last)
     }
 
     /// Luau: `[export] type name<generics> = value`.
@@ -543,13 +535,14 @@ impl<'ast> Synth<'ast> {
         generics: Option<GenericTypeList<'ast>>,
         value: Type<'ast>,
     ) -> Statement<'ast> {
-        Statement::TypeDeclaration(self.boxed(TypeDeclaration {
-            span: self.next_span(),
+        Statement::new_type_declaration(
+            self.next_span(),
             is_exported,
-            name: self.name(name),
-            generics: generics.map(|list| self.boxed(list)),
-            value: TypeDeclarationValue::Alias(value),
-        }))
+            self.name(name),
+            generics.map(|list| self.boxed(list)),
+            TypeDeclarationValue::Alias(value),
+            self.allocator,
+        )
     }
 
     /// Luau: `[export] type function name funcbody`.
@@ -565,15 +558,16 @@ impl<'ast> Synth<'ast> {
         signature: FunctionSignature<'ast>,
         body: Block<'ast>,
     ) -> Statement<'ast> {
-        Statement::TypeDeclaration(self.boxed(TypeDeclaration {
-            span: self.next_span(),
+        let value =
+            TypeDeclarationValue::TypeFunction(self.boxed(self.function_body(signature, body)));
+        Statement::new_type_declaration(
+            self.next_span(),
             is_exported,
-            name: self.name(name),
-            generics: None,
-            value: TypeDeclarationValue::TypeFunction(
-                self.boxed(self.function_body(signature, body)),
-            ),
-        }))
+            self.name(name),
+            None,
+            value,
+            self.allocator,
+        )
     }
 }
 

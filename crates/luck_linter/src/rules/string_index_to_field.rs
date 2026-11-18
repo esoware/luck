@@ -1,4 +1,4 @@
-use luck_ast::{ChainHead, Expression, Suffix, SuffixedExpression};
+use luck_ast::{ChainHead, Expression, GetSpan as _, Suffix, SuffixedExpression};
 use luck_token::{Span, TokenKind, short_string_body};
 
 use crate::diagnostic::Finding;

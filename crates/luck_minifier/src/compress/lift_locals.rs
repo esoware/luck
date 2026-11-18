@@ -18,9 +18,8 @@ use core::mem;
 
 use luck_allocator::{Box, List};
 use luck_ast::{
-    Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, LastStatement,
-    LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, Name, Statement, Type,
-    Var, Visitor,
+    AttributedName, Block, Expression, FunctionBody, LastStatement, LocalAssignment,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, Name, Statement, Type, Var, Visit,
 };
 use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS};
 use rustc_hash::FxHashMap;
@@ -177,7 +176,7 @@ impl Pressure {
 /// Counts expressions outside closures, types, and parentheses.
 struct ExprCounter(usize);
 
-impl<'tree> Visitor<'tree> for ExprCounter {
+impl<'tree> Visit<'tree> for ExprCounter {
     fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
         if !matches!(expr, Expression::Parenthesized(_)) {
             self.0 = self.0.saturating_add(1);
@@ -412,10 +411,6 @@ impl<'ast> Collector<'_, 'ast> {
     }
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the compressor is one type with its rewrites split by flag"
-)]
 impl<'ast> Compressor<'_, 'ast> {
     /// Whether a name that kept a lift from a declaration lost the last of
     /// its reads as a global and captures later in the walk, which leaves
@@ -447,20 +442,17 @@ impl<'ast> Compressor<'_, 'ast> {
         self.rewrite_block(&mut body.block, &mut cursor, registers);
         let allocator = self.allocator;
         let names = self.lifter.hoisted.iter().map(|hoisted| {
-            let name = Name {
-                text: hoisted.text.into(),
-                index: Some(local_index(hoisted.binding)),
-                span: body.span,
-            };
-            AttributedName { name, type_annotation: None, attribute: None }
+            let name =
+                Name::new(hoisted.text.into(), Some(local_index(hoisted.binding)), body.span);
+            AttributedName::new(name, None, None)
         });
-        let local = LocalAssignment {
-            span: body.span,
-            names: List::from_iter_in(names, allocator),
-            exprs: List::new(),
-            kind: LocalAssignmentKind::Local,
-        };
-        let declaration = Statement::LocalAssignment(Box::new_in(local, allocator));
+        let declaration = Statement::new_local_assignment(
+            body.span,
+            List::from_iter_in(names, allocator),
+            List::new(),
+            LocalAssignmentKind::Local,
+            allocator,
+        );
         body.block.stmts.insert(0, declaration, allocator);
         if self.config.merge_locals {
             self.live_registers = parameter_locals(body);
@@ -611,8 +603,7 @@ impl<'ast> Compressor<'_, 'ast> {
             }
             Statement::LocalFunction(local_function) => {
                 let LocalFunction { span, attributes, body, name, .. } = local_function.unbox();
-                let function = FunctionDef { span, attributes, body };
-                let value = Expression::FunctionDef(Box::new_in(function, allocator));
+                let value = Expression::new_function_def(span, attributes, body, allocator);
                 (vec![name], List::from_array_in([value], allocator), span)
             }
             kept @ (Statement::Assignment(_)
@@ -663,9 +654,12 @@ impl<'ast> Compressor<'_, 'ast> {
             }
         }
         let targets = names.into_iter().map(|name| Var::Name(Box::new_in(name, allocator)));
-        let assignment =
-            Assignment { span, targets: List::from_iter_in(targets, allocator), values };
-        *stmt = Statement::Assignment(Box::new_in(assignment, allocator));
+        *stmt = Statement::new_assignment(
+            span,
+            List::from_iter_in(targets, allocator),
+            values,
+            allocator,
+        );
     }
 }
 

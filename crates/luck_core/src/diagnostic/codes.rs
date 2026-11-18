@@ -5,10 +5,6 @@ use luck_token::{SourceError, Span};
 
 use super::Diagnostic;
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "every numbered code and its wording stay in this file"
-)]
 impl Diagnostic {
     #[must_use]
     pub fn e002(file_path: &str, span: Span) -> Self {

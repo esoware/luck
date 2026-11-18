@@ -72,6 +72,10 @@ advisories:
 bench *args:
   cargo bench -p luck_benchmark {{args}}
 
+# Regenerate luck_ast/src/generated after a type that derives `Ast` changes
+ast:
+  cargo run -p luck_ast_tools
+
 # Regenerate editors/vscode/schemas/luckrc.schema.json after a config type changes
 schema:
   cargo test -p luck_config regenerate_luckrc_schema -- --ignored

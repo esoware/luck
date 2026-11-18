@@ -1,18 +1,12 @@
 use luck_allocator::{Box, List};
 use luck_ast::{
-    BinaryLink, BinaryOp, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionDef,
-    IfExpression, InterpolatedSegment, InterpolatedString, Literal, MethodCall, OneOrMore,
-    ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor, TypeArgs, TypeCast,
-    UnaryOp,
+    BinaryLink, ElseIfExprClause, Expression, Field, FunctionArgs, GetSpan as _,
+    InterpolatedSegment, Literal, OneOrMore, Suffix, TableConstructor, TypeArgs,
 };
 use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
 use super::{Closer, Parser};
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the parser is one type with its grammar split by file"
-)]
 impl<'ast> Parser<'ast> {
     /// Each precedence level's operators run in a loop into one node, so a
     /// run of any length is one level of nesting, counted toward the depth
@@ -49,17 +43,17 @@ impl<'ast> Parser<'ast> {
         let operand_precedence = precedence.saturating_add(1);
         let start = self.scratch.binary_links.len();
         let operand = self.parse_expr(operand_precedence);
-        self.scratch.binary_links.push(BinaryLink { op, operand });
+        self.scratch.binary_links.push(BinaryLink::new(op, operand));
         while let Some(next_op) =
             self.peek_binary_op().filter(|next_op| next_op.precedence().0 == precedence)
         {
             self.advance();
             let next_operand = self.parse_expr(operand_precedence);
-            self.scratch.binary_links.push(BinaryLink { op: next_op, operand: next_operand });
+            self.scratch.binary_links.push(BinaryLink::new(next_op, next_operand));
         }
         let links = OneOrMore::split_off_in(&mut self.scratch.binary_links, start, self.allocator);
         let span = first.span().merge(links.last().operand.span());
-        Expression::BinaryOp(self.alloc(BinaryOp { span, first, links }))
+        Expression::new_binary_op(span, first, links, self.allocator)
     }
 
     #[inline]
@@ -110,7 +104,7 @@ impl<'ast> Parser<'ast> {
         let operand = self.parse_expr(UnOp::PRECEDENCE);
         self.exit_depth();
         let span = op_span.merge(operand.span());
-        Expression::UnaryOp(self.alloc(UnaryOp { span, op, operand }))
+        Expression::new_unary_op(span, op, operand, self.allocator)
     }
 
     /// Luau's grammar is `asexp ::= simpleexp ['::' Type]`, so `x :: A :: B`
@@ -124,7 +118,7 @@ impl<'ast> Parser<'ast> {
         let ty = self.parse_type();
         self.nesting_depth = level;
         let span = expr.span().merge(ty.span());
-        Expression::TypeCast(self.alloc(TypeCast { span, expr, ty }))
+        Expression::new_type_cast(span, expr, ty, self.allocator)
     }
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
@@ -183,8 +177,7 @@ impl<'ast> Parser<'ast> {
         self.exit_depth();
         let close = self.expect_closer(TokenKind::RightParen, Closer::Paren);
         let span = open.merge(close);
-        let parenthesized =
-            Expression::Parenthesized(self.alloc(ParenthesizedExpression { span, expr }));
+        let parenthesized = Expression::new_parenthesized(span, expr, self.allocator);
         self.parse_suffixes(parenthesized)
     }
 
@@ -235,7 +228,7 @@ impl<'ast> Parser<'ast> {
         self.nesting_depth = level;
         let suffixes = OneOrMore::split_off_in(&mut self.scratch.suffixes, start, self.allocator);
         let span = prefix.span().merge(suffixes.last().span());
-        Expression::Suffixed(self.alloc(SuffixedExpression { span, prefix, suffixes }))
+        Expression::new_suffixed(span, prefix, suffixes, self.allocator)
     }
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token ends the run")]
@@ -292,7 +285,7 @@ impl<'ast> Parser<'ast> {
             self.alloc(type_args)
         });
         let args = self.parse_function_args();
-        Suffix::MethodCall(self.alloc(MethodCall { name, type_args, args }))
+        Suffix::new_method_call(name, type_args, args, self.allocator)
     }
 
     #[inline]
@@ -328,7 +321,7 @@ impl<'ast> Parser<'ast> {
             self.expect(TokenKind::Then);
             let expr = self.parse_expr(0);
             let span = elseif_span.merge(expr.span());
-            let clause = ElseIfExprClause { span, condition: clause_condition, expr };
+            let clause = ElseIfExprClause::new(span, clause_condition, expr);
             self.scratch.elseif_exprs.push(clause);
         }
         self.close(Closer::Else);
@@ -338,18 +331,19 @@ impl<'ast> Parser<'ast> {
         let span = if_span.merge(else_expr.span());
         let elseif_clauses =
             List::split_off_in(&mut self.scratch.elseif_exprs, start, self.allocator);
-        Expression::IfExpression(self.alloc(IfExpression {
+        Expression::new_if_expr(
             span,
             condition,
             then_expr,
             elseif_clauses,
             else_expr,
-        }))
+            self.allocator,
+        )
     }
 
     /// The text of an interpolated string piece, between its delimiters.
     fn piece(&self, token: Token) -> Literal<'ast> {
-        Literal { text: token.text(self.source), span: token.text_span() }
+        Literal::new(token.text(self.source), token.text_span())
     }
 
     fn parse_interpolated_string(&mut self) -> Expression<'ast> {
@@ -362,8 +356,12 @@ impl<'ast> Parser<'ast> {
         if first.kind == TokenKind::InterpolatedStringSimple {
             self.exit_depth();
             let tail = self.piece(first);
-            let string = InterpolatedString { span: first.span, segments: List::new(), tail };
-            return Expression::InterpolatedString(self.alloc(string));
+            return Expression::new_interpolated_string(
+                first.span,
+                List::new(),
+                tail,
+                self.allocator,
+            );
         }
         self.open(Closer::StringSegment);
         let start = self.scratch.segments.len();
@@ -380,13 +378,13 @@ impl<'ast> Parser<'ast> {
         } else {
             let end_span = self.report_unfinished_interpolated_string();
             let at = self.previous_span.end;
-            (end_span, Literal { text: "", span: Span::new(at, at) })
+            (end_span, Literal::new("", Span::new(at, at)))
         };
         self.close(Closer::StringSegment);
         self.exit_depth();
         let segments = List::split_off_in(&mut self.scratch.segments, start, self.allocator);
         let span = start_span.merge(end_span);
-        Expression::InterpolatedString(self.alloc(InterpolatedString { span, segments, tail }))
+        Expression::new_interpolated_string(span, segments, tail, self.allocator)
     }
 
     /// The expression after `literal`, whose last byte is the `{` that opens
@@ -401,7 +399,7 @@ impl<'ast> Parser<'ast> {
             self.parse_expr(0)
         };
         let text = self.piece(literal);
-        self.scratch.segments.push(InterpolatedSegment { text, expr });
+        self.scratch.segments.push(InterpolatedSegment::new(text, expr));
     }
 
     #[cold]
@@ -489,7 +487,7 @@ impl<'ast> Parser<'ast> {
             return Expression::Error(start_span);
         };
         let span = start_span.merge(body.span);
-        Expression::FunctionDef(self.alloc(FunctionDef { span, attributes, body }))
+        Expression::new_function_def(span, attributes, body, self.allocator)
     }
 
     #[cold]
@@ -528,8 +526,8 @@ impl<'ast> Parser<'ast> {
 
         let close = self.expect_closer(TokenKind::RightBrace, Closer::Brace);
         let fields = List::split_off_in(&mut self.scratch.fields, start, self.allocator);
-        let table = TableConstructor { span: open.merge(close), fields, has_trailing_separator };
-        Some(self.alloc(table))
+        let span = open.merge(close);
+        Some(TableConstructor::boxed(span, fields, has_trailing_separator, self.allocator))
     }
 
     #[cold]

@@ -1,6 +1,6 @@
 use core::mem;
 
-use luck_ast::Block;
+use luck_ast::{Block, GetSpan as _};
 use luck_token::{CommentKind, Span};
 
 use crate::diagnostic::Finding;

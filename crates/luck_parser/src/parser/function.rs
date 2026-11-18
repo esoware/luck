@@ -1,16 +1,12 @@
 use core::mem;
 
 use luck_allocator::{Box, List};
-use luck_ast::{FunctionBody, Name, Parameter, Type, VarArgParam};
+use luck_ast::{FunctionBody, GetSpan as _, Name, Parameter, Type, VarArgParam};
 use luck_token::TokenKind;
 
 use super::types::GenericsOwner;
 use super::{Closer, FunctionScope, Parser};
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the parser is one type with its grammar split by file"
-)]
 impl<'ast> Parser<'ast> {
     /// `None` when the body or its block would pass the depth cap.
     pub(super) fn parse_function_body(&mut self) -> Option<FunctionBody<'ast>> {
@@ -50,7 +46,7 @@ impl<'ast> Parser<'ast> {
         self.close(Closer::BlockEnd);
         let end_span = self.expect(TokenKind::End);
         let span = start_span.merge(end_span);
-        Some(FunctionBody { span, generics, params, vararg, return_type, block })
+        Some(FunctionBody::new(span, generics, params, vararg, return_type, block))
     }
 
     /// Parse the parameter list between a function's parens, stopping before
@@ -86,7 +82,7 @@ impl<'ast> Parser<'ast> {
     /// just consumed, taking a Luau `: T` annotation if one follows.
     pub(super) fn parse_parameter(&mut self, name: Name<'ast>) -> Parameter<'ast> {
         self.counts.declarations = self.counts.declarations.wrapping_add(1);
-        Parameter { name, type_annotation: self.try_parse_type_annotation() }
+        Parameter::new(name, self.try_parse_type_annotation())
     }
 
     /// Parse `... [name] [: type]`; `...` must be the current token.
@@ -105,6 +101,6 @@ impl<'ast> Parser<'ast> {
             .map(Type::span)
             .or_else(|| name.map(|vararg_name| vararg_name.span))
             .unwrap_or(dots);
-        self.alloc(VarArgParam { span: dots.merge(end_span), name, type_annotation })
+        VarArgParam::boxed(dots.merge(end_span), name, type_annotation, self.allocator)
     }
 }

@@ -6,7 +6,7 @@ use core::mem;
 use luck_allocator::List;
 use luck_ast::{
     Assignment, AttributedName, Expression, LocalAssignment, LocalAssignmentKind, Name, Statement,
-    Var, Visitor,
+    Var, Visit,
 };
 use luck_token::LuaVersion;
 
@@ -57,16 +57,16 @@ impl ReferenceFinder<'_> {
     }
 }
 
-impl<'tree> Visitor<'tree> for ReferenceFinder<'_> {
-    fn visit_assignment_target(&mut self, target: &'tree Var<'tree>) {
+impl<'tree> Visit<'tree> for ReferenceFinder<'_> {
+    fn visit_var(&mut self, var: &'tree Var<'tree>) {
         if self.has_reference {
             return;
         }
-        if let Var::Name(name) = target {
+        if let Var::Name(name) = var {
             self.check(name);
             return;
         }
-        self.walk_assignment_target(target);
+        self.walk_var(var);
     }
 
     fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
@@ -99,10 +99,6 @@ fn references_any(expr: &Expression<'_>, group: &[usize], bindings: &Bindings) -
     finder.has_reference
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the compressor is one type with its rewrites split by flag"
-)]
 impl<'ast> Compressor<'_, 'ast> {
     /// `local a = 1 local b = 2` becomes `local a, b = 1, 2`, `a = 1 b = 2`
     /// becomes `a, b = 1, 2` where both are locals, `local a local b`

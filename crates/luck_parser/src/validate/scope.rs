@@ -9,8 +9,8 @@
 use core::mem;
 
 use luck_ast::{
-    Attribute, AttributedName, Block, Expression, FunctionBody, FunctionDecl, GenericFor, Name,
-    NumericFor, RepeatLoop, Statement, Type, TypeDeclarationValue, Var, Visitor,
+    Attribute, AttributedName, Block, Expression, FunctionBody, FunctionDecl, GenericFor,
+    GetSpan as _, Name, NumericFor, RepeatLoop, Statement, Type, TypeDeclarationValue, Var, Visit,
 };
 use luck_token::{LuaVersion, Span};
 
@@ -186,7 +186,7 @@ impl<'ast> ScopeChecker<'ast> {
             Var::Name(token) => self.check_name(token, true),
             // `t.x = 1` and `t[k] = 1` mutate the table, not the binding, and
             // const doesn't freeze contents.
-            Var::Suffixed(chain) => self.visit_suffixed(chain),
+            Var::Suffixed(chain) => self.visit_suffixed_expr(chain),
         }
     }
 
@@ -234,6 +234,87 @@ impl<'ast> ScopeChecker<'ast> {
         }
         if let Some(last) = &block.last_stmt {
             self.visit_last_stmt(last);
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ScopeChecker<'ast> {
+    fn visit_block(&mut self, block: &'ast Block<'ast>) {
+        let start = self.open_block();
+        self.walk_statements(block, false, start.active_vars());
+        self.close_block(start);
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
+        match stmt {
+            Statement::Assignment(assignment) => {
+                for value in &assignment.values {
+                    self.visit_expr(value);
+                }
+                for target in &assignment.targets {
+                    self.check_target(target);
+                }
+            }
+            // Luau
+            Statement::CompoundAssignment(compound_assignment) => {
+                self.visit_expr(&compound_assignment.expr);
+                self.check_target(&compound_assignment.var);
+            }
+            Statement::LocalFunction(local_function) => {
+                self.declare_local(&local_function.name, local_function.kind.is_const());
+                self.visit_function_body(&local_function.body);
+            }
+            Statement::LocalAssignment(local) => {
+                for attributed in &local.names {
+                    self.visit_attributed_name(attributed);
+                }
+                for expr in &local.exprs {
+                    self.visit_expr(expr);
+                }
+                self.declare_attributed_names(&local.names, local.kind.is_const(), false);
+            }
+            // Lua 5.5
+            Statement::GlobalDeclaration(global) => {
+                for expr in &global.exprs {
+                    self.visit_expr(expr);
+                }
+                self.declare_attributed_names(&global.names, false, true);
+            }
+            // Lua 5.5
+            Statement::GlobalFunction(global_function) => {
+                if !global_function.name.text.is_empty() {
+                    self.push_binding(Some(global_function.name.text.as_str()), true, false);
+                }
+                self.visit_function_body(&global_function.body);
+            }
+            // Lua 5.5
+            Statement::GlobalStar(global_star) => {
+                let is_readonly = global_star.attribute.as_ref().is_some_and(is_readonly_attribute);
+                self.push_binding(None, true, is_readonly);
+            }
+            // Luau
+            Statement::TypeDeclaration(type_declaration) => {
+                if matches!(type_declaration.value, TypeDeclarationValue::TypeFunction(_)) {
+                    let enclosing = mem::replace(&mut self.type_function_base, self.bindings.len());
+                    self.walk_stmt(stmt);
+                    self.type_function_base = enclosing;
+                } else {
+                    self.walk_stmt(stmt);
+                }
+            }
+            Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::FunctionDecl(_)
+            | Statement::EmptyStatement(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::Break(_)
+            | Statement::Error(_) => self.walk_stmt(stmt),
         }
     }
 
@@ -307,99 +388,20 @@ impl<'ast> ScopeChecker<'ast> {
         self.visit_function_body(&function_decl.body);
         self.bindings.truncate(bindings_base);
     }
-}
 
-impl<'ast> Visitor<'ast> for ScopeChecker<'ast> {
-    fn visit_block(&mut self, block: &'ast Block<'ast>) {
-        let start = self.open_block();
-        self.walk_statements(block, false, start.active_vars());
-        self.close_block(start);
-    }
-
-    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-        match stmt {
-            Statement::Assignment(assignment) => {
-                for value in &assignment.values {
-                    self.visit_expr(value);
-                }
-                for target in &assignment.targets {
-                    self.check_target(target);
-                }
-            }
-            // Luau
-            Statement::CompoundAssignment(compound_assignment) => {
-                self.visit_expr(&compound_assignment.expr);
-                self.check_target(&compound_assignment.var);
-            }
-            Statement::RepeatLoop(repeat_loop) => self.visit_repeat_loop(repeat_loop),
-            Statement::NumericFor(numeric_for) => self.visit_numeric_for(numeric_for),
-            Statement::GenericFor(generic_for) => self.visit_generic_for(generic_for),
-            Statement::FunctionDecl(function_decl) => self.visit_function_decl(function_decl),
-            Statement::LocalFunction(local_function) => {
-                self.declare_local(&local_function.name, local_function.kind.is_const());
-                self.visit_function_body(&local_function.body);
-            }
-            Statement::LocalAssignment(local) => {
-                self.walk_attributed_names(&local.names);
-                for expr in &local.exprs {
-                    self.visit_expr(expr);
-                }
-                self.declare_attributed_names(&local.names, local.kind.is_const(), false);
-            }
-            // Lua 5.5
-            Statement::GlobalDeclaration(global) => {
-                for expr in &global.exprs {
-                    self.visit_expr(expr);
-                }
-                self.declare_attributed_names(&global.names, false, true);
-            }
-            // Lua 5.5
-            Statement::GlobalFunction(global_function) => {
-                if !global_function.name.text.is_empty() {
-                    self.push_binding(Some(global_function.name.text.as_str()), true, false);
-                }
-                self.visit_function_body(&global_function.body);
-            }
-            // Lua 5.5
-            Statement::GlobalStar(global_star) => {
-                let is_readonly = global_star.attribute.as_ref().is_some_and(is_readonly_attribute);
-                self.push_binding(None, true, is_readonly);
-            }
-            // Luau
-            Statement::TypeDeclaration(type_declaration) => {
-                if matches!(type_declaration.value, TypeDeclarationValue::TypeFunction(_)) {
-                    let enclosing = mem::replace(&mut self.type_function_base, self.bindings.len());
-                    self.walk_stmt(stmt);
-                    self.type_function_base = enclosing;
-                } else {
-                    self.walk_stmt(stmt);
-                }
-            }
-            Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::Break(_)
-            | Statement::Error(_) => self.walk_stmt(stmt),
-        }
-    }
-
-    fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
+    fn visit_function_body(&mut self, function_body: &'ast FunctionBody<'ast>) {
         let bindings_base = self.bindings.len();
-        for param in &body.params {
+        for param in &function_body.params {
             self.declare_local(&param.name, false);
         }
         // 5.5 manual: a vararg's name "denotes a read-only local variable".
-        if let Some(vararg) = &body.vararg
+        if let Some(vararg) = &function_body.vararg
             && let Some(name) = &vararg.name
         {
             self.declare_local(name, true);
         }
         let enclosing_gotos = self.gotos.enter_function();
-        self.walk_function_body(body);
+        self.walk_function_body(function_body);
         self.gotos.leave_function(enclosing_gotos);
         self.bindings.truncate(bindings_base);
     }

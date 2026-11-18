@@ -10,7 +10,7 @@
 use core::iter::{self, Peekable};
 use core::ops::Range;
 
-use luck_ast::{Block, LastStatement, Statement, Visitor, stmt_starts_with_paren};
+use luck_ast::{Block, GetSpan as _, LastStatement, Statement, Visit, stmt_starts_with_paren};
 use luck_token::{
     LuaVersion, Span, is_lua_whitespace, line_breaks, offset_to_index, strip_line_break,
 };
@@ -102,10 +102,6 @@ struct PreviousItem {
     should_surround_with_blank: bool,
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
     /// An empty block with nothing to print writes nothing, so no blank line
     /// comes before its closer.
@@ -397,7 +393,7 @@ struct InnermostBlock<'tree, 'range> {
     found: &'tree Block<'tree>,
 }
 
-impl<'tree> Visitor<'tree> for InnermostBlock<'tree, '_> {
+impl<'tree> Visit<'tree> for InnermostBlock<'tree, '_> {
     fn visit_block(&mut self, block: &'tree Block<'tree>) {
         let first_start = first_item_start(block);
         let last_end = printed_items(block).last().map(|item| item.span().end);

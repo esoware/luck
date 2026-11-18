@@ -1,4 +1,4 @@
-use luck_ast::{Call, Expression};
+use luck_ast::{Call, Expression, GetSpan as _};
 use luck_semantic::SemanticAnalysis;
 
 use crate::call::{CallArg, CallArgs, is_global_call};

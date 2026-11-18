@@ -1,7 +1,9 @@
 //! Types format from the [`Type`] tree alone, never from source, so synthetic
 //! types format the same as parsed ones.
 
-use luck_ast::{FunctionTypeParam, GenericTypeList, GenericTypeParam, Type, TypeArgs, TypeField};
+use luck_ast::{
+    FunctionTypeParam, GenericTypeList, GenericTypeParam, GetSpan as _, Type, TypeArgs, TypeField,
+};
 
 use crate::ir::{Formatter, LineMode};
 
@@ -47,10 +49,6 @@ fn flat_leading_name<'ast>(ty: &Type<'ast>) -> Option<&'ast str> {
     }
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
     /// An alternation places its own leading comments, after the line break
     /// it may open with.

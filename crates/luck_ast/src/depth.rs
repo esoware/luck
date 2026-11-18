@@ -3,12 +3,13 @@ use core::mem;
 use luck_token::Span;
 
 use crate::expr::Expression;
+use crate::generated::Visit;
+use crate::span::GetSpan as _;
 use crate::stmt::{Block, Statement};
 use crate::types::Type;
-use crate::visitor::Visitor;
 
 /// The deepest tree `luck_parser` builds, in every dialect, in the levels
-/// [`Visitor::descend`] counts.
+/// [`Visit::descend`] counts.
 ///
 /// Luau's parser counts a level for each statement in a block and each
 /// expression, and stops past 1,000, and Lua's stops at 200. Nesting a
@@ -89,7 +90,7 @@ struct DepthMeter {
     deepest: usize,
 }
 
-impl Visitor<'_> for DepthMeter {
+impl Visit<'_> for DepthMeter {
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
         self.deepest = self.deepest.max(self.depth);
@@ -108,7 +109,7 @@ struct OverflowFinder {
     spans: Vec<Span>,
 }
 
-impl<'ast> Visitor<'ast> for OverflowFinder {
+impl<'ast> Visit<'ast> for OverflowFinder {
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
         let fits = self.depth <= MAX_NESTING_DEPTH;
@@ -143,11 +144,10 @@ impl<'ast> Visitor<'ast> for OverflowFinder {
 
 #[cfg(test)]
 mod tests {
-    use luck_allocator::Box;
     use luck_token::{BinOp, UnOp};
 
     use super::*;
-    use crate::expr::{BinaryLink, BinaryOp, UnaryOp};
+    use crate::expr::BinaryLink;
     use crate::fixtures::Fixture;
     use crate::one_or_more::OneOrMore;
     use crate::synth::{FunctionSignature, Synth};
@@ -248,11 +248,8 @@ mod tests {
         let synth = fixture.synth();
         let allocator = fixture.allocator();
         let run = |first, operand| {
-            let links = OneOrMore::new(BinaryLink { op: BinOp::Concat, operand }, allocator);
-            Expression::BinaryOp(Box::new_in(
-                BinaryOp { span: Span::default(), first, links },
-                allocator,
-            ))
+            let links = OneOrMore::new(BinaryLink::new(BinOp::Concat, operand), allocator);
+            Expression::new_binary_op(Span::default(), first, links, allocator)
         };
         let nested = run(run(synth.name_expr("a"), synth.name_expr("b")), synth.name_expr("c"));
         assert_eq!(expr_nesting_depth(&nested), 2);
@@ -322,8 +319,7 @@ mod tests {
         }
         assert_eq!(expr_nesting_depth(&chain), MAX_NESTING_DEPTH);
         for _ in 0..50_000u32 {
-            let unary_op = UnaryOp { span: Span::default(), op: UnOp::Not, operand: chain };
-            chain = Expression::UnaryOp(Box::new_in(unary_op, allocator));
+            chain = Expression::new_unary_op(Span::default(), UnOp::Not, chain, allocator);
         }
         assert_eq!(expr_nesting_depth(&chain), MAX_NESTING_DEPTH + 1);
     }

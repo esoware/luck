@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Call, Expression, LastStatement, Suffix, SuffixedExpression};
+use luck_ast::{Call, Expression, GetSpan as _, LastStatement, Suffix, SuffixedExpression};
 use luck_semantic::{
     ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction, expand_replace_template,
 };

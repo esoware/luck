@@ -10,7 +10,7 @@ use core::mem;
 
 use luck_ast::{
     Expression, FunctionBody, LocalAssignment, LocalAssignmentKind, LocalFunction, Name, NameIndex,
-    Statement, Type, Var, Visitor,
+    Statement, Type, Var, Visit,
 };
 use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 
@@ -281,7 +281,7 @@ impl Counter<'_> {
     }
 }
 
-impl<'tree> Visitor<'tree> for Counter<'_> {
+impl<'tree> Visit<'tree> for Counter<'_> {
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
         true
@@ -343,36 +343,36 @@ impl<'tree> Visitor<'tree> for Counter<'_> {
         self.walk_expr(expr);
     }
 
-    fn visit_assignment_target(&mut self, target: &'tree Var<'tree>) {
-        if let Var::Name(name) = target {
+    fn visit_var(&mut self, var: &'tree Var<'tree>) {
+        if let Var::Name(name) = var {
             self.reference(name, true);
             return;
         }
-        self.walk_assignment_target(target);
+        self.walk_var(var);
     }
 
     /// A signature belongs to the scope around the function, as the bind
     /// walk counts it.
-    fn visit_function_body(&mut self, body: &'tree FunctionBody<'tree>) {
+    fn visit_function_body(&mut self, function_body: &'tree FunctionBody<'tree>) {
         if self.descend() {
-            if let Some(generics) = &body.generics {
+            if let Some(generics) = &function_body.generics {
                 self.visit_generic_type_list(generics);
             }
-            for param in &body.params {
+            for param in &function_body.params {
                 if let Some(ty) = &param.type_annotation {
                     self.visit_type(ty);
                 }
             }
             if let Some(ty) =
-                body.vararg.as_ref().and_then(|vararg| vararg.type_annotation.as_ref())
+                function_body.vararg.as_ref().and_then(|vararg| vararg.type_annotation.as_ref())
             {
                 self.visit_type(ty);
             }
-            if let Some(ty) = &body.return_type {
+            if let Some(ty) = &function_body.return_type {
                 self.visit_type(ty);
             }
             self.function_depth = self.function_depth.saturating_add(1);
-            self.visit_block(&body.block);
+            self.visit_block(&function_body.block);
             self.function_depth = self.function_depth.saturating_sub(1);
         }
         self.ascend();

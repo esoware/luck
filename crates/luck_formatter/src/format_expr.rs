@@ -4,7 +4,7 @@
 use core::iter;
 
 use luck_ast::{
-    BinaryOp, Expression, FunctionDef, IfExpression, InterpolatedString, Suffix,
+    BinaryOp, Expression, FunctionDef, GetSpan as _, IfExpression, InterpolatedString, Suffix,
     SuffixedExpression, UnaryOp, Var, expr_starts_with_brace,
 };
 use luck_token::UnOp;
@@ -65,10 +65,6 @@ fn is_double_minus_hazard(op: UnOp, operand: &Expression<'_>) -> bool {
     op == UnOp::Neg && matches!(operand, Expression::UnaryOp(inner) if inner.op == UnOp::Neg)
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
     pub(crate) fn write_expr(&mut self, expr: &Expression<'ast>) {
         self.node(

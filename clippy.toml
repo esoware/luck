@@ -2,6 +2,7 @@ avoid-breaking-exported-api = false
 check-private-items = true
 allow-mixed-uninlined-format-args = false
 check-inconsistent-struct-field-initializers = true
+inherent-impl-lint-scope = "file"
 upper-case-acronyms-aggressive = true
 matches-for-let-else = "AllTypes"
 lint-commented-code = true

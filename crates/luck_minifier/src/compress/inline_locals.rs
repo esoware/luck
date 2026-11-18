@@ -5,8 +5,8 @@ use core::mem;
 
 use luck_allocator::List;
 use luck_ast::{
-    BinaryOp, Block, Expression, LocalAssignment, MAX_NESTING_DEPTH, Statement, Visitor,
-    VisitorMut as _, expr_nesting_depth,
+    BinaryOp, Block, Expression, LocalAssignment, MAX_NESTING_DEPTH, Statement, Visit,
+    VisitMut as _, expr_nesting_depth,
 };
 use luck_token::{BinOp, MAX_ACTIVE_LOCALS, OperandSide, UnOp};
 
@@ -162,7 +162,7 @@ struct ReadFinder<'bindings> {
     is_found: bool,
 }
 
-impl<'tree> Visitor<'tree> for ReadFinder<'_> {
+impl<'tree> Visit<'tree> for ReadFinder<'_> {
     fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
         if self.is_found {
             return;
@@ -193,7 +193,9 @@ impl<'ast> Compressor<'_, 'ast> {
         // An initializer can hold `local`s of its own, so the list is a
         // stack that every `local` leaves as it found it.
         let landed_start = self.landed_counts.len();
-        self.walk_attributed_names(&mut local.names);
+        for attributed in &mut local.names {
+            self.visit_attributed_name(attributed);
+        }
         for expr in &mut local.exprs {
             let outer_landed_locals = mem::replace(&mut self.landed_locals, 0);
             self.visit_expr(expr);

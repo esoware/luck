@@ -1,3 +1,4 @@
+use luck_ast::GetSpan as _;
 use luck_token::{Comment, LuaVersion, Span, has_line_break, index_to_offset};
 
 use crate::diagnostic::{LintDiagnostic, Severity};

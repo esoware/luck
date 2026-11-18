@@ -26,9 +26,11 @@ use crate::leaf::{Literal, Name};
 ///
 /// They're built for tools that emit a tree directly, such as decompilers,
 /// so they also take on the output-validity work such a tool would otherwise
-/// reimplement. Nodes go in the [`Allocator`] the synthesizer is given, and
-/// every name and literal is copied into it. Lists come in as arrays or as
-/// iterators of known length.
+/// reimplement. They build every node with the tree's generated
+/// constructors, such as [`Expression::new_binary_op`](crate::Expression::new_binary_op),
+/// which take each field as given and check nothing. Nodes go in the
+/// [`Allocator`] the synthesizer is given, and every name and literal is
+/// copied into it. Lists come in as arrays or as iterators of known length.
 ///
 /// `Synth` is `Copy`, and its methods take `&self`, so calls nest:
 /// `synth.call(synth.name_expr("f"), [synth.nil()])`.
@@ -117,8 +119,8 @@ use crate::leaf::{Literal, Name};
 /// - **Raw text.** [`Synth::number`] and [`Synth::integer_literal`] take
 ///   numeral text as written. The printers print each leaf as the tree holds
 ///   it, so text that isn't one numeral prints output that doesn't read back
-///   as the tree. The same goes for a node built by hand, with spans from
-///   [`Synth::next_span`].
+///   as the tree. The same goes for a node built with its own constructor,
+///   with spans from [`Synth::next_span`].
 /// - **Type names.** A type reads a bare `typeof` as the start of
 ///   `typeof(expr)`, so [`Synth::ty_named`] or [`Synth::ty_generic`] given
 ///   `typeof` prints a type that doesn't read back. Don't build one: a type
@@ -198,10 +200,6 @@ impl SpanCounter {
     }
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the synthesizer is one type with its constructors split by node family"
-)]
 impl<'ast> Synth<'ast> {
     #[must_use]
     pub const fn new(allocator: &'ast Allocator, spans: &'ast SpanCounter) -> Self {
@@ -224,7 +222,8 @@ impl<'ast> Synth<'ast> {
     }
 
     /// A fresh single-point span, distinct from every earlier one the counter
-    /// gave out until it reaches `u32::MAX`, for a node built by hand.
+    /// gave out until it reaches `u32::MAX`, for a node built with its own
+    /// constructor.
     #[must_use]
     pub fn next_span(&self) -> Span {
         self.spans.next_span()
@@ -247,11 +246,7 @@ impl<'ast> Synth<'ast> {
             |version| is_valid_identifier_in(text, version),
         );
         assert!(is_valid, "synth: {text:?} is not a valid identifier");
-        Name {
-            text: ThinStr::new(self.allocator.alloc_str(text)),
-            index: None,
-            span: self.next_span(),
-        }
+        Name::new(ThinStr::new(self.allocator.alloc_str(text)), None, self.next_span())
     }
 
     /// Whether `name` works as a `.name` field or `name =` key: an identifier
@@ -277,7 +272,7 @@ impl<'ast> Synth<'ast> {
 
     /// `text` copied into the arena, at a fresh span.
     fn literal(&self, text: &str) -> Literal<'ast> {
-        Literal { text: self.allocator.alloc_str(text), span: self.next_span() }
+        Literal::new(self.allocator.alloc_str(text), self.next_span())
     }
 }
 
@@ -291,6 +286,7 @@ mod tests {
     use super::*;
     use crate::expr::{Expression, FunctionArgs, Suffix};
     use crate::fixtures::Fixture;
+    use crate::span::GetSpan as _;
     use crate::stmt::LastStatement;
 
     #[test]

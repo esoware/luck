@@ -1,5 +1,6 @@
 use luck_ast::{
-    Block, Expression, GenericFor, LocalAssignment, Name, NumericFor, Statement, Suffix, Var,
+    Block, Expression, GenericFor, GetSpan as _, LocalAssignment, Name, NumericFor, Statement,
+    Suffix, Var,
 };
 use luck_semantic::{ScopeTree, SemanticAnalysis};
 use luck_token::{Span, UnOp};

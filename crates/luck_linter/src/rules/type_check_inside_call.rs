@@ -1,4 +1,4 @@
-use luck_ast::{Call, Expression, FunctionArgs};
+use luck_ast::{Call, Expression, FunctionArgs, GetSpan as _};
 use luck_semantic::SemanticAnalysis;
 use luck_token::BinOp;
 

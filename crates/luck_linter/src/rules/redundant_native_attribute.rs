@@ -1,4 +1,4 @@
-use luck_ast::{Expression, FunctionAttribute, LastStatement, Statement};
+use luck_ast::{Expression, FunctionAttribute, GetSpan as _, LastStatement, Statement};
 use luck_token::{CommentKind, Span, offset_to_index};
 
 use crate::diagnostic::Finding;

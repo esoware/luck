@@ -2,10 +2,9 @@ use core::mem;
 
 use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
-    Assignment, Block, Expression, FunctionArgs, FunctionDecl, FunctionName, Literal,
-    LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MAX_NESTING_DEPTH,
-    Name, OneOrMore, Statement, Suffix, SuffixedExpression, Var, VisitorMut,
-    spans_past_nesting_cap,
+    Block, Expression, FunctionArgs, FunctionName, GetSpan as _, LocalAssignment,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, MAX_NESTING_DEPTH, Name, OneOrMore,
+    Statement, Suffix, SuffixedExpression, Var, VisitMut, spans_past_nesting_cap,
 };
 use luck_core::Diagnostic;
 use luck_resolver::to_slash_lossy;
@@ -34,7 +33,7 @@ pub(crate) fn emit_block<'ast>(
     version: LuaVersion,
 ) -> Result<(Block<'ast>, String), Vec<Diagnostic>> {
     let Some(entry) = graph.modules.get(graph.entry_id.0) else {
-        let empty = Block { span: Span::default(), stmts: List::new(), last_stmt: None };
+        let empty = Block::new(Span::default(), List::new(), None);
         return Ok((empty, String::new()));
     };
     let header = chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied());
@@ -85,7 +84,7 @@ impl<Bodies> Filler<'_, '_, Bodies> {
     }
 }
 
-impl<'ast, Bodies> VisitorMut<'ast> for Filler<'_, 'ast, Bodies>
+impl<'ast, Bodies> VisitMut<'ast> for Filler<'_, 'ast, Bodies>
 where
     Bodies: Iterator<Item = Block<'ast>>,
 {
@@ -239,33 +238,25 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
     fn key_expr(&mut self, key: Key<'_>) -> Expression<'ast> {
         self.key_text.clear();
         key.write(&mut self.key_text);
-        let literal = Box::new_in(
-            Literal { text: self.allocator.alloc_str(&self.key_text), span: Span::default() },
-            self.allocator,
-        );
+        let text = self.allocator.alloc_str(&self.key_text);
         match key {
-            Key::Slot(_) => Expression::Number(literal),
-            Key::Name(_) => Expression::StringLiteral(literal),
+            Key::Slot(_) => Expression::new_number(text, Span::default(), self.allocator),
+            Key::Name(_) => Expression::new_string_literal(text, Span::default(), self.allocator),
         }
     }
 
     /// The export table's field that a lowered export's reference reads or
     /// writes.
     fn export_field(&self, name: &Name<'ast>) -> Option<Box<'ast, SuffixedExpression<'ast>>> {
-        self.module
-            .exports
-            .is_field_reference(name.span)
-            .then(|| Box::new_in(self.table_field(*name), self.allocator))
+        self.module.exports.is_field_reference(name.span).then(|| self.table_field(*name))
     }
 
     /// The export table's field `name`, spanning it.
-    fn table_field(&self, name: Name<'ast>) -> SuffixedExpression<'ast> {
-        let table = Name { text: self.names.exports.into(), index: None, span: name.span };
-        SuffixedExpression {
-            span: name.span,
-            prefix: Expression::Name(Box::new_in(table, self.allocator)),
-            suffixes: OneOrMore::new(Suffix::Field(name), self.allocator),
-        }
+    fn table_field(&self, name: Name<'ast>) -> Box<'ast, SuffixedExpression<'ast>> {
+        let table =
+            Expression::new_name(self.names.exports.into(), None, name.span, self.allocator);
+        let suffixes = OneOrMore::new(Suffix::Field(name), self.allocator);
+        SuffixedExpression::boxed(name.span, table, suffixes, self.allocator)
     }
 
     /// A top-level `export` declaration loses the keyword. One whose exports
@@ -289,12 +280,9 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
                 }
                 let LocalAssignment { span, names, exprs, .. } = Box::unbox(local);
                 let targets = List::from_iter_in(
-                    names.into_iter().map(|attributed| {
-                        Var::Suffixed(Box::new_in(
-                            self.table_field(attributed.name),
-                            self.allocator,
-                        ))
-                    }),
+                    names
+                        .into_iter()
+                        .map(|attributed| Var::Suffixed(self.table_field(attributed.name))),
                     self.allocator,
                 );
                 let values = if exprs.is_empty() {
@@ -302,10 +290,7 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
                 } else {
                     exprs
                 };
-                Statement::Assignment(Box::new_in(
-                    Assignment { span, targets, values },
-                    self.allocator,
-                ))
+                Statement::new_assignment(span, targets, values, self.allocator)
             }
             Statement::LocalFunction(mut function) if function.kind.is_exported() => {
                 if !exports.is_table_statement(function.span) {
@@ -315,14 +300,10 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
                     return Statement::LocalFunction(function);
                 }
                 let LocalFunction { span, attributes, name, body, .. } = Box::unbox(function);
-                let table = Name { text: self.names.exports.into(), index: None, span: name.span };
-                let function_name = FunctionName {
-                    span: name.span,
-                    names: List::from_array_in([table, name], self.allocator),
-                    method: None,
-                };
-                let declaration = FunctionDecl { span, attributes, name: function_name, body };
-                Statement::FunctionDecl(Box::new_in(declaration, self.allocator))
+                let table = Name::new(self.names.exports.into(), None, name.span);
+                let names = List::from_array_in([table, name], self.allocator);
+                let function_name = FunctionName::new(name.span, names, None);
+                Statement::new_function_decl(span, attributes, function_name, body, self.allocator)
             }
             other @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
@@ -348,7 +329,7 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
     }
 }
 
-impl<'ast> VisitorMut<'ast> for ModuleRewriter<'_, 'ast> {
+impl<'ast> VisitMut<'ast> for ModuleRewriter<'_, 'ast> {
     fn visit_stmt(&mut self, stmt: &mut Statement<'ast>) {
         if !self.touches(stmt.span()) {
             return;
@@ -359,20 +340,20 @@ impl<'ast> VisitorMut<'ast> for ModuleRewriter<'_, 'ast> {
             && let Some(root) = function_decl.name.names.first()
             && self.module.exports.is_field_reference(root.span)
         {
-            let table = Name { text: self.names.exports.into(), index: None, span: root.span };
+            let table = Name::new(self.names.exports.into(), None, root.span);
             function_decl.name.names.insert(0, table, self.allocator);
         }
         self.walk_stmt(stmt);
     }
 
     /// A lowered export as the prefix joins the chain.
-    fn visit_suffixed(&mut self, chain: &mut SuffixedExpression<'ast>) {
-        if !self.touches(chain.span) {
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &mut SuffixedExpression<'ast>) {
+        if !self.touches(suffixed_expr.span) {
             return;
         }
-        self.retarget_require(chain);
-        self.walk_suffixed(chain);
-        chain.splice_prefix(self.allocator);
+        self.retarget_require(suffixed_expr);
+        self.walk_suffixed_expr(suffixed_expr);
+        suffixed_expr.splice_prefix(self.allocator);
     }
 
     fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
@@ -392,13 +373,13 @@ impl<'ast> VisitorMut<'ast> for ModuleRewriter<'_, 'ast> {
         self.walk_expr(expr);
     }
 
-    fn visit_assignment_target(&mut self, target: &mut Var<'ast>) {
-        if let Var::Name(name) = target
+    fn visit_var(&mut self, var: &mut Var<'ast>) {
+        if let Var::Name(name) = var
             && let Some(field) = self.export_field(name)
         {
-            *target = Var::Suffixed(field);
+            *var = Var::Suffixed(field);
             return;
         }
-        self.walk_assignment_target(target);
+        self.walk_var(var);
     }
 }

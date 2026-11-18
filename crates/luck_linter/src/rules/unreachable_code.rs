@@ -1,4 +1,4 @@
-use luck_ast::{Block, Statement};
+use luck_ast::{Block, GetSpan as _, Statement};
 use luck_semantic::SemanticAnalysis;
 
 use crate::cfg::FlowGraph;

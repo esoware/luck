@@ -1,8 +1,8 @@
 use core::slice;
 
 use luck_ast::{
-    Block, Call, ChainHead, Expression, FunctionArgs, Literal, Name, Statement, Suffix,
-    SuffixedExpression, Var, Visitor,
+    Block, Call, ChainHead, Expression, FunctionArgs, GetSpan as _, Literal, Name, Statement,
+    Suffix, SuffixedExpression, Var, Visit,
 };
 use luck_semantic::{ScopeTree, SymbolId, SymbolKind};
 use luck_token::{CommentKind, Span, Token, TokenKind, offset_to_index};
@@ -279,7 +279,7 @@ impl<'ast> NodeFinder<'ast> {
     }
 }
 
-impl<'ast> Visitor<'ast> for NodeFinder<'ast> {
+impl<'ast> Visit<'ast> for NodeFinder<'ast> {
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
         for stmt in statements_touching(block, self.offset) {
             self.visit_stmt(stmt);
@@ -301,16 +301,16 @@ impl<'ast> Visitor<'ast> for NodeFinder<'ast> {
         self.walk_expr(expr);
     }
 
-    fn visit_assignment_target(&mut self, target: &'ast Var<'ast>) {
-        if let Var::Name(name) = target {
+    fn visit_var(&mut self, var: &'ast Var<'ast>) {
+        if let Var::Name(name) = var {
             self.record_name(name);
         }
-        self.walk_assignment_target(target);
+        self.walk_var(var);
     }
 
-    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression<'ast>) {
-        self.record_chain(chain);
-        self.walk_suffixed(chain);
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
+        self.record_chain(suffixed_expr);
+        self.walk_suffixed_expr(suffixed_expr);
     }
 }
 
@@ -336,7 +336,7 @@ struct CallSiteFinder<'document> {
     result: Option<CallSite<'document>>,
 }
 
-impl<'document> Visitor<'document> for CallSiteFinder<'document> {
+impl<'document> Visit<'document> for CallSiteFinder<'document> {
     fn visit_block(&mut self, block: &'document Block<'document>) {
         for stmt in statements_touching(block, self.offset) {
             self.visit_stmt(stmt);
@@ -354,9 +354,11 @@ impl<'document> Visitor<'document> for CallSiteFinder<'document> {
         }
     }
 
-    fn visit_call(&mut self, call: Call<'document>) {
-        self.try_record(call);
-        self.walk_call(call);
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &'document SuffixedExpression<'document>) {
+        for call in suffixed_expr.calls() {
+            self.try_record(call);
+        }
+        self.walk_suffixed_expr(suffixed_expr);
     }
 }
 
@@ -416,7 +418,7 @@ struct StringArgFinder<'ast> {
     result: Option<StringArgSite<'ast>>,
 }
 
-impl<'ast> Visitor<'ast> for StringArgFinder<'ast> {
+impl<'ast> Visit<'ast> for StringArgFinder<'ast> {
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
         for stmt in statements_touching(block, self.offset) {
             self.visit_stmt(stmt);
@@ -434,9 +436,11 @@ impl<'ast> Visitor<'ast> for StringArgFinder<'ast> {
         }
     }
 
-    fn visit_call(&mut self, call: Call<'ast>) {
-        self.try_record(call);
-        self.walk_call(call);
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
+        for call in suffixed_expr.calls() {
+            self.try_record(call);
+        }
+        self.walk_suffixed_expr(suffixed_expr);
     }
 }
 

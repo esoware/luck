@@ -33,9 +33,9 @@ idiomatic.lua:
 
 infinite_yield.luau:
   file size: 482971 # 482.97 kB
-  sys allocs: 24897
+  sys allocs: 24894
   sys reallocs: 8901
-  sys deallocs: 24897
+  sys deallocs: 24894
   sys alloc bytes: 13734974 # 13.73 MB
   sys peak growth: 9694973 # 9.69 MB
   arena allocs: 0

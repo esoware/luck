@@ -1,4 +1,4 @@
-use luck_ast::{Block, FunctionBody, Statement, Visitor};
+use luck_ast::{Block, FunctionBody, GotoStatement, LabelStatement, Visit};
 use luck_token::Span;
 
 use crate::diagnostic::Finding;
@@ -56,39 +56,20 @@ struct LabelScope<'ast> {
     nested_bodies: Vec<&'ast FunctionBody<'ast>>,
 }
 
-impl<'ast> Visitor<'ast> for LabelScope<'ast> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-        match stmt {
-            // Lua 5.2+
-            Statement::Label(label) => self.labels.push((label.name.text.as_str(), label.span)),
-            // Lua 5.2+
-            Statement::Goto(goto) => self.goto_names.push(goto.name.text.as_str()),
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-        self.walk_stmt(stmt);
+impl<'ast> Visit<'ast> for LabelScope<'ast> {
+    // Lua 5.2+
+    fn visit_label_stmt(&mut self, label_stmt: &'ast LabelStatement<'ast>) {
+        self.labels.push((label_stmt.name.text.as_str(), label_stmt.span));
+    }
+
+    // Lua 5.2+
+    fn visit_goto_stmt(&mut self, goto_stmt: &'ast GotoStatement<'ast>) {
+        self.goto_names.push(goto_stmt.name.text.as_str());
     }
 
     // A nested function gets its own `check_scope` pass.
-    fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
-        self.nested_bodies.push(body);
+    fn visit_function_body(&mut self, function_body: &'ast FunctionBody<'ast>) {
+        self.nested_bodies.push(function_body);
     }
 }
 

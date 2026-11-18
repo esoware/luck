@@ -1,4 +1,4 @@
-use luck_ast::{Block, LocalAssignment, LocalFunction, Statement};
+use luck_ast::{Block, GetSpan as _, LocalAssignment, LocalFunction, Statement};
 use luck_semantic::{ScopeKind, ScopeTree, Symbol, SymbolId};
 use luck_token::{LuaVersion, Span, TokenKind, line_breaks, offset_to_index};
 use rustc_hash::FxHashSet;

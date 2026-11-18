@@ -1,4 +1,4 @@
-use luck_ast::{LastStatement, Statement};
+use luck_ast::{GetSpan as _, LastStatement, Statement};
 use luck_token::Span;
 
 use crate::diagnostic::Finding;

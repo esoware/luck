@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use luck_allocator::Allocator;
-use luck_ast::{Call, Visitor};
+use luck_ast::{SuffixedExpression, Visit};
 use luck_bundler::{BundleOptions, BundleResult, DynamicRequire, LineMapEntry};
 use luck_core::Diagnostic;
 use luck_semantic::{ScopeId, ScopeKind, ScopeTree, SymbolId};
@@ -269,12 +269,14 @@ fn lua51_arg_restore_ends_before_a_body_opening_with_a_parenthesis() {
 #[derive(Default)]
 struct EnvCalls(usize);
 
-impl<'ast> Visitor<'ast> for EnvCalls {
-    fn visit_call(&mut self, call: Call<'ast>) {
-        if call.callee.as_name().is_some_and(|name| name.text == "_ENV") {
-            self.0 = self.0.saturating_add(1);
+impl<'ast> Visit<'ast> for EnvCalls {
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
+        for call in suffixed_expr.calls() {
+            if call.callee.as_name().is_some_and(|name| name.text == "_ENV") {
+                self.0 = self.0.saturating_add(1);
+            }
         }
-        self.walk_call(call);
+        self.walk_suffixed_expr(suffixed_expr);
     }
 }
 

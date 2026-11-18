@@ -10,7 +10,8 @@ luck is a workspace of small crates around one syntax tree. This file covers the
 | `luck_token` | Spans, tokens, `LuaVersion`, `SourceError`, and the literal and line-break rules every stage shares | |
 | `luck_core` | `LuaTarget`, the dialect a user names, and `Diagnostic` | token |
 | `luck_lexer` | Source to tokens and comments | token |
-| `luck_ast` | The tree, its visitors, `Synth`, and the nesting cap | allocator, token |
+| `luck_ast_macros` | The `Ast` derive, which marks a type as part of the tree and generates nothing | |
+| `luck_ast` | The tree, the support code generated from it, `Synth`, and the nesting cap | allocator, token, ast_macros |
 | `luck_parser` | Source to a tree, through the lexer | allocator, token, lexer, ast |
 | `luck_codegen` | A tree to the shortest source that parses back to it | token, ast |
 | `luck_formatter` | A tree to formatted source | allocator, token, lexer, ast, parser |
@@ -23,6 +24,7 @@ luck is a workspace of small crates around one syntax tree. This file covers the
 | `luck_lsp` | The language server | allocator, token, core, ast, parser, formatter, semantic, linter, resolver, config |
 | `luck_cli` | The `luck` binary | allocator, token, core, ast, parser, formatter, minifier, linter, resolver, bundler, config, lsp |
 | `luck` | The facade, published as `luck_lua`, which re-exports each stage behind a feature | every crate above but lsp and cli |
+| `luck_ast_tools` | Unpublished: writes `luck_ast`'s visitors, node kinds, span accessors, content equality, builder, and layout assertions from the types that derive `Ast` | |
 | `luck_testgen` | Unpublished: generated programs, stack-test inputs, and a round-trip tree comparison for other crates' tests | token, ast |
 | `luck_benchmark_files` | Unpublished: the pinned files and projects the benches and allocation snapshots measure | allocator, token, core, parser |
 | `luck_benchmark` | Unpublished: a bench per stage | |
@@ -71,7 +73,7 @@ So no rewrite has to carry comments along.
 
 ## The nesting cap and the stack
 
-Every traversal recurses on the thread's stack, once per level of nesting, so luck caps the depth of a tree rather than rewrite every walk as a loop. `luck_ast::MAX_NESTING_DEPTH` is 2,001 levels in every dialect, counted the way `Visitor::descend` counts them. That is enough to read any construct nested inside itself as deep as the reference Lua and Luau parsers do. A run of suffixes, or of binary operators at one precedence, is one node and one level however long it gets, so a long `a.b.c` or `a + b + c` never nears the cap.
+Every traversal recurses on the thread's stack, once per level of nesting, so luck caps the depth of a tree rather than rewrite every walk as a loop. `luck_ast::MAX_NESTING_DEPTH` is 2,001 levels in every dialect, counted the way `Visit::descend` counts them. That is enough to read any construct nested inside itself as deep as the reference Lua and Luau parsers do. A run of suffixes, or of binary operators at one precedence, is one node and one level however long it gets, so a long `a.b.c` or `a + b + c` never nears the cap.
 
 - The parser refuses the node that would pass the cap with one error that ends the parse, so every tree it returns, with errors or without, fits.
 - `minify_block` and `format_block` return an error for a deeper tree. A minifier rewrite that nests an expression deeper checks that it still fits, and the bundler reports E013 where a module's wrapper would push it past the cap. `compact` takes only trees its callers keep within the cap. So no stage writes output the parser would refuse.
@@ -93,6 +95,7 @@ Every traversal recurses on the thread's stack, once per level of nesting, so lu
 - **A token holds no text, and there is no global string interner.** `Token::text` slices the source, and an interner's lock would serialize rayon's workers.
 - **Leaves hold their text as written, and the printers print it unchecked.** The parser builds only leaves the lexer read, and luck's own rewrites build none the lexer would read differently, so a check would only cost time. Code that builds a tree is responsible for its leaves.
 - **Luau types are a tree.** `luck_ast::Type` holds them as nodes, not text, so every consumer gets their structure.
+- **The tree's support code is generated from its types, as oxc's is.** `luck_ast_tools` reads the types that derive `Ast` and writes `Visit` and `VisitMut`, with a hook for every type in source order, `AstKind`, `GetSpan`, `ContentEq`, the builder, and a test that pins every type's size, so a new node or field is one edit and `just ast`. The levels the nesting cap counts are marked on the types with `#[visit(level)]`. Every tree is built through the generated constructors, by the parser, by the minifier's and bundler's rewrites, and by `Synth`, which adds only policy on top. Code that compares code compares trees with `ContentEq`, which leaves out spans, rather than source text.
 - **A fix has a kind, and only a fix that keeps what the code does runs unasked.** `--fix` and the editor's fix-all apply `Fix`es, round after round until none is left. A `Suggestion`, such as renaming an unused variable to `_x`, is an editor quick fix, or `--fix-suggestions` applies it. The linter builds only the kinds its host applies, and drops any fix whose edits would delete a comment.
 - **Errors are data, and one diagnostic scheme reports them.** A lex, parse, or format error is a `SourceError`, and a `require` that doesn't resolve gets a `ResolveError`. An error that reaches a user is a `Diagnostic` from a numbered constructor in `luck_core`, such as `Diagnostic::e008` for a parse failure, and a lint diagnostic is named after its rule. Only the caller that reports an error builds its diagnostic. The CLI exits 0 on success, 1 when it found problems, and 2 on a usage or config error.
 - **The core crates make no OS calls.** `luck_token`, `luck_lexer`, `luck_ast`, `luck_parser`, `luck_codegen`, `luck_core`, `luck_formatter`, and `luck_minifier` take text or a tree and return text, a tree, or errors. Reading files and resolving paths start at `luck_resolver`, whose resolver reads through a `FileSystem` trait, so a caller such as the language server can resolve against files it holds in memory.

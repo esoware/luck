@@ -1,4 +1,4 @@
-use luck_ast::Statement;
+use luck_ast::{ContentEq as _, Statement};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -22,7 +22,7 @@ impl NodeRule for IfSameThenElse {
     fn on_stmt(
         &self,
         stmt: &Statement<'_>,
-        context: &LintContext<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         let Statement::IfStatement(if_stmt) = stmt else {
@@ -31,9 +31,8 @@ impl NodeRule for IfSameThenElse {
         let Some(else_clause) = &if_stmt.else_clause else {
             return;
         };
-        let then_text = if_stmt.block.span.text(context.source);
-        let else_text = else_clause.block.span.text(context.source);
-        if !then_text.is_empty() && then_text.trim() == else_text.trim() {
+        let is_empty = if_stmt.block.stmts.is_empty() && if_stmt.block.last_stmt.is_none();
+        if !is_empty && if_stmt.block.content_eq(&else_clause.block) {
             let finding =
                 Finding::new("`if` and `else` branches have identical bodies", if_stmt.span);
             // An `elseif` keeps the first condition meaningful.
@@ -79,6 +78,28 @@ mod tests {
     #[test]
     fn ignores_if_without_else() {
         let diags = run("if a then print(1) end");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_branches_that_differ_only_in_spacing_and_comments() {
+        let diags = run("\
+if a then
+  print(1, x) -- the first
+else
+  print( 1,x )
+end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_empty_branches() {
+        let diags = run("\
+if a then
+  -- nothing
+else
+  -- nothing
+end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

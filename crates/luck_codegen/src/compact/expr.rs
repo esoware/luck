@@ -5,10 +5,6 @@ use luck_ast::{
 use super::Printer;
 use crate::separator::{INTERPOLATION_BRACE, OTHER, merges_after};
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the printer is one type with its node families split by file"
-)]
 impl Printer {
     /// Names, numbers, and strings, half of all expressions, print inline
     /// where they're reached, which saves them a call to a function that

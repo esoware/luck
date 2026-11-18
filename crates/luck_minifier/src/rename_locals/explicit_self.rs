@@ -6,7 +6,7 @@
 //! it is the parameter's from the start.
 
 use luck_allocator::Allocator;
-use luck_ast::{Expression, FunctionBody, FunctionDecl, Name, Parameter, Var, Visitor};
+use luck_ast::{Expression, FunctionBody, FunctionDecl, Name, Parameter, Var, Visit};
 
 use crate::binding::{Bindings, METHOD_RECEIVER_NAME, RECEIVER_NAME_ID, local_index, local_of};
 
@@ -35,16 +35,8 @@ pub(super) fn rewrite<'ast>(
     if let Some(binding) = bindings.entries.get_mut(receiver) {
         binding.merged_into = u32::try_from(parameter).unwrap_or(binding.merged_into);
     }
-    let name = Name {
-        text: METHOD_RECEIVER_NAME.into(),
-        index: Some(local_index(parameter)),
-        span: method.span,
-    };
-    function_declaration.body.params.insert(
-        0,
-        Parameter { name, type_annotation: None },
-        allocator,
-    );
+    let name = Name::new(METHOD_RECEIVER_NAME.into(), Some(local_index(parameter)), method.span);
+    function_declaration.body.params.insert(0, Parameter::new(name, None), allocator);
 }
 
 /// Counts the references to the method's own `self`.
@@ -67,7 +59,7 @@ impl SelfCounter<'_> {
     }
 }
 
-impl<'tree> Visitor<'tree> for SelfCounter<'_> {
+impl<'tree> Visit<'tree> for SelfCounter<'_> {
     fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
         if let Expression::Name(name) = expr {
             self.count(name);
@@ -75,11 +67,11 @@ impl<'tree> Visitor<'tree> for SelfCounter<'_> {
         self.walk_expr(expr);
     }
 
-    fn visit_assignment_target(&mut self, target: &'tree Var<'tree>) {
-        if let Var::Name(name) = target {
+    fn visit_var(&mut self, var: &'tree Var<'tree>) {
+        if let Var::Name(name) = var {
             self.count(name);
         }
-        self.walk_assignment_target(target);
+        self.walk_var(var);
     }
 
     // Skips nested functions. A nested method binds its own `self`, and

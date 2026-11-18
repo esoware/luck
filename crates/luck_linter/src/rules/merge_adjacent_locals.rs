@@ -1,4 +1,6 @@
-use luck_ast::{Attribute, LocalAssignment, LocalAssignmentKind, Statement};
+use luck_ast::{
+    Attribute, ContentEq as _, GetSpan as _, LocalAssignment, LocalAssignmentKind, Statement,
+};
 use luck_token::Span;
 
 use crate::diagnostic::Finding;
@@ -68,7 +70,7 @@ fn mergeable<'ast>(
     if !context.comments_within(pair_span).is_empty() {
         return None;
     }
-    if !annotations_match(context.source, &first, &second) {
+    if !first.attribute.content_eq(&second.attribute) {
         return None;
     }
     // Lua allows only one `<close>` variable per local list.
@@ -115,16 +117,6 @@ fn simple_binding<'ast>(local: &'ast LocalAssignment<'ast>) -> Option<SimpleBind
         attribute: attributed.attribute.as_deref(),
         initializer: initializer.span(),
     })
-}
-
-fn annotations_match(source: &str, first: &SimpleBinding<'_>, second: &SimpleBinding<'_>) -> bool {
-    match (first.attribute, second.attribute) {
-        (None, None) => true,
-        (Some(first_attribute), Some(second_attribute)) => {
-            first_attribute.span.text(source) == second_attribute.span.text(source)
-        }
-        (Some(_), None) | (None, Some(_)) => false,
-    }
 }
 
 /// Builds the merged statement from source slices, which keeps the
@@ -175,6 +167,17 @@ local b = 2";
         let source = "\
 local a <const> = 1
 local b <const> = 2";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local a <const>, b <const> = 1, 2");
+    }
+
+    #[test]
+    fn flags_and_fixes_a_shared_attribute_spelled_with_other_spacing() {
+        let source = "\
+local a <const> = 1
+local b < const > = 2";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);

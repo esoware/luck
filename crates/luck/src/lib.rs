@@ -11,7 +11,8 @@
 //!   threads (always on)
 //! - `token` - Spans, `LuaVersion`, tokens, literal value semantics (always on)
 //! - `lexer` - Tokenizer (always on)
-//! - `ast` - AST nodes, `Visitor`, `VisitorMut`, `span()` accessors (always on)
+//! - `ast` - AST nodes and their builder, `Visit`, `VisitMut`, `AstKind`,
+//!   `GetSpan`, `ContentEq` (always on)
 //! - `parser` - Pratt + recursive-descent parser (always on)
 //! - `core` - Dialect targets, diagnostics (always on)
 //! - `codegen` - Compact printer (feature `codegen`)

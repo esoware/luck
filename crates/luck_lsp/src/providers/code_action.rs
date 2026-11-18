@@ -1,6 +1,6 @@
 use core::ops;
 
-use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
+use luck_ast::{Block, Expression, GetSpan as _, LastStatement, Statement, Visit};
 use luck_linter::{Fix, FixKind, LintDiagnostic};
 use luck_token::{Span, has_line_break, is_lua_whitespace, offset_to_index};
 use rustc_hash::FxHashMap;
@@ -229,7 +229,7 @@ impl StatementFinder {
     }
 }
 
-impl<'ast> Visitor<'ast> for StatementFinder {
+impl<'ast> Visit<'ast> for StatementFinder {
     /// Only the statements between the first start and the last can hold
     /// one, and a block's statements are in source order.
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
@@ -253,9 +253,9 @@ impl<'ast> Visitor<'ast> for StatementFinder {
         }
     }
 
-    fn visit_last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
-        if self.holds(last.span()) {
-            self.walk_last_stmt(last);
+    fn visit_last_stmt(&mut self, last_stmt: &'ast LastStatement<'ast>) {
+        if self.holds(last_stmt.span()) {
+            self.walk_last_stmt(last_stmt);
         }
     }
 

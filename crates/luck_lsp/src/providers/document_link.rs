@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use luck_ast::{Block, Call, Expression, FunctionArgs, Visitor};
+use luck_ast::{Block, Call, Expression, FunctionArgs, GetSpan as _, SuffixedExpression, Visit};
 use luck_resolver::{ResolveOptions, Resolver};
 use luck_token::decode_string;
 use tower_lsp_server::ls_types::{DocumentLink, Position, Uri};
@@ -64,7 +64,7 @@ struct LinkCollector<'document> {
     links: Vec<DocumentLink>,
 }
 
-impl<'ast> Visitor<'ast> for LinkCollector<'_> {
+impl<'ast> Visit<'ast> for LinkCollector<'_> {
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
         let Some(offset) = self.offset else {
             self.walk_block(block);
@@ -86,9 +86,11 @@ impl<'ast> Visitor<'ast> for LinkCollector<'_> {
         }
     }
 
-    fn visit_call(&mut self, call: Call<'ast>) {
-        self.try_record(call);
-        self.walk_call(call);
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
+        for call in suffixed_expr.calls() {
+            self.try_record(call);
+        }
+        self.walk_suffixed_expr(suffixed_expr);
     }
 }
 

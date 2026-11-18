@@ -1,6 +1,8 @@
 use core::iter;
 
-use luck_ast::{Expression, FunctionArgs, FunctionAttribute, FunctionBody, Parameter, VarArgParam};
+use luck_ast::{
+    Expression, FunctionArgs, FunctionAttribute, FunctionBody, GetSpan as _, Parameter, VarArgParam,
+};
 use luck_token::Span;
 
 use crate::ir::{Formatter, LineMode};
@@ -19,10 +21,6 @@ fn is_block_arg(arg: &Expression<'_>) -> bool {
         || matches!(arg, Expression::TableConstructor(table) if !table.fields.is_empty())
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
     pub(crate) fn write_function_body(&mut self, body: &FunctionBody<'ast>) {
         // Luau: `<T, U...>` generic list before the parameter parens.

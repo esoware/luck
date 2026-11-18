@@ -1,3 +1,4 @@
+use luck_ast::GetSpan as _;
 use luck_semantic::{ResolvedCallee, StdlibEntry, StdlibFunction};
 
 use crate::call::{CallArg, CallArgs, string_literal_value};
