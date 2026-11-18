@@ -11,30 +11,29 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
     if text_kind_at(document, offset) != TextKind::Code {
         return None;
     }
-    let node = find_node_at(&document.parsed.block, offset)?;
+    let node = find_node_at(&document.parse().block, offset)?;
     let path = node.path();
-    // Resolving from the root's span lets shaped locals (`f:read` after
+    let semantic = document.semantic();
+    let tree = semantic.scope_tree();
+    // Resolving from the root's reference lets shaped locals (`f:read` after
     // `local f = io.open(...)`) resolve through their shape, and gives a
     // shadowed base (`local string = 1; string.format`) no stdlib hover
     // instead of the wrong docs.
     let entry = match &node {
-        CursorNode::Identifier { name, span } => {
-            if document.semantic.resolves_to_local(name, *span) {
+        CursorNode::Identifier(name, _) => {
+            if tree.resolves_to_local(name) {
                 return None;
             }
-            document.semantic.stdlib().lookup(path)?
+            semantic.stdlib().lookup(path)?
         }
-        CursorNode::DottedPath { root_span, .. } => {
-            document.semantic.resolve_stdlib_path(path, *root_span)?
-        }
-        CursorNode::Call { root_span, .. } => {
-            document.semantic.resolve_stdlib_path(path, (*root_span)?)?
+        CursorNode::DottedPath { root, .. } | CursorNode::Call { root, .. } => {
+            semantic.resolve_stdlib_path(path, tree.reference(tree.reference_of((*root)?)?))?
         }
     };
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: render_entry(path, entry, document.lua_version),
+            value: render_entry(path, entry, document.lua_version()),
         }),
         range: Some(document.range(node.span())),
     })
@@ -137,9 +136,9 @@ const fn version_label(version: LuaVersion) -> &'static str {
 mod tests {
     use luck_core::LuaTarget;
     use luck_token::index_to_offset;
-    use rustc_hash::FxHashSet;
 
     use super::*;
+    use crate::fixtures::document;
 
     fn markdown_at(document: &DocumentState, line: u32, utf16_column: u32) -> Option<String> {
         let HoverContents::Markup(markup) =
@@ -153,8 +152,7 @@ mod tests {
     #[test]
     fn hover_on_enum_item_renders_constant() {
         let text = "local m = Enum.Material.Grass";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox, FxHashSet::default());
+        let document = document(text, LuaTarget::LuauRoblox);
         // Cursor on `Grass`.
         let utf16_column = index_to_offset(text.find("Grass").expect("item") + 2);
         let markdown = markdown_at(&document, 0, utf16_column).expect("hover on enum item");
@@ -166,8 +164,7 @@ mod tests {
         let text = "\
 local f = io.open('x')
 local n = f:seek('set')";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document(text, LuaTarget::Lua54);
         let utf16_column = index_to_offset(text.find(":seek").expect("method") + 2);
         let markdown =
             markdown_at(&document, 1, utf16_column).expect("hover on shaped local method");
@@ -179,8 +176,7 @@ local n = f:seek('set')";
         let text = "\
 local string = 1
 local x = string.format";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document(text, LuaTarget::Lua54);
         let utf16_column = index_to_offset(text.find(".format").expect("member") + 3);
         assert!(
             markdown_at(&document, 1, utf16_column).is_none(),
@@ -191,8 +187,7 @@ local x = string.format";
     #[test]
     fn hover_on_game_get_service_uses_colon_syntax() {
         let text = "local p = game:GetService('RunService')";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox, FxHashSet::default());
+        let document = document(text, LuaTarget::LuauRoblox);
         let utf16_column = index_to_offset(text.find("GetService").expect("method") + 4);
         let markdown = markdown_at(&document, 0, utf16_column).expect("hover on GetService");
         assert!(markdown.contains("game:GetService("), "colon rendering expected: {markdown}");
@@ -201,8 +196,7 @@ local x = string.format";
     #[test]
     fn hover_ignores_a_field_of_a_call_result() {
         let text = "local printer = make().print\n";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document(text, LuaTarget::Lua54);
         let utf16_column = index_to_offset(text.find(".print").expect("field") + 3);
         let markdown = markdown_at(&document, 0, utf16_column);
         assert!(
@@ -217,8 +211,7 @@ local x = string.format";
 local f = io.open('x')
 f:seek('set')
 ";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document(text, LuaTarget::Lua54);
         let markdown = markdown_at(&document, 1, 3);
         assert!(
             markdown.as_deref().is_some_and(|rendered| rendered.contains("f:seek(")),
@@ -229,8 +222,7 @@ f:seek('set')
     #[test]
     fn hover_ignores_a_comment_inside_a_call() {
         let text = "print(--[[ print ]] 1)\n";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document(text, LuaTarget::Lua54);
         assert!(markdown_at(&document, 0, 13).is_none());
     }
 }

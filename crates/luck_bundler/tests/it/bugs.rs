@@ -6,11 +6,12 @@
 use std::fs;
 use std::path::Path;
 
+use luck_allocator::Allocator;
 use luck_ast::{Call, Visitor};
 use luck_bundler::{BundleOptions, BundleResult, DynamicRequire, LineMapEntry};
 use luck_core::Diagnostic;
 use luck_semantic::{ScopeId, ScopeKind, ScopeTree, SymbolId};
-use luck_token::{LuaVersion, Token};
+use luck_token::LuaVersion;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tempfile::TempDir;
 
@@ -60,10 +61,20 @@ fn bundle_files(files: &[(&str, &[u8])], entry: &str, version: LuaVersion) -> Bu
     bundle_project(directory.path(), entry, version).expect("bundle failed")
 }
 
-fn scope_tree_of(output: &str, version: LuaVersion) -> ScopeTree {
-    let parsed = luck_parser::parse(output, version);
+fn scope_tree_of<'ast>(
+    allocator: &'ast Allocator,
+    output: &'ast str,
+    version: LuaVersion,
+) -> ScopeTree<'ast> {
+    let parsed = luck_parser::parse(allocator, output, version);
     assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
-    luck_semantic::build_scope_tree(&parsed.block, version)
+    ScopeTree::build(allocator.alloc(parsed.block), parsed.counts, version)
+}
+
+fn assert_reparses(output: &str, version: LuaVersion) {
+    let allocator = Allocator::new();
+    let parsed = luck_parser::parse(&allocator, output, version);
+    assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
 }
 
 fn line_map_entry<'map>(result: &'map BundleResult, file_name: &str) -> &'map LineMapEntry {
@@ -78,9 +89,10 @@ fn line_map_entry<'map>(result: &'map BundleResult, file_name: &str) -> &'map Li
 // every function between the use and the declaring scope, as Lua's compiler
 // does.
 fn max_function_upvalues(output: &str, version: LuaVersion) -> usize {
-    let tree = scope_tree_of(output, version);
+    let allocator = Allocator::new();
+    let tree = scope_tree_of(&allocator, output, version);
     let mut upvalues: FxHashMap<ScopeId, FxHashSet<SymbolId>> = FxHashMap::default();
-    for reference in &tree.references {
+    for reference in tree.references() {
         let Some(symbol) = reference.resolved else {
             continue;
         };
@@ -221,11 +233,12 @@ return 1
         "main.lua",
         LuaVersion::Lua54,
     );
-    let tree = scope_tree_of(&result.output, LuaVersion::Lua54);
+    let allocator = Allocator::new();
+    let tree = scope_tree_of(&allocator, &result.output, LuaVersion::Lua54);
     let shared_writes = tree
-        .references
+        .references()
         .iter()
-        .filter(|reference| reference.name == "_ENV" && reference.kind.is_write())
+        .filter(|reference| tree.name(reference.name) == "_ENV" && reference.kind.is_write())
         .filter(|reference| reference.resolved.is_none())
         .count();
     assert_eq!(
@@ -242,7 +255,8 @@ fn lua51_arg_restore_ends_before_a_body_opening_with_a_parenthesis() {
         "main.lua",
         LuaVersion::Lua51,
     );
-    let parsed = luck_parser::parse(&result.output, LuaVersion::Lua51);
+    let allocator = Allocator::new();
+    let parsed = luck_parser::parse(&allocator, &result.output, LuaVersion::Lua51);
     assert!(
         parsed.errors.is_empty(),
         "restoring `arg` must not run into the body's `(`: {:?}\n{}",
@@ -257,7 +271,7 @@ struct EnvCalls(usize);
 
 impl<'ast> Visitor<'ast> for EnvCalls {
     fn visit_call(&mut self, call: Call<'ast>) {
-        if call.callee.as_name().and_then(Token::identifier) == Some("_ENV") {
+        if call.callee.as_name().is_some_and(|name| name.text == "_ENV") {
             self.0 = self.0.saturating_add(1);
         }
         self.walk_call(call);
@@ -280,7 +294,8 @@ _ENV = {}
         "main.lua",
         LuaVersion::Lua54,
     );
-    let parsed = luck_parser::parse(&result.output, LuaVersion::Lua54);
+    let allocator = Allocator::new();
+    let parsed = luck_parser::parse(&allocator, &result.output, LuaVersion::Lua54);
     assert!(parsed.errors.is_empty(), "{:?}\n{}", parsed.errors, result.output);
     let mut env_calls = EnvCalls::default();
     env_calls.visit_block(&parsed.block);
@@ -315,15 +330,16 @@ name = \"B\"
         "main.lua",
         LuaVersion::Lua52,
     );
-    let tree = scope_tree_of(&result.output, LuaVersion::Lua52);
+    let allocator = Allocator::new();
+    let tree = scope_tree_of(&allocator, &result.output, LuaVersion::Lua52);
     let wrapper = tree
-        .references
+        .references()
         .iter()
-        .find(|reference| reference.name == "module")
+        .find(|reference| tree.name(reference.name) == "module")
         .expect("module() stays in the bundle")
         .scope;
     let mut captures: Vec<_> = tree
-        .references
+        .references()
         .iter()
         .filter(|reference| reference.scope == wrapper)
         .filter(|reference| {
@@ -333,9 +349,9 @@ name = \"B\"
     captures.sort_by_key(|reference| reference.span.start);
     let first = captures.first().expect("the wrapper captures something");
     assert!(
-        !first.name.starts_with("__luck"),
+        !tree.name(first.name).starts_with("__luck"),
         "upvalue 1 of a wrapper calling module() must not be `{}`:\n{}",
-        first.name,
+        tree.name(first.name),
         result.output
     );
 }
@@ -532,12 +548,13 @@ animal = \"bird\"
         "main.luau",
         LuaVersion::Luau,
     );
-    let tree = scope_tree_of(&result.output, LuaVersion::Luau);
+    let allocator = Allocator::new();
+    let tree = scope_tree_of(&allocator, &result.output, LuaVersion::Luau);
     let shadow_start = result.output.find("\"cat\"").expect("the shadow stays in the bundle");
     let has_shadow_read = tree
-        .references
+        .references()
         .iter()
-        .filter(|reference| reference.name == "animal" && reference.kind.is_read())
+        .filter(|reference| tree.name(reference.name) == "animal" && reference.kind.is_read())
         .filter_map(|reference| reference.resolved)
         .any(|symbol| {
             luck_token::offset_to_index(tree.symbol(symbol).definition_span.start)
@@ -557,10 +574,11 @@ export local value = table
         "main.luau",
         LuaVersion::Luau,
     );
-    let tree = scope_tree_of(&result.output, LuaVersion::Luau);
+    let allocator = Allocator::new();
+    let tree = scope_tree_of(&allocator, &result.output, LuaVersion::Luau);
     let freeze_start = result.output.find("table.freeze(").unwrap_or(usize::MAX);
-    let is_captured = tree.references.iter().any(|reference| {
-        reference.name == "table"
+    let is_captured = tree.references().iter().any(|reference| {
+        tree.name(reference.name) == "table"
             && luck_token::offset_to_index(reference.span.start) == freeze_start
             && reference.resolved.is_some()
     });
@@ -578,9 +596,12 @@ export function increment() count += 1 end
         "main.luau",
         LuaVersion::Luau,
     );
-    let tree = scope_tree_of(&result.output, LuaVersion::Luau);
-    let has_local_write = tree.references.iter().any(|reference| {
-        reference.name == "count" && reference.kind.is_write() && reference.resolved.is_some()
+    let allocator = Allocator::new();
+    let tree = scope_tree_of(&allocator, &result.output, LuaVersion::Luau);
+    let has_local_write = tree.references().iter().any(|reference| {
+        tree.name(reference.name) == "count"
+            && reference.kind.is_write()
+            && reference.resolved.is_some()
     });
     assert!(
         !has_local_write,
@@ -599,13 +620,7 @@ fn luau_bracketed_attribute_on_an_export_function_survives_lowering() {
         "main.luau",
         LuaVersion::Luau,
     );
-    let parsed = luck_parser::parse(&result.output, LuaVersion::Luau);
-    assert!(
-        parsed.errors.is_empty(),
-        "bundle must reparse: {:?}\n{}",
-        parsed.errors,
-        result.output
-    );
+    assert_reparses(&result.output, LuaVersion::Luau);
 }
 
 #[test]
@@ -663,8 +678,7 @@ print(keep, b)
         LuaVersion::Luau,
     );
     let output = result.output.as_str();
-    let parsed = luck_parser::parse(output, LuaVersion::Luau);
-    assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
+    assert_reparses(output, LuaVersion::Luau);
     for needle in [
         "__luck_exports.a,__luck_exports.b = 1, 2\n",
         "__luck_exports.blank = nil;\n",

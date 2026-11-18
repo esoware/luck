@@ -1,11 +1,6 @@
 //! Regressions for `generate_runtime_safe`: each pinned program breaks the
 //! parse-and-run guarantee on the stock interpreters.
 
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
 use luck_testgen::generate_runtime_safe;
 use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS};
 

@@ -12,7 +12,7 @@ pub enum OperandSide {
     Right,
 }
 
-/// The spelling is fixed per variant, so a node holds this one-byte enum instead of a 40-byte
+/// The spelling is fixed per variant, so a node holds this one-byte enum instead of a 12-byte
 /// `Token`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
@@ -73,7 +73,7 @@ impl BinOp {
         clippy::wildcard_enum_match_arm,
         reason = "None is the right answer for every non-operator token, present or future"
     )]
-    pub const fn from_token_kind(kind: &TokenKind) -> Option<Self> {
+    pub const fn from_token_kind(kind: TokenKind) -> Option<Self> {
         Some(match kind {
             TokenKind::Plus => Self::Add,
             TokenKind::Minus => Self::Sub,
@@ -206,7 +206,7 @@ impl UnOp {
         clippy::wildcard_enum_match_arm,
         reason = "None is the right answer for every non-operator token, present or future"
     )]
-    pub const fn from_token_kind(kind: &TokenKind) -> Option<Self> {
+    pub const fn from_token_kind(kind: TokenKind) -> Option<Self> {
         Some(match kind {
             TokenKind::Not => Self::Not,
             TokenKind::Minus => Self::Neg,
@@ -245,7 +245,7 @@ impl CompoundOp {
         clippy::wildcard_enum_match_arm,
         reason = "None is the right answer for every non-operator token, present or future"
     )]
-    pub const fn from_token_kind(kind: &TokenKind) -> Option<Self> {
+    pub const fn from_token_kind(kind: TokenKind) -> Option<Self> {
         Some(match kind {
             TokenKind::PlusEqual => Self::Add,
             TokenKind::MinusEqual => Self::Sub,

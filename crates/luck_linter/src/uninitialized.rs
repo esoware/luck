@@ -15,23 +15,21 @@ pub(crate) struct UninitializedLocals {
 }
 
 impl UninitializedLocals {
-    pub(crate) fn record(&mut self, stmt: &Statement) {
+    pub(crate) fn record(&mut self, stmt: &Statement<'_>) {
         match stmt {
             Statement::LocalAssignment(local) => {
                 // A call or `...` last can fill every name after it.
-                let value_count = local.exprs.as_ref().map_or(0, |exprs| {
-                    if exprs.last().is_some_and(is_multi_value) {
-                        usize::MAX
-                    } else {
-                        exprs.items.len()
-                    }
-                });
+                let value_count = if local.exprs.last().is_some_and(is_multi_value) {
+                    usize::MAX
+                } else {
+                    local.exprs.len()
+                };
                 self.name_spans.extend(
                     local.names.iter().skip(value_count).map(|attributed| attributed.name.span),
                 );
             }
             Statement::Assignment(assignment) => {
-                for var in assignment.targets.iter() {
+                for var in &assignment.targets {
                     self.record_target(var);
                 }
             }
@@ -60,13 +58,13 @@ impl UninitializedLocals {
 
     /// Only a name the field or index is written on directly, as in
     /// `x.foo = 1`, counts.
-    fn record_target(&mut self, var: &Var) {
+    fn record_target(&mut self, var: &Var<'_>) {
         if let Var::Suffixed(chain) = var
             && let [_] = &*chain.suffixes
-            && let Expression::Name(token) = &chain.prefix
-            && token.identifier().is_some()
+            && let Expression::Name(name) = &chain.prefix
+            && !name.text.is_empty()
         {
-            self.field_write_prefix_starts.push(token.span.start);
+            self.field_write_prefix_starts.push(name.span.start);
         }
     }
 

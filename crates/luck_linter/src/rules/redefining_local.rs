@@ -1,5 +1,5 @@
-use luck_ast::{Block, Statement};
-use luck_token::{LineIndex, MAX_ACTIVE_LOCALS, Span, Token};
+use luck_ast::{Block, Name, Statement};
+use luck_token::{LineIndex, MAX_ACTIVE_LOCALS, Span};
 
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -28,7 +28,7 @@ impl WholeRule for RedefiningLocal {
             declarations: Vec::new(),
             findings: Vec::new(),
         };
-        for block in context.blocks {
+        for block in context.nodes.blocks() {
             checker.check_block(block);
         }
         checker.findings
@@ -45,12 +45,12 @@ struct RedefineChecker<'ast> {
 }
 
 impl<'ast> RedefineChecker<'ast> {
-    fn check_block(&mut self, block: &'ast Block) {
+    fn check_block(&mut self, block: &'ast Block<'ast>) {
         self.declarations.clear();
         for stmt in &block.stmts {
             match stmt {
                 Statement::LocalAssignment(local) => {
-                    for attributed in local.names.iter() {
+                    for attributed in &local.names {
                         self.declare(&attributed.name);
                     }
                 }
@@ -78,10 +78,8 @@ impl<'ast> RedefineChecker<'ast> {
         }
     }
 
-    fn declare(&mut self, name_token: &'ast Token) {
-        let Some(name) = name_token.identifier() else {
-            return;
-        };
+    fn declare(&mut self, declared: &Name<'ast>) {
+        let name = declared.text.as_str();
         if self.declarations.len() > MAX_ACTIVE_LOCALS {
             return;
         }
@@ -96,12 +94,12 @@ impl<'ast> RedefineChecker<'ast> {
             self.findings.push(
                 Finding::new(
                     format!("local `{name}` is redeclared in the same block"),
-                    name_token.span,
+                    declared.span,
                 )
                 .with_help(format!("first declared at {line}:{column}")),
             );
         }
-        self.declarations.push((name, name_token.span));
+        self.declarations.push((name, declared.span));
     }
 }
 

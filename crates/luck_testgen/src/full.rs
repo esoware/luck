@@ -36,13 +36,6 @@ const BUILTIN_CALLEES: [&str; 12] = [
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Placement {
-    Module,
-    /// Spliced into a block, where Luau value exports aren't valid.
-    Embedded,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Varargs {
     Allowed,
     Forbidden,
@@ -72,10 +65,9 @@ struct FullGenerator {
 }
 
 impl FullGenerator {
-    fn new(seed: u64, version: LuaVersion, placement: Placement) -> Self {
+    fn new(seed: u64, version: LuaVersion) -> Self {
         let mut rng = Rng::new(seed);
-        let is_export_module =
-            placement == Placement::Module && version.has_value_exports() && rng.chance(30);
+        let is_export_module = version.has_value_exports() && rng.chance(30);
         Self {
             rng,
             version,
@@ -286,15 +278,7 @@ impl FullGenerator {
 
 #[must_use]
 pub fn generate_full(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
-    FullGenerator::new(seed, version, Placement::Module).program(statement_budget)
-}
-
-/// Like [`generate_full`], but safe to splice into a nested block
-/// (`do ... end` wrappers): Luau value exports are only valid at module
-/// scope, so the export-module mode is disabled.
-#[must_use]
-pub fn generate_full_embeddable(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
-    FullGenerator::new(seed, version, Placement::Embedded).program(statement_budget)
+    FullGenerator::new(seed, version).program(statement_budget)
 }
 
 #[cfg(test)]
@@ -333,16 +317,6 @@ mod tests {
         }
         for needle in ["export local", "export const", "export function", "1_000_000i", "<<"] {
             assert!(all_programs.contains(needle), "expected generated {needle}");
-        }
-    }
-
-    #[test]
-    fn embeddable_programs_export_no_values() {
-        for seed in 0..16 {
-            let program = generate_full_embeddable(seed, LuaVersion::Luau, 60);
-            for needle in ["export local", "export const", "export function"] {
-                assert!(!program.contains(needle), "seed {seed} emitted {needle}");
-            }
         }
     }
 }

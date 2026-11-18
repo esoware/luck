@@ -1,29 +1,31 @@
-//! `span()` accessors, and `take()` where a node has an empty placeholder,
-//! kept in one place instead of beside each node type.
+//! `span()` accessors, and `take()` where a node has a placeholder that costs
+//! no allocation, kept in one place instead of beside each node type.
 
 use core::mem;
 
+use luck_allocator::List;
 use luck_token::Span;
 
 use crate::expr::{Expression, Field, FunctionArgs, Suffix, Var};
+use crate::function::Parameter;
 use crate::stmt::{Block, LastStatement, Statement};
-use crate::types::{Type, TypeField};
+use crate::types::{FunctionTypeParam, Type, TypeField};
 
-impl Block {
+impl Block<'_> {
     /// Moves the value out of a `&mut` and leaves an empty block behind, as
     /// [`Expression::take`] does.
     #[must_use]
-    pub fn take(&mut self) -> Self {
-        mem::replace(self, Self { span: Span::default(), stmts: Vec::new(), last_stmt: None })
+    pub const fn take(&mut self) -> Self {
+        mem::replace(self, Self { span: Span::new(0, 0), stmts: List::new(), last_stmt: None })
     }
 }
 
-impl Statement {
+impl Statement<'_> {
     /// Moves the value out of a `&mut` and leaves an error placeholder
     /// behind, as [`Expression::take`] does.
     #[must_use]
-    pub fn take(&mut self) -> Self {
-        mem::replace(self, Self::Error(Span::default()))
+    pub const fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::new(0, 0)))
     }
 
     #[must_use]
@@ -59,7 +61,7 @@ impl Statement {
     }
 }
 
-impl LastStatement {
+impl LastStatement<'_> {
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
@@ -67,16 +69,9 @@ impl LastStatement {
             Self::Break(span) | Self::Continue(span) | Self::Error(span) => *span,
         }
     }
-
-    /// Moves the value out of a `&mut` and leaves an error placeholder
-    /// behind, as [`Expression::take`] does.
-    #[must_use]
-    pub fn take(&mut self) -> Self {
-        mem::replace(self, Self::Error(Span::default()))
-    }
 }
 
-impl Expression {
+impl Expression<'_> {
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
@@ -89,7 +84,7 @@ impl Expression {
                 literal.span
             }
             Self::FunctionDef(expr) => expr.span,
-            Self::Name(token) => token.span,
+            Self::Name(name) => name.span,
             Self::Suffixed(expr) => expr.span,
             Self::Parenthesized(expr) => expr.span,
             Self::TableConstructor(expr) => expr.span,
@@ -105,24 +100,24 @@ impl Expression {
     }
 
     /// Moves the value out of a `&mut` and leaves an error placeholder
-    /// behind. Assign the replacement back.
+    /// behind, which costs no allocation. Assign the replacement back.
     #[must_use]
-    pub fn take(&mut self) -> Self {
-        mem::replace(self, Self::Error(Span::default()))
+    pub const fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::new(0, 0)))
     }
 }
 
-impl Var {
+impl Var<'_> {
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Self::Name(token) => token.span,
+            Self::Name(name) => name.span,
             Self::Suffixed(chain) => chain.span,
         }
     }
 }
 
-impl Suffix {
+impl Suffix<'_> {
     /// A field's span is its name's, and a method call's starts at the
     /// method's name.
     #[must_use]
@@ -130,48 +125,48 @@ impl Suffix {
         match self {
             Self::Field(name) => name.span,
             Self::Index { span, .. } | Self::TypeInstantiation { span, .. } => *span,
-            Self::Call(call) => {
-                let args_span = call.args().span();
-                call.method().map_or(args_span, |method| method.span.merge(args_span))
-            }
+            Self::Call(args) => args.span(),
+            Self::MethodCall(call) => call.name.span.merge(call.args.span()),
         }
     }
 }
 
-impl FunctionArgs {
+impl FunctionArgs<'_> {
     #[must_use]
-    pub const fn span(&self) -> Span {
+    pub fn span(&self) -> Span {
         match self {
             Self::Parenthesized { span, .. } | Self::Error(span) => *span,
             Self::TableConstructor(table) => table.span,
             Self::StringLiteral(literal) => literal.span,
         }
     }
-
-    /// Moves the value out of a `&mut` and leaves an error placeholder
-    /// behind, as [`Expression::take`] does.
-    #[must_use]
-    pub fn take(&mut self) -> Self {
-        mem::replace(self, Self::Error(Span::default()))
-    }
 }
 
-impl Field {
+impl Field<'_> {
     #[must_use]
-    pub const fn span(&self) -> Span {
+    pub fn span(&self) -> Span {
         match self {
-            Self::Bracketed { span, .. }
-            | Self::Named { span, .. }
-            | Self::Positional { span, .. } => *span,
+            Self::Bracketed { span, .. } => *span,
+            Self::Named { name, value } => name.span.merge(value.span()),
+            Self::Positional(value) => value.span(),
         }
     }
 }
 
-impl Type {
+impl Parameter<'_> {
+    #[must_use]
+    pub fn span(&self) -> Span {
+        self.type_annotation.as_ref().map_or(self.name.span, |ty| self.name.span.merge(ty.span()))
+    }
+}
+
+impl Type<'_> {
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Self::Name { span, .. } | Self::Error(span) => *span,
+            Self::Nil(span) | Self::True(span) | Self::False(span) | Self::Error(span) => *span,
+            Self::Name(name) => name.span,
+            Self::StringLiteral(literal) | Self::Number(literal) => literal.span,
             Self::Named(node) => node.span,
             Self::Typeof(node) => node.span,
             Self::Table(node) => node.span,
@@ -181,7 +176,6 @@ impl Type {
             Self::Intersection(node) => node.span,
             Self::Parenthesized(node) => node.span,
             Self::Pack(node) => node.span,
-            Self::Singleton(node) => node.span,
             Self::Variadic(node) => node.span,
             Self::GenericPack(node) => node.span,
         }
@@ -190,12 +184,12 @@ impl Type {
     /// Moves the value out of a `&mut` and leaves an error placeholder
     /// behind, as [`Expression::take`] does.
     #[must_use]
-    pub fn take(&mut self) -> Self {
-        mem::replace(self, Self::Error(Span::default()))
+    pub const fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::new(0, 0)))
     }
 }
 
-impl TypeField {
+impl TypeField<'_> {
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
@@ -203,5 +197,12 @@ impl TypeField {
                 *span
             }
         }
+    }
+}
+
+impl FunctionTypeParam<'_> {
+    #[must_use]
+    pub fn span(&self) -> Span {
+        self.name.map_or_else(|| self.ty.span(), |name| name.span.merge(self.ty.span()))
     }
 }

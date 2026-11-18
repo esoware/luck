@@ -1,6 +1,6 @@
-use luck_ast::{DottedPath, FunctionName, Statement, Suffix, Var, Visitor};
+use luck_ast::{FunctionName, Name, Statement, Suffix, Var};
 use luck_semantic::{SemanticAnalysis, StdlibEntry};
-use luck_token::{Span, Token};
+use luck_token::Span;
 
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -19,20 +19,26 @@ impl_rule!(
 impl WholeRule for BuiltinGlobalWrite {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
+        let tree = semantic.scope_tree();
         let mut findings = Vec::new();
 
-        for reference in semantic.scope_tree.unresolved_references() {
+        for reference in tree.global_references() {
             if !reference.kind.is_write() {
                 continue;
             }
-            if !is_overwritable_builtin(semantic, &reference.name) {
+            let name = tree.name(reference.name);
+            if !is_overwritable_builtin(semantic, name) {
                 continue;
             }
-            findings.push(overwrite_finding(&reference.name, reference.span));
+            findings.push(overwrite_finding(name, reference.span));
         }
 
         let mut checker = FieldWriteChecker { semantic, findings };
-        checker.visit_block(context.block);
+        for block in context.nodes.blocks() {
+            for stmt in &block.stmts {
+                checker.check_stmt(stmt);
+            }
+        }
         checker.findings
     }
 }
@@ -40,10 +46,9 @@ impl WholeRule for BuiltinGlobalWrite {
 /// Names in the config's extra globals belong to the user, even when they
 /// collide with a stdlib name. Globals the stdlib model marks writable
 /// (`_G`, Roblox's `shared`, `_PROMPT`) exist to be set.
-fn is_overwritable_builtin(semantic: &SemanticAnalysis, name: &str) -> bool {
-    semantic.is_known_global(name)
-        && semantic.is_read_only_global(name)
-        && !semantic.extra_globals.contains(name)
+fn is_overwritable_builtin(semantic: &SemanticAnalysis<'_>, name: &str) -> bool {
+    semantic.is_read_only_global(name)
+        && semantic.scope_tree().name_id(name).is_none_or(|id| !semantic.is_extra_global(id))
 }
 
 fn overwrite_finding(name: &str, span: Span) -> Finding {
@@ -56,7 +61,7 @@ fn overwrite_finding(name: &str, span: Span) -> Finding {
 }
 
 struct FieldWriteChecker<'semantic> {
-    semantic: &'semantic SemanticAnalysis,
+    semantic: &'semantic SemanticAnalysis<'semantic>,
     findings: Vec<Finding>,
 }
 
@@ -64,14 +69,16 @@ impl FieldWriteChecker<'_> {
     /// A field of a stdlib value, such as `package.loaded` or a Roblox
     /// instance's property, isn't the library. Neither is a `path` that no
     /// longer reaches the host's global.
-    fn writes_namespace_member(&self, path: &[&str], root_span: Span, leaf: Option<&str>) -> bool {
-        let Some(&root) = path.first() else {
-            return false;
-        };
+    fn writes_namespace_member<'path>(
+        &self,
+        root: &Name<'_>,
+        path: impl IntoIterator<Item = &'path str>,
+        leaf: Option<&str>,
+    ) -> bool {
         // Writing through a writable base (`_G.x = 1`, Roblox's
         // `shared.score = 1`) is intended.
-        if !is_overwritable_builtin(self.semantic, root)
-            || !self.semantic.reaches_host_global(root, root_span)
+        if !is_overwritable_builtin(self.semantic, root.text.as_str())
+            || !self.semantic.scope_tree().reaches_host_global(root)
         {
             return false;
         }
@@ -82,7 +89,7 @@ impl FieldWriteChecker<'_> {
         leaf.and_then(|name| namespace.members.get(name)).is_none_or(StdlibEntry::is_read_only)
     }
 
-    fn check_var_target(&mut self, var: &Var) {
+    fn check_var_target(&mut self, var: &Var<'_>) {
         // Whole-name writes surface as unresolved Write references.
         let Var::Suffixed(chain) = var else {
             return;
@@ -91,18 +98,18 @@ impl FieldWriteChecker<'_> {
             return;
         };
         let leaf = match last {
-            Suffix::Field(name) => name.identifier(),
+            Suffix::Field(name) => Some(name.text.as_str()),
             Suffix::Index { .. } => None,
-            Suffix::Call(_) | Suffix::TypeInstantiation { .. } => return,
+            Suffix::Call(_) | Suffix::MethodCall(_) | Suffix::TypeInstantiation { .. } => return,
         };
         let span = chain.span;
-        let Some(DottedPath { segments, root_span, .. }) = container.dotted_path() else {
+        let Some(path) = container.dotted_path() else {
             return;
         };
-        if !self.writes_namespace_member(&segments, root_span, leaf) {
+        if !self.writes_namespace_member(path.root(), path.segments(), leaf) {
             return;
         }
-        let mut display = segments.join(".");
+        let mut display = path.to_string();
         if let Some(name) = leaf {
             display.push('.');
             display.push_str(name);
@@ -110,9 +117,9 @@ impl FieldWriteChecker<'_> {
         self.findings.push(overwrite_finding(&display, span));
     }
 
-    fn check_function_name(&mut self, function_name: &FunctionName) {
+    fn check_function_name(&mut self, function_name: &FunctionName<'_>) {
         let (container, leaf, separator) = if let Some(method) = &function_name.method {
-            (function_name.names.as_slice(), method, ':')
+            (&*function_name.names, method, ':')
         } else {
             // Bare `function print()` surfaces as an unresolved Write
             // reference, and has no container here.
@@ -121,26 +128,22 @@ impl FieldWriteChecker<'_> {
             };
             (container, leaf, '.')
         };
-        let Some(segments) = container.iter().map(Token::identifier).collect::<Option<Vec<_>>>()
-        else {
+        let segments: Vec<&str> = container.iter().map(|name| name.text.as_str()).collect();
+        let Some(root) = container.first() else {
             return;
         };
-        let (Some(root), Some(leaf_name)) = (container.first(), leaf.identifier()) else {
-            return;
-        };
-        if !self.writes_namespace_member(&segments, root.span, Some(leaf_name)) {
+        let leaf_name = leaf.text;
+        if !self.writes_namespace_member(root, segments.iter().copied(), Some(leaf_name.as_str())) {
             return;
         }
         let display = format!("{}{separator}{leaf_name}", segments.join("."));
         self.findings.push(overwrite_finding(&display, function_name.span));
     }
-}
 
-impl<'ast> Visitor<'ast> for FieldWriteChecker<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+    fn check_stmt(&mut self, stmt: &Statement<'_>) {
         match stmt {
             Statement::Assignment(assignment) => {
-                for var in assignment.targets.iter() {
+                for var in &assignment.targets {
                     self.check_var_target(var);
                 }
             }
@@ -166,7 +169,6 @@ impl<'ast> Visitor<'ast> for FieldWriteChecker<'_> {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
-        self.walk_stmt(stmt);
     }
 }
 

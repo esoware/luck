@@ -1,11 +1,11 @@
 //! Committed size tracking, modeled on oxc's `tasks/minsize`.
 //!
-//! Minified and gzipped sizes for every corpus input go to `minsize.snap`
-//! next to this crate's `Cargo.toml`, and CI checks them. Byte counts are
-//! exact, so any size regression or win shows up as a diff.
+//! Minified and gzipped sizes for every benchmark file and project go to
+//! `minsize.snap` next to this crate's `Cargo.toml`, and CI checks them. Byte
+//! counts are exact, so any size regression or win shows up as a diff.
 //!
-//! Both tests are `#[ignore]`d because they fetch the corpus (over the
-//! network on first run) and minify all of it. The benchmark workflow runs
+//! Both tests are `#[ignore]`d because they fetch the benchmark files (over the
+//! network on first run) and minify all of them. The benchmark workflow runs
 //! the check.
 
 #![expect(
@@ -20,7 +20,8 @@ use std::io::Write as _;
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use luck_benchmark::{test_files, test_projects};
+use luck_allocator::Allocator;
+use luck_benchmark_files::{test_files, test_projects};
 use luck_core::LuaTarget;
 use luck_minifier::TransformConfig;
 
@@ -47,11 +48,17 @@ fn gzipped_byte_count(text: &str) -> Result<usize, Box<dyn Error>> {
 /// # Errors
 ///
 /// Fails when `source` doesn't minify or the result can't be compressed.
-fn measure(name: &str, source: &str, target: LuaTarget) -> Result<Row, Box<dyn Error>> {
-    // Fetched corpus files keep whatever line endings upstream committed.
+fn measure(
+    allocator: &mut Allocator,
+    name: &str,
+    source: &str,
+    target: LuaTarget,
+) -> Result<Row, Box<dyn Error>> {
+    // Downloaded benchmark files keep whatever line endings upstream committed.
     let normalized = source.replace("\r\n", "\n");
     let config = TransformConfig::default();
-    let minified = luck_minifier::minify(&normalized, target.lua_version(), &config)
+    allocator.reset();
+    let minified = luck_minifier::minify(allocator, &normalized, target.lua_version(), &config)
         .map_err(|errors| format!("{name} failed to minify: {errors:?}"))?;
     Ok(Row {
         name: name.to_owned(),
@@ -65,17 +72,20 @@ fn measure(name: &str, source: &str, target: LuaTarget) -> Result<Row, Box<dyn E
 ///
 /// # Errors
 ///
-/// Fails when any corpus input can't be measured.
+/// Fails when any benchmark file can't be measured.
 fn collect_rows() -> Result<Vec<Row>, Box<dyn Error>> {
+    let mut allocator = Allocator::new();
     let mut rows = Vec::new();
     for file in test_files() {
-        rows.push(measure(file.file_name, &file.source_text, file.target)?);
+        rows.push(measure(&mut allocator, file.file_name, &file.source_text, file.target)?);
     }
     for project in test_projects() {
         let file_rows = project
             .files
             .iter()
-            .map(|file| measure(&file.relative_path, &file.source_text, project.target))
+            .map(|file| {
+                measure(&mut allocator, &file.relative_path, &file.source_text, project.target)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         rows.push(Row {
             name: format!("{} ({} files)", project.name, project.files.len()),
@@ -92,13 +102,13 @@ fn collect_rows() -> Result<Vec<Row>, Box<dyn Error>> {
 ///
 /// # Errors
 ///
-/// Fails when a corpus input can't be measured.
+/// Fails when a benchmark file can't be measured.
 fn minsize_snapshot() -> Result<String, Box<dyn Error>> {
     let mut snapshot = String::new();
     writeln!(
         snapshot,
         "\
-Minified-size tracking over the bench corpus. Sizes are exact bytes;
+Minified-size tracking over the benchmark files. Sizes are exact bytes;
 gzip is the minified output at the default flate2 level. Regenerate:
 {REGENERATE_COMMAND}
 "
@@ -130,7 +140,7 @@ fn regenerate_minsize() {
 }
 
 #[test]
-#[ignore = "fetches the corpus and minifies all of it; run explicitly or in CI"]
+#[ignore = "fetches the benchmark files and minifies all of them; run explicitly or in CI"]
 fn minsize_is_up_to_date() {
     let committed = fs::read_to_string(SNAPSHOT_PATH).expect("read minsize.snap");
     assert_eq!(

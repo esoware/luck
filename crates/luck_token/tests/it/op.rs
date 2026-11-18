@@ -25,11 +25,11 @@ fn bin_op_from_token_kind_maps_every_binary_operator_token() {
         (TokenKind::FloorDiv, BinOp::FloorDiv),
         (TokenKind::Caret, BinOp::Pow),
     ] {
-        assert_eq!(BinOp::from_token_kind(&kind), Some(op), "{kind:?}");
+        assert_eq!(BinOp::from_token_kind(kind), Some(op), "{kind:?}");
         assert_eq!(Some(op.static_text()), kind.static_text(), "{kind:?}");
     }
-    assert_eq!(BinOp::from_token_kind(&TokenKind::Not), None);
-    assert_eq!(BinOp::from_token_kind(&TokenKind::Equal), None);
+    assert_eq!(BinOp::from_token_kind(TokenKind::Not), None);
+    assert_eq!(BinOp::from_token_kind(TokenKind::Equal), None);
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn un_op_and_compound_op_spell_their_tokens() {
         (TokenKind::Hash, "#"),
         (TokenKind::Tilde, "~"),
     ] {
-        let op = UnOp::from_token_kind(&kind).expect("unary operator kind");
+        let op = UnOp::from_token_kind(kind).expect("unary operator kind");
         assert_eq!(op.static_text(), expected);
         assert_eq!(kind.static_text(), Some(expected));
     }
@@ -93,7 +93,7 @@ fn un_op_and_compound_op_spell_their_tokens() {
         (TokenKind::CaretEqual, "^="),
         (TokenKind::DotDotEqual, "..="),
     ] {
-        let op = CompoundOp::from_token_kind(&kind).expect("compound operator kind");
+        let op = CompoundOp::from_token_kind(kind).expect("compound operator kind");
         assert_eq!(op.static_text(), expected);
         assert_eq!(kind.static_text(), Some(expected));
     }

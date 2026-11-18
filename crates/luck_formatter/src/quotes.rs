@@ -1,30 +1,33 @@
-use alloc::borrow::Cow;
-
 use luck_token::short_string_body;
 
 use crate::QuoteStyle;
 
-pub(crate) fn normalize_quote(literal: &str, style: QuoteStyle) -> Cow<'_, str> {
+/// Writes `literal` requoted for `style` to `requoted` and returns true, or
+/// returns false when it stays as written.
+pub(crate) fn requote(literal: &str, style: QuoteStyle, requoted: &mut String) -> bool {
     // A long-bracket string has no quotes to swap.
     let (Some(content), Some(current_quote)) = (short_string_body(literal), literal.chars().next())
     else {
-        return Cow::Borrowed(literal);
+        return false;
     };
     let target_quote = resolve_target_quote(style, content);
 
     if current_quote == target_quote {
-        return Cow::Borrowed(literal);
+        return false;
     }
 
-    let mut requoted = String::with_capacity(literal.len());
+    requoted.reserve(literal.len());
     requoted.push(target_quote);
 
     // Walk chars, not bytes, to keep UTF-8 intact. Each escape consumes both
     // of its chars, or a `\\` followed by a quote would read as an escaped
     // quote.
+    let mut original_escapes = 0usize;
+    let mut requoted_escapes = 0usize;
     let mut chars = content.chars();
     while let Some(character) = chars.next() {
         if character == '\\' {
+            original_escapes = original_escapes.saturating_add(1);
             match chars.next() {
                 // Unescape old delimiter: \' -> ' (or \" -> ")
                 Some(escaped) if escaped == current_quote => requoted.push(current_quote),
@@ -33,26 +36,28 @@ pub(crate) fn normalize_quote(literal: &str, style: QuoteStyle) -> Cow<'_, str> 
                 Some(escaped) => {
                     requoted.push('\\');
                     requoted.push(escaped);
+                    requoted_escapes = requoted_escapes.saturating_add(1);
+                    if escaped == '\\' {
+                        original_escapes = original_escapes.saturating_add(1);
+                        requoted_escapes = requoted_escapes.saturating_add(1);
+                    }
                 }
-                None => requoted.push('\\'),
+                None => {
+                    requoted.push('\\');
+                    requoted_escapes = requoted_escapes.saturating_add(1);
+                }
             }
         } else if character == target_quote {
             requoted.push('\\');
             requoted.push(target_quote);
+            requoted_escapes = requoted_escapes.saturating_add(1);
         } else {
             requoted.push(character);
         }
     }
 
     requoted.push(target_quote);
-
-    let original_escapes = content.matches('\\').count();
-    let requoted_escapes = requoted.matches('\\').count();
-    if requoted_escapes > original_escapes {
-        return Cow::Borrowed(literal);
-    }
-
-    Cow::Owned(requoted)
+    requoted_escapes <= original_escapes
 }
 
 /// Auto modes count each quote kind in the content, escaped or not, since
@@ -78,6 +83,11 @@ fn resolve_target_quote(style: QuoteStyle, content: &str) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn normalize_quote(literal: &str, style: QuoteStyle) -> String {
+        let mut requoted = String::new();
+        if requote(literal, style, &mut requoted) { requoted } else { literal.to_owned() }
+    }
 
     #[test]
     fn normalize_to_double() {
@@ -134,6 +144,13 @@ mod tests {
             normalize_quote("'has \"both\" and it\\'s'", QuoteStyle::Double),
             "'has \"both\" and it\\'s'"
         );
+    }
+
+    #[test]
+    fn escaped_backslashes_count_as_written() {
+        assert_eq!(normalize_quote("'a\\\\b'", QuoteStyle::Double), "\"a\\\\b\"");
+        assert_eq!(normalize_quote("'a\\\\'", QuoteStyle::Double), "\"a\\\\\"");
+        assert_eq!(normalize_quote("'\\\\\"'", QuoteStyle::Double), "'\\\\\"'");
     }
 
     #[test]

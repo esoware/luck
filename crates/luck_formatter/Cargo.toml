@@ -21,10 +21,11 @@ schemars = ["dep:schemars", "serde"]
 workspace = true
 
 [dependencies]
-luck_ast    = { workspace = true }
-luck_lexer  = { workspace = true }
-luck_parser = { workspace = true }
-luck_token  = { workspace = true }
+luck_allocator = { workspace = true }
+luck_ast       = { workspace = true }
+luck_lexer     = { workspace = true }
+luck_parser    = { workspace = true }
+luck_token     = { workspace = true }
 
 rustc-hash    = { workspace = true }
 schemars      = { workspace = true, optional = true }

@@ -1,7 +1,5 @@
 use luck_ast::{Attribute, LocalAssignment, LocalAssignmentKind, Statement};
-use luck_semantic::{ScopeTree, SymbolId};
 use luck_token::Span;
-use rustc_hash::FxHashMap;
 
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit, comments_within};
@@ -21,15 +19,8 @@ impl_rule!(
 
 impl WholeRule for MergeAdjacentLocals {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let symbols_by_definition: FxHashMap<Span, SymbolId> = context
-            .semantic
-            .scope_tree
-            .symbols
-            .iter()
-            .map(|symbol| (symbol.definition_span, symbol.id))
-            .collect();
         let mut findings = Vec::new();
-        for block in context.blocks {
+        for block in context.nodes.blocks() {
             let mut pairs = adjacent_stmts(block);
             while let Some((first_stmt, second_stmt)) = pairs.next() {
                 let (
@@ -39,9 +30,7 @@ impl WholeRule for MergeAdjacentLocals {
                 else {
                     continue;
                 };
-                let Some(merged) =
-                    merged_local(first_local, second_local, &symbols_by_definition, context)
-                else {
+                let Some(merged) = merged_local(first_local, second_local, context) else {
                     continue;
                 };
                 findings.push(
@@ -67,9 +56,8 @@ impl WholeRule for MergeAdjacentLocals {
 /// The one `local` that declares both bindings, unless merging them could
 /// change what the code does or drop a comment.
 fn merged_local(
-    first_local: &LocalAssignment,
-    second_local: &LocalAssignment,
-    symbols_by_definition: &FxHashMap<Span, SymbolId>,
+    first_local: &LocalAssignment<'_>,
+    second_local: &LocalAssignment<'_>,
     context: &LintContext<'_>,
 ) -> Option<String> {
     let first = simple_binding(first_local)?;
@@ -83,43 +71,37 @@ fn merged_local(
         return None;
     }
     // Lua allows only one `<close>` variable per local list.
-    if first.attribute.is_some_and(|attribute| attribute.name.identifier() == Some("close")) {
+    if first.attribute.is_some_and(|attribute| attribute.name.text == "close") {
         return None;
     }
     // Both values in `local a, b = x, y` are evaluated before either name is
     // bound, so merging `local a = 1 local b = a` would make `b` read an outer
     // or global `a`.
-    let tree = &context.semantic.scope_tree;
-    let first_symbol = *symbols_by_definition.get(&first.name)?;
-    if is_read_in_span(first_symbol, second.initializer, tree) {
-        return None;
-    }
-    Some(build_merged(source, &first, &second))
-}
-
-fn is_read_in_span(symbol_id: SymbolId, span: Span, tree: &ScopeTree) -> bool {
-    tree.symbol(symbol_id).reference_ids.iter().any(|&reference_id| {
-        let reference_span = tree.reference(reference_id).span;
-        span.start <= reference_span.start && reference_span.end <= span.end
-    })
+    let tree = context.semantic.scope_tree();
+    let reads_first = tree.references_within(second.initializer).any(|id| {
+        tree.reference(id)
+            .resolved
+            .is_some_and(|symbol| tree.symbol(symbol).definition_span == first.name)
+    });
+    (!reads_first).then(|| build_merged(source, &first, &second))
 }
 
 struct SimpleBinding<'ast> {
     name: Span,
     declaration: Span,
-    attribute: Option<&'ast Attribute>,
+    attribute: Option<&'ast Attribute<'ast>>,
     initializer: Span,
 }
 
-fn simple_binding(local: &LocalAssignment) -> Option<SimpleBinding<'_>> {
+fn simple_binding<'ast>(local: &'ast LocalAssignment<'ast>) -> Option<SimpleBinding<'ast>> {
     // `const` and `export` belong to the statement this rule rebuilds.
     if local.kind != LocalAssignmentKind::Local {
         return None;
     }
-    let [attributed] = local.names.items.as_slice() else {
+    let [attributed] = &*local.names else {
         return None;
     };
-    let [initializer] = local.exprs.as_ref()?.items.as_slice() else {
+    let [initializer] = &*local.exprs else {
         return None;
     };
     let declaration_end = attributed

@@ -1,4 +1,10 @@
-use luck_linter::{LintConfig, RuleLevel};
+use luck_allocator::Allocator;
+use luck_core::LuaTarget;
+use luck_linter::{LintConfig, LintDiagnostic, RuleLevel};
+
+pub(crate) fn lint(source: &str, target: LuaTarget, config: &LintConfig) -> Vec<LintDiagnostic> {
+    luck_linter::lint(&Allocator::new(), source, target, config)
+}
 
 pub(crate) fn with_level(name: &str, level: RuleLevel) -> LintConfig {
     let mut config = LintConfig::default();

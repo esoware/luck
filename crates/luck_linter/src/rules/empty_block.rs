@@ -21,7 +21,12 @@ impl NodeRule for EmptyBlock {
             NodeType::RepeatLoop,
         ])
     }
-    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        _context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let (block, message, span) = match stmt {
             Statement::IfStatement(if_stmt) => {
                 findings.extend(check_body(&if_stmt.block, "empty `if` block", if_stmt.span));
@@ -66,8 +71,12 @@ impl NodeRule for EmptyBlock {
     }
 }
 
-fn check_body(block: &Block, message: &str, span: Span) -> Option<Finding> {
-    (block.stmts.is_empty() && block.last_stmt.is_none()).then(|| Finding::new(message, span))
+/// A `;` is no statement, so a body of only `;` is as empty as one of
+/// nothing, and the formatter prints it as one.
+fn check_body(block: &Block<'_>, message: &'static str, span: Span) -> Option<Finding> {
+    let is_empty = block.last_stmt.is_none()
+        && block.stmts.iter().all(|stmt| matches!(stmt, Statement::EmptyStatement(_)));
+    is_empty.then(|| Finding::new(message, span))
 }
 
 #[cfg(test)]
@@ -87,7 +96,7 @@ mod tests {
         let diags = run("\
 local c = 1
 if c then elseif c then else end");
-        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
         assert_eq!(
             messages,
             ["empty `if` block", "empty `elseif` block", "empty `else` block"],
@@ -104,7 +113,7 @@ do end
 for i = 1, 2 do end
 for k in pairs({}) do end
 repeat until c");
-        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
         assert_eq!(
             messages,
             [
@@ -114,6 +123,20 @@ repeat until c");
                 "empty generic `for` loop body",
                 "empty `repeat` loop body",
             ],
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_body_of_only_semicolons() {
+        let diags = run("\
+local c = 1
+if c then ; else ;; end
+do ; end");
+        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
+        assert_eq!(
+            messages,
+            ["empty `if` block", "empty `else` block", "empty `do` block"],
             "{diags:?}"
         );
     }

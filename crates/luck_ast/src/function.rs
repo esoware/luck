@@ -1,21 +1,22 @@
-use luck_token::{Span, Token};
+use luck_allocator::{Box, List};
+use luck_token::Span;
 
 use crate::expr::Expression;
-use crate::punctuated::Punctuated;
+use crate::leaf::Name;
 use crate::stmt::Block;
 use crate::types::{GenericTypeList, Type};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionBody {
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionBody<'ast> {
     pub span: Span,
-    pub generics: Option<Box<GenericTypeList>>,
-    pub params: Punctuated<Parameter>,
-    pub vararg: Option<Box<VarArgParam>>,
-    pub return_type: Option<Type>,
-    pub block: Block,
+    pub generics: Option<Box<'ast, GenericTypeList<'ast>>>,
+    pub params: List<'ast, Parameter<'ast>>,
+    pub vararg: Option<Box<'ast, VarArgParam<'ast>>>,
+    pub return_type: Option<Type<'ast>>,
+    pub block: Block<'ast>,
 }
 
-impl FunctionBody {
+impl FunctionBody<'_> {
     /// Span of the closing `end` keyword: the last three bytes of the body
     /// span.
     ///
@@ -28,29 +29,31 @@ impl FunctionBody {
     }
 }
 
-/// A typed name: function parameter or generic-for loop binding.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Parameter {
-    pub span: Span,
-    pub name: Token,
-    pub type_annotation: Option<Type>,
+/// A typed name: function parameter or generic-for loop binding. It spans
+/// from its name, so it holds no span of its own.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Parameter<'ast> {
+    pub name: Name<'ast>,
+    pub type_annotation: Option<Type<'ast>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VarArgParam {
+/// `...`, where `span` starts at the dots.
+#[derive(Debug, PartialEq, Eq)]
+pub struct VarArgParam<'ast> {
     pub span: Span,
-    pub name: Option<Token>,
+    /// Lua 5.5: `...name`.
+    pub name: Option<Name<'ast>>,
     /// Luau: `: T`, which may be a generic pack (`T...`).
-    pub type_annotation: Option<Type>,
+    pub type_annotation: Option<Type<'ast>>,
 }
 
 /// Output must keep these, since some change runtime behavior (`@native`
 /// forces native codegen).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionAttribute {
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionAttribute<'ast> {
     pub span: Span,
-    pub name: Token,
+    pub name: Name<'ast>,
     /// Literal arguments of the bracketed `@[name(...)]` form; `None` for
     /// the plain `@name` form and for `@[name]` without arguments.
-    pub args: Option<Punctuated<Expression>>,
+    pub args: Option<List<'ast, Expression<'ast>>>,
 }

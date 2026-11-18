@@ -1,16 +1,15 @@
-use alloc::sync::Arc;
 use core::ops;
 
 use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
 use luck_linter::{Fix, LintDiagnostic};
 use luck_token::{Span, has_line_break, is_lua_whitespace, offset_to_index};
+use rustc_hash::FxHashMap;
 use tower_lsp_server::ls_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
     CodeActionResponse, Diagnostic, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
 };
 
-use crate::document::DocumentState;
-use crate::settings::ProjectSettings;
+use crate::document::{DocumentState, OpenDocument};
 
 /// A client drops an action that isn't inside the kind it asked for, and this
 /// most specific kind is inside `source`, `source.fixAll`, and itself.
@@ -24,7 +23,7 @@ pub(crate) fn code_action(
     lints: &[LintDiagnostic],
 ) -> CodeActionResponse {
     let uri = &params.text_document.uri;
-    let matched: Vec<(&Diagnostic, &str, &LintDiagnostic)> = params
+    let requested: Vec<(&Diagnostic, &str, Span)> = params
         .context
         .diagnostics
         .iter()
@@ -35,17 +34,21 @@ pub(crate) fn code_action(
             if diag.range.end < params.range.start || diag.range.start > params.range.end {
                 return None;
             }
-            // A diagnostic carries its lint's rule and range back unchanged,
-            // so the pair names the one lint it came from.
             let byte_range = document.byte_range(diag.range)?;
-            let span = Span::from_indices(byte_range.start, byte_range.end);
-            let lint = lint_at(lints, rule, span)?;
-            Some((diag, rule.as_str(), lint))
+            Some((diag, rule.as_str(), Span::from_indices(byte_range.start, byte_range.end)))
         })
+        .collect();
+    let lints_by_key =
+        lints_starting_at(lints, requested.iter().map(|&(_, _, span)| span.start).collect());
+    // A diagnostic carries its lint's rule and range back unchanged, so the
+    // pair names the one lint it came from.
+    let matched: Vec<(&Diagnostic, &str, &LintDiagnostic)> = requested
+        .into_iter()
+        .filter_map(|(diag, rule, span)| Some((diag, rule, *lints_by_key.get(&(span, rule))?)))
         .collect();
     // Directives apply only after a clean parse, so none can silence a syntax
     // error.
-    let disabler = (!matched.is_empty() && document.parsed.errors.is_empty()).then(|| {
+    let disabler = (!matched.is_empty() && document.parse().errors.is_empty()).then(|| {
         Disabler::new(
             document,
             &matched.iter().map(|(_, _, lint)| lint.span.start).collect::<Vec<_>>(),
@@ -99,20 +102,27 @@ pub(crate) fn code_action(
     actions
 }
 
-/// The lint `rule` reported at `span`, from `lints` in the order the linter
-/// returns them, sorted by where they start.
-fn lint_at<'lints>(
-    lints: &'lints [LintDiagnostic],
-    rule: &str,
-    span: Span,
-) -> Option<&'lints LintDiagnostic> {
-    let first = lints.partition_point(|lint| lint.span.start < span.start);
-    lints
-        .get(first..)?
-        .iter()
-        .take_while(|lint| lint.span.start == span.start)
-        .filter(|lint| lint.rule == rule && lint.span == span)
-        .last()
+/// The last lint of each rule and span that starts at one of `starts`, from
+/// `lints` in the order the linter returns them, sorted by where they start.
+///
+/// A request can hold every lint of a file, and many can start at one place,
+/// as each comparison in a run of them does, so a lint is found by key, not
+/// by a walk over the others that start there.
+fn lints_starting_at(
+    lints: &[LintDiagnostic],
+    mut starts: Vec<u32>,
+) -> FxHashMap<(Span, &str), &LintDiagnostic> {
+    starts.sort_unstable();
+    starts.dedup();
+    let mut by_key = FxHashMap::default();
+    for start in starts {
+        let from = lints.partition_point(|lint| lint.span.start < start);
+        let to = lints.partition_point(|lint| lint.span.start <= start);
+        for lint in lints.get(from..to).unwrap_or_default() {
+            by_key.insert((lint.span, lint.rule), lint);
+        }
+    }
+    by_key
 }
 
 fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
@@ -128,10 +138,11 @@ fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
 /// LSP forbids overlapping edits in one change list, and a dropped fix
 /// reappears on the next pass.
 fn all_fix_edits(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<TextEdit> {
+    let mut positions = document.positions();
     luck_linter::non_overlapping_edits(lints)
         .into_iter()
         .map(|edit| TextEdit {
-            range: document.range(edit.span),
+            range: positions.range(edit.span),
             new_text: edit.replacement.clone(),
         })
         .collect()
@@ -153,7 +164,7 @@ impl<'document> Disabler<'document> {
         let mut starts: Vec<(u32, usize)> = lint_starts.iter().copied().zip(0..).collect();
         starts.sort_unstable();
         let mut finder = StatementFinder { starts, ends: vec![None; lint_starts.len()] };
-        finder.visit_block(&document.parsed.block);
+        finder.visit_block(&document.parse().block);
         Self { document, statement_ends: finder.ends }
     }
 
@@ -170,7 +181,7 @@ impl<'document> Disabler<'document> {
         let blank_length = rest.bytes().take_while(|&b| is_lua_whitespace(b)).count();
         let blank = rest.get(..blank_length).unwrap_or_default();
         let is_line_end =
-            blank_length == rest.len() || has_line_break(blank, self.document.lua_version);
+            blank_length == rest.len() || has_line_break(blank, self.document.lua_version());
         let new_text = if is_line_end {
             format!(" -- luck: allow({rule})")
         } else {
@@ -216,7 +227,7 @@ impl StatementFinder {
 impl<'ast> Visitor<'ast> for StatementFinder {
     /// Only the statements between the first start and the last can hold
     /// one, and a block's statements are in source order.
-    fn visit_block(&mut self, block: &'ast Block) {
+    fn visit_block(&mut self, block: &'ast Block<'ast>) {
         let (Some(&(first, _)), Some(&(last, _))) = (self.starts.first(), self.starts.last())
         else {
             return;
@@ -231,19 +242,19 @@ impl<'ast> Visitor<'ast> for StatementFinder {
         }
     }
 
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         if self.holds(stmt.span()) {
             self.walk_stmt(stmt);
         }
     }
 
-    fn visit_last_stmt(&mut self, last: &'ast LastStatement) {
+    fn visit_last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
         if self.holds(last.span()) {
             self.walk_last_stmt(last);
         }
     }
 
-    fn visit_expr(&mut self, expr: &'ast Expression) {
+    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
         if !self.held(expr.span()).is_empty() {
             self.walk_expr(expr);
         }
@@ -271,15 +282,21 @@ fn should_offer_fix_all(context: &CodeActionContext) -> bool {
     })
 }
 
-pub(crate) fn fix_all_open(
-    documents: &[(Uri, Arc<DocumentState>, Arc<ProjectSettings>)],
-) -> WorkspaceEdit {
+/// Every included document's fixes, from the lints it last published, or
+/// from a lint where it has published none yet.
+///
+/// A document the project leaves out, like the lints the opt-in gate holds
+/// back, publishes nothing to fix.
+pub(crate) fn fix_all_open(documents: &[(Uri, OpenDocument)]) -> WorkspaceEdit {
     let changes = documents
         .iter()
-        .filter_map(|(uri, document, settings)| {
-            // The opt-in gate keeps fix-all away from diagnostics that were never
-            // published.
-            let edits = all_fix_edits(document, &document.lint(&settings.lint_config));
+        .filter(|(_, open)| open.state.settings().is_included)
+        .filter_map(|(uri, open)| {
+            let document = &open.state;
+            let edits = open.published_lints.as_ref().map_or_else(
+                || all_fix_edits(document, &document.lint()),
+                |lints| all_fix_edits(document, lints),
+            );
             (!edits.is_empty()).then(|| (uri.clone(), edits))
         })
         .collect();
@@ -290,13 +307,14 @@ pub(crate) fn fix_all_open(
 mod tests {
     use luck_core::LuaTarget;
     use luck_linter::{Category, LintConfig, RuleLevel, Severity, TextEdit as LinterTextEdit};
-    use rustc_hash::FxHashSet;
     use tower_lsp_server::ls_types::{
         PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams,
     };
 
     use super::*;
+    use crate::fixtures::document_under;
     use crate::providers::diagnostics;
+    use crate::settings::ProjectSettings;
 
     fn uri() -> Uri {
         "file:///main.lua".parse().expect("valid URI")
@@ -309,8 +327,12 @@ mod tests {
         config
     }
 
-    fn document(text: &str) -> DocumentState {
-        DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default())
+    /// `text` linted under `config`, and its lints.
+    fn linted(text: &str, config: &LintConfig) -> (DocumentState, Vec<LintDiagnostic>) {
+        let project = ProjectSettings { lint_config: config.clone(), ..ProjectSettings::default() };
+        let document = document_under(text, LuaTarget::Lua54, project);
+        let lints = document.lint();
+        (document, lints)
     }
 
     fn params(
@@ -345,8 +367,7 @@ mod tests {
     }
 
     fn disabled(text: &str, config: &LintConfig, lint_index: usize) -> String {
-        let document = document(text);
-        let lints = document.lint(config);
+        let (document, lints) = linted(text, config);
         let lint = lints.get(lint_index).expect("the lint fired");
         let disabler = Disabler::new(&document, &[lint.span.start]);
         let edit = disabler.edit(0, lint.rule).expect("a statement holds it");
@@ -355,8 +376,7 @@ mod tests {
 
     #[test]
     fn fix_all_action_has_the_kind_the_client_requests() {
-        let document = document("local x = nil\n");
-        let lints = document.lint(&config_enabling("redundant_nil_init"));
+        let (document, lints) = linted("local x = nil\n", &config_enabling("redundant_nil_init"));
         let kind = CodeActionKind::new("source.fixAll.luck");
         let actions = code_action(
             &document,
@@ -373,8 +393,8 @@ mod tests {
 
     #[test]
     fn fix_all_edits_do_not_overlap() {
-        let document = document("return not (a == (not (b == c)))\n");
-        let lints = document.lint(&config_enabling("unnecessary_negation"));
+        let (document, lints) =
+            linted("return not (a == (not (b == c)))\n", &config_enabling("unnecessary_negation"));
         let edits = all_fix_edits(&document, &lints);
         let mut ranges: Vec<Range> = edits.iter().map(|edit| edit.range).collect();
         ranges.sort_by_key(|range| range.start);
@@ -390,8 +410,8 @@ mod tests {
 
     #[test]
     fn two_diagnostics_of_one_rule_yield_one_fix_each() {
-        let document = document("local x = nil local y = nil\n");
-        let lints = document.lint(&config_enabling("redundant_nil_init"));
+        let (document, lints) =
+            linted("local x = nil local y = nil\n", &config_enabling("redundant_nil_init"));
         let diags = diagnostics::to_lsp(&document, &lints);
         let range = Range::new(Position::new(0, 0), Position::new(0, 27));
         let actions = code_action(&document, &params(range, diags, None), &lints);
@@ -406,9 +426,7 @@ mod tests {
     fn no_disable_action_for_a_parse_error() {
         // Directives apply only after a clean parse, so a comment can't
         // silence a syntax error.
-        let document = document("local x =\n");
-        let config = config_enabling("redundant_nil_init");
-        let lints = document.lint(&config);
+        let (document, lints) = linted("local x =\n", &config_enabling("redundant_nil_init"));
         let diags = diagnostics::to_lsp(&document, &lints);
         let range = Range::new(Position::new(0, 0), Position::new(1, 0));
         let actions = code_action(&document, &params(range, diags, None), &lints);
@@ -425,7 +443,7 @@ mod tests {
         let text = "local a = 1 local x = nil\n";
         let config = config_enabling("redundant_nil_init");
         let edited = disabled(text, &config, 0);
-        let remaining = document(&edited).lint(&config);
+        let (_, remaining) = linted(&edited, &config);
         assert!(
             remaining.is_empty(),
             "the comment must silence the line: {edited:?} {remaining:?}"
@@ -460,7 +478,7 @@ local u = second_missing
 ";
         let config = config_enabling("undefined_variable");
         let edited = disabled(text, &config, 0);
-        let remaining = document(&edited).lint(&config);
+        let (_, remaining) = linted(&edited, &config);
         assert!(
             remaining.iter().any(|lint| lint.message.contains("second_missing")),
             "\"for this line\" must leave the next statement flagged: {edited:?}"
@@ -473,9 +491,8 @@ local u = second_missing
         let config = config_enabling("redundant_nil_init");
         let edited = disabled(text, &config, 0);
         assert!(edited.contains("--[[ luck: allow(redundant_nil_init) ]]"), "{edited:?}");
-        let reparsed = document(&edited);
-        assert!(reparsed.parsed.errors.is_empty(), "{:?}", reparsed.parsed.errors);
-        let remaining = reparsed.lint(&config);
+        let (reparsed, remaining) = linted(&edited, &config);
+        assert!(reparsed.parse().errors.is_empty(), "{:?}", reparsed.parse().errors);
         assert_eq!(remaining.len(), 1, "the later statement stays flagged: {remaining:?}");
     }
 
@@ -484,7 +501,7 @@ local u = second_missing
             rule: "test_rule",
             category: Category::Style,
             severity: Severity::Warning,
-            message: "bad".to_owned(),
+            message: "bad".into(),
             span: Span::new(0, 0),
             help: None,
             fix: Some(Fix { description: "fix".to_owned(), edits }),
@@ -497,7 +514,7 @@ local u = second_missing
 
     #[test]
     fn a_fix_that_overlaps_a_later_one_drops_whole() {
-        let document = document("0123456789\n");
+        let (document, _) = linted("0123456789\n", &LintConfig::default());
         let fixes = [
             lint_with_fix(vec![linter_edit(0, 1), linter_edit(2, 6)]),
             lint_with_fix(vec![linter_edit(5, 8)]),

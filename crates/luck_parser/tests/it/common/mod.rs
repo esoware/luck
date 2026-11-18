@@ -1,29 +1,29 @@
 use core::fmt::Write as _;
 use core::iter;
 
+use luck_allocator::Allocator;
 use luck_ast::{Expression, Statement, Suffix, SuffixedExpression, Var};
 use luck_parser::ParseResult;
 use luck_token::{BinOp, LuaVersion};
 
-pub(crate) fn assert_no_errors(result: &ParseResult) {
+pub(crate) fn assert_no_errors(result: &ParseResult<'_>) {
     assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
 }
 
-pub(crate) fn parse_luau(source: &str) -> ParseResult {
-    luck_parser::parse(source, LuaVersion::Luau)
+pub(crate) fn parse_luau<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
+    luck_parser::parse(allocator, source, LuaVersion::Luau)
 }
 
 /// The last initializer of a `local ... = <expr>` first statement.
-pub(crate) fn local_value(result: &ParseResult) -> &Expression {
+pub(crate) fn local_value<'ast>(result: &'ast ParseResult<'ast>) -> &'ast Expression<'ast> {
     let Some(Statement::LocalAssignment(local)) = result.block.stmts.first() else {
         panic!("expected LocalAssignment, got {:?}", result.block.stmts);
     };
-    let exprs = local.exprs.as_ref().expect("assignment has values");
-    exprs.last().expect("expression list has last element")
+    local.exprs.last().expect("assignment has values")
 }
 
 /// A binary run's operators, in source order.
-pub(crate) fn run_ops(expr: &Expression) -> Vec<BinOp> {
+pub(crate) fn run_ops(expr: &Expression<'_>) -> Vec<BinOp> {
     let Expression::BinaryOp(run) = expr else {
         panic!("expected a binary run, got {expr:?}");
     };
@@ -31,21 +31,23 @@ pub(crate) fn run_ops(expr: &Expression) -> Vec<BinOp> {
 }
 
 /// A binary run's operands, in source order.
-pub(crate) fn run_operands(expr: &Expression) -> Vec<&Expression> {
+pub(crate) fn run_operands<'tree, 'ast>(
+    expr: &'tree Expression<'ast>,
+) -> Vec<&'tree Expression<'ast>> {
     let Expression::BinaryOp(run) = expr else {
         panic!("expected a binary run, got {expr:?}");
     };
     iter::once(&run.first).chain(run.links.iter().map(|link| &link.operand)).collect()
 }
 
-pub(crate) fn chain(expr: &Expression) -> &SuffixedExpression {
+pub(crate) fn chain<'tree, 'ast>(expr: &'tree Expression<'ast>) -> &'tree SuffixedExpression<'ast> {
     let Expression::Suffixed(chain) = expr else {
         panic!("expected a suffixed expression, got {expr:?}");
     };
     chain
 }
 
-pub(crate) fn target_chain(var: &Var) -> &SuffixedExpression {
+pub(crate) fn target_chain<'tree, 'ast>(var: &'tree Var<'ast>) -> &'tree SuffixedExpression<'ast> {
     let Var::Suffixed(chain) = var else {
         panic!("expected a suffixed target, got {var:?}");
     };
@@ -54,9 +56,9 @@ pub(crate) fn target_chain(var: &Var) -> &SuffixedExpression {
 
 /// The prefix's name, or `()` for parentheses, then each suffix: `.name`,
 /// `[]`, `()`, `:name()`, or `<<>>`.
-pub(crate) fn chain_shape(chain: &SuffixedExpression) -> String {
+pub(crate) fn chain_shape(chain: &SuffixedExpression<'_>) -> String {
     let mut shape = if let Expression::Name(name) = &chain.prefix {
-        name.identifier().unwrap_or_default().to_owned()
+        name.text.to_string()
     } else if let Expression::Parenthesized(_) = &chain.prefix {
         "()".to_owned()
     } else {
@@ -64,12 +66,10 @@ pub(crate) fn chain_shape(chain: &SuffixedExpression) -> String {
     };
     for suffix in &chain.suffixes {
         let _unused = match suffix {
-            Suffix::Field(name) => write!(shape, ".{}", name.identifier().unwrap_or_default()),
+            Suffix::Field(name) => write!(shape, ".{}", name.text),
             Suffix::Index { .. } => write!(shape, "[]"),
-            Suffix::Call(call) => match call.method() {
-                Some(method) => write!(shape, ":{}()", method.identifier().unwrap_or_default()),
-                None => write!(shape, "()"),
-            },
+            Suffix::Call(_) => write!(shape, "()"),
+            Suffix::MethodCall(call) => write!(shape, ":{}()", call.name.text),
             Suffix::TypeInstantiation { .. } => write!(shape, "<<>>"),
         };
     }

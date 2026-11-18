@@ -1,30 +1,29 @@
+use luck_allocator::Allocator;
 use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_token::{
     Comment, CommentKind, LuaVersion, SourceError, chunk_header, leading_hot_comments,
 };
 
+use crate::bind::bind;
+use crate::binding::Bindings;
+use crate::compress::compress;
+use crate::name_table::NameTable;
+use crate::rename_locals::rename;
 use crate::transform_config::TransformConfig;
-use crate::transforms;
 
-/// Measured corpora settle in two or three rounds, so the cap only bounds a
-/// pass that never stops changing the tree, which the fixpoint tests catch.
-const MAX_PIPELINE_ROUNDS: usize = 8;
-
-/// Minifies Lua source, returning the compact output or the parse errors.
-///
-/// The transform chain repeats until its output stops changing, since each
-/// pass can expose work for the others: inlining opens folds, folding opens
-/// dead branches, and lift and merge reshape declarations for the next round.
+/// Parses `source` into `allocator` and minifies it, returning the compact
+/// output or the parse errors.
 ///
 /// # Errors
 ///
 /// Returns the parse errors when `source` doesn't parse.
-pub fn minify(
-    source: &str,
+pub fn minify<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
     version: LuaVersion,
     config: &TransformConfig,
 ) -> Result<String, Vec<SourceError>> {
-    let result = luck_parser::parse(source, version);
+    let mut result = luck_parser::parse(allocator, source, version);
     if !result.errors.is_empty() {
         return Err(result.errors);
     }
@@ -39,7 +38,10 @@ pub fn minify(
         shebang,
         leading_hot_comments(hot_comments, source).map(|comment| comment.span),
     );
-    let code = minify_tree(result.block, version, config);
+    if !minify_tree(allocator, &mut result.block, version, config, false) {
+        return Err(vec![nesting_error(&result.block)]);
+    }
+    let code = luck_codegen::compact(&result.block);
     if output.is_empty() {
         return Ok(code);
     }
@@ -47,126 +49,81 @@ pub fn minify(
     Ok(output)
 }
 
-/// Minifies a tree as [`minify`] does the one it parses, and returns the
-/// compact output. A tree holds no comments, so a shebang or Luau hot
-/// comments the output needs on top are the caller's to write.
+/// Minifies a tree in place, as [`minify`] does the one it parses, and
+/// returns its compact output.
 ///
-/// Every round works on the tree the last one left. The passes build nodes
-/// in the shape the parser gives their printed text, so the tree the rounds
-/// settle on is the one its own output parses to, which is what makes
-/// minifying the output again a fixpoint.
+/// New nodes go in `allocator`. A tree holds no comments, so a shebang or
+/// Luau hot comments the output needs on top are the caller's to write.
 ///
 /// # Errors
 ///
 /// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
-/// which `luck_parser` never builds.
-pub fn minify_block(
-    block: Block,
+/// which `luck_parser` never builds, and leaves the tree as it was but for
+/// its names' indexes.
+pub fn minify_block<'ast>(
+    allocator: &'ast Allocator,
+    block: &mut Block<'ast>,
     version: LuaVersion,
     config: &TransformConfig,
 ) -> Result<String, SourceError> {
-    if block_nesting_depth(&block) > MAX_NESTING_DEPTH {
-        return Err(SourceError {
-            span: block.span,
-            message: format!(
-                "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
-            ),
-        });
+    if !minify_tree(allocator, block, version, config, true) {
+        return Err(nesting_error(block));
     }
-    Ok(minify_tree(block, version, config))
+    Ok(luck_codegen::compact(block))
 }
 
-fn minify_tree(mut block: Block, version: LuaVersion, config: &TransformConfig) -> String {
-    let mut output = luck_codegen::compact(&block);
-    for _ in 0..MAX_PIPELINE_ROUNDS {
-        block = apply_core_transforms(block, config, version);
-        let (tail_block, round_output) =
-            apply_tail_transforms(block, config, version, output.len());
-        block = tail_block;
-        if round_output == output {
-            break;
-        }
-        output = round_output;
+fn nesting_error(block: &Block<'_>) -> SourceError {
+    SourceError {
+        span: block.span,
+        message: format!(
+            "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
+        ),
     }
-    output
 }
 
-fn apply_core_transforms(mut block: Block, config: &TransformConfig, version: LuaVersion) -> Block {
-    if config.remove_dead_code {
-        block = transforms::remove_dead_code::remove(block, version);
-    }
-    if config.simplify_statements {
-        block = transforms::simplify_statements::simplify(block);
-    }
-    if config.fold_constants {
-        block = transforms::fold_constants::fold(block, version);
-    }
-    if config.inline_locals {
-        block = transforms::inline_locals::inline(block, version);
-    }
-    // Inlining exposes new foldable constants.
-    if config.fold_constants {
-        block = transforms::fold_constants::fold(block, version);
-    }
-    // Folding those (`local DEBUG = false` inlined into `if DEBUG then`)
-    // exposes new dead branches within the same round.
-    if config.remove_dead_code {
-        block = transforms::remove_dead_code::remove(block, version);
-    }
-    if config.merge_locals {
-        block = transforms::merge_locals::merge(block, version);
-    }
-    if config.simplify_indexes {
-        block = transforms::simplify_indexes::simplify(block, version);
-    }
-    if config.shorten_strings {
-        block = transforms::shorten_strings::shorten(block, version);
-    }
-    if config.shorten_numbers {
-        block = transforms::shorten_numbers::shorten(block, version);
-    }
-    if config.simplify_parens {
-        block = transforms::simplify_parens::simplify(block);
-    }
-    block
-}
-
-/// Lift decides by name, and rename's slot reuse gives distinct bindings the
-/// same name, so each rename, lift, and merge round can unblock more lifts.
+/// Binds the tree once, compresses it to its fixpoint, and names its locals
+/// once, as each phase is on, or leaves a tree nested deeper than
+/// [`MAX_NESTING_DEPTH`] as [`minify_block`] does and says so.
 ///
-/// The loop runs that cascade to its own fixpoint here, so the outer loop
-/// never reruns the core passes for tail-only work. Returns the tree and its
-/// compact output.
-fn apply_tail_transforms(
-    mut block: Block,
-    config: &TransformConfig,
+/// Without `can_nest_too_deep`, for a tree `luck_parser` built, which never
+/// nests that deep, it spares measuring a tree it doesn't bind.
+fn minify_tree<'ast>(
+    allocator: &'ast Allocator,
+    block: &mut Block<'ast>,
     version: LuaVersion,
-    output_capacity: usize,
-) -> (Block, String) {
-    // Explicit self goes before rename so the renamer can shorten the parameter.
+    config: &TransformConfig,
+    can_nest_too_deep: bool,
+) -> bool {
+    let should_compress = config.remove_dead_code
+        || config.simplify_statements
+        || config.fold_constants
+        || config.inline_locals
+        || config.merge_locals
+        || config.simplify_indexes
+        || config.shorten_strings
+        || config.shorten_numbers
+        || config.simplify_parens
+        || config.lift_locals;
+    let needs_bindings = config.remove_dead_code
+        || config.inline_locals
+        || config.merge_locals
+        || config.lift_locals
+        || config.rename_locals;
+    let mut bindings = Bindings::default();
+    let mut names = NameTable::default();
+    let fits = if needs_bindings {
+        bind(block, version, &mut bindings, &mut names)
+    } else {
+        !can_nest_too_deep || block_nesting_depth(block) <= MAX_NESTING_DEPTH
+    };
+    if !fits {
+        return false;
+    }
+    if should_compress {
+        compress(allocator, version, *config, &mut bindings, block);
+    }
     if config.rename_locals {
-        block = transforms::explicit_self::rewrite(block);
+        rename(allocator, version, block, &mut bindings, &names, config.rename_globals);
     }
-    let mut output = luck_codegen::compact_with_capacity(&block, output_capacity);
-    if !config.rename_locals && !config.lift_locals {
-        return (block, output);
-    }
-    for _ in 0..MAX_PIPELINE_ROUNDS {
-        if config.rename_locals {
-            block = transforms::rename_locals::rename(block, version, config.rename_globals);
-        }
-        if config.lift_locals {
-            block = transforms::lift_locals::lift(block, version);
-        }
-        // Fuse `local X\nX=Y` back into `local X=Y` after lifting.
-        if config.rename_locals && config.merge_locals {
-            block = transforms::merge_locals::merge(block, version);
-        }
-        let next_output = luck_codegen::compact_with_capacity(&block, output.len());
-        if next_output == output {
-            break;
-        }
-        output = next_output;
-    }
-    (block, output)
+    true
 }

@@ -2,11 +2,13 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
+use luck_allocator::Allocator;
 use luck_core::LuaTarget;
 use luck_resolver::read_source_file;
 
 use crate::exit::Exit;
-use crate::project::{outcomes_in_order, project_files};
+use crate::output::OUTPUT_BUFFER_BYTES;
+use crate::project::{for_each_outcome_in_order, project_files};
 use crate::render::render_source_errors;
 use crate::verbosity::Verbosity;
 
@@ -42,13 +44,19 @@ impl CheckArgs {
         let mut has_errors = false;
         {
             // One lock and one flush for the whole run.
-            let mut stderr = BufWriter::new(io::stderr().lock());
-            let outcomes = outcomes_in_order(&files, |file| check_file(&file.path, file.target));
-            for rendered in outcomes.flatten() {
-                has_errors = true;
-                let _unused = stderr.write_all(&rendered);
-            }
-        }
+            let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
+            for_each_outcome_in_order(
+                &files,
+                |file, allocator| check_file(allocator, &file.path, file.target),
+                |outcome| {
+                    if let Some(rendered) = outcome {
+                        has_errors = true;
+                        let _unused = stderr.write_all(&rendered);
+                    }
+                    Ok(())
+                },
+            )
+        }?;
 
         if has_errors {
             return Err(Exit::Failure);
@@ -62,7 +70,7 @@ impl CheckArgs {
     }
 }
 
-fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
+fn check_file(allocator: &Allocator, file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
     let source = match read_source_file(file_path) {
         Ok(text) => text,
         Err(error) => {
@@ -73,7 +81,7 @@ fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
     };
 
     let version = target.lua_version();
-    let mut result = luck_parser::parse(source, version);
+    let mut result = luck_parser::parse(allocator, &source, version);
     if result.errors.is_empty() {
         // The compile-time errors real Lua reports beyond the grammar, such as
         // const writes and unresolved gotos. Only `check` pays for this pass.
@@ -85,7 +93,7 @@ fn check_file(file_path: &Path, target: LuaTarget) -> Option<Vec<u8>> {
 
     Some(render_source_errors(
         file_path.to_string_lossy().into_owned(),
-        &result.source,
+        &source,
         &result.errors,
         version,
     ))

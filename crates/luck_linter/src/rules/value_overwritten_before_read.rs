@@ -18,7 +18,7 @@ impl_rule!(
 
 impl WholeRule for ValueOverwrittenBeforeRead {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = &context.semantic.scope_tree;
+        let tree = context.semantic.scope_tree();
         context
             .local_flow()
             .overwritten_values
@@ -27,7 +27,7 @@ impl WholeRule for ValueOverwrittenBeforeRead {
                 Finding::new(
                     format!(
                         "value assigned to `{}` is overwritten before it is read",
-                        tree.symbol(symbol_id).name
+                        tree.name(tree.symbol(symbol_id).name)
                     ),
                     span,
                 )

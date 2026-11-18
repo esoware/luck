@@ -71,7 +71,7 @@ impl NodeType {
         self as usize
     }
 
-    pub(crate) const fn of_stmt(stmt: &Statement) -> Self {
+    pub(crate) const fn of_stmt(stmt: &Statement<'_>) -> Self {
         match stmt {
             Statement::Assignment(_) => Self::Assignment,
             Statement::FunctionCall(_) => Self::FunctionCallStmt,
@@ -105,7 +105,7 @@ impl NodeType {
         }
     }
 
-    pub(crate) const fn of_last_stmt(last_stmt: &LastStatement) -> Self {
+    pub(crate) const fn of_last_stmt(last_stmt: &LastStatement<'_>) -> Self {
         match last_stmt {
             LastStatement::Return(_) => Self::Return,
             LastStatement::Break(_) => Self::LastBreak,
@@ -115,7 +115,7 @@ impl NodeType {
         }
     }
 
-    pub(crate) const fn of_expr(expr: &Expression) -> Self {
+    pub(crate) const fn of_expr(expr: &Expression<'_>) -> Self {
         match expr {
             Expression::Nil(_) => Self::Nil,
             Expression::False(_) => Self::False,

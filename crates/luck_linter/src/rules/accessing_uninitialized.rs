@@ -21,18 +21,18 @@ impl_rule!(
 
 impl WholeRule for AccessingUninitialized {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = &context.semantic.scope_tree;
+        let tree = context.semantic.scope_tree();
         context
             .local_flow()
             .first_unassigned_uses
             .iter()
             .filter_map(|&(symbol_id, reference_id)| {
                 let first = tree.reference(reference_id);
-                (!context.uninitialized_locals.is_field_write_prefix(first)).then(|| {
+                (!context.nodes.uninitialized_locals().is_field_write_prefix(first)).then(|| {
                     Finding::new(
                         format!(
                             "`{}` is read before any value is assigned, so it is `nil`",
-                            tree.symbol(symbol_id).name
+                            tree.name(tree.symbol(symbol_id).name)
                         ),
                         first.span,
                     )

@@ -11,8 +11,10 @@
 //! file's directory, and `@alias` prefixes from the `.luaurc` files found up
 //! the directory tree.
 //!
-//! A [`Resolver`] caches `.luaurc` aliases and Luau's file probes and never
-//! invalidates them, so create one per build to see edits.
+//! A [`Resolver`] lists each directory a require looks in, and caches those
+//! listings, what each Lua require string resolves to, `.luaurc` aliases, and
+//! Luau's file probes, and never invalidates them, so create one per build to
+//! see edits. Its threads share one.
 //!
 //! This is the lowest crate that touches the filesystem, so it also holds what
 //! every file-reading consumer shares: [`read_source_file`], and the path form
@@ -27,7 +29,7 @@
 //! use luck_token::{LuaVersion, Span};
 //!
 //! let search_paths = ["./?.lua".to_owned()];
-//! let mut resolver = Resolver::new(LuaVersion::Lua54, &search_paths, Path::new("."));
+//! let resolver = Resolver::new(LuaVersion::Lua54, &search_paths, Path::new("."));
 //! let resolved = resolver
 //!     .resolve(&ResolveRequest {
 //!         module: "foo",
@@ -48,6 +50,7 @@
 
 extern crate alloc;
 
+mod file_system;
 #[cfg(test)]
 mod fixtures;
 mod lua;
@@ -55,6 +58,7 @@ mod luau;
 mod luaurc;
 mod path;
 mod resolver;
+mod shared_cache;
 mod source_io;
 
 pub use path::{native_path, normalize_path};

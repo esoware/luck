@@ -1,79 +1,32 @@
 # luck_formatter
 
-Prettier-style code formatter for Lua 5.1-5.5 and Luau.
+The Prettier-style formatter for Lua 5.1 to 5.5 and Luau.
 
 ## Overview
 
-Each AST node's emitter is an `impl Format`, composing combinators (`group`, `indent`, `soft_line`, `fill`, `if_group_breaks`, ...) into a tag-stream IR. A line-width-aware printer then decides which groups fit flat and which need to expand.
+The formatter writes the tree into one flat stream of layout elements in the caller's arena. The elements are text, line breaks, indents, and groups, and each text borrows from the tree, the source, or the arena. A printer then walks the stream once. A group prints on one line if it fits the line width and breaks if it doesn't.
 
-## Key features
+For a parse, the formatter takes comments from the parse's comment list and places them by byte position. It keeps blank lines between statements, and copies `-- luck: format off` to `-- luck: format on` regions and statements after `-- luck: ignore` as written. It also copies a statement as written when the statement holds a comment it can't place without moving it past code. A tree built in code takes its comments from `SyntheticComment`s instead. The output parses, and formatting it again changes nothing.
 
-- **Formats ASTs directly.** `format_block` formats an AST with no source text required, so ASTs built in code, and their synthetic comments, format the same as parsed source. It returns a `FormatError` for a tree nested past `luck_ast::MAX_NESTING_DEPTH`, which only a tree built in code can be, because the parser would refuse the output, and for no other tree. Leaf text prints as the tree holds it, unchecked, so a tree built in code reads back as itself only if each leaf is one the lexer would read where it sits.
-- **Comment preservation.** Comments before, after, and between statements lay out normally. Table constructors and call argument lists claim the comments written between their items: the list breaks one item per line, and each comment keeps the line it was on. A single-line block comment between a statement's condition and its `then` or `do` prints where it was written. Each construct claims only the comments inside its own span, so none is dragged across an opening delimiter. A comment after a block's last statement, or alone in an empty block, stays in that block, and blank lines around comments are kept. When an interior comment still has no safe place, the smallest statement around it is kept verbatim instead of moving the comment. Its lines are re-indented to its block and a run of blank lines collapses to one, but nothing else changes, and the inside of a long string or long comment stays exactly as written. `-- luck: format off` and `-- luck: format on` copy the region between them byte for byte, directive lines included, and a region that doesn't line up with a block's statements keeps the whole statement around it verbatim. `-- luck: ignore` (or `-- luck: format ignore`) keeps the next statement's layout and line breaks, re-indented to its block. A directive's last word must end at a word boundary, so `-- luck: format offset` is not one.
-- **Hug patterns.** A call's function and table arguments are hugged: when the call is too long for one line, the other arguments stay beside the parentheses and those arguments break instead, as in `table.sort(items, function(a, b)` or `createElement("Frame", {` ... `}, {` ... `})`. A hugged table that fits stays on one line beside a function, which always breaks. An empty table isn't hugged. A call where another argument sits between two hugged ones, or one whose lines would still be too long, puts every argument on its own line. StyLua byte-for-byte compatibility isn't a goal.
-- **Access chain breaking.** A long method chain (`foo:bar():baz()`) breaks before each `:` call, with the continuation lines indented. A dot chain of three or more names breaks before each `.` only when the names don't fit after what they follow, so `end).never.to.throw()` stays on the line a callback closes on.
-- **Condition breaking.** `if`, `elseif`, `while`, and `until` conditions lose redundant outer parentheses, and a long `if`, `elseif`, or `while` condition breaks onto its own indented line before `then` or `do`. An operator chain still too long for that line breaks before each operator, level with its first operand.
-- **Operator chains.** A long chain breaks before each operator of one precedence level, and an operand that binds tighter breaks only when it doesn't fit by itself, so `a == b or c == d` breaks at `or` alone.
-- **Assignments.** Values too long for the `=` line move to the next line, one indent deeper, when they fit there, and otherwise hang from `=`. A lone table, function, or call stays on the `=` line and breaks inside its own brackets. This covers `local`, `global`, plain, and compound assignments.
-- **If-expressions.** A Luau if-expression too long for one line starts an indented line at each `then`, `elseif`, and `else`.
-- **Fill mode.** A table of positional literals and variables packs entries greedily onto lines instead of one per line.
-- **Blank lines in tables.** A blank line between two fields is kept, as one between statements is, and breaks the table. A packed list stays packed on either side of it. The lines right inside the braces take none.
-- **Range formatting.** `format_range` formats only the statements overlapping a byte range, or those of the innermost nested block holding the whole range, and copies every other byte as it was, line endings included. This is what an editor's "format selection" calls.
-- **Luau type annotations.** Luau type syntax formats from the `Type` AST, with group-based line breaking. A union or intersection that breaks gives each member a line and a leading `|` or `&`: one indent deeper on the lines after the text it follows, such as `type T =` or `name:`, or, as an array field or an unnamed item of a type list, on the line the table or the list opens for it. A union or intersection that opens an array field with no access modifier keeps its leading `|` or `&` even when flat if its first member starts with `read` or `write`, which would otherwise read back as the field's access modifier.
+## Features
 
-## Architecture
+- `FormatOptions` sets the line width, indent style and width, quote style, hex digit case, call parentheses, collapsing of simple `if` statements, line endings, blank lines at the edges of blocks, `require` sorting, a space after function names, and the magic trailing comma.
+- The `serde` feature derives `Deserialize` for the option enums, the shape `luck.json` gives them, and `schemars` derives `JsonSchema` too.
 
-### Pipeline
+## Usage
 
-1. **Parse.** Source text becomes an AST through `luck_parser`. (Skipped when a caller hands `format_parsed` a parse or `format_block` an AST.)
-2. **IR generation.** Each node's `impl Format` writes into a `Formatter`, which records a flat stream of `FormatElement`s (text, soft and hard lines) with paired `Tag`s marking groups, indents, fills, line suffixes, and conditionals keyed by group id. Emitters build it with combinators rather than pushing elements by hand.
-3. **Print.** A `propagate_expand` pre-pass marks every group containing a forced break as expanded, then the printer walks the stream with a mode stack, measuring each unforced group's content against the remaining width and committing to flat or expanded (fits-then-commit).
+- `format(allocator, source, version, &options)` parses and formats, returning a `FormatResult` with the output and any parse errors.
+- `format_parsed` formats a parse the caller holds, and `format_range` formats only the statements a byte range overlaps and copies the rest.
+- `format_block(allocator, &block, comments, &options)` formats a tree with no source, such as one built with `luck_ast::Synth`, with `Comments::synthetic` or `Comments::none`. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`.
 
-### IR primitives
+```rust
+use luck_allocator::Allocator;
+use luck_formatter::FormatOptions;
+use luck_token::LuaVersion;
 
-`group` decisions are local: a nested group can stay flat while its parent expands. `soft_line` prints nothing when flat and a newline when expanded, `soft_line_or_space` prints a space when flat, and `hard_line` is always a newline. `indent` increases indentation for nested content. `fill` packs entries greedily, and `separated` writes a list with a separator between its items. `if_group_breaks` emits content only when a given group, addressed by its id, breaks.
-
-### Configuration
-
-The defaults follow the [Roblox Lua style guide](https://roblox.github.io/lua-style-guide/).
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `line_width` | `u16` | 100 | Target line width before breaking |
-| `indent_style` | `IndentStyle` | `Tabs` | Tabs or Spaces |
-| `indent_width` | `u8` | 4 | Columns per indent level: the spaces written per level, or how wide a tab counts against `line_width` |
-| `quote_style` | `QuoteStyle` | `Double` | Double, Single, AutoPreferDouble, or AutoPreferSingle (the auto styles switch quotes when that needs fewer escapes) |
-| `hexadecimal_case` | `HexCase` | `Preserve` | Case of hex digits `A`-`F`: Preserve, Lower, or Upper. The `0x`/`0b` prefix and exponent markers are always lowercased |
-| `call_parentheses` | `CallParentheses` | `Always` | Always, NoSingleString, NoSingleTable, None (single string or table), or Input (preserve source) |
-| `collapse_simple_statement` | `CollapseSimpleStatement` | `Never` | Never or ConditionalOnly. Function bodies never collapse, though an empty one keeps `end` on the header's line, as in `function() end`. An `if` that doesn't fit on one line, or whose body spans lines or has a comment that couldn't keep its place on one line, stays expanded |
-| `line_endings` | `LineEndings` | `Unix` | Unix (LF) or Windows (CRLF) |
-| `block_newline_gaps` | `BlockNewlineGaps` | `Never` | Never (strip) or Preserve blank lines at block start/end |
-| `space_after_function_names` | `SpaceAfterFunction` | `Never` | Never, Definitions, Calls, or Always, for a space before a definition's parameter list, a call's `(`, or both |
-| `sort_requires` | `bool` | `true` | Sort runs of `local x = require(...)` and `GetService(...)` statements by name, where the require takes a string or a dotted path, leaving alone any run whose reordering can't be proven safe |
-| `magic_trailing_comma` | `bool` | `true` | A trailing comma keeps the table broken: one field per line, or still packed when the source packed its positional values several to a line (argument lists can't carry one) |
-
-### Module layout
-
-| Module | Role |
-|--------|------|
-| `lib.rs` | Module list and public re-exports |
-| `format.rs` | Public entry points (`format_block`, `format`, `format_parsed`, `format_range`) and `FormatResult` |
-| `format_options.rs` | `FormatOptions` and its conversion from `FormatConfig` |
-| `ir.rs` | `Format` trait, `Formatter`, and the tag-stream IR (`FormatElement`, `Tag`, combinators) |
-| `printer.rs` | Line-width-aware IR printer (expand pre-pass + fits-then-commit) |
-| `comments.rs` | Comment interleaving (sourced + synthetic), including the lists that claim the comments between their items |
-| `directive.rs` | The `luck:` directives (`format off`/`on`, `ignore`) and the `format off` regions they mark |
-| `format_expr.rs` | Expression formatting |
-| `format_stmt.rs` | Statement formatting |
-| `format_table.rs` | Table constructor formatting |
-| `format_function.rs` | Function definition and call formatting |
-| `format_block.rs` | Block formatting: the statement loop, blank lines, range selection, and verbatim statements |
-| `format_type.rs` | Luau type annotation formatting |
-| `quotes.rs` | Quote style normalization |
-| `numbers.rs` | Numeric-literal normalization |
-| `tokens.rs` | Token-to-IR text emission |
-| `sort_requires.rs` | `require` statement sorting, which the block emitter applies as it prints by moving each statement's printed lines |
-
-## Testing
-
-Public-API tests live in `tests/it/` as a single binary. Every case pins the exact output through `assert_format`, `assert_format_with`, or `assert_format_range`, or, for a tree built in code, `synthetic.rs`'s `assert_format_block`, and each also checks that the output re-parses and formats to itself. The expected text is what shows the output keeps the input's meaning, comments included. `fixtures.rs` snapshots every shared fixture with `insta` at widths 1, 40, 80, 100, and 120, writing each distinct layout once under the widths that give it, so a layout change at any width is a snapshot diff to review. `luck_testgen` checks re-parsing and idempotency over its generated programs and runs the formatter on a 1 MiB stack.
+let allocator = Allocator::new();
+let result =
+    luck_formatter::format(&allocator, "local x=1", LuaVersion::Lua54, &FormatOptions::default());
+assert!(result.errors.is_empty());
+assert_eq!(result.output, "local x = 1\n");
+```

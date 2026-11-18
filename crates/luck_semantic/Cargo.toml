@@ -14,6 +14,11 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+# The generated catalogs are expressions that `include!` splices in, which cargo-shear reads as files
+# with no items.
+[package.metadata.cargo-shear]
+ignored-paths = ["src/stdlib_catalog/*.rs"]
+
 [dependencies]
 luck_ast   = { workspace = true }
 luck_token = { workspace = true }
@@ -21,8 +26,9 @@ luck_token = { workspace = true }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]
-luck_parser  = { workspace = true }
-luck_testgen = { workspace = true }
+luck_allocator = { workspace = true }
+luck_parser    = { workspace = true }
+luck_testgen   = { workspace = true }
 
 # The catalog generator reads stdlib_data with these.
 serde = { workspace = true }

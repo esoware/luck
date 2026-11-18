@@ -1,7 +1,7 @@
-use luck_ast::{Call, Expression, FunctionArgs, Literal, is_multi_value, unwrap_parentheses};
+use luck_ast::{Call, Expression, Literal, unwrap_parentheses};
 use luck_token::{LuaVersion, Span, short_string_body};
 
-use crate::call::dotted_callee;
+use crate::call::{CallArg, CallArgs, dotted_callee};
 use crate::diagnostic::Finding;
 use crate::format_pattern::{
     PatternError, validate_format, validate_gsub_replacement, validate_lua_pattern,
@@ -35,9 +35,9 @@ impl NodeRule for FormatString {
         let Some(dsl) = DslKind::of_call(call) else {
             return;
         };
-        findings.extend(check_dsl_literal(call, dsl, semantic.version));
+        findings.extend(check_dsl_literal(call, dsl, semantic.version()));
         if dsl == DslKind::Gsub {
-            findings.extend(check_gsub_replacement(call, semantic.version));
+            findings.extend(check_gsub_replacement(call, semantic.version()));
         }
     }
 }
@@ -62,10 +62,10 @@ enum DslKind {
 impl DslKind {
     fn of_call(call: Call<'_>) -> Option<Self> {
         if let Some(method) = call.method {
-            return Self::of_string_function(method.identifier()?);
+            return Self::of_string_function(method.text.as_str());
         }
         let (root, field) = dotted_callee(call)?;
-        match (root.identifier()?, field) {
+        match (root.text.as_str(), field) {
             ("string", _) => Self::of_string_function(field),
             ("os", "date") => Some(Self::OsDate),
             _ => None,
@@ -96,45 +96,29 @@ impl DslKind {
     }
 }
 
-/// The literal `dsl` reads from `call` and the arguments after it, which are
-/// `None` when string or table call syntax leaves no list to count.
+/// The literal `dsl` reads from `call` and the arguments after it.
 ///
 /// In a method call the receiver is the format, but the subject of a pattern.
-fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal, Option<&[Expression]>)> {
+fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal<'_>, CallArgs<'_>)> {
     let is_method = call.method.is_some();
+    let mut args = CallArgs::new(call.args);
     if is_method && !dsl.is_pattern() {
         let Some(Expression::StringLiteral(receiver)) =
             call.callee.as_expr().map(unwrap_parentheses)
         else {
             return None;
         };
-        let all_args = match call.args {
-            FunctionArgs::Parenthesized { args, .. } => Some(args.items.as_slice()),
-            FunctionArgs::TableConstructor(_)
-            | FunctionArgs::StringLiteral(_)
-            | FunctionArgs::Error(_) => None,
-        };
-        return Some((receiver, all_args));
+        return Some((receiver, args));
     }
     let literal_index = usize::from(dsl.is_pattern() && !is_method);
-    match call.args {
-        FunctionArgs::Parenthesized { args, .. } => {
-            let Some(Expression::StringLiteral(literal)) = args.get(literal_index) else {
-                return None;
-            };
-            Some((literal, args.items.get(literal_index.saturating_add(1)..)))
-        }
-        FunctionArgs::StringLiteral(literal) if literal_index == 0 => Some((literal, None)),
-        FunctionArgs::StringLiteral(_)
-        | FunctionArgs::TableConstructor(_)
-        | FunctionArgs::Error(_) => None,
-    }
+    let literal = args.nth(literal_index)?.string_literal()?;
+    Some((literal, args))
 }
 
 fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Option<Finding> {
     let (literal, trailing_args) = dsl_literal(call, dsl)?;
     let body = checkable_body(literal)?;
-    if dsl == DslKind::Find && is_plain_find(body, trailing_args.unwrap_or_default()) {
+    if dsl == DslKind::Find && is_plain_find(body, trailing_args.clone()) {
         return None;
     }
     // The argument count each specifier or value option asks for. Pattern
@@ -151,7 +135,7 @@ fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Optio
         DslKind::OsDate => ("date format", validate_os_date(body, version).map(|()| None)),
     };
     match expected_arg_count {
-        Ok(Some(expected)) => check_arg_count(trailing_args?, literal.span, expected),
+        Ok(Some(expected)) => check_arg_count(trailing_args, literal.span, expected),
         Ok(None) => None,
         Err(error) => Some(literal_error(error, literal, body, noun)),
     }
@@ -160,8 +144,8 @@ fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Optio
 /// The body of `literal`, or `None` for one that can't be checked here: a
 /// long-bracket string, or a body with a numeric escape, which could spell a
 /// character the DSL reads, since escapes stay undecoded.
-fn checkable_body(literal: &Literal) -> Option<&str> {
-    let body = short_string_body(&literal.text)?;
+fn checkable_body<'ast>(literal: &Literal<'ast>) -> Option<&'ast str> {
+    let body = short_string_body(literal.text)?;
     let mut bytes = body.bytes();
     while let Some(byte) = bytes.next() {
         if byte == b'\\'
@@ -178,22 +162,24 @@ fn checkable_body(literal: &Literal) -> Option<&str> {
 ///
 /// `str_find_aux` also searches plainly when the pattern has no character
 /// from `SPECIALS`, which is what lets a lone `)` through.
-fn is_plain_find(pattern: &str, after_pattern: &[Expression]) -> bool {
-    let is_maybe_plain = match after_pattern {
-        [] => false,
+fn is_plain_find(pattern: &str, mut after_pattern: CallArgs<'_>) -> bool {
+    let is_maybe_plain = match (after_pattern.next(), after_pattern.next()) {
+        (None, _) => false,
         // A call or `...` here can expand over `init` and `plain`.
-        [init] => is_multi_value(init),
-        [_, plain, ..] => !matches!(plain, Expression::Nil(_) | Expression::False(_)),
+        (Some(init), None) => init.is_multi_value(),
+        (Some(_), Some(plain)) => {
+            !matches!(plain, CallArg::Expr(Expression::Nil(_) | Expression::False(_)))
+        }
     };
     is_maybe_plain || !pattern.contains(['^', '$', '*', '+', '?', '.', '(', '[', '%', '-'])
 }
 
-fn check_arg_count(args: &[Expression], literal_span: Span, expected: usize) -> Option<Finding> {
+fn check_arg_count(mut args: CallArgs<'_>, literal_span: Span, expected: usize) -> Option<Finding> {
+    let given = args.len();
     // A `...` or call could expand to any number of values.
-    if args.iter().any(is_multi_value) {
+    if args.any(CallArg::is_multi_value) {
         return None;
     }
-    let given = args.len();
     (given != expected).then(|| {
         Finding::new(
             format!("wrong argument count, format takes {expected}, got {given}"),
@@ -205,19 +191,12 @@ fn check_arg_count(args: &[Expression], literal_span: Span, expected: usize) -> 
 /// Capture indices are only checked when the pattern is a valid literal too.
 fn check_gsub_replacement(call: Call<'_>, version: LuaVersion) -> Option<Finding> {
     let pattern_index = usize::from(call.method.is_none());
-    let FunctionArgs::Parenthesized { args, .. } = call.args else {
-        return None;
-    };
-    let Some(Expression::StringLiteral(replacement)) = args.get(pattern_index.saturating_add(1))
-    else {
-        return None;
-    };
+    let mut args = CallArgs::new(call.args);
+    let pattern = args.nth(pattern_index).and_then(CallArg::string_literal);
+    let replacement = args.next()?.string_literal()?;
     let replacement_body = checkable_body(replacement)?;
-    let capture_count = if let Some(Expression::StringLiteral(pattern)) = args.get(pattern_index) {
-        checkable_body(pattern).and_then(|body| validate_lua_pattern(body).ok())
-    } else {
-        None
-    };
+    let capture_count =
+        pattern.and_then(checkable_body).and_then(|body| validate_lua_pattern(body).ok());
     validate_gsub_replacement(replacement_body, capture_count, version)
         .err()
         .map(|e| literal_error(e, replacement, replacement_body, "replacement"))
@@ -225,7 +204,7 @@ fn check_gsub_replacement(call: Call<'_>, version: LuaVersion) -> Option<Finding
 
 /// Reports `error` at its offset in the quoted `literal`, whose `body` the
 /// offset counts into, over the whole character there.
-fn literal_error(error: PatternError, literal: &Literal, body: &str, noun: &str) -> Finding {
+fn literal_error(error: PatternError, literal: &Literal<'_>, body: &str, noun: &str) -> Finding {
     let offset = error.offset();
     let width = body.get(offset..).and_then(|rest| rest.chars().next()).map_or(1, char::len_utf8);
     Finding::new(
@@ -256,6 +235,27 @@ mod tests {
         let diags = run("string.format(\"%q\")");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("format takes 1, got 0"), "msg: {}", diags[0].message);
+    }
+
+    #[test]
+    fn flags_too_few_args_without_parentheses() {
+        for source in [
+            "string.format\"%d\"",
+            "local s = (\"%d %d\"):format\"x\"",
+            "local s = (\"%d %d\"):format{}",
+        ] {
+            let diags = run(source);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+            assert!(diags[0].message.contains("wrong argument count"), "{source}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn ignores_method_form_string_and_table_args_without_parentheses() {
+        for source in ["local s = (\"%s\"):format\"x\"", "local s = (\"%s\"):format{}"] {
+            let diags = run(source);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
+        }
     }
 
     #[test]

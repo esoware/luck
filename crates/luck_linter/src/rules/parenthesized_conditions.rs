@@ -21,7 +21,12 @@ impl NodeRule for ParenthesizedConditions {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::IfStatement, NodeType::WhileLoop])
     }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         let source = context.source;
         match stmt {
             Statement::IfStatement(if_stmt) => {
@@ -78,8 +83,8 @@ impl NodeRule for ParenthesizedConditions {
 
 /// The fix deletes just those two tokens, so anything between them stays.
 fn check_condition(
-    condition: &Expression,
-    message: &str,
+    condition: &Expression<'_>,
+    message: &'static str,
     span: Span,
     source: &str,
 ) -> Option<Finding> {
@@ -130,7 +135,7 @@ mod tests {
 local c = 1
 if (c) then elseif (c) then end
 while (c) do break end");
-        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
         assert_eq!(
             messages,
             [

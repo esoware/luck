@@ -8,14 +8,10 @@
 //! A chain resolves from its prefix forward, a suffix at a time, so what it
 //! reads, or what any of its calls calls, costs one pass over it.
 
-use luck_ast::{ChainHead, Expression, Suffix, SuffixedExpression};
-use luck_token::Token;
-use rustc_hash::FxHashMap;
+use luck_ast::{Call, ChainHead, Expression, Name, Suffix, SuffixedExpression};
 
 use crate::scope::{ScopeTree, SymbolId};
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
-
-pub(crate) type SymbolShapes = FxHashMap<SymbolId, &'static str>;
 
 /// What a chain's head reads, as far as it's known.
 #[derive(Debug, Clone, Copy, Default)]
@@ -35,25 +31,30 @@ impl HeadState {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ShapeResolver<'input> {
-    tree: &'input ScopeTree,
+    tree: &'input ScopeTree<'input>,
     library: &'static StdlibLibrary,
-    symbol_shapes: &'input SymbolShapes,
+    /// Each symbol's shape, by symbol index.
+    symbol_shapes: &'input [Option<&'static str>],
 }
 
 impl<'input> ShapeResolver<'input> {
     pub(crate) const fn new(
-        tree: &'input ScopeTree,
+        tree: &'input ScopeTree<'input>,
         library: &'static StdlibLibrary,
-        symbol_shapes: &'input SymbolShapes,
+        symbol_shapes: &'input [Option<&'static str>],
     ) -> Self {
         Self { tree, library, symbol_shapes }
     }
 
+    pub(crate) fn symbol_shape(self, symbol: SymbolId) -> Option<&'static str> {
+        self.symbol_shapes.get(symbol.index()).copied().flatten()
+    }
+
     /// The shape of `expr`, when statically known. See the module docs for
     /// what "known" means.
-    pub(crate) fn expr_shape(self, expr: &Expression) -> Option<&'static str> {
+    fn expr_shape(self, expr: &Expression<'_>) -> Option<&'static str> {
         match expr {
-            Expression::Name(token) => self.name_state(token).shape,
+            Expression::Name(name) => self.name_state(name).shape,
             Expression::Suffixed(_) => self.head_state(ChainHead::from(expr)).shape,
             Expression::Parenthesized(parenthesized) => self.expr_shape(&parenthesized.expr),
             // Literal strings carry the derived `string` receiver shape, so
@@ -77,29 +78,25 @@ impl<'input> ShapeResolver<'input> {
         }
     }
 
-    /// What `token` reads: a local's shape, or the host's global and its
+    /// What `name` reads: a local's shape, or the host's global and its
     /// shape.
-    fn name_state(self, token: &Token) -> HeadState {
-        let Some(reference) =
-            token.identifier().and_then(|name| self.tree.reference_at(name, token.span))
-        else {
+    fn name_state(self, name: &Name<'_>) -> HeadState {
+        let Some(reference) = self.tree.reference_of(name).map(|id| self.tree.reference(id)) else {
             return HeadState::default();
         };
         match reference.resolved {
-            Some(symbol_id) => {
-                HeadState { shape: self.symbol_shapes.get(&symbol_id).copied(), global: None }
-            }
+            Some(symbol) => HeadState { shape: self.symbol_shape(symbol), global: None },
             None if self.tree.is_host_global(reference) => {
-                let global = self.library.globals.get(&reference.name);
+                let global = self.library.globals.get(name.text.as_str());
                 HeadState { shape: global.and_then(StdlibEntry::shape), global }
             }
             None => HeadState::default(),
         }
     }
 
-    fn prefix_state(self, prefix: &Expression) -> HeadState {
-        if let Expression::Name(token) = prefix {
-            self.name_state(token)
+    fn prefix_state(self, prefix: &Expression<'_>) -> HeadState {
+        if let Expression::Name(name) = prefix {
+            self.name_state(name)
         } else {
             HeadState { shape: self.expr_shape(prefix), global: None }
         }
@@ -110,7 +107,7 @@ impl<'input> ShapeResolver<'input> {
     }
 
     /// What a head that reads `state` reads once `suffixes` apply to it.
-    fn read(self, mut state: HeadState, suffixes: &[Suffix]) -> HeadState {
+    fn read(self, mut state: HeadState, suffixes: &[Suffix<'_>]) -> HeadState {
         for suffix in suffixes {
             if state.is_unknown() {
                 break;
@@ -122,32 +119,27 @@ impl<'input> ShapeResolver<'input> {
 
     /// A call accepts a method called with `.`: passing self explicitly
     /// doesn't change what the call returns.
-    fn after_suffix(self, suffix: &Suffix, state: HeadState) -> HeadState {
-        match suffix {
+    fn after_suffix(self, suffix: &Suffix<'_>, state: HeadState) -> HeadState {
+        let callee = match suffix {
             Suffix::Field(name) => {
-                let member = state
-                    .global
-                    .zip(name.identifier())
-                    .and_then(|(parent, segment)| self.library.child(parent, segment));
-                HeadState { shape: member.and_then(StdlibEntry::shape), global: member }
+                let member =
+                    state.global.and_then(|parent| self.library.child(parent, name.text.as_str()));
+                return HeadState { shape: member.and_then(StdlibEntry::shape), global: member };
             }
-            Suffix::Call(call) => {
-                let callee = call.method().map_or(state.global, |method| {
-                    self.shape_method(state.shape?, method.identifier()?)
-                });
-                let shape = match callee {
-                    Some(StdlibEntry::Function(function)) => function.returns_shape,
-                    Some(
-                        StdlibEntry::Constant(_)
-                        | StdlibEntry::Property(_)
-                        | StdlibEntry::Namespace(_),
-                    )
-                    | None => None,
-                };
-                HeadState { shape, global: None }
+            Suffix::Call(_) => state.global,
+            Suffix::MethodCall(call) => {
+                state.shape.and_then(|shape| self.shape_method(shape, call.name.text.as_str()))
             }
-            Suffix::Index { .. } | Suffix::TypeInstantiation { .. } => HeadState::default(),
-        }
+            Suffix::Index { .. } | Suffix::TypeInstantiation { .. } => None,
+        };
+        let shape = match callee {
+            Some(StdlibEntry::Function(function)) => function.returns_shape,
+            Some(
+                StdlibEntry::Constant(_) | StdlibEntry::Property(_) | StdlibEntry::Namespace(_),
+            )
+            | None => None,
+        };
+        HeadState { shape, global: None }
     }
 
     /// Only method-flagged functions are colon-callable; a dot member
@@ -162,9 +154,9 @@ impl<'input> ShapeResolver<'input> {
         self,
         head: ChainHead<'input>,
         state: HeadState,
-        method: Option<&'input Token>,
+        method: Option<&'input Name<'input>>,
     ) -> Option<ResolvedCallee<'input>> {
-        let Some(method_token) = method else {
+        let Some(&Name { text: method_name, .. }) = method else {
             let entry = state.global?;
             // A method called with `.` passes self explicitly, which its
             // declared arity doesn't count.
@@ -173,21 +165,18 @@ impl<'input> ShapeResolver<'input> {
             }
             return Some(ResolvedCallee { path: CalleePath::Dotted(head), entry });
         };
-        let method_name = method_token.identifier()?;
         let shape = state.shape?;
-        let entry = self.shape_method(shape, method_name)?;
-        let base = head.as_name().map_or(shape, |token| token.identifier().unwrap_or(shape));
-        Some(ResolvedCallee { path: CalleePath::Method { base, method: method_name }, entry })
+        let entry = self.shape_method(shape, method_name.as_str())?;
+        let base = head.as_name().map_or(shape, |name| name.text.as_str());
+        Some(ResolvedCallee {
+            path: CalleePath::Method { base, method: method_name.as_str() },
+            entry,
+        })
     }
 
-    /// What a call with `method` after `head` calls, read from `head`'s
-    /// prefix.
-    pub(crate) fn head_callee(
-        self,
-        head: ChainHead<'input>,
-        method: Option<&'input Token>,
-    ) -> Option<ResolvedCallee<'input>> {
-        self.callee(head, self.head_state(head), method)
+    /// What `call` calls, read from its callee's prefix.
+    pub(crate) fn call_callee(self, call: Call<'input>) -> Option<ResolvedCallee<'input>> {
+        self.callee(call.callee, self.head_state(call.callee), call.method)
     }
 }
 
@@ -197,24 +186,25 @@ fn string_shape(library: &StdlibLibrary) -> Option<&'static str> {
     library.shapes.contains_key("string").then_some("string")
 }
 
-/// The shape of each never-reassigned local in `initialized_locals` whose
-/// initializer has a known shape. A local comes before any initializer that
+/// Each symbol's shape, by symbol index.
+///
+/// Only a never-reassigned local in `initialized_locals` whose initializer
+/// has a known shape has one. A local comes before any initializer that
 /// reads it, so a shaped local seeds later ones.
 pub(crate) fn symbol_shapes(
-    tree: &ScopeTree,
+    tree: &ScopeTree<'_>,
     library: &'static StdlibLibrary,
-    initialized_locals: &[(SymbolId, &Expression)],
-) -> SymbolShapes {
-    let mut shapes = SymbolShapes::default();
-    for &(symbol_id, initializer) in initialized_locals {
-        if tree.symbol(symbol_id).is_modified {
+    initialized_locals: &[(SymbolId, &Expression<'_>)],
+) -> Vec<Option<&'static str>> {
+    let mut shapes = vec![None; tree.symbols().len()];
+    for &(symbol, initializer) in initialized_locals {
+        if tree.symbol(symbol).is_modified {
             continue;
         }
-        let resolver = ShapeResolver::new(tree, library, &shapes);
-        let Some(shape) = resolver.expr_shape(initializer) else {
-            continue;
-        };
-        shapes.insert(symbol_id, shape);
+        let shape = ShapeResolver::new(tree, library, &shapes).expr_shape(initializer);
+        if let Some(slot) = shapes.get_mut(symbol.index()) {
+            *slot = shape;
+        }
     }
     shapes
 }
@@ -243,7 +233,7 @@ impl ResolvedCallee<'_> {
         match self.path {
             CalleePath::Method { base, method } => format!("{base}:{method}"),
             CalleePath::Dotted(head) => {
-                head.dotted_path().map(|path| path.segments.join(".")).unwrap_or_default()
+                head.dotted_path().map(|path| path.to_string()).unwrap_or_default()
             }
         }
     }
@@ -259,20 +249,23 @@ impl ResolvedCallee<'_> {
 #[derive(Debug, Clone, Copy)]
 pub struct ChainCallees<'chain> {
     resolver: ShapeResolver<'chain>,
-    chain: &'chain SuffixedExpression,
+    chain: &'chain SuffixedExpression<'chain>,
     /// What the head of the first `read_count` suffixes reads.
     state: HeadState,
     read_count: usize,
 }
 
 impl<'chain> ChainCallees<'chain> {
-    pub(crate) fn new(resolver: ShapeResolver<'chain>, chain: &'chain SuffixedExpression) -> Self {
+    pub(crate) fn new(
+        resolver: ShapeResolver<'chain>,
+        chain: &'chain SuffixedExpression<'chain>,
+    ) -> Self {
         let state = resolver.prefix_state(&chain.prefix);
         Self { resolver, chain, state, read_count: 0 }
     }
 
     #[must_use]
-    pub const fn chain(&self) -> &'chain SuffixedExpression {
+    pub const fn chain(&self) -> &'chain SuffixedExpression<'chain> {
         self.chain
     }
 
@@ -283,27 +276,24 @@ impl<'chain> ChainCallees<'chain> {
     /// A call is read on from the one asked for before it, so `index` is
     /// never below an earlier one.
     pub fn callee(&mut self, index: usize) -> Option<ResolvedCallee<'chain>> {
-        let suffixes: &'chain [Suffix] = &self.chain.suffixes;
-        let Suffix::Call(call) = suffixes.get(index)? else {
-            return None;
-        };
+        let suffixes: &'chain [Suffix<'chain>] = &self.chain.suffixes;
+        let call = Call::new(self.chain.head(index), suffixes.get(index)?)?;
         let unread = suffixes.get(self.read_count..index).unwrap_or_default();
         self.state = self.resolver.read(self.state, unread);
         self.read_count = index;
-        let head = ChainHead {
-            prefix: &self.chain.prefix,
-            suffixes: suffixes.get(..index).unwrap_or_default(),
-        };
-        self.resolver.callee(head, self.state, call.method())
+        self.resolver.callee(call.callee, self.state, call.method)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_allocator::Allocator;
+    use luck_ast::TreeCounts;
     use luck_token::{LuaVersion, StdlibEnvironment};
 
     use super::*;
-    use crate::builder;
+    use crate::fixtures::parse;
+    use crate::scope::build_with_initializers;
     use crate::stdlib_catalog::{FUNCTION, VALUE, optional, required, signature};
     use crate::stdlib_model::{
         StdlibArgKind, StdlibFunction, StdlibNamespace, StdlibShape, StdlibValue, stdlib_map,
@@ -455,88 +445,74 @@ mod tests {
         ),
     };
 
-    fn shapes_for(source: &str) -> (ScopeTree, SymbolShapes) {
-        let parsed = luck_parser::parse(source, LuaVersion::Lua54);
-        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    fn shape_of(source: &str, name: &str) -> Option<&'static str> {
+        let allocator = Allocator::new();
+        let block = parse(&allocator, source, LuaVersion::Lua54);
         let (tree, initialized_locals) =
-            builder::build_with_initializers(&parsed.block, LuaVersion::Lua54);
+            build_with_initializers(block, TreeCounts::default(), LuaVersion::Lua54, &mut ());
         let shapes = symbol_shapes(&tree, &SHAPED_LIBRARY, &initialized_locals);
-        (tree, shapes)
-    }
-
-    fn shape_of(tree: &ScopeTree, shapes: &SymbolShapes, name: &str) -> Option<&'static str> {
-        let symbol = tree.symbols.iter().find(|symbol| symbol.name == name)?;
-        shapes.get(&symbol.id).copied()
+        let symbol = tree.symbols().iter().find(|symbol| tree.name(symbol.name) == name)?;
+        shapes.get(symbol.id.index()).copied().flatten()
     }
 
     #[test]
     fn local_from_shaped_call_gets_shape() {
-        let (tree, shapes) = shapes_for("local f = io.open('x')");
-        assert_eq!(shape_of(&tree, &shapes, "f"), Some("file"));
+        assert_eq!(shape_of("local f = io.open('x')", "f"), Some("file"));
     }
 
     #[test]
     fn local_from_shaped_global_gets_shape() {
-        let (tree, shapes) = shapes_for("local g = game");
-        assert_eq!(shape_of(&tree, &shapes, "g"), Some("DataModel"));
+        assert_eq!(shape_of("local g = game", "g"), Some("DataModel"));
     }
 
     #[test]
     fn method_chain_propagates_shapes() {
-        let (tree, shapes) = shapes_for(
-            "\
+        let source = "\
 local players = game:GetService('Players')
-local again = players:FindFirstChild('x')",
-        );
-        assert_eq!(shape_of(&tree, &shapes, "players"), Some("Instance"));
+local again = players:FindFirstChild('x')";
+        assert_eq!(shape_of(source, "players"), Some("Instance"));
         // FindFirstChild declares no return shape.
-        assert_eq!(shape_of(&tree, &shapes, "again"), None);
+        assert_eq!(shape_of(source, "again"), None);
     }
 
     #[test]
     fn reassigned_local_has_no_shape() {
-        let (tree, shapes) = shapes_for(
-            "\
+        let source = "\
 local f = io.open('x')
-f = 1",
-        );
-        assert_eq!(shape_of(&tree, &shapes, "f"), None);
+f = 1";
+        assert_eq!(shape_of(source, "f"), None);
     }
 
     #[test]
     fn shadowed_global_base_has_no_shape() {
-        let (tree, shapes) = shapes_for(
-            "\
+        let source = "\
 local game = 1
-local g = game",
-        );
-        assert_eq!(shape_of(&tree, &shapes, "g"), None);
+local g = game";
+        assert_eq!(shape_of(source, "g"), None);
     }
 
     #[test]
     fn string_literal_gets_string_shape() {
-        let (tree, shapes) = shapes_for("local s = 'abc'");
-        assert_eq!(shape_of(&tree, &shapes, "s"), Some("string"));
+        assert_eq!(shape_of("local s = 'abc'", "s"), Some("string"));
     }
 
     #[test]
     fn parenthesized_literal_method_chains_string_shape() {
         // The string shape's upper returns a string, so the call result
         // seeds the local's shape.
-        let (tree, shapes) = shapes_for("local u = ('x'):upper()");
-        assert_eq!(shape_of(&tree, &shapes, "u"), Some("string"));
+        assert_eq!(shape_of("local u = ('x'):upper()", "u"), Some("string"));
     }
 
     #[test]
     fn misaligned_multi_assignment_ignored() {
-        let (tree, shapes) = shapes_for("local a, b = io.open('x')");
-        assert_eq!(shape_of(&tree, &shapes, "a"), None);
-        assert_eq!(shape_of(&tree, &shapes, "b"), None);
+        let source = "local a, b = io.open('x')";
+        assert_eq!(shape_of(source, "a"), None);
+        assert_eq!(shape_of(source, "b"), None);
     }
 
     #[test]
     fn method_called_with_dot_still_yields_return_shape() {
-        let (tree, shapes) = shapes_for("local players = game.GetService(game, 'Players')");
-        assert_eq!(shape_of(&tree, &shapes, "players"), Some("Instance"));
+        let source = "local players = game.GetService(game, 'Players')";
+        assert_eq!(shape_of(source, "players"), Some("Instance"));
     }
 }

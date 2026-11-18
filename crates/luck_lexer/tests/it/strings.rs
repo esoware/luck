@@ -1,12 +1,12 @@
 use luck_lexer::lex;
 use luck_token::{LuaVersion, SourceError, Span, TokenKind};
 
-use crate::common::{first_kind, kinds_in, lex_lua51};
+use crate::common::{lex_lua51, tokens, tokens_in};
 
 #[test]
 fn quoted_strings_keep_their_spelling() {
     for source in ["\"hello\"", "'hello'"] {
-        assert_eq!(first_kind(source), TokenKind::StringLiteral(source.into()));
+        assert_eq!(tokens(source), [(TokenKind::StringLiteral, source)]);
     }
 }
 
@@ -16,11 +16,7 @@ fn single_char_escapes_keep_their_spelling() {
         "\"\\a\"", "\"\\b\"", "\"\\f\"", "\"\\n\"", "\"\\r\"", "\"\\t\"", "\"\\v\"", "\"\\\\\"",
         "\"\\\"\"", "'\\'x'",
     ] {
-        assert_eq!(
-            first_kind(source),
-            TokenKind::StringLiteral(source.into()),
-            "failed for: {source:?}"
-        );
+        assert_eq!(tokens(source), [(TokenKind::StringLiteral, source)], "{source:?}");
     }
 }
 
@@ -28,9 +24,7 @@ fn single_char_escapes_keep_their_spelling() {
 fn decimal_escapes_up_to_255_lex() {
     // \065 = 'A'
     for source in ["\"\\065\"", "\"\\255\""] {
-        let result = lex_lua51(source);
-        assert_eq!(result.errors, Vec::<SourceError>::new());
-        assert_eq!(result.tokens[0].kind, TokenKind::StringLiteral(source.into()));
+        assert_eq!(tokens(source), [(TokenKind::StringLiteral, source)]);
     }
 }
 
@@ -48,8 +42,8 @@ fn escaped_line_breaks_continue_short_strings_in_every_version() {
             for newline in ["\r\n", "\n", "\r"] {
                 let source = format!("{quote}a \\{newline}b{quote}");
                 assert_eq!(
-                    kinds_in(&source, version),
-                    vec![TokenKind::StringLiteral(source.as_str().into())],
+                    tokens_in(&source, version),
+                    [(TokenKind::StringLiteral, source.as_str())],
                     "{version:?} {source:?}"
                 );
             }
@@ -65,10 +59,10 @@ fn short_string_scan_boundaries_preserve_spelling_and_errors() {
             let text = format!("{}\u{e9}{opposite}\u{6f22}", "a".repeat(length));
             for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau] {
                 let source = format!("{quote}{text}\\n{text}{quote}");
-                let result = lex(&source, version);
-                assert!(result.errors.is_empty(), "{source:?}: {:?}", result.errors);
-                assert_eq!(result.tokens[0].kind, TokenKind::StringLiteral(source.as_str().into()));
-                assert_eq!(result.tokens[0].span, Span::from_indices(0, source.len()));
+                assert_eq!(
+                    tokens_in(&source, version),
+                    [(TokenKind::StringLiteral, source.as_str())]
+                );
                 for newline in ["\n", "\r", "\r\n"] {
                     let broken_source = format!("{quote}{text}{newline}{text}{quote}");
                     let broken_result = lex(&broken_source, version);
@@ -88,8 +82,8 @@ fn short_string_scan_boundaries_preserve_spelling_and_errors() {
 /// it would have.
 #[test]
 fn a_malformed_string_keeps_its_token() {
-    let name = |text: &str| TokenKind::Identifier(text.into());
-    let string = |text: &str| TokenKind::StringLiteral(text.into());
+    let name = |text| (TokenKind::Identifier, text);
+    let string = |text| (TokenKind::StringLiteral, text);
     let cases = [
         (
             LuaVersion::Lua54,
@@ -104,7 +98,7 @@ y",
         (
             LuaVersion::Lua54,
             "'a\\qb' .. y",
-            vec![string("'a\\qb'"), TokenKind::DotDot, name("y")],
+            vec![string("'a\\qb'"), (TokenKind::DotDot, ".."), name("y")],
             "invalid escape sequence `\\q`",
             "\\q",
             false,
@@ -145,13 +139,14 @@ y",
     ];
     for (version, source, expected, message, text, is_unterminated) in cases {
         let result = lex(source, version);
-        let kinds: Vec<TokenKind> = result
+        let tokens: Vec<(TokenKind, &str)> = result
             .tokens
             .iter()
             .filter(|token| token.kind != TokenKind::Eof)
-            .map(|token| token.kind.clone())
+            .map(|token| (token.kind, token.text(source)))
             .collect();
-        assert_eq!(kinds, expected, "{source:?}");
+        assert_eq!(tokens, expected, "{source:?}");
+        assert_eq!(result.tokens[0].is_unterminated, is_unterminated, "{source:?}");
         let [error] = result.errors.as_slice() else {
             panic!("{source:?}: {:?}", result.errors);
         };
@@ -262,9 +257,8 @@ fn unicode_escape_without_open_brace_is_error() {
 
 #[test]
 fn unicode_escape_codepoint_must_be_below_2_pow_31() {
-    let result = lex(r#""\u{7FFFFFFF}""#, LuaVersion::Lua54);
-    assert_eq!(result.errors, Vec::<SourceError>::new());
-    assert_eq!(result.tokens[0].kind, TokenKind::StringLiteral(r#""\u{7FFFFFFF}""#.into()));
+    let source = r#""\u{7FFFFFFF}""#;
+    assert_eq!(tokens_in(source, LuaVersion::Lua54), [(TokenKind::StringLiteral, source)]);
 
     for overflow in [r#""\u{80000000}""#, r#""\u{FFFFFFFF}""#] {
         let overflowed = lex(overflow, LuaVersion::Lua54);
@@ -276,11 +270,7 @@ fn unicode_escape_codepoint_must_be_below_2_pow_31() {
 #[test]
 fn long_strings_keep_their_spelling_at_every_level() {
     for source in ["[[text]]", "[=[text]=]", "[==[text]==]", "[===[text]===]"] {
-        assert_eq!(
-            first_kind(source),
-            TokenKind::StringLiteral(source.into()),
-            "failed for: {source:?}"
-        );
+        assert_eq!(tokens(source), [(TokenKind::StringLiteral, source)], "{source:?}");
     }
 }
 
@@ -289,7 +279,7 @@ fn long_string_keeps_its_line_breaks() {
     let source = "\
 [[line1
 line2]]";
-    assert_eq!(first_kind(source), TokenKind::StringLiteral(source.into()));
+    assert_eq!(tokens(source), [(TokenKind::StringLiteral, source)]);
 }
 
 #[test]

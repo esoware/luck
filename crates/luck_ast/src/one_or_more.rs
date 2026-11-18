@@ -1,135 +1,126 @@
+use core::fmt;
 use core::ops::{Deref, DerefMut};
-use core::{fmt, mem, slice};
+use core::slice;
 
-/// A list that is never empty. A lone item sits inline, so it costs no
-/// allocation of its own. Derefs to a slice of every item.
-pub struct OneOrMore<T>(Repr<T>);
+use luck_allocator::{Allocator, List, ListIntoIter};
 
-enum Repr<T> {
-    One(T),
-    /// Never empty.
-    Many(Vec<T>),
-}
+/// A [`List`] that is never empty: every way to build or change one keeps an
+/// item in it. Derefs to a slice of every item.
+#[derive(PartialEq, Eq)]
+pub struct OneOrMore<'ast, T>(List<'ast, T>);
 
-impl<T> OneOrMore<T> {
+impl<'ast, T> OneOrMore<'ast, T> {
     #[must_use]
-    pub const fn new(item: T) -> Self {
-        Self(Repr::One(item))
-    }
-
-    /// `first` and then `rest`, in one allocation when `rest` knows its
-    /// length.
-    pub fn from_first<Rest>(first: T, rest: Rest) -> Self
-    where
-        Rest: IntoIterator<Item = T>,
-    {
-        let mut others = rest.into_iter();
-        let Some(second) = others.next() else {
-            return Self::new(first);
-        };
-        let mut items = Vec::with_capacity(others.size_hint().0.saturating_add(2));
-        items.push(first);
-        items.push(second);
-        items.extend(others);
-        Self(Repr::Many(items))
+    pub fn new(item: T, allocator: &'ast Allocator) -> Self {
+        Self(List::from_array_in([item], allocator))
     }
 
     /// `None` when `items` is empty.
     #[must_use]
-    pub fn from_vec(mut items: Vec<T>) -> Option<Self> {
-        if items.len() > 1 {
-            return Some(Self(Repr::Many(items)));
-        }
-        items.pop().map(Self::new)
+    pub fn from_list(items: List<'ast, T>) -> Option<Self> {
+        (!items.is_empty()).then_some(Self(items))
     }
 
+    /// Moves `items[at..]` into the arena, as [`List::split_off_in`] does.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at` isn't below `items.len()`, which would leave the list
+    /// empty, or if more than `u32::MAX` items move.
     #[must_use]
-    pub fn into_vec(self) -> Vec<T> {
-        match self.0 {
-            Repr::One(item) => vec![item],
-            Repr::Many(items) => items,
-        }
+    pub fn split_off_in(items: &mut Vec<T>, at: usize, allocator: &'ast Allocator) -> Self {
+        assert!(
+            at < items.len(),
+            "a run takes at least one of the {} items from {at}",
+            items.len()
+        );
+        Self(List::split_off_in(items, at, allocator))
     }
 
-    pub fn push(&mut self, item: T) {
-        self.0 = match mem::replace(&mut self.0, Repr::Many(Vec::new())) {
-            Repr::One(first) => Repr::Many(vec![first, item]),
-            Repr::Many(mut items) => {
-                items.push(item);
-                Repr::Many(items)
-            }
-        };
+    /// See [`List::push`].
+    pub fn push(&mut self, item: T, allocator: &'ast Allocator) {
+        self.0.push(item, allocator);
     }
 
-    /// Removes every item after the first and returns them in order.
-    pub fn split_off_rest(&mut self) -> Vec<T> {
-        match &mut self.0 {
-            Repr::One(_) => Vec::new(),
-            Repr::Many(items) => items.split_off(1),
-        }
+    /// See [`List::insert`].
+    pub fn insert(&mut self, index: usize, item: T, allocator: &'ast Allocator) {
+        self.0.insert(index, item, allocator);
+    }
+
+    /// Removes every item after the first and returns them in order, without
+    /// allocating, as [`List::split_off`] does.
+    #[must_use]
+    pub fn split_off_rest(&mut self) -> List<'ast, T> {
+        self.0.split_off(1)
+    }
+
+    /// Keeps the first `at` items and returns the rest in order, without
+    /// allocating, as [`List::split_off`] does.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at` is zero, which would leave the list empty, or past the
+    /// list's length.
+    #[must_use]
+    pub fn split_off(&mut self, at: usize) -> List<'ast, T> {
+        assert!(at > 0, "a run keeps at least one item");
+        self.0.split_off(at)
+    }
+
+    /// Keeps the first `new_length` items, as [`List::truncate`] does.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `new_length` is zero, which would leave the list empty.
+    pub fn truncate(&mut self, new_length: usize) {
+        assert!(new_length > 0, "a run keeps at least one item");
+        self.0.truncate(new_length);
     }
 
     #[must_use]
     pub fn first(&self) -> &T {
-        match &self.0 {
-            Repr::One(item) => item,
-            #[expect(clippy::indexing_slicing, reason = "a `Many` is never empty")]
-            Repr::Many(items) => &items[0],
-        }
+        #[expect(clippy::indexing_slicing, reason = "the list is never empty")]
+        &self.0[0]
     }
 
     #[must_use]
     pub fn last(&self) -> &T {
-        match &self.0 {
-            Repr::One(item) => item,
-            #[expect(clippy::indexing_slicing, reason = "a `Many` is never empty")]
-            Repr::Many(items) => &items[items.len().saturating_sub(1)],
-        }
+        #[expect(clippy::indexing_slicing, reason = "the list is never empty")]
+        &self.0[self.0.len().saturating_sub(1)]
     }
 
     #[must_use]
     pub fn last_mut(&mut self) -> &mut T {
-        match &mut self.0 {
-            Repr::One(item) => item,
-            #[expect(clippy::indexing_slicing, reason = "a `Many` is never empty")]
-            Repr::Many(items) => {
-                let last = items.len().saturating_sub(1);
-                &mut items[last]
-            }
-        }
+        let last = self.0.len().saturating_sub(1);
+        #[expect(clippy::indexing_slicing, reason = "the list is never empty")]
+        &mut self.0[last]
     }
 }
 
-impl<T> Deref for OneOrMore<T> {
+impl<T> Deref for OneOrMore<'_, T> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {
-        match &self.0 {
-            Repr::One(item) => slice::from_ref(item),
-            Repr::Many(items) => items,
-        }
+        &self.0
     }
 }
 
-impl<T> DerefMut for OneOrMore<T> {
+impl<T> DerefMut for OneOrMore<'_, T> {
     fn deref_mut(&mut self) -> &mut [T] {
-        match &mut self.0 {
-            Repr::One(item) => slice::from_mut(item),
-            Repr::Many(items) => items,
-        }
+        &mut self.0
     }
 }
 
-impl<T: Clone> Clone for OneOrMore<T> {
-    fn clone(&self) -> Self {
-        Self(match &self.0 {
-            Repr::One(item) => Repr::One(item.clone()),
-            Repr::Many(items) => Repr::Many(items.clone()),
-        })
+impl<'ast, T> IntoIterator for OneOrMore<'ast, T> {
+    type Item = T;
+    type IntoIter = ListIntoIter<'ast, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 
-impl<'list, T> IntoIterator for &'list OneOrMore<T> {
+impl<'list, T> IntoIterator for &'list OneOrMore<'_, T> {
     type Item = &'list T;
     type IntoIter = slice::Iter<'list, T>;
 
@@ -138,7 +129,7 @@ impl<'list, T> IntoIterator for &'list OneOrMore<T> {
     }
 }
 
-impl<'list, T> IntoIterator for &'list mut OneOrMore<T> {
+impl<'list, T> IntoIterator for &'list mut OneOrMore<'_, T> {
     type Item = &'list mut T;
     type IntoIter = slice::IterMut<'list, T>;
 
@@ -147,15 +138,7 @@ impl<'list, T> IntoIterator for &'list mut OneOrMore<T> {
     }
 }
 
-impl<T: PartialEq> PartialEq for OneOrMore<T> {
-    fn eq(&self, other: &Self) -> bool {
-        **self == **other
-    }
-}
-
-impl<T: Eq> Eq for OneOrMore<T> {}
-
-impl<T: fmt::Debug> fmt::Debug for OneOrMore<T> {
+impl<T: fmt::Debug> fmt::Debug for OneOrMore<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
@@ -166,43 +149,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_one_item_inline_and_grows_past_it() {
-        let mut list = OneOrMore::new(1u8);
-        assert_eq!(*list, [1]);
-        list.push(2);
-        list.push(3);
+    fn grows_at_either_end_and_keeps_its_first_and_last() {
+        let allocator = Allocator::new();
+        let mut list = OneOrMore::new(2u8, &allocator);
+        assert_eq!((*list.first(), *list.last()), (2, 2));
+        list.push(3, &allocator);
+        list.insert(0, 1, &allocator);
         assert_eq!(*list, [1, 2, 3]);
         assert_eq!((*list.first(), *list.last()), (1, 3));
         *list.last_mut() = 4;
-        assert_eq!(list.into_vec(), [1, 2, 4]);
+        assert_eq!(list.into_iter().collect::<Vec<_>>(), [1, 2, 4]);
     }
 
     #[test]
-    fn builds_from_a_vec_of_any_nonzero_length() {
-        assert!(OneOrMore::<u8>::from_vec(Vec::new()).is_none());
-        assert_eq!(OneOrMore::from_vec(vec![7u8]), Some(OneOrMore::new(7)));
-        let list = OneOrMore::from_vec(vec![1u8, 2]).expect("two items");
-        assert_eq!(*list, [1, 2]);
-    }
-
-    #[test]
-    fn builds_from_a_first_item_in_one_exact_allocation() {
-        assert_eq!(OneOrMore::from_first(1u8, []), OneOrMore::new(1));
-        let list = OneOrMore::from_first(1u8, [2, 3]);
-        assert_eq!(*list, [1, 2, 3]);
-        assert_eq!(list.into_vec().capacity(), 3);
-    }
-
-    #[test]
-    fn splitting_off_the_rest_keeps_the_first() {
-        let mut single = OneOrMore::new(1u8);
-        assert_eq!(single.split_off_rest(), Vec::<u8>::new());
-        assert_eq!(*single, [1]);
-        let mut list = OneOrMore::from_first(1u8, [2, 3]);
-        assert_eq!(list.split_off_rest(), [2, 3]);
+    fn splits_and_truncates_without_emptying() {
+        let allocator = Allocator::new();
+        let mut list = OneOrMore::from_list(List::from_array_in([1u8, 2, 3, 4], &allocator))
+            .expect("the list has items");
+        let rest = list.split_off(3);
+        assert_eq!((&*list, &*rest), ([1, 2, 3].as_slice(), [4].as_slice()));
+        list.truncate(1);
         assert_eq!(*list, [1]);
-        assert_eq!((*list.first(), *list.last()), (1, 1));
-        list.push(4);
-        assert_eq!(list, OneOrMore::from_first(1, [4]));
+    }
+
+    #[test]
+    fn builds_from_any_list_but_an_empty_one() {
+        let allocator = Allocator::new();
+        assert!(OneOrMore::<u8>::from_list(List::new()).is_none());
+        let list = OneOrMore::from_list(List::from_array_in([7u8, 8], &allocator));
+        assert_eq!(list.as_deref(), Some([7, 8].as_slice()));
+    }
+
+    #[test]
+    fn splits_the_tail_off_a_scratch_vec() {
+        let allocator = Allocator::new();
+        let mut scratch = vec![1u8, 2, 3];
+        let tail = OneOrMore::split_off_in(&mut scratch, 1, &allocator);
+        assert_eq!((scratch.as_slice(), &*tail), ([1].as_slice(), [2, 3].as_slice()));
     }
 }

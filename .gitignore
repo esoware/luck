@@ -1,13 +1,10 @@
 /target
 .claude/settings.local.json
 CLAUDE.local.md
-
-# fetched bench inputs (see luck_benchmark corpus.rs)
-crates/luck_benchmark/corpus/
-
-# fuzzing
-fuzz/target/
-fuzz/corpus/
-fuzz/artifacts/
-fuzz/Cargo.lock
 REARCHITECTURE.md
+
+# downloaded benchmark files (see luck_benchmark_files)
+crates/luck_benchmark_files/cache/
+
+# the per-rule report `just allocs rules` writes
+crates/luck_allocs/allocs_linter_rules.yaml

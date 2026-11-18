@@ -21,12 +21,22 @@ impl NodeRule for DuplicateParameter {
     fn node_types(&self) -> NodeTypeSet {
         FunctionNode::NODE_TYPES
     }
-    fn on_stmt(&self, stmt: &Statement, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        _context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         if let Some(function) = FunctionNode::of_stmt(stmt) {
             check_params(function, findings);
         }
     }
-    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        _context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         if let Some(function) = FunctionNode::of_expr(expr) {
             check_params(function, findings);
         }
@@ -40,20 +50,22 @@ impl NodeRule for DuplicateParameter {
 /// Parameters are locals, so no Lua compiles a function with more than
 /// [`MAX_ACTIVE_LOCALS`] of them, and one that has more isn't checked.
 fn check_params(function: FunctionNode<'_>, findings: &mut Vec<Finding>) {
-    let params = &function.body.params.items;
+    let params = &function.body.params;
     let vararg_name = function.body.vararg.as_deref().and_then(|vararg| vararg.name.as_ref());
     if params.len().saturating_add(usize::from(vararg_name.is_some())) > MAX_ACTIVE_LOCALS {
         return;
     }
-    for (i, token) in params.iter().map(|param| &param.name).chain(vararg_name).enumerate() {
-        let Some(name) = token.identifier().filter(|&name| name != "_") else {
+    for (i, param_name) in params.iter().map(|param| &param.name).chain(vararg_name).enumerate() {
+        let name = param_name.text;
+        if name == "_" {
             continue;
-        };
-        let is_repeat =
-            params.iter().take(i).any(|earlier| earlier.name.identifier() == Some(name));
+        }
+        let is_repeat = params.iter().take(i).any(|earlier| earlier.name.text == name);
         if is_repeat || (function.is_method && name == "self") {
-            findings
-                .push(Finding::new(format!("parameter `{name}` is already defined"), token.span));
+            findings.push(Finding::new(
+                format!("parameter `{name}` is already defined"),
+                param_name.span,
+            ));
         }
     }
 }

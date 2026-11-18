@@ -26,13 +26,23 @@ impl NodeRule for ImplicitReturn {
     fn node_types(&self) -> NodeTypeSet {
         FunctionNode::NODE_TYPES
     }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         findings.extend(
             FunctionNode::of_stmt(stmt)
                 .and_then(|function| check_function(function, context.semantic)),
         );
     }
-    fn on_expr(&self, expr: &Expression, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
         findings.extend(
             FunctionNode::of_expr(expr)
                 .and_then(|function| check_function(function, context.semantic)),
@@ -40,7 +50,7 @@ impl NodeRule for ImplicitReturn {
     }
 }
 
-fn check_function(function: FunctionNode<'_>, semantic: &SemanticAnalysis) -> Option<Finding> {
+fn check_function(function: FunctionNode<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding> {
     let graph = FlowGraph::of_block(&function.body.block, semantic);
     (graph.reaches(Exit::ReturnValue) && graph.reaches(Exit::End)).then(|| {
         Finding::new("function returns on some paths but falls through on others", function.span)

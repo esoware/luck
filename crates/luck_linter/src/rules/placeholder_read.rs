@@ -25,14 +25,19 @@ impl NodeRule for PlaceholderRead {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::Name])
     }
-    fn on_expr(&self, expr: &Expression, _context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        if let Expression::Name(token) = expr
-            && token.identifier() == Some("_")
+    fn on_expr(
+        &self,
+        expr: &Expression<'_>,
+        _context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
+        if let Expression::Name(name) = expr
+            && name.text == "_"
         {
             findings.push(
                 Finding::new(
                     "read of `_`, but convention is to use `_` only for ignored bindings",
-                    token.span,
+                    name.span,
                 )
                 .with_help("rename the binding or pull the value into a meaningful local"),
             );

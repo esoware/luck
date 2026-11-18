@@ -23,25 +23,25 @@ impl NodeRule for StringIndexToField {
     }
     fn on_chain(
         &self,
-        chain: &SuffixedExpression,
+        chain: &SuffixedExpression<'_>,
         _position: ChainPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         for (position, suffix) in chain.suffixes.iter().enumerate() {
-            findings.extend(check_index(chain.head(position), suffix, context.semantic.version));
+            findings.extend(check_index(chain.head(position), suffix, context.semantic.version()));
         }
     }
 }
 
-fn check_index(head: ChainHead<'_>, suffix: &Suffix, version: LuaVersion) -> Option<Finding> {
+fn check_index(head: ChainHead<'_>, suffix: &Suffix<'_>, version: LuaVersion) -> Option<Finding> {
     let Suffix::Index { span: index_span, index: Expression::StringLiteral(literal) } = suffix
     else {
         return None;
     };
     // The body is the raw spelling. The shape check rejects the `\` of any
     // escape, which could make the key differ from that spelling.
-    let name = short_string_body(&literal.text)?;
+    let name = short_string_body(literal.text)?;
     if !TokenKind::is_identifier_shaped(name) || TokenKind::is_reserved(name, version) {
         return None;
     }

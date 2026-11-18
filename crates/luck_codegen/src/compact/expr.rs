@@ -1,214 +1,193 @@
 use luck_ast::{
-    BinaryOp, CallSuffix, Expression, Field, FunctionArgs, FunctionDef, IfExpression,
-    InterpolatedString, ParenthesizedExpression, Suffix, SuffixedExpression, TableConstructor,
-    TypeCast, UnaryOp, Var, expr_starts_with_brace,
+    Expression, Field, FunctionArgs, Suffix, SuffixedExpression, TableConstructor, Var,
 };
-use luck_token::TokenKind;
 
-use super::CompactPrinter;
-use crate::separator::PieceClass;
+use super::Printer;
+use crate::separator::{INTERPOLATION_BRACE, OTHER, merges_after};
 
 #[expect(
     clippy::multiple_inherent_impl,
-    reason = "the printer is one type with its emitters split by node family"
+    reason = "the printer is one type with its node families split by file"
 )]
-impl CompactPrinter {
-    pub(super) fn emit_expr(&mut self, expr: &Expression) {
+impl Printer {
+    /// Names, numbers, and strings, half of all expressions, print inline
+    /// where they're reached, which saves them a call to a function that
+    /// saves every callee-saved register.
+    #[expect(clippy::inline_always, reason = "an outlined copy would be the call it saves")]
+    #[inline(always)]
+    pub(super) fn print_expr(&mut self, expr: &Expression<'_>) {
         match expr {
-            Expression::Nil(_) => self.emit_fixed("nil"),
-            Expression::False(_) => self.emit_fixed("false"),
-            Expression::True(_) => self.emit_fixed("true"),
-            Expression::VarArg(_) => self.emit_fixed("..."),
+            Expression::Name(name) => self.name(name.text.as_str()),
             Expression::Number(literal) | Expression::Integer(literal) => {
-                self.emit_piece(&literal.text, PieceClass::Number);
+                self.number(literal.text);
             }
-            Expression::StringLiteral(literal) => {
-                self.emit_piece(&literal.text, PieceClass::Other);
+            Expression::StringLiteral(literal) => self.string(literal.text),
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Suffixed(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::Error(_) => self.print_other_expr(expr),
+        }
+    }
+
+    fn print_other_expr(&mut self, expr: &Expression<'_>) {
+        match expr {
+            Expression::Name(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_) => self.print_expr(expr),
+            Expression::Nil(_) => self.piece("nil"),
+            Expression::False(_) => self.piece("false"),
+            Expression::True(_) => self.piece("true"),
+            // `.....` reads as `...` `..`, so nothing merges with a vararg.
+            Expression::VarArg(_) => self.emit("...", merges_after(b'.'), OTHER),
+            Expression::FunctionDef(function) => {
+                self.print_function_attributes(&function.attributes);
+                self.piece("function");
+                self.print_function_body(&function.body);
             }
-            Expression::FunctionDef(function) => self.emit_function_definition(function),
-            Expression::Name(token) => self.emit_token(token),
-            Expression::Suffixed(chain) => self.emit_suffixed(chain),
+            Expression::Suffixed(chain) => self.print_suffixed(chain),
             Expression::Parenthesized(parenthesized) => {
-                self.emit_parenthesized_expr(parenthesized);
+                self.piece("(");
+                self.print_expr(&parenthesized.expr);
+                self.piece(")");
             }
-            Expression::TableConstructor(table) => self.emit_table_constructor(table),
-            Expression::BinaryOp(binary_op) => self.emit_binary_op(binary_op),
-            Expression::UnaryOp(unary_op) => self.emit_unary_op(unary_op),
+            Expression::TableConstructor(table) => self.print_table(table),
+            Expression::BinaryOp(binary_op) => {
+                self.print_expr(&binary_op.first);
+                for link in &binary_op.links {
+                    self.piece(link.op.static_text());
+                    self.print_expr(&link.operand);
+                }
+            }
+            Expression::UnaryOp(unary_op) => {
+                self.piece(unary_op.op.static_text());
+                self.print_expr(&unary_op.operand);
+            }
             // Luau
-            Expression::IfExpression(if_expr) => self.emit_if_expr(if_expr),
+            Expression::IfExpression(if_expr) => {
+                self.piece("if");
+                self.print_expr(&if_expr.condition);
+                self.piece("then");
+                self.print_expr(&if_expr.then_expr);
+                for clause in &if_expr.elseif_clauses {
+                    self.piece("elseif");
+                    self.print_expr(&clause.condition);
+                    self.piece("then");
+                    self.print_expr(&clause.expr);
+                }
+                self.piece("else");
+                self.print_expr(&if_expr.else_expr);
+            }
             // Luau
-            Expression::InterpolatedString(string) => self.emit_interpolated_string(string),
+            Expression::InterpolatedString(interpolated) => {
+                self.output.print_ascii_byte(b'`');
+                for segment in &interpolated.segments {
+                    self.output.print_str(segment.text.text);
+                    self.output.print_ascii_byte(b'{');
+                    self.last = INTERPOLATION_BRACE;
+                    self.print_expr(&segment.expr);
+                    self.output.print_ascii_byte(b'}');
+                }
+                self.output.print_str(interpolated.tail.text);
+                self.output.print_ascii_byte(b'`');
+                self.last = OTHER;
+            }
             // Luau
-            Expression::TypeCast(cast) => self.emit_type_cast(cast),
+            Expression::TypeCast(cast) => {
+                self.print_expr(&cast.expr);
+                self.piece("::");
+                self.print_type(&cast.ty);
+            }
             Expression::Error(_) => {}
         }
     }
 
-    pub(super) fn emit_var(&mut self, var: &Var) {
+    pub(super) fn print_var(&mut self, var: &Var<'_>) {
         match var {
-            Var::Name(token) => self.emit_token(token),
-            Var::Suffixed(chain) => self.emit_suffixed(chain),
+            Var::Name(name) => self.name(name.text.as_str()),
+            Var::Suffixed(chain) => self.print_suffixed(chain),
         }
     }
 
-    fn emit_function_definition(&mut self, function_definition: &FunctionDef) {
-        self.emit_function_attributes(&function_definition.attributes);
-        self.emit_fixed("function");
-        self.emit_function_body(&function_definition.body);
-    }
-
-    pub(super) fn emit_suffixed(&mut self, chain: &SuffixedExpression) {
-        self.emit_expr(&chain.prefix);
+    #[expect(
+        clippy::inline_always,
+        reason = "measured: inlined into each caller, it prints up to 3% faster"
+    )]
+    #[inline(always)]
+    pub(super) fn print_suffixed(&mut self, chain: &SuffixedExpression<'_>) {
+        self.print_expr(&chain.prefix);
         for suffix in &chain.suffixes {
-            self.emit_suffix(suffix);
-        }
-    }
-
-    fn emit_suffix(&mut self, suffix: &Suffix) {
-        match suffix {
-            Suffix::Field(name) => {
-                self.emit_fixed(".");
-                self.emit_token(name);
-            }
-            Suffix::Index { index, .. } => {
-                self.emit_fixed("[");
-                self.emit_expr(index);
-                self.emit_fixed("]");
-            }
-            Suffix::Call(call) => {
-                let args = match call {
-                    CallSuffix::Plain(args) => args,
-                    CallSuffix::Method(method) => {
-                        self.emit_fixed(":");
-                        self.emit_token(&method.name);
-                        if let Some(type_args) = &method.explicit_type_args {
-                            self.emit_fixed("<<");
-                            self.emit_punctuated(&type_args.args, ",", Self::emit_type);
-                            self.emit_fixed(">>");
-                        }
-                        &method.args
+            match suffix {
+                Suffix::Field(name) => {
+                    self.piece(".");
+                    self.name(name.text.as_str());
+                }
+                Suffix::Index { index, .. } => {
+                    self.piece("[");
+                    self.print_expr(index);
+                    self.piece("]");
+                }
+                Suffix::Call(args) => self.print_args(args),
+                Suffix::MethodCall(call) => {
+                    self.piece(":");
+                    self.name(call.name.text.as_str());
+                    if let Some(type_args) = &call.type_args {
+                        self.print_type_instantiation(type_args);
                     }
-                };
-                self.emit_function_args(args);
-            }
-            // Luau
-            Suffix::TypeInstantiation { type_args, .. } => {
-                self.emit_fixed("<<");
-                self.emit_punctuated(&type_args.args, ",", Self::emit_type);
-                self.emit_fixed(">>");
+                    self.print_args(&call.args);
+                }
+                // Luau
+                Suffix::TypeInstantiation { type_args, .. } => {
+                    self.print_type_instantiation(type_args);
+                }
             }
         }
     }
 
-    fn emit_function_args(&mut self, function_args: &FunctionArgs) {
+    fn print_args(&mut self, function_args: &FunctionArgs<'_>) {
         match function_args {
             FunctionArgs::Parenthesized { args, .. } => {
-                self.emit_fixed("(");
-                self.emit_punctuated(args, ",", Self::emit_expr);
-                self.emit_fixed(")");
+                self.piece("(");
+                self.list(args, ",", Self::print_expr);
+                self.piece(")");
             }
-            FunctionArgs::TableConstructor(table) => self.emit_table_constructor(table),
-            FunctionArgs::StringLiteral(literal) => {
-                self.emit_piece(&literal.text, PieceClass::Other);
-            }
+            FunctionArgs::TableConstructor(table) => self.print_table(table),
+            FunctionArgs::StringLiteral(literal) => self.string(literal.text),
             FunctionArgs::Error(_) => {}
         }
     }
 
-    fn emit_parenthesized_expr(&mut self, parenthesized: &ParenthesizedExpression) {
-        self.emit_fixed("(");
-        self.emit_expr(&parenthesized.expr);
-        self.emit_fixed(")");
+    /// A trailing separator changes nothing, so it's dropped.
+    fn print_table(&mut self, table: &TableConstructor<'_>) {
+        self.piece("{");
+        self.list(&table.fields, ",", Self::print_field);
+        self.piece("}");
     }
 
-    fn emit_table_constructor(&mut self, table: &TableConstructor) {
-        self.emit_fixed("{");
-        // A trailing separator the source carried is dropped; it costs bytes
-        // and changes nothing.
-        self.emit_joined(&table.fields.items, ",", Self::emit_field);
-        self.emit_fixed("}");
-    }
-
-    fn emit_field(&mut self, field: &Field) {
+    fn print_field(&mut self, field: &Field<'_>) {
         match field {
             Field::Bracketed { key, value, .. } => {
-                self.emit_fixed("[");
-                self.emit_expr(key);
-                self.emit_fixed("]");
-                self.emit_fixed("=");
-                self.emit_expr(value);
+                self.piece("[");
+                self.print_expr(key);
+                self.piece("]=");
+                self.print_expr(value);
             }
-            Field::Named { name, value, .. } => {
-                self.emit_token(name);
-                self.emit_fixed("=");
-                self.emit_expr(value);
+            Field::Named { name, value } => {
+                self.name(name.text.as_str());
+                self.piece("=");
+                self.print_expr(value);
             }
-            Field::Positional { value, .. } => {
-                self.emit_expr(value);
-            }
+            Field::Positional(value) => self.print_expr(value),
         }
-    }
-
-    fn emit_binary_op(&mut self, binary_op: &BinaryOp) {
-        self.emit_expr(&binary_op.first);
-        for link in &binary_op.links {
-            self.emit_fixed(link.op.static_text());
-            self.emit_expr(&link.operand);
-        }
-    }
-
-    fn emit_unary_op(&mut self, unary_op: &UnaryOp) {
-        self.emit_fixed(unary_op.op.static_text());
-        self.emit_expr(&unary_op.operand);
-    }
-
-    fn emit_if_expr(&mut self, if_expr: &IfExpression) {
-        self.emit_fixed("if");
-        self.emit_expr(&if_expr.condition);
-        self.emit_fixed("then");
-        self.emit_expr(&if_expr.then_expr);
-        for clause in &if_expr.elseif_clauses {
-            self.emit_fixed("elseif");
-            self.emit_expr(&clause.condition);
-            self.emit_fixed("then");
-            self.emit_expr(&clause.expr);
-        }
-        self.emit_fixed("else");
-        self.emit_expr(&if_expr.else_expr);
-    }
-
-    fn emit_interpolated_string(&mut self, interpolated: &InterpolatedString) {
-        // The braces follow expression presence, not token kind: a plain
-        // `` `text` `` lexes as a Begin("") + End(text) pair with no
-        // expression and must print without braces.
-        self.output.print_ascii_byte(b'`');
-        for segment in &interpolated.segments {
-            if let TokenKind::InterpolatedStringBegin(text)
-            | TokenKind::InterpolatedStringMiddle(text)
-            | TokenKind::InterpolatedStringEnd(text) = &segment.literal.kind
-            {
-                self.output.print_str(text);
-            }
-            if let Some(expr) = &segment.expr {
-                self.output.print_ascii_byte(b'{');
-                // `{{` is a parse error in Luau: an expression starting with a
-                // table constructor needs a space after the interpolation
-                // opener.
-                if expr_starts_with_brace(expr) {
-                    self.output.print_ascii_byte(b' ');
-                }
-                self.previous = PieceClass::Other;
-                self.emit_expr(expr);
-                self.output.print_ascii_byte(b'}');
-            }
-        }
-        self.output.print_ascii_byte(b'`');
-        self.previous = PieceClass::Other;
-    }
-
-    fn emit_type_cast(&mut self, cast: &TypeCast) {
-        self.emit_expr(&cast.expr);
-        self.emit_fixed("::");
-        self.emit_type(&cast.type_annotation);
     }
 }

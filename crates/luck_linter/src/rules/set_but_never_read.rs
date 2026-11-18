@@ -22,14 +22,15 @@ impl_rule!(
 
 impl WholeRule for SetButNeverRead {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let semantic = context.semantic;
+        let tree = context.semantic.scope_tree();
         let mut findings = Vec::new();
 
-        for symbol in &semantic.scope_tree.symbols {
+        for symbol in tree.symbols() {
             if symbol.kind != SymbolKind::Local {
                 continue;
             }
-            if symbol.name.starts_with('_') {
+            let name = tree.name(symbol.name);
+            if name.starts_with('_') {
                 continue;
             }
             // Luau: exported bindings are read through the module's
@@ -40,8 +41,8 @@ impl WholeRule for SetButNeverRead {
 
             let mut has_write = false;
             let mut has_read = false;
-            for &reference_id in &symbol.reference_ids {
-                let kind = semantic.scope_tree.reference(reference_id).kind;
+            for &reference_id in tree.resolved_references(symbol.id) {
+                let kind = tree.reference(reference_id).kind;
                 has_read |= kind.is_read();
                 has_write |= kind.is_write();
             }
@@ -52,7 +53,7 @@ impl WholeRule for SetButNeverRead {
 
             findings.push(
                 Finding::new(
-                    format!("value assigned to `{}` is never read", symbol.name),
+                    format!("value assigned to `{name}` is never read"),
                     symbol.definition_span,
                 )
                 .with_help("remove the assignment or use the value somewhere"),

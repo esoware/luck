@@ -1,9 +1,9 @@
-use luck_ast::{Expression, LastStatement, Statement, SuffixedExpression, Visitor};
+use luck_ast::{Block, Expression, LastStatement, Statement, SuffixedExpression, Visitor};
 use luck_token::{Associativity, Span};
 use tower_lsp_server::ls_types::{Position, SelectionRange};
 
 use crate::document::DocumentState;
-use crate::providers::cursor::touches;
+use crate::providers::cursor::{statements_touching, touches};
 
 /// How many of the innermost enclosing spans reach the editor. The `parent`
 /// chain's drop and serialization recurse, so a long run of operators or
@@ -20,7 +20,7 @@ pub(crate) fn selection_ranges(
 fn selection_for(document: &DocumentState, position: Position) -> SelectionRange {
     let offset = document.offset(position);
     let mut collector = SpanStack { offset, stack: Vec::new() };
-    collector.visit_block(&document.parsed.block);
+    collector.visit_block(&document.parse().block);
     let first_kept = collector.stack.len().saturating_sub(MAX_SELECTION_DEPTH);
     collector.stack.drain(..first_kept);
 
@@ -56,18 +56,32 @@ impl SpanStack {
 }
 
 impl<'ast> Visitor<'ast> for SpanStack {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+    fn visit_block(&mut self, block: &'ast Block<'ast>) {
+        for stmt in statements_touching(block, self.offset) {
+            self.visit_stmt(stmt);
+        }
+        if let Some(last) = &block.last_stmt {
+            self.visit_last_stmt(last);
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         self.record(stmt.span());
         self.walk_stmt(stmt);
     }
 
-    fn visit_last_stmt(&mut self, last: &'ast LastStatement) {
-        self.record(last.span());
-        self.walk_last_stmt(last);
+    fn visit_last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
+        if touches(last.span(), self.offset) {
+            self.record(last.span());
+            self.walk_last_stmt(last);
+        }
     }
 
     /// A run steps out through each pair it groups into, as if it nested.
-    fn visit_expr(&mut self, expr: &'ast Expression) {
+    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
+        if !touches(expr.span(), self.offset) {
+            return;
+        }
         self.record(expr.span());
         if let Expression::BinaryOp(run) = expr {
             let operands = || run.links.iter().map(|link| &link.operand);
@@ -87,7 +101,7 @@ impl<'ast> Visitor<'ast> for SpanStack {
         self.walk_expr(expr);
     }
 
-    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression) {
+    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression<'ast>) {
         for count in (1..chain.suffixes.len()).rev() {
             self.record(chain.head(count).span());
         }
@@ -98,16 +112,15 @@ impl<'ast> Visitor<'ast> for SpanStack {
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
-    use rustc_hash::FxHashSet;
     use tower_lsp_server::ls_types::Range;
 
     use super::*;
+    use crate::fixtures::document;
 
     /// The selection at `offset` on the first line, innermost first.
     fn ranges_at(source: &str, offset: u32) -> Vec<Range> {
-        let document =
-            DocumentState::new(source.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
-        assert!(document.parsed.errors.is_empty(), "{:?}", document.parsed.errors);
+        let document = document(source, LuaTarget::Lua54);
+        assert!(document.parse().errors.is_empty(), "{:?}", document.parse().errors);
         let selection = selection_for(&document, Position::new(0, offset));
         let mut ranges = vec![selection.range];
         let mut current = &selection;
@@ -161,12 +174,7 @@ mod tests {
 
     #[test]
     fn a_selection_range_parent_contains_its_child() {
-        let document = DocumentState::new(
-            "local value = alpha.beta + 1\n".to_owned(),
-            1,
-            LuaTarget::Lua54,
-            FxHashSet::default(),
-        );
+        let document = document("local value = alpha.beta + 1\n", LuaTarget::Lua54);
         let selection = selection_for(&document, Position::new(0, 20));
         let mut current = &selection;
         while let Some(parent) = current.parent.as_deref() {

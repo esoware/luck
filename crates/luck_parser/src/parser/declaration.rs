@@ -1,10 +1,11 @@
+use luck_allocator::List;
 use luck_ast::{
     Attribute, AttributedName, Expression, FunctionAttribute, FunctionDecl, FunctionName,
     GlobalDeclaration, GlobalFunction, GlobalStar, LocalAssignment, LocalAssignmentKind,
-    LocalFunction, LocalFunctionKind, Punctuated, Statement, TypeDeclaration, TypeDeclarationValue,
+    LocalFunction, LocalFunctionKind, Name, Statement, TypeDeclaration, TypeDeclarationValue,
     is_multi_value,
 };
-use luck_token::{Span, Token, TokenKind};
+use luck_token::{Span, TokenKind};
 
 use super::Parser;
 use super::types::GenericsOwner;
@@ -14,11 +15,11 @@ use super::types::GenericsOwner;
 /// attribute when it has no values.
 fn declaration_span(
     start_span: Span,
-    names: &Punctuated<AttributedName>,
-    exprs: Option<&Punctuated<Expression>>,
+    names: &[AttributedName<'_>],
+    exprs: &[Expression<'_>],
 ) -> Span {
     let end_span = exprs
-        .and_then(Punctuated::last)
+        .last()
         .map(Expression::span)
         .or_else(|| {
             names.last().map(|attributed| {
@@ -40,17 +41,21 @@ fn declaration_span(
     clippy::multiple_inherent_impl,
     reason = "the parser is one type with its grammar split by file"
 )]
-impl Parser<'_> {
+impl<'ast> Parser<'ast> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    pub(super) fn parse_attributed_function(&mut self) -> Statement {
+    pub(super) fn parse_attributed_function(&mut self) -> Statement<'ast> {
         let attributes = self.parse_function_attributes();
         match self.peek() {
             TokenKind::Local => self.parse_local_stmt(attributes),
             TokenKind::Function => self.parse_function_decl(attributes),
-            TokenKind::Identifier(name) if name == "export" => self.parse_export_stmt(attributes),
-            TokenKind::Identifier(name) if name == "const" => self.parse_const_stmt(attributes),
+            TokenKind::Identifier if self.current_text() == "export" => {
+                self.parse_export_stmt(attributes)
+            }
+            TokenKind::Identifier if self.current_text() == "const" => {
+                self.parse_const_stmt(attributes)
+            }
             _ => {
-                let span = self.current_span();
+                let span = self.token.span;
                 self.syntax_error(
                     span,
                     "expected `function`, `local`, `const`, or `export` after attribute",
@@ -60,55 +65,64 @@ impl Parser<'_> {
         }
     }
 
-    pub(super) fn parse_function_decl(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
-        let function_span = self.advance_span();
+    pub(super) fn parse_function_decl(
+        &mut self,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+    ) -> Statement<'ast> {
+        let function_span = self.advance();
         let name = self.parse_function_name();
         let start_span = attributes.first().map_or(function_span, |attribute| attribute.span);
         let Some(body) = self.parse_function_body() else {
             return Statement::Error(start_span);
         };
         let span = start_span.merge(body.span);
-
-        Statement::FunctionDecl(Box::new(FunctionDecl { span, attributes, name, body }))
+        Statement::FunctionDecl(self.alloc(FunctionDecl { span, attributes, name, body }))
     }
 
-    fn parse_function_name(&mut self) -> FunctionName {
+    fn parse_function_name(&mut self) -> FunctionName<'ast> {
         let first = self.expect_identifier_recover();
-        let start_span = first.span;
-        let mut names = vec![first];
-
-        while self.eat(&TokenKind::Dot) {
-            let name = self.expect_identifier_recover();
-            names.push(name);
-        }
-
-        let method = self.eat(&TokenKind::Colon).then(|| self.expect_identifier_recover());
-
+        self.counts.name_uses = self.counts.name_uses.wrapping_add(1);
+        let names = if self.is_at(TokenKind::Dot) {
+            let start = self.scratch.names.len();
+            self.scratch.names.push(first);
+            while self.eat(TokenKind::Dot) {
+                let name = self.expect_identifier_recover();
+                self.scratch.names.push(name);
+            }
+            List::split_off_in(&mut self.scratch.names, start, self.allocator)
+        } else {
+            List::from_array_in([first], self.allocator)
+        };
+        // A method declares `self`.
+        let method = self.eat(TokenKind::Colon).then(|| {
+            self.counts.declarations = self.counts.declarations.wrapping_add(1);
+            self.expect_identifier_recover()
+        });
         let end_span = method
-            .as_ref()
-            .map(|name| name.span)
-            .or_else(|| names.last().map(|name| name.span))
-            .unwrap_or(start_span);
-
-        FunctionName { span: start_span.merge(end_span), names, method }
+            .map_or_else(|| names.last().map_or(first.span, |name| name.span), |name| name.span);
+        FunctionName { span: first.span.merge(end_span), names, method }
     }
 
-    pub(super) fn parse_local_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
-        let local_span = self.advance_span();
-
-        if matches!(self.peek(), TokenKind::Function) {
+    pub(super) fn parse_local_stmt(
+        &mut self,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+    ) -> Statement<'ast> {
+        let local_span = self.advance();
+        if self.is_at(TokenKind::Function) {
             return self.parse_local_function(local_span, attributes, LocalFunctionKind::Local);
         }
-
         if let Some(attribute) = attributes.first() {
             self.error(attribute.span, "attributes are only allowed on function declarations");
         }
         self.parse_local_assignment(local_span, LocalAssignmentKind::Local)
     }
 
-    pub(super) fn parse_const_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
-        let const_span = self.advance_span(); // contextual `const`
-        if matches!(self.peek(), TokenKind::Function) {
+    pub(super) fn parse_const_stmt(
+        &mut self,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+    ) -> Statement<'ast> {
+        let const_span = self.advance(); // contextual `const`
+        if self.is_at(TokenKind::Function) {
             return self.parse_local_function(const_span, attributes, LocalFunctionKind::Const);
         }
         if let Some(attribute) = attributes.first() {
@@ -120,28 +134,32 @@ impl Parser<'_> {
     fn parse_local_function(
         &mut self,
         local_span: Span,
-        attributes: Vec<FunctionAttribute>,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
         kind: LocalFunctionKind,
-    ) -> Statement {
+    ) -> Statement<'ast> {
         let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
-        self.advance_span(); // `function`
+        self.advance(); // `function`
         let name = self.expect_identifier_recover();
+        self.counts.declarations = self.counts.declarations.wrapping_add(1);
         let Some(body) = self.parse_function_body() else {
             return Statement::Error(start_span);
         };
         let span = start_span.merge(body.span);
-
-        Statement::LocalFunction(Box::new(LocalFunction { span, attributes, name, body, kind }))
+        Statement::LocalFunction(self.alloc(LocalFunction { span, attributes, name, body, kind }))
     }
 
-    fn parse_local_assignment(&mut self, local_span: Span, kind: LocalAssignmentKind) -> Statement {
+    fn parse_local_assignment(
+        &mut self,
+        local_span: Span,
+        kind: LocalAssignmentKind,
+    ) -> Statement<'ast> {
         let names = self.parse_attname_list();
 
         // 5.4 manual section 3.3.7: "A list of variables can contain at most
         // one to-be-closed variable."
         let mut has_close = false;
         for attribute in names.iter().filter_map(|attributed| attributed.attribute.as_deref()) {
-            if attribute.name.identifier() == Some("close") {
+            if attribute.name.text == "close" {
                 if has_close {
                     self.error(attribute.span, "multiple to-be-closed variables in local list");
                 }
@@ -149,51 +167,49 @@ impl Parser<'_> {
             }
         }
 
-        let exprs = self.eat(&TokenKind::Equal).then(|| self.parse_expr_list());
+        let has_values = self.eat(TokenKind::Equal);
+        let exprs = if has_values { self.parse_expr_list() } else { List::new() };
 
-        let span = declaration_span(local_span, &names, exprs.as_ref());
+        let span = declaration_span(local_span, &names, &exprs);
 
         // Grammar: `const bindinglist '=' explist`, one value per name, except
         // that a last call or `...` may supply the rest.
         if kind.is_const()
-            && !exprs.as_ref().is_some_and(|values| {
-                values.len() == names.len() || values.last().is_some_and(is_multi_value)
-            })
+            && !(has_values
+                && (exprs.len() == names.len() || exprs.last().is_some_and(is_multi_value)))
         {
             self.error(span, "missing initializer in `const` declaration");
         }
 
-        Statement::LocalAssignment(Box::new(LocalAssignment { span, names, exprs, kind }))
+        Statement::LocalAssignment(self.alloc(LocalAssignment { span, names, exprs, kind }))
     }
 
     /// The leading attribute is new in 5.5; in 5.4, attributes only follow
     /// names.
-    fn parse_attname_list(&mut self) -> Punctuated<AttributedName> {
+    fn parse_attname_list(&mut self) -> List<'ast, AttributedName<'ast>> {
         // Lua 5.5: optional leading attribute before the first name.
         let leading_attribute = (self.version.has_leading_attributes()
-            && matches!(self.peek(), TokenKind::Less))
+            && self.is_at(TokenKind::Less))
         .then(|| self.parse_attribute());
-        self.parse_attributed_names(leading_attribute.as_ref())
+        self.parse_attributed_names(leading_attribute)
     }
 
     /// `global <attrib> name...` also enters here directly.
     fn parse_attributed_names(
         &mut self,
-        leading_attribute: Option<&Attribute>,
-    ) -> Punctuated<AttributedName> {
-        let Some(first) = self.parse_attributed_name(leading_attribute) else {
-            return Punctuated::empty();
-        };
-        let mut names = vec![first];
-
-        while self.eat(&TokenKind::Comma) {
-            let Some(name) = self.parse_attributed_name(leading_attribute) else {
-                break;
-            };
-            names.push(name);
+        leading_attribute: Option<Attribute<'ast>>,
+    ) -> List<'ast, AttributedName<'ast>> {
+        let start = self.scratch.attributed_names.len();
+        if let Some(first) = self.parse_attributed_name(leading_attribute) {
+            self.scratch.attributed_names.push(first);
+            while self.eat(TokenKind::Comma) {
+                let Some(name) = self.parse_attributed_name(leading_attribute) else {
+                    break;
+                };
+                self.scratch.attributed_names.push(name);
+            }
         }
-
-        Punctuated::from_items(names)
+        List::split_off_in(&mut self.scratch.attributed_names, start, self.allocator)
     }
 
     /// Parse `Name [: T] [attrib]`, or `None` after recording the error when
@@ -204,51 +220,51 @@ impl Parser<'_> {
     /// the same thing). A name's own postfixed attribute replaces the copy.
     fn parse_attributed_name(
         &mut self,
-        leading_attribute: Option<&Attribute>,
-    ) -> Option<AttributedName> {
+        leading_attribute: Option<Attribute<'ast>>,
+    ) -> Option<AttributedName<'ast>> {
         let name = self.expect_identifier()?;
+        self.counts.declarations = self.counts.declarations.wrapping_add(1);
         // Luau: type annotation after the name.
         let type_annotation = self.try_parse_type_annotation();
-        let attribute = self.try_parse_attribute().or_else(|| leading_attribute.cloned());
-        Some(AttributedName { name, type_annotation, attribute: attribute.map(Box::new) })
+        let attribute =
+            self.try_parse_attribute().or(leading_attribute).map(|attribute| self.alloc(attribute));
+        Some(AttributedName { name, type_annotation, attribute })
     }
 
-    pub(super) fn parse_global_stmt(&mut self) -> Statement {
-        let global_span = self.advance_span();
+    pub(super) fn parse_global_stmt(&mut self) -> Statement<'ast> {
+        let global_span = self.advance();
 
         // `global function name(...) ... end`
-        if matches!(self.peek(), TokenKind::Function) {
-            self.advance_span();
+        if self.is_at(TokenKind::Function) {
+            self.advance();
             let name = self.expect_identifier_recover();
             let Some(body) = self.parse_function_body() else {
                 return Statement::Error(global_span);
             };
             let span = global_span.merge(body.span);
-            return Statement::GlobalFunction(Box::new(GlobalFunction { span, name, body }));
+            return Statement::GlobalFunction(self.alloc(GlobalFunction { span, name, body }));
         }
 
         // `global *`
-        if matches!(self.peek(), TokenKind::Star) {
-            let star = self.advance_span();
+        if self.is_at(TokenKind::Star) {
+            let star = self.advance();
             let span = global_span.merge(star);
-            return Statement::GlobalStar(Box::new(GlobalStar { span, attribute: None }));
+            return Statement::GlobalStar(self.alloc(GlobalStar { span, attribute: None }));
         }
 
         // `global <attrib> *` puts the attribute before the star. Otherwise
         // the attribute leads an attnamelist and the shared parser takes it.
-        if matches!(self.peek(), TokenKind::Less) {
+        if self.is_at(TokenKind::Less) {
             let attribute = self.parse_attribute();
-            self.reject_global_close(&attribute);
-            if matches!(self.peek(), TokenKind::Star) {
-                let star = self.advance_span();
+            self.reject_global_close(attribute);
+            if self.is_at(TokenKind::Star) {
+                let star = self.advance();
                 let span = global_span.merge(star);
-                return Statement::GlobalStar(Box::new(GlobalStar {
-                    span,
-                    attribute: Some(attribute),
-                }));
+                let global_star = GlobalStar { span, attribute: Some(attribute) };
+                return Statement::GlobalStar(self.alloc(global_star));
             }
-            let names = self.parse_attributed_names(Some(&attribute));
-            return self.finish_global_declaration(global_span, names, Some(&attribute));
+            let names = self.parse_attributed_names(Some(attribute));
+            return self.finish_global_declaration(global_span, names, Some(attribute));
         }
 
         // `global name [attrib] {, name [attrib]} ['=' explist]`
@@ -262,81 +278,80 @@ impl Parser<'_> {
     fn finish_global_declaration(
         &mut self,
         global_span: Span,
-        names: Punctuated<AttributedName>,
-        leading_attribute: Option<&Attribute>,
-    ) -> Statement {
+        names: List<'ast, AttributedName<'ast>>,
+        leading_attribute: Option<Attribute<'ast>>,
+    ) -> Statement<'ast> {
         for attribute in
             names.iter().filter_map(|attributed| attributed.attribute.as_deref()).filter(
                 |attribute| leading_attribute.is_none_or(|leading| leading.span != attribute.span),
             )
         {
-            self.reject_global_close(attribute);
+            self.reject_global_close(*attribute);
         }
 
-        let exprs = self.eat(&TokenKind::Equal).then(|| self.parse_expr_list());
-
-        let span = declaration_span(global_span, &names, exprs.as_ref());
-
-        Statement::GlobalDeclaration(Box::new(GlobalDeclaration { span, names, exprs }))
+        let exprs = if self.eat(TokenKind::Equal) { self.parse_expr_list() } else { List::new() };
+        let span = declaration_span(global_span, &names, &exprs);
+        Statement::GlobalDeclaration(self.alloc(GlobalDeclaration { span, names, exprs }))
     }
 
     /// 5.5 manual section 3.3.7: only local variables can have the close
     /// attribute.
-    fn reject_global_close(&mut self, attribute: &Attribute) {
-        if attribute.name.identifier() == Some("close") {
+    fn reject_global_close(&mut self, attribute: Attribute<'ast>) {
+        if attribute.name.text == "close" {
             self.error(attribute.span, "only local variables can have the `close` attribute");
         }
     }
 
-    pub(super) fn parse_type_declaration(&mut self, export_span: Option<Span>) -> Statement {
-        let type_span = self.advance_span(); // `type` identifier
+    pub(super) fn parse_type_declaration(&mut self, export_span: Option<Span>) -> Statement<'ast> {
+        let type_span = self.advance(); // `type` identifier
         let start_span = export_span.unwrap_or(type_span);
+        let is_exported = export_span.is_some();
 
         // `type function Name funcbody` takes no `=`, and the body is
         // ordinary Luau.
-        if matches!(self.peek(), TokenKind::Function) {
-            self.advance_span();
+        if self.is_at(TokenKind::Function) {
+            self.advance();
             self.has_type_function = true;
             let name = self.expect_identifier_recover();
             let Some(body) = self.parse_function_body() else {
                 return Statement::Error(start_span);
             };
             let span = start_span.merge(body.span);
-            return Statement::TypeDeclaration(Box::new(TypeDeclaration {
+            let value = TypeDeclarationValue::TypeFunction(self.alloc(body));
+            return Statement::TypeDeclaration(self.alloc(TypeDeclaration {
                 span,
-                is_exported: export_span.is_some(),
+                is_exported,
                 name,
                 generics: None,
-                type_value: TypeDeclarationValue::TypeFunction(Box::new(body)),
+                value,
             }));
         }
 
         let name = self.expect_identifier_recover();
-
-        let generics = matches!(self.peek(), TokenKind::Less)
-            .then(|| Box::new(self.parse_generic_type_list(GenericsOwner::TypeAlias)));
-
-        self.expect(&TokenKind::Equal);
-
-        let alias_type = self.parse_type();
-        let span = start_span.merge(alias_type.span());
-
-        Statement::TypeDeclaration(Box::new(TypeDeclaration {
+        let generics = self.is_at(TokenKind::Less).then(|| {
+            let generics = self.parse_generic_type_list(GenericsOwner::TypeAlias);
+            self.alloc(generics)
+        });
+        self.expect(TokenKind::Equal);
+        let ty = self.parse_type();
+        let span = start_span.merge(ty.span());
+        Statement::TypeDeclaration(self.alloc(TypeDeclaration {
             span,
-            is_exported: export_span.is_some(),
+            is_exported,
             name,
             generics,
-            type_value: TypeDeclarationValue::Alias(alias_type),
+            value: TypeDeclarationValue::Alias(ty),
         }))
     }
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    pub(super) fn parse_export_stmt(&mut self, attributes: Vec<FunctionAttribute>) -> Statement {
-        let export_span = self.advance_span(); // contextual `export`
+    pub(super) fn parse_export_stmt(
+        &mut self,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+    ) -> Statement<'ast> {
+        let export_span = self.advance(); // contextual `export`
 
-        if let TokenKind::Identifier(name) = self.peek()
-            && name == "type"
-        {
+        if self.is_at_name("type") {
             if !attributes.is_empty() {
                 self.error(export_span, "attributes are only allowed on exported functions");
             }
@@ -361,8 +376,8 @@ impl Parser<'_> {
 
         let stmt = match self.peek() {
             TokenKind::Local => {
-                let local_span = self.advance_span();
-                if matches!(self.peek(), TokenKind::Function) {
+                let local_span = self.advance();
+                if self.is_at(TokenKind::Function) {
                     self.error(
                         export_span,
                         "`export local function` is not supported, use `export function`",
@@ -381,23 +396,23 @@ impl Parser<'_> {
             TokenKind::Function => {
                 self.parse_local_function(export_span, attributes, LocalFunctionKind::Export)
             }
-            TokenKind::Identifier(name) if name == "const" => {
-                self.advance_span();
+            TokenKind::Identifier if self.current_text() == "const" => {
+                self.advance();
                 if !attributes.is_empty() {
                     self.error(export_span, "attributes are only allowed on exported functions");
                 }
-                if matches!(self.peek(), TokenKind::Function) {
+                if self.is_at(TokenKind::Function) {
                     self.error(
                         export_span,
                         "`export const function` is not supported, use `export function`",
                     );
-                    self.parse_local_function(export_span, Vec::new(), LocalFunctionKind::Const)
+                    self.parse_local_function(export_span, List::new(), LocalFunctionKind::Const)
                 } else {
                     self.parse_local_assignment(export_span, LocalAssignmentKind::ExportConst)
                 }
             }
             _ => {
-                let span = self.current_span();
+                let span = self.token.span;
                 self.syntax_error(
                     span,
                     "`export` must be followed by `type`, `local`, `const`, or `function`",
@@ -410,27 +425,24 @@ impl Parser<'_> {
         stmt
     }
 
-    fn register_exported_names(&mut self, stmt: &Statement) {
+    fn register_exported_names(&mut self, stmt: &Statement<'ast>) {
         if let Statement::LocalAssignment(local) = stmt
             && local.kind.is_exported()
         {
-            for attributed in local.names.iter() {
-                self.register_exported_name(&attributed.name);
+            for attributed in &local.names {
+                self.register_exported_name(attributed.name);
             }
         }
         if let Statement::LocalFunction(function) = stmt
             && function.kind.is_exported()
         {
-            self.register_exported_name(&function.name);
+            self.register_exported_name(function.name);
         }
     }
 
-    fn register_exported_name(&mut self, token: &Token) {
-        let TokenKind::Identifier(name) = &token.kind else {
-            return;
-        };
-        if !self.exported_names.insert(name.clone()) {
-            self.error(token.span, format!("duplicate exported identifier `{name}`"));
+    fn register_exported_name(&mut self, name: Name<'ast>) {
+        if !self.exported_names.insert(name.text.as_str()) {
+            self.error(name.span, format!("duplicate exported identifier `{}`", name.text));
         }
     }
 }

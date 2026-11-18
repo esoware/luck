@@ -1,10 +1,16 @@
 use alloc::sync::Arc;
-use std::env;
+use core::num::NonZero;
+use core::panic::AssertUnwindSafe;
+use core::{iter, mem};
+use std::panic;
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::sync::mpsc;
+use std::{env, thread};
 
 use globset::GlobSet;
-use ignore::WalkBuilder;
+use ignore::{DirEntry, WalkBuilder, WalkState};
+use luck_allocator::{Allocator, AllocatorPool};
+use luck_ast::MIN_STACK_BYTES;
 use luck_bundler::DynamicRequire;
 use luck_config::{
     CONFIG_FILE_NAME, LuckConfig, ProjectConfig, ProjectFilter, discover_config, glob_set,
@@ -12,7 +18,7 @@ use luck_config::{
 };
 use luck_core::LuaTarget;
 use luck_resolver::{native_path, normalize_path};
-use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::exit::{Exit, operation_error, usage_error};
@@ -45,6 +51,13 @@ pub(crate) fn entry_and_root(entry: &str) -> Result<(&Path, &Path), Exit> {
     // A bare file name's parent is empty, and an empty root is the working
     // directory.
     Ok((entry_path, entry_path.parent().unwrap_or_else(|| Path::new(""))))
+}
+
+/// An arena for each thread the machine runs at once, since the bundler reads
+/// modules on one thread per arena. An arena no reader takes costs nothing.
+pub(crate) fn bundle_arenas() -> Vec<Allocator> {
+    let thread_count = thread::available_parallelism().map_or(1, NonZero::get);
+    iter::repeat_with(Allocator::new).take(thread_count).collect()
 }
 
 /// An explicit `-t/--target` wins. Otherwise `config` picks by extension,
@@ -362,17 +375,27 @@ where
         if let Some(explicit) = &self.explicit {
             return Ok(Arc::clone(explicit));
         }
-        // Walking up a `..`, which `path::absolute` keeps on Unix, would leave
-        // this directory's ancestors.
-        let canonical = directory
-            .canonicalize()
-            .map_err(|e| usage_error(format!("`{}`: {e}", directory.display())))?;
-        if let Some(known) = self.by_directory.get(&canonical) {
+        self.for_canonical_directory(&canonical_directory(directory)?)
+    }
+
+    /// [`for_directory`](Self::for_directory) for a canonical `directory`.
+    ///
+    /// # Errors
+    ///
+    /// As for [`for_directory`](Self::for_directory).
+    fn for_canonical_directory(
+        &mut self,
+        directory: &Path,
+    ) -> Result<Arc<Project<Settings>>, Exit> {
+        if let Some(explicit) = &self.explicit {
+            return Ok(Arc::clone(explicit));
+        }
+        if let Some(known) = self.by_directory.get(directory) {
             return Ok(Arc::clone(known));
         }
         // Found by stat alone, so a project met before isn't loaded again.
         let project = if let Some(root) =
-            canonical.ancestors().find(|ancestor| ancestor.join(CONFIG_FILE_NAME).is_file())
+            directory.ancestors().find(|ancestor| ancestor.join(CONFIG_FILE_NAME).is_file())
         {
             if let Some(known) = self.discovered.get(root) {
                 Arc::clone(known)
@@ -390,7 +413,7 @@ where
             self.fallback = Some(Arc::clone(&fallback));
             fallback
         };
-        self.by_directory.insert(canonical, Arc::clone(&project));
+        self.by_directory.insert(directory.to_path_buf(), Arc::clone(&project));
         Ok(project)
     }
 
@@ -413,79 +436,227 @@ where
         let max_depth = selection.and_then(|selected| selected.max_depth);
         let mut pending_trees = vec![(directory.to_path_buf(), max_depth)];
         while let Some((tree, tree_max_depth)) = pending_trees.pop() {
-            let project = self.for_directory(&tree)?;
-            let tree_filter = project.filter.clone();
-            let (nested_sender, nested_receiver) = mpsc::channel();
-            let walker = WalkBuilder::new(&tree)
-                .add_custom_ignore_filename(".luckignore")
-                .max_depth(tree_max_depth)
-                .filter_entry(move |entry| {
-                    if !entry.file_type().is_some_and(|file_type| file_type.is_dir()) {
-                        return true;
-                    }
-                    if tree_filter.excludes_tree(entry.path()) {
-                        return false;
-                    }
-                    // A directory with its own config is another project's
-                    // tree, walked after this one under that config.
-                    if has_nested_projects
-                        && entry.depth() > 0
-                        && entry.path().join(CONFIG_FILE_NAME).is_file()
-                    {
-                        let nested_max_depth =
-                            tree_max_depth.map(|depth| depth.saturating_sub(entry.depth()));
-                        let _unused =
-                            nested_sender.send((entry.path().to_path_buf(), nested_max_depth));
-                        return false;
-                    }
-                    true
-                })
-                .build();
-            for walked in walker {
-                let entry =
-                    walked.map_err(|e| operation_error(format!("cannot walk directory: {e}")))?;
-                let path = entry.path();
-                if path
-                    .extension()
-                    .is_some_and(|extension| extension == "lua" || extension == "luau")
-                    && selection.is_none_or(|selected| {
-                        path.strip_prefix(directory)
-                            .is_ok_and(|relative| selected.patterns.is_match(relative))
-                    })
-                    && path.is_file()
-                    && project.filter.is_included(path)
-                {
-                    tree_files.push((entry.into_path(), Arc::clone(&project)));
-                }
-            }
-            pending_trees.extend(nested_receiver.try_iter());
+            let canonical_tree = canonical_directory(&tree)?;
+            let project = self.for_canonical_directory(&canonical_tree)?;
+            let walk = TreeWalk {
+                tree: &tree,
+                canonical_tree: &canonical_tree,
+                max_depth: tree_max_depth,
+                filter: &project.filter,
+                selection: selection.map(|selected| (directory, &selected.patterns)),
+                has_nested_projects,
+            };
+            let walked = walk.run()?;
+            tree_files.extend(walked.files.into_iter().map(|path| (path, Arc::clone(&project))));
+            pending_trees.extend(walked.nested_trees);
         }
-        tree_files.sort_by(|(left, _), (right, _)| left.cmp(right));
+        tree_files.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         found.extend(tree_files);
         Ok(())
     }
 }
 
-/// Runs `work` over `files` on the rayon pool and yields the outcomes in input
-/// order, so output stays deterministic.
+/// One project's tree, walked for the Lua files its filter takes.
+struct TreeWalk<'walk> {
+    tree: &'walk Path,
+    canonical_tree: &'walk Path,
+    max_depth: Option<usize>,
+    filter: &'walk ProjectFilter,
+    /// The directory a glob argument names, and the patterns a path below it
+    /// has to match.
+    selection: Option<(&'walk Path, &'walk GlobSet)>,
+    has_nested_projects: bool,
+}
+
+/// What a walk found, or one of its visitors' share of it.
+#[derive(Default)]
+struct Walked {
+    files: Vec<PathBuf>,
+    /// Each with how much deeper a glob without `**` can still match in it.
+    nested_trees: Vec<(PathBuf, Option<usize>)>,
+    error: Option<ignore::Error>,
+}
+
+/// A visitor's share, sent when the walk drops the visitor.
+struct WalkerShare {
+    walked: Walked,
+    sender: mpsc::Sender<Walked>,
+}
+
+impl Drop for WalkerShare {
+    fn drop(&mut self) {
+        let _unused = self.sender.send(mem::take(&mut self.walked));
+    }
+}
+
+impl TreeWalk<'_> {
+    /// # Errors
+    ///
+    /// Reports the failure and returns [`Exit::Failure`] when part of the
+    /// tree outside any excluded directory can't be walked.
+    fn run(&self) -> Result<Walked, Exit> {
+        let (sender, receiver) = mpsc::channel();
+        WalkBuilder::new(self.tree)
+            .add_custom_ignore_filename(".luckignore")
+            .max_depth(self.max_depth)
+            // Measured: one thread of the parallel walker reads a tree in half
+            // the time the serial walker takes, and each thread more idles a
+            // millisecond or so before the walk can end, which a small tree
+            // pays in full.
+            .threads(1)
+            .build_parallel()
+            .run(|| {
+                let mut share = WalkerShare { walked: Walked::default(), sender: sender.clone() };
+                Box::new(move |walked| match walked {
+                    Ok(entry) => self.visit(entry, &mut share.walked),
+                    Err(error) => {
+                        share.walked.error.get_or_insert(error);
+                        WalkState::Quit
+                    }
+                })
+            });
+        drop(sender);
+        let mut walked = Walked::default();
+        for share in receiver {
+            if let Some(error) = share.error {
+                return Err(operation_error(format!("cannot walk directory: {error}")));
+            }
+            walked.files.extend(share.files);
+            walked.nested_trees.extend(share.nested_trees);
+        }
+        Ok(walked)
+    }
+
+    fn visit(&self, entry: DirEntry, walked: &mut Walked) -> WalkState {
+        let path = entry.path();
+        if entry.file_type().is_some_and(|file_type| file_type.is_dir()) {
+            if self.filter.excludes_canonical_tree(&self.canonical(path)) {
+                return WalkState::Skip;
+            }
+            // A directory with its own config is another project's tree,
+            // walked after this one under that config.
+            if self.has_nested_projects
+                && entry.depth() > 0
+                && path.join(CONFIG_FILE_NAME).is_file()
+            {
+                let max_depth = self.max_depth.map(|depth| depth.saturating_sub(entry.depth()));
+                walked.nested_trees.push((entry.into_path(), max_depth));
+                return WalkState::Skip;
+            }
+            return WalkState::Continue;
+        }
+        let is_selected =
+            path.extension().is_some_and(|extension| extension == "lua" || extension == "luau")
+                && self.selection.is_none_or(|(directory, patterns)| {
+                    path.strip_prefix(directory).is_ok_and(|relative| patterns.is_match(relative))
+                });
+        if !is_selected {
+            return WalkState::Continue;
+        }
+        // The walk follows no symlink, so only a symlink itself needs the
+        // disk to tell what it is and where it leads.
+        let is_included = if entry.path_is_symlink() {
+            path.is_file() && self.filter.is_included(path)
+        } else {
+            #[expect(
+                clippy::filetype_is_file,
+                reason = "a pipe or device named like a source file is no file to read"
+            )]
+            let is_file = entry.file_type().is_some_and(|file_type| file_type.is_file());
+            is_file && self.filter.includes_canonical(&self.canonical(path))
+        };
+        if is_included {
+            walked.files.push(entry.into_path());
+        }
+        WalkState::Continue
+    }
+
+    /// `path`, which the walk reached, under the tree's canonical form, so the
+    /// filter sees a canonical path without asking the disk for one.
+    fn canonical(&self, path: &Path) -> PathBuf {
+        match path.strip_prefix(self.tree) {
+            Ok(below) if !below.as_os_str().is_empty() => self.canonical_tree.join(below),
+            Ok(_) | Err(_) => self.canonical_tree.to_path_buf(),
+        }
+    }
+}
+
+/// # Errors
 ///
-/// Files go out in fixed-size chunks, and a chunk only starts once the caller
-/// has taken every outcome of the one before, which keeps memory flat on huge
-/// projects.
-pub(crate) fn outcomes_in_order<Settings, Outcome>(
+/// Reports the failure and returns [`Exit::Usage`] when `directory` can't be
+/// resolved.
+fn canonical_directory(directory: &Path) -> Result<PathBuf, Exit> {
+    // Walking up a `..`, which `path::absolute` keeps on Unix, would leave
+    // this directory's ancestors.
+    directory.canonicalize().map_err(|e| usage_error(format!("`{}`: {e}", directory.display())))
+}
+
+/// Runs `work` over `files` on the rayon pool and hands `take` each outcome
+/// on the calling thread, in input order.
+///
+/// An error from `take` ends the run once the files already started finish.
+/// Each file gets an arena from a pool, reset when its outcome is done, so a
+/// run allocates about one arena per thread. A file starts as soon as a
+/// thread is free and is less than a window of files past the outcome `take`
+/// waits for, which keeps memory flat on huge projects without a thread ever
+/// waiting for a batch to finish.
+///
+/// # Errors
+///
+/// Returns the first error `take` returns.
+pub(crate) fn for_each_outcome_in_order<Settings, Outcome>(
     files: &[ProjectFile<Settings>],
-    work: impl Fn(&ProjectFile<Settings>) -> Outcome + Sync,
-) -> impl Iterator<Item = Outcome>
+    work: impl Fn(&ProjectFile<Settings>, &Allocator) -> Outcome + Sync,
+    mut take: impl FnMut(Outcome) -> Result<(), Exit>,
+) -> Result<(), Exit>
 where
     Settings: Send + Sync,
     Outcome: Send,
 {
-    // Four per thread keeps the pool busy while bounding how many rendered
-    // outcomes sit in memory at once.
-    let files_per_chunk = rayon::current_num_threads().saturating_mul(4);
-    files
-        .chunks(files_per_chunk)
-        .flat_map(move |chunk| chunk.par_iter().map(&work).collect::<Vec<Outcome>>())
+    // Before anything starts rayon's default pool, whose threads' stacks are
+    // too small for a deep file.
+    let _already_built = ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global();
+    let thread_count = rayon::current_num_threads();
+    // A worker waiting on a file's own parallel lint can steal another file,
+    // which takes an arena of its own, so the pool can grow past this.
+    let pool = AllocatorPool::new(thread_count);
+    // A smaller window leaves threads idle behind a slow file, and a larger
+    // one gains nothing.
+    let window = NonZero::new(thread_count.saturating_mul(16)).unwrap_or(NonZero::<usize>::MIN);
+    let (sender, receiver) = mpsc::channel::<(usize, thread::Result<Outcome>)>();
+    let mut ready: Vec<Option<Outcome>> = iter::repeat_with(|| None).take(window.get()).collect();
+    let mut next_outcome = |index: usize| loop {
+        if let Some(outcome) = ready.get_mut(index % window)?.take() {
+            return Some(outcome);
+        }
+        // `sender` outlives this, so a job still out always arrives.
+        let (finished, result) = receiver.recv().ok()?;
+        let outcome = result.unwrap_or_else(|payload| panic::resume_unwind(payload));
+        *ready.get_mut(finished % window)? = Some(outcome);
+    };
+    // Spawned from outside the pool, the jobs queue in file order.
+    rayon::in_place_scope(|scope| {
+        let start = |index: usize| {
+            if let Some(file) = files.get(index) {
+                let (job_work, job_pool, job_sender) = (&work, &pool, sender.clone());
+                scope.spawn(move |_| {
+                    // A panic would otherwise leave the caller waiting forever.
+                    let result =
+                        panic::catch_unwind(AssertUnwindSafe(|| job_work(file, &job_pool.get())));
+                    let _unused = job_sender.send((index, result));
+                });
+            }
+        };
+        (0..window.get()).for_each(start);
+        for index in 0..files.len() {
+            let Some(outcome) = next_outcome(index) else {
+                break;
+            };
+            start(index.saturating_add(window.get()));
+            take(outcome)?;
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]

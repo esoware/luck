@@ -16,6 +16,21 @@ fn pushes_append_mixed_ascii_and_unicode_in_order() {
 }
 
 #[test]
+fn strings_of_every_short_length_append_whole_with_or_without_spare_capacity() {
+    let text = "abcdefghijklmnopq\u{e9}";
+    for end in (0..=text.len()).filter(|end| text.is_char_boundary(*end)) {
+        let piece = text.split_at(end).0;
+        for capacity in [0, 1, 4, 32] {
+            let mut buffer = CodeBuffer::with_capacity(capacity);
+            buffer.print_str("x");
+            buffer.print_str(piece);
+            buffer.print_str("\u{e9}");
+            assert_eq!(buffer.into_string(), format!("x{piece}\u{e9}"), "capacity {capacity}");
+        }
+    }
+}
+
+#[test]
 fn truncate_drops_trailing_bytes() {
     let mut buffer = CodeBuffer::default();
     buffer.print_str("abc  ");

@@ -16,5 +16,6 @@ mod lua55;
 mod luau;
 mod luau_types;
 mod parse_result;
+mod stack;
 mod validate;
 mod version;

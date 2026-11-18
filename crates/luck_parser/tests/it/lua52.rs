@@ -1,24 +1,23 @@
+use luck_allocator::Allocator;
 use luck_ast::{LastStatement, Statement};
 use luck_parser::ParseResult;
 use luck_token::LuaVersion;
 
 use crate::common::assert_no_errors;
 
-fn parse_lua52(source: &str) -> ParseResult {
-    luck_parser::parse(source, LuaVersion::Lua52)
+fn parse_lua52<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
+    luck_parser::parse(allocator, source, LuaVersion::Lua52)
 }
 
 #[test]
 fn goto_stmt() {
+    let allocator = Allocator::new();
     // The label is there because Lua rejects a goto with no visible label.
-    let result = parse_lua52("goto label_name ::label_name::");
+    let result = parse_lua52(&allocator, "goto label_name ::label_name::");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 2);
     if let Statement::Goto(goto) = &result.block.stmts[0] {
-        assert!(matches!(
-            &goto.name.kind,
-            luck_token::TokenKind::Identifier(name) if name == "label_name"
-        ));
+        assert_eq!(goto.name.text, "label_name");
     } else {
         panic!("expected Goto, got {:?}", result.block.stmts[0]);
     }
@@ -26,14 +25,12 @@ fn goto_stmt() {
 
 #[test]
 fn label_stmt() {
-    let result = parse_lua52("::my_label::");
+    let allocator = Allocator::new();
+    let result = parse_lua52(&allocator, "::my_label::");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 1);
     if let Statement::Label(label) = &result.block.stmts[0] {
-        assert!(matches!(
-            &label.name.kind,
-            luck_token::TokenKind::Identifier(name) if name == "my_label"
-        ));
+        assert_eq!(label.name.text, "my_label");
     } else {
         panic!("expected Label, got {:?}", result.block.stmts[0]);
     }
@@ -41,7 +38,8 @@ fn label_stmt() {
 
 #[test]
 fn goto_and_label_in_same_block() {
-    let result = parse_lua52("::start:: goto start");
+    let allocator = Allocator::new();
+    let result = parse_lua52(&allocator, "::start:: goto start");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 2);
     assert!(matches!(&result.block.stmts[0], Statement::Label(_)));
@@ -50,7 +48,8 @@ fn goto_and_label_in_same_block() {
 
 #[test]
 fn semicolons_parse_as_empty_stmts() {
-    let result = parse_lua52(";;;");
+    let allocator = Allocator::new();
+    let result = parse_lua52(&allocator, ";;;");
     assert_no_errors(&result);
     assert_eq!(result.block.stmts.len(), 3);
     for stmt in &result.block.stmts {
@@ -63,7 +62,8 @@ fn semicolons_parse_as_empty_stmts() {
 
 #[test]
 fn break_can_precede_other_stmts() {
-    let result = parse_lua52("while true do break local x = 1 end");
+    let allocator = Allocator::new();
+    let result = parse_lua52(&allocator, "while true do break local x = 1 end");
     assert_no_errors(&result);
     if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
         assert!(
@@ -88,10 +88,11 @@ fn break_can_precede_other_stmts() {
 
 #[test]
 fn return_takes_a_trailing_semicolon() {
-    let result = parse_lua52("return 1;");
+    let allocator = Allocator::new();
+    let result = parse_lua52(&allocator, "return 1;");
     assert_no_errors(&result);
     if let Some(last) = &result.block.last_stmt {
-        if let LastStatement::Return(return_stmt) = &**last {
+        if let LastStatement::Return(return_stmt) = last {
             assert_eq!(return_stmt.exprs.len(), 1);
         } else {
             panic!("expected Return");
@@ -103,12 +104,13 @@ fn return_takes_a_trailing_semicolon() {
 
 #[test]
 fn break_at_block_end_is_an_ordinary_stmt() {
-    let result = parse_lua52("while true do break end");
+    let allocator = Allocator::new();
+    let result = parse_lua52(&allocator, "while true do break end");
     assert_no_errors(&result);
     if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
         // In 5.2+, `break` is a regular statement, not a last statement.
         assert!(
-            matches!(while_loop.block.stmts.as_slice(), [Statement::Break(_)]),
+            matches!(&*while_loop.block.stmts, [Statement::Break(_)]),
             "expected a lone Break statement, got {:?}",
             while_loop.block.stmts
         );

@@ -1,0 +1,27 @@
+[package]
+name                   = "luck_benchmark_files"
+version.workspace      = true
+publish                = false
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description            = "Internal test inputs: the pinned files the benches and allocation snapshots measure"
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+luck_allocator = { workspace = true }
+luck_core      = { workspace = true }
+luck_parser    = { workspace = true }
+luck_token     = { workspace = true }
+
+flate2 = { workspace = true }
+tar    = { workspace = true }
+ureq   = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

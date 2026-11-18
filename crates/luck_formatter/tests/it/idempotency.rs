@@ -1,4 +1,7 @@
+use luck_allocator::Allocator;
+use luck_ast::MAX_NESTING_DEPTH;
 use luck_formatter::FormatOptions;
+use luck_testgen::with_the_smallest_stack;
 use luck_token::LuaVersion;
 
 use crate::common::assert_format;
@@ -193,17 +196,26 @@ fn broken_table_calls(levels: usize) -> String {
 
 #[test]
 fn call_parentheses_never_format_valid_input_past_the_nesting_cap() {
-    // `f{...}` gains parentheses by default, so a bare table argument has to
-    // count toward the cap as the parenthesized one it prints as does.
-    for levels in [100, 126, 127] {
-        assert_format(&nested_table_calls(levels), &broken_table_calls(levels));
-    }
-    for levels in [128, 129, 200, 255] {
-        let source = nested_table_calls(levels);
-        let result = luck_formatter::format(&source, LuaVersion::Lua54, &FormatOptions::default());
-        let [error] = result.errors.as_slice() else {
-            panic!("{levels} levels: {:?}", result.errors);
-        };
-        assert!(error.message.contains("maximum nesting depth exceeded"), "{levels}: {error:?}");
-    }
+    with_the_smallest_stack(|| {
+        // `f{...}` gains parentheses by default, so a bare table argument has to
+        // count toward the cap as the parenthesized one it prints as does. Each
+        // call and its table are two levels under the chunk's block.
+        let fitting = (MAX_NESTING_DEPTH - 1).div_euclid(2);
+        for levels in [100, fitting - 1, fitting] {
+            assert_format(&nested_table_calls(levels), &broken_table_calls(levels));
+        }
+        for levels in [fitting + 1, fitting + 2, 2 * fitting] {
+            let source = nested_table_calls(levels);
+            let allocator = Allocator::new();
+            let options = FormatOptions::default();
+            let result = luck_formatter::format(&allocator, &source, LuaVersion::Lua54, &options);
+            let [error] = result.errors.as_slice() else {
+                panic!("{levels} levels: {:?}", result.errors);
+            };
+            assert!(
+                error.message.contains("maximum nesting depth exceeded"),
+                "{levels}: {error:?}"
+            );
+        }
+    });
 }

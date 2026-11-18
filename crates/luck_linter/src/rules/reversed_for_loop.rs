@@ -20,8 +20,13 @@ impl NodeRule for ReversedForLoop {
     fn node_types(&self) -> NodeTypeSet {
         NodeTypeSet::from_types(&[NodeType::NumericFor])
     }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let version = context.semantic.version;
+    fn on_stmt(
+        &self,
+        stmt: &Statement<'_>,
+        context: &LintContext<'_>,
+        findings: &mut Vec<Finding>,
+    ) {
+        let version = context.semantic.version();
         if let Statement::NumericFor(numeric_for) = stmt
             && let Some(start) = signed_number_value(&numeric_for.start, version)
             && let Some(limit) = signed_number_value(&numeric_for.limit, version)

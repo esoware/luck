@@ -3,21 +3,25 @@ use luck_token::Span;
 use tower_lsp_server::ls_types::FoldingRange;
 
 use crate::document::DocumentState;
+use crate::line_index::Positions;
 
 pub(crate) fn folding_ranges(document: &DocumentState) -> Vec<FoldingRange> {
-    let mut folder = Folder { document, ranges: Vec::new() };
-    folder.visit_block(&document.parsed.block);
+    let mut folder = Folder { document, starts: document.positions(), ranges: Vec::new() };
+    folder.visit_block(&document.parse().block);
     folder.ranges
 }
 
 struct Folder<'document> {
     document: &'document DocumentState,
+    /// The walk meets each fold before those inside it, so their starts come
+    /// in order.
+    starts: Positions<'document>,
     ranges: Vec<FoldingRange>,
 }
 
 impl Folder<'_> {
     fn push(&mut self, span: Span) {
-        let start = self.document.position(span.start);
+        let start = self.starts.position(span.start);
         let end = self.document.position(span.end);
         if end.line <= start.line {
             return;
@@ -34,7 +38,7 @@ impl Folder<'_> {
 }
 
 impl<'ast> Visitor<'ast> for Folder<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             Statement::DoBlock(_)
             | Statement::WhileLoop(_)
@@ -63,12 +67,12 @@ impl<'ast> Visitor<'ast> for Folder<'_> {
 
     // Every function form reaches this: declarations, `local` and `global`
     // functions, Luau type functions, and anonymous functions.
-    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
+    fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
         self.push(body.span);
         self.walk_function_body(body);
     }
 
-    fn visit_table_constructor(&mut self, table: &'ast TableConstructor) {
+    fn visit_table_constructor(&mut self, table: &'ast TableConstructor<'ast>) {
         self.push(table.span);
         self.walk_table_constructor(table);
     }
@@ -77,12 +81,12 @@ impl<'ast> Visitor<'ast> for Folder<'_> {
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
-    use rustc_hash::FxHashSet;
 
     use super::*;
+    use crate::fixtures::document;
 
     fn folded_lines(text: &str, target: LuaTarget) -> Vec<(u32, u32)> {
-        let document = DocumentState::new(text.to_owned(), 1, target, FxHashSet::default());
+        let document = document(text, target);
         folding_ranges(&document).iter().map(|fold| (fold.start_line, fold.end_line)).collect()
     }
 

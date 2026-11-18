@@ -1,0 +1,54 @@
+gen_full_lua54.lua:
+  file size: 376750 # 376.75 kB
+  sys allocs: 11
+  sys reallocs: 13
+  sys deallocs: 10
+  sys alloc bytes: 7648 # 7.65 kB
+  sys peak growth: 7648 # 7.65 kB
+  arena allocs: 65954
+  arena reallocs: 0
+  arena size: 2430104 # 2.43 MB
+
+gen_full_luau.luau:
+  file size: 441060 # 441.06 kB
+  sys allocs: 242
+  sys reallocs: 13
+  sys deallocs: 241
+  sys alloc bytes: 10448 # 10.45 kB
+  sys peak growth: 8664 # 8.66 kB
+  arena allocs: 75472
+  arena reallocs: 0
+  arena size: 2772664 # 2.77 MB
+
+idiomatic.lua:
+  file size: 2124 # 2.12 kB
+  sys allocs: 10
+  sys reallocs: 4
+  sys deallocs: 9
+  sys alloc bytes: 1504 # 1.50 kB
+  sys peak growth: 1504 # 1.50 kB
+  arena allocs: 332
+  arena reallocs: 0
+  arena size: 12176 # 12.18 kB
+
+infinite_yield.luau:
+  file size: 482971 # 482.97 kB
+  sys allocs: 11
+  sys reallocs: 25
+  sys deallocs: 10
+  sys alloc bytes: 74368 # 74.37 kB
+  sys peak growth: 74368 # 74.37 kB
+  arena allocs: 92976
+  arena reallocs: 0
+  arena size: 3463936 # 3.46 MB
+
+obfuscated_vm.luau:
+  file size: 2290215 # 2.29 MB
+  sys allocs: 9
+  sys reallocs: 17
+  sys deallocs: 9
+  sys alloc bytes: 15520 # 15.52 kB
+  sys peak growth: 15520 # 15.52 kB
+  arena allocs: 18256
+  arena reallocs: 0
+  arena size: 604520 # 604.52 kB

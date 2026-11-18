@@ -1,6 +1,5 @@
-use luck_benchmark::{
-    BenchmarkId, Criterion, black_box, criterion_group, criterion_main, test_files, test_projects,
-};
+use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use luck_benchmark_files::{test_files, test_projects};
 
 fn bench_lexer(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("lexer");

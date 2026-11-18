@@ -10,4 +10,6 @@ mod common;
 
 mod compact;
 mod fixtures;
+mod generated;
 mod separator;
+mod stack;

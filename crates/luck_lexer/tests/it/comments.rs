@@ -112,14 +112,13 @@ local x",
 
 #[test]
 fn bom_then_shebang_is_skipped() {
-    let result = lex(
-        "\
+    let source = "\
 \u{FEFF}#!/usr/bin/lua
-print(1)",
-        LuaVersion::Lua54,
-    );
+print(1)";
+    let result = lex(source, LuaVersion::Lua54);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    assert_eq!(result.tokens[0].kind, TokenKind::Identifier("print".into()));
+    let first = result.tokens[0];
+    assert_eq!((first.kind, first.text(source)), (TokenKind::Identifier, "print"));
 }
 
 #[test]

@@ -4,13 +4,15 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_config::{LuckConfig, resolved_format_config};
-use luck_core::LuaTarget;
+use luck_allocator::Allocator;
+use luck_config::{Editorconfigs, LuckConfig};
+use luck_formatter::FormatOptions;
 use luck_resolver::read_source_file;
+use luck_token::LuaVersion;
 
 use crate::exit::{Exit, usage_error};
-use crate::output::read_stdin_source;
-use crate::project::{config_for_one_shot, outcomes_in_order, project_files};
+use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
+use crate::project::{ProjectFile, config_for_one_shot, for_each_outcome_in_order, project_files};
 use crate::render::render_source_errors;
 use crate::verbosity::Verbosity;
 
@@ -122,35 +124,38 @@ impl FmtArgs {
         {
             // One lock and one flush per stream for the whole run (the early
             // returns flush on drop).
-            let mut stderr = BufWriter::new(io::stderr().lock());
-            let mut stdout = BufWriter::new(io::stdout().lock());
-            let outcomes = outcomes_in_order(&files, |file| {
-                self.format_file(&file.path, file.target, &file.project.config)
-            });
-            for outcome in outcomes {
-                match outcome {
-                    FileOutcome::Failed(rendered) => {
-                        let _unused = stderr.write_all(&rendered);
-                        has_failed_file = true;
-                    }
-                    FileOutcome::RangeError(message) => {
-                        let _unused = writeln!(stderr, "{message}");
-                        return Err(Exit::Usage);
-                    }
-                    FileOutcome::Unchanged => {}
-                    FileOutcome::Changed(path) => changed_paths.push(path),
-                    FileOutcome::WriteError(message) => {
-                        let _unused = writeln!(stderr, "{message}");
-                        return Err(Exit::Failure);
-                    }
-                    FileOutcome::Written(path) => {
-                        if verbosity != Verbosity::Quiet {
-                            let _unused = writeln!(stdout, "{path}");
+            let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
+            let mut stdout = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stdout().lock());
+            let editorconfigs = Editorconfigs::default();
+            for_each_outcome_in_order(
+                &files,
+                |file, allocator| self.format_file(allocator, &editorconfigs, file),
+                |outcome| {
+                    match outcome {
+                        FileOutcome::Failed(rendered) => {
+                            let _unused = stderr.write_all(&rendered);
+                            has_failed_file = true;
+                        }
+                        FileOutcome::RangeError(message) => {
+                            let _unused = writeln!(stderr, "{message}");
+                            return Err(Exit::Usage);
+                        }
+                        FileOutcome::Unchanged => {}
+                        FileOutcome::Changed(path) => changed_paths.push(path),
+                        FileOutcome::WriteError(message) => {
+                            let _unused = writeln!(stderr, "{message}");
+                            return Err(Exit::Failure);
+                        }
+                        FileOutcome::Written(path) => {
+                            if verbosity != Verbosity::Quiet {
+                                let _unused = writeln!(stdout, "{path}");
+                            }
                         }
                     }
-                }
-            }
-        }
+                    Ok(())
+                },
+            )
+        }?;
 
         if self.is_report_only() {
             for path in &changed_paths {
@@ -188,10 +193,11 @@ impl FmtArgs {
             Exit::Usage
         })?;
 
-        let file_path = PathBuf::from(stdin_path);
-        let target = luck_config.target_for_path(&file_path).map_err(usage_error)?;
+        let file_path = Path::new(stdin_path);
+        let version = luck_config.target_for_path(file_path).map_err(usage_error)?.lua_version();
+        let options = self.format_options(&Editorconfigs::default(), luck_config, file_path);
 
-        match self.format_document(luck_config, &source, &file_path, target, range) {
+        match format_document(&Allocator::new(), &source, file_path, version, &options, range) {
             FormatOutcome::Failed(rendered) => {
                 let _unused = io::stderr().write_all(&rendered);
                 Err(Exit::Failure)
@@ -225,10 +231,11 @@ impl FmtArgs {
 
     fn format_file(
         &self,
-        file_path: &Path,
-        target: LuaTarget,
-        luck_config: &LuckConfig,
+        allocator: &Allocator,
+        editorconfigs: &Editorconfigs,
+        file: &ProjectFile<()>,
     ) -> FileOutcome {
+        let file_path = file.path.as_path();
         let source = match read_source_file(file_path) {
             Ok(text) => text,
             Err(error) => {
@@ -243,11 +250,14 @@ impl FmtArgs {
             Err(message) => return FileOutcome::RangeError(message),
         };
 
-        let formatted = match self.format_document(luck_config, &source, file_path, target, range) {
-            FormatOutcome::Failed(rendered) => return FileOutcome::Failed(rendered),
-            FormatOutcome::Unchanged => return FileOutcome::Unchanged,
-            FormatOutcome::Changed(output) => output,
-        };
+        let options = self.format_options(editorconfigs, &file.project.config, file_path);
+        let version = file.target.lua_version();
+        let formatted =
+            match format_document(allocator, &source, file_path, version, &options, range) {
+                FormatOutcome::Failed(rendered) => return FileOutcome::Failed(rendered),
+                FormatOutcome::Unchanged => return FileOutcome::Unchanged,
+                FormatOutcome::Changed(output) => output,
+            };
 
         let path = file_path.display().to_string();
         if self.is_report_only() {
@@ -259,39 +269,18 @@ impl FmtArgs {
         }
     }
 
-    /// Writes nothing; callers decide whether the result goes to disk or stdout.
-    fn format_document(
+    /// The defaults, then the `.editorconfig` files above `file_path` unless
+    /// `--no-editorconfig`, then `luck_config`'s `format` section.
+    fn format_options(
         &self,
+        editorconfigs: &Editorconfigs,
         luck_config: &LuckConfig,
-        source: &str,
         file_path: &Path,
-        target: LuaTarget,
-        range: Option<Range<usize>>,
-    ) -> FormatOutcome {
+    ) -> FormatOptions {
         let editorconfig_path = (!self.no_editorconfig).then_some(file_path);
-        let options = luck_formatter::FormatOptions::from(&resolved_format_config(
-            luck_config.format,
-            editorconfig_path,
-        ));
-        let version = target.lua_version();
-        let result = range.map_or_else(
-            || luck_formatter::format(source, version, &options),
-            |byte_range| luck_formatter::format_range(source, version, &options, byte_range),
-        );
-        if !result.errors.is_empty() {
-            return FormatOutcome::Failed(render_source_errors(
-                file_path.to_string_lossy().into_owned(),
-                source,
-                &result.errors,
-                version,
-            ));
-        }
-
-        if result.output == source {
-            FormatOutcome::Unchanged
-        } else {
-            FormatOutcome::Changed(result.output)
-        }
+        FormatOptions::from(
+            &editorconfigs.resolved_format_config(luck_config.format, editorconfig_path),
+        )
     }
 
     /// A missing start is 0, a missing end is the end of the source, and an
@@ -313,6 +302,35 @@ impl FmtArgs {
             ));
         }
         Ok(Some(start..end))
+    }
+}
+
+/// Writes nothing; callers decide whether the result goes to disk or stdout.
+fn format_document(
+    allocator: &Allocator,
+    source: &str,
+    file_path: &Path,
+    version: LuaVersion,
+    options: &FormatOptions,
+    range: Option<Range<usize>>,
+) -> FormatOutcome {
+    let parse = luck_parser::parse(allocator, source, version);
+    if !parse.errors.is_empty() {
+        return FormatOutcome::Failed(render_source_errors(
+            file_path.to_string_lossy().into_owned(),
+            source,
+            &parse.errors,
+            version,
+        ));
+    }
+    let result = range.map_or_else(
+        || luck_formatter::format_parsed(allocator, &parse, version, options),
+        |byte_range| luck_formatter::format_range(allocator, &parse, version, options, byte_range),
+    );
+    if result.output == source {
+        FormatOutcome::Unchanged
+    } else {
+        FormatOutcome::Changed(result.output)
     }
 }
 
@@ -444,6 +462,16 @@ end
         );
     }
 
+    /// `source` at `file_path` formatted under `flags` with the default config.
+    fn formatted_document(flags: &[&str], source: &str, file_path: &Path) -> FormatOutcome {
+        let options = fmt_args(flags).format_options(
+            &Editorconfigs::default(),
+            &LuckConfig::default(),
+            file_path,
+        );
+        format_document(&Allocator::new(), source, file_path, LuaVersion::Lua54, &options, None)
+    }
+
     #[test]
     fn format_document_without_editorconfig_uses_only_luck_json() {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -457,17 +485,14 @@ indent_size = 2
 ",
         )
         .expect("write .editorconfig");
-        let source_path = directory.path().join("main.lua");
-        let outcome = fmt_args(&["--no-editorconfig"]).format_document(
-            &LuckConfig::default(),
+        let outcome = formatted_document(
+            &["--no-editorconfig"],
             "\
 local function f()
 return 1
 end
 ",
-            &source_path,
-            LuaTarget::Lua54,
-            None,
+            &directory.path().join("main.lua"),
         );
         let FormatOutcome::Changed(formatted) = outcome else {
             panic!("unindented source should reformat to Changed");
@@ -482,16 +507,8 @@ end
     fn format_document_reports_changed_unchanged_and_parse_error() {
         // The shared per-document formatter helper backs both the file-walk and
         // the --stdin-filepath paths, so cover its three outcomes directly.
-        let args = fmt_args(&["--no-editorconfig"]);
-        let luck_config = LuckConfig::default();
         let format = |source: &str| {
-            args.format_document(
-                &luck_config,
-                source,
-                Path::new("stdin.lua"),
-                LuaTarget::Lua54,
-                None,
-            )
+            formatted_document(&["--no-editorconfig"], source, Path::new("stdin.lua"))
         };
 
         let FormatOutcome::Changed(formatted) = format("local  x=1\n") else {

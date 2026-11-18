@@ -7,7 +7,7 @@ use crate::node_type::{NodeType, NodeTypeSet};
 /// statement, or a function expression.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FunctionNode<'ast> {
-    pub body: &'ast FunctionBody,
+    pub body: &'ast FunctionBody<'ast>,
     /// The whole statement or expression.
     pub span: Span,
     /// The declared name, such as `a.b:c`. `None` for a function expression.
@@ -24,7 +24,7 @@ impl<'ast> FunctionNode<'ast> {
         NodeType::FunctionDef,
     ]);
 
-    pub(crate) fn of_stmt(stmt: &'ast Statement) -> Option<Self> {
+    pub(crate) fn of_stmt(stmt: &'ast Statement<'ast>) -> Option<Self> {
         let (body, span, name_span, is_method) = match stmt {
             Statement::FunctionDecl(decl) => {
                 (&decl.body, decl.span, decl.name.span, decl.name.method.is_some())
@@ -38,7 +38,7 @@ impl<'ast> FunctionNode<'ast> {
             }
             // Luau
             Statement::TypeDeclaration(type_declaration) => {
-                let TypeDeclarationValue::TypeFunction(body) = &type_declaration.type_value else {
+                let TypeDeclarationValue::TypeFunction(body) = &type_declaration.value else {
                     return None;
                 };
                 (&**body, type_declaration.span, type_declaration.name.span, false)
@@ -64,7 +64,7 @@ impl<'ast> FunctionNode<'ast> {
         Some(Self { body, span, name_span: Some(name_span), is_method })
     }
 
-    pub(crate) const fn of_expr(expr: &'ast Expression) -> Option<Self> {
+    pub(crate) fn of_expr(expr: &'ast Expression<'ast>) -> Option<Self> {
         let Expression::FunctionDef(function) = expr else {
             return None;
         };

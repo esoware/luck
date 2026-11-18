@@ -1,7 +1,8 @@
 use core::mem;
 
-use luck_ast::{FunctionBody, Parameter, Punctuated, Type, VarArgParam};
-use luck_token::{Token, TokenKind};
+use luck_allocator::{Box, List};
+use luck_ast::{FunctionBody, Name, Parameter, Type, VarArgParam};
+use luck_token::TokenKind;
 
 use super::types::GenericsOwner;
 use super::{Closer, FunctionScope, Parser};
@@ -10,27 +11,29 @@ use super::{Closer, FunctionScope, Parser};
     clippy::multiple_inherent_impl,
     reason = "the parser is one type with its grammar split by file"
 )]
-impl Parser<'_> {
+impl<'ast> Parser<'ast> {
     /// `None` when the body or its block would pass the depth cap.
-    pub(super) fn parse_function_body(&mut self) -> Option<FunctionBody> {
+    pub(super) fn parse_function_body(&mut self) -> Option<FunctionBody<'ast>> {
         if !self.enter_depth() {
             return None;
         }
         self.open(Closer::BlockEnd);
 
         // Luau puts the generic list before the parens: `function f<T>(x: T)`.
-        let generics = (self.version.has_type_syntax() && matches!(self.peek(), TokenKind::Less))
-            .then(|| Box::new(self.parse_generic_type_list(GenericsOwner::Function)));
+        let generics = (self.is_at(TokenKind::Less) && self.version.has_type_syntax()).then(|| {
+            let generics = self.parse_generic_type_list(GenericsOwner::Function);
+            self.alloc(generics)
+        });
 
-        let open = self.expect(&TokenKind::LeftParen);
+        let open = self.expect(TokenKind::LeftParen);
         let start_span = generics.as_ref().map_or(open, |list| list.span);
 
         self.open(Closer::Paren);
         let (params, vararg) = self.parse_params();
-        self.expect_closer(&TokenKind::RightParen, Closer::Paren);
+        self.expect_closer(TokenKind::RightParen, Closer::Paren);
 
         // Luau: optional return type annotation after `)`.
-        let return_type = (self.version.has_type_syntax() && self.eat(&TokenKind::Colon))
+        let return_type = (self.version.has_type_syntax() && self.eat(TokenKind::Colon))
             .then(|| self.parse_return_type());
 
         // A loop around the function doesn't make `break` or `continue` valid
@@ -45,60 +48,63 @@ impl Parser<'_> {
         let block = parsed_block?;
 
         self.close(Closer::BlockEnd);
-        let end_span = self.expect(&TokenKind::End);
-
+        let end_span = self.expect(TokenKind::End);
         let span = start_span.merge(end_span);
-
         Some(FunctionBody { span, generics, params, vararg, return_type, block })
     }
 
     /// Parse the parameter list between a function's parens, stopping before
     /// the closing `)`.
-    fn parse_params(&mut self) -> (Punctuated<Parameter>, Option<Box<VarArgParam>>) {
-        let mut params = Punctuated::<Parameter>::empty();
-        if matches!(self.peek(), TokenKind::DotDotDot) {
-            return (params, Some(Box::new(self.parse_vararg_param())));
+    fn parse_params(
+        &mut self,
+    ) -> (List<'ast, Parameter<'ast>>, Option<Box<'ast, VarArgParam<'ast>>>) {
+        if self.is_at(TokenKind::DotDotDot) {
+            return (List::new(), Some(self.parse_vararg_param()));
         }
         if !self.is_at_identifier() {
-            return (params, None);
+            return (List::new(), None);
         }
-
-        let first_name = self.advance();
-        params.push(self.parse_parameter(first_name));
-
-        while self.eat(&TokenKind::Comma) {
-            if matches!(self.peek(), TokenKind::DotDotDot) {
+        let start = self.scratch.params.len();
+        let first_name = self.advance_name();
+        let first = self.parse_parameter(first_name);
+        self.scratch.params.push(first);
+        let mut vararg = None;
+        while self.eat(TokenKind::Comma) {
+            if self.is_at(TokenKind::DotDotDot) {
                 // Vararg after the last named parameter.
-                return (params, Some(Box::new(self.parse_vararg_param())));
+                vararg = Some(self.parse_vararg_param());
+                break;
             }
             let name = self.expect_identifier_recover();
-            params.push(self.parse_parameter(name));
+            let param = self.parse_parameter(name);
+            self.scratch.params.push(param);
         }
-        (params, None)
+        (List::split_off_in(&mut self.scratch.params, start, self.allocator), vararg)
     }
 
     /// Finish a function parameter or a for-loop variable whose `name` was
     /// just consumed, taking a Luau `: T` annotation if one follows.
-    pub(super) fn parse_parameter(&mut self, name: Token) -> Parameter {
-        let type_annotation = self.try_parse_type_annotation();
-        let end_span = type_annotation.as_ref().map_or(name.span, Type::span);
-        Parameter { span: name.span.merge(end_span), name, type_annotation }
+    pub(super) fn parse_parameter(&mut self, name: Name<'ast>) -> Parameter<'ast> {
+        self.counts.declarations = self.counts.declarations.wrapping_add(1);
+        Parameter { name, type_annotation: self.try_parse_type_annotation() }
     }
 
     /// Parse `... [name] [: type]`; `...` must be the current token.
-    fn parse_vararg_param(&mut self) -> VarArgParam {
-        let dots = self.advance_span();
+    fn parse_vararg_param(&mut self) -> Box<'ast, VarArgParam<'ast>> {
+        let dots = self.advance();
         // Lua 5.5: named varargs `...name`.
-        let vararg_name =
-            (self.version.has_named_varargs() && self.is_at_identifier()).then(|| self.advance());
+        let name = (self.version.has_named_varargs() && self.is_at_identifier()).then(|| {
+            self.counts.declarations = self.counts.declarations.wrapping_add(1);
+            self.advance_name()
+        });
         // Luau: vararg type annotation `...: type` or `...: T...`.
-        let vararg_type = (self.version.has_type_syntax() && self.eat(&TokenKind::Colon))
+        let type_annotation = (self.version.has_type_syntax() && self.eat(TokenKind::Colon))
             .then(|| self.parse_vararg_type());
-        let end_span = vararg_type
+        let end_span = type_annotation
             .as_ref()
             .map(Type::span)
-            .or_else(|| vararg_name.as_ref().map(|name| name.span))
+            .or_else(|| name.map(|vararg_name| vararg_name.span))
             .unwrap_or(dots);
-        VarArgParam { span: dots.merge(end_span), name: vararg_name, type_annotation: vararg_type }
+        self.alloc(VarArgParam { span: dots.merge(end_span), name, type_annotation })
     }
 }

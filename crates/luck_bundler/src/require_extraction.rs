@@ -1,29 +1,32 @@
+use luck_allocator::Allocator;
 use luck_ast::{
-    Block, Call, Expression, FunctionArgs, FunctionBody, Statement, Suffix, SuffixedExpression,
-    Var, Visitor,
+    Block, Call, Expression, FunctionArgs, FunctionBody, Name, Statement, Suffix,
+    SuffixedExpression, TreeCounts, Var,
 };
 use luck_core::Diagnostic;
-use luck_semantic::{ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
-use luck_token::{LuaVersion, Span, StdlibEnvironment, Token, decode_string};
-use rustc_hash::{FxHashMap, FxHashSet};
+use luck_semantic::{NodeSink, ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
+use luck_token::{LuaVersion, Span, StdlibEnvironment, decode_string};
+use rustc_hash::FxHashSet;
 
 use crate::dynamic_require::DynamicRequire;
+use crate::exports::{Exports, has_value_exports};
 
 /// A `require("literal")` call that reaches the global `require`.
-#[derive(Debug)]
-pub(crate) struct RequireSite {
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RequireSite<'ast> {
     /// The require string with escapes decoded, as real `require` would
     /// receive it.
-    pub require_string: String,
+    pub require_string: &'ast str,
     pub call_span: Span,
 }
 
-pub(crate) struct ExtractedRequires {
+#[derive(Debug)]
+pub(crate) struct ExtractedRequires<'ast> {
     /// In source order.
-    pub sites: Vec<RequireSite>,
+    pub sites: Vec<RequireSite<'ast>>,
     /// The `require` identifier of each call whose argument isn't a string
-    /// literal. The emitter retargets just this token, so a static require
-    /// nested in the argument still gets its own rewrite.
+    /// literal, in source order. The emitter retargets just this token, so a
+    /// static require nested in the argument still gets its own rewrite.
     pub dynamic_callees: Vec<Span>,
     pub diags: Vec<Diagnostic>,
     /// The module's own chunk reads `...`.
@@ -34,8 +37,11 @@ pub(crate) struct ExtractedRequires {
     pub has_env_rebinding: bool,
     /// Lua 5.1: the most locals any one function captures. Zero elsewhere.
     pub max_function_upvalues: usize,
+    pub exports: Exports<'ast>,
 }
 
+/// What bundling needs from a module's tree, `block`, whose text is `source`.
+///
 /// A call that doesn't reach the global `require`, through a local binding
 /// named `require`, a local `_ENV`, or a global the file replaced, keeps its
 /// meaning and gets W005.
@@ -46,147 +52,336 @@ pub(crate) struct ExtractedRequires {
 /// Luau, writes to `package.loaded` get E006.
 ///
 /// `dynamic_require` decides whether a `require(expr)` aborts the bundle or
-/// stays for the runtime.
-pub(crate) fn extract_requires(
-    block: &Block,
+/// stays for the runtime. Each require string goes in `allocator`. `counts`
+/// is the parse's.
+pub(crate) fn extract_requires<'ast>(
+    allocator: &'ast Allocator,
+    block: &Block<'_>,
+    counts: TreeCounts,
+    source: &'ast str,
     file_path: &str,
     version: LuaVersion,
     dynamic_require: DynamicRequire,
-) -> ExtractedRequires {
-    let scope_tree = luck_semantic::build_scope_tree(block, version);
-    let mut finder = RequireFinder {
-        file_path,
-        version,
-        dynamic_require,
-        scope_tree: &scope_tree,
-        sites: Vec::new(),
-        dynamic_callees: Vec::new(),
-        diags: Vec::new(),
-        package_loaded_writes: Vec::new(),
-        seen_require_strings: FxHashSet::default(),
-        direct_callee_spans: FxHashSet::default(),
-        function_depth: 0,
-        vararg_function_depth: 0,
-        has_vararg_read: false,
-        has_global_arg_read: false,
-    };
-    finder.visit_block(block);
-
-    let RequireFinder {
-        mut sites,
-        dynamic_callees,
-        mut diags,
-        package_loaded_writes,
-        direct_callee_spans,
-        has_vararg_read,
-        has_global_arg_read,
-        ..
-    } = finder;
-
-    diags.extend(
-        scope_tree
-            .unresolved_references()
-            .filter(|reference| {
-                reference.name == "require"
-                    && reference.kind.is_read()
-                    && !direct_callee_spans.contains(&reference.span)
-            })
-            .map(|reference| Diagnostic::w005_aliased(file_path, reference.span)),
-    );
-
-    sites.sort_by_key(|site| site.call_span.start);
-    diags.extend(package_loaded_writes);
-
-    let has_env_rebinding = version.has_env_upvalue()
-        && (scope_tree.is_env_assigned
-            || scope_tree.unresolved_references().any(|reference| reference.name == "module"));
-    // Lua 5.1: the only target with an upvalue limit a loader can hit.
-    let max_function_upvalues = if version.has_env_upvalue() || version.is_luau() {
-        0
+) -> ExtractedRequires<'ast> {
+    let mut uses = Uses::new(version);
+    let tree = if counts_upvalues(version) || has_exports(block, version) {
+        ScopeTree::build_with(block, counts, version, &mut uses)
     } else {
-        max_function_upvalues(&scope_tree)
+        ScopeTree::build_for_names(block, version, &ASKED_NAMES, &mut uses)
     };
+    RequireFinder::new(allocator, source, file_path, version, dynamic_require, &tree)
+        .read(block, uses)
+}
 
-    ExtractedRequires {
-        sites,
-        dynamic_callees,
-        diags,
-        has_vararg_read,
-        has_global_arg_read,
-        has_env_rebinding,
-        max_function_upvalues,
-    }
+/// Every name [`RequireFinder`] asks its tree about, unless it counts
+/// captures or plans exports, which take every name. Lua 5.1's `arg` is
+/// asked about only where captures are counted.
+const ASKED_NAMES: [&str; 4] = ["require", "_G", "package", "module"];
+
+/// Lua 5.1: the only target with an upvalue limit a loader can hit.
+const fn counts_upvalues(version: LuaVersion) -> bool {
+    !version.has_env_upvalue() && !version.is_luau()
+}
+
+fn has_exports(block: &Block<'_>, version: LuaVersion) -> bool {
+    version.has_value_exports() && has_value_exports(block)
 }
 
 /// The most distinct outer locals any one function captures. A capture counts
 /// on every function between the use and the declaring scope, as Lua's
 /// compiler counts it.
-fn max_function_upvalues(tree: &ScopeTree) -> usize {
-    let mut captures: FxHashMap<ScopeId, FxHashSet<SymbolId>> = FxHashMap::default();
-    for reference in &tree.references {
+fn max_function_upvalues(tree: &ScopeTree<'_>) -> usize {
+    let mut captures: FxHashSet<(SymbolId, ScopeId)> = FxHashSet::default();
+    let mut counts = vec![0usize; tree.scopes().len()];
+    for reference in tree.references() {
         let Some(symbol) = reference.resolved else {
             continue;
         };
-        let home = tree.symbol(symbol).scope;
-        let mut current = Some(reference.scope);
-        while let Some(id) = current
-            && id != home
-        {
-            let scope = tree.scope(id);
-            if scope.kind == ScopeKind::Function {
-                captures.entry(id).or_default().insert(symbol);
+        let home = tree.scope(tree.symbol(symbol).scope).function;
+        let mut function = tree.scope(reference.scope).function;
+        while function != home {
+            let scope = tree.scope(function);
+            if scope.kind == ScopeKind::Function
+                && captures.insert((symbol, function))
+                && let Some(count) = counts.get_mut(function.index())
+            {
+                *count = count.saturating_add(1);
             }
-            current = scope.parent;
+            let Some(parent) = scope.parent else {
+                break;
+            };
+            function = tree.scope(parent).function;
         }
     }
-    captures.values().map(FxHashSet::len).max().unwrap_or(0)
+    counts.into_iter().max().unwrap_or(0)
 }
 
-struct RequireFinder<'input> {
-    file_path: &'input str,
+/// What the scope tree's walk finds that bundling has to look at once the tree
+/// can say what each name reaches.
+struct Uses<'tree> {
+    version: LuaVersion,
+    /// The function bodies the walk is in as of the last [`Self::reach`],
+    /// innermost last, and whether each declares `...`, binding its own `arg`
+    /// on 5.1.
+    functions: Vec<(Span, bool)>,
+    requires: Vec<RequireUse<'tree>>,
+    /// Lua 5.1: each name `arg` outside every vararg function.
+    arg_reads: Vec<&'tree Name<'tree>>,
+    /// Luau: each write to or into `package.loaded`, by its `package` name.
+    package_loaded_writes: Vec<(&'tree Name<'tree>, Span)>,
+    /// The module's own chunk reads `...`.
+    has_vararg_read: bool,
+}
+
+#[derive(Clone, Copy)]
+enum RequireUse<'tree> {
+    /// A direct call of a name `require`.
+    Call(Call<'tree>),
+    /// A chain reading `require` from the global table named.
+    GlobalTable(&'tree SuffixedExpression<'tree>, &'tree Name<'tree>),
+}
+
+impl RequireUse<'_> {
+    fn start(&self) -> u32 {
+        match self {
+            Self::Call(call) => call.span().start,
+            Self::GlobalTable(chain, _) => chain.span.start,
+        }
+    }
+}
+
+impl<'tree> Uses<'tree> {
+    const fn new(version: LuaVersion) -> Self {
+        Self {
+            version,
+            functions: Vec::new(),
+            requires: Vec::new(),
+            arg_reads: Vec::new(),
+            package_loaded_writes: Vec::new(),
+            has_vararg_read: false,
+        }
+    }
+
+    /// Leaves each function body that doesn't hold `start`, since the walk
+    /// is past it.
+    fn reach(&mut self, start: u32) {
+        while let Some(&(body, _)) = self.functions.last()
+            && !(body.start <= start && start < body.end)
+        {
+            self.functions.pop();
+        }
+    }
+
+    fn note_target(&mut self, target: &'tree Var<'tree>) {
+        match target {
+            Var::Name(name) => self.note_arg(name),
+            // Lua targets use package.loaded itself as the bundle cache, so
+            // writes to it behave as in real Lua. Luau has no package table,
+            // and its bundle cache is private.
+            Var::Suffixed(_) => {
+                if self.version.is_luau()
+                    && let Some(package) = package_loaded_root(target, self.version)
+                {
+                    self.package_loaded_writes.push((package, target.span()));
+                }
+            }
+        }
+    }
+
+    /// Lua 5.1: a use of `arg`, outside every vararg function.
+    fn note_arg(&mut self, name: &'tree Name<'tree>) {
+        if self.version.has_implicit_vararg_table() && name.text == "arg" {
+            self.reach(name.span.start);
+            if !self.functions.iter().any(|&(_, is_vararg)| is_vararg) {
+                self.arg_reads.push(name);
+            }
+        }
+    }
+}
+
+impl<'tree> NodeSink<'tree> for Uses<'tree> {
+    fn function_body(&mut self, body: &'tree FunctionBody<'tree>) {
+        self.reach(body.span.start);
+        self.functions.push((body.span, body.vararg.is_some()));
+    }
+
+    fn stmt(&mut self, stmt: &'tree Statement<'tree>) {
+        if let Statement::Assignment(assignment) = stmt {
+            for target in &assignment.targets {
+                self.note_target(target);
+            }
+        }
+        // Luau
+        if let Statement::CompoundAssignment(compound) = stmt {
+            self.note_target(&compound.var);
+        }
+    }
+
+    fn expr(&mut self, expr: &'tree Expression<'tree>) {
+        if let Expression::VarArg(span) = expr {
+            self.reach(span.start);
+            self.has_vararg_read |= self.functions.is_empty();
+        }
+        if let Expression::Name(name) = expr {
+            self.note_arg(name);
+        }
+    }
+
+    fn chain(&mut self, chain: &'tree SuffixedExpression<'tree>, _is_target: bool) {
+        if let Some(table) = global_table_require(chain, self.version) {
+            self.requires.push(RequireUse::GlobalTable(chain, table));
+        }
+        // Only the first call's callee can be a bare name.
+        if let Some(call) = Call::new(chain.head(0), chain.suffixes.first())
+            && require_callee(call).is_some()
+        {
+            self.requires.push(RequireUse::Call(call));
+        }
+    }
+}
+
+/// What the module's requires make of it, decided in source order.
+struct RequireFinder<'tree, 'ast> {
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    file_path: &'tree str,
     version: LuaVersion,
     dynamic_require: DynamicRequire,
-    scope_tree: &'input ScopeTree,
-    sites: Vec<RequireSite>,
+    tree: &'tree ScopeTree<'tree>,
+    sites: Vec<RequireSite<'ast>>,
     dynamic_callees: Vec<Span>,
     diags: Vec<Diagnostic>,
-    /// E006s, which follow every other diagnostic.
-    package_loaded_writes: Vec<Diagnostic>,
-    seen_require_strings: FxHashSet<String>,
-    direct_callee_spans: FxHashSet<Span>,
-    /// Function bodies entered so far; zero is the module's own chunk.
-    function_depth: usize,
-    /// How many of those declare `...`, each binding its own `arg` on 5.1.
-    vararg_function_depth: usize,
-    has_vararg_read: bool,
-    has_global_arg_read: bool,
+    seen_require_strings: FxHashSet<&'ast str>,
+    direct_callees: Vec<Span>,
 }
 
-impl RequireFinder<'_> {
+impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
+    fn new(
+        allocator: &'ast Allocator,
+        source: &'ast str,
+        file_path: &'tree str,
+        version: LuaVersion,
+        dynamic_require: DynamicRequire,
+        tree: &'tree ScopeTree<'tree>,
+    ) -> Self {
+        Self {
+            allocator,
+            source,
+            file_path,
+            version,
+            dynamic_require,
+            tree,
+            sites: Vec::new(),
+            dynamic_callees: Vec::new(),
+            diags: Vec::new(),
+            seen_require_strings: FxHashSet::default(),
+            direct_callees: Vec::new(),
+        }
+    }
+
+    /// What `uses`, found in `block` by the walk that built the tree, make of
+    /// the module.
+    fn read(mut self, block: &Block<'_>, mut uses: Uses<'_>) -> ExtractedRequires<'ast> {
+        // The walk reaches an assignment's values before its targets, and the
+        // diagnostics follow the source.
+        uses.requires.sort_by_key(RequireUse::start);
+        for require in &uses.requires {
+            match *require {
+                RequireUse::Call(call) => self.handle_call(call),
+                RequireUse::GlobalTable(chain, table) => {
+                    self.flag_global_table_require(chain, table);
+                }
+            }
+        }
+        let Self {
+            source,
+            file_path,
+            version,
+            tree,
+            mut sites,
+            dynamic_callees,
+            mut diags,
+            mut direct_callees,
+            ..
+        } = self;
+
+        if let Some(require) = tree.name_id("require") {
+            direct_callees.sort_unstable_by_key(|span| span.start);
+            let is_direct_callee = |span: Span| {
+                direct_callees
+                    .binary_search_by_key(&span.start, |callee| callee.start)
+                    .is_ok_and(|i| direct_callees.get(i) == Some(&span))
+            };
+            diags.extend(
+                tree.global_references()
+                    .filter(|reference| {
+                        reference.name == require
+                            && reference.kind.is_read()
+                            && !is_direct_callee(reference.span)
+                    })
+                    .map(|reference| Diagnostic::w005_aliased(file_path, reference.span)),
+            );
+        }
+
+        sites.sort_by_key(|site| site.call_span.start);
+        // A local named `package` is no concern of the bundle's.
+        diags.extend(
+            uses.package_loaded_writes
+                .iter()
+                .filter(|(package, _)| tree.reaches_host_global(package))
+                .map(|(_, target)| Diagnostic::e006(file_path, *target)),
+        );
+        let has_global_arg_read = uses.arg_reads.iter().any(|name| !tree.resolves_to_local(name));
+
+        let has_env_rebinding = version.has_env_upvalue()
+            && (tree.is_env_assigned()
+                || tree.name_id("module").is_some_and(|module| {
+                    tree.global_references().any(|reference| reference.name == module)
+                }));
+        let max_function_upvalues =
+            if counts_upvalues(version) { max_function_upvalues(tree) } else { 0 };
+        let exports = if has_exports(block, version) {
+            Exports::new(block, tree, source)
+        } else {
+            Exports::default()
+        };
+
+        ExtractedRequires {
+            sites,
+            dynamic_callees,
+            diags,
+            has_vararg_read: uses.has_vararg_read,
+            has_global_arg_read,
+            has_env_rebinding,
+            max_function_upvalues,
+            exports,
+        }
+    }
+
     fn handle_call(&mut self, call: Call<'_>) {
-        let Some(callee_span) = require_callee_span(call) else {
+        let Some(callee) = require_callee(call) else {
             return;
         };
-        self.direct_callee_spans.insert(callee_span);
-        if !self.scope_tree.reaches_host_global("require", callee_span) {
+        self.direct_callees.push(callee.span);
+        if !self.tree.reaches_host_global(callee) {
             self.diags.push(Diagnostic::w005_shadowed(self.file_path, call.span()));
             return;
         }
 
-        match literal_require_string(call, self.version) {
+        match self.literal_require_string(call) {
             // The real `require` finds a standard library in `package.loaded`
             // before any searcher, so no file can stand in for it.
-            Some(require_string) if is_standard_library(&require_string, self.version) => {}
+            Some(require_string) if is_standard_library(require_string, self.version) => {}
             Some(require_string) => {
-                if !self.seen_require_strings.insert(require_string.clone()) {
-                    self.diags.push(Diagnostic::w001(self.file_path, call.span(), &require_string));
+                if !self.seen_require_strings.insert(require_string) {
+                    self.diags.push(Diagnostic::w001(self.file_path, call.span(), require_string));
                 }
                 self.sites.push(RequireSite { require_string, call_span: call.span() });
             }
             // `require(expr)` can't be resolved statically. Aborting the whole
             // bundle over one such call is rarely what the author wants, so by
             // default it stays and resolves at runtime.
-            None => self.handle_dynamic_call(call, callee_span),
+            None => self.handle_dynamic_call(call, callee.span),
         }
     }
 
@@ -212,91 +407,30 @@ impl RequireFinder<'_> {
         }
     }
 
-    /// A local named `package` is no concern of the bundle's.
-    fn flag_package_loaded_write(&mut self, target: &Var) {
-        if let Some(package_span) = package_loaded_root(target, self.version)
-            && self.scope_tree.reaches_host_global("package", package_span)
-        {
-            self.package_loaded_writes.push(Diagnostic::e006(self.file_path, target.span()));
-        }
+    /// The argument of `call` when it's one string literal, with escapes
+    /// resolved and a long string's leading newline stripped. `None` if it
+    /// doesn't decode or the result isn't UTF-8.
+    fn literal_require_string(&self, call: Call<'_>) -> Option<&'ast str> {
+        let literal_span = match call.args {
+            FunctionArgs::Parenthesized { args, .. } => {
+                let [Expression::StringLiteral(literal)] = &**args else {
+                    return None;
+                };
+                literal.span
+            }
+            FunctionArgs::StringLiteral(literal) => literal.span,
+            FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => return None,
+        };
+        let decoded = decode_string(literal_span.text(self.source), self.version)?;
+        Some(self.allocator.alloc_str(str::from_utf8(&decoded).ok()?))
     }
 
     /// W005 for `_G.require` or `_ENV.require`, the global `require` reached
     /// through its table rather than a direct call.
-    fn flag_global_table_require(&mut self, chain: &SuffixedExpression) {
-        if let Some((table_name, table_span)) = global_table_require(chain, self.version)
-            && self.scope_tree.reaches_host_global(table_name, table_span)
-        {
+    fn flag_global_table_require(&mut self, chain: &SuffixedExpression<'_>, table: &Name<'_>) {
+        if self.tree.reaches_host_global(table) {
             self.diags.push(Diagnostic::w005_aliased(self.file_path, chain.head(1).span()));
         }
-    }
-
-    /// Lua 5.1: a read of the global `arg`, outside every vararg function.
-    fn note_arg_read(&mut self, name: &Token) {
-        if self.vararg_function_depth == 0
-            && self.version.has_implicit_vararg_table()
-            && name.identifier() == Some("arg")
-            && !self.scope_tree.resolves_to_local("arg", name.span)
-        {
-            self.has_global_arg_read = true;
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for RequireFinder<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
-        // Lua targets use package.loaded itself as the bundle cache, so writes
-        // to it behave as in real Lua. Luau has no package table, and its
-        // bundle cache is private.
-        if self.version.is_luau() {
-            if let Statement::Assignment(assignment) = stmt {
-                for target in assignment.targets.iter() {
-                    self.flag_package_loaded_write(target);
-                }
-            }
-            if let Statement::CompoundAssignment(compound) = stmt {
-                self.flag_package_loaded_write(&compound.var);
-            }
-        }
-        self.walk_stmt(stmt);
-    }
-
-    fn visit_expr(&mut self, expr: &'ast Expression) {
-        if self.function_depth == 0 && matches!(expr, Expression::VarArg(_)) {
-            self.has_vararg_read = true;
-        }
-        if let Expression::Name(name) = expr {
-            self.note_arg_read(name);
-        }
-        self.walk_expr(expr);
-    }
-
-    fn visit_assignment_target(&mut self, target: &'ast Var) {
-        if let Var::Name(name) = target {
-            self.note_arg_read(name);
-        }
-        self.walk_assignment_target(target);
-    }
-
-    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression) {
-        self.flag_global_table_require(chain);
-        self.walk_suffixed(chain);
-    }
-
-    fn visit_function_body(&mut self, body: &'ast FunctionBody) {
-        let is_vararg = body.vararg.is_some();
-        self.function_depth = self.function_depth.saturating_add(1);
-        self.vararg_function_depth =
-            self.vararg_function_depth.saturating_add(usize::from(is_vararg));
-        self.walk_function_body(body);
-        self.vararg_function_depth =
-            self.vararg_function_depth.saturating_sub(usize::from(is_vararg));
-        self.function_depth = self.function_depth.saturating_sub(1);
-    }
-
-    fn visit_call(&mut self, call: Call<'ast>) {
-        self.handle_call(call);
-        self.walk_call(call);
     }
 }
 
@@ -314,108 +448,115 @@ fn is_standard_library(name: &str, version: LuaVersion) -> bool {
 }
 
 /// Whether `suffix` reads the field `key`, as `.key` or `["key"]`.
-fn is_key(suffix: &Suffix, key: &str, version: LuaVersion) -> bool {
+fn is_key(suffix: &Suffix<'_>, key: &str, version: LuaVersion) -> bool {
     match suffix {
-        Suffix::Field(name) => name.identifier() == Some(key),
+        Suffix::Field(name) => name.text == key,
         Suffix::Index { index: Expression::StringLiteral(literal), .. } => {
-            decode_string(&literal.text, version).is_some_and(|value| *value == *key.as_bytes())
+            decode_string(literal.text, version).is_some_and(|value| *value == *key.as_bytes())
         }
-        Suffix::Index { .. } | Suffix::Call(_) | Suffix::TypeInstantiation { .. } => false,
+        Suffix::Index { .. }
+        | Suffix::Call(_)
+        | Suffix::MethodCall(_)
+        | Suffix::TypeInstantiation { .. } => false,
     }
 }
 
 /// When `chain` starts by reading the field `require` of the global table
-/// (`_G`, or `_ENV` on Lua 5.2+), that table's name and span, which decide
-/// whether the access reaches the host's global table.
-fn global_table_require(chain: &SuffixedExpression, version: LuaVersion) -> Option<(&str, Span)> {
-    if !is_key(chain.suffixes.first(), "require", version) {
-        return None;
-    }
-    let Expression::Name(token) = &chain.prefix else {
+/// (`_G`, or `_ENV` on Lua 5.2+), that table's name, which decides whether the
+/// access reaches the host's global table.
+fn global_table_require<'chain>(
+    chain: &'chain SuffixedExpression<'_>,
+    version: LuaVersion,
+) -> Option<&'chain Name<'chain>> {
+    let Expression::Name(table) = &chain.prefix else {
         return None;
     };
-    let table_name = token.identifier()?;
-    (table_name == "_G" || (table_name == "_ENV" && version.has_env_upvalue()))
-        .then_some((table_name, token.span))
+    ((table.text == "_G" || (table.text == "_ENV" && version.has_env_upvalue()))
+        && is_key(chain.suffixes.first(), "require", version))
+    .then_some(table)
 }
 
-/// The callee token span when `call` is a direct, non-method call of a
-/// variable named `require` (whatever that name resolves to).
-fn require_callee_span(call: Call<'_>) -> Option<Span> {
+/// The callee when `call` is a direct, non-method call of a variable named
+/// `require`, whatever that name resolves to.
+fn require_callee(call: Call<'_>) -> Option<&Name<'_>> {
     if call.method.is_some() {
         return None;
     }
-    let token = call.callee.as_name()?;
-    (token.identifier() == Some("require")).then_some(token.span)
+    call.callee.as_name().filter(|name| name.text == "require")
 }
 
-/// Escapes are resolved and a long string's leading newline is stripped.
-/// `None` if it doesn't decode or the result isn't UTF-8.
-fn literal_require_string(call: Call<'_>, version: LuaVersion) -> Option<String> {
-    let literal = match call.args {
-        FunctionArgs::Parenthesized { args, .. } => {
-            let [Expression::StringLiteral(literal)] = args.items.as_slice() else {
-                return None;
-            };
-            literal
-        }
-        FunctionArgs::StringLiteral(literal) => literal,
-        FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => return None,
-    };
-    String::from_utf8(decode_string(&literal.text, version)?.into_owned()).ok()
-}
-
-/// The span of the `package` name when an assignment target is, or indexes
-/// into, `package.loaded` or `package["loaded"]`.
-fn package_loaded_root(target: &Var, version: LuaVersion) -> Option<Span> {
+/// The `package` name when an assignment target is, or indexes into,
+/// `package.loaded` or `package["loaded"]`.
+fn package_loaded_root<'target>(
+    target: &'target Var<'_>,
+    version: LuaVersion,
+) -> Option<&'target Name<'target>> {
     let Var::Suffixed(chain) = target else {
         return None;
     };
-    let Expression::Name(token) = &chain.prefix else {
+    let Expression::Name(package) = &chain.prefix else {
         return None;
     };
-    (token.identifier() == Some("package") && is_key(chain.suffixes.first(), "loaded", version))
-        .then_some(token.span)
+    (package.text == "package" && is_key(chain.suffixes.first(), "loaded", version))
+        .then_some(package)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+    use std::fs;
+    use std::path::Path;
+
+    use luck_testgen::{
+        collect_fixture_files, generate_full, generate_runtime_safe, is_error_fixture,
+    };
+
     use super::*;
 
-    fn parse(source: &str, version: LuaVersion) -> Block {
-        let result = luck_parser::parse(source, version);
-        assert!(result.errors.is_empty(), "parse failed: {:?}", result.errors);
-        result.block
-    }
-
-    fn extract(source: &str) -> ExtractedRequires {
-        extract_with(source, DynamicRequire::default())
-    }
-
-    fn extract_with(source: &str, dynamic_require: DynamicRequire) -> ExtractedRequires {
+    fn extract_in<'ast>(
+        allocator: &'ast Allocator,
+        source: &'ast str,
+        version: LuaVersion,
+        dynamic_require: DynamicRequire,
+    ) -> ExtractedRequires<'ast> {
+        let parsed = luck_parser::parse(allocator, source, version);
+        assert!(parsed.errors.is_empty(), "parse failed: {:?}", parsed.errors);
         extract_requires(
-            &parse(source, LuaVersion::Lua54),
+            allocator,
+            &parsed.block,
+            parsed.counts,
+            source,
             "test.lua",
-            LuaVersion::Lua54,
+            version,
             dynamic_require,
         )
     }
 
-    fn extract_luau(source: &str) -> ExtractedRequires {
-        extract_requires(
-            &parse(source, LuaVersion::Luau),
-            "test.luau",
-            LuaVersion::Luau,
-            DynamicRequire::default(),
-        )
+    fn extract<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ExtractedRequires<'ast> {
+        extract_with(allocator, source, DynamicRequire::default())
     }
 
-    fn require_strings(result: &ExtractedRequires) -> Vec<&str> {
-        result.sites.iter().map(|site| site.require_string.as_str()).collect()
+    fn extract_with<'ast>(
+        allocator: &'ast Allocator,
+        source: &'ast str,
+        dynamic_require: DynamicRequire,
+    ) -> ExtractedRequires<'ast> {
+        extract_in(allocator, source, LuaVersion::Lua54, dynamic_require)
+    }
+
+    fn extract_luau<'ast>(
+        allocator: &'ast Allocator,
+        source: &'ast str,
+    ) -> ExtractedRequires<'ast> {
+        extract_in(allocator, source, LuaVersion::Luau, DynamicRequire::default())
+    }
+
+    fn require_strings<'ast>(result: &ExtractedRequires<'ast>) -> Vec<&'ast str> {
+        result.sites.iter().map(|site| site.require_string).collect()
     }
 
     fn with_code<'result>(
-        result: &'result ExtractedRequires,
+        result: &'result ExtractedRequires<'_>,
         code: &str,
     ) -> Vec<&'result Diagnostic> {
         result.diags.iter().filter(|diag| diag.code == code).collect()
@@ -423,7 +564,9 @@ mod tests {
 
     #[test]
     fn extracts_single_require() {
+        let allocator = Allocator::new();
         let result = extract(
+            &allocator,
             "\
 local utils = require(\"utils\")
 print(utils.foo())
@@ -435,7 +578,9 @@ print(utils.foo())
 
     #[test]
     fn extracts_multiple_requires_in_order() {
+        let allocator = Allocator::new();
         let result = extract(
+            &allocator,
             "\
 local a = require(\"mod_a\")
 local b = require(\"mod_b\")
@@ -449,8 +594,10 @@ print(a, b, c)
 
     #[test]
     fn require_after_code_is_not_flagged() {
+        let allocator = Allocator::new();
         // Requires are position-independent with the lazy loader.
         let result = extract(
+            &allocator,
             "\
 print(\"hello\")
 local x = require(\"x\")
@@ -462,7 +609,9 @@ local x = require(\"x\")
 
     #[test]
     fn non_literal_require_flags_e002_in_error_mode() {
-        let result = extract_with("local x = require(varname)\n", DynamicRequire::Error);
+        let allocator = Allocator::new();
+        let result =
+            extract_with(&allocator, "local x = require(varname)\n", DynamicRequire::Error);
         assert!(result.sites.is_empty());
         assert_eq!(result.dynamic_callees, Vec::<Span>::new());
         assert_eq!(with_code(&result, "E002").len(), 1, "{:?}", result.diags);
@@ -471,7 +620,8 @@ local x = require(\"x\")
     /// The default: one runtime-resolved require must not abort the bundle.
     #[test]
     fn non_literal_require_warns_and_is_kept_by_default() {
-        let result = extract("local x = require(varname)\n");
+        let allocator = Allocator::new();
+        let result = extract(&allocator, "local x = require(varname)\n");
         assert!(result.sites.is_empty());
         assert!(with_code(&result, "E002").is_empty(), "{:?}", result.diags);
         assert_eq!(with_code(&result, "W007").len(), 1, "{:?}", result.diags);
@@ -481,7 +631,9 @@ local x = require(\"x\")
 
     #[test]
     fn allow_mode_keeps_the_call_without_warning() {
-        let result = extract_with("local x = require(varname)\n", DynamicRequire::Allow);
+        let allocator = Allocator::new();
+        let result =
+            extract_with(&allocator, "local x = require(varname)\n", DynamicRequire::Allow);
         assert!(result.diags.is_empty(), "{:?}", result.diags);
         assert_eq!(result.dynamic_callees, [Span::new(10, 17)]);
     }
@@ -491,7 +643,8 @@ local x = require(\"x\")
     /// but is never retargeted.
     #[test]
     fn luau_dynamic_require_is_warned_but_not_retargeted() {
-        let result = extract_luau("local x = require(varname)\n");
+        let allocator = Allocator::new();
+        let result = extract_luau(&allocator, "local x = require(varname)\n");
         assert_eq!(with_code(&result, "W007").len(), 1, "{:?}", result.diags);
         assert_eq!(result.dynamic_callees, Vec::<Span>::new());
     }
@@ -500,23 +653,27 @@ local x = require(\"x\")
     /// retargeted span is the outer callee only.
     #[test]
     fn static_require_nested_in_a_dynamic_one_is_still_extracted() {
-        let result = extract("local x = require(require(\"names\").first)\n");
+        let allocator = Allocator::new();
+        let result = extract(&allocator, "local x = require(require(\"names\").first)\n");
         assert_eq!(require_strings(&result), ["names"]);
         assert_eq!(result.dynamic_callees, [Span::new(10, 17)]);
     }
 
     #[test]
     fn bare_require_stmt_is_extracted() {
-        let result = extract("require(\"something\")\n");
+        let allocator = Allocator::new();
+        let result = extract(&allocator, "require(\"something\")\n");
         assert_eq!(require_strings(&result), ["something"]);
         assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
 
     #[test]
     fn escape_sequences_decode_like_real_lua() {
+        let allocator = Allocator::new();
         // require("a\46b") is require("a.b") at runtime; the bundler must
         // resolve and deduplicate on the decoded value.
         let result = extract(
+            &allocator,
             "\
 local a = require(\"a\\46b\")
 local b = require(\"a.b\")
@@ -529,17 +686,19 @@ local b = require(\"a.b\")
 
     #[test]
     fn long_string_leading_newline_is_stripped() {
-        let result = extract("local m = require [[\nmymod]]\n");
+        let allocator = Allocator::new();
+        let result = extract(&allocator, "local m = require [[\nmymod]]\n");
         assert_eq!(require_strings(&result), ["mymod"]);
     }
 
     #[test]
     fn shadowed_require_is_skipped_with_w005() {
+        let allocator = Allocator::new();
         let source = "\
 local require = function(s) return s end
 local x = require(\"dep\")
 ";
-        let result = extract(source);
+        let result = extract(&allocator, source);
         assert!(
             result.sites.is_empty(),
             "shadowed require must not be bundled: {:?}",
@@ -551,6 +710,7 @@ local x = require(\"dep\")
 
     #[test]
     fn shadowed_require_in_inner_scope_only_skips_there() {
+        let allocator = Allocator::new();
         let source = "\
 local a = require(\"real\")
 local function f()
@@ -558,14 +718,16 @@ local function f()
     require(\"fake\")
 end
 ";
-        let result = extract(source);
+        let result = extract(&allocator, source);
         assert_eq!(require_strings(&result), ["real"]);
         assert_eq!(with_code(&result, "W005").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn aliased_require_flags_w005() {
+        let allocator = Allocator::new();
         let result = extract(
+            &allocator,
             "\
 local r = require
 local x = r(\"dep\")
@@ -577,7 +739,9 @@ local x = r(\"dep\")
 
     #[test]
     fn direct_calls_do_not_flag_w005() {
+        let allocator = Allocator::new();
         let result = extract(
+            &allocator,
             "\
 local a = require(\"x\")
 require(\"y\")
@@ -589,9 +753,11 @@ require(\"y\")
 
     #[test]
     fn package_loaded_write_is_allowed_on_lua_targets() {
+        let allocator = Allocator::new();
         // On Lua targets the bundle cache is package.loaded itself, so
         // writes to it behave as in real Lua and need no E006.
         let result = extract(
+            &allocator,
             "\
 package.loaded[\"mymod\"] = {}
 package.loaded.other = {}
@@ -602,37 +768,44 @@ package.loaded.other = {}
 
     #[test]
     fn package_loaded_index_write_flags_e006_on_luau() {
-        let result = extract_luau("package.loaded[\"mymod\"] = {}\n");
+        let allocator = Allocator::new();
+        let result = extract_luau(&allocator, "package.loaded[\"mymod\"] = {}\n");
         assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn package_loaded_field_write_flags_e006_on_luau() {
-        let result = extract_luau("package.loaded.mymod = {}\n");
+        let allocator = Allocator::new();
+        let result = extract_luau(&allocator, "package.loaded.mymod = {}\n");
         assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn package_loaded_compound_assignment_flags_e006_on_luau() {
-        let result = extract_luau("package.loaded.x ..= \"a\"\n");
+        let allocator = Allocator::new();
+        let result = extract_luau(&allocator, "package.loaded.x ..= \"a\"\n");
         assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn nested_package_loaded_compound_assignment_flags_e006_on_luau() {
-        let result = extract_luau("package.loaded[\"x\"].y += 1\n");
+        let allocator = Allocator::new();
+        let result = extract_luau(&allocator, "package.loaded[\"x\"].y += 1\n");
         assert_eq!(with_code(&result, "E006").len(), 1, "{:?}", result.diags);
     }
 
     #[test]
     fn compound_assignment_to_another_table_is_not_flagged_on_luau() {
-        let result = extract_luau("loaded.x ..= \"a\"\n");
+        let allocator = Allocator::new();
+        let result = extract_luau(&allocator, "loaded.x ..= \"a\"\n");
         assert!(with_code(&result, "E006").is_empty(), "{:?}", result.diags);
     }
 
     #[test]
     fn local_named_package_is_not_flagged_on_luau() {
+        let allocator = Allocator::new();
         let result = extract_luau(
+            &allocator,
             "\
 local package = { loaded = {} }
 package.loaded.x = 1
@@ -644,7 +817,9 @@ package.loaded.y ..= \"a\"
 
     #[test]
     fn package_write_outside_a_local_named_package_is_flagged_on_luau() {
+        let allocator = Allocator::new();
         let result = extract_luau(
+            &allocator,
             "\
 do local package = {} end
 package.loaded.x = 1
@@ -655,7 +830,9 @@ package.loaded.x = 1
 
     #[test]
     fn duplicate_require_flags_w001() {
+        let allocator = Allocator::new();
         let result = extract(
+            &allocator,
             "\
 local a = require(\"utils\")
 local b = require(\"utils\")
@@ -667,9 +844,11 @@ local b = require(\"utils\")
 
     #[test]
     fn top_level_vararg_is_not_flagged() {
+        let allocator = Allocator::new();
         // The loader passes each module its real name, so the
         // `local modname = ...` idiom works and needs no warning.
         let result = extract(
+            &allocator,
             "\
 local modname = ...
 return modname
@@ -680,14 +859,9 @@ return modname
 
     #[test]
     fn lua51_global_arg_read_ignores_a_vararg_functions_own_arg() {
-        let extract_arg_read = |source: &str| {
-            extract_requires(
-                &luck_parser::parse(source, LuaVersion::Lua51).block,
-                "test.lua",
-                LuaVersion::Lua51,
-                DynamicRequire::default(),
-            )
-            .has_global_arg_read
+        let extract_arg_read = |source: &'static str| {
+            extract_in(&Allocator::new(), source, LuaVersion::Lua51, DynamicRequire::default())
+                .has_global_arg_read
         };
         assert!(extract_arg_read("return arg\n"));
         assert!(extract_arg_read(
@@ -718,38 +892,45 @@ return arg
 
     #[test]
     fn no_requires_yields_empty_result() {
-        let result = extract("print(\"hello world\")\n");
+        let allocator = Allocator::new();
+        let result = extract(&allocator, "print(\"hello world\")\n");
         assert!(result.sites.is_empty());
         assert!(result.diags.is_empty(), "{:?}", result.diags);
     }
 
     #[test]
     fn require_string_call_syntax_is_extracted() {
-        let result = extract("local m = require \"mymod\"\n");
+        let allocator = Allocator::new();
+        let result = extract(&allocator, "local m = require \"mymod\"\n");
         assert_eq!(require_strings(&result), ["mymod"]);
     }
 
     #[test]
     fn single_quoted_require_is_extracted() {
-        let result = extract("local m = require('mymod')\n");
+        let allocator = Allocator::new();
+        let result = extract(&allocator, "local m = require('mymod')\n");
         assert_eq!(require_strings(&result), ["mymod"]);
     }
 
     #[test]
     fn long_bracket_require_is_extracted() {
-        let result = extract("local m = require [[mymod]]\n");
+        let allocator = Allocator::new();
+        let result = extract(&allocator, "local m = require [[mymod]]\n");
         assert_eq!(require_strings(&result), ["mymod"]);
     }
 
     #[test]
     fn require_in_multi_name_local_is_extracted() {
-        let result = extract("local a, b = require(\"x\"), 1\n");
+        let allocator = Allocator::new();
+        let result = extract(&allocator, "local a, b = require(\"x\"), 1\n");
         assert_eq!(require_strings(&result), ["x"]);
     }
 
     #[test]
     fn require_in_nested_function_is_extracted() {
+        let allocator = Allocator::new();
         let result = extract(
+            &allocator,
             "\
 local function setup()
     local m = require(\"inner\")
@@ -761,7 +942,9 @@ end
 
     #[test]
     fn field_function_named_require_is_ignored() {
+        let allocator = Allocator::new();
         let result = extract(
+            &allocator,
             "\
 local obj = {}
 function obj.require(s) end
@@ -770,5 +953,124 @@ obj.require(\"x\")
         );
         assert!(result.sites.is_empty());
         assert!(with_code(&result, "W005").is_empty(), "{:?}", result.diags);
+    }
+
+    /// Extraction from a tree of every name, for `source` when it parses as
+    /// `version`.
+    fn extract_from_every_name<'ast>(
+        allocator: &'ast Allocator,
+        source: &'ast str,
+        version: LuaVersion,
+    ) -> Option<ExtractedRequires<'ast>> {
+        let parsed = luck_parser::parse(allocator, source, version);
+        if !parsed.errors.is_empty() {
+            return None;
+        }
+        let block = allocator.alloc(parsed.block);
+        let mut uses = Uses::new(version);
+        let tree = ScopeTree::build_with(block, parsed.counts, version, &mut uses);
+        let finder =
+            RequireFinder::new(allocator, source, "test.lua", version, DynamicRequire::Warn, &tree);
+        Some(finder.read(block, uses))
+    }
+
+    fn assert_asked_names_answer_alone(source: &str, version: LuaVersion) {
+        let allocator = Allocator::new();
+        let Some(every_name) = extract_from_every_name(&allocator, source, version) else {
+            return;
+        };
+        let asked_names = extract_in(&allocator, source, version, DynamicRequire::Warn);
+        assert_eq!(format!("{asked_names:?}"), format!("{every_name:?}"), "{version:?}\n{source}");
+    }
+
+    #[test]
+    fn asked_names_answer_as_every_name_does() {
+        let sources = [
+            "\
+local r = require
+require(\"a\")
+_G.require(\"b\")
+_ENV.require(\"c\")
+_G[\"require\"](\"d\")
+package.loaded.x = 1
+package.loaded[\"y\"] = require
+do
+    local require = print
+    require(\"e\")
+end
+local _ENV = { require = print }
+require(\"f\")
+module(\"m\")
+return function(...) return ..., arg, r end
+",
+            "\
+require(\"a\")
+require = nil
+",
+            "\
+_ENV = {}
+require(\"a\")
+",
+            "\
+module(\"m\", package.seeall)
+return require(\"a\")
+",
+            "\
+local _G = {}
+_G.require(\"a\")
+local package = {}
+package.loaded.x = 1
+local function module() end
+module()
+",
+            "\
+global require
+global function module() end
+require(\"a\")
+do
+    global *
+    local _G <const> = {}
+    _G.require(\"b\")
+end
+",
+            "\
+type require = number
+type function f(t)
+    return require(types)
+end
+require(\"./a\")
+package.loaded.x ..= \"y\"
+export type T = number
+",
+            "\
+export local a = require(\"./a\")
+export function f() a = 1 end
+local a = 2
+",
+        ];
+        for source in sources {
+            for version in LuaVersion::ALL {
+                assert_asked_names_answer_alone(source, version);
+            }
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+        for path in collect_fixture_files(&root).expect("the fixture tree reads") {
+            let relative = path.strip_prefix(&root).expect("a fixture is under the root");
+            let is_source =
+                matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau"));
+            if !is_source || is_error_fixture(relative) {
+                continue;
+            }
+            let source = fs::read_to_string(&path).expect("a fixture reads");
+            for version in LuaVersion::ALL {
+                assert_asked_names_answer_alone(&source, version);
+            }
+        }
+        for version in LuaVersion::ALL {
+            for seed in 0..40 {
+                assert_asked_names_answer_alone(&generate_full(seed, version, 40), version);
+                assert_asked_names_answer_alone(&generate_runtime_safe(seed, version, 40), version);
+            }
+        }
     }
 }

@@ -1,4 +1,4 @@
-# One job per pipeline stage, each built with the codspeed feature and run under CodSpeed. Modeled on oxc's benchmark workflow.
+# One bench job per pipeline stage, each built with the codspeed feature and run under CodSpeed, plus the minsize and allocation snapshot checks. Modeled on oxc's benchmark workflow.
 
 name: Benchmark
 
@@ -8,7 +8,10 @@ on:
     types: [opened, synchronize]
     paths: &paths
       - "crates/**/*.rs"
+      - "crates/**/Cargo.toml"
       - "crates/luck_benchmark/**"
+      - "crates/luck_benchmark_files/**"
+      - "crates/luck_allocs/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -60,11 +63,11 @@ jobs:
         with:
           tool: cargo-codspeed@6.0.0
 
-      # The corpus pins live in corpus.rs and the cache layout in corpus_cache.rs, so keying on both refetches only when one changes.
+      # The pins live in benchmark_files.rs and the cache layout in download.rs, so keying on both refetches only when one changes.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: crates/luck_benchmark/corpus
-          key: bench-corpus-${{ hashFiles('crates/luck_benchmark/src/corpus.rs', 'crates/luck_benchmark/src/corpus_cache.rs') }}
+          path: crates/luck_benchmark_files/cache
+          key: benchmark-files-${{ hashFiles('crates/luck_benchmark_files/src/benchmark_files.rs', 'crates/luck_benchmark_files/src/download.rs') }}
 
       - name: Build the benchmark
         run: cargo codspeed build -p luck_benchmark --bench "$COMPONENT" --features codspeed
@@ -95,8 +98,36 @@ jobs:
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: crates/luck_benchmark/corpus
-          key: bench-corpus-${{ hashFiles('crates/luck_benchmark/src/corpus.rs', 'crates/luck_benchmark/src/corpus_cache.rs') }}
+          path: crates/luck_benchmark_files/cache
+          key: benchmark-files-${{ hashFiles('crates/luck_benchmark_files/src/benchmark_files.rs', 'crates/luck_benchmark_files/src/download.rs') }}
 
       - name: Check that minsize.snap is current
         run: cargo test -p luck_benchmark --test it minsize_is_up_to_date -- --ignored
+
+  allocs:
+    name: Allocation snapshots
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: allocs
+          save-if: ${{ github.ref_name == 'main' }}
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/luck_benchmark_files/cache
+          key: benchmark-files-${{ hashFiles('crates/luck_benchmark_files/src/benchmark_files.rs', 'crates/luck_benchmark_files/src/download.rs') }}
+
+      - name: Check that the allocation snapshots are current
+        run: |
+          cargo run -p luck_allocs --profile allocs
+          git diff --exit-code crates/luck_allocs ||
+            (echo 'The allocation snapshots are stale. Run `just allocs` and commit what it writes, or fix the regression.' && exit 1)

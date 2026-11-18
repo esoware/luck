@@ -9,6 +9,20 @@ fn empty_table() {
 }
 
 #[test]
+fn a_lone_cr_in_a_long_string_expands_its_table_as_an_lf_does() {
+    for line_break in ["\n", "\r"] {
+        let expected = format!(
+            "\
+local t = {{
+\t[[a{line_break}b]], 1,
+}}
+"
+        );
+        assert_format(&format!("local t = {{ [[a{line_break}b]], 1 }}\n"), &expected);
+    }
+}
+
+#[test]
 fn flat_table_named() {
     assert_format("local t={a=1,b=2}\n", "local t = { a = 1, b = 2 }\n");
 }

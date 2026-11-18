@@ -1,11 +1,12 @@
-use luck_ast::{Call, Expression, FunctionArgs, LastStatement, Suffix, SuffixedExpression};
+use luck_allocator::Allocator;
+use luck_ast::{Call, Expression, LastStatement, Suffix, SuffixedExpression};
 use luck_semantic::{
     ResolvedCallee, SemanticAnalysis, StdlibDeprecation, StdlibEntry, StdlibFunction,
     expand_replace_template,
 };
 use luck_token::{index_to_offset, is_lua_whitespace, offset_to_index};
 
-use crate::call::{positional_args, string_literal_value};
+use crate::call::{CallArgs, string_literal_value};
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit, comments_within};
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -35,7 +36,7 @@ impl NodeRule for Deprecated {
     }
     fn on_chain(
         &self,
-        chain: &SuffixedExpression,
+        chain: &SuffixedExpression<'_>,
         position: ChainPosition,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
@@ -76,8 +77,9 @@ fn deprecated_params(
     callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
 ) -> impl Iterator<Item = Finding> {
-    let (args, arg_count) = positional_args(call.args);
-    args.iter().enumerate().filter_map(move |(index, expr)| {
+    let args = CallArgs::new(call.args);
+    let arg_count = args.len();
+    args.enumerate().filter_map(move |(index, arg)| {
         let mut deprecations = function
             .matching_signatures(arg_count)
             .map(|signature| signature.params.get(index)?.deprecated.as_ref());
@@ -87,7 +89,7 @@ fn deprecated_params(
             let arg_number = index.saturating_add(1);
             Finding::new(
                 format!("argument {arg_number} of `{}` is deprecated", callee.name()),
-                expr.span(),
+                arg.span(),
             )
             .with_help(deprecation.message)
         })
@@ -105,14 +107,14 @@ fn deprecated_constants(
     callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
 ) -> impl Iterator<Item = Finding> {
-    let (args, arg_count) = positional_args(call.args);
-    args.iter().enumerate().filter_map(move |(index, expr)| {
-        let (value, span) = string_literal_value(expr)?;
+    let args = CallArgs::new(call.args);
+    let arg_count = args.len();
+    args.enumerate().filter_map(move |(index, arg)| {
+        let (value, span) = string_literal_value(arg)?;
         // Each signature's first constant spelled `value` counts, and the
         // first of those that's deprecated decides.
         let deprecation = function
             .allowed_constants(index, arg_count)?
-            .iter()
             .filter_map(|values| values.iter().find(|constant| constant.value == value))
             .find_map(|constant| constant.deprecated.as_ref())?;
         Some(
@@ -140,15 +142,17 @@ fn replacement_fix(
     let StdlibEntry::Function(function) = entry else {
         return None;
     };
+    let args = CallArgs::new(call.args);
     // A template spells the positional arguments, which a method's receiver
     // isn't among, and the argument text can't carry a comment between them.
     if call.method.is_some()
-        || !function.accepts_arg_count(positional_args(call.args).1)
+        || !function.accepts_arg_count(args.len())
         || !comments_within(context.comments, call.span()).is_empty()
     {
         return None;
     }
-    let expanded = expand_replace_template(template, &arg_texts(call.args, context.source));
+    let arg_texts: Vec<&str> = args.map(|arg| arg.span().text(context.source)).collect();
+    let expanded = expand_replace_template(template, &arg_texts);
     if starts_with_rebound_name(&expanded, call.span().start, context.semantic) {
         return None;
     }
@@ -161,13 +165,14 @@ fn replacement_fix(
 
 /// Whether the name `expanded` starts with may not be the host's global at
 /// `offset`, because a local before it or a write in the chunk rebinds it.
-fn starts_with_rebound_name(expanded: &str, offset: u32, semantic: &SemanticAnalysis) -> bool {
+fn starts_with_rebound_name(expanded: &str, offset: u32, semantic: &SemanticAnalysis<'_>) -> bool {
     let name_length =
         expanded.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(expanded.len());
     let name = expanded.get(..name_length).unwrap_or_default();
+    let tree = semantic.scope_tree();
     !name.is_empty()
         && (semantic.nearest_local(name, offset).is_some()
-            || semantic.scope_tree.assigned_globals.contains(name))
+            || tree.name_id(name).is_some_and(|id| tree.is_assigned_global(id)))
 }
 
 /// `expanded` as it must read where the call stood, or `None` if it doesn't
@@ -179,17 +184,20 @@ fn fit_to_position(
     position: CallPosition,
     context: &LintContext<'_>,
 ) -> Option<String> {
-    let version = context.semantic.version;
+    let version = context.semantic.version();
+    let allocator = Allocator::new();
     if position == CallPosition::Statement {
-        let parse = luck_parser::parse(format!("do {expanded} end"), version);
+        let statement = format!("do {expanded} end");
+        let parse = luck_parser::parse(&allocator, &statement, version);
         return parse.errors.is_empty().then_some(expanded);
     }
-    let parse = luck_parser::parse(format!("return {expanded}"), version);
+    let return_stmt = format!("return {expanded}");
+    let parse = luck_parser::parse(&allocator, &return_stmt, version);
     if !parse.errors.is_empty() {
         return None;
     }
     let is_unary = matches!(
-        parse.block.last_stmt.as_deref(),
+        parse.block.last_stmt.as_ref(),
         Some(LastStatement::Return(returned))
             if matches!(returned.exprs.first(), Some(Expression::UnaryOp(_)))
     );
@@ -231,17 +239,6 @@ fn is_followed_by_tighter_binding(offset: u32, context: &LintContext<'_>) -> boo
     }
 }
 
-fn arg_texts<'source>(function_args: &FunctionArgs, source: &'source str) -> Vec<&'source str> {
-    match function_args {
-        FunctionArgs::Parenthesized { args, .. } => {
-            args.iter().map(|expr| expr.span().text(source)).collect()
-        }
-        FunctionArgs::StringLiteral(literal) => vec![literal.span.text(source)],
-        FunctionArgs::TableConstructor(table) => vec![table.span.text(source)],
-        FunctionArgs::Error(_) => Vec::new(),
-    }
-}
-
 /// Flags each dotted read in the field run `chain` starts with that resolves
 /// to a deprecated constant, property, or namespace.
 ///
@@ -249,9 +246,9 @@ fn arg_texts<'source>(function_args: &FunctionArgs, source: &'source str) -> Vec
 /// own entry, so a chain whose prefix is deprecated warns once. Functions are
 /// skipped because `check_call` reports them at the call.
 fn check_field_accesses(
-    chain: &SuffixedExpression,
+    chain: &SuffixedExpression<'_>,
     position: ChainPosition,
-    semantic: &SemanticAnalysis,
+    semantic: &SemanticAnalysis<'_>,
     findings: &mut Vec<Finding>,
 ) {
     // A target's last field is stored to, not read.
@@ -263,11 +260,9 @@ fn check_field_accesses(
     let (Expression::Name(root), Some(Suffix::Field(_))) = (&chain.prefix, reads.first()) else {
         return;
     };
-    let Some(root_name) = root.identifier() else {
-        return;
-    };
+    let root_name = root.text;
     let stdlib = semantic.stdlib();
-    let Some(mut entry) = stdlib.globals.get(root_name) else {
+    let Some(mut entry) = stdlib.globals.get(root_name.as_str()) else {
         return;
     };
     for (read_index, suffix) in (1usize..).zip(reads) {
@@ -275,8 +270,7 @@ fn check_field_accesses(
             return;
         };
         // Nothing past an unknown path resolves either.
-        let Some(member) = name.identifier().and_then(|segment| stdlib.child(entry, segment))
-        else {
+        let Some(member) = stdlib.child(entry, name.text.as_str()) else {
             return;
         };
         entry = member;
@@ -284,9 +278,9 @@ fn check_field_accesses(
             continue;
         }
         if let Some(deprecation) = entry.deprecation()
-            && !semantic.resolves_to_local(root_name, root.span)
+            && !semantic.scope_tree().resolves_to_local(root)
         {
-            let path = chain.head(read_index).dotted_path().map(|path| path.segments.join("."));
+            let path = chain.head(read_index).dotted_path().map(|path| path.to_string());
             findings.push(
                 Finding::new(format!("`{}` is deprecated", path.unwrap_or_default()), name.span)
                     .with_help(deprecation.message),
@@ -390,6 +384,17 @@ mod tests {
     }
 
     #[test]
+    fn flags_dead_service_name_without_parentheses() {
+        let diags = run_rule_roblox(&Deprecated, "local p = game:GetService'PointsService'");
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.message.contains("`PointsService` is a deprecated argument")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
     fn ignores_live_service_name() {
         let diags = run_rule_roblox(&Deprecated, "local p = game:GetService('Players')");
         assert!(diags.is_empty(), "{diags:?}");
@@ -432,6 +437,15 @@ local a = Enum.AlignType.Parallel",
     fn flags_deprecated_collectgarbage_option() {
         // Per-constant deprecation from the 5.4 GC rework.
         let diags = run_rule(&Deprecated, "collectgarbage('setpause', 100)", LuaVersion::Lua54);
+        assert!(
+            diags.iter().any(|diag| diag.message.contains("`setpause` is a deprecated argument")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_deprecated_collectgarbage_option_without_parentheses() {
+        let diags = run_rule(&Deprecated, "collectgarbage'setpause'", LuaVersion::Lua54);
         assert!(
             diags.iter().any(|diag| diag.message.contains("`setpause` is a deprecated argument")),
             "{diags:?}"

@@ -1,13 +1,15 @@
 use core::fmt::Write as _;
 use core::ops::Range;
 
+use luck_allocator::Allocator;
 use luck_parser::ParseError;
 use luck_token::LuaVersion;
 
 /// Parse errors, or validation errors after a clean parse, as `luck check`
 /// reports them.
 fn check(source: &str, version: LuaVersion) -> Vec<ParseError> {
-    let result = luck_parser::parse(source, version);
+    let allocator = Allocator::new();
+    let result = luck_parser::parse(&allocator, source, version);
     if result.errors.is_empty() {
         luck_parser::validate(&result.block, version)
     } else {

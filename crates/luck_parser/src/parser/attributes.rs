@@ -4,20 +4,36 @@
 //! Both are validated as they're parsed, since Lua and Luau reject unknown attributes as syntax
 //! errors.
 
-use luck_ast::{Attribute, Expression, Field, FunctionAttribute, Punctuated};
-use luck_token::{Span, Token, TokenKind};
+use luck_allocator::List;
+use luck_ast::{Attribute, Expression, Field, FunctionAttribute, Name};
+use luck_token::{Span, TokenKind};
 
 use super::{Closer, Parser};
 
 /// Whether `expr` is a constant string, which a backtick string with no holes
 /// also is in Luau.
-fn is_constant_string(expr: &Expression) -> bool {
-    matches!(expr, Expression::StringLiteral(_))
-        || matches!(
-            expr,
-            Expression::InterpolatedString(interpolated)
-                if interpolated.segments.iter().all(|segment| segment.expr.is_none())
-        )
+fn is_constant_string(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::StringLiteral(_) => true,
+        // Luau
+        Expression::InterpolatedString(interpolated) => interpolated.segments.is_empty(),
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
+        | Expression::Parenthesized(_)
+        | Expression::TableConstructor(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::TypeCast(_)
+        | Expression::Error(_) => false,
+    }
 }
 
 /// Whether `expr` fits the grammar's `literal` production for attribute
@@ -25,7 +41,7 @@ fn is_constant_string(expr: &Expression) -> bool {
 /// plain-name or positional fields.
 ///
 /// An error passes, since it has been reported already.
-fn is_attribute_literal(expr: &Expression) -> bool {
+fn is_attribute_literal(expr: &Expression<'_>) -> bool {
     match expr {
         Expression::Nil(_)
         | Expression::True(_)
@@ -37,9 +53,7 @@ fn is_attribute_literal(expr: &Expression) -> bool {
         // Luau
         Expression::InterpolatedString(_) => is_constant_string(expr),
         Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
-            Field::Named { value, .. } | Field::Positional { value, .. } => {
-                is_attribute_literal(value)
-            }
+            Field::Named { value, .. } | Field::Positional(value) => is_attribute_literal(value),
             Field::Bracketed { .. } => false,
         }),
         Expression::VarArg(_)
@@ -54,98 +68,92 @@ fn is_attribute_literal(expr: &Expression) -> bool {
     }
 }
 
-impl Parser<'_> {
-    pub(super) fn try_parse_attribute(&mut self) -> Option<Attribute> {
-        (self.version.has_attributes() && matches!(self.peek(), TokenKind::Less))
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "the parser is one type with its grammar split by file"
+)]
+impl<'ast> Parser<'ast> {
+    pub(super) fn try_parse_attribute(&mut self) -> Option<Attribute<'ast>> {
+        (self.is_at(TokenKind::Less) && self.version.has_attributes())
             .then(|| self.parse_attribute())
     }
 
     /// Parse a `< Name >` attribute; `<` must be the current token.
-    pub(super) fn parse_attribute(&mut self) -> Attribute {
-        let open = self.advance_span(); // `<`
+    pub(super) fn parse_attribute(&mut self) -> Attribute<'ast> {
+        let open = self.advance(); // `<`
         let name = self.expect_identifier_recover();
         // 5.4 manual section 3.3.7: "There are two possible attributes"; Lua
         // rejects any other name at parse time.
-        if let TokenKind::Identifier(attribute_name) = &name.kind
-            && !attribute_name.is_empty()
-            && attribute_name != "const"
-            && attribute_name != "close"
-        {
-            self.error(name.span, format!("unknown attribute `{attribute_name}`"));
+        if !matches!(name.text.as_str(), "" | "const" | "close") {
+            self.error(name.span, format!("unknown attribute `{}`", name.text));
         }
-        let close = self.expect(&TokenKind::Greater);
-        let span = open.merge(close);
-        Attribute { span, name }
+        let close = self.expect(TokenKind::Greater);
+        Attribute { span: open.merge(close), name }
     }
 
     /// Grammar: `attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'`
     /// with `parattr ::= NAME [pars]` and literal-only arguments. The AST
     /// keeps them because `@native` and friends change how Luau compiles the
     /// function.
-    pub(super) fn parse_function_attributes(&mut self) -> Vec<FunctionAttribute> {
-        let mut attributes = Vec::new();
-        while matches!(self.peek(), TokenKind::At) {
-            let at_span = self.advance_span();
+    pub(super) fn parse_function_attributes(&mut self) -> List<'ast, FunctionAttribute<'ast>> {
+        let start = self.scratch.attributes.len();
+        while self.is_at(TokenKind::At) {
+            let at_span = self.advance();
             // Luau lexes `@name` and `@[` as single tokens.
-            if self.current_span().start != at_span.end {
+            if self.token.span.start != at_span.end {
                 self.error(at_span, "attribute name must directly follow `@`");
             }
-            if self.eat(&TokenKind::LeftBracket) {
+            if self.eat(TokenKind::LeftBracket) {
                 self.open(Closer::Bracket);
                 loop {
                     let name = self.expect_identifier_recover();
                     let args = self.parse_attribute_args();
-                    self.validate_function_attribute(&name, args.as_ref(), &attributes);
+                    self.validate_function_attribute(name, args.as_deref(), start);
                     let end_span = args
                         .as_ref()
-                        .and_then(Punctuated::last)
+                        .and_then(|list| list.last())
                         .map_or(name.span, Expression::span);
-                    attributes.push(FunctionAttribute {
-                        span: at_span.merge(end_span),
-                        name,
-                        args,
-                    });
-                    if !self.eat(&TokenKind::Comma) {
+                    let attribute = FunctionAttribute { span: at_span.merge(end_span), name, args };
+                    self.scratch.attributes.push(attribute);
+                    if !self.eat(TokenKind::Comma) {
                         break;
                     }
                 }
-                self.expect_closer(&TokenKind::RightBracket, Closer::Bracket);
+                self.expect_closer(TokenKind::RightBracket, Closer::Bracket);
             } else {
                 let name = self.expect_identifier_recover();
-                self.validate_function_attribute(&name, None, &attributes);
-                attributes.push(FunctionAttribute {
-                    span: at_span.merge(name.span),
-                    name,
-                    args: None,
-                });
+                self.validate_function_attribute(name, None, start);
+                let attribute =
+                    FunctionAttribute { span: at_span.merge(name.span), name, args: None };
+                self.scratch.attributes.push(attribute);
             }
         }
-        attributes
+        List::split_off_in(&mut self.scratch.attributes, start, self.allocator)
     }
 
     /// Grammar: `pars ::= '(' [litlist] ')' | littable | STRING`. A string or
     /// table argument becomes a one-element argument list, so every form
     /// nests its arguments one level, as the list it prints back as does.
     #[expect(clippy::wildcard_enum_match_arm, reason = "the guard leaves only a string")]
-    fn parse_attribute_args(&mut self) -> Option<Punctuated<Expression>> {
+    fn parse_attribute_args(&mut self) -> Option<List<'ast, Expression<'ast>>> {
         if !matches!(
             self.peek(),
-            TokenKind::LeftParen | TokenKind::StringLiteral(_) | TokenKind::LeftBrace
+            TokenKind::LeftParen | TokenKind::StringLiteral | TokenKind::LeftBrace
         ) || !self.enter_depth()
         {
             return None;
         }
         let args = match self.peek() {
             TokenKind::LeftParen => {
-                self.advance_span();
+                self.advance();
                 self.open(Closer::Paren);
-                let args = if matches!(self.peek(), TokenKind::RightParen) {
-                    Punctuated::empty()
+                let args = if self.is_at(TokenKind::RightParen) {
+                    List::new()
                 } else {
                     self.parse_expr_list()
                 };
-                self.expect_closer(&TokenKind::RightParen, Closer::Paren);
-                for expr in args.iter() {
+                self.expect_closer(TokenKind::RightParen, Closer::Paren);
+                for expr in &args {
                     if !is_attribute_literal(expr) {
                         self.error(expr.span(), "attribute arguments must be literals");
                     }
@@ -153,17 +161,19 @@ impl Parser<'_> {
                 args
             }
             TokenKind::LeftBrace => {
-                let open = self.current_span();
-                let expr =
-                    self.parse_table_constructor().map_or(Expression::Error(open), |table| {
-                        Expression::TableConstructor(Box::new(table))
-                    });
+                let open = self.token.span;
+                let expr = self
+                    .parse_table_constructor()
+                    .map_or(Expression::Error(open), Expression::TableConstructor);
                 if !is_attribute_literal(&expr) {
                     self.error(expr.span(), "attribute arguments must be literals");
                 }
-                Punctuated::from_item(expr)
+                List::from_array_in([expr], self.allocator)
             }
-            _ => Punctuated::from_item(Expression::StringLiteral(self.advance_literal())),
+            _ => {
+                let literal = self.advance_literal();
+                List::from_array_in([Expression::StringLiteral(literal)], self.allocator)
+            }
         };
         self.exit_depth();
         Some(args)
@@ -171,35 +181,35 @@ impl Parser<'_> {
 
     /// Luau validates attributes at parse time: only `checked`, `native`, and
     /// `deprecated` exist, duplicates are errors, and only `deprecated` takes
-    /// arguments.
+    /// arguments. The list's attributes so far are the scratch's from
+    /// `list_start`.
     fn validate_function_attribute(
         &mut self,
-        name: &Token,
-        args: Option<&Punctuated<Expression>>,
-        previous_attributes: &[FunctionAttribute],
+        name: Name<'ast>,
+        args: Option<&[Expression<'ast>]>,
+        list_start: usize,
     ) {
-        let TokenKind::Identifier(attribute_name) = &name.kind else {
-            return;
-        };
-        if attribute_name.is_empty() {
+        if name.text.is_empty() {
             return;
         }
-        if !matches!(attribute_name.as_str(), "checked" | "native" | "deprecated") {
-            self.error(name.span, format!("invalid attribute `@{attribute_name}`"));
+        if !matches!(name.text.as_str(), "checked" | "native" | "deprecated") {
+            self.error(name.span, format!("invalid attribute `@{}`", name.text));
             return;
         }
-        if args.is_some() && attribute_name != "deprecated" {
-            self.error(name.span, format!("attribute `@{attribute_name}` does not take arguments"));
+        if args.is_some() && name.text != "deprecated" {
+            self.error(name.span, format!("attribute `@{}` does not take arguments", name.text));
         }
-        if previous_attributes.iter().any(|attribute| {
-            matches!(
-                &attribute.name.kind,
-                TokenKind::Identifier(existing) if existing == attribute_name
-            )
-        }) {
-            self.error(name.span, format!("duplicate attribute `@{attribute_name}`"));
+        let is_duplicate = self
+            .scratch
+            .attributes
+            .get(list_start..)
+            .unwrap_or_default()
+            .iter()
+            .any(|attribute| attribute.name.text == name.text);
+        if is_duplicate {
+            self.error(name.span, format!("duplicate attribute `@{}`", name.text));
         }
-        if attribute_name == "deprecated"
+        if name.text == "deprecated"
             && let Some(deprecated_args) = args
         {
             self.validate_deprecated_args(name.span, deprecated_args);
@@ -208,12 +218,11 @@ impl Parser<'_> {
 
     /// Luau's `deprecatedArgsValidator`: at most one argument, a table whose
     /// only keys are `use` and `reason`, each holding a constant string.
-    fn validate_deprecated_args(&mut self, name_span: Span, args: &Punctuated<Expression>) {
-        if args.len() > 1 {
-            self.error(name_span, "`@deprecated` takes at most one argument");
-            return;
-        }
-        let Some(arg) = args.first() else {
+    fn validate_deprecated_args(&mut self, name_span: Span, args: &[Expression<'ast>]) {
+        let [arg] = args else {
+            if !args.is_empty() {
+                self.error(name_span, "`@deprecated` takes at most one argument");
+            }
             return;
         };
         let Expression::TableConstructor(table) = arg else {
@@ -225,10 +234,10 @@ impl Parser<'_> {
             }
             return;
         };
-        for field in table.fields.iter() {
+        for field in &table.fields {
             match field {
-                Field::Named { name, value, .. } => {
-                    if !matches!(name.identifier(), Some("use" | "reason")) {
+                Field::Named { name, value } => {
+                    if !matches!(name.text.as_str(), "use" | "reason") {
                         self.error(
                             name.span,
                             "unknown `@deprecated` argument, only `use` and `reason` are allowed",
@@ -239,8 +248,8 @@ impl Parser<'_> {
                         self.error(value.span(), "`@deprecated` fields take constant strings");
                     }
                 }
-                Field::Positional { span, .. } | Field::Bracketed { span, .. } => {
-                    self.error(*span, "`@deprecated` takes only `use` and `reason` fields");
+                Field::Positional(_) | Field::Bracketed { .. } => {
+                    self.error(field.span(), "`@deprecated` takes only `use` and `reason` fields");
                 }
             }
         }

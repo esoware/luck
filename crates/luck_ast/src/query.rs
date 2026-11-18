@@ -1,20 +1,8 @@
-use luck_token::Span;
-
 use crate::expr::{Expression, Var};
 use crate::stmt::Statement;
 
-/// A `Name(.Name)*` chain's names, root first, and where its first and last
-/// names sit. [`ChainHead::dotted_path`](crate::ChainHead::dotted_path)
-/// finds one.
-#[derive(Debug)]
-pub struct DottedPath<'ast> {
-    pub segments: Vec<&'ast str>,
-    pub root_span: Span,
-    pub leaf_span: Span,
-}
-
 #[must_use]
-pub fn unwrap_parentheses(expr: &Expression) -> &Expression {
+pub fn unwrap_parentheses<'tree, 'ast>(expr: &'tree Expression<'ast>) -> &'tree Expression<'ast> {
     let mut current = expr;
     while let Expression::Parenthesized(parenthesized) = current {
         current = &parenthesized.expr;
@@ -28,7 +16,7 @@ pub fn unwrap_parentheses(expr: &Expression) -> &Expression {
 /// Parenthesizing one, or moving it out of the last position of a list,
 /// truncates it to exactly one value.
 #[must_use]
-pub fn is_multi_value(expr: &Expression) -> bool {
+pub fn is_multi_value(expr: &Expression<'_>) -> bool {
     match expr {
         Expression::VarArg(_) => true,
         Expression::Suffixed(chain) => chain.is_call(),
@@ -56,7 +44,7 @@ pub fn is_multi_value(expr: &Expression) -> bool {
 ///
 /// Anything else needs parentheses there, as in `("s"):rep(2)` or `({}).x`.
 #[must_use]
-pub const fn is_prefix_expr(expr: &Expression) -> bool {
+pub const fn is_prefix_expr(expr: &Expression<'_>) -> bool {
     match expr {
         Expression::Name(_) | Expression::Suffixed(_) | Expression::Parenthesized(_) => true,
         Expression::Nil(_)
@@ -81,12 +69,11 @@ pub const fn is_prefix_expr(expr: &Expression) -> bool {
 /// ends in an expression, `(...)` glues onto that expression and re-parses
 /// as a call, silently changing the meaning.
 #[must_use]
-pub fn stmt_starts_with_paren(stmt: &Statement) -> bool {
+pub fn stmt_starts_with_paren(stmt: &Statement<'_>) -> bool {
     match stmt {
         Statement::FunctionCall(chain) => expr_starts_with_paren(&chain.prefix),
         Statement::Assignment(assignment) => {
-            let first_var = assignment.targets.first();
-            first_var.is_some_and(var_starts_with_paren)
+            assignment.targets.first().is_some_and(var_starts_with_paren)
         }
         // Luau
         Statement::CompoundAssignment(compound) => var_starts_with_paren(&compound.var),
@@ -111,7 +98,7 @@ pub fn stmt_starts_with_paren(stmt: &Statement) -> bool {
     }
 }
 
-fn expr_starts_with_paren(expr: &Expression) -> bool {
+fn expr_starts_with_paren(expr: &Expression<'_>) -> bool {
     let mut current = expr;
     loop {
         current = match current {
@@ -138,7 +125,7 @@ fn expr_starts_with_paren(expr: &Expression) -> bool {
     }
 }
 
-fn var_starts_with_paren(var: &Var) -> bool {
+fn var_starts_with_paren(var: &Var<'_>) -> bool {
     match var {
         Var::Name(_) => false,
         Var::Suffixed(chain) => expr_starts_with_paren(&chain.prefix),
@@ -148,7 +135,7 @@ fn var_starts_with_paren(var: &Var) -> bool {
 /// Inside an interpolated string, `{` directly after the interpolation
 /// opener forms `{{`, which Luau rejects, so printers must separate them.
 #[must_use]
-pub fn expr_starts_with_brace(expr: &Expression) -> bool {
+pub fn expr_starts_with_brace(expr: &Expression<'_>) -> bool {
     let mut current = expr;
     loop {
         current = match current {

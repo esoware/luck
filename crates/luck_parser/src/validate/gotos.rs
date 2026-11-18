@@ -101,16 +101,17 @@ impl<'ast> GotoTracker<'ast> {
 
     /// Record a label whose scope starts at `active_vars`, solving the gotos
     /// pending in this block with its name.
-    pub(super) fn add_label(&mut self, label: &'ast LabelStatement, active_vars: usize) {
-        let Some(name) = label.name.identifier() else {
+    pub(super) fn add_label(&mut self, label: &'ast LabelStatement<'ast>, active_vars: usize) {
+        let name = label.name.text;
+        if name.is_empty() {
             return;
-        };
+        }
         let function = &mut self.function;
         let block = &mut function.block;
         let is_defined = if self.version.has_label_shadowing() {
-            block.labels.contains(name)
+            block.labels.contains(name.as_str())
         } else {
-            function.visible_labels.contains_key(name)
+            function.visible_labels.contains_key(name.as_str())
         };
         if is_defined {
             self.errors.push(ParseError {
@@ -118,7 +119,7 @@ impl<'ast> GotoTracker<'ast> {
                 message: format!("label `{name}` already defined"),
             });
         }
-        for goto in block.pending_gotos.remove(name).unwrap_or_default() {
+        for goto in block.pending_gotos.remove(name.as_str()).unwrap_or_default() {
             if goto.active_vars < active_vars {
                 self.errors.push(ParseError {
                     span: goto.span,
@@ -126,23 +127,24 @@ impl<'ast> GotoTracker<'ast> {
                 });
             }
         }
-        if block.labels.insert(name) {
-            let count = function.visible_labels.entry(name).or_default();
+        if block.labels.insert(name.as_str()) {
+            let count = function.visible_labels.entry(name.as_str()).or_default();
             *count = count.saturating_add(1);
         }
     }
 
     /// Record a goto at `active_vars` active variables, a backward jump if
     /// this block already has its label.
-    pub(super) fn add_goto(&mut self, goto: &'ast GotoStatement, active_vars: usize) {
-        let Some(name) = goto.name.identifier() else {
+    pub(super) fn add_goto(&mut self, goto: &'ast GotoStatement<'ast>, active_vars: usize) {
+        let name = goto.name.text;
+        if name.is_empty() {
             return;
-        };
+        }
         let block = &mut self.function.block;
-        if !block.labels.contains(name) {
+        if !block.labels.contains(name.as_str()) {
             block
                 .pending_gotos
-                .entry(name)
+                .entry(name.as_str())
                 .or_default()
                 .push(PendingGoto { span: goto.span, active_vars });
         }

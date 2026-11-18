@@ -23,15 +23,15 @@ impl NodeRule for MixedTable {
     }
     fn on_table(
         &self,
-        table: &TableConstructor,
+        table: &TableConstructor<'_>,
         _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         let mut has_positional = false;
         let mut has_named = false;
-        for field in table.fields.iter() {
+        for field in &table.fields {
             match field {
-                Field::Positional { .. } => has_positional = true,
+                Field::Positional(_) => has_positional = true,
                 Field::Named { .. } => has_named = true,
                 // An explicit `[expr] = v` key shows the author chose where
                 // the value goes, so it counts as neither kind.

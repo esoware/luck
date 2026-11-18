@@ -5,11 +5,9 @@ use tower_lsp_server::ls_types::{GotoDefinitionParams, GotoDefinitionResponse, L
 use crate::document::DocumentState;
 use crate::providers::cursor::local_at;
 use crate::providers::document_link;
-use crate::settings::ProjectSettings;
 
 pub(crate) fn goto(
     document: &DocumentState,
-    settings: &ProjectSettings,
     params: &GotoDefinitionParams,
 ) -> Option<GotoDefinitionResponse> {
     let uri = &params.text_document_position_params.text_document.uri;
@@ -17,14 +15,14 @@ pub(crate) fn goto(
 
     // A `require("...")` string under the cursor that resolves to a file
     // jumps to the top of that file.
-    if let Some(module_uri) = document_link::target_at(document, uri, settings, position) {
+    if let Some(module_uri) = document_link::target_at(document, uri, position) {
         return Some(GotoDefinitionResponse::Scalar(Location {
             uri: module_uri,
             range: Range::default(),
         }));
     }
 
-    let tree = &document.semantic.scope_tree;
+    let tree = document.tree();
     let (symbol_id, _) = local_at(tree, document.offset(position))?;
     Some(GotoDefinitionResponse::Scalar(Location {
         uri: uri.clone(),

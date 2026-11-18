@@ -1,7 +1,8 @@
 use alloc::borrow::Cow;
 
 use luck_token::{
-    LuaVersion, decode_string, encode_string, short_string_body, unicode_escape_codepoint,
+    LuaVersion, decode_string, encode_string, encodes_to_at_least, short_string_body,
+    unicode_escape_codepoint,
 };
 
 fn decode(raw: &str) -> Option<Vec<u8>> {
@@ -10,6 +11,12 @@ fn decode(raw: &str) -> Option<Vec<u8>> {
 
 fn decode_in(raw: &str, version: LuaVersion) -> Option<Vec<u8>> {
     decode_string(raw, version).map(Cow::into_owned)
+}
+
+fn encode(bytes: &[u8]) -> String {
+    let mut encoded = String::new();
+    encode_string(bytes, &mut encoded);
+    encoded
 }
 
 #[test]
@@ -83,6 +90,22 @@ fn decode_string_encodes_unicode_escapes_as_utf8() {
     assert_eq!(decode(r#""\u{48}""#), Some(b"H".to_vec()));
     // U+00E9 (e-acute) encodes to two UTF-8 bytes.
     assert_eq!(decode(r#""\u{e9}""#), Some(vec![0xC3, 0xA9]));
+}
+
+#[test]
+fn decode_string_encodes_unicode_escapes_char_cannot_hold() {
+    // Lua 5.3+ and Luau take a surrogate, and 5.4+ a value below 2^31, which
+    // `luaO_utf8esc` writes in the original UTF-8's longer forms.
+    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Luau] {
+        assert_eq!(
+            decode_in(r#""\u{D800}""#, version),
+            Some(vec![0xED, 0xA0, 0x80]),
+            "{version:?}"
+        );
+    }
+    assert_eq!(decode(r#""\u{110000}""#), Some(vec![0xF4, 0x90, 0x80, 0x80]));
+    assert_eq!(decode(r#""\u{200000}""#), Some(vec![0xF8, 0x88, 0x80, 0x80, 0x80]));
+    assert_eq!(decode(r#""\u{7FFFFFFF}""#), Some(vec![0xFD, 0xBF, 0xBF, 0xBF, 0xBF, 0xBF]));
 }
 
 #[test]
@@ -195,22 +218,30 @@ fn decode_string_drops_one_leading_long_bracket_eol_on_every_version() {
 
 #[test]
 fn encode_string_escapes_quotes_backslashes_and_newlines() {
-    assert_eq!(encode_string(b"hello"), r#""hello""#);
-    assert_eq!(encode_string(b"a\nb"), r#""a\nb""#);
-    assert_eq!(encode_string(b"q\"q"), r#""q\"q""#);
-    assert_eq!(encode_string(b"back\\slash"), r#""back\\slash""#);
+    assert_eq!(encode(b"hello"), r#""hello""#);
+    assert_eq!(encode(b"a\nb"), r#""a\nb""#);
+    assert_eq!(encode(b"q\"q"), r#""q\"q""#);
+    assert_eq!(encode(b"back\\slash"), r#""back\\slash""#);
+}
+
+#[test]
+fn encode_string_appends_to_what_the_buffer_holds() {
+    let mut output = String::from("x = ");
+    encode_string(b"a", &mut output);
+    encode_string(b"b", &mut output);
+    assert_eq!(output, r#"x = "a""b""#);
 }
 
 #[test]
 fn encode_string_writes_invalid_utf8_as_decimal_escapes() {
-    assert_eq!(encode_string(&[0xFF]), r#""\255""#);
+    assert_eq!(encode(&[0xFF]), r#""\255""#);
 }
 
 #[test]
 fn encode_string_pads_decimal_escapes_before_a_digit() {
     // `\1` followed by `2` must pad to `\001` so it can't read as `\12`.
-    assert_eq!(encode_string(&[0x01, b'2']), r#""\0012""#);
-    assert_eq!(encode_string(&[0x01, 0xFF, b'2']), r#""\1\2552""#);
+    assert_eq!(encode(&[0x01, b'2']), r#""\0012""#);
+    assert_eq!(encode(&[0x01, 0xFF, b'2']), r#""\1\2552""#);
 }
 
 #[test]
@@ -219,7 +250,7 @@ fn encode_string_round_trips_every_byte_with_and_without_a_following_digit() {
         for suffix in [None, Some(b'0'), Some(b'9'), Some(b'x')] {
             let mut bytes = vec![byte];
             bytes.extend(suffix);
-            let encoded = encode_string(&bytes);
+            let encoded = encode(&bytes);
             for version in LuaVersion::ALL {
                 assert_eq!(
                     decode_string(&encoded, version).as_deref(),
@@ -247,13 +278,37 @@ fn encode_string_round_trips_through_decode_string() {
         &[b'a', 0x01, 0xFF, b'7', 0x7F, 0xC3, b'3', b'"', 0x02],
     ];
     for bytes in cases {
-        let encoded = encode_string(bytes);
+        let encoded = encode(bytes);
         assert_eq!(
             decode(&encoded).as_deref(),
             Some(*bytes),
             "round trip failed for {bytes:?} (encoded {encoded:?})"
         );
     }
+}
+
+#[test]
+fn encodes_to_at_least_never_claims_more_than_the_encoding_holds() {
+    let cases: &[&[u8]] = &[
+        b"",
+        b"hello",
+        b"a\nb\tc\"d\\e",
+        &[0x01, b'2', 0xFF, 0x7F],
+        "\u{e9}\u{6f22}\n\u{1f600}".as_bytes(),
+        &[b'x'; 40],
+        &[0x1A; 12],
+    ];
+    for bytes in cases {
+        let encoded_length = encode(bytes).len();
+        for length in 0..encoded_length.saturating_add(8) {
+            if encodes_to_at_least(bytes, length) {
+                assert!(encoded_length >= length, "{bytes:?} {length}");
+            }
+        }
+        assert!(encodes_to_at_least(bytes, bytes.len() + 2), "{bytes:?}");
+    }
+    assert!(encodes_to_at_least(&[0x1A; 12], 14 + 12), "every escape counts");
+    assert!(!encodes_to_at_least(b"hello", 8), "nothing in it is escaped");
 }
 
 #[test]

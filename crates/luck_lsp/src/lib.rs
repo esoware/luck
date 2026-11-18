@@ -13,14 +13,32 @@
 //!   document links
 //! - custom requests: `luck/syntaxTree`, `luck/fixAllWorkspace`
 //!
+//! Each open document is parsed and analyzed once per version, in an arena
+//! of its own that is freed when the version is replaced or closed, and
+//! every request reads that version's tree and analysis.
+//!
 //! `luck lsp` serves it over stdio, or over TCP with `--socket <port>` for
 //! debugging.
 //!
 //! # Usage
 //!
+//! Requests are served on the thread that polls the server, on tokio's
+//! blocking pool, and, for a large file's lint, on rayon's pool, so each
+//! needs [`luck_ast::MIN_STACK_BYTES`]:
+//!
 //! ```no_run
-//! let runtime = tokio::runtime::Runtime::new()?;
-//! runtime.block_on(luck_lsp::serve_stdio());
+//! use std::thread;
+//!
+//! use luck_ast::MIN_STACK_BYTES;
+//!
+//! let runtime = tokio::runtime::Builder::new_multi_thread()
+//!     .thread_stack_size(MIN_STACK_BYTES)
+//!     .enable_all()
+//!     .build()?;
+//! let server = thread::Builder::new()
+//!     .stack_size(MIN_STACK_BYTES)
+//!     .spawn(move || runtime.block_on(luck_lsp::serve_stdio()))?;
+//! server.join().expect("the server doesn't panic");
 //! # Ok::<(), std::io::Error>(())
 //! ```
 
@@ -34,8 +52,11 @@
 
 extern crate alloc;
 
+mod analyzed;
 mod backend;
 mod document;
+#[cfg(test)]
+mod fixtures;
 mod line_index;
 mod providers;
 mod settings;

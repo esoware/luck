@@ -1,12 +1,8 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
+use luck_allocator::Allocator;
 use luck_formatter::{Comments, FormatOptions, format, format_block};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
-use luck_testgen::{generate_full, generate_runtime_safe};
+use luck_testgen::{generate_full, generate_runtime_safe, tree_shape};
 use luck_token::LuaVersion;
 
 const SEED_COUNT: u64 = 60;
@@ -40,8 +36,13 @@ fn programs() -> impl Iterator<Item = Program> {
     })
 }
 
-fn parse_cleanly(program: &Program, stage: &str, output: &str) -> ParseResult {
-    let parsed = luck_parser::parse(output, program.version);
+fn parse_cleanly<'ast>(
+    allocator: &'ast Allocator,
+    program: &Program,
+    stage: &str,
+    output: &'ast str,
+) -> ParseResult<'ast> {
+    let parsed = luck_parser::parse(allocator, output, program.version);
     assert!(
         parsed.errors.is_empty(),
         "{}: {stage} output failed to parse.\ninput:\n{}\noutput:\n{output}\nerrors: {:?}",
@@ -52,37 +53,40 @@ fn parse_cleanly(program: &Program, stage: &str, output: &str) -> ParseResult {
     parsed
 }
 
-#[test]
-fn generated_programs_parse_cleanly() {
-    for program in programs() {
-        parse_cleanly(&program, "generator", &program.source);
-    }
-}
-
-#[test]
-fn compact_output_reparses() {
-    for program in programs() {
-        let parsed = parse_cleanly(&program, "generator", &program.source);
-        let compacted = luck_codegen::compact(&parsed.block);
-        parse_cleanly(&program, "compact", &compacted);
-    }
+/// The printer kept the program's meaning: what it printed parses back to the
+/// tree it was given, up to what a printer may change.
+fn assert_same_tree(
+    program: &Program,
+    stage: &str,
+    before: &ParseResult<'_>,
+    after: &ParseResult<'_>,
+) {
+    assert_eq!(
+        tree_shape(&before.block, program.version),
+        tree_shape(&after.block, program.version),
+        "{}: {stage} changed the tree.\ninput:\n{}",
+        program.label,
+        program.source
+    );
 }
 
 #[test]
 fn format_reparses_and_is_idempotent() {
     let options = FormatOptions::default();
+    let mut allocator = Allocator::new();
     for program in programs() {
+        allocator.reset();
         let Program { source, version, label } = &program;
-        let first = format(source, *version, &options);
+        let original = parse_cleanly(&allocator, &program, "generator", source);
+        let first = format(&allocator, source, *version, &options);
         assert!(
             first.errors.is_empty(),
             "{label}: format errored:\n{source}\nerrors: {:?}",
             first.errors
         );
-
-        parse_cleanly(&program, "format", &first.output);
-
-        let second = format(&first.output, *version, &options);
+        let formatted = parse_cleanly(&allocator, &program, "format", &first.output);
+        assert_same_tree(&program, "format", &original, &formatted);
+        let second = format(&allocator, &first.output, *version, &options);
         assert_eq!(
             first.output, second.output,
             "{label}: format not idempotent.\ninput:\n{source}"
@@ -95,12 +99,16 @@ fn format_reparses_and_is_idempotent() {
 #[test]
 fn format_block_without_source_reparses_and_formats_as_itself() {
     let options = FormatOptions::default();
+    let mut allocator = Allocator::new();
     for program in programs() {
+        allocator.reset();
         let Program { source, version, label } = &program;
-        let original = parse_cleanly(&program, "generator", source);
-        let via_ast = format_block(&original.block, Comments::none(), &options).unwrap();
-        parse_cleanly(&program, "format_block", &via_ast);
-        let reformatted = format(&via_ast, *version, &options);
+        let original = parse_cleanly(&allocator, &program, "generator", source);
+        let via_ast = format_block(&allocator, &original.block, Comments::none(), &options)
+            .expect("a parsed tree nests within the cap");
+        let reprinted = parse_cleanly(&allocator, &program, "format_block", &via_ast);
+        assert_same_tree(&program, "format_block", &original, &reprinted);
+        let reformatted = format(&allocator, &via_ast, *version, &options);
         assert_eq!(
             via_ast, reformatted.output,
             "{label}: format changed format_block's output.\ninput:\n{source}"
@@ -108,23 +116,30 @@ fn format_block_without_source_reparses_and_formats_as_itself() {
     }
 }
 
+/// Minified code, dense and renamed, is the input a reader formats to read.
 #[test]
-fn minify_reparses_and_is_idempotent() {
+fn formatting_minified_output_reparses_and_is_idempotent() {
+    let options = FormatOptions::default();
     let config = TransformConfig::default();
+    let mut allocator = Allocator::new();
     for program in programs() {
+        allocator.reset();
         let Program { source, version, label } = &program;
-        let Ok(first) = luck_minifier::minify(source, *version, &config) else {
-            panic!("{label}: minify errored on valid input:\n{source}");
-        };
-
-        parse_cleanly(&program, "minify", &first);
-
-        let Ok(second) = luck_minifier::minify(&first, *version, &config) else {
-            panic!("{label}: second minify errored.\nfirst output:\n{first}");
-        };
+        let minified = luck_minifier::minify(&allocator, source, *version, &config)
+            .unwrap_or_else(|errors| panic!("{label}: minify errored: {errors:?}\n{source}"));
+        let minified_parse = parse_cleanly(&allocator, &program, "minify", &minified);
+        let first = format(&allocator, &minified, *version, &options);
+        assert!(
+            first.errors.is_empty(),
+            "{label}: format errored on minified output:\n{minified}\nerrors: {:?}",
+            first.errors
+        );
+        let formatted = parse_cleanly(&allocator, &program, "format of minify", &first.output);
+        assert_same_tree(&program, "format of minify", &minified_parse, &formatted);
+        let second = format(&allocator, &first.output, *version, &options);
         assert_eq!(
-            first, second,
-            "{label}: minify not idempotent.\ninput:\n{source}\nfirst:\n{first}\nsecond:\n{second}"
+            first.output, second.output,
+            "{label}: format not idempotent on minified output.\nminified:\n{minified}"
         );
     }
 }

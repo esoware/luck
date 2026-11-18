@@ -22,7 +22,7 @@ impl NodeRule for AmbiguousNewlineCall {
     }
     fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
         let call = site.call;
-        findings.extend(check_call(call, context.source, context.semantic.version));
+        findings.extend(check_call(call, context.source, context.semantic.version()));
     }
 }
 

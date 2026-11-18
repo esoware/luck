@@ -855,6 +855,11 @@ fn shebang_drops_trailing_carriage_returns() {
 }
 
 #[test]
+fn shebang_drops_a_carriage_return_behind_trailing_spaces() {
+    assert_format("#!x\r \t\nlocal x = 1\n", "#!x\nlocal x = 1\n");
+}
+
+#[test]
 fn blank_line_preserved() {
     assert_format(
         "\
@@ -1105,11 +1110,45 @@ fn windows_line_endings_keep_other_verbatim_line_breaks() {
     }
 }
 
+#[test]
+fn windows_line_endings_keep_an_lf_that_verbatim_text_follows_with_a_cr() {
+    // Luau reads no line break in a CR, so the region starts with one, and
+    // the line break before it is half of an LFCR.
+    assert_format_with(
+        "-- luck: format off\n\rlocal x=1\n-- luck: format on\nlocal y=2\n",
+        "-- luck: format off\n\rlocal x=1\r\n-- luck: format on\r\nlocal y = 2\r\n",
+        LuaVersion::Luau,
+        &windows_options(),
+    );
+}
+
 fn conditional_collapse_options() -> FormatOptions {
     FormatOptions {
         collapse_simple_statement: CollapseSimpleStatement::ConditionalOnly,
         ..FormatOptions::default()
     }
+}
+
+#[test]
+fn a_verbatim_statement_forces_only_its_own_breaks() {
+    // Formatted, the call would break around the function body, which it
+    // never prints, so the `if` still collapses.
+    let collapsed = "if a then g --[[c]] (function() return 1 end) end\n";
+    let options = conditional_collapse_options();
+    assert_format_with(collapsed, collapsed, LuaVersion::Lua54, &options);
+    assert_format(
+        "\
+local t = f(function() return 1 end, x --[[e]] .y)
+local u = f(function() local z = q --[[k]] (r) return z end, 2)
+",
+        "\
+local t = f(function() return 1 end, x --[[e]] .y)
+local u = f(function()
+\tlocal z = q --[[k]] (r)
+\treturn z
+end, 2)
+",
+    );
 }
 
 #[test]

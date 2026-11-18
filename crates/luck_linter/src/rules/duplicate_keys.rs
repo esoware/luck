@@ -27,17 +27,17 @@ impl NodeRule for DuplicateKeys {
     }
     fn on_table(
         &self,
-        table: &TableConstructor,
+        table: &TableConstructor<'_>,
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let version = context.semantic.version;
+        let version = context.semantic.version();
         let mut first_spans: FxHashMap<Key<'_>, Span> = FxHashMap::default();
-        for field in table.fields.iter() {
+        for field in &table.fields {
             let keyed = match field {
-                Field::Named { name, .. } => name
-                    .identifier()
-                    .map(|identifier| (Key::String(Cow::Borrowed(identifier)), name.span)),
+                Field::Named { name, .. } => {
+                    Some((Key::String(Cow::Borrowed(name.text.as_str())), name.span))
+                }
                 // Compare decoded values, since `["\97"]` and `["a"]` are the
                 // same key.
                 Field::Bracketed { key: Expression::StringLiteral(literal), .. } => {
@@ -46,7 +46,7 @@ impl NodeRule for DuplicateKeys {
                 Field::Bracketed { key: key_expr, .. } => {
                     number_key(key_expr, version).map(|k| (k, key_expr.span()))
                 }
-                Field::Positional { .. } => None,
+                Field::Positional(_) => None,
             };
             let Some((key, span)) = keyed else {
                 continue;
@@ -82,8 +82,8 @@ impl fmt::Display for Key<'_> {
 
 /// A string literal's decoded value, borrowed when decoding changes nothing,
 /// or `None` when it doesn't decode to UTF-8.
-fn decoded_key(literal: &Literal, version: LuaVersion) -> Option<Cow<'_, str>> {
-    match decode_string(&literal.text, version)? {
+fn decoded_key<'ast>(literal: &Literal<'ast>, version: LuaVersion) -> Option<Cow<'ast, str>> {
+    match decode_string(literal.text, version)? {
         Cow::Borrowed(bytes) => str::from_utf8(bytes).ok().map(Cow::Borrowed),
         Cow::Owned(bytes) => String::from_utf8(bytes).ok().map(Cow::Owned),
     }
@@ -91,7 +91,7 @@ fn decoded_key(literal: &Literal, version: LuaVersion) -> Option<Cow<'_, str>> {
 
 /// The key a number literal sets, so `1` and `1.0` match. A value of 2^53 or
 /// more isn't compared, since a double can't tell it from its neighbors.
-fn number_key(expr: &Expression, version: LuaVersion) -> Option<Key<'static>> {
+fn number_key(expr: &Expression<'_>, version: LuaVersion) -> Option<Key<'static>> {
     let value = signed_number_value(expr, version)?;
     (value.abs() < EXACT_DOUBLE_LIMIT)
         .then(|| Key::Number(if value == 0.0f64 { 0 } else { value.to_bits() }))

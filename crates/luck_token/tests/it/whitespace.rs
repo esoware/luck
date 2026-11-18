@@ -88,6 +88,13 @@ fn line_index_breaks_lines_as_the_version_does() {
 }
 
 #[test]
+fn line_index_reads_a_shebang_as_one_line_up_to_its_lf() {
+    for version in LuaVersion::ALL {
+        assert_eq!(LineIndex::new("#!x\ry\r\nz", version).line_column(7), (2, 1), "{version:?}");
+    }
+}
+
+#[test]
 fn line_index_starts_the_first_line_past_a_skipped_bom() {
     let source = "\u{feff}local x
 y";

@@ -15,5 +15,4 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-compact_str = { workspace = true }
-memchr      = { workspace = true }
+memchr = { workspace = true }

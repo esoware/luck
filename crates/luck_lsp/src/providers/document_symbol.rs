@@ -4,19 +4,20 @@
 )]
 
 use luck_ast::{
-    Assignment, Block, Expression, FunctionBody, FunctionName, Statement, Suffix,
+    Assignment, Block, Expression, FunctionBody, FunctionName, Name, Statement, Suffix,
     TypeDeclarationValue, Var, Visitor,
 };
-use luck_token::{Span, Token};
+use luck_token::Span;
 use tower_lsp_server::ls_types::{DocumentSymbol, SymbolKind};
 
 use crate::document::DocumentState;
+use crate::providers::cursor::identifier;
 
 pub(crate) fn document_symbols(document: &DocumentState) -> Vec<DocumentSymbol> {
-    outline(document, &document.parsed.block)
+    outline(document, &document.parse().block)
 }
 
-fn outline(document: &DocumentState, block: &Block) -> Vec<DocumentSymbol> {
+fn outline(document: &DocumentState, block: &Block<'_>) -> Vec<DocumentSymbol> {
     let mut emitter = SymbolEmitter { document, symbols: Vec::new() };
     emitter.visit_block(block);
     emitter.symbols
@@ -28,7 +29,7 @@ struct SymbolEmitter<'document> {
 }
 
 impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement) {
+    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             Statement::FunctionDecl(declaration) => {
                 let (name, kind) = function_name_label(&declaration.name);
@@ -55,24 +56,22 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
             ),
             // Luau
             Statement::TypeDeclaration(declaration) => {
-                if let TypeDeclarationValue::TypeFunction(body) = &declaration.type_value {
+                if let TypeDeclarationValue::TypeFunction(body) = &declaration.value {
                     self.push_named_function(&declaration.name, body, declaration.span);
                 }
             }
             Statement::LocalAssignment(local) => {
-                for (index, name_token) in local.names.iter().enumerate() {
-                    let Some(name) = name_token.name.identifier() else {
+                for (index, attributed) in local.names.iter().enumerate() {
+                    let Some(name) = identifier(&attributed.name) else {
                         continue;
                     };
-                    let initializer =
-                        local.exprs.as_ref().and_then(|exprs| exprs.iter().nth(index));
-                    if let Some(Expression::FunctionDef(function)) = initializer {
+                    if let Some(Expression::FunctionDef(function)) = local.exprs.get(index) {
                         self.push_function(
                             name,
                             SymbolKind::FUNCTION,
                             &function.body,
                             local.span,
-                            name_token.name.span,
+                            attributed.name.span,
                         );
                         continue;
                     }
@@ -83,7 +82,7 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
                         tags: None,
                         deprecated: None,
                         range: self.document.range(local.span),
-                        selection_range: self.document.range(name_token.name.span),
+                        selection_range: self.document.range(attributed.name.span),
                         children: None,
                     });
                 }
@@ -109,23 +108,22 @@ impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
 
     // A function inside an expression gets no symbol, so neither do its
     // declarations.
-    fn visit_expr(&mut self, _expr: &'ast Expression) {}
+    fn visit_expr(&mut self, _expr: &'ast Expression<'ast>) {}
 }
 
 impl SymbolEmitter<'_> {
-    fn push_assigned_functions(&mut self, assignment: &Assignment) {
+    fn push_assigned_functions(&mut self, assignment: &Assignment<'_>) {
         for (index, var) in assignment.targets.iter().enumerate() {
-            let Some(Expression::FunctionDef(function)) = assignment.values.iter().nth(index)
-            else {
+            let Some(Expression::FunctionDef(function)) = assignment.values.get(index) else {
                 continue;
             };
             let (label, selection_span) = match var {
-                Var::Name(token) => (token.identifier(), token.span),
+                Var::Name(name) => (identifier(name), name.span),
                 Var::Suffixed(chain) => {
                     let Suffix::Field(name) = chain.suffixes.last() else {
                         continue;
                     };
-                    (name.identifier().map(|_| chain.span.text(self.document.text())), chain.span)
+                    (identifier(name).map(|_| chain.span.text(self.document.text())), chain.span)
                 }
             };
             if let Some(name) = label {
@@ -140,8 +138,8 @@ impl SymbolEmitter<'_> {
         }
     }
 
-    fn push_named_function(&mut self, name: &Token, body: &FunctionBody, span: Span) {
-        if let Some(label) = name.identifier() {
+    fn push_named_function(&mut self, name: &Name<'_>, body: &FunctionBody<'_>, span: Span) {
+        if let Some(label) = identifier(name) {
             self.push_function(label, SymbolKind::FUNCTION, body, span, name.span);
         }
     }
@@ -152,7 +150,7 @@ impl SymbolEmitter<'_> {
         &mut self,
         name: &str,
         kind: SymbolKind,
-        body: &FunctionBody,
+        body: &FunctionBody<'_>,
         span: Span,
         selection_span: Span,
     ) {
@@ -171,15 +169,15 @@ impl SymbolEmitter<'_> {
 }
 
 /// The label for `name`, empty when recovery left no real name in it.
-fn function_name_label(name: &FunctionName) -> (String, SymbolKind) {
+fn function_name_label(name: &FunctionName<'_>) -> (String, SymbolKind) {
     let mut label = String::new();
-    for identifier in name.names.iter().filter_map(Token::identifier) {
+    for segment in name.names.iter().filter_map(identifier) {
         if !label.is_empty() {
             label.push('.');
         }
-        label.push_str(identifier);
+        label.push_str(segment);
     }
-    if let Some(method) = name.method.as_ref().and_then(Token::identifier) {
+    if let Some(method) = name.method.as_ref().and_then(identifier) {
         label.push(':');
         label.push_str(method);
     }
@@ -191,9 +189,9 @@ fn function_name_label(name: &FunctionName) -> (String, SymbolKind) {
     (label, kind)
 }
 
-fn format_params(body: &FunctionBody) -> String {
+fn format_params(body: &FunctionBody<'_>) -> String {
     let mut parts: Vec<&str> =
-        body.params.iter().filter_map(|param| param.name.identifier()).collect();
+        body.params.iter().filter_map(|param| identifier(&param.name)).collect();
     if body.vararg.is_some() {
         parts.push("...");
     }
@@ -203,13 +201,12 @@ fn format_params(body: &FunctionBody) -> String {
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
-    use rustc_hash::FxHashSet;
 
     use super::*;
+    use crate::fixtures::document;
 
     fn symbols_of(text: &str, target: LuaTarget) -> Vec<DocumentSymbol> {
-        let document = DocumentState::new(text.to_owned(), 1, target, FxHashSet::default());
-        document_symbols(&document)
+        document_symbols(&document(text, target))
     }
 
     #[test]

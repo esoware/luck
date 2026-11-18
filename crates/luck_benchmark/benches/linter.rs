@@ -3,12 +3,14 @@
     reason = "a test panics to fail, so a Panics section says nothing"
 )]
 
-use luck_benchmark::{
-    BenchmarkId, Criterion, black_box, criterion_group, criterion_main, test_files, test_projects,
-};
+use luck_allocator::Allocator;
+use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use luck_benchmark_files::{test_files, test_projects};
 use luck_linter::{CategoryLevels, LintConfig, RuleLevel};
 use rayon::ThreadPoolBuilder;
 
+/// Each iteration analyzes and lints a parse made once, since the linter's
+/// node table is built in the analysis walk.
 fn bench_linter(criterion: &mut Criterion) {
     // A pool of only the bench thread runs the large-file joins and chunks
     // inline, so no work waits on another thread or depends on the runner's
@@ -29,40 +31,24 @@ fn bench_linter(criterion: &mut Criterion) {
 
     for file in test_files() {
         let id = BenchmarkId::from_parameter(file.file_name);
-        let parse_result = file.parse();
-        let semantic = luck_semantic::analyze_with_environment(
-            &parse_result.block,
-            file.target.lua_version(),
-            file.target.stdlib_environment(),
-        );
+        let allocator = Allocator::new();
+        let parse_result = file.parse(&allocator);
         group.bench_function(id, |bencher| {
             bencher
-                .iter(|| luck_linter::lint_analyzed(black_box(&parse_result), &semantic, &config));
+                .iter(|| luck_linter::lint_parsed(black_box(&parse_result), file.target, &config));
         });
     }
 
     for project in test_projects() {
         let id = BenchmarkId::from_parameter(project.name);
-        let version = project.target.lua_version();
-        let environment = project.target.stdlib_environment();
-        let analyzed_files: Vec<_> = project
-            .parse_files()
-            .into_iter()
-            .map(|parse_result| {
-                let semantic = luck_semantic::analyze_with_environment(
-                    &parse_result.block,
-                    version,
-                    environment,
-                );
-                (parse_result, semantic)
-            })
-            .collect();
+        let allocator = Allocator::new();
+        let parse_results = project.parse_files(&allocator);
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                for (parse_result, semantic) in &analyzed_files {
-                    black_box(luck_linter::lint_analyzed(
+                for parse_result in &parse_results {
+                    black_box(luck_linter::lint_parsed(
                         black_box(parse_result),
-                        semantic,
+                        project.target,
                         &config,
                     ));
                 }

@@ -84,7 +84,7 @@ fn empty_search_paths_try_the_default_templates() {
     let project =
         project_with(&[("dep.lua", "return {}"), ("pkg/init.lua", "return {}"), ("main.lua", "")]);
     let from_file = normalized(&project, "main.lua");
-    let mut resolver = Resolver::new(LuaVersion::Lua54, &[], project.path());
+    let resolver = Resolver::new(LuaVersion::Lua54, &[], project.path());
     let by_name = resolver.resolve(&request("dep", &from_file)).expect("resolve dep");
     assert_eq!(by_name.path, normalized(&project, "dep.lua"));
     let by_init = resolver.resolve(&request("pkg", &from_file)).expect("resolve pkg");

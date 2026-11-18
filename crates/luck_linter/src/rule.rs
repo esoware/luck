@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 
 use luck_ast::{Block, Call, Expression, Statement, SuffixedExpression, TableConstructor};
+use luck_parser::ParseResult;
 use luck_semantic::{ResolvedCallee, SemanticAnalysis};
 use luck_token::{Comment, LineIndex};
 
@@ -8,32 +9,47 @@ use crate::config::LintConfig;
 use crate::diagnostic::{Category, Finding, Severity};
 use crate::local_flow::LocalFlow;
 use crate::node_type::NodeTypeSet;
-use crate::uninitialized::UninitializedLocals;
+use crate::nodes::Nodes;
 
+/// What every rule reads of one document. The lazily built parts are shared,
+/// so the first rule to ask builds them for all.
 #[derive(Debug)]
-pub(crate) struct LintContext<'document> {
-    pub block: &'document Block,
-    /// Every block in the document, `block` first, in the default
-    /// visitor's pre-order.
-    pub blocks: &'document [&'document Block],
-    /// `block`, then the body of every function in it.
-    pub function_blocks: &'document [&'document Block],
-    pub uninitialized_locals: &'document UninitializedLocals,
-    pub semantic: &'document SemanticAnalysis,
-    pub source: &'document str,
-    pub comments: &'document [Comment],
-    pub config: &'document LintConfig,
+pub(crate) struct LintContext<'ast> {
+    pub block: &'ast Block<'ast>,
+    pub nodes: &'ast Nodes<'ast>,
+    pub semantic: &'ast SemanticAnalysis<'ast>,
+    pub source: &'ast str,
+    pub comments: &'ast [Comment],
+    pub config: &'ast LintConfig,
     pub local_flow: OnceLock<LocalFlow>,
     pub line_index: OnceLock<LineIndex>,
 }
 
-impl LintContext<'_> {
+impl<'ast> LintContext<'ast> {
+    pub(crate) fn new(
+        parse: &'ast ParseResult<'_>,
+        semantic: &'ast SemanticAnalysis<'ast>,
+        nodes: &'ast Nodes<'ast>,
+        config: &'ast LintConfig,
+    ) -> Self {
+        Self {
+            block: &parse.block,
+            nodes,
+            semantic,
+            source: parse.source,
+            comments: &parse.comments,
+            config,
+            local_flow: OnceLock::new(),
+            line_index: OnceLock::new(),
+        }
+    }
+
     pub(crate) fn local_flow(&self) -> &LocalFlow {
         self.local_flow.get_or_init(|| LocalFlow::compute(self))
     }
 
     pub(crate) fn line_index(&self) -> &LineIndex {
-        self.line_index.get_or_init(|| LineIndex::new(self.source, self.semantic.version))
+        self.line_index.get_or_init(|| LineIndex::new(self.source, self.semantic.version()))
     }
 }
 
@@ -111,7 +127,12 @@ pub(crate) trait NodeRule: Rule {
     fn node_types(&self) -> NodeTypeSet;
 
     /// Never gets a `Statement::FunctionCall`, which goes to [`Self::on_call`].
-    fn on_stmt(&self, _stmt: &Statement, _context: &LintContext<'_>, _findings: &mut Vec<Finding>) {
+    fn on_stmt(
+        &self,
+        _stmt: &Statement<'_>,
+        _context: &LintContext<'_>,
+        _findings: &mut Vec<Finding>,
+    ) {
     }
 
     /// Never gets an `Expression::Suffixed`, which goes to
@@ -119,7 +140,7 @@ pub(crate) trait NodeRule: Rule {
     /// to [`Self::on_table`].
     fn on_expr(
         &self,
-        _expr: &Expression,
+        _expr: &Expression<'_>,
         _context: &LintContext<'_>,
         _findings: &mut Vec<Finding>,
     ) {
@@ -129,7 +150,7 @@ pub(crate) trait NodeRule: Rule {
     /// argument.
     fn on_table(
         &self,
-        _table: &TableConstructor,
+        _table: &TableConstructor<'_>,
         _context: &LintContext<'_>,
         _findings: &mut Vec<Finding>,
     ) {
@@ -139,7 +160,7 @@ pub(crate) trait NodeRule: Rule {
     /// assignment target.
     fn on_chain(
         &self,
-        _chain: &SuffixedExpression,
+        _chain: &SuffixedExpression<'_>,
         _position: ChainPosition,
         _context: &LintContext<'_>,
         _findings: &mut Vec<Finding>,

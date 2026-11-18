@@ -1,120 +1,13 @@
 //! Types format from the [`Type`] tree alone, never from source, so synthetic
 //! types format the same as parsed ones.
 
-use luck_ast::{
-    FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, IntersectionType,
-    NamedType, TableType, Type, TypeArgs, TypeField, TypeofType, UnionType,
-};
-use luck_token::TokenKind;
+use luck_ast::{FunctionTypeParam, GenericTypeList, Type, TypeField};
 
-use crate::ir::{
-    Format, Formatter, format_with, group, group_with_id, if_group_breaks, indent, separated,
-    soft_line, soft_line_or_space, space, token,
-};
-use crate::quotes::normalize_quote;
-
-impl Format for Type {
-    fn fmt(&self, f: &mut Formatter) {
-        match self {
-            Self::Name { name, .. } => f.write_text(name.clone()),
-            Self::Named(named) => named.fmt(f),
-            Self::Typeof(typeof_type) => typeof_type.fmt(f),
-            Self::Table(table) => table.fmt(f),
-            Self::Function(function) => function.fmt(f),
-            Self::Optional(optional) => (&optional.type_value, token("?")).fmt(f),
-            Self::Union(union) => union.fmt(f),
-            Self::Intersection(intersection) => intersection.fmt(f),
-            Self::Parenthesized(parenthesized) => {
-                (token("("), &parenthesized.type_value, token(")")).fmt(f);
-            }
-            Self::Pack(pack) => write_delimited(f, "(", ")", &pack.types.items, write_list_type),
-            Self::Singleton(literal) => {
-                if let TokenKind::StringLiteral(text) = &literal.kind {
-                    let quote_style = f.options().quote_style;
-                    f.write_text(normalize_quote(text, quote_style));
-                } else {
-                    literal.fmt(f);
-                }
-            }
-            // Luau: `...T`.
-            Self::Variadic(variadic) => (token("..."), &variadic.type_value).fmt(f),
-            // Luau: `T...`.
-            Self::GenericPack(generic_pack) => (&generic_pack.name, token("...")).fmt(f),
-            // A parse-recovery placeholder has no text to print.
-            Self::Error(_) => {}
-        }
-    }
-}
-
-/// Qualification and generics are tight against the name.
-impl Format for NamedType {
-    fn fmt(&self, f: &mut Formatter) {
-        if let Some(module) = &self.prefix {
-            (module, token(".")).fmt(f);
-        }
-        (&self.name, &self.generics).fmt(f);
-    }
-}
-
-impl Format for TypeofType {
-    fn fmt(&self, f: &mut Formatter) {
-        (token("typeof"), token("("), &self.expr, token(")")).fmt(f);
-    }
-}
-
-/// When the group breaks, each field gets its own line and a trailing comma,
-/// except the array shorthand `{ T }`, since Luau's grammar has no `{ T, }`.
-impl Format for TableType {
-    fn fmt(&self, f: &mut Formatter) {
-        if self.fields.is_empty() {
-            (token("{"), token("}")).fmt(f);
-            return;
-        }
-
-        let is_array_shorthand = matches!(self.fields.items.as_slice(), [TypeField::Array { .. }]);
-
-        let group_id = f.group_id();
-        group_with_id(
-            group_id,
-            (
-                token("{"),
-                indent((
-                    soft_line_or_space(),
-                    separated(&self.fields.items, (token(","), soft_line_or_space())),
-                    (!is_array_shorthand).then(|| if_group_breaks(group_id, token(","))),
-                )),
-                soft_line_or_space(),
-                token("}"),
-            ),
-        )
-        .fmt(f);
-    }
-}
-
-/// The parameter list breaks like a call argument list.
-impl Format for FunctionType {
-    fn fmt(&self, f: &mut Formatter) {
-        self.generics.fmt(f);
-        write_delimited(f, "(", ")", &self.params.items, |param_f, param| param.fmt(param_f));
-        (space(), token("->"), space(), &self.return_type).fmt(f);
-    }
-}
-
-impl Format for UnionType {
-    fn fmt(&self, f: &mut Formatter) {
-        write_alternation(f, &self.types.items, "|", Placement::AfterText);
-    }
-}
-
-impl Format for IntersectionType {
-    fn fmt(&self, f: &mut Formatter) {
-        write_alternation(f, &self.types.items, "&", Placement::AfterText);
-    }
-}
+use crate::ir::Formatter;
 
 /// Where an alternation stands, which decides the lines its members take
 /// when it breaks.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum Placement {
     /// After other text on its line, such as `type T =` or `name:`. The
     /// members move to the lines after it, one indent deeper.
@@ -125,57 +18,16 @@ enum Placement {
     LineStart { should_lead: bool },
 }
 
-/// Flat reads `A | B | C`.
-///
-/// Broken, each member gets its own line and a leading
-/// `| ` (or `& `), as Prettier does for TypeScript unions. The break decision
-/// alone places the leading operator, so the AST's `has_leading_pipe` and
-/// `has_leading_ampersand` are ignored.
-fn write_alternation(f: &mut Formatter, items: &[Type], op: &'static str, placement: Placement) {
-    let group_id = f.group_id();
-    let separator = (soft_line_or_space(), token(op), space());
-    let members = separated(items, &separator);
-    match placement {
-        Placement::AfterText => {
-            group_with_id(group_id, indent((if_group_breaks(group_id, &separator), members)))
-                .fmt(f);
-        }
-        Placement::LineStart { should_lead: true } => {
-            group_with_id(group_id, (token(op), space(), members)).fmt(f);
-        }
-        Placement::LineStart { should_lead: false } => {
-            let lead = if_group_breaks(group_id, (token(op), space()));
-            group_with_id(group_id, (lead, members)).fmt(f);
-        }
-    }
-}
-
-/// `ty` where a list or a table that breaks opens a line for it.
-fn write_at_line_start(f: &mut Formatter, ty: &Type, should_lead: bool) {
-    let placement = Placement::LineStart { should_lead };
-    if let Type::Union(union) = ty {
-        write_alternation(f, &union.types.items, "|", placement);
-    } else if let Type::Intersection(intersection) = ty {
-        write_alternation(f, &intersection.types.items, "&", placement);
-    } else {
-        ty.fmt(f);
-    }
-}
-
-fn write_list_type(f: &mut Formatter, ty: &Type) {
-    write_at_line_start(f, ty, false);
-}
-
 /// The name `ty` prints first when flat, where an alternation drops its
 /// leading `|` or `&`.
-fn flat_leading_name(ty: &Type) -> Option<&str> {
+fn flat_leading_name<'ast>(ty: &Type<'ast>) -> Option<&'ast str> {
     let mut current = ty;
     loop {
         current = match current {
-            Type::Name { name, .. } => return Some(name),
-            Type::Named(named) => return named.prefix.as_ref().unwrap_or(&named.name).identifier(),
-            Type::GenericPack(pack) => return pack.name.identifier(),
-            Type::Optional(optional) => &optional.type_value,
+            Type::Name(name) => return Some(name.text.as_str()),
+            Type::Named(named) => return Some(named.prefix.unwrap_or(named.name).text.as_str()),
+            Type::GenericPack(pack) => return Some(pack.name.text.as_str()),
+            Type::Optional(optional) => &optional.ty,
             Type::Union(union) => union.types.first()?,
             Type::Intersection(intersection) => intersection.types.first()?,
             Type::Typeof(_)
@@ -183,205 +35,392 @@ fn flat_leading_name(ty: &Type) -> Option<&str> {
             | Type::Function(_)
             | Type::Parenthesized(_)
             | Type::Pack(_)
-            | Type::Singleton(_)
+            | Type::Nil(_)
+            | Type::True(_)
+            | Type::False(_)
+            | Type::StringLiteral(_)
+            | Type::Number(_)
             | Type::Variadic(_)
             | Type::Error(_) => return None,
         };
     }
 }
 
-impl Format for TypeField {
-    fn fmt(&self, f: &mut Formatter) {
-        match self {
-            Self::Named { access, name, value, .. } => {
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "the formatter is one type with its node families split by file"
+)]
+impl<'ast> Formatter<'ast> {
+    pub(crate) fn write_type(&mut self, ty: &Type<'ast>) {
+        match ty {
+            Type::Name(name) => self.name(**name),
+            // Qualification and generics are tight against the name.
+            Type::Named(named) => {
+                if let Some(module) = &named.prefix {
+                    self.name(*module);
+                    self.token(".");
+                }
+                self.name(named.name);
+                if let Some(generics) = &named.generics {
+                    self.write_delimited_types("<", ">", &generics.args);
+                }
+            }
+            Type::Typeof(typeof_type) => {
+                self.token("typeof");
+                self.token("(");
+                self.write_expr(&typeof_type.expr);
+                self.token(")");
+            }
+            Type::Table(table) => self.write_table_type(&table.fields),
+            // The parameter list breaks like a call argument list.
+            Type::Function(function) => {
+                if let Some(generics) = &function.generics {
+                    self.write_generic_type_list(generics);
+                }
+                self.write_delimited("(", ")", &function.params, Self::write_function_type_param);
+                self.space();
+                self.token("->");
+                self.space();
+                self.write_type(&function.return_type);
+            }
+            Type::Optional(optional) => {
+                self.write_type(&optional.ty);
+                for _ in 0..optional.question_count {
+                    self.token("?");
+                }
+            }
+            Type::Union(union) => self.write_alternation(&union.types, "|", Placement::AfterText),
+            Type::Intersection(intersection) => {
+                self.write_alternation(&intersection.types, "&", Placement::AfterText);
+            }
+            Type::Parenthesized(parenthesized) => {
+                self.token("(");
+                self.write_type(&parenthesized.ty);
+                self.token(")");
+            }
+            Type::Pack(pack) => self.write_delimited_types("(", ")", &pack.types),
+            Type::Nil(_) => self.token("nil"),
+            Type::True(_) => self.token("true"),
+            Type::False(_) => self.token("false"),
+            Type::StringLiteral(literal) => self.write_string(literal.text),
+            Type::Number(literal) => self.ascii(literal.text),
+            // Luau: `...T`.
+            Type::Variadic(variadic) => {
+                self.token("...");
+                self.write_type(&variadic.ty);
+            }
+            // Luau: `T...`.
+            Type::GenericPack(generic_pack) => {
+                self.name(generic_pack.name);
+                self.token("...");
+            }
+            // A parse-recovery placeholder has no text to print.
+            Type::Error(_) => {}
+        }
+    }
+
+    /// When the group breaks, each field gets its own line and a trailing
+    /// comma, except the array shorthand `{ T }`, since Luau's grammar has no
+    /// `{ T, }`.
+    fn write_table_type(&mut self, fields: &[TypeField<'ast>]) {
+        if fields.is_empty() {
+            self.token("{");
+            self.token("}");
+            return;
+        }
+
+        let is_array_shorthand = matches!(fields, [TypeField::Array { .. }]);
+
+        let group_id = self.group_id();
+        self.group_with_id(group_id, |grouped| {
+            grouped.token("{");
+            grouped.indent(|indented| {
+                indented.soft_line_or_space();
+                for (i, field) in fields.iter().enumerate() {
+                    if i > 0 {
+                        indented.token(",");
+                        indented.soft_line_or_space();
+                    }
+                    indented.write_type_field(field);
+                }
+                if !is_array_shorthand {
+                    indented.if_group_breaks(group_id, |f| f.token(","));
+                }
+            });
+            grouped.soft_line_or_space();
+            grouped.token("}");
+        });
+    }
+
+    fn write_type_field(&mut self, field: &TypeField<'ast>) {
+        match field {
+            TypeField::Named { access, name, value, .. } => {
                 // Luau `read`/`write` access modifier sits before the name.
                 if let Some(modifier) = access {
-                    (modifier, space()).fmt(f);
+                    self.token(modifier.as_str());
+                    self.space();
                 }
-                (name, token(":"), space(), value).fmt(f);
+                self.name(*name);
+                self.token(":");
+                self.space();
+                self.write_type(value);
             }
-            Self::Indexer { access, key, value, .. } => {
+            TypeField::Indexer { access, key, value, .. } => {
                 if let Some(modifier) = access {
-                    (modifier, space()).fmt(f);
+                    self.token(modifier.as_str());
+                    self.space();
                 }
-                (token("["), key, token("]"), token(":"), space(), value).fmt(f);
+                self.token("[");
+                self.write_type(key);
+                self.token("]");
+                self.token(":");
+                self.space();
+                self.write_type(value);
             }
-            Self::Array { access: Some(modifier), value, .. } => {
-                (modifier, space(), value).fmt(f);
+            TypeField::Array { access: Some(modifier), value, .. } => {
+                self.token(modifier.as_str());
+                self.space();
+                self.write_type(value);
             }
-            Self::Array { access: None, value, .. } => {
+            TypeField::Array { access: None, value, .. } => {
                 // A `read` or `write` that opens the field would read back
                 // as its access modifier, so the leading operator that keeps
                 // it from opening the field stays.
                 let should_lead =
                     flat_leading_name(value).is_some_and(|name| matches!(name, "read" | "write"));
-                write_at_line_start(f, value, should_lead);
+                self.write_at_line_start(value, should_lead);
             }
         }
     }
-}
 
-impl Format for TypeArgs {
-    fn fmt(&self, f: &mut Formatter) {
-        write_delimited(f, "<", ">", &self.args.items, write_list_type);
-    }
-}
-
-/// Luau expression-side explicit type arguments use doubled delimiters.
-pub(crate) struct ExplicitTypeArgs<'args>(pub &'args TypeArgs);
-
-impl Format for ExplicitTypeArgs<'_> {
-    fn fmt(&self, f: &mut Formatter) {
-        write_delimited(f, "<<", ">>", &self.0.args.items, write_list_type);
-    }
-}
-
-impl Format for GenericTypeList {
-    fn fmt(&self, f: &mut Formatter) {
-        write_delimited(f, "<", ">", &self.params.items, |param_f, param| param.fmt(param_f));
-    }
-}
-
-impl Format for GenericTypeParam {
-    fn fmt(&self, f: &mut Formatter) {
-        self.name.fmt(f);
-        // Luau: `T...` marks a generic pack parameter.
-        if self.is_pack {
-            token("...").fmt(f);
+    /// Flat reads `A | B | C`.
+    ///
+    /// Broken, each member gets its own line and a leading `| ` (or `& `), as
+    /// Prettier does for TypeScript unions. The break decision alone places
+    /// the leading operator, so the AST's `has_leading_pipe` and
+    /// `has_leading_ampersand` are ignored.
+    fn write_alternation(&mut self, items: &[Type<'ast>], op: &'static str, placement: Placement) {
+        let group_id = self.group_id();
+        let separator = |f: &mut Self| {
+            f.soft_line_or_space();
+            f.token(op);
+            f.space();
+        };
+        let members = |f: &mut Self| {
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    separator(f);
+                }
+                f.write_type(item);
+            }
+        };
+        match placement {
+            Placement::AfterText => self.group_with_id(group_id, |grouped| {
+                grouped.indent(|f| {
+                    f.if_group_breaks(group_id, separator);
+                    members(f);
+                });
+            }),
+            Placement::LineStart { should_lead: true } => self.group_with_id(group_id, |f| {
+                f.token(op);
+                f.space();
+                members(f);
+            }),
+            Placement::LineStart { should_lead: false } => {
+                self.group_with_id(group_id, |grouped| {
+                    grouped.if_group_breaks(group_id, |f| {
+                        f.token(op);
+                        f.space();
+                    });
+                    members(grouped);
+                });
+            }
         }
-        // `= T` default - only legal in `type` declarations.
-        if let Some(default) = &self.default {
-            (space(), token("="), space(), default).fmt(f);
-        }
     }
-}
 
-impl Format for FunctionTypeParam {
-    fn fmt(&self, f: &mut Formatter) {
-        if let Some(name) = &self.name {
-            (name, token(":"), space(), &self.type_value).fmt(f);
+    /// `ty` where a list or a table that breaks opens a line for it.
+    fn write_at_line_start(&mut self, ty: &Type<'ast>, should_lead: bool) {
+        let placement = Placement::LineStart { should_lead };
+        if let Type::Union(union) = ty {
+            self.write_alternation(&union.types, "|", placement);
+        } else if let Type::Intersection(intersection) = ty {
+            self.write_alternation(&intersection.types, "&", placement);
         } else {
-            write_list_type(f, &self.type_value);
+            self.write_type(ty);
         }
     }
-}
 
-/// A broken list opens a line for each item, where `write_item` writes it.
-///
-/// Nested angle brackets close with adjacent `>` tokens. The lexer reads them
-/// as one `>>`, which the parser splits again.
-fn write_delimited<T>(
-    f: &mut Formatter,
-    open: &'static str,
-    close: &'static str,
-    items: &[T],
-    write_item: impl Fn(&mut Formatter, &T),
-) {
-    if items.is_empty() {
-        (token(open), token(close)).fmt(f);
-        return;
+    fn write_list_type(&mut self, ty: &Type<'ast>) {
+        self.write_at_line_start(ty, false);
     }
-    let list = format_with(|list_f| {
-        for (i, item) in items.iter().enumerate() {
-            if i > 0 {
-                (token(","), soft_line_or_space()).fmt(list_f);
+
+    pub(crate) fn write_generic_type_list(&mut self, generics: &GenericTypeList<'ast>) {
+        self.write_delimited("<", ">", &generics.params, |f, param| {
+            f.name(param.name);
+            // Luau: `T...` marks a generic pack parameter.
+            if param.is_pack {
+                f.token("...");
             }
-            write_item(list_f, item);
+            // `= T` default - only legal in `type` declarations.
+            if let Some(default) = &param.default {
+                f.space();
+                f.token("=");
+                f.space();
+                f.write_type(default);
+            }
+        });
+    }
+
+    fn write_function_type_param(&mut self, param: &FunctionTypeParam<'ast>) {
+        if let Some(name) = &param.name {
+            self.name(*name);
+            self.token(":");
+            self.space();
+            self.write_type(&param.ty);
+        } else {
+            self.write_list_type(&param.ty);
         }
-    });
-    group((token(open), indent((soft_line(), list)), soft_line(), token(close))).fmt(f);
+    }
+
+    /// Type arguments, `<T, U>`, and a Luau instantiation's doubled
+    /// `<<T, U>>`.
+    pub(crate) fn write_delimited_types(
+        &mut self,
+        open: &'static str,
+        close: &'static str,
+        types: &[Type<'ast>],
+    ) {
+        self.write_delimited(open, close, types, Self::write_list_type);
+    }
+
+    /// A broken list opens a line for each item, where `write_item` writes it.
+    ///
+    /// Nested angle brackets close with adjacent `>` tokens. The lexer reads
+    /// them as one `>>`, which the parser splits again.
+    fn write_delimited<T>(
+        &mut self,
+        open: &'static str,
+        close: &'static str,
+        items: &[T],
+        write_item: impl Fn(&mut Self, &T),
+    ) {
+        if items.is_empty() {
+            self.token(open);
+            self.token(close);
+            return;
+        }
+        self.group(|grouped| {
+            grouped.token(open);
+            grouped.indent(|f| {
+                f.soft_line();
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.token(",");
+                        f.soft_line_or_space();
+                    }
+                    write_item(f, item);
+                }
+            });
+            grouped.soft_line();
+            grouped.token(close);
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_ast::{Synth, Type};
+    use luck_allocator::Allocator;
+    use luck_ast::{SpanCounter, Synth, Type};
 
-    use crate::{FormatOptions, fixtures};
+    use crate::FormatOptions;
+    use crate::fixtures::render;
 
-    fn render(ty: &Type) -> String {
-        fixtures::render(ty, FormatOptions::default())
+    fn render_type<'ast>(
+        allocator: &'ast Allocator,
+        build: impl FnOnce(Synth<'ast>) -> Type<'ast>,
+    ) -> String {
+        let spans = allocator.alloc(SpanCounter::new());
+        let ty = build(Synth::new(allocator, spans));
+        render(allocator, FormatOptions::default(), |f| f.write_type(&ty))
     }
 
     #[test]
     fn named_type() {
-        let synth = Synth::new();
-        let ty = synth.ty_named("number");
-        assert_eq!(render(&ty), "number");
+        let allocator = Allocator::new();
+        assert_eq!(render_type(&allocator, |synth| synth.ty_named("number")), "number");
     }
 
     #[test]
     fn qualified_type() {
-        let synth = Synth::new();
-        let ty = synth.ty_qualified("module", "Type");
-        assert_eq!(render(&ty), "module.Type");
+        let allocator = Allocator::new();
+        let rendered = render_type(&allocator, |synth| synth.ty_qualified("module", "Type"));
+        assert_eq!(rendered, "module.Type");
     }
 
     #[test]
     fn optional_is_tight() {
-        let synth = Synth::new();
-        let inner = synth.ty_named("string");
-        let ty = synth.ty_optional(inner);
-        assert_eq!(render(&ty), "string?");
+        let allocator = Allocator::new();
+        let rendered = render_type(&allocator, |synth| synth.ty_optional(synth.ty_named("string")));
+        assert_eq!(rendered, "string?");
     }
 
     #[test]
     fn union_flat_has_spaced_pipes() {
-        let synth = Synth::new();
-        let string_ty = synth.ty_named("string");
-        let number_ty = synth.ty_named("number");
-        let ty = synth.ty_union(vec![string_ty, number_ty]);
-        assert_eq!(render(&ty), "string | number");
+        let allocator = Allocator::new();
+        let rendered = render_type(&allocator, |synth| {
+            synth.ty_union([synth.ty_named("string"), synth.ty_named("number")])
+        });
+        assert_eq!(rendered, "string | number");
     }
 
     #[test]
     fn intersection_flat_has_spaced_ampersands() {
-        let synth = Synth::new();
-        let left = synth.ty_named("A");
-        let right = synth.ty_named("B");
-        let ty = synth.ty_intersection(vec![left, right]);
-        assert_eq!(render(&ty), "A & B");
+        let allocator = Allocator::new();
+        let rendered = render_type(&allocator, |synth| {
+            synth.ty_intersection([synth.ty_named("A"), synth.ty_named("B")])
+        });
+        assert_eq!(rendered, "A & B");
     }
 
     #[test]
     fn generic_args() {
-        let synth = Synth::new();
-        let key = synth.ty_named("string");
-        let value = synth.ty_named("number");
-        let ty = synth.ty_generic("Map", vec![key, value]);
-        assert_eq!(render(&ty), "Map<string, number>");
+        let allocator = Allocator::new();
+        let rendered = render_type(&allocator, |synth| {
+            synth.ty_generic("Map", [synth.ty_named("string"), synth.ty_named("number")])
+        });
+        assert_eq!(rendered, "Map<string, number>");
     }
 
     #[test]
     fn table_type_flat_has_inner_spaces() {
-        let synth = Synth::new();
-        let name_ty = synth.ty_named("string");
-        let age_ty = synth.ty_named("number");
-        let ty = synth.ty_record(vec![("name", name_ty), ("age", age_ty)]);
-        assert_eq!(render(&ty), "{ name: string, age: number }");
+        let allocator = Allocator::new();
+        let rendered = render_type(&allocator, |synth| {
+            synth.ty_record([("name", synth.ty_named("string")), ("age", synth.ty_named("number"))])
+        });
+        assert_eq!(rendered, "{ name: string, age: number }");
     }
 
     #[test]
     fn array_shorthand_has_no_trailing_comma() {
-        let synth = Synth::new();
-        let element = synth.ty_named("string");
-        let ty = synth.ty_table_array(element);
-        assert_eq!(render(&ty), "{ string }");
+        let allocator = Allocator::new();
+        let rendered =
+            render_type(&allocator, |synth| synth.ty_table_array(synth.ty_named("string")));
+        assert_eq!(rendered, "{ string }");
     }
 
     #[test]
     fn function_type() {
-        let synth = Synth::new();
-        let param = synth.ty_named("number");
-        let return_type = synth.ty_named("boolean");
-        let ty = synth.ty_function(vec![param], return_type);
-        assert_eq!(render(&ty), "(number) -> boolean");
+        let allocator = Allocator::new();
+        let rendered = render_type(&allocator, |synth| {
+            synth.ty_function([synth.ty_named("number")], synth.ty_named("boolean"))
+        });
+        assert_eq!(rendered, "(number) -> boolean");
     }
 
     #[test]
     fn variadic_pack_is_tight() {
-        let synth = Synth::new();
-        let element = synth.ty_named("number");
-        let ty = synth.ty_variadic(element);
-        assert_eq!(render(&ty), "...number");
+        let allocator = Allocator::new();
+        let rendered = render_type(&allocator, |synth| synth.ty_variadic(synth.ty_named("number")));
+        assert_eq!(rendered, "...number");
     }
 }

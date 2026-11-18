@@ -29,6 +29,6 @@ pub(crate) const fn assignment_target_limit(live_registers: usize) -> usize {
 
 /// A `:` method's `self` and a named vararg aren't all visible from the body
 /// alone, so both are assumed present.
-pub(crate) const fn parameter_locals(body: &FunctionBody) -> usize {
+pub(crate) fn parameter_locals(body: &FunctionBody<'_>) -> usize {
     body.params.len().saturating_add(2)
 }

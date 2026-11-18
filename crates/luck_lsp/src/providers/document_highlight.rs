@@ -11,20 +11,20 @@ pub(crate) fn document_highlights(
     position: Position,
 ) -> Vec<DocumentHighlight> {
     let offset = document.offset(position);
-    let Some(node) = find_node_at(&document.parsed.block, offset) else {
+    let Some(node) = find_node_at(&document.parse().block, offset) else {
         return Vec::new();
     };
-    let Some(&name) = node.path().last() else {
+    let tree = document.tree();
+    let Some(name) = node.path().last().and_then(|&name| tree.name_id(name)) else {
         return Vec::new();
     };
-    document
-        .semantic
-        .scope_tree
-        .references
+    // References come in evaluation order, which is mostly source order.
+    let mut positions = document.positions();
+    tree.references()
         .iter()
         .filter(|reference| reference.name == name)
         .map(|reference| DocumentHighlight {
-            range: document.range(reference.span),
+            range: positions.range(reference.span),
             kind: Some(if reference.kind.is_write() {
                 DocumentHighlightKind::WRITE
             } else {
@@ -37,9 +37,9 @@ pub(crate) fn document_highlights(
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
-    use rustc_hash::FxHashSet;
 
     use super::*;
+    use crate::fixtures::document;
 
     #[test]
     fn highlight_marks_compound_assignment_as_a_write() {
@@ -47,8 +47,7 @@ mod tests {
 local n = 1
 n += 1
 ";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::Luau, FxHashSet::default());
+        let document = document(text, LuaTarget::Luau);
         let highlights = document_highlights(&document, Position::new(1, 0));
         assert_eq!(
             highlights.first().and_then(|highlight| highlight.kind),

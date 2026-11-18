@@ -12,14 +12,14 @@ use crate::providers::cursor::local_at;
 pub(crate) fn references(document: &DocumentState, params: &ReferenceParams) -> Vec<Location> {
     let uri = &params.text_document_position.text_document.uri;
     let offset = document.offset(params.text_document_position.position);
-    let tree = &document.semantic.scope_tree;
+    let tree = document.tree();
     let Some((symbol_id, _)) = local_at(tree, offset) else {
         return Vec::new();
     };
     let symbol = tree.symbol(symbol_id);
 
-    let mut spans: Vec<Span> = symbol
-        .reference_ids
+    let mut spans: Vec<Span> = tree
+        .resolved_references(symbol_id)
         .iter()
         .map(|&reference_id| tree.reference(reference_id).span)
         .collect();
@@ -30,36 +30,34 @@ pub(crate) fn references(document: &DocumentState, params: &ReferenceParams) -> 
     spans.sort_by_key(|span| span.start);
     spans.dedup();
 
+    let mut positions = document.positions();
     spans
         .into_iter()
-        .map(|span| Location { uri: uri.clone(), range: document.range(span) })
+        .map(|span| Location { uri: uri.clone(), range: positions.range(span) })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
-    use rustc_hash::FxHashSet;
     use tower_lsp_server::ls_types::{
         PartialResultParams, Position, ReferenceContext, TextDocumentIdentifier,
         TextDocumentPositionParams, WorkDoneProgressParams,
     };
 
     use super::*;
+    use crate::fixtures::document;
 
     #[test]
     fn the_implicit_self_declaration_is_no_location() {
-        let document = DocumentState::new(
+        let document = document(
             "\
 local t = {}
 function t:m()
   return self
 end
-"
-            .to_owned(),
-            1,
+",
             LuaTarget::Lua54,
-            FxHashSet::default(),
         );
         let params = ReferenceParams {
             text_document_position: TextDocumentPositionParams {

@@ -20,19 +20,21 @@ impl_rule!(
 impl WholeRule for NoImplicitGlobals {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
+        let tree = semantic.scope_tree();
         let mut findings = Vec::new();
 
-        for reference in semantic.scope_tree.unresolved_references() {
+        for reference in tree.global_references() {
+            let name = tree.name(reference.name);
             // `_` is a conventional discard name, not a real global.
-            if reference.name == "_" {
+            if name == "_" {
                 continue;
             }
-            if semantic.extra_globals.contains(reference.name.as_str()) {
+            if semantic.is_extra_global(reference.name) {
                 continue;
             }
 
             findings.push(
-                Finding::new(format!("global variable `{}` used", reference.name), reference.span)
+                Finding::new(format!("global variable `{name}` used"), reference.span)
                     .with_help("pass it in explicitly, or add it to `extra_globals`"),
             );
         }

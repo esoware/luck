@@ -33,6 +33,7 @@ linter    = ["luck_linter", "semantic"]
 config    = ["luck_config", "bundler", "minifier", "formatter", "linter"]
 
 [dependencies]
+luck_allocator = { workspace = true }
 luck_ast       = { workspace = true }
 luck_bundler   = { workspace = true, optional = true }
 luck_codegen   = { workspace = true, optional = true }
@@ -46,6 +47,10 @@ luck_parser    = { workspace = true }
 luck_resolver  = { workspace = true, optional = true }
 luck_semantic  = { workspace = true, optional = true }
 luck_token     = { workspace = true }
+
+[dev-dependencies]
+# Every stage's doctest runs.
+luck_lua = { path = ".", features = ["full"] }
 
 [package.metadata.docs.rs]
 all-features = true

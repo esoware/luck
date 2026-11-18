@@ -3,7 +3,8 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use luck_parser::parse;
+use luck_allocator::Allocator;
+use luck_parser::{parse, parse_with_tokens};
 use luck_testgen::{collect_fixture_files, detect_version, is_error_fixture};
 
 fn fixtures_directory() -> PathBuf {
@@ -18,6 +19,7 @@ fn fixtures_directory() -> PathBuf {
 
 #[test]
 fn fixtures_outside_errors_parse_cleanly() {
+    let allocator = Allocator::new();
     let root = fixtures_directory();
     let files: Vec<PathBuf> = collect_fixture_files(&root)
         .expect("fixture tree is readable")
@@ -32,7 +34,7 @@ fn fixtures_outside_errors_parse_cleanly() {
     for path in &files {
         let relative = path.strip_prefix(&root).expect("fixture is under the root");
         let source = fs::read_to_string(path).expect("failed to read fixture file");
-        let result = parse(&source, detect_version(relative));
+        let result = parse(&allocator, &source, detect_version(relative));
 
         if is_error_fixture(relative) {
             // Fixtures under `errors/` may or may not parse.
@@ -58,4 +60,21 @@ fn fixtures_outside_errors_parse_cleanly() {
     }
 
     assert!(success_count > 0, "parsed {success_count} fixtures successfully");
+}
+
+#[test]
+fn every_fixture_parses_with_the_tokens_it_lexes_to() {
+    let root = fixtures_directory();
+    let files = collect_fixture_files(&root).expect("fixture tree is readable");
+    for path in files
+        .iter()
+        .filter(|path| matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau")))
+    {
+        let relative = path.strip_prefix(&root).expect("fixture is under the root");
+        let source = fs::read_to_string(path).expect("failed to read fixture file");
+        let version = detect_version(relative);
+        let allocator = Allocator::new();
+        let (_, tokens) = parse_with_tokens(&allocator, &source, version);
+        assert_eq!(tokens, luck_lexer::lex(&source, version).tokens, "{}", relative.display());
+    }
 }

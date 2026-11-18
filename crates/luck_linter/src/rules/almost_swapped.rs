@@ -18,7 +18,8 @@ impl_rule!(
 impl WholeRule for AlmostSwapped {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         context
-            .blocks
+            .nodes
+            .blocks()
             .iter()
             .flat_map(|block| adjacent_stmts(block))
             .filter_map(|(first, second)| failed_swap(first, second))
@@ -26,17 +27,14 @@ impl WholeRule for AlmostSwapped {
     }
 }
 
-fn failed_swap(first_stmt: &Statement, second_stmt: &Statement) -> Option<Finding> {
+fn failed_swap(first_stmt: &Statement<'_>, second_stmt: &Statement<'_>) -> Option<Finding> {
     let (Statement::Assignment(first), Statement::Assignment(second)) = (first_stmt, second_stmt)
     else {
         return None;
     };
-    let ([first_target], [first_value], [second_target], [second_value]) = (
-        first.targets.items.as_slice(),
-        first.values.items.as_slice(),
-        second.targets.items.as_slice(),
-        second.values.items.as_slice(),
-    ) else {
+    let ([first_target], [first_value], [second_target], [second_value]) =
+        (&*first.targets, &*first.values, &*second.targets, &*second.values)
+    else {
         return None;
     };
     let target_a = var_name(first_target)?;
@@ -55,18 +53,18 @@ fn failed_swap(first_stmt: &Statement, second_stmt: &Statement) -> Option<Findin
     })
 }
 
-fn var_name(var: &Var) -> Option<&str> {
-    let Var::Name(token) = var else {
+fn var_name<'ast>(var: &Var<'ast>) -> Option<&'ast str> {
+    let Var::Name(name) = var else {
         return None;
     };
-    token.identifier()
+    Some(name.text.as_str())
 }
 
-fn expr_var_name(expr: &Expression) -> Option<&str> {
-    let Expression::Name(token) = expr else {
+fn expr_var_name<'ast>(expr: &Expression<'ast>) -> Option<&'ast str> {
+    let Expression::Name(name) = expr else {
         return None;
     };
-    token.identifier()
+    Some(name.text.as_str())
 }
 
 #[cfg(test)]

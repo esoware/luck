@@ -19,7 +19,8 @@ impl_rule!(
 impl WholeRule for UnreachableCode {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         context
-            .blocks
+            .nodes
+            .blocks()
             .iter()
             .filter_map(|block| first_unreachable_stmt(block, context.semantic))
             .map(|stmt| Finding::new("unreachable code", stmt.span()))
@@ -29,9 +30,9 @@ impl WholeRule for UnreachableCode {
 
 /// A `goto` can still reach the code after a label.
 fn first_unreachable_stmt<'ast>(
-    block: &'ast Block,
-    semantic: &SemanticAnalysis,
-) -> Option<&'ast Statement> {
+    block: &'ast Block<'ast>,
+    semantic: &SemanticAnalysis<'_>,
+) -> Option<&'ast Statement<'ast>> {
     let mut code_after_break = block
         .stmts
         .iter()

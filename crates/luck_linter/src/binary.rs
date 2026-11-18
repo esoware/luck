@@ -7,13 +7,13 @@ use luck_token::{Associativity, BinOp, Span};
 pub(crate) struct OperatorPair<'ast> {
     pub op: BinOp,
     /// `None` when the left side is the operators of the run before this one.
-    pub lhs: Option<&'ast Expression>,
+    pub lhs: Option<&'ast Expression<'ast>>,
     /// `None` when the right side is the operators of the run after this one.
-    pub rhs: Option<&'ast Expression>,
+    pub rhs: Option<&'ast Expression<'ast>>,
     /// Where [`Self::span`] starts.
-    pub first_operand: &'ast Expression,
+    pub first_operand: &'ast Expression<'ast>,
     /// Where [`Self::span`] ends.
-    pub last_operand: &'ast Expression,
+    pub last_operand: &'ast Expression<'ast>,
 }
 
 impl OperatorPair<'_> {
@@ -25,9 +25,11 @@ impl OperatorPair<'_> {
 
 /// Each operator of `run`, the outermost pair first: the last of a
 /// left-associative run, and the first of a right-associative one.
-pub(crate) fn operator_pairs(run: &BinaryOp) -> impl Iterator<Item = OperatorPair<'_>> {
+pub(crate) fn operator_pairs<'ast>(
+    run: &'ast BinaryOp<'ast>,
+) -> impl Iterator<Item = OperatorPair<'ast>> {
     let is_left_associative = run.precedence().1 == Associativity::Left;
-    let links: &[BinaryLink] = &run.links;
+    let links: &[BinaryLink<'_>] = &run.links;
     let count = links.len();
     let run_last_operand = &run.links.last().operand;
     (0..count).filter_map(move |step| {

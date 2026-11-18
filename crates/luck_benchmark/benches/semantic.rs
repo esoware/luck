@@ -1,7 +1,9 @@
-use luck_benchmark::{
-    BenchmarkId, Criterion, black_box, criterion_group, criterion_main, test_files, test_projects,
-};
+use luck_allocator::Allocator;
+use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use luck_benchmark_files::{test_files, test_projects};
 
+/// Each iteration analyzes a parse made once, since analysis only reads the
+/// tree.
 fn bench_semantic(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("semantic");
 
@@ -9,13 +11,13 @@ fn bench_semantic(criterion: &mut Criterion) {
         let id = BenchmarkId::from_parameter(file.file_name);
         let version = file.target.lua_version();
         let environment = file.target.stdlib_environment();
-        // `analyze_with_environment` only borrows the AST, so one parse
-        // serves every iteration.
-        let parse_result = file.parse();
+        let allocator = Allocator::new();
+        let parse_result = file.parse(&allocator);
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                luck_semantic::analyze_with_environment(
+                luck_semantic::analyze(
                     black_box(&parse_result.block),
+                    parse_result.counts,
                     version,
                     environment,
                 )
@@ -27,12 +29,14 @@ fn bench_semantic(criterion: &mut Criterion) {
         let id = BenchmarkId::from_parameter(project.name);
         let version = project.target.lua_version();
         let environment = project.target.stdlib_environment();
-        let parse_results = project.parse_files();
+        let allocator = Allocator::new();
+        let parse_results = project.parse_files(&allocator);
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
                 for parse_result in &parse_results {
-                    black_box(luck_semantic::analyze_with_environment(
+                    black_box(luck_semantic::analyze(
                         black_box(&parse_result.block),
+                        parse_result.counts,
                         version,
                         environment,
                     ));

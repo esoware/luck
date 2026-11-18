@@ -3,6 +3,11 @@ use std::{fs, io};
 
 use crate::exit::{Exit, operation_error};
 
+/// What a path command buffers before writing to stdout or stderr. One file's
+/// rendered diagnostics often outgrow the default buffer, which would write
+/// each through on its own.
+pub(crate) const OUTPUT_BUFFER_BYTES: usize = 1 << 18;
+
 #[expect(
     clippy::as_conversions,
     clippy::cast_precision_loss,

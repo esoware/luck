@@ -1,7 +1,7 @@
 use luck_lexer::lex;
 use luck_token::{LuaVersion, Span, TokenKind};
 
-use crate::common::{first_kind, first_kind_in, kinds, kinds_in, lex_lua51};
+use crate::common::{first_kind, first_kind_in, kinds, kinds_in, lex_lua51, tokens};
 
 #[test]
 fn lua51_keywords_lex_as_keyword_tokens() {
@@ -35,8 +35,31 @@ fn lua51_keywords_lex_as_keyword_tokens() {
 
 #[test]
 fn identifiers_take_letters_digits_and_underscores() {
-    for source in ["foo", "_bar", "_123", "abc_def"] {
-        assert_eq!(first_kind(source), TokenKind::Identifier(source.into()));
+    for source in ["foo", "_bar", "_123", "abc_def", "x9_Y"] {
+        assert_eq!(tokens(source), [(TokenKind::Identifier, source)]);
+    }
+}
+
+#[test]
+fn a_name_ends_at_the_first_byte_that_cannot_continue_it() {
+    assert_eq!(
+        tokens("abc.d9(e_f)g"),
+        [
+            (TokenKind::Identifier, "abc"),
+            (TokenKind::Dot, "."),
+            (TokenKind::Identifier, "d9"),
+            (TokenKind::LeftParen, "("),
+            (TokenKind::Identifier, "e_f"),
+            (TokenKind::RightParen, ")"),
+            (TokenKind::Identifier, "g"),
+        ]
+    );
+}
+
+#[test]
+fn a_keyword_spelling_inside_a_longer_name_is_a_name() {
+    for source in ["ends", "_end", "end_", "End", "iff", "forward", "functions", "localx", "nil2"] {
+        assert_eq!(first_kind(source), TokenKind::Identifier, "{source:?}");
     }
 }
 
@@ -90,9 +113,44 @@ fn multi_char_symbols_lex_to_their_kinds() {
 #[test]
 fn whitespace_yields_no_tokens() {
     assert_eq!(
-        kinds("  x  +  y  "),
-        vec![TokenKind::Identifier("x".into()), TokenKind::Plus, TokenKind::Identifier("y".into()),]
+        tokens(" \t x \x0B\x0C + \r\n y  "),
+        [(TokenKind::Identifier, "x"), (TokenKind::Plus, "+"), (TokenKind::Identifier, "y")]
     );
+}
+
+#[test]
+fn each_token_records_whether_a_line_break_precedes_it() {
+    let source = "\
+a b
+c --[[
+]] d -- e
+f --[[ g ]] h";
+    let result = lex_lua51(source);
+    let breaks: Vec<(&str, bool)> = result
+        .tokens
+        .iter()
+        .map(|token| (token.text(source), token.has_line_break_before))
+        .collect();
+    assert_eq!(
+        breaks,
+        [
+            ("a", true),
+            ("b", false),
+            ("c", true),
+            ("d", true),
+            ("f", true),
+            ("h", false),
+            ("", false)
+        ]
+    );
+}
+
+#[test]
+fn only_luau_reads_a_lone_cr_as_no_line_break() {
+    for version in LuaVersion::ALL {
+        let result = lex("a\rb", version);
+        assert_eq!(result.tokens[1].has_line_break_before, !version.is_luau(), "{version:?}");
+    }
 }
 
 #[test]
@@ -106,6 +164,41 @@ fn empty_source_lexes_to_only_eof() {
     let result = lex_lua51("");
     assert_eq!(result.tokens.len(), 1);
     assert_eq!(result.tokens[0].kind, TokenKind::Eof);
+}
+
+/// Every scan can meet the end of the source, so each prefix ends one at a
+/// different byte.
+#[test]
+fn every_prefix_of_a_source_lexes_to_an_eof_at_its_end() {
+    let source = "\u{FEFF}#!lua
+local name_longer_than_a_word, x = 0x1F.8p-3 + 1e+10 .. 0b1_01i, 1_000i
+s = \"esc \\n \\z \t \\x41 \\u{1F600} \\065 \\q \u{e9}\" .. 'q\\\r
+' t = [==[ long ]] ]=] ]==] --[[ block
+comment ]] -- line \u{1F600}\r
+`a {b .. `c {d}`} \\{ {{ e` f(...) ..= //= :: -> \x0B\x0C caf\u{e9}
+";
+    for version in LuaVersion::ALL {
+        // `get` refuses a cut inside a char.
+        for prefix in (0..=source.len()).filter_map(|length| source.get(..length)) {
+            let result = lex(prefix, version);
+            let end = u32::try_from(prefix.len()).expect("the source is short");
+            let (eof, tokens) = result.tokens.split_last().expect("an EOF token");
+            assert_eq!(eof.kind, TokenKind::Eof, "{version:?} {prefix:?}");
+            assert_eq!(eof.span, Span::new(end, end), "{version:?} {prefix:?}");
+            let mut previous_end = 0;
+            for token in tokens {
+                let span = token.span;
+                assert!(
+                    previous_end <= span.start && span.start < span.end && span.end <= end,
+                    "{version:?} {prefix:?} {token:?}"
+                );
+                previous_end = span.end;
+            }
+            for comment in &result.comments {
+                assert!(comment.span.end <= end, "{version:?} {prefix:?} {comment:?}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -124,11 +217,11 @@ fn local_stmt_lexes_token_by_token() {
         kinds("local x = 1 + 2"),
         vec![
             TokenKind::Local,
-            TokenKind::Identifier("x".into()),
+            TokenKind::Identifier,
             TokenKind::Equal,
-            TokenKind::Number("1".into()),
+            TokenKind::Number,
             TokenKind::Plus,
-            TokenKind::Number("2".into()),
+            TokenKind::Number,
         ]
     );
 }
@@ -138,9 +231,9 @@ fn call_with_string_argument_lexes_token_by_token() {
     assert_eq!(
         kinds("print(\"hello\")"),
         vec![
-            TokenKind::Identifier("print".into()),
+            TokenKind::Identifier,
             TokenKind::LeftParen,
-            TokenKind::StringLiteral("\"hello\"".into()),
+            TokenKind::StringLiteral,
             TokenKind::RightParen,
         ]
     );
@@ -152,11 +245,11 @@ fn table_constructor_lexes_token_by_token() {
         kinds("{1, 2, 3}"),
         vec![
             TokenKind::LeftBrace,
-            TokenKind::Number("1".into()),
+            TokenKind::Number,
             TokenKind::Comma,
-            TokenKind::Number("2".into()),
+            TokenKind::Number,
             TokenKind::Comma,
-            TokenKind::Number("3".into()),
+            TokenKind::Number,
             TokenKind::RightBrace,
         ]
     );
@@ -167,11 +260,11 @@ fn field_and_method_access_lex_token_by_token() {
     assert_eq!(
         kinds("a.b:c()"),
         vec![
-            TokenKind::Identifier("a".into()),
+            TokenKind::Identifier,
             TokenKind::Dot,
-            TokenKind::Identifier("b".into()),
+            TokenKind::Identifier,
             TokenKind::Colon,
-            TokenKind::Identifier("c".into()),
+            TokenKind::Identifier,
             TokenKind::LeftParen,
             TokenKind::RightParen,
         ]
@@ -209,7 +302,7 @@ fn goto_is_a_keyword_only_in_lua52_plus() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         assert_eq!(
             first_kind_in("goto", version),
-            TokenKind::Identifier("goto".into()),
+            TokenKind::Identifier,
             "goto should be identifier in {version:?}"
         );
     }
@@ -220,7 +313,7 @@ fn global_is_a_name_in_every_version() {
     for version in LuaVersion::ALL {
         assert_eq!(
             first_kind_in("global", version),
-            TokenKind::Identifier("global".into()),
+            TokenKind::Identifier,
             "global should be identifier in {version:?}"
         );
     }
@@ -232,9 +325,9 @@ fn lua52_goto_and_label_lex_token_by_token() {
         kinds_in("goto done :: done ::", LuaVersion::Lua52),
         vec![
             TokenKind::Goto,
-            TokenKind::Identifier("done".into()),
+            TokenKind::Identifier,
             TokenKind::DoubleColon,
-            TokenKind::Identifier("done".into()),
+            TokenKind::Identifier,
             TokenKind::DoubleColon,
         ]
     );
@@ -244,12 +337,7 @@ fn lua52_goto_and_label_lex_token_by_token() {
 fn lua55_global_stmt_lexes_token_by_token() {
     assert_eq!(
         kinds_in("global x = 5", LuaVersion::Lua55),
-        vec![
-            TokenKind::Identifier("global".into()),
-            TokenKind::Identifier("x".into()),
-            TokenKind::Equal,
-            TokenKind::Number("5".into()),
-        ]
+        vec![TokenKind::Identifier, TokenKind::Identifier, TokenKind::Equal, TokenKind::Number,]
     );
 }
 
@@ -288,12 +376,7 @@ fn floor_div_not_confused_with_comment() {
 fn lua52_double_slash_lexes_as_two_slashes() {
     assert_eq!(
         kinds_in("a // b", LuaVersion::Lua52),
-        vec![
-            TokenKind::Identifier("a".into()),
-            TokenKind::Slash,
-            TokenKind::Slash,
-            TokenKind::Identifier("b".into()),
-        ]
+        vec![TokenKind::Identifier, TokenKind::Slash, TokenKind::Slash, TokenKind::Identifier,]
     );
 }
 
@@ -353,11 +436,11 @@ fn lua53_bitwise_expr_lexes_token_by_token() {
     assert_eq!(
         kinds_in("a & b | c", LuaVersion::Lua53),
         vec![
-            TokenKind::Identifier("a".into()),
+            TokenKind::Identifier,
             TokenKind::Ampersand,
-            TokenKind::Identifier("b".into()),
+            TokenKind::Identifier,
             TokenKind::Pipe,
-            TokenKind::Identifier("c".into()),
+            TokenKind::Identifier,
         ]
     );
 }
@@ -367,11 +450,11 @@ fn lua53_shift_expr_lexes_token_by_token() {
     assert_eq!(
         kinds_in("x << 2 >> 1", LuaVersion::Lua53),
         vec![
-            TokenKind::Identifier("x".into()),
+            TokenKind::Identifier,
             TokenKind::ShiftLeft,
-            TokenKind::Number("2".into()),
+            TokenKind::Number,
             TokenKind::ShiftRight,
-            TokenKind::Number("1".into()),
+            TokenKind::Number,
         ]
     );
 }
@@ -382,16 +465,16 @@ fn lua53_mixed_bitwise_expr_lexes_token_by_token() {
         kinds_in("(a & b) | (~c >> 2)", LuaVersion::Lua53),
         vec![
             TokenKind::LeftParen,
-            TokenKind::Identifier("a".into()),
+            TokenKind::Identifier,
             TokenKind::Ampersand,
-            TokenKind::Identifier("b".into()),
+            TokenKind::Identifier,
             TokenKind::RightParen,
             TokenKind::Pipe,
             TokenKind::LeftParen,
             TokenKind::Tilde,
-            TokenKind::Identifier("c".into()),
+            TokenKind::Identifier,
             TokenKind::ShiftRight,
-            TokenKind::Number("2".into()),
+            TokenKind::Number,
             TokenKind::RightParen,
         ]
     );
@@ -404,12 +487,12 @@ fn lua54_const_attribute_lexes_as_separate_tokens() {
         kinds_in("local x <const> = 5", LuaVersion::Lua54),
         vec![
             TokenKind::Local,
-            TokenKind::Identifier("x".into()),
+            TokenKind::Identifier,
             TokenKind::Less,
-            TokenKind::Identifier("const".into()),
+            TokenKind::Identifier,
             TokenKind::Greater,
             TokenKind::Equal,
-            TokenKind::Number("5".into()),
+            TokenKind::Number,
         ]
     );
 }
@@ -418,7 +501,7 @@ fn lua54_const_attribute_lexes_as_separate_tokens() {
 fn lua54_close_attribute_lexes_as_separate_tokens() {
     let token_kinds = kinds_in("local f <close> = io.open('x')", LuaVersion::Lua54);
     assert!(token_kinds.contains(&TokenKind::Less));
-    assert!(token_kinds.contains(&TokenKind::Identifier("close".into())));
+    assert!(token_kinds.contains(&TokenKind::Identifier));
     assert!(token_kinds.contains(&TokenKind::Greater));
 }
 
@@ -474,10 +557,7 @@ fn at_lexes_only_in_luau() {
 
 #[test]
 fn luau_attribute_lexes_as_at_and_a_name() {
-    assert_eq!(
-        kinds_in("@native", LuaVersion::Luau),
-        vec![TokenKind::At, TokenKind::Identifier("native".into())]
-    );
+    assert_eq!(kinds_in("@native", LuaVersion::Luau), vec![TokenKind::At, TokenKind::Identifier]);
 }
 
 #[test]

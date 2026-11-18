@@ -243,17 +243,20 @@ impl StdlibFunction {
         &self,
         index: usize,
         count: usize,
-    ) -> Option<Vec<&'static [StdlibConstant]>> {
-        let sets: Vec<&'static [StdlibConstant]> = self
-            .matching_signatures(count)
-            .map(|signature| {
+    ) -> Option<impl Iterator<Item = &'static [StdlibConstant]> + Clone> {
+        let signatures: &'static [StdlibSignature] = self.signatures;
+        let sets = signatures.iter().filter(move |signature| signature.accepts(count)).map(
+            move |signature| {
                 let StdlibArgKind::Constant(values) = signature.params.get(index)?.kind else {
                     return None;
                 };
                 Some(values)
-            })
-            .collect::<Option<_>>()?;
-        (!sets.is_empty()).then_some(sets)
+            },
+        );
+        let mut checked = sets.clone();
+        let is_constrained =
+            checked.next().is_some_and(|set| set.is_some()) && checked.all(|set| set.is_some());
+        is_constrained.then(|| sets.flatten())
     }
 
     #[must_use]
@@ -384,11 +387,15 @@ impl StdlibLibrary {
     /// property or constant, so `["game", "GetService"]` resolves through
     /// `game`'s shape.
     #[must_use]
-    pub fn lookup(&self, path: &[&str]) -> Option<&'static StdlibEntry> {
-        let (root, members) = path.split_first()?;
-        let mut current = self.globals.get(root)?;
-        for segment in members {
-            current = self.child(current, segment)?;
+    pub fn lookup<Path>(&self, path: Path) -> Option<&'static StdlibEntry>
+    where
+        Path: IntoIterator,
+        Path::Item: AsRef<str>,
+    {
+        let mut segments = path.into_iter();
+        let mut current = self.globals.get(segments.next()?.as_ref())?;
+        for segment in segments {
+            current = self.child(current, segment.as_ref())?;
         }
         Some(current)
     }

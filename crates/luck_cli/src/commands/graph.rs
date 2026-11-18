@@ -4,7 +4,8 @@ use luck_core::LuaTarget;
 
 use crate::exit::{Exit, fail_with_diags};
 use crate::project::{
-    config_for_one_shot, entry_and_root, resolve_configured_target, resolve_dynamic_require,
+    bundle_arenas, config_for_one_shot, entry_and_root, resolve_configured_target,
+    resolve_dynamic_require,
 };
 use crate::render::print_diags;
 use crate::verbosity::Verbosity;
@@ -51,7 +52,9 @@ impl GraphArgs {
         let (entry_path, project_root) = entry_and_root(&self.entry)?;
         let version = target.lua_version();
 
+        let mut arenas = bundle_arenas();
         let dependency_graph = DependencyGraph::build(
+            &mut arenas,
             entry_path,
             &BundleOptions {
                 version,
@@ -74,7 +77,7 @@ impl GraphArgs {
     }
 }
 
-fn print_graph_json(dependency_graph: &DependencyGraph) {
+fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
     use serde_json::{Map, Value, json};
 
     let module_path =
@@ -82,11 +85,8 @@ fn print_graph_json(dependency_graph: &DependencyGraph) {
 
     let mut modules_map = Map::new();
     for module in &dependency_graph.modules {
-        let requires: Vec<&str> = module
-            .dependencies
-            .iter()
-            .map(|dependency| dependency.require_string.as_str())
-            .collect();
+        let requires: Vec<&str> =
+            module.dependencies.iter().map(|dependency| dependency.require_string).collect();
         let resolved_paths: Vec<Option<&str>> =
             module.dependencies.iter().map(|dependency| module_path(dependency.target)).collect();
 
@@ -111,7 +111,7 @@ fn print_graph_json(dependency_graph: &DependencyGraph) {
     println!("{output:#}");
 }
 
-fn print_graph_dot(dependency_graph: &DependencyGraph) {
+fn print_graph_dot(dependency_graph: &DependencyGraph<'_>) {
     println!("digraph dependencies {{");
     for module in &dependency_graph.modules {
         for dependency in &module.dependencies {

@@ -1,9 +1,11 @@
+use alloc::borrow::Cow;
 use core::fmt::Write as _;
 use std::fs;
 use std::io::{self, BufWriter, Write as _};
 use std::path::{self, Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
+use luck_allocator::Allocator;
 use luck_config::LuckConfig;
 use luck_core::{Diagnostic, LuaTarget};
 use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
@@ -11,8 +13,10 @@ use luck_resolver::{normalize_path, read_source_file};
 use luck_token::{LineIndex, LuaVersion};
 
 use crate::exit::{Exit, operation_error, usage_error};
-use crate::output::read_stdin_source;
-use crate::project::{config_for_one_shot, outcomes_in_order, project_files, resolve_project};
+use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
+use crate::project::{
+    config_for_one_shot, for_each_outcome_in_order, project_files, resolve_project,
+};
 use crate::render::{line_and_column, render_document_diags};
 use crate::verbosity::Verbosity;
 
@@ -210,25 +214,35 @@ impl LintArgs {
         let mut total_fixed = 0usize;
         {
             // One lock and one flush per stream for the whole run.
-            let mut stderr = BufWriter::new(io::stderr().lock());
-            let mut stdout = BufWriter::new(io::stdout().lock());
-            let outcomes = outcomes_in_order(&files, |file| {
-                self.lint_file(&file.path, file.target, &file.project.settings, is_quiet)
-            });
-            for outcome in outcomes {
-                if let Some(note) = &outcome.note {
-                    let _unused = writeln!(stderr, "{note}");
-                }
-                let _unused = match &outcome.rendered {
-                    Some(Rendered::Pretty(pretty)) => stderr.write_all(pretty),
-                    Some(Rendered::Lines(lines)) => stdout.write_all(lines.as_bytes()),
-                    None => Ok(()),
-                };
-                total_errors = total_errors.saturating_add(outcome.error_count);
-                total_warnings = total_warnings.saturating_add(outcome.warning_count);
-                total_fixed = total_fixed.saturating_add(usize::from(outcome.is_fixed));
-            }
-        }
+            let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
+            let mut stdout = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stdout().lock());
+            for_each_outcome_in_order(
+                &files,
+                |file, allocator| {
+                    self.lint_file(
+                        allocator,
+                        &file.path,
+                        file.target,
+                        &file.project.settings,
+                        is_quiet,
+                    )
+                },
+                |outcome| {
+                    if let Some(note) = &outcome.note {
+                        let _unused = writeln!(stderr, "{note}");
+                    }
+                    let _unused = match &outcome.rendered {
+                        Some(Rendered::Pretty(pretty)) => stderr.write_all(pretty),
+                        Some(Rendered::Lines(lines)) => stdout.write_all(lines.as_bytes()),
+                        None => Ok(()),
+                    };
+                    total_errors = total_errors.saturating_add(outcome.error_count);
+                    total_warnings = total_warnings.saturating_add(outcome.warning_count);
+                    total_fixed = total_fixed.saturating_add(usize::from(outcome.is_fixed));
+                    Ok(())
+                },
+            )
+        }?;
 
         if !self.silent && self.fix && total_fixed > 0 && !is_quiet {
             eprintln!("Fixed {total_fixed} file(s)");
@@ -263,24 +277,24 @@ impl LintArgs {
         let source = read_stdin_source()?;
 
         let target = luck_config.target_for_path(Path::new(stdin_path)).map_err(usage_error)?;
-        let mut diags = luck_linter::lint_target(&source, target, lint_config);
-        let mut current_source = source;
+        let version = target.lua_version();
+        let allocator = Allocator::new();
+        let mut diags = luck_linter::lint(&allocator, &source, target, lint_config);
+        let mut current_source = source.as_str();
 
         if self.fix {
+            if let Some(fixed) = luck_linter::apply_fixes(&allocator, &source, &diags, version) {
+                diags = luck_linter::lint_parsed(&fixed, target, lint_config);
+                current_source = fixed.source;
+            }
             // Echo the source even with nothing to fix, since editors and
             // pipelines take stdout as the new file content.
-            if diags.iter().any(|diag| diag.fix.is_some()) {
-                current_source =
-                    luck_linter::apply_fixes(&current_source, &diags, target.lua_version());
-            }
             print!("{current_source}");
-            diags = luck_linter::lint_target(&current_source, target, lint_config);
         }
 
         let (total_errors, total_warnings) = severity_counts(&diags);
 
-        if let Some(rendered) =
-            self.rendered(stdin_path, &current_source, diags, target.lua_version(), is_quiet)
+        if let Some(rendered) = self.rendered(stdin_path, current_source, diags, version, is_quiet)
         {
             match rendered {
                 Rendered::Pretty(pretty) => {
@@ -323,6 +337,7 @@ impl LintArgs {
 
     fn lint_file(
         &self,
+        allocator: &Allocator,
         file_path: &Path,
         target: LuaTarget,
         lint_config: &LintConfig,
@@ -343,33 +358,27 @@ impl LintArgs {
             }
         };
 
-        let mut diags = luck_linter::lint_target(&source, target, lint_config);
-        let mut current_source = source;
+        let version = target.lua_version();
+        let mut diags = luck_linter::lint(allocator, &source, target, lint_config);
+        let mut current_source = source.as_str();
         let mut is_fixed = false;
         let mut note = None;
 
-        if self.fix && diags.iter().any(|diag| diag.fix.is_some()) {
-            let fixed_source =
-                luck_linter::apply_fixes(&current_source, &diags, target.lua_version());
-            if fixed_source != current_source {
-                if let Err(error) = fs::write(file_path, &fixed_source) {
-                    note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
-                } else {
-                    is_fixed = true;
-                    diags = luck_linter::lint_target(&fixed_source, target, lint_config);
-                    current_source = fixed_source;
-                }
+        if self.fix
+            && let Some(fixed) = luck_linter::apply_fixes(allocator, &source, &diags, version)
+        {
+            if let Err(error) = fs::write(file_path, fixed.source) {
+                note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
+            } else {
+                is_fixed = true;
+                diags = luck_linter::lint_parsed(&fixed, target, lint_config);
+                current_source = fixed.source;
             }
         }
 
         let (finding_errors, warning_count) = severity_counts(&diags);
-        let rendered = self.rendered(
-            &file_path.to_string_lossy(),
-            &current_source,
-            diags,
-            target.lua_version(),
-            is_quiet,
-        );
+        let rendered =
+            self.rendered(&file_path.to_string_lossy(), current_source, diags, version, is_quiet);
         // A fix that couldn't be written fails the run, as an unread file does.
         let error_count = finding_errors.saturating_add(usize::from(note.is_some()));
         LintOutcome { error_count, warning_count, is_fixed, note, rendered }
@@ -388,28 +397,27 @@ impl LintArgs {
         if is_quiet {
             diags.retain(|diag| diag.severity == Severity::Error);
         }
-        (!diags.is_empty() && !self.silent)
-            .then(|| self.render(file_label, source, &diags, version))
+        (!diags.is_empty() && !self.silent).then(|| self.render(file_label, source, diags, version))
     }
 
     fn render(
         &self,
         file_label: &str,
         source: &str,
-        diags: &[LintDiagnostic],
+        diags: Vec<LintDiagnostic>,
         version: LuaVersion,
     ) -> Rendered {
         match self.format {
             LintFormat::Default => {
                 let renderable_diags: Vec<Diagnostic> = diags
-                    .iter()
+                    .into_iter()
                     .map(|diag| Diagnostic {
                         code: diag.rule,
-                        message: diag.message.clone(),
+                        message: diag.message.into_owned(),
                         severity: diag.severity,
                         file_path: file_label.to_owned(),
                         span: diag.span,
-                        help: diag.help.clone(),
+                        help: diag.help.map(Cow::into_owned),
                     })
                     .collect();
                 Rendered::Pretty(render_document_diags(
@@ -422,7 +430,7 @@ impl LintArgs {
             LintFormat::Json => {
                 let line_index = LineIndex::new(source, version);
                 let mut lines = String::new();
-                for diag in diags {
+                for diag in &diags {
                     let (line, column) = line_and_column(&line_index, source, diag.span.start);
                     let (end_line, end_column) =
                         line_and_column(&line_index, source, diag.span.end);
@@ -453,13 +461,13 @@ impl LintArgs {
                 let absolute = path::absolute(label).unwrap_or_else(|_| label.to_path_buf());
                 let file = annotation_property(&normalize_path(&absolute));
                 let mut lines = String::new();
-                for diag in diags {
+                for diag in &diags {
                     let (line, column) = line_and_column(&line_index, source, diag.span.start);
                     let (end_line, end_column) =
                         line_and_column(&line_index, source, diag.span.end);
                     let message = diag.help.as_ref().map_or_else(
                         || diag.message.clone(),
-                        |help| format!("{}\nhelp: {help}", diag.message),
+                        |help| format!("{}\nhelp: {help}", diag.message).into(),
                     );
                     let _unused = writeln!(
                         lines,
@@ -576,10 +584,18 @@ mod tests {
         args.lint_config(&project.config).expect("lint config resolves")
     }
 
+    fn lint_source(
+        source: &str,
+        target: LuaTarget,
+        lint_config: &LintConfig,
+    ) -> Vec<LintDiagnostic> {
+        luck_linter::lint(&Allocator::new(), source, target, lint_config)
+    }
+
     fn rendered_lines(format: &str, file_label: &str, source: &str) -> String {
-        let diags = luck_linter::lint_target(source, LuaTarget::Lua54, &LintConfig::default());
+        let diags = lint_source(source, LuaTarget::Lua54, &LintConfig::default());
         let args = lint_args(&["--format", format]);
-        match args.render(file_label, source, &diags, LuaVersion::Lua54) {
+        match args.render(file_label, source, diags, LuaVersion::Lua54) {
             Rendered::Lines(lines) => lines,
             Rendered::Pretty(_) => panic!("{format} is a line format"),
         }
@@ -742,7 +758,7 @@ mod tests {
         let source = "\
 local unused = 1
 print(undefined_var)";
-        let diags = luck_linter::lint_target(source, LuaTarget::Lua54, &LintConfig::default());
+        let diags = lint_source(source, LuaTarget::Lua54, &LintConfig::default());
         let args = lint_args(&["--format", "json"]);
         let lines_when = |is_quiet: bool| match args.rendered(
             "a.lua",
@@ -828,15 +844,14 @@ print(a)",
         let target = project.config.target_for_path(&luau_file).expect("luau target resolves");
         assert_eq!(target, LuaTarget::LuauRoblox);
 
-        let diags = luck_linter::lint_target("print(game)", target, &lint_config);
+        let diags = lint_source("print(game)", target, &lint_config);
         assert!(
             diags.iter().all(|diag| diag.rule != "undefined_variable"),
             "roblox global `game` should not be undefined"
         );
 
         // Standalone Luau (the default) does flag it; that contrast is the point.
-        let standalone_diags =
-            luck_linter::lint_target("print(game)", LuaTarget::Luau, &lint_config);
+        let standalone_diags = lint_source("print(game)", LuaTarget::Luau, &lint_config);
         assert!(standalone_diags.iter().any(|diag| diag.rule == "undefined_variable"));
     }
 }

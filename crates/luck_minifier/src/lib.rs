@@ -1,29 +1,39 @@
 //! # `luck_minifier`
 //!
-//! AST transform pipeline for Lua/Luau minification.
+//! Lua and Luau minification on the arena tree, in place.
 //!
-//! [`minify`] parses source and [`minify_block`] takes a tree. Both run the
-//! enabled transforms on the tree and print the result with
-//! [`luck_codegen::compact_with_capacity`]. Each pass takes and returns a
-//! `Block` and is built on [`Transform`](luck_ast::Transform).
+//! [`minify`] parses source into the caller's arena and [`minify_block`]
+//! takes a tree. Both rewrite the tree in place and print it once, with
+//! [`luck_codegen::compact`].
 //!
-//! ## Pipeline order
+//! The work runs in three phases, each once:
 //!
-//! `apply_core_transforms` and `apply_tail_transforms` hold the exact order.
-//! The orderings that matter: `fold_constants` runs before and after
-//! `inline_locals` (inlining exposes folds), `remove_dead_code` runs again
-//! after the second fold (folds expose dead branches), `explicit_self` runs
-//! just before `rename_locals`, and `rename_locals` is followed by
-//! `lift_locals` and a final `merge_locals` that fuses lifted declarations.
+//! - **Binding**, one walk that resolves every name to its binding, writes
+//!   the binding into the name, so the later phases tell apart two locals
+//!   that share a name however the tree is rewritten, and counts each
+//!   binding's references.
+//! - **Compression**, one in-place walk that runs every rewrite as it leaves
+//!   each node: constant folding, dead-code and dead-local removal, inlining
+//!   single-use locals, merging neighboring locals, `if` and `return`
+//!   simplification, shorter literals, indexes, and parentheses, and lifting
+//!   nested declarations to the top of their function. Each rewrite keeps
+//!   the binding walk's counts true, so the walk reaches the fixpoint, and
+//!   walks again only for a rewrite it exposed too late to make.
+//! - **Renaming**, which gives locals the shortest names their scopes allow.
+//!
+//! [`TransformConfig`] turns each rewrite on or off.
 //!
 //! # Usage
 //!
 //! ```
+//! use luck_allocator::Allocator;
 //! use luck_minifier::TransformConfig;
 //! use luck_token::LuaVersion;
 //!
-//! let output = luck_minifier::minify("return 1 + 2", LuaVersion::Lua54, &TransformConfig::default()).unwrap();
-//! assert!(output.len() < "return 1 + 2".len());
+//! let allocator = Allocator::new();
+//! let config = TransformConfig::default();
+//! let output = luck_minifier::minify(&allocator, "return 1 + 2", LuaVersion::Lua54, &config);
+//! assert_eq!(output.as_deref(), Ok("return 3"));
 //! ```
 
 #![cfg_attr(
@@ -36,14 +46,18 @@
 
 extern crate alloc;
 
+mod bind;
 mod binding;
+mod compress;
 mod expr;
 #[cfg(test)]
 mod fixtures;
 mod limits;
+mod name_table;
 mod pipeline;
+mod rename_globals;
+mod rename_locals;
 mod transform_config;
-mod transforms;
 
 pub use pipeline::{minify, minify_block};
 pub use transform_config::TransformConfig;

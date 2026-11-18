@@ -76,9 +76,22 @@ pub struct LineIndex {
 impl LineIndex {
     #[must_use]
     pub fn new(source: &str, version: LuaVersion) -> Self {
-        let first_line_start = index_to_offset(chunk_start(source, version));
-        let line_starts = iter::once(first_line_start)
-            .chain(line_breaks(source, version).map(|line_break| index_to_offset(line_break.end)))
+        let first_line_start = chunk_start(source, version);
+        let chunk = source.get(first_line_start..).unwrap_or_default();
+        // Loaders skip a shebang line up to its LF, so a CR in it starts no
+        // line.
+        let shebang_length = if has_shebang(chunk.as_bytes(), version) {
+            memchr::memchr(b'\n', chunk.as_bytes()).unwrap_or(chunk.len())
+        } else {
+            0
+        };
+        let scan_start = first_line_start.saturating_add(shebang_length);
+        let rest = source.get(scan_start..).unwrap_or_default();
+        let line_starts = iter::once(index_to_offset(first_line_start))
+            .chain(
+                line_breaks(rest, version)
+                    .map(|line_break| index_to_offset(scan_start.saturating_add(line_break.end))),
+            )
             .collect();
         Self { line_starts }
     }

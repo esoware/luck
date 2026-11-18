@@ -31,13 +31,21 @@ mod render;
 mod verbosity;
 
 use std::process::ExitCode;
+use std::{panic, thread};
+
+use luck_ast::MIN_STACK_BYTES;
+
+use crate::exit::operation_error;
 
 #[cfg(not(any(target_arch = "arm", target_arch = "riscv64", target_family = "wasm")))]
 #[global_allocator]
 static GLOBAL: mimalloc_safe::MiMalloc = mimalloc_safe::MiMalloc;
 
-/// Every stage fits in 1 MB of stack, a Windows main thread's, however deep
-/// the source nests, so each thread runs on the stack it starts with.
+/// A main thread gets the platform's stack, 1 MiB on Windows, so the command
+/// runs on a thread with what every stage needs.
 fn main() -> ExitCode {
-    cli::run()
+    match thread::Builder::new().stack_size(MIN_STACK_BYTES).spawn(cli::run) {
+        Ok(worker) => worker.join().unwrap_or_else(|payload| panic::resume_unwind(payload)),
+        Err(e) => operation_error(format_args!("can't start a thread: {e}")).into(),
+    }
 }

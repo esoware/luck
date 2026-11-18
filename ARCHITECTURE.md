@@ -1,67 +1,97 @@
 # Architecture
 
-Core pipeline:
-
-```
-luck_token -> luck_lexer -> luck_ast -> luck_parser -> luck_codegen
-```
-
-Everything else consumes the parsed AST. `luck_minifier`, `luck_formatter`, and `luck_linter` transform or check it, and `luck_semantic` supplies scope analysis to the linter, the LSP, and the bundler. `luck_resolver` resolves require paths for `luck_bundler` and the LSP's document links. `luck_config` reads `luck.json` and `.editorconfig` into each tool's plain options for `luck_cli`, `luck_lsp`, and embedders through the facade's `config` feature, and no tool depends on it. On top sit `luck` (facade re-exports), `luck_lsp` (language server), and `luck_cli`, which drives the stage crates directly and serves `luck_lsp`. `luck_testgen` and `luck_benchmark` are unpublished internal harnesses, one for generated test programs and one for benches.
+luck is a workspace of small crates around one syntax tree. This file covers the crates and their dependencies, the path a source file takes through them, and the rules every crate follows. Each crate's README and docs cover how it works inside.
 
 ## Crates
 
-| Crate | Role | Key entry |
-|-------|------|-----------|
-| `luck_token` | Spans, `LuaVersion`, `StdlibEnvironment`, `SourceError`, shared literal decode/encode, `CompactString` storage, `CodeBuffer` byte-level output builder | `span.rs`, `version.rs`, `token.rs`, `op.rs`, `number.rs`, `string.rs`, `code_buffer.rs` |
-| `luck_lexer` | Single-pass tokenizer, comments emitted separately, memchr + byte-table batched scanning | `lexer.rs`, `search.rs` |
-| `luck_ast` | `Expression`/`Statement`/`Type` <=64 B, `Visitor`, `Transform`, `Synth` builder (source-free AST construction), `MAX_NESTING_DEPTH` and the depth measures | `expr.rs`, `stmt.rs`, `types.rs`, `transform.rs`, `synth.rs`, `depth.rs` |
-| `luck_parser` | Pratt expressions + recursive-descent statements + full Luau type grammar, version-gated | `parser.rs`, `parser/expr.rs`, `parser/stmt.rs`, `parser/types.rs` |
-| `luck_codegen` | Compact printer (ambiguity cases live in `separator.rs` + its tests) | `compact.rs`, `separator.rs` |
-| `luck_core` | `LuaTarget`, diagnostic codes | `diagnostic/codes.rs`, `lua_target.rs` |
-| `luck_config` | `luck.json` and `.editorconfig` loading, `extends`, discovery, project filters, build resolution, and the generated schema, deserializing each section into its tool's own options | `config.rs`, `load.rs`, `resolve.rs`, `editorconfig.rs` |
-| `luck_resolver` | Lua search paths, Luau `@aliases`, `.luaurc` chain, `read_source_file` (SIMD-validated file reads), `normalize_path`/`native_path` (the forward-slash path form modules are keyed on) | `resolver.rs`, `lua.rs`, `luau.rs`, `luaurc.rs`, `source_io.rs`, `path.rs` |
-| `luck_bundler` | Scope-aware require extraction (via `luck_semantic`), dep graph with cycle detection, version-exact lazy loader emit + line maps, the minified bundle built from the modules' own trees, collision-proof `__luck` prefix, runtime-resolved `require(expr)` kept via the loader's dynamic entry point (`dynamic_require`) | `require_extraction.rs`, `graph.rs`, `emitter.rs`, `block_emitter.rs`, `loader.rs`, `module.rs` |
-| `luck_minifier` | AST transform pipeline, with `TransformConfig` flags turning passes on and off | `pipeline.rs` `minify()` and `minify_block()`, `transforms/` |
-| `luck_formatter` | Wadler-style engine: `Format` trait + combinator IR, AST-in `format_block` formats synthetic ASTs (no source needed), idempotency invariant | `ir.rs`, `printer.rs`, `format_*.rs`, `comments.rs` |
-| `luck_linter` | `Rule` identity trait, `WholeRule`/`NodeRule` checking traits + `LintContext`, stateless rules in a static `RULES` registry reporting `Finding`s the driver turns into `LintDiagnostic`s, `NodeType`-bucketed single-pass bus over a flat pre-order node table, suppressions, `--fix` | `rules/`, `rule.rs`, `bus.rs`, `nodes.rs`, `node_type.rs` |
-| `luck_semantic` | Scope tree, refs (R/W/RW), upvalues, typed `NonZeroU32` ids, per-environment stdlib catalog TOMLs (5.1-5.5, luau, luau_roblox) with overloads, shapes, and deprecations, generated into static Rust libraries so nothing is parsed at runtime, and generated Roblox API data | `analysis.rs`, `builder.rs`, `stdlib_model.rs`, `resolve.rs` |
-| `luck_lsp` | Library-only LSP backend (no binary), served by `luck lsp` | `backend.rs`, `transport.rs`, `providers/` |
-| `luck_cli` | Binary only: flat Clap commands, one module per command, rayon-parallel lint/fmt/check, ariadne rendering, exit codes 0/1/2 | `main.rs`, `cli.rs`, `commands/`, `render.rs` |
-| `luck` | Facade re-exports (no logic), published as package `luck_lua` with `[lib] name = "luck"`, so imports stay `luck::` | `lib.rs` |
-| `luck_testgen` | Internal (`publish = false`): deterministic program generators (runtime-safe and full-grammar/parse-only), round-trip property tests, and the shared fixture walker | `src/runtime.rs`, `src/full.rs`, `src/fixtures.rs`, `tests/it/roundtrip.rs` |
-| `luck_benchmark` | Internal (`publish = false`): per-stage criterion benches run on CodSpeed, corpus cached in gitignored `corpus/`, committed `minsize.snap` size tracking | `benches/`, `src/corpus.rs`, `tests/it/metrics.rs` |
+| Crate | Role | Depends on |
+| --- | --- | --- |
+| `luck_allocator` | The bump arena trees live in | |
+| `luck_token` | Spans, tokens, `LuaVersion`, `SourceError`, and the literal and line-break rules every stage shares | |
+| `luck_core` | `LuaTarget`, the dialect a user names, and `Diagnostic` | token |
+| `luck_lexer` | Source to tokens and comments | token |
+| `luck_ast` | The tree, its visitors, `Synth`, and the nesting cap | allocator, token |
+| `luck_parser` | Source to a tree, through the lexer | allocator, token, lexer, ast |
+| `luck_codegen` | A tree to the shortest source that parses back to it | token, ast |
+| `luck_formatter` | A tree to formatted source | allocator, token, lexer, ast, parser |
+| `luck_minifier` | Rewrites a tree to be small, then prints it | allocator, token, ast, parser, codegen |
+| `luck_semantic` | Scopes, symbols, references, and the stdlib catalogs | token, ast |
+| `luck_linter` | Rules over a tree and its analysis, with fixes | allocator, token, core, ast, parser, semantic |
+| `luck_resolver` | `require` strings to files, and reading them | token, core |
+| `luck_bundler` | A project to one file | allocator, token, core, lexer, ast, parser, minifier, semantic, resolver |
+| `luck_config` | `luck.json` and `.editorconfig` to each tool's options | core, formatter, minifier, linter, bundler |
+| `luck_lsp` | The language server | allocator, token, core, ast, parser, formatter, semantic, linter, resolver, config |
+| `luck_cli` | The `luck` binary | allocator, token, core, ast, parser, formatter, minifier, linter, resolver, bundler, config, lsp |
+| `luck` | The facade, published as `luck_lua`, which re-exports each stage behind a feature | every crate above but lsp and cli |
+| `luck_testgen` | Unpublished: generated programs, stack-test inputs, and a round-trip tree comparison for other crates' tests | token, ast |
+| `luck_benchmark_files` | Unpublished: the pinned files and projects the benches and allocation snapshots measure | allocator, token, core, parser |
+| `luck_benchmark` | Unpublished: a bench per stage | |
+| `luck_allocs` | Unpublished: committed allocation counts for each stage, behind `luck_allocator`'s `track_allocations` feature | allocator, lexer, ast, parser, codegen, formatter, minifier, semantic, linter, benchmark_files |
 
-## The three target axes
+"Depends on" leaves out dev-dependencies and the `luck_` prefix. `luck_codegen`, `luck_formatter`, and `luck_minifier` depend on nothing that analyzes, resolves, bundles, or configures. No tool depends on `luck_config`, which depends on them. The VS Code extension in `editors/vscode` holds no language logic. It starts `luck lsp`, and everything that has to understand Lua runs in `luck_lsp`.
 
-Never conflated:
+## The pipeline
 
-- `LuaVersion` (luck_token): syntax only, covering 5.1-5.5 and Luau. Parser, codegen, formatter, and minifier key off this.
-- `StdlibEnvironment` (luck_token): `Standalone` vs `Roblox`. Only meaningful for Luau. Semantic, linter, and LSP filter on it.
-- `LuaTarget` (luck_core): the user-facing dialect (7 variants incl. `LuauRoblox`). Projects to the two axes via `lua_version()` and `stdlib_environment()`.
+1. The caller owns an arena and the source text, and both outlive the tree.
+2. `luck_parser` pulls tokens from `luck_lexer` one at a time and builds a `Block` in the arena. A token holds no text, and the lexer keeps comments in a separate list. The tree's leaves borrow their text from the source, and the parser gives each name a `NameIndex` in reading order. The `ParseResult` holds the tree, the comments, every error, and the `TreeCounts` that size the analysis tables.
+3. A stage takes the tree. `luck_codegen` prints it compactly, `luck_minifier` rewrites it in place and prints it with `luck_codegen`, and `luck_formatter` lays it out with its comments. `luck_semantic` resolves its names in one walk and matches globals against a stdlib catalog. `luck_linter` builds its own table of the tree's nodes during that walk and runs its rules over both.
+4. `luck_bundler` parses every module an entry reaches, on one thread per arena. It finds their requires with `luck_semantic`, resolves them with `luck_resolver`, and writes one file whose lazy loader works like the target's own `require`. For a minified bundle, it builds one tree from the modules' trees and minifies that, so no text is parsed twice.
+5. `luck_cli` and `luck_lsp` drive the stages. They read `luck.json` through `luck_config`, pick each file's dialect, and own the arenas.
 
-The split happens once at each entry boundary. Codegen-side crates, the minifier included, read only the syntax axis, and Roblox and standalone Luau share syntax, so `-t roblox` and `-t luau` minify identically. That's correct, not a bug.
+## Arenas
 
-## Configuration
+Every tree lives in a `luck_allocator::Allocator` the caller owns, and every entry point that parses or builds nodes takes it as its first argument. Nothing in an arena is dropped on its own. A tree is freed all at once when its arena is reset or dropped, and `reset` keeps the memory for the next file. An arena serves one thread at a time, but a finished tree is `Send` and `Sync`, can hold nodes from several arenas that outlive it, and can be read from any thread. That rules out per-node interior mutability, so a name's `NameIndex` is a plain field. The parser writes it, and a pass that holds the tree mutably, such as the minifier, rewrites it.
 
-One typed source of truth: `luck.json`, discovered by walking up from each file for the path commands (`lint`, `fmt`, `check`), from cwd for `build`, from the input directory for one-shot `minify`/`bundle`/`graph` commands (cwd for stdin), and from each open document's directory in the LSP. The nearest config governs a file whole, so a nested `luck.json` doesn't merge into the one above it unless it `extends` it. `-c/--config` overrides discovery and puts every file of a path command under that one config, and explicit transform flags layer over the configured transforms, not fresh defaults. Each tool owns the `luck.json` shape of its options (`TransformConfig`, `DynamicRequire`, the formatter's option enums, `LintConfig`), deriving it behind optional `serde` and `schemars` features that `luck_config` turns on. The `format` section is `luck_config`'s `FormatConfig`, every option unset unless the config sets it, which converts into `FormatOptions`. Every section deserializes with `deny_unknown_fields`, so unknown keys and invalid enum values are hard errors. The one open map is `lint.rules`, whose keys the linter checks against its rule names. Targets are per-extension via the `lua`/`luau` keys, and either key may name any dialect. `DialectKey` picks the key for a path and holds its default, so the CLI and the LSP choose a file's dialect the same way. Extension and dialect are independent, so a Roblox or Rojo tree that keeps Luau in `.lua` files sets `"lua": "roblox"`. `extends`/`include`/`exclude`/`root` shape the project. Bool flags on `transforms` turn minifier passes on and off. Schemars generates the VS Code schema (`editors/vscode/schemas/luckrc.schema.json`) from the Rust types, and a drift test fails if it's stale. Format-option precedence: defaults < `.editorconfig` < `luck.json` `format`, layered for both the CLI and the LSP by `resolved_format_config`.
+Three crates manage arenas:
 
-## Diagnostics
+- `luck_cli` runs `lint`, `fmt`, and `check` on rayon's pool. Each file gets an arena from an `AllocatorPool`, and the CLI resets it as soon as the file's work is done.
+- `luck_bundler` takes a slice of arenas, one per discovery thread, the caller's thread included. Each module's source and tree stay in the arena of the thread that read it, and the result borrows none of them.
+- `luck_lsp` copies each version of an open document into an arena of its own and shares the parse and analysis there read-only across threads. Once nothing holds a replaced version, the server empties its arena and reuses it.
 
-One scheme: codes live in `luck_core`'s `diagnostic/codes.rs` as numbered `Diagnostic` constructors (`Diagnostic::e008`), the only way to build a coded diagnostic, so consumers never inline literal codes. Parse failures are always E008. Lint diagnostics render with the rule name as the code. Rules report bare findings, and the driver stamps each with the rule's name, its `category()`, and the resolved severity. The CLI exits 0 (success), 1 (problems found), or 2 (usage/config error).
+## Dialects
+
+Three types describe a dialect:
+
+- `LuaVersion`, in `luck_token`, is the syntax: Lua 5.1 to 5.5 or Luau. Code checks each syntax difference with a `has_<feature>` predicate.
+- `StdlibEnvironment`, in `luck_token`, is the standard library, standalone or Roblox, which only Luau tells apart.
+- `LuaTarget`, in `luck_core`, is the dialect a user names, one of seven, and converts to the other two with `lua_version()` and `stdlib_environment()`.
+
+Each entry point converts a `LuaTarget` once. The parser, codegen, formatter, and minifier read only `LuaVersion`, so `-t roblox` and `-t luau` minify and format identically. Semantic analysis, the linter, and the language server read the environment too.
+
+## Comments live outside the tree
+
+The tree holds no comments. The lexer puts each in a sorted list beside the tokens, as `Leading` or `Trailing`, with the start of the token it attaches to, and whatever needs comments reads that list:
+
+- The formatter places each comment by byte position and keeps it between the same tokens, apart from separators such as `;`. It copies a statement as written when the statement holds a comment it can't place that way. A tree built in code carries `SyntheticComment`s, anchored to its nodes' spans, instead.
+- The linter reads its suppression directives from the list, and the formatter its `format off`, `format on`, and `ignore` directives.
+- Codegen prints no comments, and the minifier keeps only a shebang and Luau's `--!` hot comments, which it writes above the code.
+
+So no rewrite has to carry comments along.
+
+## The nesting cap and the stack
+
+Every traversal recurses on the thread's stack, once per level of nesting, so luck caps the depth of a tree rather than rewrite every walk as a loop. `luck_ast::MAX_NESTING_DEPTH` is 2,001 levels in every dialect, counted the way `Visitor::descend` counts them. That is enough to read any construct nested inside itself as deep as the reference Lua and Luau parsers do. A run of suffixes, or of binary operators at one precedence, is one node and one level however long it gets, so a long `a.b.c` or `a + b + c` never nears the cap.
+
+- The parser refuses the node that would pass the cap with one error that ends the parse, so every tree it returns, with errors or without, fits.
+- `minify_block` and `format_block` return an error for a deeper tree. A minifier rewrite that nests an expression deeper checks that it still fits, and the bundler reports E013 where a module's wrapper would push it past the cap. `compact` takes only trees its callers keep within the cap. So no stage writes output the parser would refuse.
+- `luck_ast::MIN_STACK_BYTES`, 16 MiB, is the stack any stage needs on a tree at the cap. The CLI runs each command on a thread of that size and gives rayon's pool and the language server's tokio threads the same. The bundler starts its discovery threads with it, and code that embeds luck gives it to its own threads. A stack is reserved address space, and only the pages a thread touches take memory.
+
+## Output guarantees
+
+- `minify(minify(x)) == minify(x)` and `format(format(x)) == format(x)`, and both outputs parse with no errors. Tests check both.
+- Purity analysis assumes metamethods. A variable read, an index, arithmetic, a comparison, or a concatenation can each call one, so only literal arithmetic is pure. `#"str"` is never folded, because escape sequences make its raw length unreliable.
+- Constant folding reproduces the target's float arithmetic exactly, so it never fuses or reorders an operation.
+- Emitters never read source text. Codegen and the formatter read it only for trivia and verbatim regions, and work without it, so a tree built in code still prints.
+- A bundle names no host path. Every path it carries is relative to the project root.
 
 ## Design decisions
 
-- **Hand-written lexer/parser/codegen.** No external parser dependency, and version gating and error recovery are easier to control by hand.
-- **`Span` is `u32`, not `usize`.** Halves the size of every span, at the price of a 4 GB file cap nobody hits.
-- **Enum size budget <=64 bytes** for `Expression`, `Statement`, and `Type` (boxed large variants), enforced by `luck_ast` tests.
-- **Comments live outside the AST** in a sorted `Vec<Comment>` with `Leading`/`Trailing` classification and `attached_to`. The formatter also accepts node-anchored `SyntheticComment`s for generated ASTs.
-- **Emitters never read source text.** Codegen and formatter leaf text comes from token-carried values. They consult source only for trivia fidelity and verbatim regions, and every such path degrades gracefully when source is absent, so synthetic ASTs stay printable.
-- **Emitters print leaves as given.** `compact` and `format_block` print each leaf's text as the tree holds it, without checking it. The parser builds only leaves the lexer read, and luck's own transforms build none the lexer would read differently, so a check would only cost time, and a tree built in code answers for its own leaves. The only tree either printer refuses is one nested past `luck_ast::MAX_NESTING_DEPTH`.
-- **Luau types are a real AST** (`luck_ast::Type`), not opaque type text, so every consumer gets structure for free.
-- **One error type: `SourceError`.** `LexError`, `ParseError`, `FormatError` are aliases, keeping one rendering path for all diagnostics.
-- **Purity analysis assumes metamethods.** Variable reads, indexing, arithmetic, comparison, and concat may all invoke metamethods. Only literal arithmetic is pure, and `#"str"` is never folded (escape sequences make raw length unreliable).
-- **Nesting depth is a host resource budget, not a VM limit.** The 256-level cap, `luck_ast::MAX_NESTING_DEPTH`, is the same for every dialect, and target compilers enforce their own limits. It bounds the depth of the tree itself, which every traversal recurses down, counted in the levels `Visitor::descend` defines. A run of suffixes, or of binary operators at one precedence level, is one node and one level however long it gets, so the cap measures real nesting, and a long `a + b + ...` or `a.b.c...`, which stock Lua reads in a loop, never reaches it. The node that would pass the cap is one error that ends the parse, as input over 4 GiB is: the parser skips the rest of the source in a loop, and every construct still open closes there with nothing more to report, so even a tree with errors stays within the cap. A minifier rewrite that nests an expression deeper checks that it still fits, and `compact` and `format_block` return an error for a deeper tree, so no stage emits output the parser would refuse. `luck_testgen` supplies cap-deep input, input nested far past the cap or broken at every level, and long runs and sibling lists, and each stage's crate runs its stage over them in 1 MiB of stack, in the optimized test profile, so the CLI and the language server run on the stacks their threads start with.
-- **Interior comments must not relocate.** List-shaped emitters (table constructors, call argument lists) claim the comments written between their items and break one item per line to hold them. A statement header keeps a single-line block comment that sits before its `then` or `do` inline (`if cond --[[ why ]] then`). Each emitter claims only what its own span covers, so none drags a comment across its opening delimiter. Anything unplaceable falls back to the smallest enclosing sourced statement, which is re-indented to its block but otherwise emitted as written, and never split at a newline inside a long string or long comment, where the newline is content. A moved comment crosses nothing but whitespace and the separators the formatter writes at its own discretion (`;`, `,`). Exact-output tests and the fixture snapshots, at widths from 1 to 120, pin where each comment lands.
-- **The core crates make no OS calls.** `luck_token`, `luck_lexer`, `luck_ast`, `luck_parser`, `luck_codegen`, `luck_core`, `luck_formatter`, and `luck_minifier` take text or a tree and return text, a tree, or errors. File reads and path canonicalization start at `luck_resolver`.
-- **Idempotency and re-parseability are tested guarantees.** `minify(minify(x)) == minify(x)`, `format(format(x)) == format(x)`, and both outputs parse with zero errors.
-- **No global string interner.** Identifiers stay per-token `CompactString`. A shared interner's lock serializes rayon workers and has halved CPU utilization in comparable tools.
+- **Hand-written lexer, parser, and printers.** luck has no parser dependency, so it controls version gating and error recovery itself.
+- **`Span` is `u32`.** That halves every span and caps a source at 4 GiB, which the lexer reports as one error.
+- **A token holds no text, and there is no global string interner.** `Token::text` slices the source, and an interner's lock would serialize rayon's workers.
+- **Leaves hold their text as written, and the printers print it unchecked.** The parser builds only leaves the lexer read, and luck's own rewrites build none the lexer would read differently, so a check would only cost time. Code that builds a tree is responsible for its leaves.
+- **Luau types are a tree.** `luck_ast::Type` holds them as nodes, not text, so every consumer gets their structure.
+- **One error type and one diagnostic scheme.** A lex, parse, or format error is a `SourceError`. An error that reaches a user is a `Diagnostic` from a numbered constructor in `luck_core`, such as `Diagnostic::e008` for a parse failure, and a lint diagnostic is named after its rule. The CLI exits 0 on success, 1 when it found problems, and 2 on a usage or config error.
+- **The core crates make no OS calls.** `luck_token`, `luck_lexer`, `luck_ast`, `luck_parser`, `luck_codegen`, `luck_core`, `luck_formatter`, and `luck_minifier` take text or a tree and return text, a tree, or errors. Reading files and resolving paths start at `luck_resolver`.
+- **Each tool defines its own config types.** A tool's option types derive their `luck.json` form behind its `serde` feature, which `luck_config` turns on. A file's settings come from the nearest `luck.json` alone, which takes nothing from a config above it unless it `extends` that config. Format options layer defaults, then `.editorconfig`, then `luck.json`. An unknown key is an error, `luck_config` checks rule names against the linter's rules, and the extension's schema is generated from these types.
+- **A file's dialect comes from its extension and the config.** A `.luau` file takes the `luau` key and any other file the `lua` key, and either key can name any dialect, so a Roblox project that keeps Luau in `.lua` files sets `"lua": "roblox"`. The CLI and the language server both choose through `luck_config::DialectKey`.

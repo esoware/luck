@@ -15,9 +15,10 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-luck_ast   = { workspace = true }
-luck_lexer = { workspace = true }
-luck_token = { workspace = true }
+luck_allocator = { workspace = true }
+luck_ast       = { workspace = true }
+luck_lexer     = { workspace = true }
+luck_token     = { workspace = true }
 
 rustc-hash = { workspace = true }
 

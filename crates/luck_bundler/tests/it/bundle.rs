@@ -6,12 +6,13 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+use luck_allocator::Allocator;
 use luck_bundler::{BundleOptions, BundleResult, DependencyGraph, DynamicRequire};
 use luck_core::Diagnostic;
 use luck_token::LuaVersion;
 use tempfile::TempDir;
 
-use crate::common::bundle_both;
+use crate::common::{arenas, bundle_both};
 
 fn fixture_directory(dialect: &str, name: &str) -> PathBuf {
     let manifest_directory = env!("CARGO_MANIFEST_DIR");
@@ -378,8 +379,7 @@ fn luau_export_type_is_stripped_inside_module_wrappers() {
         "export must be stripped inside module wrappers:\n{output}"
     );
     assert!(output.contains("type Adder"), "the alias itself must survive:\n{output}");
-    let reparsed = luck_parser::parse(&output, LuaVersion::Luau);
-    assert!(reparsed.errors.is_empty(), "bundle must reparse: {:?}", reparsed.errors);
+    assert_reparses(&output, LuaVersion::Luau);
 }
 
 /// The bundle must name no directory on the build host. Provenance comments
@@ -479,7 +479,8 @@ print(util)
 const RETURN_ONE: &[u8] = b"return 1\n";
 
 fn assert_reparses(output: &str, version: LuaVersion) {
-    let parsed = luck_parser::parse(output, version);
+    let allocator = Allocator::new();
+    let parsed = luck_parser::parse(&allocator, output, version);
     assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
 }
 
@@ -775,6 +776,27 @@ require(\"bad\")
 }
 
 #[test]
+fn require_that_resolves_nowhere_flags_e004_in_each_module_making_it() {
+    let directory = temp_project(&[
+        (
+            "main.lua",
+            b"require(\"a\")
+require(\"b\")
+",
+        ),
+        ("a.lua", b"require(\"missing\")\n"),
+        ("b.lua", b"require(\"missing\")\n"),
+    ])
+    .expect("project");
+    let errors =
+        bundle_lua_project(directory.path()).expect_err("an unresolved module must not bundle");
+    assert_eq!(codes(&errors), ["E004", "E004"], "{errors:?}");
+    let files: Vec<&str> =
+        errors.iter().filter_map(|error| error.file_path.rsplit('/').next()).collect();
+    assert_eq!(files, ["a.lua", "b.lua"], "{errors:?}");
+}
+
+#[test]
 fn oversized_dependency_reports_e012_once_for_its_requirers() {
     let oversized = vec![b'-'; 10 * 1024 * 1024 + 1];
     let directory = temp_project(&[
@@ -795,6 +817,76 @@ require(\"b\")
     assert_eq!(codes(&errors), ["E012"], "{errors:?}");
 }
 
+/// Eight directories of twenty modules, so threads race to resolve into the
+/// same directories.
+///
+/// Each module requires every module of its own directory, the first of the
+/// next, and, when `has_missing_requires`, one that doesn't exist, which is
+/// more than one task resolves, while the entry requires few.
+///
+/// # Errors
+///
+/// Returns the I/O error that stopped a file from being written.
+fn wide_project(version: LuaVersion, has_missing_requires: bool) -> io::Result<TempDir> {
+    let directory = tempfile::tempdir()?;
+    let extension = if version.is_luau() { "luau" } else { "lua" };
+    // Luau's `./` is the requiring module's directory, which is the root only
+    // for `main`.
+    let require = |up: &str, package: &str, module: &str| {
+        if version.is_luau() {
+            format!("require(\"{up}/{package}/{module}\")\n")
+        } else {
+            format!("require(\"{package}.{module}\")\n")
+        }
+    };
+    let packages = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    let modules: Vec<String> = (0u8..20).map(|module| format!("m{module}")).collect();
+    let main: String = packages.iter().map(|package| require(".", package, "m0")).collect();
+    fs::write(directory.path().join(format!("main.{extension}")), main)?;
+    for (package, next_package) in packages.iter().zip(packages.iter().cycle().skip(1)) {
+        let package_directory = directory.path().join(package);
+        fs::create_dir_all(&package_directory)?;
+        for module in &modules {
+            let mut source: String =
+                modules.iter().map(|sibling| require("..", package, sibling)).collect();
+            source.push_str(&require("..", next_package, "m0"));
+            if has_missing_requires {
+                source.push_str(&require("..", package, "missing"));
+            }
+            source.push_str("return {}\n");
+            fs::write(package_directory.join(format!("{module}.{extension}")), source)?;
+        }
+    }
+    Ok(directory)
+}
+
+#[test]
+fn threads_sharing_one_resolver_find_what_one_thread_does() {
+    for version in [LuaVersion::Lua54, LuaVersion::Luau] {
+        for has_missing_requires in [false, true] {
+            let directory = wide_project(version, has_missing_requires).expect("project");
+            let entry_name = if version.is_luau() { "main.luau" } else { "main.lua" };
+            let entry = directory.path().join(entry_name);
+            let options = BundleOptions {
+                version,
+                search_paths: &[],
+                project_root: directory.path(),
+                dynamic_require: DynamicRequire::default(),
+            };
+            let one_thread = luck_bundler::bundle(&mut arenas(1), &entry, &options);
+            match &one_thread {
+                Ok(bundled) => assert_eq!(bundled.source_files.len(), 161, "{version:?}"),
+                Err(errors) => assert_eq!(codes(errors), ["E004"; 160], "{version:?}"),
+            }
+            assert_eq!(one_thread.is_err(), has_missing_requires, "{version:?}");
+            for _ in 0u8..4 {
+                let threaded = luck_bundler::bundle(&mut arenas(16), &entry, &options);
+                assert_eq!(format!("{threaded:?}"), format!("{one_thread:?}"), "{version:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn dependency_targets_index_the_modules_they_resolve_to() {
     let directory = temp_project(&[
@@ -809,7 +901,9 @@ require(\"b\")
         ("b.lua", RETURN_ONE),
     ])
     .expect("project");
+    let mut arenas = arenas(2);
     let graph = DependencyGraph::build(
+        &mut arenas,
         &directory.path().join("main.lua"),
         &BundleOptions {
             version: LuaVersion::Lua54,

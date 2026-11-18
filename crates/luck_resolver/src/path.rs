@@ -4,8 +4,16 @@ use std::path::{MAIN_SEPARATOR_STR, Path, PathBuf};
 /// platform.
 #[must_use]
 pub fn normalize_path(path: &Path) -> String {
-    let canonical = path.canonicalize();
-    let slashed = canonical.as_deref().unwrap_or(path).to_string_lossy().replace('\\', "/");
+    canonical_path(path).unwrap_or_else(|| slashed(path))
+}
+
+/// [`normalize_path`], or `None` when the OS can't canonicalize `path`.
+pub(crate) fn canonical_path(path: &Path) -> Option<String> {
+    path.canonicalize().ok().map(|canonical| slashed(&canonical))
+}
+
+fn slashed(path: &Path) -> String {
+    let slashed = path.to_string_lossy().replace('\\', "/");
     // Windows extended-length prefixes after backslash replacement:
     //   \\?\C:\x          -> //?/C:/x          -> C:/x
     //   \\?\UNC\srv\sh    -> //?/UNC/srv/sh    -> //srv/sh (network path!)

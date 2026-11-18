@@ -2,7 +2,7 @@
 //! after the colon) gets no member completion. The dangling colon doesn't
 //! parse, so there's no AST to resolve the receiver from.
 
-use luck_ast::{Call, FunctionArgs, Literal};
+use luck_ast::{Call, FunctionArgs, Literal, Name};
 use luck_semantic::{StdlibEntry, StdlibFunction};
 use luck_token::{Span, TokenKind, index_to_offset};
 use rustc_hash::FxHashSet;
@@ -13,7 +13,7 @@ use tower_lsp_server::ls_types::{
 
 use crate::document::DocumentState;
 use crate::providers::cursor::{
-    TextKind, dotted_chain_ending_tokens, find_string_arg_at, text_kind_at,
+    TextKind, dotted_chain_ending_tokens, find_string_arg_at, is_unterminated, text_kind_at,
 };
 use crate::providers::stdlib_render::param_label;
 
@@ -33,28 +33,26 @@ pub(crate) fn completion(document: &DocumentState, position: Position) -> Comple
 }
 
 fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<CompletionItem> {
-    let mut items: Vec<CompletionItem> = document
-        .semantic
-        .stdlib()
-        .globals
-        .iter()
-        .map(|(name, entry)| item_for_entry(name, entry))
-        .collect();
+    let semantic = document.semantic();
+    let mut items: Vec<CompletionItem> =
+        semantic.stdlib().globals.iter().map(|(name, entry)| item_for_entry(name, entry)).collect();
     // Every local or parameter declared before the cursor, whether or not it's
     // still in scope there, because completion is best-effort. The implicit
     // `self` has an empty span, so it fails the text check.
-    for symbol in &document.semantic.scope_tree.symbols {
+    let tree = semantic.scope_tree();
+    for symbol in tree.symbols() {
         let span = symbol.definition_span;
-        if span.end <= offset && span.text(document.text()) == symbol.name.as_str() {
+        let name = tree.name(symbol.name);
+        if span.end <= offset && span.text(document.text()) == name {
             items.push(CompletionItem {
-                label: symbol.name.to_string(),
+                label: name.to_owned(),
                 kind: Some(CompletionItemKind::VARIABLE),
                 ..Default::default()
             });
         }
     }
     for keyword in KEYWORD_COMPLETIONS {
-        if TokenKind::is_reserved(keyword, document.lua_version) {
+        if TokenKind::is_reserved(keyword, document.lua_version()) {
             items.push(CompletionItem {
                 label: (*keyword).to_owned(),
                 kind: Some(CompletionItemKind::KEYWORD),
@@ -78,20 +76,23 @@ fn member_completions(
     let Some(&root) = segments.first() else {
         return Vec::new();
     };
-    let tree = &document.semantic.scope_tree;
+    let semantic = document.semantic();
+    let tree = semantic.scope_tree();
     // A reference at the root is exact. Text mid-typing often has none, so
     // that case falls back to the nearest declaration before the cursor.
-    let (root_local, reaches_host_global) = tree.references_by_span.get(root_span).map_or_else(
-        || {
-            let local = document.semantic.nearest_local(root, offset).map(|symbol| symbol.id);
-            (local, local.is_none())
-        },
-        |&reference_id| {
-            (tree.reference(reference_id).resolved, tree.reaches_host_global(root, *root_span))
-        },
-    );
+    let (root_local, reaches_host_global) =
+        tree.reference_of(&Name { text: root.into(), index: None, span: *root_span }).map_or_else(
+            || {
+                let local = semantic.nearest_local(root, offset).map(|symbol| symbol.id);
+                (local, local.is_none())
+            },
+            |reference_id| {
+                let reference = tree.reference(reference_id);
+                (reference.resolved, tree.is_host_global(reference))
+            },
+        );
 
-    let stdlib = document.semantic.stdlib();
+    let stdlib = semantic.stdlib();
     let mut items: Vec<CompletionItem> = Vec::new();
     let mut push = |name: &str, member: &StdlibEntry| {
         let is_method = matches!(member, StdlibEntry::Function(function) if function.is_method);
@@ -111,7 +112,7 @@ fn member_completions(
     // `local g = game; g:` the DataModel ones.
     let shape = match (stdlib_entry, root_local, segments.as_slice()) {
         (Some(entry), _, _) => entry.shape(),
-        (None, Some(symbol_id), [_]) => document.semantic.symbol_shapes.get(&symbol_id).copied(),
+        (None, Some(symbol_id), [_]) => semantic.symbol_shape(symbol_id),
         (None, _, _) => None,
     };
     if let Some(shape_members) = shape.and_then(|name| stdlib.shapes.get(name)) {
@@ -130,15 +131,15 @@ fn constant_value_completions(
     offset: u32,
 ) -> Option<Vec<CompletionItem>> {
     let site = find_string_arg_at(document, offset)?;
-    let callee = document.semantic.resolve_callee(site.call)?;
+    let callee = document.semantic().resolve_callee(site.call)?;
     let StdlibEntry::Function(function) = callee.entry() else {
         return None;
     };
     let allowed_sets = function.allowed_constants(site.arg_index, call_arg_count(site.call))?;
     // Replace the literal's interior, so the client filters on whatever is
     // typed inside the delimiters.
-    let is_unterminated = document.unterminated().contains(&site.literal.span);
-    let interior = document.range(string_interior(site.literal, is_unterminated));
+    let interior =
+        document.range(string_interior(site.literal, is_unterminated(document, site.literal)));
     let mut seen_values: FxHashSet<&str> = FxHashSet::default();
     let mut items: Vec<CompletionItem> = Vec::new();
     for constant in allowed_sets.into_iter().flatten() {
@@ -177,7 +178,7 @@ fn constant_value_completions(
     Some(items)
 }
 
-const fn call_arg_count(call: Call<'_>) -> usize {
+fn call_arg_count(call: Call<'_>) -> usize {
     match call.args {
         FunctionArgs::Parenthesized { args, .. } => args.len(),
         FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => 1,
@@ -188,7 +189,7 @@ const fn call_arg_count(call: Call<'_>) -> usize {
 /// The part of a string literal between its delimiters. A long bracket's
 /// opener is `[`, any number of `=`, then `[`, and its closer mirrors it. An
 /// unterminated literal has no closer.
-fn string_interior(literal: &Literal, is_unterminated: bool) -> Span {
+fn string_interior(literal: &Literal<'_>, is_unterminated: bool) -> Span {
     let delimiter_width =
         index_to_offset(literal.text.strip_prefix('[').map_or(1, |after_bracket| {
             after_bracket.bytes().take_while(|&b| b == b'=').count().saturating_add(2)
@@ -213,20 +214,20 @@ struct MemberAccess<'source> {
 /// partial name (`a.b.` or `a.b:fo`). Working from tokens keeps a `..` concat
 /// from reading as a member separator.
 fn member_access_before(document: &DocumentState, offset: u32) -> Option<MemberAccess<'_>> {
-    let tokens = document.tokens();
+    let (source, tokens) = (document.text(), document.tokens());
     let before_cursor = tokens.get(..tokens.partition_point(|token| token.span.start < offset))?;
     let (last, before_last) = before_cursor.split_last()?;
     // The word in progress can lex as a keyword: `string.for` is on its way
     // to `format`.
     let is_partial_word =
-        offset <= last.span.end && TokenKind::is_identifier_shaped(last.span.text(document.text()));
+        offset <= last.span.end && TokenKind::is_identifier_shaped(last.span.text(source));
     let (separator, before_separator) =
         if is_partial_word { before_last.split_last()? } else { (last, before_last) };
-    let is_colon = matches!(separator.kind, TokenKind::Colon);
-    if !is_colon && !matches!(separator.kind, TokenKind::Dot) {
+    let is_colon = separator.kind == TokenKind::Colon;
+    if !is_colon && separator.kind != TokenKind::Dot {
         return None;
     }
-    Some(MemberAccess { receiver: dotted_chain_ending_tokens(before_separator), is_colon })
+    Some(MemberAccess { receiver: dotted_chain_ending_tokens(before_separator, source), is_colon })
 }
 
 fn item_for_entry(name: &str, entry: &StdlibEntry) -> CompletionItem {
@@ -307,16 +308,13 @@ mod tests {
     use tower_lsp_server::ls_types::Range as LspRange;
 
     use super::*;
+    use crate::fixtures::document as document_for;
 
     fn items_at(document: &DocumentState, line: u32, utf16_column: u32) -> Vec<CompletionItem> {
         match completion(document, Position::new(line, utf16_column)) {
             CompletionResponse::Array(items) => items,
             CompletionResponse::List(list) => list.items,
         }
-    }
-
-    fn document_for(text: &str, target: LuaTarget) -> DocumentState {
-        DocumentState::new(text.to_owned(), 1, target, FxHashSet::default())
     }
 
     fn roblox_document(text: &str) -> DocumentState {

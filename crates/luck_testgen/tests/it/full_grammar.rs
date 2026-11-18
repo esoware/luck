@@ -1,11 +1,6 @@
 //! Regressions for `generate_full`: each pinned program breaks the promise to
 //! parse under the official compiler or to reach the whole grammar.
 
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
 use luck_testgen::generate_full;
 use luck_token::LuaVersion;
 

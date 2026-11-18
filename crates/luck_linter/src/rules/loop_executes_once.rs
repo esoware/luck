@@ -1,9 +1,11 @@
-use luck_ast::Statement;
+use luck_ast::{Block, Statement};
+use rustc_hash::FxHashMap;
 
-use crate::cfg::{Exit, FlowGraph};
+use crate::cfg::{Exit, Exits, FlowGraph};
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::nodes::NodeKind;
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// Flags loops whose body `break`s, `return`s, or `error`s on every path, so
 /// it runs at most once. Such a loop was usually meant to be an `if` or a
@@ -19,59 +21,81 @@ impl_rule!(
     "loop body always exits on the first iteration"
 );
 
-impl NodeRule for LoopExecutesOnce {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[
+impl WholeRule for LoopExecutesOnce {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let loop_types = NodeTypeSet::from_types(&[
             NodeType::WhileLoop,
             NodeType::RepeatLoop,
             NodeType::NumericFor,
             NodeType::GenericFor,
-        ])
-    }
-    fn on_stmt(&self, stmt: &Statement, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let (body, span, kind) = match stmt {
-            Statement::WhileLoop(node) => (&node.block, node.span, "`while`"),
-            Statement::RepeatLoop(node) => (&node.block, node.span, "`repeat`"),
-            Statement::NumericFor(node) => (&node.block, node.span, "numeric `for`"),
-            Statement::GenericFor(node) => (&node.block, node.span, "generic `for`"),
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::IfStatement(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => return,
-        };
-        let graph = FlowGraph::of_block(body, context.semantic);
-        if graph.reaches(Exit::End) {
-            return;
+        ]);
+        if !context.nodes.contains_any(loop_types) {
+            return Vec::new();
         }
-        let can_return = graph.reaches(Exit::ReturnValue) || graph.reaches(Exit::ReturnEmpty);
-        let label = match (can_return, graph.reaches(Exit::Break), graph.reaches(Exit::Error)) {
-            (true, false, _) => "always returns",
-            (false, true, false) => "always breaks",
-            // A body stuck in an inner infinite loop reaches no exit, and
-            // never starts another iteration either.
-            (false, false, _) => "always errors",
-            (true, true, _) | (false, true, true) => "always exits",
-        };
-        findings.push(
-            Finding::new(
-                format!("{kind} loop body {label}, so the loop executes at most once"),
-                span,
-            )
-            .with_help("if a single execution is intended, use a `do ... end` block"),
-        );
+        // The exits of each loop inside one already analyzed, whose graph
+        // held theirs, by where the loop starts.
+        let mut nested_exits: FxHashMap<u32, Exits> = FxHashMap::default();
+        let mut findings = Vec::new();
+        for node in context.nodes.as_slice() {
+            let NodeKind::Statement(stmt) = node.kind else {
+                continue;
+            };
+            let Some((body, kind)) = loop_body(stmt) else {
+                continue;
+            };
+            let span = stmt.span();
+            let exits = nested_exits.remove(&span.start).unwrap_or_else(|| {
+                let graph = FlowGraph::of_block(body, context.semantic);
+                nested_exits.extend(graph.loop_exits());
+                graph.exits()
+            });
+            if exits.reaches(Exit::End) {
+                continue;
+            }
+            let can_return = exits.reaches(Exit::ReturnValue) || exits.reaches(Exit::ReturnEmpty);
+            let label = match (can_return, exits.reaches(Exit::Break), exits.reaches(Exit::Error)) {
+                (true, false, _) => "always returns",
+                (false, true, false) => "always breaks",
+                // A body stuck in an inner infinite loop reaches no exit, and
+                // never starts another iteration either.
+                (false, false, _) => "always errors",
+                (true, true, _) | (false, true, true) => "always exits",
+            };
+            findings.push(
+                Finding::new(
+                    format!("{kind} loop body {label}, so the loop executes at most once"),
+                    span,
+                )
+                .with_help("if a single execution is intended, use a `do ... end` block"),
+            );
+        }
+        findings
+    }
+}
+
+fn loop_body<'ast>(stmt: &'ast Statement<'ast>) -> Option<(&'ast Block<'ast>, &'static str)> {
+    match stmt {
+        Statement::WhileLoop(node) => Some((&node.block, "`while`")),
+        Statement::RepeatLoop(node) => Some((&node.block, "`repeat`")),
+        Statement::NumericFor(node) => Some((&node.block, "numeric `for`")),
+        Statement::GenericFor(node) => Some((&node.block, "generic `for`")),
+        Statement::Assignment(_)
+        | Statement::FunctionCall(_)
+        | Statement::DoBlock(_)
+        | Statement::IfStatement(_)
+        | Statement::FunctionDecl(_)
+        | Statement::LocalFunction(_)
+        | Statement::LocalAssignment(_)
+        | Statement::EmptyStatement(_)
+        | Statement::Goto(_)
+        | Statement::Label(_)
+        | Statement::GlobalDeclaration(_)
+        | Statement::GlobalFunction(_)
+        | Statement::GlobalStar(_)
+        | Statement::Break(_)
+        | Statement::CompoundAssignment(_)
+        | Statement::TypeDeclaration(_)
+        | Statement::Error(_) => None,
     }
 }
 
@@ -144,7 +168,7 @@ while c do if c then return 1 else return 2 end end");
     #[test]
     fn flags_nested_loops_outer_first() {
         let diags = run("while true do for i = 1, 2 do break end return end");
-        let messages: Vec<&str> = diags.iter().map(|diag| diag.message.as_str()).collect();
+        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
         assert_eq!(
             messages,
             [

@@ -22,7 +22,7 @@ pub(crate) fn signature_help(
     // `local f = io.open(...)`) and literal receivers (`("x"):rep(`), and
     // gives a shadowed base no help. Method params exclude `self`, matching
     // the argument count inside the parens.
-    let callee = document.semantic.resolve_callee(site.call)?;
+    let callee = document.semantic().resolve_callee(site.call)?;
     let StdlibEntry::Function(function) = callee.entry() else {
         return None;
     };
@@ -115,9 +115,9 @@ fn param_documentation(param: &StdlibParam) -> Option<Documentation> {
 mod tests {
     use luck_core::LuaTarget;
     use luck_token::offset_to_index;
-    use rustc_hash::FxHashSet;
 
     use super::*;
+    use crate::fixtures::document;
 
     fn active_signature(help: &SignatureHelp) -> &SignatureInformation {
         &help.signatures[offset_to_index(help.active_signature.unwrap_or(0))]
@@ -128,8 +128,7 @@ mod tests {
         let text = "\
 local f = io.open('x')
 f:setvbuf('full', 512)";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document(text, LuaTarget::Lua54);
         // Cursor inside the second argument.
         let help =
             signature_help(&document, Position::new(1, 18)).expect("file method signature help");
@@ -141,8 +140,7 @@ f:setvbuf('full', 512)";
     #[test]
     fn signature_help_marks_method_active_param_excluding_self() {
         let text = "local p = game:GetService('Players')";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::LuauRoblox, FxHashSet::default());
+        let document = document(text, LuaTarget::LuauRoblox);
         let utf16_column = index_to_offset(text.find("'Players'").expect("literal") + 3);
         let help = signature_help(&document, Position::new(0, utf16_column))
             .expect("GetService signature help");
@@ -159,8 +157,7 @@ f:setvbuf('full', 512)";
         let text = "\
 local string = 1
 string.format('x')";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document(text, LuaTarget::Lua54);
         assert!(
             signature_help(&document, Position::new(1, 15)).is_none(),
             "shadowed base must not show stdlib signatures"
@@ -172,8 +169,7 @@ string.format('x')";
         // Statement-position calls never pass through visit_expr;
         // the call hook must find them.
         let text = "collectgarbage('collect')";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document(text, LuaTarget::Lua54);
         let help =
             signature_help(&document, Position::new(0, 16)).expect("statement-position call");
         assert!(
@@ -184,8 +180,7 @@ string.format('x')";
 
     #[test]
     fn signature_help_ends_at_the_closing_paren() {
-        let document =
-            DocumentState::new("print(1)".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document("print(1)", LuaTarget::Lua54);
         let help = signature_help(&document, Position::new(0, 8));
         assert!(help.is_none(), "the cursor is past `)`, outside the call: {help:?}");
     }
@@ -193,8 +188,7 @@ string.format('x')";
     #[test]
     fn signature_help_counts_commas_before_the_cursor() {
         let text = "string.rep(\"a\" , 3 )";
-        let document =
-            DocumentState::new(text.to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document(text, LuaTarget::Lua54);
         let before_comma =
             signature_help(&document, Position::new(0, 15)).expect("inside the call");
         assert_eq!(before_comma.active_parameter, Some(0), "no comma before the cursor yet");
@@ -205,8 +199,7 @@ string.format('x')";
 
     #[test]
     fn signature_help_stays_inside_an_unclosed_argument_list() {
-        let document =
-            DocumentState::new("print(1".to_owned(), 1, LuaTarget::Lua54, FxHashSet::default());
+        let document = document("print(1", LuaTarget::Lua54);
         assert!(
             signature_help(&document, Position::new(0, 7)).is_some(),
             "the closing paren hasn't been typed yet"
@@ -215,12 +208,7 @@ string.format('x')";
 
     #[test]
     fn signature_help_offers_nothing_inside_a_comment_argument() {
-        let document = DocumentState::new(
-            "print(--[[ note ]] 1)".to_owned(),
-            1,
-            LuaTarget::Lua54,
-            FxHashSet::default(),
-        );
+        let document = document("print(--[[ note ]] 1)", LuaTarget::Lua54);
         assert!(signature_help(&document, Position::new(0, 13)).is_none());
     }
 }

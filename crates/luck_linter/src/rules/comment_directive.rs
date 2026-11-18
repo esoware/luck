@@ -23,7 +23,7 @@ impl_rule!(
 
 impl WholeRule for CommentDirective {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        if !context.semantic.version.is_luau() {
+        if !context.semantic.version().is_luau() {
             return Vec::new();
         }
         let first_code_start = first_code_start(context.block);
@@ -64,7 +64,7 @@ impl WholeRule for CommentDirective {
     }
 }
 
-fn first_code_start(block: &Block) -> Option<u32> {
+fn first_code_start(block: &Block<'_>) -> Option<u32> {
     let stmt_start = block.stmts.first().map(|stmt| stmt.span().start);
     let last_start = block.last_stmt.as_ref().map(|last| last.span().start);
     stmt_start.into_iter().chain(last_start).min()

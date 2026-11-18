@@ -21,10 +21,11 @@ luck_formatter = { workspace = true, features = ["serde"] }
 luck_linter    = { workspace = true, features = ["serde"] }
 luck_minifier  = { workspace = true, features = ["serde"] }
 
-globset    = { workspace = true }
-json5      = { workspace = true }
-rustc-hash = { workspace = true }
-serde      = { workspace = true }
+globset     = { workspace = true }
+json5       = { workspace = true }
+parking_lot = { workspace = true }
+rustc-hash  = { workspace = true }
+serde       = { workspace = true }
 
 # Only the tests that generate and check the VS Code schema derive JsonSchema.
 [dev-dependencies]

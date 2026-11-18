@@ -1,4 +1,6 @@
 use clap::Args;
+use luck_ast::MIN_STACK_BYTES;
+use rayon::ThreadPoolBuilder;
 use tokio::runtime::Builder;
 
 use crate::exit::Exit;
@@ -16,10 +18,16 @@ impl LspArgs {
     /// Reports the failure and returns [`Exit::Failure`] when the async
     /// runtime can't start or the socket transport fails.
     pub(crate) fn run(self) -> Result<(), Exit> {
-        let runtime = Builder::new_multi_thread().enable_all().build().map_err(|e| {
-            eprintln!("luck lsp: failed to start async runtime: {e}");
-            Exit::Failure
-        })?;
+        // Requests are served on this thread, and a lint's rules on rayon's.
+        let _already_built = ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global();
+        let runtime = Builder::new_multi_thread()
+            .thread_stack_size(MIN_STACK_BYTES)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                eprintln!("luck lsp: failed to start async runtime: {e}");
+                Exit::Failure
+            })?;
         runtime.block_on(async {
             if let Some(port) = self.socket {
                 luck_lsp::serve_socket(port).await.map_err(|e| {
