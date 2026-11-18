@@ -8,10 +8,10 @@ use luck_formatter::{
 };
 
 /// Formatter settings from luck.json.
-#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct FormatConfig {
+pub(crate) struct FormatConfig {
     pub line_width: Option<u16>,
     pub indent_style: Option<IndentStyle>,
     /// Columns per indent level. With tabs, this is how wide a tab counts
@@ -68,8 +68,6 @@ impl FormatConfig {
     }
 }
 
-/// The CLI and the LSP both convert through this, so they agree on every
-/// field.
 impl From<&FormatConfig> for FormatOptions {
     fn from(config: &FormatConfig) -> Self {
         // Destructured in full so a new config field can't go unmapped.
@@ -110,7 +108,7 @@ impl From<&FormatConfig> for FormatOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::load::parse_luck_config;
+    use crate::fixtures::{parse_error, parsed};
 
     #[test]
     fn parses_every_format_option() {
@@ -130,8 +128,7 @@ mod tests {
                 "magic_trailing_comma": true
             }
         }"#;
-        let config = parse_luck_config(json).expect("deserialize failed");
-        let format = config.format.expect("format should be present");
+        let format = parsed(json).format.expect("format should be present");
         assert_eq!(format.line_width, Some(120));
         assert_eq!(format.indent_style, Some(IndentStyle::Spaces));
         assert_eq!(format.indent_width, Some(4));
@@ -151,7 +148,7 @@ mod tests {
 
     #[test]
     fn leaves_unset_format_options_none() {
-        let config = parse_luck_config(r#"{ "format": {} }"#).expect("deserialize failed");
+        let config = parsed(r#"{ "format": {} }"#);
         let FormatConfig {
             line_width,
             indent_style,
@@ -182,48 +179,22 @@ mod tests {
 
     #[test]
     fn rejects_an_unknown_format_key() {
-        let json = r#"{
-            "lua": "lua54",
-            "entry": "main.lua",
-            "output_dir": "dist",
-            "format": {
-                "line_width": 100,
-                "not_a_real_option": true
-            }
-        }"#;
-        let result = parse_luck_config(json);
-        assert!(result.is_err(), "unknown nested keys must error");
-        let error = result.unwrap_err();
-        assert!(
-            error.contains("not_a_real_option") || error.contains("unknown field"),
-            "error should name the offending nested key: {error}"
-        );
+        let error =
+            parse_error(r#"{ "format": { "line_width": 100, "not_a_real_option": true } }"#);
+        assert!(error.contains("unknown field `not_a_real_option`"), "{error}");
     }
 
     #[test]
     fn rejects_an_unknown_quote_style() {
-        let json = r#"{
-            "lua": "lua54",
-            "entry": "main.lua",
-            "output_dir": "dist",
-            "format": {
-                "quote_style": "bogus"
-            }
-        }"#;
-        let result = parse_luck_config(json);
-        assert!(result.is_err(), "invalid enum values must error");
-        let error = result.unwrap_err();
-        assert!(
-            error.contains("bogus") || error.contains("unknown variant"),
-            "error should name the offending value: {error}"
-        );
+        let error = parse_error(r#"{ "format": { "quote_style": "bogus" } }"#);
+        assert!(error.contains("unknown variant `bogus`"), "{error}");
     }
 
     #[test]
     fn rejects_the_function_collapse_modes() {
         for mode in ["function_only", "always"] {
             let json = format!(r#"{{ "format": {{ "collapse_simple_statement": "{mode}" }} }}"#);
-            let error = parse_luck_config(&json).unwrap_err();
+            let error = parse_error(&json);
             assert!(error.contains(mode), "error should name the offending value: {error}");
         }
     }

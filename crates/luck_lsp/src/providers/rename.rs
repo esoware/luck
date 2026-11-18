@@ -108,7 +108,7 @@ fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), Str
         return Err(format!("`{new_name}` isn't a valid identifier"));
     }
     // The analysis knows only the configured globals the document names.
-    let extra_globals = &document.settings().project.lint_config.extra_globals;
+    let extra_globals = &document.settings().lint.extra_globals;
     if document.semantic().is_known_global(new_name)
         || extra_globals.iter().any(|global| global == new_name)
     {

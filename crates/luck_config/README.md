@@ -1,27 +1,39 @@
 # luck_config
 
-Loads `luck.json` and `.editorconfig` into the options each luck tool takes.
+Loads a `luck.json` into one validated project, which every luck command and the language server ask for each file's settings.
 
 ## Overview
 
-`luck.json` is JSON5, and `LuckConfig` is its top level. Each tool defines the type of its own section, so `transforms`, `dynamic_require`, and `lint` deserialize straight into `TransformConfig`, `DynamicRequire`, and `LintConfig`, through the `serde` features this crate turns on. The `format` section is a `FormatConfig`, which leaves each option unset unless the config sets it, so it layers over `.editorconfig`: built-in defaults, then `.editorconfig`, then `format`. It converts into `luck_formatter::FormatOptions` with `From`. An unknown key or an invalid value is an error.
+`luck.json` is JSON5. Discovery walks up from a directory to the nearest `luck.json`, and only that file applies: a config takes nothing from one above it unless it `extends` it, and `root: true` keeps an `extends` chain inside its directory. `Project::load` reads the file and what it extends, merges them, and checks everything at once: the syntax, every key, the dialects, the globs, the lint rule names and options, and the build keys that can't go together. A problem comes back as one E014 `Diagnostic` placed where it is in the file at fault, or E010 when the file can't be read.
 
-Discovery walks up from a directory to the nearest `luck.json`, and only that file applies. A config takes nothing from one above it unless it `extends` it, and `root: true` keeps an `extends` chain inside its directory. The `lua` and `luau` keys name the dialect of `.lua` and `.luau` files, and either can name any dialect. `include` and `exclude` choose the project's files, and the build keys, `entry`, `entries`, `output`, and `profiles` among them, resolve into one `BuildConfig` per entry.
+Each tool defines the type of its own section, so `transforms`, `dynamic_require`, and `lint` deserialize straight into `TransformConfig`, `DynamicRequire`, and `LintConfig`, through the `serde` features this crate turns on, and the dialect keys into `LuaTarget`. The linter checks its rule names as its section deserializes.
 
-The VS Code extension's schema is generated from `LuckConfig`, with the doc comments as its descriptions.
+A project gives each file its settings:
+
+- `target_for` picks its dialect: the `luau` key for a `.luau` file and the `lua` key for any other, and either can name any dialect.
+- `lint_for` layers the `overrides` the file's path matches over the `lint` section, in order, as oxlint's `overrides` do. `overlay_lint` layers command-line flags over every file's, overrides included.
+- `format_options` layers the defaults, then `.editorconfig`, then the `format` section, then the matching `overrides`.
+- `filter` holds `include` and `exclude`, and `bundle_options` and `search_paths` resolve modules from the project's root.
+- `builds` turns the build keys and a profile into the bundles `luck build` writes.
+
+Every glob matches relative to the `luck.json` directory, whichever file in an `extends` chain sets it, and `*` stops at `/` while `**/` crosses directories. A directory with no `luck.json` above it gets `Project::defaults`, rooted where discovery started.
+
+The VS Code extension's schema is generated from the config types, with the doc comments as its descriptions.
 
 ## Usage
 
-- `parse_luck_config` reads one file's text, `load_with_extends` loads a file and what it extends, and `discover_config` and `load_or_discover_config` find one.
-- `LuckConfig::target_for_path` picks a file's dialect, through `DialectKey`.
-- `resolved_format_config`, or `Editorconfigs` across many files, layers a file's `.editorconfig` under the `format` section.
-- `resolve_build_config` turns the build settings and a profile into the builds `luck build` runs.
+```rust,no_run
+use std::path::Path;
 
-```rust
-use luck_config::parse_luck_config;
-use luck_formatter::FormatOptions;
+use luck_config::{Editorconfigs, Project, find_config};
 
-let config = parse_luck_config(r#"{ "format": { "line_width": 80 } }"#).unwrap();
-let options = FormatOptions::from(&config.format.unwrap_or_default());
-assert_eq!(options.line_width, 80);
+let directory = Path::new("src");
+let project = match find_config(directory) {
+    Some(config_path) => Project::load(&config_path).expect("a valid luck.json"),
+    None => Project::defaults(directory.to_path_buf()),
+};
+let file = Path::new("src/main.lua");
+let target = project.target_for(Some(file));
+let lint = project.lint_for(Some(file));
+let format = project.format_options(Some(file), Some(&Editorconfigs::default()));
 ```

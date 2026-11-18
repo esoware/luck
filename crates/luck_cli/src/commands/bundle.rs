@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_bundler::{BundleOptions, DynamicRequire, LineMapEntry, bundle, bundle_minified};
+use luck_bundler::{DynamicRequire, LineMapEntry, bundle, bundle_minified};
 use luck_config::check_output_paths;
 use luck_core::LuaTarget;
 use luck_resolver::to_slash_lossy;
@@ -10,10 +10,7 @@ use luck_resolver::to_slash_lossy;
 use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::write_output;
-use crate::project::{
-    bundle_arenas, config_for_one_shot, entry_and_root, resolve_configured_target,
-    resolve_dynamic_require,
-};
+use crate::project::{bundle_arenas, bundle_options, existing_file, one_shot_project};
 use crate::render::print_diags;
 use crate::verbosity::Verbosity;
 
@@ -34,7 +31,7 @@ pub(crate) struct BundleArgs {
     #[arg(short = 'c', long = "config", value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Search path template (repeatable).
+    /// Search path template (repeatable) [default: luck.json's `search_paths`].
     #[arg(short = 's', long = "search-path", value_name = "PATTERN")]
     search_paths: Vec<String>,
 
@@ -42,7 +39,7 @@ pub(crate) struct BundleArgs {
     #[arg(long)]
     minify: bool,
 
-    /// How to treat require(expr): error, warn, or allow.
+    /// How to treat require(expr): error, warn, or allow [default: from luck.json].
     #[arg(long = "dynamic-require", value_name = "MODE")]
     dynamic_require: Option<DynamicRequire>,
 
@@ -62,19 +59,12 @@ impl BundleArgs {
     /// that would replace a bundled file or another output, and
     /// [`Exit::Failure`] when bundling or writing fails.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
-        let config = config_for_one_shot(self.config.as_deref(), &self.entry)?;
-        let target = resolve_configured_target(&config, self.target, &self.entry)?;
+        let entry_path = existing_file(&self.entry)?;
+        let project = one_shot_project(self.config.as_deref(), entry_path)?;
+        let target = self.target.unwrap_or_else(|| project.target_for(Some(entry_path)));
         let version = target.lua_version();
-        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require);
-        let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default());
-
-        let (entry_path, project_root) = entry_and_root(&self.entry)?;
-        let options = BundleOptions {
-            version,
-            search_paths: &self.search_paths,
-            project_root,
-            dynamic_require,
-        };
+        let transforms = self.minify_flags.apply_to(project.transforms());
+        let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
 
         let mut arenas = bundle_arenas();
         if self.minify {

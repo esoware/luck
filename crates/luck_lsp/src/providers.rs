@@ -27,7 +27,6 @@ mod tests {
     use alloc::sync::Arc;
 
     use luck_core::LuaTarget;
-    use luck_linter::LintConfig;
     use luck_testgen::{
         broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
     };
@@ -40,16 +39,12 @@ mod tests {
 
     use super::*;
     use crate::document::OpenDocument;
-    use crate::fixtures::document_under;
-    use crate::settings::ProjectSettings;
+    use crate::fixtures::document;
 
     fn serve_every_request(source: &str, version: LuaVersion) {
         let target = if version.is_luau() { LuaTarget::LuauRoblox } else { LuaTarget::Lua54 };
         let uri: Uri = "file:///main.lua".parse().expect("a valid URI");
-        // Every correctness rule, which the server's own default turns off.
-        let project =
-            ProjectSettings { lint_config: LintConfig::default(), ..ProjectSettings::default() };
-        let document = document_under(source, target, project);
+        let document = document(source, target);
         let lints = document.lint();
         let diagnostics = diagnostics::to_lsp(&document, &lints);
         let full_range = document.full_range();

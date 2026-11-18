@@ -216,6 +216,12 @@ impl Diagnostic {
         ))
     }
 
+    /// A `luck.json`, or a file it extends, that isn't a valid config.
+    #[must_use]
+    pub fn e014(file_path: &str, span: Span, problem: &str) -> Self {
+        Self::error_at("E014", format!("invalid config: {problem}"), file_path, span)
+    }
+
     #[must_use]
     pub fn w001(file_path: &str, span: Span, module_name: &str) -> Self {
         Self::warning_at(

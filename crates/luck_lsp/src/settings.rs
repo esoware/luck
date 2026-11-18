@@ -1,168 +1,167 @@
-//! Discovery walks up from the document's directory. Results, misses
-//! included, stay cached until a watched config file changes.
+//! Discovery walks up from the document's directory. Results, misses and
+//! configs that don't load included, stay cached until a watched config file
+//! changes.
 
 use alloc::sync::Arc;
+use core::mem;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use luck_config::{
-    DialectKey, Editorconfigs, FormatConfig, LuckConfig, ProjectFilter, discover_config,
-};
-use luck_core::LuaTarget;
-use luck_formatter::FormatOptions;
-use luck_linter::{Category, LintConfig, RuleLevel};
-use rustc_hash::FxHashMap;
+use luck_config::{CONFIG_FILE_NAME, Editorconfigs, Project, find_config};
+use luck_core::Diagnostic;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::RwLock;
 use tokio::task::spawn_blocking;
 
-#[derive(Debug)]
-pub(crate) struct ProjectSettings {
-    pub lua_target: LuaTarget,
-    pub luau_target: LuaTarget,
-    /// The raw `format` section, kept to layer over each file's
-    /// `.editorconfig` at format time.
-    pub format_config: Option<FormatConfig>,
-    /// The lint config to run. Linting is opt-in, so without a `lint` section
-    /// `correctness` is off and only parse errors surface.
-    ///
-    /// Publishing, code actions, and fix-all all go through this, so none of
-    /// them fixes a diagnostic the user was never shown.
-    pub lint_config: LintConfig,
-    pub filter: ProjectFilter,
-    /// Lua 5.x template search paths (`?.lua`, `src/?.lua`, ...). Resolved
-    /// against [`root`](Self::root) when it's set, otherwise against the
-    /// requiring file's own directory. Luau targets ignore them and resolve
-    /// relative and alias imports instead.
-    pub search_paths: Vec<String>,
-    /// Directory containing the discovered `luck.json`. `None` means no
-    /// config was found or it failed to load, so these are the defaults.
-    pub root: Option<PathBuf>,
-    /// The `.editorconfig` files formatting has read, each read once until
-    /// a watched config file changes and these settings are rebuilt.
-    pub editorconfigs: Editorconfigs,
-}
-
-impl Default for ProjectSettings {
-    fn default() -> Self {
-        Self::new(&LuckConfig::default(), None)
-    }
-}
-
-impl ProjectSettings {
-    /// Settings from `config`, the `luck.json` found in `root`. Without a
-    /// root, the filter is rooted at the working directory.
-    fn new(config: &LuckConfig, root: Option<PathBuf>) -> Self {
-        // Unlike the CLI, the server can't just exit on a config mistake, so a
-        // bad dialect or glob falls back to its default.
-        let target = |k: DialectKey| config.target(k).unwrap_or_else(|_| k.default_target());
-        let filter_base = root.as_deref().unwrap_or_else(|| Path::new("."));
-        Self {
-            lua_target: target(DialectKey::Lua),
-            luau_target: target(DialectKey::Luau),
-            format_config: config.format,
-            lint_config: config.lint.clone().unwrap_or_else(|| {
-                let mut lint_config = LintConfig::default();
-                lint_config.categories.set_level(Category::Correctness, RuleLevel::Off);
-                lint_config
-            }),
-            // Without `include`/`exclude` the default globs are constants that
-            // always build, so the fallback's `unwrap_or_default` is never
-            // reached.
-            filter: config.project_filter(filter_base).unwrap_or_else(|_| {
-                ProjectFilter::new(filter_base, None, None).unwrap_or_default()
-            }),
-            search_paths: config.search_paths.clone().unwrap_or_default(),
-            root,
-            editorconfigs: Editorconfigs::default(),
-        }
-    }
-
-    /// The target for the document at `file_path`, picked by the
-    /// [`DialectKey`] its extension selects. A document with no file path
-    /// takes the `lua` key's.
-    pub(crate) fn target_for(&self, file_path: Option<&Path>) -> LuaTarget {
-        match file_path.map_or(DialectKey::Lua, DialectKey::for_path) {
-            DialectKey::Lua => self.lua_target,
-            DialectKey::Luau => self.luau_target,
-        }
-    }
-
-    /// Precedence is defaults < `.editorconfig` < `luck.json` `format`.
-    /// Untitled and other non-file documents have no `.editorconfig` to find,
-    /// so they get the project's `format` section alone.
-    pub(crate) fn format_options(&self, file_path: Option<&Path>) -> FormatOptions {
-        FormatOptions::from(
-            &self.editorconfigs.resolved_format_config(self.format_config, file_path),
-        )
-    }
-}
+/// The other files whose change can change a document's settings.
+const SETTINGS_FILE_NAMES: [&str; 2] = [".editorconfig", ".luaurc"];
 
 #[derive(Debug, Default)]
 pub(crate) struct SettingsCache {
-    /// One lock for all of them, so a reader never sees a root without its
-    /// settings.
+    /// One lock for all of them, so a reader never sees a directory without
+    /// its project.
     lookups: RwLock<Lookups>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Lookups {
-    /// Shared by every document without a config or a file path.
-    defaults: Arc<ProjectSettings>,
-    settings_by_root: FxHashMap<PathBuf, Arc<ProjectSettings>>,
-    /// Each search directory's config root, or `None` for no config, so a
-    /// repeat lookup doesn't walk the filesystem again.
-    roots_by_search_directory: FxHashMap<PathBuf, Option<PathBuf>>,
+    /// Shared by every document without a file path.
+    untitled: Arc<Project>,
+    /// By the directory a document is in.
+    by_directory: FxHashMap<PathBuf, Arc<Project>>,
+    /// By the path of their `luck.json`, so documents in several of a
+    /// project's directories share it.
+    by_config: FxHashMap<PathBuf, Arc<Project>>,
+    /// The `.editorconfig` files formatting has read, each read once until a
+    /// watched config file changes.
+    editorconfigs: Arc<Editorconfigs>,
+    /// The name of every file a project read, beside `luck.json`, which a
+    /// watched change has to touch to matter.
+    config_names: FxHashSet<OsString>,
+    /// Each config file a reported load error is in. While there's one, any
+    /// JSON file a broken chain might name matters.
+    broken: Vec<PathBuf>,
+}
+
+impl Default for Lookups {
+    fn default() -> Self {
+        Self {
+            untitled: Arc::new(Project::defaults(PathBuf::from("."))),
+            by_directory: FxHashMap::default(),
+            by_config: FxHashMap::default(),
+            editorconfigs: Arc::default(),
+            config_names: FxHashSet::default(),
+            broken: Vec::new(),
+        }
+    }
+}
+
+/// A document's project, and why its `luck.json` didn't load the first time
+/// a document asks, so the problem is reported once.
+#[derive(Debug)]
+pub(crate) struct Discovered {
+    pub project: Arc<Project>,
+    pub error: Option<Diagnostic>,
 }
 
 impl SettingsCache {
-    /// Resolve settings for the document at `document_path`. Walks parent
-    /// directories looking for `luck.json`, caches the result, and falls back
-    /// to defaults if discovery fails, no config exists, or the document has
-    /// no file path.
-    pub(crate) async fn settings_for(&self, document_path: Option<&Path>) -> Arc<ProjectSettings> {
-        let Some(file_path) = document_path else {
-            return Arc::clone(&self.lookups.read().await.defaults);
+    /// The project of the nearest `luck.json` above the document at
+    /// `document_path`, or the defaults rooted at its directory when there's
+    /// none. A `luck.json` that doesn't load gives the defaults rooted at its
+    /// directory, with the error.
+    pub(crate) async fn project_for(&self, document_path: Option<&Path>) -> Discovered {
+        let Some(directory) = document_path.and_then(Path::parent) else {
+            return Discovered {
+                project: Arc::clone(&self.lookups.read().await.untitled),
+                error: None,
+            };
         };
-        let search_directory =
-            file_path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-
-        {
-            let lookups = self.lookups.read().await;
-            match lookups.roots_by_search_directory.get(&search_directory) {
-                Some(Some(root)) => {
-                    if let Some(settings) = lookups.settings_by_root.get(root) {
-                        return Arc::clone(settings);
-                    }
-                }
-                Some(None) => return Arc::clone(&lookups.defaults),
-                None => {}
-            }
+        if let Some(project) = self.lookups.read().await.by_directory.get(directory) {
+            return Discovered { project: Arc::clone(project), error: None };
         }
-
-        // Discovery reads config files and canonicalizes the root.
-        let discovery_directory = search_directory.clone();
-        let discovered = spawn_blocking(move || {
-            let project = discover_config(&discovery_directory).ok().flatten()?;
-            let settings = ProjectSettings::new(&project.config, Some(project.root.clone()));
-            Some((project.root, Arc::new(settings)))
+        // Discovery stats every directory up to the root, and the defaults'
+        // filter canonicalizes theirs.
+        let search = directory.to_path_buf();
+        let found = spawn_blocking(move || {
+            find_config(&search).ok_or_else(|| Arc::new(Project::defaults(search)))
         })
-        .await
-        .ok()
-        .flatten();
-        let Some((root, settings)) = discovered else {
-            // Cache the negative lookup so we don't re-walk every did_change.
-            let mut lookups = self.lookups.write().await;
-            lookups.roots_by_search_directory.insert(search_directory, None);
-            return Arc::clone(&lookups.defaults);
+        .await;
+        let config_path = match found {
+            Ok(Ok(config_path)) => config_path,
+            Ok(Err(defaults)) => {
+                let by_directory = &mut self.lookups.write().await.by_directory;
+                by_directory.insert(directory.to_path_buf(), Arc::clone(&defaults));
+                return Discovered { project: defaults, error: None };
+            }
+            // A lookup that dies is tried again by the next document.
+            Err(_) => {
+                let project = Arc::clone(&self.lookups.read().await.untitled);
+                return Discovered { project, error: None };
+            }
+        };
+        let shared = self.lookups.read().await.by_config.get(&config_path).cloned();
+        if let Some(project) = shared {
+            let by_directory = &mut self.lookups.write().await.by_directory;
+            by_directory.insert(directory.to_path_buf(), Arc::clone(&project));
+            return Discovered { project, error: None };
+        }
+        // Loading reads every file in the `extends` chain.
+        let loaded_path = config_path.clone();
+        let loaded = spawn_blocking(move || match Project::load(&loaded_path) {
+            Ok(project) => (Arc::new(project), None),
+            Err(diag) => {
+                let root = loaded_path.parent().map_or_else(PathBuf::new, Path::to_path_buf);
+                (Arc::new(Project::defaults(root)), Some(diag))
+            }
+        })
+        .await;
+        let Ok((project, error)) = loaded else {
+            let untitled = Arc::clone(&self.lookups.read().await.untitled);
+            return Discovered { project: untitled, error: None };
         };
         let mut lookups = self.lookups.write().await;
-        lookups.settings_by_root.insert(root.clone(), Arc::clone(&settings));
-        lookups.roots_by_search_directory.insert(search_directory, Some(root));
-        settings
+        // Another document may have loaded it meanwhile, and reported it.
+        if let Some(known) = lookups.by_config.get(&config_path).cloned() {
+            lookups.by_directory.insert(directory.to_path_buf(), Arc::clone(&known));
+            drop(lookups);
+            return Discovered { project: known, error: None };
+        }
+        let names = project.files().iter().filter_map(|file| file.file_name()).map(OsString::from);
+        lookups.config_names.extend(names);
+        if let Some(diag) = &error {
+            let file = PathBuf::from(&diag.file_path);
+            lookups.config_names.extend(file.file_name().map(OsString::from));
+            lookups.broken.push(file);
+        }
+        lookups.by_config.insert(config_path, Arc::clone(&project));
+        lookups.by_directory.insert(directory.to_path_buf(), Arc::clone(&project));
+        drop(lookups);
+        Discovered { project, error }
     }
 
-    /// Forgets every lookup, and the defaults' `.editorconfig` reads too.
-    pub(crate) async fn clear(&self) {
-        *self.lookups.write().await = Lookups::default();
+    pub(crate) async fn editorconfigs(&self) -> Arc<Editorconfigs> {
+        Arc::clone(&self.lookups.read().await.editorconfigs)
+    }
+
+    /// Whether a change to the file at `path` can change a document's
+    /// settings.
+    pub(crate) async fn is_settings_file(&self, path: &Path) -> bool {
+        let Some(name) = path.file_name() else {
+            return false;
+        };
+        let lookups = self.lookups.read().await;
+        name == CONFIG_FILE_NAME
+            || SETTINGS_FILE_NAMES.iter().any(|settings_name| name == *settings_name)
+            || lookups.config_names.contains(name)
+            || (!lookups.broken.is_empty()
+                && path.extension().is_some_and(|extension| extension == "json"))
+    }
+
+    /// Forgets every lookup and every `.editorconfig` read, and returns each
+    /// config file a load error was reported in.
+    pub(crate) async fn clear(&self) -> Vec<PathBuf> {
+        let Lookups { broken, .. } = mem::take(&mut *self.lookups.write().await);
+        broken
     }
 }
 
@@ -170,188 +169,82 @@ impl SettingsCache {
 mod tests {
     use std::fs;
 
-    use luck_config::parse_luck_config;
-    use luck_formatter::{
-        BlockNewlineGaps, CallParentheses, IndentStyle, QuoteStyle, SpaceAfterFunction,
-    };
+    use luck_core::LuaTarget;
 
     use super::*;
 
-    #[test]
-    fn default_settings_are_lua54() {
-        let settings = ProjectSettings::default();
-        assert_eq!(settings.lua_target, LuaTarget::Lua54);
-        assert!(settings.root.is_none());
-    }
-
-    #[test]
-    fn target_for_picks_by_extension() {
-        let settings = ProjectSettings {
-            lua_target: LuaTarget::Lua53,
-            luau_target: LuaTarget::LuauRoblox,
-            ..Default::default()
-        };
-        assert_eq!(settings.target_for(Some(Path::new("/tmp/a.lua"))), LuaTarget::Lua53);
-        assert_eq!(settings.target_for(Some(Path::new("/tmp/a.luau"))), LuaTarget::LuauRoblox);
-        // Unknown extension falls back to the lua target.
-        assert_eq!(settings.target_for(Some(Path::new("/tmp/a.txt"))), LuaTarget::Lua53);
-        assert_eq!(settings.target_for(None), LuaTarget::Lua53);
-    }
-
     #[tokio::test]
-    async fn cache_falls_back_to_defaults() {
+    async fn a_document_with_no_config_takes_the_defaults_rooted_at_its_directory() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let file = directory.path().join("foo.lua");
         let cache = SettingsCache::default();
-        let settings =
-            cache.settings_for(Some(Path::new("/definitely/nonexistent/path/foo.lua"))).await;
-        assert_eq!(settings.lua_target, LuaTarget::Lua54);
+        let Discovered { project, error } = cache.project_for(Some(&file)).await;
+        assert!(error.is_none());
+        assert_eq!(project.target_for(Some(&file)), LuaTarget::Lua54);
+        if find_config(directory.path()).is_none() {
+            assert_eq!(project.root(), directory.path());
+        }
+        let untitled = cache.project_for(None).await.project;
+        assert_eq!(untitled.target_for(None), LuaTarget::Lua54);
     }
 
     #[tokio::test]
-    async fn cache_keeps_settings_until_cleared() {
+    async fn cache_keeps_projects_until_cleared() {
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
         fs::write(&config_path, r#"{ "lua": "lua53" }"#).expect("write luck.json");
+        fs::create_dir_all(directory.path().join("sub")).expect("mkdir sub");
         let first = directory.path().join("first.lua");
-        let second = directory.path().join("second.lua");
+        let nested = directory.path().join("sub/nested.lua");
         let cache = SettingsCache::default();
 
-        let settings = cache.settings_for(Some(&first)).await;
-        assert_eq!(settings.lua_target, LuaTarget::Lua53);
-        assert!(Arc::ptr_eq(&settings, &cache.settings_for(Some(&second)).await));
+        let project = cache.project_for(Some(&first)).await.project;
+        assert_eq!(project.target_for(Some(&first)), LuaTarget::Lua53);
+        assert!(Arc::ptr_eq(&project, &cache.project_for(Some(&nested)).await.project));
 
         fs::write(&config_path, r#"{ "lua": "lua51" }"#).expect("rewrite luck.json");
-        assert_eq!(cache.settings_for(Some(&first)).await.lua_target, LuaTarget::Lua53);
+        let cached = cache.project_for(Some(&first)).await.project;
+        assert_eq!(cached.target_for(Some(&first)), LuaTarget::Lua53);
         cache.clear().await;
-        assert_eq!(cache.settings_for(Some(&first)).await.lua_target, LuaTarget::Lua51);
+        let reloaded = cache.project_for(Some(&first)).await.project;
+        assert_eq!(reloaded.target_for(Some(&first)), LuaTarget::Lua51);
     }
 
     #[tokio::test]
-    async fn an_editorconfig_is_read_once_until_the_cache_clears() {
+    async fn a_broken_config_is_reported_once_and_its_files_take_the_defaults() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
-        let editorconfig = directory.path().join(".editorconfig");
-        let indented = |size: u8| {
-            format!(
-                "\
-[*.lua]
-indent_style = space
-indent_size = {size}
-"
-            )
-        };
-        fs::write(&editorconfig, indented(2)).expect("write editorconfig");
-        let file_path = directory.path().join("main.lua");
+        fs::write(directory.path().join("luck.json"), r#"{ "lua": "lua99" }"#)
+            .expect("write luck.json");
+        let file = directory.path().join("a.lua");
         let cache = SettingsCache::default();
-        let indent_width = async || {
-            let settings = cache.settings_for(Some(&file_path)).await;
-            settings.format_options(Some(&file_path)).indent_width
-        };
 
-        assert_eq!(indent_width().await, 2);
-        fs::write(&editorconfig, indented(3)).expect("rewrite editorconfig");
-        assert_eq!(indent_width().await, 2, "the first read holds until a watched file changes");
-        cache.clear().await;
-        assert_eq!(indent_width().await, 3);
+        let Discovered { project, error } = cache.project_for(Some(&file)).await;
+        let diag = error.expect("the error comes with the first lookup");
+        assert_eq!(diag.code, "E014");
+        assert_eq!(project.target_for(Some(&file)), LuaTarget::Lua54);
+        assert!(cache.project_for(Some(&file)).await.error.is_none(), "reported once");
+
+        assert!(cache.is_settings_file(&directory.path().join("other.json")).await);
+        let broken = cache.clear().await;
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert!(!cache.is_settings_file(&directory.path().join("other.json")).await);
     }
 
-    #[test]
-    fn settings_carry_targets_lint_and_filter() {
-        let json = r#"{ "lua":"lua53","luau":"roblox","lint":{"extra_globals":["vim"]},
-            "exclude":["**/vendor/**"] }"#;
-        let config = parse_luck_config(json).unwrap();
-        let settings = ProjectSettings::new(&config, Some(PathBuf::from("/proj")));
-        assert_eq!(settings.lint_config.categories.level(Category::Correctness), None);
-        assert_eq!(settings.lint_config.extra_globals, vec!["vim".to_owned()]);
-        assert_eq!(settings.lua_target, LuaTarget::Lua53);
-        assert_eq!(settings.luau_target, LuaTarget::LuauRoblox);
-        assert!(!settings.filter.is_included(Path::new("/proj/vendor/a.lua")));
-    }
-
-    #[test]
-    fn lint_disabled_without_lint_key() {
-        let config = parse_luck_config(r#"{ "lua":"lua54" }"#).unwrap();
-        let lint_config = ProjectSettings::new(&config, Some(PathBuf::from("."))).lint_config;
-        assert_eq!(lint_config.categories.level(Category::Correctness), Some(RuleLevel::Off));
-        assert_eq!(lint_config.rules.names().count(), 0);
-    }
-
-    #[test]
-    fn format_options_without_a_path_use_the_format_section() {
-        let json = r#"{
-            "luau": "luau",
-            "entry": "main.luau",
-            "output_dir": "dist",
-            "format": {
-                "line_width": 120,
-                "indent_style": "spaces",
-                "indent_width": 2,
-                "quote_style": "single"
-            }
-        }"#;
-        let config = parse_luck_config(json).expect("parse config");
-        let settings = ProjectSettings::new(&config, Some(PathBuf::from(".")));
-        assert_eq!(settings.luau_target, LuaTarget::Luau);
-        let options = settings.format_options(None);
-        assert_eq!(options.line_width, 120);
-        assert_eq!(options.indent_width, 2);
-        assert_eq!(options.indent_style, IndentStyle::Spaces);
-        assert_eq!(options.quote_style, QuoteStyle::Single);
-    }
-
-    #[test]
-    fn maps_all_formatter_options() {
-        let json = r#"{ "format":{ "block_newline_gaps":"preserve","sort_requires":true,
-            "space_after_function_names":"calls","magic_trailing_comma":true,"call_parentheses":"input" } }"#;
-        let config = parse_luck_config(json).unwrap();
-        let options = ProjectSettings::new(&config, Some(PathBuf::from("."))).format_options(None);
-        assert_eq!(options.block_newline_gaps, BlockNewlineGaps::Preserve);
-        assert!(options.sort_requires);
-        assert_eq!(options.space_after_function_names, SpaceAfterFunction::Calls);
-        assert!(options.magic_trailing_comma);
-        assert_eq!(options.call_parentheses, CallParentheses::Input);
-    }
-
-    #[test]
-    fn format_options_pick_up_editorconfig() {
+    #[tokio::test]
+    async fn a_file_a_project_extends_is_a_settings_file() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(
-            directory.path().join(".editorconfig"),
-            "\
-[*.lua]
-indent_style = space
-indent_size = 2
-",
-        )
-        .expect("write editorconfig");
-        let file_path = directory.path().join("main.lua");
+        fs::write(directory.path().join("shared.json"), "{}").expect("write shared.json");
+        fs::write(directory.path().join("luck.json"), r#"{ "extends": ["shared.json"] }"#)
+            .expect("write luck.json");
+        let cache = SettingsCache::default();
+        let sourcemap = directory.path().join("sourcemap.json");
+        let shared = directory.path().join("shared.json");
+        assert!(!cache.is_settings_file(&shared).await);
 
-        // No project format config: the `.editorconfig` is the only source.
-        let options = ProjectSettings::default().format_options(Some(&file_path));
-        assert_eq!(options.indent_style, IndentStyle::Spaces);
-        assert_eq!(options.indent_width, 2);
-    }
-
-    #[test]
-    fn format_options_luck_json_overrides_editorconfig() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(
-            directory.path().join(".editorconfig"),
-            "\
-[*.lua]
-indent_style = space
-indent_size = 2
-",
-        )
-        .expect("write editorconfig");
-        let file_path = directory.path().join("main.lua");
-
-        // luck.json `format` sets indent_width to 8, which must win over the
-        // `.editorconfig` value of 2.
-        let config = parse_luck_config(r#"{ "format": { "indent_width": 8 } }"#).unwrap();
-        let settings = ProjectSettings::new(&config, Some(PathBuf::from(".")));
-        let options = settings.format_options(Some(&file_path));
-        assert_eq!(options.indent_width, 8);
-        // indent_style not set in luck.json, so it still comes from editorconfig.
-        assert_eq!(options.indent_style, IndentStyle::Spaces);
+        let _discovered = cache.project_for(Some(&directory.path().join("a.lua"))).await;
+        assert!(cache.is_settings_file(&shared).await);
+        assert!(cache.is_settings_file(&directory.path().join("luck.json")).await);
+        assert!(cache.is_settings_file(&directory.path().join(".editorconfig")).await);
+        assert!(!cache.is_settings_file(&sourcemap).await, "Rojo rewrites it on every change");
     }
 }

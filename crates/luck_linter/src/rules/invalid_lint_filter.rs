@@ -1,7 +1,6 @@
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
-use crate::rules::{is_registered_rule_name, registered_rule_names};
-use crate::suggest::closest;
+use crate::rules::{closest_rule_name, is_registered_rule_name, registered_rule_names};
 use crate::suppression::{DirectiveRule, parse_directive};
 
 /// Flags unknown rule names in lint directives. A typo like
@@ -37,7 +36,7 @@ impl WholeRule for InvalidLintFilter {
                     continue;
                 }
 
-                let (message, help) = closest_match(name, registered_rule_names()).map_or_else(
+                let (message, help) = closest_rule_name(name, registered_rule_names()).map_or_else(
                     || {
                         (
                             format!("unknown lint rule `{name}`"),
@@ -60,36 +59,12 @@ impl WholeRule for InvalidLintFilter {
     }
 }
 
-/// A far-off "did you mean" is worse than none.
-fn closest_match(
-    needle: &str,
-    candidates: impl IntoIterator<Item = &'static str>,
-) -> Option<&'static str> {
-    // Up to a third of the longer name, and never less than 2.
-    closest(needle, candidates, |distance, candidate| {
-        distance <= 2 || distance.saturating_mul(3) <= needle.len().max(candidate.len())
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
     use crate::fixtures::run_rule;
-
-    #[test]
-    fn closest_match_picks_near_neighbor() {
-        assert_eq!(
-            closest_match("unsued_variable", ["unused_variable", "shadowing"]),
-            Some("unused_variable")
-        );
-    }
-
-    #[test]
-    fn closest_match_none_for_far_strings() {
-        assert!(closest_match("xx", ["unused_variable"]).is_none());
-    }
 
     #[test]
     fn flags_unknown_name() {

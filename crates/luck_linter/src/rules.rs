@@ -66,8 +66,8 @@ mod value_overwritten_before_read;
 
 use core::iter;
 
-use crate::config::LintConfig;
 use crate::rule::{NodeRule, Rule, WholeRule};
+use crate::suggest::closest;
 
 #[derive(Clone, Copy)]
 pub(crate) enum RuleEntry {
@@ -162,10 +162,8 @@ pub(crate) static RULES: &[RuleEntry] = &[
 /// unknown.
 pub(crate) const PARSE_ERROR_PSEUDO_RULE: &str = "parse_error";
 
-/// Every rule name in registration order, then `parse_error`.
-///
-/// `invalid_lint_filter` and `unknown_rule_names` check directive and config
-/// names against this list.
+/// Every rule name in registration order, then `parse_error`, which
+/// `invalid_lint_filter` checks directive names against.
 pub(crate) fn registered_rule_names() -> impl Iterator<Item = &'static str> {
     RULES.iter().map(|entry| entry.rule().name()).chain(iter::once(PARSE_ERROR_PSEUDO_RULE))
 }
@@ -178,18 +176,31 @@ pub fn rules() -> impl Iterator<Item = &'static dyn Rule> {
     RULES.iter().map(RuleEntry::rule)
 }
 
-/// The names come back sorted. They're checked against the same list
-/// `invalid_lint_filter` uses, which includes `parse_error`.
-#[must_use]
-pub fn unknown_rule_names(config: &LintConfig) -> Vec<String> {
-    let mut unknown_names: Vec<String> = config
-        .rules
-        .names()
-        .filter(|name| !is_registered_rule_name(name))
-        .map(str::to_owned)
-        .collect();
-    unknown_names.sort();
-    unknown_names
+/// The rule named `name`, which `luck.json` and the `-A`, `-W`, and `-D`
+/// flags look rules up by.
+///
+/// # Errors
+///
+/// Returns the message for a name no rule has, which suggests a rule whose
+/// name is close.
+pub fn rule_named(name: &str) -> Result<&'static dyn Rule, String> {
+    rules().find(|rule| rule.name() == name).ok_or_else(|| {
+        closest_rule_name(name, rules().map(Rule::name)).map_or_else(
+            || format!("unknown lint rule `{name}`"),
+            |suggestion| format!("unknown lint rule `{name}`, did you mean `{suggestion}`?"),
+        )
+    })
+}
+
+/// A far-off "did you mean" is worse than none.
+pub(crate) fn closest_rule_name(
+    needle: &str,
+    candidates: impl IntoIterator<Item = &'static str>,
+) -> Option<&'static str> {
+    // Up to a third of the longer name, and never less than 2.
+    closest(needle, candidates, |distance, candidate| {
+        distance <= 2 || distance.saturating_mul(3) <= needle.len().max(candidate.len())
+    })
 }
 
 #[cfg(test)]
@@ -197,6 +208,33 @@ mod tests {
     use rustc_hash::FxHashSet;
 
     use super::*;
+
+    #[test]
+    fn closest_rule_name_picks_a_near_neighbor() {
+        assert_eq!(
+            closest_rule_name("unsued_variable", ["unused_variable", "shadowing"]),
+            Some("unused_variable")
+        );
+    }
+
+    #[test]
+    fn closest_rule_name_is_none_for_far_strings() {
+        assert!(closest_rule_name("xx", ["unused_variable"]).is_none());
+    }
+
+    #[test]
+    fn rule_named_finds_a_rule_and_suggests_for_a_typo() {
+        assert_eq!(rule_named("shadowing").map(Rule::name), Ok("shadowing"));
+        assert_eq!(
+            rule_named("unsued_variable").map(Rule::name),
+            Err("unknown lint rule `unsued_variable`, did you mean `unused_variable`?".to_owned())
+        );
+        assert_eq!(
+            rule_named("parse_error").map(Rule::name),
+            Err("unknown lint rule `parse_error`".to_owned()),
+            "config can't turn a parse error off, so it doesn't name one"
+        );
+    }
 
     #[test]
     fn registered_names_are_every_rule_then_parse_error() {

@@ -7,7 +7,15 @@ use luck_token::{LuaVersion, StdlibEnvironment};
 ///
 /// [`Self::lua_version`] and [`Self::stdlib_environment`] project it onto the
 /// syntax and stdlib axes the rest of the workspace keys off.
+// `luck.json` spells it only as its lowercase name, as it spells every other
+// enum, and `FromStr` takes the shorter forms a command line wants too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "lowercase"))]
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(description = "A Lua dialect: Lua 5.1 to 5.5, Luau, or Luau on Roblox.")
+)]
 pub enum LuaTarget {
     Lua51,
     Lua52,
@@ -16,6 +24,7 @@ pub enum LuaTarget {
     Lua55,
     Luau,
     /// Luau on Roblox: the same syntax as `Luau`, with the Roblox stdlib.
+    #[cfg_attr(feature = "serde", serde(rename = "roblox"))]
     LuauRoblox,
 }
 
@@ -79,6 +88,10 @@ impl LuaTarget {
 
 #[cfg(test)]
 mod tests {
+    use serde::Deserialize as _;
+    use serde::de::IntoDeserializer as _;
+    use serde::de::value::Error;
+
     use super::*;
 
     const ALIASES: [(LuaTarget, &[&str]); 7] = [
@@ -114,6 +127,21 @@ mod tests {
             let displayed = target.to_string();
             assert_eq!(displayed.parse::<LuaTarget>(), Ok(target), "{displayed}");
         }
+    }
+
+    /// `luck.json` spells a dialect only as `FromStr` reads its lowercase
+    /// name, so a name it takes works on the command line too.
+    #[test]
+    fn deserializes_the_lowercase_names_from_str_reads() {
+        for (target, aliases) in ALIASES {
+            let name = aliases.first().expect("every target has a name");
+            let deserialized = LuaTarget::deserialize(name.into_deserializer());
+            assert_eq!(deserialized, Ok::<_, Error>(target), "{name}");
+        }
+        let error = LuaTarget::deserialize("5.4".into_deserializer())
+            .map_err(|e: Error| e.to_string())
+            .unwrap_err();
+        assert!(error.contains("unknown variant `5.4`"), "{error}");
     }
 
     #[test]

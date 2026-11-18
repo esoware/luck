@@ -12,11 +12,11 @@ use tower_lsp_server::ls_types::{
     CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
     DocumentHighlightKind, DocumentHighlightParams, DocumentLinkParams,
-    DocumentRangeFormattingParams, DocumentSymbolParams, DocumentSymbolResponse,
-    FoldingRangeParams, FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse,
-    HoverContents, HoverParams, InitializeParams, MessageType, PartialResultParams, Position,
-    PrepareRenameResponse, Range, ReferenceContext, ReferenceParams, Registration, RenameParams,
-    SelectionRangeParams, SemanticTokensParams, SemanticTokensRangeParams,
+    DocumentRangeFormattingParams, DocumentSymbolParams, DocumentSymbolResponse, FileChangeType,
+    FileEvent, FoldingRangeParams, FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse,
+    HoverContents, HoverParams, InitializeParams, MessageType, NumberOrString, PartialResultParams,
+    Position, PrepareRenameResponse, Range, ReferenceContext, ReferenceParams, Registration,
+    RenameParams, SelectionRangeParams, SemanticTokensParams, SemanticTokensRangeParams,
     SemanticTokensRangeResult, SemanticTokensResult, SignatureHelpParams,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, Uri, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
@@ -120,6 +120,16 @@ fn project_with_excluded_directory(directory: &Path) -> (Uri, Uri) {
     )
 }
 
+/// What a client sends when the file at `path` changes on disk.
+fn changed(path: &Path) -> DidChangeWatchedFilesParams {
+    DidChangeWatchedFilesParams {
+        changes: vec![FileEvent {
+            uri: Uri::from_file_path(path).expect("file path URI"),
+            typ: FileChangeType::CHANGED,
+        }],
+    }
+}
+
 fn fix_all_params(uri: &Uri) -> CodeActionParams {
     CodeActionParams {
         text_document: TextDocumentIdentifier { uri: uri.clone() },
@@ -177,17 +187,21 @@ async fn formatting_normalizes_spacing() {
     assert_ne!(new_text.as_str(), ugly, "formatter must change ugly source");
 }
 
+/// The editor runs the rules `luck lint` runs on the same project.
 #[tokio::test]
-async fn lint_diagnostics_are_opt_in_without_config() {
+async fn lint_runs_the_default_rules_without_config() {
     let notifier = CapturedNotifier::default();
     let server = Backend::new(notifier.clone());
     let uri = workspace_uri("unused.lua");
-    // Linting is opt-in. With no `luck.json` for `/tmp/unused.lua`, only
-    // parse errors surface, so the unused local must not be flagged.
     open(&server, &uri, "local unused = 1\n").await;
 
     let diags = notifier.diagnostics_for(&uri).await;
-    assert!(diags.is_empty(), "lint rules must be off without a lint config: {diags:?}");
+    assert!(
+        diags
+            .iter()
+            .any(|diag| diag.code == Some(NumberOrString::String("unused_variable".into()))),
+        "the correctness rules run by default, as they do in `luck lint`: {diags:?}"
+    );
 }
 
 #[tokio::test]
@@ -195,11 +209,98 @@ async fn parse_errors_surface_without_config() {
     let notifier = CapturedNotifier::default();
     let server = Backend::new(notifier.clone());
     let uri = workspace_uri("broken.lua");
-    // Parse errors surface even with linting off.
     open(&server, &uri, "local x =\n").await;
 
     let diags = notifier.diagnostics_for(&uri).await;
-    assert!(!diags.is_empty(), "parse errors must surface even when lint rules are disabled");
+    assert!(!diags.is_empty(), "parse errors must surface");
+}
+
+/// A broken `luck.json` is shown and published on the file, and its files
+/// lint under the defaults until it's fixed.
+#[tokio::test]
+async fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let config_path = directory.path().join("luck.json");
+    fs::write(&config_path, "{\n  \"lua\": \"lua99\"\n}\n").expect("write luck.json");
+    let path = directory.path().join("main.lua");
+    fs::write(&path, "local unused = 1\n").expect("write main.lua");
+    let uri = Uri::from_file_path(&path).expect("file path URI");
+    let config_uri = Uri::from_file_path(&config_path).expect("file path URI");
+
+    let notifier = CapturedNotifier::default();
+    let server = Backend::new(notifier.clone());
+    open(&server, &uri, "local unused = 1\n").await;
+
+    let config_diags = notifier.diagnostics_for(&config_uri).await;
+    let [diag] = config_diags.as_slice() else { panic!("one config error: {config_diags:?}") };
+    assert_eq!(diag.code, Some(NumberOrString::String("E014".to_owned())));
+    assert!(diag.message.contains("unknown variant `lua99`"), "{}", diag.message);
+    assert_eq!(diag.range, Range::new(Position::new(1, 9), Position::new(1, 16)));
+    let messages = notifier.messages.read().await.clone();
+    assert!(
+        messages.iter().any(|(kind, text)| *kind == MessageType::ERROR && text.contains("lua99")),
+        "{messages:?}"
+    );
+    assert!(!notifier.diagnostics_for(&uri).await.is_empty(), "the defaults lint the file");
+
+    fs::write(&config_path, "{}").expect("fix luck.json");
+    server.did_change_watched_files(changed(&config_path)).await;
+    assert!(notifier.diagnostics_for(&config_uri).await.is_empty(), "the fix clears the error");
+}
+
+#[tokio::test]
+async fn an_override_layers_its_lint_settings_over_the_files_it_matches() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        directory.path().join("luck.json"),
+        r#"{ "overrides": [{ "files": ["spec/**"], "lint": { "rules": { "unused_variable": "off" } } }] }"#,
+    )
+    .expect("write luck.json");
+    fs::create_dir_all(directory.path().join("spec")).expect("mkdir spec");
+    let (source, spec) = (directory.path().join("a.lua"), directory.path().join("spec/a.lua"));
+    for path in [&source, &spec] {
+        fs::write(path, "local unused = 1\n").expect("write source");
+    }
+    let (source_uri, spec_uri) = (
+        Uri::from_file_path(&source).expect("file path URI"),
+        Uri::from_file_path(&spec).expect("file path URI"),
+    );
+
+    let notifier = CapturedNotifier::default();
+    let server = Backend::new(notifier.clone());
+    open(&server, &source_uri, "local unused = 1\n").await;
+    open(&server, &spec_uri, "local unused = 1\n").await;
+    let source_diags = notifier.diagnostics_for(&source_uri).await;
+    assert!(!source_diags.is_empty(), "the rule runs outside the override: {source_diags:?}");
+    let spec_diags = notifier.diagnostics_for(&spec_uri).await;
+    assert!(spec_diags.is_empty(), "the override turns the rule off: {spec_diags:?}");
+}
+
+/// A file a `luck.json` extends is as much its settings as the file itself,
+/// but a JSON file no project reads, such as Rojo's sourcemap, isn't.
+#[tokio::test]
+async fn a_change_to_an_extended_config_reloads_and_another_json_file_does_not() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let base = directory.path().join("base.json");
+    fs::write(&base, "{}").expect("write base.json");
+    fs::write(directory.path().join("luck.json"), r#"{ "extends": ["base.json"] }"#)
+        .expect("write luck.json");
+    let path = directory.path().join("main.lua");
+    fs::write(&path, "local count = 1\n").expect("write main.lua");
+    let uri = Uri::from_file_path(&path).expect("file path URI");
+
+    let server = Backend::new(CapturedNotifier::default());
+    open(&server, &uri, "local count = 1\n").await;
+    assert_eq!(rename_refusal(&server, &uri, "vim").await, None, "`vim` isn't configured yet");
+
+    fs::write(&base, r#"{ "lint": { "extra_globals": ["vim"] } }"#).expect("rewrite base.json");
+    let sourcemap = directory.path().join("sourcemap.json");
+    fs::write(&sourcemap, "{}").expect("write sourcemap.json");
+    server.did_change_watched_files(changed(&sourcemap)).await;
+    assert_eq!(rename_refusal(&server, &uri, "vim").await, None, "the sourcemap isn't settings");
+
+    server.did_change_watched_files(changed(&base)).await;
+    assert!(rename_refusal(&server, &uri, "vim").await.is_some(), "the base's change took effect");
 }
 
 #[tokio::test]
@@ -1354,7 +1455,7 @@ async fn source_fix_all_stops_once_a_config_change_excludes_the_document() {
         r#"{ "exclude": ["gen/**"], "lint": { "categories": { "correctness": "off" }, "rules": { "redundant_nil_init": "warn" } } }"#,
     )
     .expect("rewrite luck.json with the exclude");
-    server.did_change_watched_files(DidChangeWatchedFilesParams { changes: Vec::new() }).await;
+    server.did_change_watched_files(changed(&directory.path().join("luck.json"))).await;
 
     let after = server
         .code_action(fix_all_params(&excluded))
@@ -1377,8 +1478,6 @@ fn vscode_windows_uri(path: &Path) -> Uri {
 #[cfg(windows)]
 #[tokio::test]
 async fn a_vscode_windows_uri_finds_its_project_settings() {
-    use tower_lsp_server::ls_types::NumberOrString;
-
     let directory = tempfile::tempdir().expect("tempdir");
     project_with_excluded_directory(directory.path());
     let included = vscode_windows_uri(&directory.path().join("kept.lua"));
@@ -1429,7 +1528,7 @@ async fn watched_config_change_reseeds_open_documents_with_extra_globals() {
 
     fs::write(directory.path().join("luck.json"), r#"{ "lint": { "extra_globals": ["vim"] } }"#)
         .expect("rewrite luck.json");
-    server.did_change_watched_files(DidChangeWatchedFilesParams { changes: Vec::new() }).await;
+    server.did_change_watched_files(changed(&directory.path().join("luck.json"))).await;
     let refusal = rename_refusal(&server, &uri, "vim").await;
     assert!(refusal.is_some(), "the config change took effect");
 }

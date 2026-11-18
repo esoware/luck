@@ -1,7 +1,8 @@
 use luck_linter::{LintDiagnostic, Severity};
-use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
+use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Range};
 
 use crate::document::DocumentState;
+use crate::line_index::LineIndex;
 
 /// The source string in `Diagnostic.source`; VS Code shows it in tooltips.
 const DIAGNOSTIC_SOURCE: &str = "luck";
@@ -11,24 +12,42 @@ pub(crate) fn to_lsp(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<
     let mut positions = document.positions();
     lints
         .iter()
-        .map(|lint| Diagnostic {
-            range: positions.range(lint.span),
-            severity: Some(match lint.severity {
-                Severity::Error => DiagnosticSeverity::ERROR,
-                Severity::Warning => DiagnosticSeverity::WARNING,
-            }),
-            code: Some(NumberOrString::String(lint.rule.to_owned())),
-            code_description: None,
-            source: Some(DIAGNOSTIC_SOURCE.to_owned()),
-            message: lint.help.as_ref().map_or_else(
+        .map(|lint| {
+            let message = lint.help.as_ref().map_or_else(
                 || lint.message.clone().into_owned(),
                 |help| format!("{}\n\nhelp: {help}", lint.message),
-            ),
-            related_information: None,
-            tags: None,
-            data: None,
+            );
+            diagnostic(positions.range(lint.span), lint.severity, lint.rule, message)
         })
         .collect()
+}
+
+/// A problem in `text`, a config file that isn't open, such as a `luck.json`
+/// that doesn't load.
+pub(crate) fn config_to_lsp(diag: &luck_core::Diagnostic, text: &str) -> Diagnostic {
+    let message = diag
+        .help
+        .as_ref()
+        .map_or_else(|| diag.message.clone(), |help| format!("{}\n\nhelp: {help}", diag.message));
+    let range = LineIndex::new(text).range(text, diag.span);
+    diagnostic(range, diag.severity, diag.code, message)
+}
+
+fn diagnostic(range: Range, severity: Severity, code: &str, message: String) -> Diagnostic {
+    Diagnostic {
+        range,
+        severity: Some(match severity {
+            Severity::Error => DiagnosticSeverity::ERROR,
+            Severity::Warning => DiagnosticSeverity::WARNING,
+        }),
+        code: Some(NumberOrString::String(code.to_owned())),
+        code_description: None,
+        source: Some(DIAGNOSTIC_SOURCE.to_owned()),
+        message,
+        related_information: None,
+        tags: None,
+        data: None,
+    }
 }
 
 #[cfg(test)]

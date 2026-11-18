@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use luck_allocator::Allocator;
+use luck_config::Project;
 use luck_core::LuaTarget;
-use luck_formatter::FormatResult;
-use luck_linter::{Analysis, LintDiagnostic};
+use luck_formatter::{FormatOptions, FormatResult};
+use luck_linter::{Analysis, LintConfig, LintDiagnostic};
 use luck_parser::ParseResult;
 use luck_semantic::{ScopeTree, SemanticAnalysis};
 use luck_token::{LuaVersion, Span, Token};
@@ -16,15 +17,18 @@ use tower_lsp_server::ls_types::{Position, Range, TextDocumentContentChangeEvent
 use crate::analyzed::Analyzed;
 use crate::line_index::{LineIndex, Positions};
 use crate::providers::semantic_tokens::{self, Highlights};
-use crate::settings::ProjectSettings;
 
 /// What a document's URI and the project around it fix, which every version
 /// of the document shares until the settings change.
 #[derive(Debug)]
 pub(crate) struct DocumentSettings {
-    pub path: Option<PathBuf>,
-    pub project: Arc<ProjectSettings>,
+    pub project: Arc<Project>,
     pub target: LuaTarget,
+    /// The project's lint settings, with the overrides the path matches.
+    /// Publishing, code actions, and fix-all all lint with these, so none of
+    /// them fixes a diagnostic the user was never shown.
+    pub lint: Arc<LintConfig>,
+    pub format: FormatOptions,
     /// Whether the project's `include` and `exclude` take the document in.
     /// One they leave out gets no diagnostics and no fixes.
     pub is_included: bool,
@@ -80,8 +84,7 @@ impl DocumentState {
         settings: Arc<DocumentSettings>,
         arena: Allocator,
     ) -> Self {
-        let (analyzed, tokens) =
-            Analyzed::new(text, settings.target, &settings.project.lint_config, arena);
+        let (analyzed, tokens) = Analyzed::new(text, settings.target, &settings.lint, arena);
         let line_index = LineIndex::new(analyzed.parse().source);
         Self { version, settings, analyzed, line_index, tokens, highlights: OnceLock::new() }
     }
@@ -167,21 +170,18 @@ impl DocumentState {
 
     /// Lints with the config the analysis was built under.
     pub(crate) fn lint(&self) -> Vec<LintDiagnostic> {
-        let config = &self.settings.project.lint_config;
-        luck_linter::lint_analyzed(self.parse(), self.analysis(), config)
+        luck_linter::lint_analyzed(self.parse(), self.analysis(), &self.settings.lint)
     }
 
     /// Formats the whole text, or with `range`, the statements it touches.
-    /// Reads the `.editorconfig` chain, which touches the disk.
     pub(crate) fn format(&self, range: Option<ops::Range<usize>>) -> FormatResult {
-        let DocumentSettings { path, project, .. } = &*self.settings;
-        let options = project.format_options(path.as_deref());
+        let options = &self.settings.format;
         // A scratch arena, so the formatting is freed as soon as it's done.
         let allocator = Allocator::new();
         let (parse, version) = (self.parse(), self.lua_version());
         range.map_or_else(
-            || luck_formatter::format_parsed(&allocator, parse, version, &options),
-            |bytes| luck_formatter::format_range(&allocator, parse, version, &options, bytes),
+            || luck_formatter::format_parsed(&allocator, parse, version, options),
+            |bytes| luck_formatter::format_range(&allocator, parse, version, options, bytes),
         )
     }
 

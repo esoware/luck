@@ -285,8 +285,7 @@ fn should_offer_fix_all(context: &CodeActionContext) -> bool {
 /// Every included document's fixes, from the lints it last published, or
 /// from a lint where it has published none yet.
 ///
-/// A document the project leaves out, like the lints the opt-in gate holds
-/// back, publishes nothing to fix.
+/// A document the project leaves out publishes nothing to fix.
 pub(crate) fn fix_all_open(documents: &[(Uri, OpenDocument)]) -> WorkspaceEdit {
     let changes = documents
         .iter()
@@ -312,9 +311,8 @@ mod tests {
     };
 
     use super::*;
-    use crate::fixtures::document_under;
+    use crate::fixtures::document_linted_by;
     use crate::providers::diagnostics;
-    use crate::settings::ProjectSettings;
 
     fn uri() -> Uri {
         "file:///main.lua".parse().expect("valid URI")
@@ -329,8 +327,7 @@ mod tests {
 
     /// `text` linted under `config`, and its lints.
     fn linted(text: &str, config: &LintConfig) -> (DocumentState, Vec<LintDiagnostic>) {
-        let project = ProjectSettings { lint_config: config.clone(), ..ProjectSettings::default() };
-        let document = document_under(text, LuaTarget::Lua54, project);
+        let document = document_linted_by(text, LuaTarget::Lua54, config.clone());
         let lints = document.lint();
         (document, lints)
     }

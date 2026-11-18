@@ -101,8 +101,6 @@ fn invalid_flag_exits_usage() {
 #[test]
 fn invalid_config_unknown_key_exits_usage() {
     let directory = TempDir::new().unwrap();
-    // `deny_unknown_fields` turns any unrecognized top-level key into a hard
-    // config error, which the CLI maps to `Exit::Usage`.
     write_file(directory.path(), "luck.json", "{ \"not_a_real_key\": true }\n");
     write_file(directory.path(), "clean.lua", "print(\"hi\")\n");
 
@@ -110,12 +108,13 @@ fn invalid_config_unknown_key_exits_usage() {
         .args(["check", "clean.lua"])
         .assert()
         .code(2i32)
-        .stderr(predicate::str::contains("error: "));
+        .stderr(predicate::str::contains("E014"))
+        .stderr(predicate::str::contains("unknown field `not_a_real_key`"))
+        .stderr(predicate::str::contains("luck.json:1:3"));
 }
 
-/// Target resolution has to happen before the parallel section, because a
-/// worker reporting the error would deadlock on the stdio locks the main
-/// thread holds there.
+/// Every config loads before the parallel section, because a worker reporting
+/// an error would deadlock on the stdio locks the main thread holds there.
 ///
 /// The timeout turns that hang into a failure.
 fn write_bad_dialect_project(directory: &Path) {
@@ -135,7 +134,7 @@ fn fmt_bad_dialect_with_multiple_files_exits_usage() {
         .timeout(Duration::from_secs(60))
         .assert()
         .code(2i32)
-        .stderr(predicate::str::contains("invalid target `lua99`"));
+        .stderr(predicate::str::contains("unknown variant `lua99`"));
 }
 
 #[test]
@@ -148,7 +147,7 @@ fn lint_bad_dialect_with_multiple_files_exits_usage() {
         .timeout(Duration::from_secs(60))
         .assert()
         .code(2i32)
-        .stderr(predicate::str::contains("invalid target `lua99`"));
+        .stderr(predicate::str::contains("unknown variant `lua99`"));
 }
 
 #[test]
@@ -161,7 +160,7 @@ fn check_bad_dialect_with_multiple_files_exits_usage() {
         .timeout(Duration::from_secs(60))
         .assert()
         .code(2i32)
-        .stderr(predicate::str::contains("invalid target `lua99`"));
+        .stderr(predicate::str::contains("unknown variant `lua99`"));
 }
 
 /// `--fix` over stdin re-lints the fixed text, so spans index that text.
@@ -225,13 +224,13 @@ fn build_empty_entries_exits_usage() {
         .arg("build")
         .assert()
         .code(2i32)
-        .stderr(predicate::str::contains("`entries` in `luck.json` is empty"));
+        .stderr(predicate::str::contains("`entries` is empty"));
 
     luck_in(directory.path())
         .args(["build", "--quiet"])
         .assert()
         .code(2i32)
-        .stderr(predicate::str::contains("`entries` in `luck.json` is empty"));
+        .stderr(predicate::str::contains("`entries` is empty"));
 }
 
 #[test]

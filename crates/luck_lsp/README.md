@@ -4,7 +4,7 @@ The language server for Lua and Luau, which `luck lsp` serves and the VS Code ex
 
 ## Overview
 
-The server copies each version of an open document into an arena of its own and parses and analyzes it once. Every request reads that version's tree and analysis, shared read-only across threads. Once nothing holds a replaced version, the server empties its arena for the next version to parse into, and closing the document frees it. A document's settings come from the nearest `luck.json` and `.editorconfig`, through `luck_config`, and the server caches them until a watched config file changes. Linting is opt-in: without a `lint` section, only parse errors show.
+The server copies each version of an open document into an arena of its own and parses and analyzes it once. Every request reads that version's tree and analysis, shared read-only across threads. Once nothing holds a replaced version, the server empties its arena for the next version to parse into, and closing the document frees it. A document's settings come from the `luck_config::Project` of the nearest `luck.json`, so the editor runs the rules `luck lint` runs, and from `.editorconfig`. The server caches each project until a file it read, or a `.editorconfig` or `.luaurc`, changes. A `luck.json` that doesn't load is shown as an error and published as a diagnostic on the file at fault, and its documents use the defaults until it's fixed.
 
 ## Features
 

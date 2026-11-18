@@ -12,14 +12,14 @@ A diagnostic may carry a `Fix`, a set of text edits. `apply_fixes` applies the e
 
 - Rules fall into four categories: correctness, suspicious, style, and performance. Only correctness rules run by default. `LintConfig` sets a level per category or per rule, a rule's options, and extra globals.
 - A comment such as `-- luck: allow(unused_variable)` silences a rule for one statement, `deny` and `warn` change its severity, `start` and `end` after it mark a region, and `-- #luck: allow(...)` covers the whole file.
-- The `serde` feature derives `Deserialize` and `Serialize` for `LintConfig`, in the shape of `luck.json`'s `lint` section, and `schemars` derives `JsonSchema` too.
+- The `serde` feature derives `Deserialize` and `Serialize` for `LintConfig`, in the shape of `luck.json`'s `lint` section, and `schemars` derives `JsonSchema` too. Deserializing rejects a name no rule has, and suggests a close one.
 
 ## Usage
 
 - `lint(allocator, source, target, config)` parses and lints.
 - `lint_parsed` lints a parse the caller holds. A host that also keeps the analysis, as the language server does, calls `analyze` and then `lint_analyzed`.
 - `apply_fixes` fixes one round, and `apply_fixes_fixpoint` lints and fixes until no fix is left.
-- `rules()` lists every rule as a `&dyn Rule` with its name, category, default severity, and description, and `unknown_rule_names` checks a config's rule names.
+- `rules()` lists every rule as a `&dyn Rule` with its name, category, default severity, and description, and `rule_named` looks one up by name, with a message that suggests a close name when none matches.
 
 ```rust
 use luck_allocator::Allocator;

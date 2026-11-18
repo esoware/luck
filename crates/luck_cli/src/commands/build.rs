@@ -6,18 +6,15 @@ use std::time::Instant;
 
 use clap::Args;
 use luck_allocator::Allocator;
-use luck_bundler::{BundleOptions, bundle, bundle_minified};
-use luck_config::{
-    BuildConfig, check_output_paths, config_directory, discover_config, load_or_discover_config,
-    resolve_build_config,
-};
+use luck_bundler::{bundle, bundle_minified};
+use luck_config::{BuildConfig, Project, check_output_paths, find_config};
 use luck_core::Diagnostic;
 use luck_token::{LuaVersion, chunk_start, has_shebang};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
-use crate::exit::{Exit, operation_error, usage_error};
+use crate::exit::{Exit, config_error, operation_error, usage_error};
 use crate::output::{format_size, write_output_file};
-use crate::project::{bundle_arenas, current_directory};
+use crate::project::{bundle_arenas, current_directory, load_project};
 use crate::render::print_diags;
 use crate::verbosity::Verbosity;
 
@@ -76,21 +73,21 @@ impl BuildArgs {
             .or_else(|| self.dev.then_some("dev"))
     }
 
+    /// `-c`, or else the first `luck.json` found walking up from cwd.
+    ///
     /// # Errors
     ///
     /// Reports the failure and returns [`Exit::Usage`] when the working
-    /// directory is unavailable, no `luck.json` is found or it fails to load,
-    /// or the build settings are invalid.
-    fn resolved_configs(&self) -> Result<Vec<BuildConfig>, Exit> {
-        let working_directory = current_directory()?;
-        let project = load_or_discover_config(self.config.as_deref(), &working_directory)
-            .map_err(usage_error)?
-            .ok_or_else(|| {
+    /// directory is unavailable or no `luck.json` is found.
+    fn config_path(&self) -> Result<PathBuf, Exit> {
+        match &self.config {
+            Some(path) => Ok(path.clone()),
+            None => find_config(&current_directory()?).ok_or_else(|| {
                 usage_error(
                     "no `luck.json` found, so run from a project directory or use `--config`",
                 )
-            })?;
-        resolve_build_config(&project, self.resolved_profile()).map_err(usage_error)
+            }),
+        }
     }
 
     /// # Errors
@@ -100,17 +97,18 @@ impl BuildArgs {
     /// can't be written.
     fn build_once(&self, verbosity: Verbosity) -> Result<(), Exit> {
         let total_start = Instant::now();
-        let configs = self.resolved_configs()?;
+        let project = load_project(&self.config_path()?)?;
+        let builds = project.builds(self.resolved_profile()).map_err(usage_error)?;
 
         if verbosity != Verbosity::Quiet
-            && let Some(first_config) = configs.first()
+            && let Some(first_build) = builds.first()
         {
-            print_build_header(first_config);
+            print_build_header(first_build);
         }
 
         let mut arenas = bundle_arenas();
-        for config in &configs {
-            match self.build_one(&mut arenas, config, verbosity) {
+        for build in &builds {
+            match self.build_one(&mut arenas, &project, build, verbosity) {
                 Ok(_) => {}
                 Err(BuildFailure::Failed { .. }) => {
                     eprintln!("\n  \x1b[31merror:\x1b[0m build failed");
@@ -132,10 +130,10 @@ impl BuildArgs {
     /// exit code when a build's output can't be written.
     fn rebuild_on_change(&self, verbosity: Verbosity) -> Result<(), Exit> {
         let mut arenas = bundle_arenas();
-        let mut source_files = self.build_for_watch(&mut arenas, verbosity)?;
+        let mut read_files = self.build_for_watch(&mut arenas, verbosity)?;
 
         loop {
-            let directories = self.watched_directories(&source_files);
+            let directories = watched_directories(&read_files);
 
             let (sender, receiver) = mpsc::channel();
             let mut debouncer = new_debouncer(Duration::from_millis(200), sender)
@@ -158,36 +156,14 @@ impl BuildArgs {
 
             eprintln!();
 
-            source_files = self.build_for_watch(&mut arenas, verbosity)?;
+            read_files = self.build_for_watch(&mut arenas, verbosity)?;
         }
     }
 
-    fn watched_directories(&self, source_files: &[PathBuf]) -> Vec<PathBuf> {
-        let config_path = self.config.as_deref();
-        let mut directories: Vec<PathBuf> =
-            source_files.iter().filter_map(|file| file.parent().map(Path::to_path_buf)).collect();
-        directories.extend(config_path.map(config_directory));
-        // Watch the discovered config too, or editing it never triggers a
-        // rebuild.
-        if config_path.is_none()
-            && let Ok(working_directory) = env::current_dir()
-            && let Ok(Some(discovered)) = discover_config(&working_directory)
-        {
-            directories.push(discovered.root);
-        }
-        // With no sources and no config to watch, such as before a luck.json
-        // exists, watch the working directory so a fix still triggers a
-        // rebuild.
-        if directories.is_empty()
-            && let Ok(working_directory) = env::current_dir()
-        {
-            directories.push(working_directory);
-        }
-        directories.sort_unstable();
-        directories.dedup();
-        directories
-    }
-
+    /// Every file the builds read, config files included, so an edit to any
+    /// of them triggers a rebuild. A config that doesn't load counts as read,
+    /// with the file at fault, since fixing either fixes the build.
+    ///
     /// # Errors
     ///
     /// Returns the exit code when a build's output can't be written. A failed
@@ -198,21 +174,33 @@ impl BuildArgs {
         arenas: &mut [Allocator],
         verbosity: Verbosity,
     ) -> Result<Vec<PathBuf>, Exit> {
-        let Ok(configs) = self.resolved_configs() else {
+        let Ok(config_path) = self.config_path() else {
             return Ok(Vec::new());
         };
-
-        let mut all_source_files = Vec::new();
-        for config in &configs {
-            match self.build_one(arenas, config, verbosity) {
+        let project = match Project::load(&config_path) {
+            Ok(project) => project,
+            Err(diag) => {
+                config_error(&diag);
+                return Ok(vec![config_path, PathBuf::from(diag.file_path)]);
+            }
+        };
+        let mut read_files = project.files().to_vec();
+        let builds = match project.builds(self.resolved_profile()) {
+            Ok(builds) => builds,
+            Err(message) => {
+                usage_error(message);
+                return Ok(read_files);
+            }
+        };
+        for build in &builds {
+            match self.build_one(arenas, &project, build, verbosity) {
                 Ok(source_files) | Err(BuildFailure::Failed { source_files }) => {
-                    all_source_files.extend(source_files);
+                    read_files.extend(source_files);
                 }
                 Err(BuildFailure::Fatal(exit)) => return Err(exit),
             }
         }
-
-        Ok(all_source_files)
+        Ok(read_files)
     }
 
     /// # Errors
@@ -223,6 +211,7 @@ impl BuildArgs {
     fn build_one(
         &self,
         arenas: &mut [Allocator],
+        project: &Project,
         config: &BuildConfig,
         verbosity: Verbosity,
     ) -> Result<Vec<PathBuf>, BuildFailure> {
@@ -232,12 +221,7 @@ impl BuildArgs {
             arena.reset();
         }
         let version = config.target.lua_version();
-        let options = BundleOptions {
-            version,
-            search_paths: &config.search_paths,
-            project_root: &config.project_root,
-            dynamic_require: config.dynamic_require,
-        };
+        let options = project.bundle_options(version);
         let bundle_failure = |errors: Vec<Diagnostic>| {
             print_diags(&errors, version);
             let source_files = errors
@@ -286,6 +270,26 @@ impl BuildArgs {
 
         Ok(source_files)
     }
+}
+
+/// The directories holding `files`, or with none, the working directory, so
+/// a `luck.json` written there still triggers a rebuild.
+fn watched_directories(files: &[PathBuf]) -> Vec<PathBuf> {
+    let mut directories: Vec<PathBuf> = files
+        .iter()
+        .filter_map(|file| file.parent())
+        // A bare file name's parent is empty, which can't be watched.
+        .map(|parent| if parent.as_os_str().is_empty() { Path::new(".") } else { parent })
+        .map(Path::to_path_buf)
+        .collect();
+    if directories.is_empty()
+        && let Ok(working_directory) = env::current_dir()
+    {
+        directories.push(working_directory);
+    }
+    directories.sort_unstable();
+    directories.dedup();
+    directories
 }
 
 /// `output` with `config`'s preamble on top, after the BOM and shebang line a
@@ -419,17 +423,30 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn watches_the_current_directory_for_a_bare_config_path() {
-        let args = BuildArgs {
-            config: Some(PathBuf::from("luck.json")),
+    fn watching(config: PathBuf) -> BuildArgs {
+        BuildArgs {
+            config: Some(config),
             dry_run: false,
             profile: None,
             release: false,
             dev: false,
             watch: true,
-        };
-        assert_eq!(args.watched_directories(&[]), [PathBuf::from(".")]);
+        }
+    }
+
+    /// The directories watched for what `args` builds, canonical.
+    fn watched_for(args: &BuildArgs) -> Vec<PathBuf> {
+        let read_files =
+            args.build_for_watch(&mut bundle_arenas(), Verbosity::Quiet).expect("watch goes on");
+        watched_directories(&read_files)
+            .iter()
+            .filter_map(|directory| directory.canonicalize().ok())
+            .collect()
+    }
+
+    #[test]
+    fn watches_the_current_directory_for_a_bare_config_path() {
+        assert_eq!(watched_directories(&[PathBuf::from("luck.json")]), [PathBuf::from(".")]);
     }
 
     #[test]
@@ -443,26 +460,37 @@ mod tests {
         let config = project.join("luck.json");
         fs::write(&config, r#"{"entry":"../sources/main.lua","output":"bundle.lua"}"#)
             .expect("write luck.json");
-        let args = BuildArgs {
-            config: Some(config),
-            dry_run: false,
-            profile: None,
-            release: false,
-            dev: false,
-            watch: true,
-        };
 
-        let source_files = args
-            .build_for_watch(&mut bundle_arenas(), Verbosity::Quiet)
-            .expect("watch keeps going");
-        let directories = args.watched_directories(&source_files);
-
+        let directories = watched_for(&watching(config));
         let canonical_sources = sources.canonicalize().expect("canonicalize sources");
         assert!(
-            directories
-                .iter()
-                .any(|watched| watched.canonicalize().is_ok_and(|path| path == canonical_sources)),
+            directories.contains(&canonical_sources),
             "fixing the broken entry must trigger a rebuild, but only {directories:?} are watched"
         );
+    }
+
+    /// Editing a file the config extends changes the build as much as editing
+    /// the config does, and so does fixing a config that doesn't load.
+    #[test]
+    fn watch_keeps_watching_every_config_file() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let shared = directory.path().join("shared");
+        let project = directory.path().join("project");
+        fs::create_dir_all(&shared).expect("mkdir shared");
+        fs::create_dir_all(&project).expect("mkdir project");
+        fs::write(shared.join("base.json"), "{}").expect("write base.json");
+        fs::write(project.join("main.lua"), "return 1\n").expect("write entry");
+        let config = project.join("luck.json");
+        let extending =
+            r#"{"extends":["../shared/base.json"],"entry":"main.lua","output":"out.lua"}"#;
+        fs::write(&config, extending).expect("write luck.json");
+        let canonical_shared = shared.canonicalize().expect("canonicalize shared");
+
+        let loading = watched_for(&watching(config.clone()));
+        assert!(loading.contains(&canonical_shared), "{loading:?}");
+
+        fs::write(shared.join("base.json"), "{ broken").expect("break base.json");
+        let broken = watched_for(&watching(config));
+        assert!(broken.contains(&canonical_shared), "{broken:?}");
     }
 }

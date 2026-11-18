@@ -4,6 +4,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::{env, fs};
 
+use luck_config::Project;
 use tempfile::TempDir;
 
 pub(crate) fn project_with(files: &[(&str, &str)]) -> TempDir {
@@ -16,6 +17,13 @@ pub(crate) fn project_with(files: &[(&str, &str)]) -> TempDir {
         fs::write(&path, contents).expect("write file");
     }
     project
+}
+
+/// `files` on disk, and the project of their `luck.json`.
+pub(crate) fn loaded(files: &[(&str, &str)]) -> (TempDir, Project) {
+    let directory = project_with(files);
+    let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
+    (directory, project)
 }
 
 /// nextest gives each test its own process, so this can't race another test.

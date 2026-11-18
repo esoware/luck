@@ -11,17 +11,15 @@ use globset::GlobSet;
 use ignore::{DirEntry, WalkBuilder, WalkState};
 use luck_allocator::{Allocator, AllocatorPool};
 use luck_ast::MIN_STACK_BYTES;
-use luck_bundler::DynamicRequire;
-use luck_config::{
-    CONFIG_FILE_NAME, LuckConfig, ProjectConfig, ProjectFilter, discover_config, glob_set,
-    load_or_discover_config, load_with_extends,
-};
-use luck_core::LuaTarget;
+use luck_bundler::{BundleOptions, DynamicRequire};
+use luck_config::{CONFIG_FILE_NAME, Project, ProjectFilter, find_config, glob_set};
+use luck_linter::LintConfig;
 use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_token::LuaVersion;
 use rayon::ThreadPoolBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::exit::{Exit, operation_error, usage_error};
+use crate::exit::{Exit, config_error, operation_error, usage_error};
 
 /// # Errors
 ///
@@ -39,20 +37,6 @@ pub(crate) fn existing_file(input: &str) -> Result<&Path, Exit> {
     if path.is_file() { Ok(path) } else { Err(usage_error(format!("file not found: `{input}`"))) }
 }
 
-/// A `bundle` or `graph` entry, and the root its modules resolve from: the
-/// entry's directory, so `luck bundle src/main.lua` finds the modules next to
-/// it without `-s`.
-///
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Usage`] when `entry` isn't a file.
-pub(crate) fn entry_and_root(entry: &str) -> Result<(&Path, &Path), Exit> {
-    let entry_path = existing_file(entry)?;
-    // A bare file name's parent is empty, and an empty root is the working
-    // directory.
-    Ok((entry_path, entry_path.parent().unwrap_or_else(|| Path::new(""))))
-}
-
 /// An arena for each thread the machine runs at once, since the bundler reads
 /// modules on one thread per arena. An arena no reader takes costs nothing.
 pub(crate) fn bundle_arenas() -> Vec<Allocator> {
@@ -60,54 +44,47 @@ pub(crate) fn bundle_arenas() -> Vec<Allocator> {
     iter::repeat_with(Allocator::new).take(thread_count).collect()
 }
 
-/// An explicit `-t/--target` wins. Otherwise `config` picks by extension,
-/// since a `.lua` file can hold any dialect. With no config, `.luau` is Luau
-/// and everything else is Lua 5.4.
-///
+/// How `bundle` and `graph` resolve and read modules: as `project` says, with
+/// `-s` replacing its search paths and `--dynamic-require` its mode when
+/// given.
+pub(crate) fn bundle_options<'project>(
+    project: &'project Project,
+    version: LuaVersion,
+    search_paths: &'project [String],
+    dynamic_require: Option<DynamicRequire>,
+) -> BundleOptions<'project> {
+    let options = project.bundle_options(version);
+    BundleOptions {
+        search_paths: if search_paths.is_empty() { options.search_paths } else { search_paths },
+        dynamic_require: dynamic_require.unwrap_or(options.dynamic_require),
+        ..options
+    }
+}
+
 /// # Errors
 ///
-/// Reports the failure and returns [`Exit::Usage`] on a bad dialect in
-/// `config`.
-pub(crate) fn resolve_configured_target(
-    config: &LuckConfig,
-    target: Option<LuaTarget>,
-    input_path: &str,
-) -> Result<LuaTarget, Exit> {
-    target.map_or_else(|| config.target_for_path(Path::new(input_path)).map_err(usage_error), Ok)
+/// Reports the config's problem and returns [`Exit::Usage`] when it doesn't
+/// load.
+pub(crate) fn load_project(config_path: &Path) -> Result<Project, Exit> {
+    Project::load(config_path).map_err(|diag| config_error(&diag))
 }
 
-/// An explicit `--dynamic-require` wins over the project's setting, which
-/// defaults to warning and keeping the call.
-pub(crate) fn resolve_dynamic_require(
-    config: &LuckConfig,
-    flag: Option<DynamicRequire>,
-) -> DynamicRequire {
-    flag.or(config.dynamic_require).unwrap_or_default()
-}
-
-/// That's `-c` resolved through `extends` when given.
+/// The project a command that takes one input reads it under: `-c` when
+/// given, or else the `luck.json` that governs `input`.
 ///
-/// Otherwise it's the `luck.json` governing the input, or defaults if there's
-/// none, and discovery starts in the input's own directory, or in the input
-/// when it's a directory, not cwd, so `luck bundle path/to/project/src/main.lua`
-/// sees that project's config.
-///
-/// The config directory isn't returned, since a one-shot run names its input
-/// and applies no include/exclude filter.
+/// Discovery starts in the input's own directory, or in the input when it's a
+/// directory, not cwd, so `luck bundle path/to/project/src/main.lua` sees that
+/// project's config. With none, it's the defaults rooted where discovery
+/// started, so a bundle resolves its modules from the entry's directory.
 ///
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Usage`] when the working directory
-/// is unavailable or the config can't be loaded.
-pub(crate) fn config_for_one_shot(
-    config_path: Option<&Path>,
-    input_path: &str,
-) -> Result<LuckConfig, Exit> {
-    if config_path.is_some() {
-        return Ok(resolve_project(config_path)?.config);
+/// is unavailable or the config doesn't load.
+pub(crate) fn one_shot_project(config_path: Option<&Path>, input: &Path) -> Result<Project, Exit> {
+    if let Some(path) = config_path {
+        return load_project(path);
     }
-
-    let input = Path::new(input_path);
     let input_directory = if input.is_dir() {
         Some(input)
     } else {
@@ -121,42 +98,30 @@ pub(crate) fn config_for_one_shot(
         // A bare file name, or `-` for stdin: cwd is the only context there is.
         None => current_directory()?,
     };
-
-    let discovered = discover_config(&start_directory).map_err(usage_error)?;
-    Ok(discovered.map_or_else(LuckConfig::default, |project| project.config))
+    find_config(&start_directory)
+        .map_or_else(|| Ok(Project::defaults(start_directory)), |found| load_project(&found))
 }
 
-/// `-c` resolved through `extends`, else the first `luck.json` found walking
-/// up from cwd, else the defaults rooted at cwd.
+/// The project of `-c` when given, or else of the first `luck.json` found
+/// walking up from cwd, or else the defaults rooted at cwd.
 ///
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Usage`] when the working directory
-/// is unavailable or the config can't be loaded.
-pub(crate) fn resolve_project(config_path: Option<&Path>) -> Result<ProjectConfig, Exit> {
+/// is unavailable or the config doesn't load.
+pub(crate) fn working_project(config_path: Option<&Path>) -> Result<Project, Exit> {
     let working_directory = current_directory()?;
-    let loaded = load_or_discover_config(config_path, &working_directory).map_err(usage_error)?;
-    Ok(loaded.unwrap_or_else(|| ProjectConfig {
-        root: working_directory,
-        config: LuckConfig::default(),
-    }))
-}
-
-/// A `luck.json`, or the defaults when no file is above a path, with what a
-/// path command derived from it.
-#[derive(Debug)]
-pub(crate) struct Project<Settings> {
-    pub filter: ProjectFilter,
-    pub config: LuckConfig,
-    pub settings: Settings,
+    config_path
+        .map(Path::to_path_buf)
+        .or_else(|| find_config(&working_directory))
+        .map_or_else(|| Ok(Project::defaults(working_directory)), |found| load_project(&found))
 }
 
 /// A file a path command works on, under the project that governs it.
 #[derive(Debug)]
-pub(crate) struct ProjectFile<Settings> {
+pub(crate) struct ProjectFile {
     pub path: PathBuf,
-    pub target: LuaTarget,
-    pub project: Arc<Project<Settings>>,
+    pub project: Arc<Project>,
 }
 
 /// The files `paths` select, each under the nearest `luck.json` above it, or
@@ -170,26 +135,25 @@ pub(crate) struct ProjectFile<Settings> {
 /// everything under a directory it matches. A file several arguments reach is
 /// processed once.
 ///
-/// `settings_of` runs once per project. Every target resolves here too,
-/// before the parallel commands' locked output sections. Those hold the stdio
-/// locks on the main thread while rayon workers run, so a worker reporting a
-/// bad dialect would deadlock.
+/// Every project gets `lint_overlay` layered over its lint settings. Each
+/// loads here, before the parallel commands' locked output sections, which
+/// hold the stdio locks on the main thread while rayon workers run, so a
+/// worker reporting a config error would deadlock.
 ///
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Usage`] on a config that doesn't
-/// load, a bad glob or dialect, a path that doesn't exist, or, unless
+/// load, a bad glob, a path that doesn't exist, or, unless
 /// `can_match_nothing`, a glob that selects no file or no file left to work
-/// on, and [`Exit::Failure`] when a directory can't be walked. An error from
-/// `settings_of` is returned as it is.
-pub(crate) fn project_files<Settings>(
+/// on, and [`Exit::Failure`] when a directory can't be walked.
+pub(crate) fn project_files(
     config_path: Option<&Path>,
     paths: &[String],
     can_match_nothing: bool,
-    settings_of: impl Fn(&LuckConfig) -> Result<Settings, Exit>,
-) -> Result<Vec<ProjectFile<Settings>>, Exit> {
+    lint_overlay: Option<&LintConfig>,
+) -> Result<Vec<ProjectFile>, Exit> {
     let working_directory = current_directory()?;
-    let mut projects = Projects::new(config_path, &working_directory, settings_of)?;
+    let mut projects = Projects::new(config_path, &working_directory, lint_overlay)?;
 
     let (dropped_args, selected_args): (Vec<&str>, Vec<&str>) =
         paths.iter().map(String::as_str).partition(|arg| arg.starts_with('!'));
@@ -197,7 +161,7 @@ pub(crate) fn project_files<Settings>(
     let requested_args =
         if selected_args.is_empty() { default_args.as_slice() } else { selected_args.as_slice() };
 
-    let mut found: Vec<(PathBuf, Arc<Project<Settings>>)> = Vec::new();
+    let mut found: Vec<ProjectFile> = Vec::new();
     for arg in requested_args {
         let path = Path::new(arg);
         if path.is_dir() {
@@ -205,8 +169,8 @@ pub(crate) fn project_files<Settings>(
         } else if path.is_file() {
             let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty());
             let project = projects.for_directory(parent.unwrap_or_else(|| Path::new(".")))?;
-            if !project.filter.is_excluded(path) {
-                found.push((path.to_path_buf(), project));
+            if !project.filter().is_excluded(path) {
+                found.push(ProjectFile { path: path.to_path_buf(), project });
             }
         } else if is_glob(arg) {
             let (base, pattern) = split_glob(arg);
@@ -237,8 +201,8 @@ pub(crate) fn project_files<Settings>(
             let absolute_base = lexical_absolute(&working_directory, &base);
             dropped.push((absolute_base, glob_set(&patterns).map_err(usage_error)?));
         }
-        found.retain(|(path, _)| {
-            let absolute = lexical_absolute(&working_directory, path);
+        found.retain(|file| {
+            let absolute = lexical_absolute(&working_directory, &file.path);
             !dropped.iter().any(|(base, patterns)| {
                 absolute.strip_prefix(base).is_ok_and(|relative| {
                     relative.as_os_str().is_empty() || patterns.is_match(relative)
@@ -250,8 +214,9 @@ pub(crate) fn project_files<Settings>(
     // One argument can't reach a file twice, so only several pay for this.
     if requested_args.len() > 1 {
         let mut seen_paths = FxHashSet::default();
-        found.retain(|(path, _)| {
-            seen_paths.insert(FileSystemOs.canonicalize(path).unwrap_or_else(|_| path.clone()))
+        found.retain(|file| {
+            seen_paths
+                .insert(FileSystemOs.canonicalize(&file.path).unwrap_or_else(|_| file.path.clone()))
         });
     }
 
@@ -261,14 +226,7 @@ pub(crate) fn project_files<Settings>(
             if quoted_args.is_empty() { "`.`".to_owned() } else { quoted_args.join(", ") };
         return Err(usage_error(format!("no `.lua` or `.luau` files matched {selection}")));
     }
-
-    found
-        .into_iter()
-        .map(|(path, project)| {
-            let target = project.config.target_for_path(&path).map_err(usage_error)?;
-            Ok(ProjectFile { path, target, project })
-        })
-        .collect()
+    Ok(found)
 }
 
 /// Whether `arg`, which names no existing path, is a glob and not a typo.
@@ -321,31 +279,28 @@ struct Selection {
 }
 
 /// The projects a run has met, one per `luck.json`.
-struct Projects<Settings, SettingsOf> {
+struct Projects<'overlay> {
     /// Set by `-c`, which puts every file under that one config.
-    explicit: Option<Arc<Project<Settings>>>,
+    explicit: Option<Arc<Project>>,
     /// The defaults, rooted at the working directory, for a path with no
     /// `luck.json` above it.
-    fallback: Option<Arc<Project<Settings>>>,
+    fallback: Option<Arc<Project>>,
     working_directory: PathBuf,
-    /// By the directory holding the `luck.json`.
-    discovered: FxHashMap<PathBuf, Arc<Project<Settings>>>,
-    by_directory: FxHashMap<PathBuf, Arc<Project<Settings>>>,
-    settings_of: SettingsOf,
+    /// By the path of their `luck.json`.
+    discovered: FxHashMap<PathBuf, Arc<Project>>,
+    by_directory: FxHashMap<PathBuf, Arc<Project>>,
+    lint_overlay: Option<&'overlay LintConfig>,
 }
 
-impl<Settings, SettingsOf> Projects<Settings, SettingsOf>
-where
-    SettingsOf: Fn(&LuckConfig) -> Result<Settings, Exit>,
-{
+impl<'overlay> Projects<'overlay> {
     /// # Errors
     ///
     /// Reports the failure and returns [`Exit::Usage`] when `config_path`
-    /// doesn't load, and the error `settings_of` returns for it.
+    /// doesn't load.
     fn new(
         config_path: Option<&Path>,
         working_directory: &Path,
-        settings_of: SettingsOf,
+        lint_overlay: Option<&'overlay LintConfig>,
     ) -> Result<Self, Exit> {
         let mut projects = Self {
             explicit: None,
@@ -353,23 +308,19 @@ where
             working_directory: working_directory.to_path_buf(),
             discovered: FxHashMap::default(),
             by_directory: FxHashMap::default(),
-            settings_of,
+            lint_overlay,
         };
-        if config_path.is_some() {
-            let ProjectConfig { root, config } = resolve_project(config_path)?;
-            projects.explicit = Some(projects.project(&root, config)?);
+        if let Some(path) = config_path {
+            projects.explicit = Some(projects.prepared(load_project(path)?));
         }
         Ok(projects)
     }
 
-    /// # Errors
-    ///
-    /// Reports the failure and returns [`Exit::Usage`] on a bad glob in
-    /// `config`, and the error `settings_of` returns for it.
-    fn project(&self, root: &Path, config: LuckConfig) -> Result<Arc<Project<Settings>>, Exit> {
-        let filter = config.project_filter(root).map_err(usage_error)?;
-        let settings = (self.settings_of)(&config)?;
-        Ok(Arc::new(Project { filter, config, settings }))
+    fn prepared(&self, mut project: Project) -> Arc<Project> {
+        if let Some(overlay) = self.lint_overlay {
+            project.overlay_lint(overlay);
+        }
+        Arc::new(project)
     }
 
     /// The project of the nearest `luck.json` at or above `directory`.
@@ -377,8 +328,8 @@ where
     /// # Errors
     ///
     /// Reports the failure and returns [`Exit::Usage`] when that config
-    /// doesn't load, and the error `settings_of` returns for it.
-    fn for_directory(&mut self, directory: &Path) -> Result<Arc<Project<Settings>>, Exit> {
+    /// doesn't load.
+    fn for_directory(&mut self, directory: &Path) -> Result<Arc<Project>, Exit> {
         if let Some(explicit) = &self.explicit {
             return Ok(Arc::clone(explicit));
         }
@@ -390,10 +341,7 @@ where
     /// # Errors
     ///
     /// As for [`for_directory`](Self::for_directory).
-    fn for_canonical_directory(
-        &mut self,
-        directory: &Path,
-    ) -> Result<Arc<Project<Settings>>, Exit> {
+    fn for_canonical_directory(&mut self, directory: &Path) -> Result<Arc<Project>, Exit> {
         if let Some(explicit) = &self.explicit {
             return Ok(Arc::clone(explicit));
         }
@@ -401,22 +349,18 @@ where
             return Ok(Arc::clone(known));
         }
         // Found by stat alone, so a project met before isn't loaded again.
-        let project = if let Some(root) =
-            directory.ancestors().find(|ancestor| ancestor.join(CONFIG_FILE_NAME).is_file())
-        {
-            if let Some(known) = self.discovered.get(root) {
+        let project = if let Some(config_path) = find_config(directory) {
+            if let Some(known) = self.discovered.get(&config_path) {
                 Arc::clone(known)
             } else {
-                let config =
-                    load_with_extends(&root.join(CONFIG_FILE_NAME)).map_err(usage_error)?;
-                let discovered = self.project(root, config)?;
-                self.discovered.insert(root.to_path_buf(), Arc::clone(&discovered));
+                let discovered = self.prepared(load_project(&config_path)?);
+                self.discovered.insert(config_path, Arc::clone(&discovered));
                 discovered
             }
         } else if let Some(fallback) = &self.fallback {
             Arc::clone(fallback)
         } else {
-            let fallback = self.project(&self.working_directory, LuckConfig::default())?;
+            let fallback = self.prepared(Project::defaults(self.working_directory.clone()));
             self.fallback = Some(Arc::clone(&fallback));
             fallback
         };
@@ -436,7 +380,7 @@ where
         &mut self,
         directory: &Path,
         selection: Option<&Selection>,
-        found: &mut Vec<(PathBuf, Arc<Project<Settings>>)>,
+        found: &mut Vec<ProjectFile>,
     ) -> Result<(), Exit> {
         let has_nested_projects = self.explicit.is_none();
         let mut tree_files = Vec::new();
@@ -449,15 +393,20 @@ where
                 tree: &tree,
                 canonical_tree: &canonical_tree,
                 max_depth: tree_max_depth,
-                filter: &project.filter,
+                filter: project.filter(),
                 selection: selection.map(|selected| (directory, &selected.patterns)),
                 has_nested_projects,
             };
             let walked = walk.run()?;
-            tree_files.extend(walked.files.into_iter().map(|path| (path, Arc::clone(&project))));
+            tree_files.extend(
+                walked
+                    .files
+                    .into_iter()
+                    .map(|path| ProjectFile { path, project: Arc::clone(&project) }),
+            );
             pending_trees.extend(walked.nested_trees);
         }
-        tree_files.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        tree_files.sort_unstable_by(|left, right| left.path.cmp(&right.path));
         found.extend(tree_files);
         Ok(())
     }
@@ -611,13 +560,12 @@ fn canonical_directory(directory: &Path) -> Result<PathBuf, Exit> {
 /// # Errors
 ///
 /// Returns the first error `take` returns.
-pub(crate) fn for_each_outcome_in_order<Settings, Outcome>(
-    files: &[ProjectFile<Settings>],
-    work: impl Fn(&ProjectFile<Settings>, &Allocator) -> Outcome + Sync,
+pub(crate) fn for_each_outcome_in_order<Outcome>(
+    files: &[ProjectFile],
+    work: impl Fn(&ProjectFile, &Allocator) -> Outcome + Sync,
     mut take: impl FnMut(Outcome) -> Result<(), Exit>,
 ) -> Result<(), Exit>
 where
-    Settings: Send + Sync,
     Outcome: Send,
 {
     // Before anything starts rayon's default pool, whose threads' stacks are
@@ -670,19 +618,23 @@ where
 mod tests {
     use std::fs;
 
-    use luck_config::parse_luck_config;
+    use luck_core::LuaTarget;
 
     use super::*;
 
-    fn selected(config_path: Option<&Path>, paths: &[String]) -> Vec<ProjectFile<()>> {
-        project_files(config_path, paths, false, |_| Ok(())).expect("files resolve")
+    fn selected(config_path: Option<&Path>, paths: &[String]) -> Vec<ProjectFile> {
+        project_files(config_path, paths, false, None).expect("files resolve")
     }
 
-    fn file_names(files: &[ProjectFile<()>]) -> Vec<String> {
+    fn file_names(files: &[ProjectFile]) -> Vec<String> {
         files
             .iter()
             .map(|file| file.path.file_name().unwrap().to_string_lossy().into_owned())
             .collect()
+    }
+
+    fn target(file: &ProjectFile) -> LuaTarget {
+        file.project.target_for(Some(&file.path))
     }
 
     fn write_file(path: &Path, contents: &str) {
@@ -690,63 +642,34 @@ mod tests {
         fs::write(path, contents).expect("write file");
     }
 
-    fn target_for(target: Option<LuaTarget>, input_path: &str) -> LuaTarget {
-        let config = config_for_one_shot(None, input_path).expect("config resolves");
-        resolve_configured_target(&config, target, input_path).expect("target resolves")
-    }
-
-    /// Discovery finds no config in a fresh tempdir, so this tests the
-    /// defaults.
-    #[test]
-    fn configured_target_infers_from_extension() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let path = |name: &str| directory.path().join(name).display().to_string();
-
-        assert_eq!(target_for(None, &path("main.luau")), LuaTarget::Luau);
-        assert_eq!(target_for(None, &path("main.lua")), LuaTarget::Lua54);
-        // No extension falls back to Lua54.
-        assert_eq!(target_for(None, &path("main")), LuaTarget::Lua54);
-    }
-
     /// The one-shot commands must honor the project's per-extension dialect,
     /// or a Roblox tree keeping Luau in `.lua` files can't bundle at all.
     #[test]
-    fn configured_target_honors_project_config() {
+    fn one_shot_project_is_the_one_above_the_input() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("luck.json"), r#"{"lua":"roblox"}"#)
             .expect("write luck.json");
-        let source_directory = directory.path().join("src");
-        fs::create_dir_all(&source_directory).expect("mkdir src");
+        let entry = directory.path().join("src/main.lua");
+        fs::create_dir_all(entry.parent().expect("a parent")).expect("mkdir src");
 
-        let entry = source_directory.join("main.lua").display().to_string();
-        assert_eq!(target_for(None, &entry), LuaTarget::LuauRoblox);
-        // An explicit -t still wins over the config.
-        assert_eq!(target_for(Some(LuaTarget::Lua51), &entry), LuaTarget::Lua51);
+        let project = one_shot_project(None, &entry).expect("project loads");
+        assert_eq!(project.target_for(Some(&entry)), LuaTarget::LuauRoblox);
     }
 
+    /// With no `luck.json`, the defaults root where discovery started, so a
+    /// bundle resolves its modules next to its entry.
     #[test]
-    fn configured_target_prefers_an_explicit_target_over_the_extension() {
-        let config = LuckConfig::default();
-        assert_eq!(
-            resolve_configured_target(&config, Some(LuaTarget::Lua54), "main.luau"),
-            Ok(LuaTarget::Lua54)
-        );
-        assert_eq!(
-            resolve_configured_target(&config, Some(LuaTarget::LuauRoblox), "main.lua"),
-            Ok(LuaTarget::LuauRoblox)
-        );
-    }
+    fn one_shot_project_without_a_config_roots_the_defaults_at_the_input() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let entry = directory.path().join("sources/main.luau");
+        write_file(&entry, "return 1\n");
 
-    #[test]
-    fn resolve_dynamic_require_prefers_the_flag_over_the_config() {
-        let config = parse_luck_config(r#"{"dynamic_require":"error"}"#).expect("parse config");
-        assert_eq!(resolve_dynamic_require(&config, None), DynamicRequire::Error);
-        assert_eq!(
-            resolve_dynamic_require(&config, Some(DynamicRequire::Allow)),
-            DynamicRequire::Allow
-        );
-        // Warning and keeping the call is the default when nothing says otherwise.
-        assert_eq!(resolve_dynamic_require(&LuckConfig::default(), None), DynamicRequire::Warn);
+        let project = one_shot_project(None, &entry).expect("defaults");
+        assert_eq!(project.target_for(Some(&entry)), LuaTarget::Luau);
+        let canonical_sources = entry.parent().and_then(|parent| parent.canonicalize().ok());
+        if find_config(directory.path()).is_none() {
+            assert_eq!(Some(project.root()), canonical_sources.as_deref());
+        }
     }
 
     /// A `.luau` file under a roblox config must resolve to the roblox target,
@@ -761,8 +684,8 @@ mod tests {
 
         let root = directory.path().display().to_string();
         let targets: Vec<(String, LuaTarget)> = selected(Some(&config_path), &[root])
-            .into_iter()
-            .map(|file| (file.path.file_name().unwrap().to_string_lossy().into(), file.target))
+            .iter()
+            .map(|file| (file.path.file_name().unwrap().to_string_lossy().into(), target(file)))
             .collect();
         assert_eq!(
             targets,
@@ -783,16 +706,16 @@ mod tests {
         write_file(&root.join("pkg/deep/b.lua"), "return 2\n");
 
         let walked = selected(None, &[root.display().to_string()]);
-        let walked_targets: Vec<LuaTarget> = walked.iter().map(|file| file.target).collect();
+        let walked_targets: Vec<LuaTarget> = walked.iter().map(target).collect();
         assert_eq!(file_names(&walked), ["a.lua", "b.lua"]);
         assert_eq!(walked_targets, [LuaTarget::Lua51, LuaTarget::Lua53]);
 
         let named = selected(None, &[root.join("pkg/deep/b.lua").display().to_string()]);
-        assert_eq!(named[0].target, LuaTarget::Lua53);
+        assert_eq!(target(&named[0]), LuaTarget::Lua53);
 
         // `-c` puts every file under the one config.
         let pinned = selected(Some(&root.join("luck.json")), &[root.display().to_string()]);
-        assert!(pinned.iter().all(|file| file.target == LuaTarget::Lua51), "{pinned:?}");
+        assert!(pinned.iter().all(|file| target(file) == LuaTarget::Lua51), "{pinned:?}");
         assert_eq!(file_names(&pinned), ["a.lua", "b.lua"]);
     }
 
@@ -833,27 +756,28 @@ mod tests {
     fn no_matching_file_is_an_error_unless_allowed() {
         let directory = tempfile::tempdir().expect("tempdir");
         let paths = [directory.path().display().to_string()];
-        assert_eq!(project_files(None, &paths, false, |_| Ok(())).unwrap_err(), Exit::Usage);
-        let allowed = project_files(None, &paths, true, |_| Ok(())).expect("allowed");
+        assert_eq!(project_files(None, &paths, false, None).unwrap_err(), Exit::Usage);
+        let allowed = project_files(None, &paths, true, None).expect("allowed");
         assert!(allowed.is_empty(), "{allowed:?}");
     }
 
     #[test]
-    fn settings_come_from_each_file_s_own_project() {
+    fn the_lint_overlay_reaches_every_project() {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
-        write_file(&root.join("luck.json"), r#"{"lua":"lua51"}"#);
-        write_file(&root.join("pkg/luck.json"), r#"{"lua":"lua53"}"#);
+        write_file(&root.join("luck.json"), r#"{"lint":{"extra_globals":["a"]}}"#);
+        write_file(&root.join("pkg/luck.json"), r#"{"lint":{"extra_globals":["b"]}}"#);
         write_file(&root.join("a.lua"), "return 1\n");
         write_file(&root.join("pkg/b.lua"), "return 2\n");
 
-        let files = project_files(None, &[root.display().to_string()], false, |config| {
-            Ok(config.lua.clone())
-        })
-        .expect("files resolve");
-        let settings: Vec<Option<&str>> =
-            files.iter().map(|file| file.project.settings.as_deref()).collect();
-        assert_eq!(settings, [Some("lua51"), Some("lua53")]);
+        let overlay = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
+        let files = project_files(None, &[root.display().to_string()], false, Some(&overlay))
+            .expect("files resolve");
+        let globals: Vec<Vec<String>> = files
+            .iter()
+            .map(|file| file.project.lint_for(Some(&file.path)).extra_globals.clone())
+            .collect();
+        assert_eq!(globals, [["a", "vim"], ["b", "vim"]]);
     }
 
     #[test]
@@ -886,7 +810,7 @@ mod tests {
         write_file(&root.join("keep.lua"), "return 1\n");
         fs::set_permissions(&excluded, fs::Permissions::from_mode(0o000)).expect("lock gen");
 
-        let walked = project_files(None, &[root.display().to_string()], false, |_| Ok(()));
+        let walked = project_files(None, &[root.display().to_string()], false, None);
         fs::set_permissions(&excluded, fs::Permissions::from_mode(0o755)).expect("unlock gen");
 
         let files = walked.expect("an excluded directory must not fail the walk");
@@ -948,8 +872,8 @@ mod tests {
         write_file(&root.join("here/luck.json"), r#"{"lua":"lua51"}"#);
         write_file(&root.join("pkg/a.lua"), "return 1\n");
 
-        let mut projects = Projects::new(None, &root.join("here"), |_| Ok(())).expect("projects");
+        let mut projects = Projects::new(None, &root.join("here"), None).expect("projects");
         let project = projects.for_directory(&root.join("here/../pkg")).expect("project resolves");
-        assert_eq!(project.config.lua, None);
+        assert_eq!(project.target_for(Some(Path::new("a.lua"))), LuaTarget::Lua54);
     }
 }

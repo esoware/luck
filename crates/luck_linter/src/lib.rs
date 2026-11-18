@@ -64,4 +64,4 @@ pub use fix::{
     non_overlapping_edits,
 };
 pub use rule::Rule;
-pub use rules::{rules, unknown_rule_names};
+pub use rules::{rule_named, rules};

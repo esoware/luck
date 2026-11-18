@@ -6,8 +6,12 @@ use alloc::sync::Arc;
 use core::future::{poll_fn, ready};
 use core::pin::pin;
 use core::task::Poll;
+use std::fs;
+use std::path::PathBuf;
 
 use luck_allocator::Allocator;
+use luck_config::Project;
+use luck_formatter::FormatOptions;
 use luck_linter::LintDiagnostic;
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::{spawn_blocking, yield_now};
@@ -42,7 +46,7 @@ use crate::providers::{
     document_symbol, folding_range, hover, references, rename, selection_range, semantic_tokens,
     signature_help, syntax_tree, workspace_symbol,
 };
-use crate::settings::SettingsCache;
+use crate::settings::{Discovered, SettingsCache};
 
 /// The parts of `tower_lsp_server::Client` the backend uses, so tests can
 /// record what the server sends instead.
@@ -148,21 +152,54 @@ impl<N: Notifier> Backend<N> {
 
     async fn document_settings(&self, uri: &Uri) -> Arc<DocumentSettings> {
         let path = file_path(uri);
-        let project = self.settings_cache.settings_for(path.as_deref()).await;
+        let Discovered { project, error } = self.settings_cache.project_for(path.as_deref()).await;
+        if let Some(diag) = error {
+            self.report_config_error(&project, &diag).await;
+        }
         let target = project.target_for(path.as_deref());
-        let is_included = match &path {
-            Some(document_path) => {
-                let (filter_settings, filtered) = (Arc::clone(&project), document_path.clone());
-                // `is_included` canonicalizes the path, which touches the
-                // disk. A check that dies counts as excluded, so no fix lands
-                // on a guess.
-                spawn_blocking(move || filter_settings.filter.is_included(&filtered))
-                    .await
-                    .unwrap_or(false)
-            }
-            None => true,
+        let editorconfigs = self.settings_cache.editorconfigs().await;
+        let resolved_project = Arc::clone(&project);
+        // The filter and the overrides canonicalize the path, and
+        // `.editorconfig` files are read, which touches the disk. A lookup
+        // that dies counts as excluded, so no fix lands on a guess.
+        let resolved = spawn_blocking(move || {
+            let document_path = path.as_deref();
+            let is_included =
+                document_path.is_none_or(|file| resolved_project.filter().is_included(file));
+            let lint = resolved_project.lint_for(document_path);
+            let format = resolved_project.format_options(document_path, Some(&editorconfigs));
+            (is_included, lint, format)
+        })
+        .await;
+        let (is_included, lint, format) =
+            resolved.unwrap_or_else(|_| (false, project.lint_for(None), FormatOptions::default()));
+        Arc::new(DocumentSettings { project, target, lint, format, is_included })
+    }
+
+    /// Shows why the `luck.json` that `defaults` stand in for doesn't load,
+    /// and publishes the problem on the file at fault.
+    async fn report_config_error(&self, defaults: &Project, diag: &luck_core::Diagnostic) {
+        let directory = defaults.root().display();
+        self.notifier
+            .show_message(
+                MessageType::ERROR,
+                format!(
+                    "luck: the `luck.json` in `{directory}` doesn't load, so its files use the \
+                     defaults: {}",
+                    diag.message
+                ),
+            )
+            .await;
+        let path = PathBuf::from(&diag.file_path);
+        let Some(uri) = Uri::from_file_path(&path) else {
+            return;
         };
-        Arc::new(DocumentSettings { path, project, target, is_included })
+        // A file that can't be read has no text to place the problem in.
+        let text = spawn_blocking(move || fs::read_to_string(path).unwrap_or_default())
+            .await
+            .unwrap_or_default();
+        let published = vec![diagnostics::config_to_lsp(diag, &text)];
+        self.notifier.publish_diagnostics(uri, published, None).await;
     }
 
     /// Lints `document` and publishes the result, unless `document` has been
@@ -391,9 +428,12 @@ impl<N: Notifier> LanguageServer for Backend<N> {
             method: "workspace/didChangeWatchedFiles".to_owned(),
             register_options: Some(
                 serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                    // Any JSON file, since a `luck.json` can extend a file
+                    // of any name. A change touching none the projects read
+                    // is ignored.
                     watchers: vec![
                         FileSystemWatcher {
-                            glob_pattern: GlobPattern::String("**/luck.json".to_owned()),
+                            glob_pattern: GlobPattern::String("**/*.json".to_owned()),
                             kind: None,
                         },
                         FileSystemWatcher {
@@ -423,8 +463,25 @@ impl<N: Notifier> LanguageServer for Backend<N> {
         }
     }
 
-    async fn did_change_watched_files(&self, _params: DidChangeWatchedFilesParams) {
-        self.settings_cache.clear().await;
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let mut is_settings_change = false;
+        for change in &params.changes {
+            if let Some(path) = file_path(&change.uri)
+                && self.settings_cache.is_settings_file(&path).await
+            {
+                is_settings_change = true;
+                break;
+            }
+        }
+        if !is_settings_change {
+            return;
+        }
+        // A config still broken reports itself again as documents reload.
+        for broken in self.settings_cache.clear().await {
+            if let Some(uri) = Uri::from_file_path(&broken) {
+                self.notifier.publish_diagnostics(uri, Vec::new(), None).await;
+            }
+        }
         // Rebuild every open document under the new settings, whether or not
         // its dialect or extra globals changed, so a lint running under the
         // old settings has nothing to publish. Each document's settings are
@@ -590,8 +647,8 @@ impl<N: Notifier> LanguageServer for Backend<N> {
             return Ok(None);
         };
         // Without published lints, they're recomputed through the same
-        // include/exclude filter and opt-in gate as publishing, so no action
-        // fixes a diagnostic the user wasn't shown.
+        // include/exclude filter and lint settings as publishing, so no
+        // action fixes a diagnostic the user wasn't shown.
         let lints = match published_lints {
             Some(lints) => lints,
             None => lint_off_the_serve_loop(&document).await,

@@ -1001,6 +1001,8 @@ dependencies = [
  "luck_formatter",
  "luck_linter",
  "luck_minifier",
+ "luck_resolver",
+ "luck_token",
  "parking_lot",
  "rustc-hash",
  "schemars",
@@ -1013,7 +1015,10 @@ dependencies = [
 name = "luck_core"
 version = "0.6.0"
 dependencies = [
+ "luck_core",
  "luck_token",
+ "schemars",
+ "serde",
 ]
 
 [[package]]

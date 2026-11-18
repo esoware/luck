@@ -24,6 +24,6 @@ cargo install luck_cli
 
 ## How it works
 
-Every command runs on a thread with `luck_ast::MIN_STACK_BYTES` of stack. `lint`, `fmt`, and `check` give each file the nearest `luck.json` above it, or the one `-c` names, and work through the files in parallel on rayon's pool, each file in an arena from a pool, printing each file's results in input order. `build` takes the `luck.json` above the working directory. `bundle`, `minify`, and `graph` take the one above their input. A command-line flag wins over the config.
+Every command runs on a thread with `luck_ast::MIN_STACK_BYTES` of stack, and reads each `luck.json` once, as a `luck_config::Project`. `lint`, `fmt`, and `check` give each file the nearest `luck.json` above it, or the one `-c` names, and work through the files in parallel on rayon's pool, each file in an arena from a pool, printing each file's results in input order. `build` takes the `luck.json` above the working directory. `bundle`, `minify`, and `graph` take the one above their input, and `bundle` and `graph` resolve modules from its root and `search_paths` as `build` does. A command-line flag wins over the config, its `overrides` included.
 
 The exit code is 0 on success, 1 when the command found problems or an operation failed, and 2 for bad arguments, a missing or invalid config, or no file to work on.
