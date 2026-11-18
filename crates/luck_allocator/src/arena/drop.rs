@@ -40,6 +40,9 @@ impl<const MIN_ALIGN: usize> Arena<MIN_ALIGN> {
     ///
     /// [the top-level documentation]: Arena
     pub fn reset(&mut self) {
+        #[cfg(feature = "track_allocations")]
+        self.stats.reset();
+
         // Takes `&mut self` so `self` must be unique, and there can't be any borrows active
         // that would get invalidated by resetting
         unsafe {
@@ -116,6 +119,12 @@ unsafe fn dealloc_chunk(footer_ptr: NonNull<ChunkFooter>) {
         let footer = unsafe { footer_ptr.as_ref() };
         (footer.backing_alloc_ptr.as_ptr(), footer.layout)
     };
+
+    // Mark the upcoming deallocation as a chunk operation, so the allocation-tracking
+    // task can exclude it from its heap metrics. Must be set immediately before the
+    // `dealloc` call, with no allocations in between.
+    #[cfg(feature = "track_allocations")]
+    crate::tracking::start_chunk_operation();
 
     // SAFETY: Each `ChunkFooter`'s `backing_alloc_ptr` and `layout` describe its backing allocation,
     // which was made via global allocator.

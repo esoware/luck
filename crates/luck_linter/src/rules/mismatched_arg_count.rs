@@ -2,7 +2,7 @@ use luck_ast::{Call, Expression, FunctionBody, Statement};
 use luck_semantic::ScopeTree;
 use rustc_hash::FxHashMap;
 
-use crate::call::{has_multi_value_tail, positional_args};
+use crate::call::{CallArg, CallArgs};
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
@@ -110,10 +110,12 @@ fn check_call(
     if signature.has_vararg {
         return None;
     }
-    let (args, arg_count) = positional_args(call.args);
+    let args = CallArgs::new(call.args);
+    let arg_count = args.len();
     // A trailing call or `...` can expand to nothing, so only the args
     // before it are sure to be passed.
-    let guaranteed_arg_count = arg_count.saturating_sub(usize::from(has_multi_value_tail(args)));
+    let has_multi_value_tail = args.last().is_some_and(CallArg::is_multi_value);
+    let guaranteed_arg_count = arg_count.saturating_sub(usize::from(has_multi_value_tail));
     if guaranteed_arg_count <= signature.param_count {
         return None;
     }
@@ -176,6 +178,15 @@ local function g() end
 local function f(a) return a end
 f(1, 2, g())");
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_string_and_table_arguments_without_parentheses() {
+        let diags = run("\
+local function f() end
+f\"x\"
+f{}");
+        assert_eq!(diags.len(), 2, "{diags:?}");
     }
 
     #[test]

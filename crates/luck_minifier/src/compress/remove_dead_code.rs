@@ -240,6 +240,7 @@ impl<'ast> Compressor<'_, 'ast> {
                         break;
                     };
                     if !self.is_used(&attributed.name) && is_pure_expr(value) {
+                        self.retract_annotation(attributed);
                         self.retract_expr(value);
                     } else {
                         local.names.swap(kept, i);
@@ -284,6 +285,9 @@ impl<'ast> Compressor<'_, 'ast> {
         let Statement::LocalAssignment(local) = stmt else {
             return;
         };
+        for attributed in &local.names {
+            self.retract_annotation(attributed);
+        }
         let mut first_call = None;
         let calls_start = self.late_calls.len();
         for expr in &mut local.exprs {
@@ -771,6 +775,16 @@ mod tests {
             "local x = {} do local y = function() return x end end",
         ] {
             assert_eq!(walk_once(source, DEAD_CODE), "", "{source}");
+        }
+    }
+
+    #[test]
+    fn uncounts_the_annotation_of_a_name_it_drops() {
+        for (source, expected) in [
+            ("local a = ... local b: typeof(a) = f()", "f()"),
+            ("local a = ... local b: typeof(a), c = 1, g print(c)", "local c=g print(c)"),
+        ] {
+            assert_eq!(minify_with(source, LuaVersion::Luau, &DEAD_CODE), expected, "{source}");
         }
     }
 

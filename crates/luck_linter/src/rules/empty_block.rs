@@ -71,8 +71,12 @@ impl NodeRule for EmptyBlock {
     }
 }
 
+/// A `;` is no statement, so a body of only `;` is as empty as one of
+/// nothing, and the formatter prints it as one.
 fn check_body(block: &Block<'_>, message: &'static str, span: Span) -> Option<Finding> {
-    (block.stmts.is_empty() && block.last_stmt.is_none()).then(|| Finding::new(message, span))
+    let is_empty = block.last_stmt.is_none()
+        && block.stmts.iter().all(|stmt| matches!(stmt, Statement::EmptyStatement(_)));
+    is_empty.then(|| Finding::new(message, span))
 }
 
 #[cfg(test)]
@@ -119,6 +123,20 @@ repeat until c");
                 "empty generic `for` loop body",
                 "empty `repeat` loop body",
             ],
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_body_of_only_semicolons() {
+        let diags = run("\
+local c = 1
+if c then ; else ;; end
+do ; end");
+        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
+        assert_eq!(
+            messages,
+            ["empty `if` block", "empty `else` block", "empty `do` block"],
             "{diags:?}"
         );
     }

@@ -22,7 +22,7 @@ local value = - -1; return value .. '\u{e9}'",
             let output = luck_codegen::compact_with_capacity(&parsed.block, capacity);
             assert_eq!(output, expected);
         }
-        assert_reprints(&expected, version);
+        assert_reprints(&parsed.block, version);
     }
 }
 

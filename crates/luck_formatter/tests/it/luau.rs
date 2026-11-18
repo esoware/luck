@@ -458,3 +458,46 @@ type T = Map<
         &narrowest,
     );
 }
+
+#[test]
+fn a_comment_after_a_line_comment_a_lone_cr_ends_starts_its_own_line() {
+    // Luau ends a line comment at a lone CR but reads no line break there.
+    assert_luau(
+        "x = 1 -- a\r-- b\r",
+        "\
+x = 1 -- a
+-- b
+",
+    );
+    assert_luau(
+        "f(a, -- x\r--[[y]] b)\n",
+        "\
+f(
+\ta, -- x
+\t--[[y]]
+\tb
+)
+",
+    );
+}
+
+#[test]
+fn lone_crs_ending_a_line_go_as_spaces_do() {
+    // Luau reads a lone CR as a space, so only the last before an LF is half
+    // of a CRLF.
+    assert_luau(
+        "x = -- c\r\r\n1\n",
+        "\
+x = -- c
+1
+",
+    );
+    assert_luau(
+        "--[[a\r\r\nb]]\nlocal x\n",
+        "\
+--[[a
+b]]
+local x
+",
+    );
+}

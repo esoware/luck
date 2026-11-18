@@ -187,6 +187,7 @@ impl<'ast> Compressor<'_, 'ast> {
         let Statement::LocalAssignment(local) = stmt else {
             return true;
         };
+        let can_hold = !mem::take(&mut self.is_late_read);
         // An initializer can hold `local`s of its own, so the list is a
         // stack that every `local` leaves as it found it.
         let landed_start = self.landed_counts.len();
@@ -197,12 +198,17 @@ impl<'ast> Compressor<'_, 'ast> {
             let landed_locals = mem::replace(&mut self.landed_locals, outer_landed_locals);
             self.landed_counts.push(landed_locals);
         }
-        let is_kept = self.inline_from(local, landed_start);
+        let is_kept = self.inline_from(local, landed_start, can_hold);
         self.landed_counts.truncate(landed_start);
         is_kept
     }
 
-    fn inline_from(&mut self, local: &mut LocalAssignment<'ast>, landed_start: usize) -> bool {
+    fn inline_from(
+        &mut self,
+        local: &mut LocalAssignment<'ast>,
+        landed_start: usize,
+        can_hold: bool,
+    ) -> bool {
         if self.config.remove_dead_code && is_nil_initialized(local) {
             local.exprs = List::new();
             self.has_changed = true;
@@ -211,6 +217,7 @@ impl<'ast> Compressor<'_, 'ast> {
         // Dropping a name and its value keeps every other name's value only
         // when each name has its own.
         if !self.config.inline_locals
+            || !can_hold
             || has_fixed_binding(local, self.version)
             || local.names.len() != local.exprs.len()
         {
@@ -228,6 +235,7 @@ impl<'ast> Compressor<'_, 'ast> {
             if local_of(&attributed.name)
                 .is_some_and(|id| self.hold_value(id, value, landed_locals))
             {
+                self.retract_annotation(attributed);
                 self.has_changed = true;
             } else {
                 local.names.swap(kept, index);
@@ -270,9 +278,15 @@ impl<'ast> Compressor<'_, 'ast> {
                     registers.saturating_add(super::merge_locals::declared_count(stmt))
                 });
             let is_read_kept = match read {
-                ReadSite::Stmt(read_index) => {
-                    block.stmts.get_mut(read_index).is_none_or(|stmt| self.visit_kept_stmt(stmt))
-                }
+                ReadSite::Stmt(read_index) => block.stmts.get_mut(read_index).is_none_or(|stmt| {
+                    // The walk is past the reads of what the read's `local`
+                    // declares, so their values wait for a late inlining of
+                    // their own.
+                    self.is_late_read = matches!(stmt, Statement::LocalAssignment(_));
+                    let is_kept = self.visit_kept_stmt(stmt);
+                    self.is_late_read = false;
+                    is_kept
+                }),
                 ReadSite::Last => {
                     if let Some(last) = &mut block.last_stmt {
                         self.visit_last_stmt(last);
@@ -296,6 +310,9 @@ impl<'ast> Compressor<'_, 'ast> {
                 remove_stmt(&mut block.stmts, read_index);
             }
             if let Some(Statement::LocalAssignment(declaration)) = block.stmts.get_mut(index) {
+                if let Some(attributed) = declaration.names.get(name_index) {
+                    self.retract_annotation(attributed);
+                }
                 let kept = declaration.names.len().saturating_sub(1);
                 for i in name_index..kept {
                     declaration.names.swap(i, i.saturating_add(1));
@@ -580,6 +597,30 @@ mod tests {
             "local x = 1 print(x) local function f() return x end",
         ] {
             assert!(walk_once(source, both).starts_with("print(1)"), "{source}");
+        }
+    }
+
+    #[test]
+    fn inlines_a_local_whose_value_takes_a_late_inlined_one() {
+        let both = TransformConfig { remove_dead_code: true, ..INLINING };
+        assert_eq!(
+            minify_with(
+                "local a = 6 local b = a if false then print(a) end print(b)",
+                LuaVersion::Lua54,
+                &both
+            ),
+            "print(6)"
+        );
+    }
+
+    #[test]
+    fn uncounts_the_annotation_of_a_name_it_inlines() {
+        let both = TransformConfig { remove_dead_code: true, ..INLINING };
+        for (source, config) in [
+            ("local a = 5 local b: typeof(a) = 1 print(a, b)", INLINING),
+            ("local a = 5 local b: typeof(a) = 1 if false then print(b) end print(a, b)", both),
+        ] {
+            assert_eq!(minify_with(source, LuaVersion::Luau, &config), "print(5,1)", "{source}");
         }
     }
 

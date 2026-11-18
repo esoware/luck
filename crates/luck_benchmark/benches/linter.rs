@@ -4,9 +4,8 @@
 )]
 
 use luck_allocator::Allocator;
-use luck_benchmark::{
-    BenchmarkId, Criterion, black_box, criterion_group, criterion_main, test_files, test_projects,
-};
+use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use luck_benchmark_files::{test_files, test_projects};
 use luck_linter::{CategoryLevels, LintConfig, RuleLevel};
 use rayon::ThreadPoolBuilder;
 

@@ -14,6 +14,8 @@
 //! A body lifts every declaration it can or none, and only when that's
 //! shorter, so lifting a body it already lifted finds nothing more.
 
+use core::mem;
+
 use luck_allocator::{Box, List};
 use luck_ast::{
     Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, LastStatement,
@@ -64,6 +66,9 @@ pub(super) struct Lifter<'ast> {
     open_names: Vec<usize>,
     /// `do` blocks that lifting leaves scoping nothing.
     unwrapped_blocks: usize,
+    /// With names kept, each name whose reads as a global or captures kept
+    /// one of the walk's lifts from a declaration.
+    blocked_names: Vec<usize>,
 }
 
 /// The most locals and registers a body can hold at once.
@@ -229,7 +234,7 @@ impl<'ast> Collector<'_, 'ast> {
     /// Whether the binding `name` declares can join a hoisted local: no
     /// closure references it, and with names kept, nothing else in the
     /// file reads its name where the hoisted local would be in scope.
-    fn can_lift_name(&self, name: &Name<'_>) -> bool {
+    fn can_lift_name(&mut self, name: &Name<'_>) -> bool {
         let Some(binding) = local_of(name).and_then(|id| self.bindings.get(id)) else {
             return false;
         };
@@ -242,9 +247,16 @@ impl<'ast> Collector<'_, 'ast> {
         let Ok(name_id) = usize::try_from(binding.name) else {
             return false;
         };
-        self.bindings.global_uses.get(name_id).is_none_or(|&uses| uses == 0)
-            && self.bindings.name_captures.get(name_id).is_none_or(|&captures| captures == 0)
-            && self.lifter.open_counts.get(name_id).is_none_or(|&count| count == 0)
+        if self.lifter.open_counts.get(name_id).is_some_and(|&count| count > 0) {
+            return false;
+        }
+        let is_used_elsewhere =
+            self.bindings.global_uses.get(name_id).is_some_and(|&uses| uses > 0)
+                || self.bindings.name_captures.get(name_id).is_some_and(|&captures| captures > 0);
+        if is_used_elsewhere {
+            self.lifter.blocked_names.push(name_id);
+        }
+        !is_used_elsewhere
     }
 
     /// Hands the binding `name` declares the hoisted local it joins.
@@ -405,6 +417,19 @@ impl<'ast> Collector<'_, 'ast> {
     reason = "the compressor is one type with its rewrites split by flag"
 )]
 impl<'ast> Compressor<'_, 'ast> {
+    /// Whether a name that kept a lift from a declaration lost the last of
+    /// its reads as a global and captures later in the walk, which leaves
+    /// the lift to another walk. Forgets the names, for the next walk.
+    pub(super) fn take_freed_names(&mut self) -> bool {
+        let bindings = &*self.bindings;
+        let is_freed = self.lifter.blocked_names.iter().any(|&name_id| {
+            bindings.global_uses.get(name_id).is_none_or(|&uses| uses == 0)
+                && bindings.name_captures.get(name_id).is_none_or(|&captures| captures == 0)
+        });
+        self.lifter.blocked_names.clear();
+        is_freed
+    }
+
     /// Lifts `body` as the walk leaves it, which leaves nothing else to
     /// change in it.
     pub(super) fn lift(&mut self, body: &mut FunctionBody<'ast>) {
@@ -575,7 +600,8 @@ impl<'ast> Compressor<'_, 'ast> {
     }
 
     /// `local a, b = X, Y` becomes `a, b = X, Y`, and `local function f()`
-    /// becomes `f = function()`, each name now its hoisted local's.
+    /// becomes `f = function()`, each name now its hoisted local's, which
+    /// takes the name's counts and the assignment's write.
     fn rewrite_declaration(&mut self, stmt: &mut Statement<'ast>, cursor: &mut (usize, usize)) {
         let allocator = self.allocator;
         let (names, values, span): (Vec<Name<'ast>>, _, _) = match stmt.take() {
@@ -618,10 +644,22 @@ impl<'ast> Compressor<'_, 'ast> {
             let hoisted_binding = joined
                 .and_then(|index| self.lifter.hoisted.get(index))
                 .map(|hoisted| hoisted.binding);
-            if let (Some(id), Some(merged_into)) = (local_of(name), hoisted_binding)
+            let Some(id) = local_of(name) else {
+                continue;
+            };
+            if let Some(merged_into) = hoisted_binding.filter(|&hoisted| hoisted != id)
                 && let Some(binding) = self.bindings.entries.get_mut(id)
             {
                 binding.merged_into = u32::try_from(merged_into).unwrap_or(binding.merged_into);
+                let (reads, writes) =
+                    (mem::take(&mut binding.reads), mem::take(&mut binding.writes));
+                if let Some(hoisted) = self.bindings.entries.get_mut(merged_into) {
+                    hoisted.reads = hoisted.reads.saturating_add(reads);
+                    hoisted.writes = hoisted.writes.saturating_add(writes);
+                }
+            }
+            if let Some(binding) = self.bindings.get_mut(id) {
+                binding.writes = binding.writes.saturating_add(1);
             }
         }
         let targets = names.into_iter().map(|name| Var::Name(Box::new_in(name, allocator)));
@@ -688,6 +726,42 @@ return f
                     "local function f()local s,x s=0 for i=1,10 do x=i*2 s=s+x end return s end return f",
                 ),
             ],
+        );
+    }
+
+    #[test]
+    fn keeps_the_hoisted_declaration_when_the_walk_returns_to_the_body() {
+        let config = TransformConfig { remove_dead_code: true, inline_locals: true, ..LIFTING };
+        let source = "\
+local v = 1
+if false then v = 2 end
+local function g()
+  do local a = x + 1 end
+  do local b = x + 2 end
+  return v
+end
+return g
+";
+        assert_eq!(
+            minify_with(source, LuaVersion::Lua54, &config),
+            "local function g()local a,b do a=x+1 end do b=x+2 end return 1 end return g"
+        );
+    }
+
+    #[test]
+    fn lifts_a_name_once_the_walk_drops_its_reads_as_a_global() {
+        let config = TransformConfig { remove_dead_code: true, ..LIFTING };
+        let source = "\
+local function f()
+  do local a = g() print(a) end
+  do local b = g() print(b) end
+end
+local function h() return a end
+return f
+";
+        assert_eq!(
+            minify_with(source, LuaVersion::Lua54, &config),
+            "local function f()local a,b do a=g()print(a)end do b=g()print(b)end end return f"
         );
     }
 

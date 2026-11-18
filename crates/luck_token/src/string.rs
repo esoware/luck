@@ -194,9 +194,24 @@ fn decode_unicode_escape<'text>(
     let digit_count = after_open.iter().take_while(|b| b.is_ascii_hexdigit()).count();
     let (hex_digits, after_digits) = after_open.split_at(digit_count);
     let remaining = after_digits.strip_prefix(b"}")?;
-    let c = char::from_u32(unicode_escape_codepoint(hex_digits, version)?)?;
-    let mut encoded = [0u8; 4];
-    output.extend_from_slice(c.encode_utf8(&mut encoded).as_bytes());
+    let mut code_point = unicode_escape_codepoint(hex_digits, version)?;
+    if let Ok(ascii) = u8::try_from(code_point)
+        && ascii.is_ascii()
+    {
+        output.push(ascii);
+        return Some(remaining);
+    }
+    // Lua's `luaO_utf8esc` (`lobject.c`), which also writes a surrogate and,
+    // in 5.4+, a value past U+10FFFF in the original UTF-8's longer forms.
+    let encoded_start = output.len();
+    let mut lead_byte_room = 0x3Fu32;
+    while code_point > lead_byte_room {
+        output.push(0x80 | u8::try_from(code_point & 0x3F).ok()?);
+        code_point >>= 6u32;
+        lead_byte_room >>= 1u32;
+    }
+    output.push(u8::try_from(((!lead_byte_room << 1u32) | code_point) & 0xFF).ok()?);
+    output.get_mut(encoded_start..)?.reverse();
     Some(remaining)
 }
 

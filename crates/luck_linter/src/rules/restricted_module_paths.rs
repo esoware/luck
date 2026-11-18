@@ -1,7 +1,7 @@
-use luck_ast::{Call, Expression, FunctionArgs};
+use luck_ast::Call;
 use luck_token::short_string_body;
 
-use crate::call::is_global_call;
+use crate::call::{CallArgs, is_global_call};
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
@@ -37,17 +37,8 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
     if !is_global_call(call, "require", context.semantic) {
         return None;
     }
-    let literal = match call.args {
-        // A computed path like `require(x .. y)` can't be checked.
-        FunctionArgs::Parenthesized { args, .. } => {
-            let Some(Expression::StringLiteral(literal)) = args.first() else {
-                return None;
-            };
-            literal
-        }
-        FunctionArgs::StringLiteral(literal) => literal,
-        FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => return None,
-    };
+    // A computed path like `require(x .. y)` can't be checked.
+    let literal = CallArgs::new(call.args).next()?.string_literal()?;
     // Escapes stay as written. Long-bracket strings give `None`; module paths
     // rarely use them.
     let path = short_string_body(literal.text)?;

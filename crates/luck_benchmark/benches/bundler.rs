@@ -6,9 +6,8 @@
 use core::slice;
 
 use luck_allocator::Allocator;
-use luck_benchmark::{
-    BenchmarkId, Criterion, bundle_project_root, criterion_group, criterion_main,
-};
+use luck_benchmark::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use luck_benchmark_files::bundle_project_root;
 use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_token::LuaVersion;
 

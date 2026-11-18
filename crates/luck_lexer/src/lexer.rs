@@ -13,9 +13,9 @@ use crate::lex_result::LexResult;
 use crate::number::scan_number;
 use string::{advance_past_long_bracket_close, eat_long_bracket_level};
 
-/// The densest real file in the bench corpus runs about this many bytes per
-/// token, so most sources fit the first reservation, and pages a sparser one
-/// leaves untouched cost nothing.
+/// The densest real file among the benchmark files runs about this many
+/// bytes per token, so most sources fit the first reservation, and pages a
+/// sparser one leaves untouched cost nothing.
 const BYTES_PER_TOKEN: usize = 4;
 
 /// Keeps a huge comment-only file from reserving gigabytes it never touches.

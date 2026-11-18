@@ -21,7 +21,13 @@ impl<const MIN_ALIGN: usize> Arena<MIN_ALIGN> {
     /// Panics if reserving space matching `layout` fails.
     #[inline(always)]
     pub fn alloc_layout(&self, layout: Layout) -> NonNull<u8> {
-        self.try_alloc_layout_fast(layout).unwrap_or_else(|| self.alloc_layout_slow(layout))
+        let ptr =
+            self.try_alloc_layout_fast(layout).unwrap_or_else(|| self.alloc_layout_slow(layout));
+
+        #[cfg(feature = "track_allocations")]
+        self.stats.record_allocation();
+
+        ptr
     }
 
     // Only `pub(super)` to expose it for unit tests

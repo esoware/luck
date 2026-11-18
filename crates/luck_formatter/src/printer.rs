@@ -712,7 +712,7 @@ impl<'ast> Printer<'ast, '_> {
             self.display_column = self.display_column.saturating_add(width);
         } else {
             // The column restarts from the last line.
-            let last_line = content.rsplit_once('\n').map_or(content, |(_, last_line)| last_line);
+            let last_line = content.rsplit(['\n', '\r']).next().unwrap_or(content);
             self.line_start = self.output.len().saturating_sub(last_line.len());
             self.display_column = last_line.width();
         }

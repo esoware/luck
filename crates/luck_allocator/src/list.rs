@@ -182,6 +182,10 @@ impl<'alloc, T> List<'alloc, T> {
         assert!(capacity > self.len, "a list holds at most u32::MAX items");
         let layout = Layout::array::<T>(capacity as usize).expect("the list fits in memory");
         let destination = allocator.alloc_layout(layout).cast::<T>();
+        #[cfg(feature = "track_allocations")]
+        if self.capacity > 0 {
+            allocator.arena().stats.record_reallocation_after_allocation();
+        }
         // SAFETY: `destination` is a fresh arena allocation with room for `capacity > len` items,
         // so it can't overlap the `len` initialized items at `ptr`. Those are left behind as
         // copies nothing reads again, which is sound because an item needs no drop.

@@ -394,9 +394,10 @@ impl<'ast> Formatter<'ast> {
         };
         let text = comment.span.text(source);
         if comment.kind == CommentKind::Shebang {
-            // Loaders skip this line up to LF, so a CR in it is text, but a
-            // trailing one would pair with the line break written after it.
-            return text.trim_end_matches('\r');
+            // Loaders skip this line up to LF, so a CR in it is text, but one
+            // the printer leaves at its end, past the spaces and tabs it
+            // trims, would pair with the line break written after it.
+            return text.trim_end_matches(['\r', ' ', '\t']);
         }
         // Only a block comment the lexer saw a line break in holds one.
         if comment.kind != CommentKind::MultiLineBlock || !text.contains('\r') {
@@ -405,7 +406,10 @@ impl<'ast> Formatter<'ast> {
         let (normalized, allocator) = self.scratch();
         let mut cursor = 0;
         for line_break in line_breaks(text, version) {
-            normalized.push_str(text.get(cursor..line_break.start).unwrap_or_default());
+            // Luau reads a lone CR as a space, and one left before the LF
+            // would make a CRLF of it.
+            let line = text.get(cursor..line_break.start).unwrap_or_default();
+            normalized.push_str(line.trim_end_matches('\r'));
             normalized.push('\n');
             cursor = line_break.end;
         }
@@ -559,14 +563,22 @@ impl<'ast> Formatter<'ast> {
         if let Some(sourced) = self.comments_mut().sourced_mut() {
             let (source, version) = (sourced.source, sourced.version);
             let mut gap_start = stmt_end;
+            // Luau ends a line comment at a lone CR but reads no line break
+            // there, so a comment after one is on the same line, where it
+            // can't print without joining it.
+            let mut is_after_line_comment = false;
             let taken = sourced.take_while(|comment| {
-                if comment.position != CommentPosition::Trailing || gap_start > comment.span.start {
+                if is_after_line_comment
+                    || comment.position != CommentPosition::Trailing
+                    || gap_start > comment.span.start
+                {
                     return false;
                 }
                 // A newline puts the comment on its own line, and a token in
                 // between means it trails something else.
                 let gap = Span::new(gap_start, comment.span.start).text(source);
                 gap_start = comment.span.end;
+                is_after_line_comment = comment.kind == CommentKind::Line;
                 !has_line_break(gap, version) && is_code_free(gap)
             });
             let spans_lines =
@@ -650,7 +662,8 @@ impl<'ast> Formatter<'ast> {
     ///
     /// It also ends at a newline, since
     /// [`Formatter::write_own_line_comments_in`] takes the comments after
-    /// one, and at a comment pending from before `offset`, which stalled
+    /// one, after a line comment, which Luau can end at a lone CR with no
+    /// newline, and at a comment pending from before `offset`, which stalled
     /// outside this list and isn't the list's to place.
     fn write_same_line_comments_after(&mut self, offset: u32, limit: u32) {
         let Some(sourced) = self.comments_mut().sourced_mut() else {
@@ -658,8 +671,12 @@ impl<'ast> Formatter<'ast> {
         };
         let (source, version) = (sourced.source, sourced.version);
         let mut gap_start = offset;
+        let mut is_after_line_comment = false;
         let taken = sourced.take_while(|comment| {
-            if comment.span.start < gap_start || comment.span.start >= limit {
+            if is_after_line_comment
+                || comment.span.start < gap_start
+                || comment.span.start >= limit
+            {
                 return false;
             }
             let gap = Span::new(gap_start, comment.span.start).text(source);
@@ -667,6 +684,7 @@ impl<'ast> Formatter<'ast> {
                 return false;
             }
             gap_start = comment.span.end;
+            is_after_line_comment = comment.kind == CommentKind::Line;
             true
         });
         for comment in taken {

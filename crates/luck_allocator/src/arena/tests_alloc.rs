@@ -57,6 +57,8 @@ impl<const MIN_ALIGN: usize> TestArena<MIN_ALIGN> {
             cursor_ptr: Cell::new(cursor_ptr),
             current_chunk_footer_ptr: Cell::new(Some(cursor_ptr.cast::<ChunkFooter>())),
             start_ptr: Cell::new(start_ptr),
+            #[cfg(feature = "track_allocations")]
+            stats: crate::tracking::AllocationStats::default(),
         };
         Self { inner: ManuallyDrop::new(arena) }
     }

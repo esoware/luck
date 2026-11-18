@@ -114,16 +114,17 @@ impl TextWidth {
     fn of(text: &str) -> Self {
         // Without a line break, `width` counts every ASCII character as one
         // column. A short text, the usual kind, takes one pass to tell, and a
-        // long one goes to the vectorized scans.
+        // long one goes to the vectorized scans. A lone CR breaks the line
+        // too, as it does in Lua 5.x and in most editors.
         let is_one_ascii_line = if text.len() <= 64 {
-            text.bytes().all(|b| b.is_ascii() && b != b'\n')
+            text.bytes().all(|b| b.is_ascii() && b != b'\n' && b != b'\r')
         } else {
-            text.is_ascii() && !text.contains('\n')
+            text.is_ascii() && !text.contains('\n') && !text.contains('\r')
         };
         if is_one_ascii_line {
             return Self::of_columns(text.len());
         }
-        if text.contains('\n') {
+        if text.contains('\n') || text.contains('\r') {
             return Self::MULTILINE;
         }
         Self::of_columns(text.width())

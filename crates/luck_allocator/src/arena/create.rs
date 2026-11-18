@@ -9,6 +9,9 @@ use std::{
 
 use super::bumpalo_alloc::AllocErr;
 
+#[cfg(feature = "track_allocations")]
+use crate::tracking::AllocationStats;
+
 use super::{
     Arena, CHUNK_ALIGN, CHUNK_FOOTER_SIZE, ChunkFooter, EMPTY_ARENA_DATA_PTR,
     utils::{
@@ -296,6 +299,8 @@ impl<const MIN_ALIGN: usize> Arena<MIN_ALIGN> {
             cursor_ptr: Cell::new(cursor_ptr),
             current_chunk_footer_ptr: Cell::new(chunk_footer_ptr),
             start_ptr: Cell::new(start_ptr),
+            #[cfg(feature = "track_allocations")]
+            stats: AllocationStats::default(),
         }
     }
 
@@ -394,6 +399,12 @@ impl<const MIN_ALIGN: usize> Arena<MIN_ALIGN> {
 
         debug_assert!(size >= requested_layout.size());
         debug_assert!(size > 0);
+
+        // Mark the upcoming allocation as a chunk operation, so the allocation-tracking
+        // task can exclude it from its heap metrics. Must be set immediately before the
+        // `alloc` call, with no allocations in between.
+        #[cfg(feature = "track_allocations")]
+        crate::tracking::start_chunk_operation();
 
         // Allocate memory for the chunk.
         // SAFETY: `layout` has non-zero size.

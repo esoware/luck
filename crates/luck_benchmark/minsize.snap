@@ -1,4 +1,4 @@
-Minified-size tracking over the bench corpus. Sizes are exact bytes;
+Minified-size tracking over the benchmark files. Sizes are exact bytes;
 gzip is the minified output at the default flate2 level. Regenerate:
 cargo test -p luck_benchmark --test it regenerate_minsize -- --ignored
 

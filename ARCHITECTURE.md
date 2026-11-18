@@ -23,8 +23,10 @@ luck is a workspace of small crates around one syntax tree. This file covers the
 | `luck_lsp` | The language server | allocator, token, core, ast, parser, formatter, semantic, linter, resolver, config |
 | `luck_cli` | The `luck` binary | allocator, token, core, ast, parser, formatter, minifier, linter, resolver, bundler, config, lsp |
 | `luck` | The facade, published as `luck_lua`, which re-exports each stage behind a feature | every crate above but lsp and cli |
-| `luck_testgen` | Unpublished: generated programs and stack-test inputs for other crates' tests | token, ast |
-| `luck_benchmark` | Unpublished: a bench per stage | allocator, token, core, parser |
+| `luck_testgen` | Unpublished: generated programs, stack-test inputs, and a round-trip tree comparison for other crates' tests | token, ast |
+| `luck_benchmark_files` | Unpublished: the pinned files and projects the benches and allocation snapshots measure | allocator, token, core, parser |
+| `luck_benchmark` | Unpublished: a bench per stage | |
+| `luck_allocs` | Unpublished: committed allocation counts for each stage, behind `luck_allocator`'s `track_allocations` feature | allocator, lexer, ast, parser, codegen, formatter, minifier, semantic, linter, benchmark_files |
 
 "Depends on" leaves out dev-dependencies and the `luck_` prefix. `luck_codegen`, `luck_formatter`, and `luck_minifier` depend on nothing that analyzes, resolves, bundles, or configures. No tool depends on `luck_config`, which depends on them. The VS Code extension in `editors/vscode` holds no language logic. It starts `luck lsp`, and everything that has to understand Lua runs in `luck_lsp`.
 

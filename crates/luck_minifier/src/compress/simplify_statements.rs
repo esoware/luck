@@ -157,6 +157,7 @@ impl<'ast> Compressor<'_, 'ast> {
             if !inner_conditions.is_empty() {
                 head.condition =
                     logical(self.allocator, BinOp::And, head.condition.take(), inner_conditions);
+                self.leave_expr(&mut head.condition, false);
                 self.has_changed = true;
             }
             if !holds_nested_if(head) {
@@ -250,7 +251,9 @@ impl<'ast> Compressor<'_, 'ast> {
             let Some(value) = (*guard_return.exprs).first_mut().map(Expression::take) else {
                 continue;
             };
-            guards.push(logical(allocator, BinOp::And, if_stmt.condition.take(), vec![value]));
+            let mut guard = logical(allocator, BinOp::And, if_stmt.condition.take(), vec![value]);
+            self.leave_expr(&mut guard, true);
+            guards.push(guard);
         }
         stmts.truncate(chain_start);
         let mut chain_values = guards.into_iter();
@@ -264,6 +267,7 @@ impl<'ast> Compressor<'_, 'ast> {
             ),
             None => fallback_expr,
         };
+        self.leave_expr(fallback, false);
         self.has_changed = true;
     }
 }
@@ -341,6 +345,18 @@ mod tests {
             ("if a then if true then if b then x() end end end", "if a and b then x()end"),
         ] {
             assert_eq!(minify_with(dropped_if, LuaVersion::Lua54, &both), expected, "{dropped_if}");
+        }
+    }
+
+    #[test]
+    fn folds_the_runs_it_builds() {
+        let folding = TransformConfig { fold_constants: true, ..STATEMENTS };
+        for (source, expected) in [
+            ("if true then if x then f() end end", "if x then f()end"),
+            ("if (false) then if (true) then f() end end", "if false then f()end"),
+            ("if true then return 1 end return 0", "return 1 or 0"),
+        ] {
+            assert_eq!(minify_with(source, LuaVersion::Lua54, &folding), expected, "{source}");
         }
     }
 

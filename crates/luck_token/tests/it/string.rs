@@ -93,6 +93,22 @@ fn decode_string_encodes_unicode_escapes_as_utf8() {
 }
 
 #[test]
+fn decode_string_encodes_unicode_escapes_char_cannot_hold() {
+    // Lua 5.3+ and Luau take a surrogate, and 5.4+ a value below 2^31, which
+    // `luaO_utf8esc` writes in the original UTF-8's longer forms.
+    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Luau] {
+        assert_eq!(
+            decode_in(r#""\u{D800}""#, version),
+            Some(vec![0xED, 0xA0, 0x80]),
+            "{version:?}"
+        );
+    }
+    assert_eq!(decode(r#""\u{110000}""#), Some(vec![0xF4, 0x90, 0x80, 0x80]));
+    assert_eq!(decode(r#""\u{200000}""#), Some(vec![0xF8, 0x88, 0x80, 0x80, 0x80]));
+    assert_eq!(decode(r#""\u{7FFFFFFF}""#), Some(vec![0xFD, 0xBF, 0xBF, 0xBF, 0xBF, 0xBF]));
+}
+
+#[test]
 fn decode_string_skips_whitespace_after_z() {
     // `\z` skips the whitespace run that follows, including newlines.
     assert_eq!(decode("\"a\\z   \n   b\""), Some(b"ab".to_vec()));

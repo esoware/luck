@@ -1,4 +1,7 @@
-#![expect(clippy::panic, reason = "a bench has no way to report a failed corpus load")]
+#![expect(
+    clippy::panic,
+    reason = "a benchmark file that fails to load leaves its caller nothing to measure"
+)]
 
 use core::time::Duration;
 use std::path::{Path, PathBuf};
@@ -15,7 +18,7 @@ fn cache_directory() -> PathBuf {
     if let Some(directory) = cache_directory_override() {
         return directory;
     }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("cache")
 }
 
 /// CI runners see transient connection resets from GitHub's codeload host,

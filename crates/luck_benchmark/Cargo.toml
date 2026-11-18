@@ -1,6 +1,6 @@
 [package]
 name                   = "luck_benchmark"
-version                = "0.0.0"
+version.workspace      = true
 publish                = false
 edition.workspace      = true
 rust-version.workspace = true
@@ -50,25 +50,22 @@ harness = false
 codspeed = ["criterion2/codspeed"]
 
 [dependencies]
-luck_allocator = { workspace = true }
-luck_core      = { workspace = true }
-luck_parser    = { workspace = true }
-luck_token     = { workspace = true }
-
 criterion2    = { workspace = true }
-flate2        = { workspace = true }
 mimalloc-safe = { workspace = true }
-tar           = { workspace = true }
-ureq          = { workspace = true }
 
 [dev-dependencies]
-luck_bundler   = { workspace = true }
-luck_codegen   = { workspace = true }
-luck_formatter = { workspace = true }
-luck_lexer     = { workspace = true }
-luck_linter    = { workspace = true }
-luck_minifier  = { workspace = true }
-luck_semantic  = { workspace = true }
+luck_allocator       = { workspace = true }
+luck_benchmark_files = { workspace = true }
+luck_bundler         = { workspace = true }
+luck_codegen         = { workspace = true }
+luck_core            = { workspace = true }
+luck_formatter       = { workspace = true }
+luck_lexer           = { workspace = true }
+luck_linter          = { workspace = true }
+luck_minifier        = { workspace = true }
+luck_parser          = { workspace = true }
+luck_semantic        = { workspace = true }
+luck_token           = { workspace = true }
 
-rayon    = { workspace = true }
-tempfile = { workspace = true }
+flate2 = { workspace = true }
+rayon  = { workspace = true }

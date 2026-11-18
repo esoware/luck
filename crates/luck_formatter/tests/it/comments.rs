@@ -855,6 +855,11 @@ fn shebang_drops_trailing_carriage_returns() {
 }
 
 #[test]
+fn shebang_drops_a_carriage_return_behind_trailing_spaces() {
+    assert_format("#!x\r \t\nlocal x = 1\n", "#!x\nlocal x = 1\n");
+}
+
+#[test]
 fn blank_line_preserved() {
     assert_format(
         "\

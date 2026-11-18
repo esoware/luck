@@ -26,7 +26,7 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# Unpublished path-only deps (luck_testgen) have no version requirement.
+# Unpublished path-only deps (luck_testgen and luck_benchmark_files) have no version requirement.
 allow-wildcard-paths = true
 
 [sources]

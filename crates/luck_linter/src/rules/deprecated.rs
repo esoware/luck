@@ -1,12 +1,12 @@
 use luck_allocator::Allocator;
-use luck_ast::{Call, Expression, FunctionArgs, LastStatement, Suffix, SuffixedExpression};
+use luck_ast::{Call, Expression, LastStatement, Suffix, SuffixedExpression};
 use luck_semantic::{
     ResolvedCallee, SemanticAnalysis, StdlibDeprecation, StdlibEntry, StdlibFunction,
     expand_replace_template,
 };
 use luck_token::{index_to_offset, is_lua_whitespace, offset_to_index};
 
-use crate::call::{positional_args, string_literal_value};
+use crate::call::{CallArgs, string_literal_value};
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, TextEdit, comments_within};
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -77,8 +77,9 @@ fn deprecated_params(
     callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
 ) -> impl Iterator<Item = Finding> {
-    let (args, arg_count) = positional_args(call.args);
-    args.iter().enumerate().filter_map(move |(index, expr)| {
+    let args = CallArgs::new(call.args);
+    let arg_count = args.len();
+    args.enumerate().filter_map(move |(index, arg)| {
         let mut deprecations = function
             .matching_signatures(arg_count)
             .map(|signature| signature.params.get(index)?.deprecated.as_ref());
@@ -88,7 +89,7 @@ fn deprecated_params(
             let arg_number = index.saturating_add(1);
             Finding::new(
                 format!("argument {arg_number} of `{}` is deprecated", callee.name()),
-                expr.span(),
+                arg.span(),
             )
             .with_help(deprecation.message)
         })
@@ -106,9 +107,10 @@ fn deprecated_constants(
     callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
 ) -> impl Iterator<Item = Finding> {
-    let (args, arg_count) = positional_args(call.args);
-    args.iter().enumerate().filter_map(move |(index, expr)| {
-        let (value, span) = string_literal_value(expr)?;
+    let args = CallArgs::new(call.args);
+    let arg_count = args.len();
+    args.enumerate().filter_map(move |(index, arg)| {
+        let (value, span) = string_literal_value(arg)?;
         // Each signature's first constant spelled `value` counts, and the
         // first of those that's deprecated decides.
         let deprecation = function
@@ -140,15 +142,17 @@ fn replacement_fix(
     let StdlibEntry::Function(function) = entry else {
         return None;
     };
+    let args = CallArgs::new(call.args);
     // A template spells the positional arguments, which a method's receiver
     // isn't among, and the argument text can't carry a comment between them.
     if call.method.is_some()
-        || !function.accepts_arg_count(positional_args(call.args).1)
+        || !function.accepts_arg_count(args.len())
         || !comments_within(context.comments, call.span()).is_empty()
     {
         return None;
     }
-    let expanded = expand_replace_template(template, &arg_texts(call.args, context.source));
+    let arg_texts: Vec<&str> = args.map(|arg| arg.span().text(context.source)).collect();
+    let expanded = expand_replace_template(template, &arg_texts);
     if starts_with_rebound_name(&expanded, call.span().start, context.semantic) {
         return None;
     }
@@ -232,17 +236,6 @@ fn is_followed_by_tighter_binding(offset: u32, context: &LintContext<'_>) -> boo
         [b'.', second, ..] => *second != b'.',
         [b'^' | b':' | b'[' | b'(' | b'{' | b'"' | b'\'', ..] => true,
         _ => false,
-    }
-}
-
-fn arg_texts<'source>(function_args: &FunctionArgs<'_>, source: &'source str) -> Vec<&'source str> {
-    match function_args {
-        FunctionArgs::Parenthesized { args, .. } => {
-            args.iter().map(|expr| expr.span().text(source)).collect()
-        }
-        FunctionArgs::StringLiteral(literal) => vec![literal.span.text(source)],
-        FunctionArgs::TableConstructor(table) => vec![table.span.text(source)],
-        FunctionArgs::Error(_) => Vec::new(),
     }
 }
 
@@ -391,6 +384,17 @@ mod tests {
     }
 
     #[test]
+    fn flags_dead_service_name_without_parentheses() {
+        let diags = run_rule_roblox(&Deprecated, "local p = game:GetService'PointsService'");
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.message.contains("`PointsService` is a deprecated argument")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
     fn ignores_live_service_name() {
         let diags = run_rule_roblox(&Deprecated, "local p = game:GetService('Players')");
         assert!(diags.is_empty(), "{diags:?}");
@@ -433,6 +437,15 @@ local a = Enum.AlignType.Parallel",
     fn flags_deprecated_collectgarbage_option() {
         // Per-constant deprecation from the 5.4 GC rework.
         let diags = run_rule(&Deprecated, "collectgarbage('setpause', 100)", LuaVersion::Lua54);
+        assert!(
+            diags.iter().any(|diag| diag.message.contains("`setpause` is a deprecated argument")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_deprecated_collectgarbage_option_without_parentheses() {
+        let diags = run_rule(&Deprecated, "collectgarbage'setpause'", LuaVersion::Lua54);
         assert!(
             diags.iter().any(|diag| diag.message.contains("`setpause` is a deprecated argument")),
             "{diags:?}"

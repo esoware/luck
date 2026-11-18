@@ -1,4 +1,8 @@
-use luck_ast::{Call, Expression, FunctionArgs, Name, Suffix, is_multi_value};
+use core::slice;
+
+use luck_ast::{
+    Call, Expression, FunctionArgs, Literal, Name, Suffix, TableConstructor, is_multi_value,
+};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, short_string_body};
 
@@ -25,29 +29,78 @@ pub(crate) fn dotted_callee(call: Call<'_>) -> Option<(&Name<'_>, &str)> {
     (!field.text.is_empty()).then_some((root, field.text.as_str()))
 }
 
-/// `f"..."` and `f{...}` pass one argument, which isn't in the list.
-pub(crate) fn positional_args<'ast>(
-    function_args: &'ast FunctionArgs<'ast>,
-) -> (&'ast [Expression<'ast>], usize) {
-    match function_args {
-        FunctionArgs::Parenthesized { args, .. } => (args, args.len()),
-        FunctionArgs::TableConstructor(_) | FunctionArgs::StringLiteral(_) => (&[], 1),
-        FunctionArgs::Error(_) => (&[], 0),
+/// An argument as a call passes it. `f"..."` and `f{...}` pass theirs with
+/// no list around it, and mean what `f("...")` and `f({...})` do.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CallArg<'ast> {
+    Expr(&'ast Expression<'ast>),
+    String(&'ast Literal<'ast>),
+    Table(&'ast TableConstructor<'ast>),
+}
+
+impl<'ast> CallArg<'ast> {
+    pub(crate) fn span(self) -> Span {
+        match self {
+            Self::Expr(expr) => expr.span(),
+            Self::String(literal) => literal.span,
+            Self::Table(table) => table.span,
+        }
+    }
+
+    pub(crate) fn string_literal(self) -> Option<&'ast Literal<'ast>> {
+        match self {
+            Self::Expr(Expression::StringLiteral(literal)) => Some(literal),
+            Self::String(literal) => Some(literal),
+            Self::Expr(_) | Self::Table(_) => None,
+        }
+    }
+
+    /// Whether it's a call or `...`, which as the last argument can expand
+    /// to any number of values, none included.
+    pub(crate) fn is_multi_value(self) -> bool {
+        matches!(self, Self::Expr(expr) if is_multi_value(expr))
     }
 }
 
-/// Whether the last argument, or the last value of an assignment, is a call
-/// or `...`, which can expand to any number of values, none included.
-pub(crate) fn has_multi_value_tail(args: &[Expression<'_>]) -> bool {
-    args.last().is_some_and(is_multi_value)
+/// Every argument a call passes, first to last.
+#[derive(Debug, Clone)]
+pub(crate) struct CallArgs<'ast> {
+    list: slice::Iter<'ast, Expression<'ast>>,
+    /// The one argument of `f"..."` or `f{...}`, which have no list.
+    bare: Option<CallArg<'ast>>,
 }
+
+impl<'ast> CallArgs<'ast> {
+    pub(crate) fn new(function_args: &'ast FunctionArgs<'ast>) -> Self {
+        let (list, bare): (&[Expression<'_>], _) = match function_args {
+            FunctionArgs::Parenthesized { args, .. } => (args, None),
+            FunctionArgs::StringLiteral(literal) => (&[], Some(CallArg::String(literal))),
+            FunctionArgs::TableConstructor(table) => (&[], Some(CallArg::Table(table))),
+            FunctionArgs::Error(_) => (&[], None),
+        };
+        Self { list: list.iter(), bare }
+    }
+}
+
+impl<'ast> Iterator for CallArgs<'ast> {
+    type Item = CallArg<'ast>;
+
+    fn next(&mut self) -> Option<CallArg<'ast>> {
+        self.list.next().map(CallArg::Expr).or_else(|| self.bare.take())
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let count = self.list.len().saturating_add(usize::from(self.bare.is_some()));
+        (count, Some(count))
+    }
+}
+
+impl ExactSizeIterator for CallArgs<'_> {}
 
 /// Escapes stay undecoded, so a value spelled with escapes won't match a
 /// catalog constant. Long-bracket strings return `None`.
-pub(crate) fn string_literal_value<'ast>(expr: &Expression<'ast>) -> Option<(&'ast str, Span)> {
-    let Expression::StringLiteral(literal) = expr else {
-        return None;
-    };
+pub(crate) fn string_literal_value(arg: CallArg<'_>) -> Option<(&str, Span)> {
+    let literal = arg.string_literal()?;
     let body = short_string_body(literal.text)?;
     let body_span =
         Span::new(literal.span.start.saturating_add(1), literal.span.end.saturating_sub(1));

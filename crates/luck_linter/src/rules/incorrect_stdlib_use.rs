@@ -1,7 +1,6 @@
-use luck_ast::Expression;
 use luck_semantic::{ResolvedCallee, StdlibEntry, StdlibFunction};
 
-use crate::call::{has_multi_value_tail, positional_args, string_literal_value};
+use crate::call::{CallArg, CallArgs, string_literal_value};
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
@@ -42,10 +41,11 @@ fn check_call(site: &CallSite<'_>, findings: &mut Vec<Finding>) {
     let StdlibEntry::Function(function) = callee.entry() else {
         return;
     };
-    let (args, arg_count) = positional_args(call.args);
+    let args = CallArgs::new(call.args);
+    let arg_count = args.len();
     // A trailing call or `...` can expand to any number of values, so the
     // minimum and overload checks skip it.
-    let has_multi_value_tail = has_multi_value_tail(args);
+    let has_multi_value_tail = args.clone().last().is_some_and(CallArg::is_multi_value);
 
     let min_args = function.min_args();
     let arity_message = if arg_count < min_args && !has_multi_value_tail {
@@ -76,11 +76,11 @@ fn check_call(site: &CallSite<'_>, findings: &mut Vec<Finding>) {
 fn invalid_constant_args(
     callee: &ResolvedCallee<'_>,
     function: &StdlibFunction,
-    args: &[Expression<'_>],
+    args: CallArgs<'_>,
     arg_count: usize,
 ) -> impl Iterator<Item = Finding> {
-    args.iter().enumerate().filter_map(move |(index, expr)| {
-        let (value, span) = string_literal_value(expr)?;
+    args.enumerate().filter_map(move |(index, arg)| {
+        let (value, span) = string_literal_value(arg)?;
         let allowed_sets = function.allowed_constants(index, arg_count)?;
         let allowed = || allowed_sets.clone().flatten();
         if allowed().any(|constant| constant.value == value) {
@@ -155,6 +155,15 @@ mod tests {
     fn flags_invalid_constant_string() {
         // `collectgarbage` first arg must be one of the option names.
         let messages = run("collectgarbage('frob')", LuaVersion::Lua54);
+        assert!(
+            messages.iter().any(|message| message.contains("argument 1 must be")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn flags_invalid_constant_string_without_parentheses() {
+        let messages = run("collectgarbage'frob'", LuaVersion::Lua54);
         assert!(
             messages.iter().any(|message| message.contains("argument 1 must be")),
             "{messages:?}"
@@ -285,6 +294,15 @@ f:setvbuf()",
         assert!(
             messages.iter().any(|message| message.contains("argument 1 must be")
                 && message.contains("allowed values")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn flags_get_service_typo_without_parentheses() {
+        let messages = run_roblox("game:GetService'Playerz'");
+        assert!(
+            messages.iter().any(|message| message.contains("argument 1 must be")),
             "{messages:?}"
         );
     }

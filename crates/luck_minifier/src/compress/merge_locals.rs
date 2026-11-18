@@ -15,13 +15,10 @@ use crate::binding::{Bindings, has_fixed_binding, is_env_binding, local_of};
 use crate::expr::{is_pure_modulo_name_reads, is_single_register_value};
 use crate::limits::assignment_target_limit;
 
-/// The binding and value of a lone `local name = value` whose value a group
-/// may evaluate beside its neighbors, the only kind of `local` an
-/// initialized group merges.
-fn single_local<'tree, 'ast>(
-    stmt: &'tree Statement<'ast>,
-    version: LuaVersion,
-) -> Option<(usize, &'tree Expression<'ast>)> {
+/// The binding of a lone `local name = value` whose value a group may
+/// evaluate beside its neighbors, the only kind of `local` an initialized
+/// group merges.
+fn single_local(stmt: &Statement<'_>, version: LuaVersion) -> Option<usize> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
@@ -33,7 +30,7 @@ fn single_local<'tree, 'ast>(
     if let ([attributed], [expr]) = (&*local.names, &*local.exprs)
         && is_pure_modulo_name_reads(expr)
     {
-        return local_of(&attributed.name).map(|id| (id, expr));
+        return local_of(&attributed.name);
     }
     None
 }
@@ -155,13 +152,21 @@ impl<'ast> Compressor<'_, 'ast> {
         let followers = stmts.get(start.saturating_add(1)..).unwrap_or_default();
         group.clear();
         let bindings = &*self.bindings;
-        let follower_count = if let Some((id, _)) = single_local(first, self.version) {
+        let follower_count = if let Some(id) = single_local(first, self.version) {
             group.push(id);
             followers
                 .iter()
                 .take_while(|stmt| {
-                    single_local(stmt, self.version).is_some_and(|(follower, value)| {
-                        let can_join = !references_any(value, group, bindings);
+                    single_local(stmt, self.version).is_some_and(|follower| {
+                        // A Luau annotation binds before the name, as the
+                        // value does.
+                        let mut finder = ReferenceFinder {
+                            group: group.as_slice(),
+                            bindings,
+                            has_reference: false,
+                        };
+                        finder.visit_stmt(stmt);
+                        let can_join = !finder.has_reference;
                         if can_join {
                             group.push(follower);
                         }
@@ -447,10 +452,11 @@ mod tests {
             minify_with("local x,y=f()global x x=1 y=2", LuaVersion::Lua55, &MERGING),
             "local x,y=f()global x x=1 y=2"
         );
-        assert_eq!(
-            minify_with("local a=1 local b=a::number print(b)", LuaVersion::Luau, &MERGING),
-            "local a=1 local b=a::number print(b)"
-        );
+        for source in
+            ["local a=1 local b=a::number print(b)", "local a=...local b:typeof(a)=g print(b)"]
+        {
+            assert_eq!(minify_with(source, LuaVersion::Luau, &MERGING), source);
+        }
     }
 
     /// A fuse runs as the walk leaves a block, so what the local it

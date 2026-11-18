@@ -1,9 +1,9 @@
-use luck_ast::{Call, Expression, FunctionArgs, Literal};
+use luck_ast::{Call, Expression, Literal};
 use luck_semantic::SemanticAnalysis;
 use luck_token::{BinOp, LuaVersion, short_string_body};
 
 use crate::binary::operator_pairs;
-use crate::call::is_global_call;
+use crate::call::{CallArgs, is_global_call};
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
@@ -111,10 +111,7 @@ fn type_function_callee(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Opti
     } else {
         return None;
     };
-    let FunctionArgs::Parenthesized { args, .. } = call.args else {
-        return None;
-    };
-    (args.len() == 1).then_some(callee)
+    (CallArgs::new(call.args).len() == 1).then_some(callee)
 }
 
 const fn primitive_type_names(version: LuaVersion) -> &'static [&'static str] {
@@ -173,6 +170,14 @@ mod tests {
         // `buffer` is a Luau-only primitive; PUC type() never returns it.
         let diags = run("local ok = type(x) == \"buffer\"", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_type_of_a_string_or_table_without_parentheses() {
+        for source in ["local ok = type\"x\" == \"strng\"", "local ok = type{} == \"strng\""] {
+            let diags = run(source, LuaVersion::Lua54);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+        }
     }
 
     #[test]

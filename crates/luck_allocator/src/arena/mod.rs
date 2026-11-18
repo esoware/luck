@@ -8,6 +8,9 @@
 
 use std::{alloc::Layout, cell::Cell, ptr::NonNull};
 
+#[cfg(feature = "track_allocations")]
+use crate::tracking::AllocationStats;
+
 mod alloc;
 mod alloc_impl;
 mod bumpalo_alloc;
@@ -125,7 +128,7 @@ mod tests_alloc;
 // `current_chunk_footer_ptr` is placed between the two hot pointers so they sit at offsets 0 and 16,
 // forcing LLVM to emit two independent 8-byte `ldr`s, each of which forwards cleanly.
 // More background here: https://eme64.github.io/blog/2024/06/24/Auto-Vectorization-and-Store-to-Load-Forwarding.html
-#[expect(clippy::struct_field_names)]
+#[cfg_attr(not(feature = "track_allocations"), expect(clippy::struct_field_names))]
 #[repr(C)]
 #[derive(Debug)]
 pub struct Arena<const MIN_ALIGN: usize = 1> {
@@ -157,6 +160,10 @@ pub struct Arena<const MIN_ALIGN: usize = 1> {
     ///
     /// This field is duplicated in `ChunkFooter`.
     start_ptr: Cell<NonNull<u8>>,
+
+    /// Used to track number of allocations made in this `Arena` when `track_allocations` feature is enabled.
+    #[cfg(feature = "track_allocations")]
+    pub(crate) stats: AllocationStats,
 }
 
 impl<const MIN_ALIGN: usize> Arena<MIN_ALIGN> {

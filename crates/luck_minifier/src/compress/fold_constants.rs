@@ -526,13 +526,13 @@ fn fold_unary<'ast>(
             }
             if let Some(number) = extract_lua_number(&unop.operand, subtypes) {
                 make_lua_number_expr(allocator, negate_number(number), subtypes, span)
-            } else if let Expression::UnaryOp(inner) = &mut unop.operand
+            } else if let Expression::UnaryOp(inner) = unwrap_parentheses(&unop.operand)
                 && inner.op == UnOp::Neg
-                && matches!(inner.operand, Expression::Number(_))
+                && let Expression::Number(literal) = &inner.operand
             {
                 // -(-x) folds to x only for a number literal, where neither a
                 // metamethod nor a string coercion can intervene.
-                Some(inner.operand.take())
+                Some(Expression::Number(Box::new_in(**literal, allocator)))
             } else {
                 None
             }
@@ -770,6 +770,18 @@ mod tests {
             ("return 2 ^ 2 ^ 3", "return 256.0"),
         ] {
             assert_eq!(apply(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn folds_a_double_negation_through_parentheses() {
+        let config = TransformConfig { simplify_parens: true, ..FOLDING };
+        for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+            assert_eq!(
+                minify_with("return -(-0x625)", version, &config),
+                "return 0x625",
+                "{version:?}"
+            );
         }
     }
 

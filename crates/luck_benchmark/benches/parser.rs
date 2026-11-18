@@ -1,7 +1,6 @@
 use luck_allocator::Allocator;
-use luck_benchmark::{
-    BenchmarkId, Criterion, black_box, criterion_group, criterion_main, test_files, test_projects,
-};
+use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use luck_benchmark_files::{test_files, test_projects};
 
 fn bench_parser(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("parser");

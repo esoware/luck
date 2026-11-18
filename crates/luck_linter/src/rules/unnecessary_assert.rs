@@ -1,7 +1,7 @@
-use luck_ast::{Call, Expression, FunctionArgs};
+use luck_ast::{Call, Expression};
 use luck_semantic::SemanticAnalysis;
 
-use crate::call::is_global_call;
+use crate::call::{CallArg, CallArgs, is_global_call};
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
@@ -31,34 +31,35 @@ fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding
     if !is_global_call(call, "assert", semantic) {
         return None;
     }
-    let FunctionArgs::Parenthesized { args, .. } = call.args else {
-        return None;
+    let is_truthy = match CallArgs::new(call.args).next()? {
+        CallArg::String(_) | CallArg::Table(_) => true,
+        CallArg::Expr(expr) => match expr {
+            // 0 and "" are truthy in Lua, so every number and string passes.
+            Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TableConstructor(_)
+            | Expression::FunctionDef(_) => true,
+            Expression::False(_) | Expression::Nil(_) => false,
+            Expression::VarArg(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
+            | Expression::Parenthesized(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::TypeCast(_)
+            | Expression::Error(_) => return None,
+        },
     };
-    let finding = match args.first()? {
-        // 0 and "" are truthy in Lua, so every number and string passes.
-        Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TableConstructor(_)
-        | Expression::FunctionDef(_) => {
-            Finding::new("`assert` on a constant value always passes", call.span())
-                .with_help("remove the `assert` or check a real condition")
-        }
-        Expression::False(_) | Expression::Nil(_) => {
-            Finding::new("`assert` on a constant falsy value always errors", call.span())
-                .with_help("use `error()` to raise unconditionally")
-        }
-        Expression::VarArg(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => return None,
+    let finding = if is_truthy {
+        Finding::new("`assert` on a constant value always passes", call.span())
+            .with_help("remove the `assert` or check a real condition")
+    } else {
+        Finding::new("`assert` on a constant falsy value always errors", call.span())
+            .with_help("use `error()` to raise unconditionally")
     };
     Some(finding)
 }
@@ -112,6 +113,15 @@ mod tests {
     fn flags_assert_nil() {
         let diags = run("assert(nil)");
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_string_and_table_arguments_without_parentheses() {
+        for source in ["assert\"\"", "assert'x'", "assert[[x]]", "assert{}", "assert{ false }"] {
+            let diags = run(source);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+            assert!(diags[0].message.contains("always passes"), "{source}: {diags:?}");
+        }
     }
 
     #[test]

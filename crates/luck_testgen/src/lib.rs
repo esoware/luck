@@ -1,5 +1,6 @@
-//! Deterministic random-program generators for property tests and bench
-//! corpora, plus the walker and dialect rules for the shared fixture tree.
+//! Deterministic random-program generators for property tests and
+//! benchmark files, plus the walker and dialect rules for the shared fixture
+//! tree.
 //!
 //! [`generate_runtime_safe`] programs are:
 //! - syntactically valid for the requested `LuaVersion`;
@@ -13,6 +14,9 @@
 //!
 //! [`deep_and_long_sources`] and [`on_the_smallest_stack`] check that a stage
 //! fits the stack luck asks of its threads.
+//!
+//! [`tree_shape`](fn@tree_shape) checks that a printer kept a tree's
+//! meaning, by comparing the tree with the parse of what it printed.
 
 #![cfg_attr(
     test,
@@ -27,6 +31,7 @@ mod full;
 mod rng;
 mod runtime;
 mod stack;
+mod tree_shape;
 
 pub use fixtures::{collect_fixture_files, detect_version, is_error_fixture};
 pub use full::generate_full;
@@ -35,3 +40,4 @@ pub use stack::{
     broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_at_the_nesting_cap,
     sources_past_the_nesting_cap, with_the_smallest_stack,
 };
+pub use tree_shape::tree_shape;

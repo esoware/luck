@@ -1,17 +1,17 @@
-//! Pinned bench inputs, two kinds:
+//! Pinned inputs, two kinds:
 //!
 //! - five single files and the bundler's module tree in
-//!   esoware/luck-bench-corpus, fetched as one tarball;
+//!   esoware/luck-benchmark-files, fetched as one tarball;
 //! - two real multi-file projects fetched as pinned upstream tarballs:
 //!   Roact (Roblox Luau, ~80 files) and Penlight (Lua 5.1, ~40 files).
 //!
-//! Everything lands in the gitignored `corpus/` cache and is pinned to a
+//! Everything lands in the gitignored `cache/` directory and is pinned to a
 //! commit SHA, so an input changes only when its pin does.
 
 #![expect(
     clippy::expect_used,
     clippy::panic,
-    reason = "a bench has no way to report a failed corpus load"
+    reason = "a benchmark file that fails to load leaves its caller nothing to measure"
 )]
 
 use std::fs;
@@ -22,7 +22,7 @@ use luck_core::LuaTarget;
 use luck_parser::ParseResult;
 use luck_token::LuaVersion;
 
-use crate::corpus_cache::fetch_project_tarball;
+use crate::download::fetch_project_tarball;
 
 #[derive(Debug)]
 pub struct TestFile {
@@ -82,18 +82,18 @@ fn parse_cleanly<'ast>(
     parse_result
 }
 
-const CORPUS_SHA: &str = "1922f00013366c3024f1fb95f62a6aa14c63a95a"; // esoware/luck-bench-corpus
+const BENCHMARK_FILES_SHA: &str = "1922f00013366c3024f1fb95f62a6aa14c63a95a"; // esoware/luck-benchmark-files
 const ROACT_SHA: &str = "956891b70fdc5410e44e9664719cd0a9f7e6fabd"; // Roblox/roact v1.4.4
 const PENLIGHT_SHA: &str = "e0bc8f7fce3b6a4fdef3660066f5006bf8456b32"; // lunarmodules/Penlight 1.15.0
 
-fn corpus_root() -> PathBuf {
-    fetch_project_tarball("esoware", "luck-bench-corpus", CORPUS_SHA)
+fn benchmark_files_root() -> PathBuf {
+    fetch_project_tarball("esoware", "luck-benchmark-files", BENCHMARK_FILES_SHA)
 }
 
 /// # Panics
 ///
 /// Panics when the file can't be read.
-fn corpus_file(root: &Path, file_name: &'static str, target: LuaTarget) -> TestFile {
+fn benchmark_file(root: &Path, file_name: &'static str, target: LuaTarget) -> TestFile {
     let path = root.join(file_name);
     let source_text = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
@@ -134,19 +134,19 @@ fn collect_lua_files(root: &Path, filter: &str) -> Vec<ProjectFile> {
 
 #[must_use]
 pub fn test_files() -> Vec<TestFile> {
-    let root = corpus_root();
+    let root = benchmark_files_root();
     vec![
         // 40 full-grammar `luck_testgen` programs, each in its own
         // `do ... end`: every version-gated construct in a realistic mix.
-        corpus_file(&root, "gen_full_lua54.lua", LuaTarget::Lua54),
-        corpus_file(&root, "gen_full_luau.luau", LuaTarget::Luau),
+        benchmark_file(&root, "gen_full_lua54.lua", LuaTarget::Lua54),
+        benchmark_file(&root, "gen_full_luau.luau", LuaTarget::Luau),
         // The `tests/fixtures/idiomatic` files, a small hand-written sample.
-        corpus_file(&root, "idiomatic.lua", LuaTarget::Lua54),
+        benchmark_file(&root, "idiomatic.lua", LuaTarget::Lua54),
         // Real-world Roblox Luau: 13k lines of comment- and string-heavy
         // hand-written code (Infinite Yield admin script).
-        corpus_file(&root, "infinite_yield.luau", LuaTarget::LuauRoblox),
+        benchmark_file(&root, "infinite_yield.luau", LuaTarget::LuauRoblox),
         // Adversarial: 2.2 MB of VM-obfuscated Luau on a single line.
-        corpus_file(&root, "obfuscated_vm.luau", LuaTarget::LuauRoblox),
+        benchmark_file(&root, "obfuscated_vm.luau", LuaTarget::LuauRoblox),
     ]
 }
 
@@ -157,7 +157,7 @@ pub fn test_files() -> Vec<TestFile> {
 /// `main.lua`.
 #[must_use]
 pub fn bundle_project_root() -> PathBuf {
-    corpus_root().join("gen_bundle")
+    benchmark_files_root().join("gen_bundle")
 }
 
 #[must_use]

@@ -383,8 +383,16 @@ impl<'ast> Formatter<'ast> {
             return false;
         };
         for (line, line_break) in reindented_lines(source, start, end, version) {
-            if !line.is_empty() {
-                self.text(line);
+            let written = if should_keep_breaks || line_break.is_empty() {
+                line
+            } else {
+                // Luau reads a lone CR as a space, and one ending the line,
+                // even behind spaces the printer trims, would pair with the
+                // line break the printer writes after it.
+                line.trim_end_matches([' ', '\t', '\r'])
+            };
+            if !written.is_empty() {
+                self.text(written);
             }
             if line_break.is_empty() {
                 continue;

@@ -15,6 +15,8 @@ mod boxed;
 mod list;
 mod pool;
 mod thin_str;
+#[cfg(feature = "track_allocations")]
+mod tracking;
 
 // Only expose `arena` module for doc tests
 #[cfg(not(feature = "testing"))]

@@ -30,8 +30,8 @@ use core::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
-    BinaryOp, Block, Expression, FunctionArgs, FunctionBody, Statement, Suffix, SuffixedExpression,
-    TableConstructor, Type, Visitor as _, VisitorMut, is_prefix_expr,
+    AttributedName, BinaryOp, Block, Expression, FunctionArgs, FunctionBody, Statement, Suffix,
+    SuffixedExpression, TableConstructor, Type, Visitor as _, VisitorMut, is_prefix_expr,
 };
 use luck_token::{LuaVersion, NumberSubtypes};
 
@@ -111,6 +111,9 @@ pub(crate) struct Compressor<'walk, 'ast> {
     /// Whether the `if` the walk enters next is the one statement of an `if`
     /// that merges the run of nested `if`s it starts.
     is_in_if_run: bool,
+    /// Whether the `local` the walk enters next holds a late inlined read,
+    /// so the names it declares are read only where the walk has been.
+    is_late_read: bool,
     respeller: Respeller,
     lifter: Lifter<'ast>,
 }
@@ -144,6 +147,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             late_calls: Vec::new(),
             unwrapped_stmts: Vec::new(),
             is_in_if_run: false,
+            is_late_read: false,
             respeller: Respeller::default(),
             lifter: Lifter::default(),
         }
@@ -167,6 +171,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             self.has_changed = true;
         }
         self.needs_revisit |= self.has_depth_refusal.get() && self.has_changed;
+        self.needs_revisit |= self.take_freed_names();
         self.has_changed
     }
 
@@ -223,6 +228,14 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
 
     fn retract_block(&mut self, block: &Block<'ast>) {
         self.counter().visit_block(block);
+    }
+
+    /// Uncounts the references in the annotation of a name the walk drops
+    /// from its `local`.
+    fn retract_annotation(&mut self, attributed: &AttributedName<'ast>) {
+        if let Some(ty) = &attributed.type_annotation {
+            self.counter().visit_type(ty);
+        }
     }
 
     /// Walks each statement, and drops the ones the walk leaves nothing of.

@@ -1,6 +1,5 @@
-use luck_ast::Statement;
+use luck_ast::{Statement, is_multi_value};
 
-use crate::call::has_multi_value_tail;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
@@ -30,7 +29,7 @@ impl NodeRule for UnbalancedAssignment {
             Statement::LocalAssignment(local) => {
                 let name_count = local.names.len();
                 let value_count = local.exprs.len();
-                if !has_multi_value_tail(&local.exprs)
+                if !local.exprs.last().is_some_and(is_multi_value)
                     && name_count != value_count
                     && value_count > 0
                 {
@@ -43,7 +42,9 @@ impl NodeRule for UnbalancedAssignment {
             Statement::Assignment(assignment) => {
                 let target_count = assignment.targets.len();
                 let value_count = assignment.values.len();
-                if !has_multi_value_tail(&assignment.values) && target_count != value_count {
+                if !assignment.values.last().is_some_and(is_multi_value)
+                    && target_count != value_count
+                {
                     findings.push(Finding::new(
                         format!(
                             "{target_count} target(s) but {value_count} value(s) in assignment"
