@@ -45,8 +45,11 @@ jobs:
           done
 
       # The prebuilt cargo-fuzz is a musl build, and it defaults to its own target, which ASan can't link.
+      # ASan pads every frame, so at the nesting cap a stage takes up to 15 MiB of the main thread's stack.
       - name: Fuzz for 5 minutes
-        run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$TARGET" -- -max_total_time=300 -timeout=30
+        run: |
+          ulimit -s 65536
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$TARGET" -- -max_total_time=300 -timeout=30
 
       - name: Upload the crash artifacts
         if: failure()

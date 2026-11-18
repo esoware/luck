@@ -89,6 +89,14 @@ roblox-api:
 minsize:
   cargo test -p luck_benchmark --test it regenerate_minsize -- --ignored
 
+# ASan pads every frame, so at the nesting cap a stage takes up to 15 MiB of the main thread's stack.
+
 # Run a fuzz target on nightly, such as just fuzz fuzz_parser
+[unix]
+fuzz target *args:
+  ulimit -s 65536 && cargo +nightly fuzz run {{target}} --fuzz-dir fuzz {{args}}
+
+# Run a fuzz target on nightly, such as just fuzz fuzz_parser
+[windows]
 fuzz target *args:
   cargo +nightly fuzz run {{target}} --fuzz-dir fuzz {{args}}
