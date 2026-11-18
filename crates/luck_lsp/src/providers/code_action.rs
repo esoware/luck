@@ -3,6 +3,7 @@ use core::ops;
 use luck_ast::{Block, Expression, LastStatement, Statement, Visitor};
 use luck_linter::{Fix, LintDiagnostic};
 use luck_token::{Span, has_line_break, is_lua_whitespace, offset_to_index};
+use rustc_hash::FxHashMap;
 use tower_lsp_server::ls_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
     CodeActionResponse, Diagnostic, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
@@ -22,7 +23,7 @@ pub(crate) fn code_action(
     lints: &[LintDiagnostic],
 ) -> CodeActionResponse {
     let uri = &params.text_document.uri;
-    let matched: Vec<(&Diagnostic, &str, &LintDiagnostic)> = params
+    let requested: Vec<(&Diagnostic, &str, Span)> = params
         .context
         .diagnostics
         .iter()
@@ -33,13 +34,17 @@ pub(crate) fn code_action(
             if diag.range.end < params.range.start || diag.range.start > params.range.end {
                 return None;
             }
-            // A diagnostic carries its lint's rule and range back unchanged,
-            // so the pair names the one lint it came from.
             let byte_range = document.byte_range(diag.range)?;
-            let span = Span::from_indices(byte_range.start, byte_range.end);
-            let lint = lint_at(lints, rule, span)?;
-            Some((diag, rule.as_str(), lint))
+            Some((diag, rule.as_str(), Span::from_indices(byte_range.start, byte_range.end)))
         })
+        .collect();
+    let lints_by_key =
+        lints_starting_at(lints, requested.iter().map(|&(_, _, span)| span.start).collect());
+    // A diagnostic carries its lint's rule and range back unchanged, so the
+    // pair names the one lint it came from.
+    let matched: Vec<(&Diagnostic, &str, &LintDiagnostic)> = requested
+        .into_iter()
+        .filter_map(|(diag, rule, span)| Some((diag, rule, *lints_by_key.get(&(span, rule))?)))
         .collect();
     // Directives apply only after a clean parse, so none can silence a syntax
     // error.
@@ -97,20 +102,27 @@ pub(crate) fn code_action(
     actions
 }
 
-/// The lint `rule` reported at `span`, from `lints` in the order the linter
-/// returns them, sorted by where they start.
-fn lint_at<'lints>(
-    lints: &'lints [LintDiagnostic],
-    rule: &str,
-    span: Span,
-) -> Option<&'lints LintDiagnostic> {
-    let first = lints.partition_point(|lint| lint.span.start < span.start);
-    lints
-        .get(first..)?
-        .iter()
-        .take_while(|lint| lint.span.start == span.start)
-        .filter(|lint| lint.rule == rule && lint.span == span)
-        .last()
+/// The last lint of each rule and span that starts at one of `starts`, from
+/// `lints` in the order the linter returns them, sorted by where they start.
+///
+/// A request can hold every lint of a file, and many can start at one place,
+/// as each comparison in a run of them does, so a lint is found by key, not
+/// by a walk over the others that start there.
+fn lints_starting_at(
+    lints: &[LintDiagnostic],
+    mut starts: Vec<u32>,
+) -> FxHashMap<(Span, &str), &LintDiagnostic> {
+    starts.sort_unstable();
+    starts.dedup();
+    let mut by_key = FxHashMap::default();
+    for start in starts {
+        let from = lints.partition_point(|lint| lint.span.start < start);
+        let to = lints.partition_point(|lint| lint.span.start <= start);
+        for lint in lints.get(from..to).unwrap_or_default() {
+            by_key.insert((lint.span, lint.rule), lint);
+        }
+    }
+    by_key
 }
 
 fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
