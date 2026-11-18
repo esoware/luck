@@ -31,7 +31,7 @@ Configuration lives in `luck.json`. `lint`, `fmt`, and `check` give each file th
 ## Tools
 
 - **Bundler.** Resolves `require` calls across Lua search paths, Luau relative imports, `@aliases`, and `.luaurc` chains, then emits one self-contained file with no external loader or runtime library.
-- **Minifier.** A twelve-pass AST pipeline. Dead code removal, constant folding, and local renaming do most of the work. Config flags turn passes on and off, and every pass assumes metamethods can fire.
+- **Minifier.** Twelve AST transforms that rewrite the tree in place, in three phases that each run once: binding, compression, and renaming. Dead code removal, constant folding, and local renaming do most of the work. Config flags turn each transform on and off, and every transform assumes metamethods can fire.
 - **Formatter.** Prettier-style layout that breaks on line width and handles the full Luau type grammar. `format(format(x)) == format(x)` and the output re-parses, both enforced by tests.
 - **Linter.** 65 rules across correctness, suspicious, style, and performance categories, with inline suppressions and `--fix`.
 - **Language server.** Hover, completions, diagnostics, go-to-definition, rename, and semantic tokens, served by `luck lsp` and consumed by the [VS Code extension](editors/vscode).
