@@ -6,9 +6,8 @@ use core::mem;
 
 use luck_allocator::List;
 use luck_ast::{
-    FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,
-    IntersectionType, Name, NamedType, OptionalType, ParenthesizedType, TableType, Type, TypeArgs,
-    TypeField, TypeFieldAccess, TypePack, TypeofType, UnionType, VariadicType,
+    FunctionTypeParam, GenericTypeList, GenericTypeParam, GetSpan as _, Name, OptionalType, Type,
+    TypeArgs, TypeField, TypeFieldAccess,
 };
 use luck_token::{Span, Token, TokenKind, decode_string};
 
@@ -26,10 +25,6 @@ pub(super) enum GenericsOwner {
     Function,
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the parser is one type with its grammar split by file"
-)]
 impl<'ast> Parser<'ast> {
     /// Parse `: T` if present, on a binding that takes a single type.
     #[inline]
@@ -57,14 +52,14 @@ impl<'ast> Parser<'ast> {
         let ty = self.parse_type();
         self.exit_depth();
         let span = dots.merge(ty.span());
-        Type::Variadic(self.alloc(VariadicType { span, ty }))
+        Type::new_variadic(span, ty, self.allocator)
     }
 
     fn parse_generic_pack(&mut self) -> Type<'ast> {
         let name = self.advance_name();
         let dots = self.advance();
         let span = name.span.merge(dots);
-        Type::GenericPack(self.alloc(GenericPackType { span, name }))
+        Type::new_generic_pack(span, name, self.allocator)
     }
 
     pub(super) fn parse_vararg_type(&mut self) -> Type<'ast> {
@@ -151,16 +146,12 @@ impl<'ast> Parser<'ast> {
             let first = self.parse_union_member();
             let types = self.parse_union_members(first);
             let span = leading.merge(types.last().map_or(leading, Type::span));
-            Type::Union(self.alloc(UnionType { span, has_leading_pipe: true, types }))
+            Type::new_union(span, true, types, self.allocator)
         } else {
             let first = self.parse_intersection_member();
             let types = self.parse_intersection_members(first);
             let span = leading.merge(types.last().map_or(leading, Type::span));
-            Type::Intersection(self.alloc(IntersectionType {
-                span,
-                has_leading_ampersand: true,
-                types,
-            }))
+            Type::new_intersection(span, true, types, self.allocator)
         };
         self.exit_depth();
         ty
@@ -179,7 +170,7 @@ impl<'ast> Parser<'ast> {
         let types = self.parse_union_members(first);
         self.nesting_depth = level;
         let span = start_span.merge(types.last().map_or(start_span, Type::span));
-        Type::Union(self.alloc(UnionType { span, has_leading_pipe: false, types }))
+        Type::new_union(span, false, types, self.allocator)
     }
 
     /// A member after the first, measured on its own.
@@ -222,11 +213,7 @@ impl<'ast> Parser<'ast> {
         let types = self.parse_intersection_members(first);
         self.nesting_depth = level;
         let span = start_span.merge(types.last().map_or(start_span, Type::span));
-        Type::Intersection(self.alloc(IntersectionType {
-            span,
-            has_leading_ampersand: false,
-            types,
-        }))
+        Type::new_intersection(span, false, types, self.allocator)
     }
 
     /// A member after the first, measured on its own.
@@ -270,7 +257,7 @@ impl<'ast> Parser<'ast> {
                 return Type::Error(primary.span());
             }
             self.nesting_depth = level;
-            self.alloc(OptionalType { span: primary.span(), ty: primary, question_count: 0 })
+            OptionalType::boxed(primary.span(), primary, 0, self.allocator)
         };
         while self.is_at(TokenKind::Question) {
             let question = self.advance();
@@ -341,7 +328,7 @@ impl<'ast> Parser<'ast> {
         self.exit_depth();
         let close = self.expect_closer(TokenKind::RightParen, Closer::Paren);
         let span = typeof_span.merge(close);
-        Type::Typeof(self.alloc(TypeofType { span, expr }))
+        Type::new_typeof(span, expr, self.allocator)
     }
 
     fn parse_named_type(&mut self, first_name: Name<'ast>) -> Type<'ast> {
@@ -361,7 +348,7 @@ impl<'ast> Parser<'ast> {
         let start_span = prefix.map_or(name.span, |module| module.span);
         let end_span = generics.as_ref().map_or(name.span, |args| args.span);
         let span = start_span.merge(end_span);
-        Type::Named(self.alloc(NamedType { span, prefix, name, generics }))
+        Type::new_named(span, prefix, name, generics, self.allocator)
     }
 
     pub(super) fn parse_type_args(&mut self) -> TypeArgs<'ast> {
@@ -379,7 +366,7 @@ impl<'ast> Parser<'ast> {
         }
         let args = List::split_off_in(&mut self.scratch.types, start, self.allocator);
         let close = self.consume_type_close_angle();
-        TypeArgs { span: open.merge(close), args }
+        TypeArgs::new(open.merge(close), args)
     }
 
     pub(super) fn parse_generic_type_list(
@@ -441,12 +428,8 @@ impl<'ast> Parser<'ast> {
             }
 
             let end_span = default.as_ref().map(Type::span).or(dots).unwrap_or(name.span);
-            let param = GenericTypeParam {
-                span: name.span.merge(end_span),
-                name,
-                is_pack: dots.is_some(),
-                default,
-            };
+            let param =
+                GenericTypeParam::new(name.span.merge(end_span), name, dots.is_some(), default);
             self.scratch.generic_params.push(param);
 
             if !self.eat(TokenKind::Comma) {
@@ -456,7 +439,7 @@ impl<'ast> Parser<'ast> {
 
         let params = List::split_off_in(&mut self.scratch.generic_params, start, self.allocator);
         let close = self.consume_type_close_angle();
-        GenericTypeList { span: open.merge(close), params }
+        GenericTypeList::new(open.merge(close), params)
     }
 
     /// The lexer is greedy, so `Foo<T>=x` holds `GreaterEqual`, which gets
@@ -514,7 +497,7 @@ impl<'ast> Parser<'ast> {
         self.check_table_type_fields(&fields, has_trailing_separator);
         let close = self.expect_closer(TokenKind::RightBrace, Closer::Brace);
         let span = open.merge(close);
-        Type::Table(self.alloc(TableType { span, fields, has_trailing_separator }))
+        Type::new_table(span, fields, has_trailing_separator, self.allocator)
     }
 
     /// Grammar: `TableType ::= '{' Type '}' | '{' [PropList] '}'`. An array
@@ -626,7 +609,7 @@ impl<'ast> Parser<'ast> {
                 // pack ends the list.
                 if self.is_at_type_pack() {
                     let ty = self.parse_type_pack();
-                    self.scratch.function_type_params.push(FunctionTypeParam { name: None, ty });
+                    self.scratch.function_type_params.push(FunctionTypeParam::new(None, ty));
                     break;
                 }
                 let name =
@@ -637,7 +620,7 @@ impl<'ast> Parser<'ast> {
                     });
                 let ty = self.parse_type();
                 let is_error = matches!(ty, Type::Error(_));
-                self.scratch.function_type_params.push(FunctionTypeParam { name, ty });
+                self.scratch.function_type_params.push(FunctionTypeParam::new(name, ty));
                 if !self.eat(TokenKind::Comma) || is_error {
                     break;
                 }
@@ -651,12 +634,7 @@ impl<'ast> Parser<'ast> {
                 List::split_off_in(&mut self.scratch.function_type_params, start, self.allocator);
             let return_type = self.parse_return_type();
             let span = open.merge(return_type.span());
-            return Type::Function(self.alloc(FunctionType {
-                span,
-                generics: None,
-                params,
-                return_type,
-            }));
+            return Type::new_function(span, None, params, return_type, self.allocator);
         }
         self.finish_paren_or_pack(open.merge(close), start, is_pack_allowed)
     }
@@ -680,12 +658,12 @@ impl<'ast> Parser<'ast> {
             && !matches!(single.ty, Type::Variadic(_) | Type::GenericPack(_))
             && let Some(param) = params.pop()
         {
-            Type::Parenthesized(self.alloc(ParenthesizedType { span, ty: param.ty }))
+            Type::new_parenthesized(span, param.ty, self.allocator)
         } else if is_pack_allowed {
             let types_start = self.scratch.types.len();
             self.scratch.types.extend(params.drain(start..).map(|param| param.ty));
             let types = List::split_off_in(&mut self.scratch.types, types_start, self.allocator);
-            Type::Pack(self.alloc(TypePack { span, types }))
+            Type::new_pack(span, types, self.allocator)
         } else {
             let is_empty = params.len() == start;
             params.truncate(start);

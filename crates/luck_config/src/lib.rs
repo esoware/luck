@@ -1,28 +1,43 @@
 //! # `luck_config`
 //!
-//! Reads `luck.json` and `.editorconfig` into the options each luck tool
-//! takes. Each tool derives the `luck.json` shape of its own option types
-//! behind its `serde` feature, which this crate turns on, so `transforms`,
-//! `dynamic_require`, and `lint` deserialize straight into them. The
-//! `format` section is [`FormatConfig`], which leaves each formatter option
-//! unset unless the config sets it, so it layers over `.editorconfig`, and
-//! converts into `luck_formatter::FormatOptions` with `From`.
+//! Loads a `luck.json`, through the files it `extends`, into one validated
+//! [`Project`], which every luck command and the language server ask for
+//! each file's dialect, lint settings, and format options, and for the
+//! build's entries and module resolution.
 //!
-//! Every config struct denies unknown fields. The one open map is
-//! `RuleSettings`, whose other keys are rule names for the linter to check.
+//! Everything is checked at load: the JSON5 syntax, every key, the dialects,
+//! the globs, the lint rule names and options, and the build keys that can't
+//! go together. A problem comes back as one E014 [`Diagnostic`] placed where
+//! it is in the file at fault.
 //!
-//! The VS Code schema is generated from [`LuckConfig`], with the type names as
-//! its `$defs` keys and the doc comments as its descriptions.
+//! Each tool derives the `luck.json` shape of its own option types behind its
+//! `serde` feature, which this crate turns on, so `transforms`,
+//! `dynamic_require`, and `lint` deserialize straight into them. The `format`
+//! section leaves each formatter option unset unless the config sets it, so
+//! it layers over `.editorconfig`. `overrides` layer `lint` and `format`
+//! settings over the files their globs match.
+//!
+//! The VS Code schema is generated from the config types, with the type
+//! names as its `$defs` keys and the doc comments as its descriptions.
+//!
+//! [`Diagnostic`]: luck_core::Diagnostic
 //!
 //! # Usage
 //!
-//! ```
-//! use luck_config::parse_luck_config;
-//! use luck_formatter::FormatOptions;
+//! ```no_run
+//! use std::path::Path;
 //!
-//! let config = parse_luck_config(r#"{ "format": { "line_width": 80 } }"#).unwrap();
-//! let options = FormatOptions::from(&config.format.unwrap_or_default());
-//! assert_eq!(options.line_width, 80);
+//! use luck_config::{Editorconfigs, Project, find_config};
+//!
+//! let directory = Path::new("src");
+//! let project = match find_config(directory) {
+//!     Some(config_path) => Project::load(&config_path).expect("a valid luck.json"),
+//!     None => Project::defaults(directory.to_path_buf()),
+//! };
+//! let file = Path::new("src/main.lua");
+//! let target = project.target_for(Some(file));
+//! let lint = project.lint_for(Some(file));
+//! let format = project.format_options(Some(file), Some(&Editorconfigs::default()));
 //! ```
 
 #![cfg_attr(
@@ -35,20 +50,21 @@
 
 extern crate alloc;
 
+mod build;
 mod config;
 mod editorconfig;
 mod filter;
+#[cfg(test)]
+mod fixtures;
 mod format_config;
+mod glob;
 mod load;
 mod path;
-mod resolve;
+mod project;
 
-pub use config::{DialectKey, EntryConfig, LuckConfig, ProfileOverrides};
-pub use editorconfig::{Editorconfigs, resolved_format_config};
-pub use filter::{ProjectFilter, glob_set};
-pub use format_config::FormatConfig;
-pub use load::{
-    CONFIG_FILE_NAME, ProjectConfig, config_directory, discover_config, load_or_discover_config,
-    load_with_extends, parse_luck_config,
-};
-pub use resolve::{BuildConfig, check_output_paths, resolve_build_config};
+pub use build::{BuildConfig, check_output_paths};
+pub use editorconfig::Editorconfigs;
+pub use filter::ProjectFilter;
+pub use glob::glob_set;
+pub use load::{CONFIG_FILE_NAME, find_config};
+pub use project::Project;

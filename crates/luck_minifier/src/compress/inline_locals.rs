@@ -5,10 +5,10 @@ use core::mem;
 
 use luck_allocator::List;
 use luck_ast::{
-    BinaryOp, Block, Expression, LocalAssignment, MAX_NESTING_DEPTH, Statement, Visitor,
-    VisitorMut as _, expr_nesting_depth,
+    BinaryOp, Block, Expression, LocalAssignment, MAX_NESTING_DEPTH, Statement, Visit,
+    VisitMut as _, expr_nesting_depth,
 };
-use luck_token::{BinOp, MAX_ACTIVE_LOCALS, OperandSide};
+use luck_token::{BinOp, MAX_ACTIVE_LOCALS, OperandSide, UnOp};
 
 use super::Compressor;
 use super::remove_dead_code::is_nil_initialized;
@@ -29,7 +29,7 @@ pub(super) struct Value<'ast> {
 pub(super) enum OperandPosition {
     Left(BinOp),
     Right(BinOp),
-    Unary,
+    Unary(UnOp),
     Cast,
 }
 
@@ -52,20 +52,22 @@ fn keeps_grouping(value: &Expression<'_>, position: OperandPosition) -> bool {
         Expression::BinaryOp(run) => match position {
             OperandPosition::Left(op) => run.can_nest_bare(op, OperandSide::Left),
             OperandPosition::Right(op) => run.can_nest_bare(op, OperandSide::Right),
-            OperandPosition::Unary => !binds_looser_than_unary(run),
+            OperandPosition::Unary(_) => !binds_looser_than_unary(run),
             OperandPosition::Cast => false,
         },
         Expression::UnaryOp(_) => match position {
             // Unary ops bind looser than ^, so (-a)^b needs its parens.
             OperandPosition::Left(op) => op != BinOp::Pow,
-            OperandPosition::Right(_) | OperandPosition::Unary => true,
+            OperandPosition::Right(_) | OperandPosition::Unary(_) => true,
             OperandPosition::Cast => false,
         },
         // Luau: `::` takes a simple expression, and `x :: A :: B` doesn't
         // parse.
         Expression::TypeCast(_) => !matches!(position, OperandPosition::Cast),
+        // Luau: `-1i` is a negative integer literal, while `-x` negates the
+        // integer `x` holds, which raises.
+        Expression::Integer(_) => !matches!(position, OperandPosition::Unary(UnOp::Neg)),
         Expression::Number(_)
-        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)
@@ -160,7 +162,7 @@ struct ReadFinder<'bindings> {
     is_found: bool,
 }
 
-impl<'tree> Visitor<'tree> for ReadFinder<'_> {
+impl<'tree> Visit<'tree> for ReadFinder<'_> {
     fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
         if self.is_found {
             return;
@@ -191,7 +193,9 @@ impl<'ast> Compressor<'_, 'ast> {
         // An initializer can hold `local`s of its own, so the list is a
         // stack that every `local` leaves as it found it.
         let landed_start = self.landed_counts.len();
-        self.walk_attributed_names(&mut local.names);
+        for attributed in &mut local.names {
+            self.visit_attributed_name(attributed);
+        }
         for expr in &mut local.exprs {
             let outer_landed_locals = mem::replace(&mut self.landed_locals, 0);
             self.visit_expr(expr);
@@ -704,6 +708,9 @@ mod tests {
                 ("local s = -1 return s<<T>>", "return(-1)<<T>>"),
                 ("local s = \"x\" :: T return s<<U>>", "return(\"x\"::T)<<U>>"),
                 ("local s = \"x\" return s<<T>><<U>>", "return(\"x\")<<T>><<U>>"),
+                // `-1i` is a literal, while negating an integer raises.
+                ("local s = 1i return -s", "return-(1i)"),
+                ("local s = 1i return not s", "return not 1i"),
                 ("local s = (\"x\")<<T>> return s .. \"y\"", "local s=(\"x\")<<T>>return s..\"y\""),
             ],
         );

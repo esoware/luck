@@ -13,11 +13,7 @@ fn key_name<'ast>(key: &Expression<'ast>, version: LuaVersion) -> Option<Name<'a
     };
     let text: &'ast str = literal.text;
     let name = short_string_body(text)?;
-    is_valid_identifier_in(name, version).then_some(Name {
-        text: name.into(),
-        index: None,
-        span: literal.span,
-    })
+    is_valid_identifier_in(name, version).then_some(Name::new(name.into(), None, literal.span))
 }
 
 /// Says whether it rewrote the suffix.

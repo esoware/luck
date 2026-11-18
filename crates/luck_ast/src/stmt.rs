@@ -1,4 +1,5 @@
 use luck_allocator::{Box, List};
+use luck_ast_macros::Ast;
 use luck_token::{CompoundOp, Span};
 
 use crate::expr::{Expression, SuffixedExpression, Var};
@@ -6,7 +7,8 @@ use crate::function::{FunctionAttribute, FunctionBody, Parameter};
 use crate::leaf::Name;
 use crate::types::{GenericTypeList, Type};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
+#[visit(level)]
 pub struct Block<'ast> {
     pub span: Span,
     pub stmts: List<'ast, Statement<'ast>>,
@@ -14,7 +16,7 @@ pub struct Block<'ast> {
 }
 
 /// Two words, like [`Expression`].
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 #[expect(
     clippy::enum_variant_names,
     reason = "each variant is named for its payload, and the syntax tree view prints these names"
@@ -45,7 +47,7 @@ pub enum Statement<'ast> {
     Error(Span),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub enum LastStatement<'ast> {
     Return(Box<'ast, ReturnStatement<'ast>>),
     Break(Span),
@@ -53,34 +55,34 @@ pub enum LastStatement<'ast> {
     Error(Span),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct Assignment<'ast> {
     pub span: Span,
     pub targets: List<'ast, Var<'ast>>,
     pub values: List<'ast, Expression<'ast>>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct DoBlock<'ast> {
     pub span: Span,
     pub block: Block<'ast>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct WhileLoop<'ast> {
     pub span: Span,
     pub condition: Expression<'ast>,
     pub block: Block<'ast>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct RepeatLoop<'ast> {
     pub span: Span,
     pub block: Block<'ast>,
     pub condition: Expression<'ast>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct IfStatement<'ast> {
     pub span: Span,
     pub condition: Expression<'ast>,
@@ -89,20 +91,20 @@ pub struct IfStatement<'ast> {
     pub else_clause: Option<ElseClause<'ast>>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct ElseIfClause<'ast> {
     pub span: Span,
     pub condition: Expression<'ast>,
     pub block: Block<'ast>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct ElseClause<'ast> {
     pub span: Span,
     pub block: Block<'ast>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct NumericFor<'ast> {
     pub span: Span,
     pub name: Name<'ast>,
@@ -113,7 +115,7 @@ pub struct NumericFor<'ast> {
     pub block: Block<'ast>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct GenericFor<'ast> {
     pub span: Span,
     pub names: List<'ast, Parameter<'ast>>,
@@ -122,14 +124,14 @@ pub struct GenericFor<'ast> {
 }
 
 /// `a.b.c` or `a.b:c`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct FunctionName<'ast> {
     pub span: Span,
     pub names: List<'ast, Name<'ast>>,
     pub method: Option<Name<'ast>>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct FunctionDecl<'ast> {
     pub span: Span,
     /// Luau: `@attr` list preceding `function`. Empty outside Luau.
@@ -138,7 +140,7 @@ pub struct FunctionDecl<'ast> {
     pub body: FunctionBody<'ast>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct LocalFunction<'ast> {
     pub span: Span,
     /// Luau: `@attr` list preceding `local function`. Empty outside Luau.
@@ -150,7 +152,7 @@ pub struct LocalFunction<'ast> {
 
 /// The keyword a [`LocalFunction`] is declared with, which fixes whether its
 /// binding is read-only and whether the module exports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
 pub enum LocalFunctionKind {
     Local,
     /// Luau: `const function`.
@@ -179,13 +181,13 @@ impl LocalFunctionKind {
 
 /// Lua 5.4+: `<const>` or `<close>`. The name is whatever identifier the
 /// parser finds there, after it reports any other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
 pub struct Attribute<'ast> {
     pub span: Span,
     pub name: Name<'ast>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct AttributedName<'ast> {
     pub name: Name<'ast>,
     /// Luau: `: T` annotation. The parser never sets both this and
@@ -195,7 +197,7 @@ pub struct AttributedName<'ast> {
 }
 
 /// `exprs` is empty for a declaration with no `=`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct LocalAssignment<'ast> {
     pub span: Span,
     pub names: List<'ast, AttributedName<'ast>>,
@@ -205,7 +207,7 @@ pub struct LocalAssignment<'ast> {
 
 /// The keywords a [`LocalAssignment`] is declared with, which fix whether its
 /// names are read-only and whether the module exports them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
 pub enum LocalAssignmentKind {
     Local,
     /// Luau: `const`, which makes every name in the list read-only.
@@ -234,26 +236,26 @@ impl LocalAssignmentKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
 pub struct GotoStatement<'ast> {
     pub span: Span,
     pub name: Name<'ast>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
 pub struct LabelStatement<'ast> {
     pub span: Span,
     pub name: Name<'ast>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct ReturnStatement<'ast> {
     pub span: Span,
     pub exprs: List<'ast, Expression<'ast>>,
 }
 
 /// Luau: `var op= expr`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct CompoundAssignment<'ast> {
     pub span: Span,
     pub var: Var<'ast>,
@@ -262,7 +264,7 @@ pub struct CompoundAssignment<'ast> {
 }
 
 /// Luau: `type Name<T> = T` or `type function Name funcbody`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct TypeDeclaration<'ast> {
     pub span: Span,
     pub is_exported: bool,
@@ -271,7 +273,7 @@ pub struct TypeDeclaration<'ast> {
     pub value: TypeDeclarationValue<'ast>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub enum TypeDeclarationValue<'ast> {
     Alias(Type<'ast>),
     /// `type function Name funcbody`, a compile-time function evaluated
@@ -280,7 +282,7 @@ pub enum TypeDeclarationValue<'ast> {
 }
 
 /// Lua 5.5: `global names [= exprs]`. `exprs` is empty when there's no `=`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct GlobalDeclaration<'ast> {
     pub span: Span,
     pub names: List<'ast, AttributedName<'ast>>,
@@ -288,7 +290,7 @@ pub struct GlobalDeclaration<'ast> {
 }
 
 /// Lua 5.5: `global function Name funcbody`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Ast)]
 pub struct GlobalFunction<'ast> {
     pub span: Span,
     pub name: Name<'ast>,
@@ -296,7 +298,7 @@ pub struct GlobalFunction<'ast> {
 }
 
 /// Lua 5.5: `global *`, with an optional attribute before the `*`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
 pub struct GlobalStar<'ast> {
     pub span: Span,
     pub attribute: Option<Attribute<'ast>>,

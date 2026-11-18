@@ -11,10 +11,11 @@
 
 use core::mem;
 
-use luck_allocator::{Allocator, Box, List};
+use luck_allocator::{Allocator, List};
 use luck_ast::{
-    BinaryOp, Block, DoBlock, ElseClause, ElseIfClause, Expression, IfStatement, LastStatement,
-    LocalAssignment, Name, NumericFor, OneOrMore, Statement, UnaryOp, VisitorMut as _,
+    BinaryOp, Block, ContentEq as _, ElseClause, ElseIfClause, Expression, GetSpan as _,
+    IfStatement, LastStatement, LocalAssignment, Name, NumericFor, OneOrMore, Statement,
+    VisitMut as _,
 };
 use luck_token::{BinOp, LuaVersion, UnOp};
 
@@ -25,8 +26,8 @@ use crate::binding::{
     has_attributed_or_env_name, has_fixed_binding, is_droppable_function, local_of,
 };
 use crate::expr::{
-    binds_looser_than_unary, constant_truthiness, is_nil, is_pure_expr, is_same_pure_expr,
-    parenthesize, truncate_multi_value,
+    binds_looser_than_unary, constant_truthiness, is_nil, is_pure_expr, parenthesize,
+    truncate_multi_value,
 };
 
 pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
@@ -82,7 +83,7 @@ fn has_loop_exit(block: &Block<'_>) -> bool {
 
 fn do_block<'ast>(allocator: &'ast Allocator, block: Block<'ast>) -> Statement<'ast> {
     let span = block.span;
-    Statement::DoBlock(Box::new_in(DoBlock { span, block }, allocator))
+    Statement::new_do_block(span, block, allocator)
 }
 
 /// Only wraps in `not`. Inverting a comparison operator would change which
@@ -92,7 +93,7 @@ fn negate<'ast>(allocator: &'ast Allocator, expr: Expression<'ast>) -> Expressio
         matches!(&expr, Expression::BinaryOp(binary_op) if binds_looser_than_unary(binary_op));
     let span = expr.span();
     let operand = if needs_parens { parenthesize(allocator, expr) } else { expr };
-    Expression::UnaryOp(Box::new_in(UnaryOp { span, op: UnOp::Not, operand }, allocator))
+    Expression::new_unary_op(span, UnOp::Not, operand, allocator)
 }
 
 /// `cond and X or X`, which a run of `or`s starts with when its first two
@@ -105,7 +106,7 @@ fn is_redundant_ternary(outer: &BinaryOp<'_>) -> bool {
     let conditions = inner.links.split_last().map_or(&[][..], |(_, before_last)| before_last);
     outer.links.first().op == BinOp::Or
         && inner.links.first().op == BinOp::And
-        && is_same_pure_expr(&inner.links.last().operand, alternative)
+        && inner.links.last().operand.content_eq(alternative)
         && is_pure_expr(&inner.first)
         && conditions.iter().all(|link| is_pure_expr(&link.operand))
         // X must be pure too: a call that returns a falsy value runs twice in
@@ -160,10 +161,6 @@ pub(super) fn is_nil_initialized(local: &LocalAssignment<'_>) -> bool {
         && matches!(&*local.exprs, [value] if is_nil(value))
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the compressor is one type with its rewrites split by flag"
-)]
 impl<'ast> Compressor<'_, 'ast> {
     pub(super) fn is_used(&self, name: &Name<'_>) -> bool {
         local_of(name).is_some_and(|id| self.bindings.is_used(id))
@@ -434,7 +431,7 @@ impl<'ast> Compressor<'_, 'ast> {
         }
         elseif_clauses.truncate(kept);
         if let Some(taken) = taken_block {
-            *else_clause = Some(ElseClause { span: taken.span, block: taken });
+            *else_clause = Some(ElseClause::new(taken.span, taken));
         }
         if let Some(clause) = else_clause {
             self.visit_block(&mut clause.block);
@@ -722,6 +719,9 @@ mod tests {
             ("return ... and 1 or 1\n", "return 1"),
             ("return ... and -2 ^ 3 or -2 ^ 3\n", "return-2^3"),
             ("return ... and {1, x = \"a\"} or {1, x = \"a\"}\n", "return{1,x=\"a\"}"),
+            // Lua leaves unspecified whether two closures created apart are
+            // the same value, so a program can't tell these apart.
+            ("return ... and function() end or function() end\n", "return function()end"),
             ("return a and ... or ...\n", "return a and...or..."),
             ("return true and ... or ...\n", "return(...)"),
         ] {
@@ -735,7 +735,7 @@ mod tests {
             "return ... and 1 or 2\n",
             "return ... and 1 or 1.0\n",
             "return ... and {1} or {2}\n",
-            "return ... and function() end or function() end\n",
+            "return ... and function() end or function(x) end\n",
         ] {
             assert!(remove_dead(source).contains("or"), "source: {source}");
         }

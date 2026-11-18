@@ -59,6 +59,6 @@ pub use sink::NodeSink;
 pub use stdlib_catalog::library_for;
 pub use stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
-    StdlibMap, StdlibNamespace, StdlibParam, StdlibShape, StdlibSignature, StdlibValue,
-    expand_replace_template,
+    StdlibMap, StdlibNamespace, StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature,
+    StdlibValue, expand_replace_template,
 };

@@ -68,7 +68,8 @@ kind = "function"
 min_args = 0
 max_args = 0
 is_must_use = true
-deprecated = { message = "use collectgarbage('count') instead", replace_template = "collectgarbage('count')" }
+# `gcinfo` counts whole kilobytes, and `collectgarbage('count')` a fraction too.
+deprecated = { message = "use collectgarbage('count') instead", replacement = { template = "collectgarbage('count')", is_exact = false } }
 
 [globals.getfenv]
 kind = "function"
@@ -325,7 +326,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_must_use = true
-deprecated = { message = "use 'string.gmatch' instead", replace_template = "string.gmatch(%1, %2)" }
+deprecated = { message = "use 'string.gmatch' instead", replacement = { template = "string.gmatch(%1, %2)", is_exact = true } }
 params = [{ kind = "string" }, { kind = "string" }]
 
 [globals.string.members.gmatch]
@@ -446,7 +447,7 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_must_use = true
-deprecated = { message = "use the '#' length operator instead", replace_template = "#%1" }
+deprecated = { message = "use the '#' length operator instead", replacement = { template = "#%1", is_exact = true } }
 params = [{ kind = "table" }]
 
 [globals.table.members.insert]

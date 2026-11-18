@@ -3,10 +3,6 @@ use super::FullGenerator;
 const BUILTIN_TYPES: [&str; 8] =
     ["number", "integer", "string", "boolean", "any", "unknown", "thread", "never"];
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the generator is one type with its grammar split by file"
-)]
 impl FullGenerator {
     pub(super) fn type_alias_stmt(&mut self) {
         let name = format!("Alias{}", self.fresh_id());

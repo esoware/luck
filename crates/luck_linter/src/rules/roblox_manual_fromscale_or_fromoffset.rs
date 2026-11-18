@@ -1,9 +1,10 @@
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
+use crate::fix::FixKind;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::signed_number_value;
 use crate::roblox::global_new_call;
 use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
+use luck_ast::GetSpan as _;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxManualFromScaleOrFromOffset;
@@ -13,7 +14,8 @@ impl_rule!(
     "roblox_manual_fromscale_or_fromoffset",
     Style,
     Warning,
-    "`UDim2.new` that could be `UDim2.fromScale` or `UDim2.fromOffset`"
+    "`UDim2.new` that could be `UDim2.fromScale` or `UDim2.fromOffset`",
+    Fix
 );
 
 impl NodeRule for RobloxManualFromScaleOrFromOffset {
@@ -58,9 +60,12 @@ impl NodeRule for RobloxManualFromScaleOrFromOffset {
                 call.span(),
             )
             .with_help(format!("use `{replacement}`"))
-            .with_fix(Fix {
-                description: format!("replace with `UDim2.{constructor}`"),
-                edits: vec![TextEdit { span: call.span(), replacement }],
+            .with_fix(context, FixKind::Fix, |fixer| {
+                fixer.replace(
+                    format!("replace with `UDim2.{constructor}`"),
+                    call.span(),
+                    replacement,
+                )
             }),
         );
     }
@@ -148,5 +153,12 @@ mod tests {
             LuaVersion::Luau,
         );
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_without_fix_for_comment_among_dropped_arguments() {
+        let diags = run("local u = UDim2.new(0.5, --[[no offset]] 0, 1, 0)");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_none(), "the fix would delete the comment: {diags:?}");
     }
 }

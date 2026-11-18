@@ -16,21 +16,25 @@
       ]
     },
     "entries": {
+      "description": "Several builds in place of `entry`, each with its own output.",
       "type": [
         "array",
         "null"
       ],
       "items": {
         "$ref": "#/$defs/EntryConfig"
-      }
+      },
+      "minItems": 1
     },
     "entry": {
+      "description": "The file `luck build` bundles, relative to the `luck.json` directory.",
       "type": [
         "string",
         "null"
       ]
     },
     "exclude": {
+      "description": "Globs of files to leave out, even when `include` takes them.",
       "type": [
         "array",
         "null"
@@ -40,6 +44,7 @@
       }
     },
     "extends": {
+      "description": "Configs this one builds on, relative to its directory. A later one\noverrides an earlier one, and this file overrides them all.",
       "type": [
         "array",
         "null"
@@ -59,6 +64,7 @@
       ]
     },
     "include": {
+      "description": "Globs of the files `lint`, `fmt`, and `check` take, relative to the\n`luck.json` directory (default every `.lua` and `.luau` file). `*`\nstops at `/`, and `**/` crosses directories.",
       "type": [
         "array",
         "null"
@@ -78,44 +84,67 @@
       ]
     },
     "lua": {
-      "description": "Dialect for `.lua` files (default `lua54`). Any dialect is accepted:\nRoblox and Rojo trees that keep Luau in `.lua` files set\n`\"lua\": \"roblox\"` or `\"lua\": \"luau\"`.",
-      "type": [
-        "string",
-        "null"
+      "description": "Dialect of every file but a `.luau` one (default `lua54`). Either key\ncan name any dialect, so a Roblox or Rojo tree that keeps Luau in\n`.lua` files sets `\"lua\": \"roblox\"`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LuaTarget"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "luau": {
-      "description": "Dialect for `.luau` files (default `luau`). Any dialect is accepted.",
-      "type": [
-        "string",
-        "null"
+      "description": "Dialect of `.luau` files (default `luau`).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LuaTarget"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "luck_preamble": {
+      "description": "Whether `luck build` names luck and its version at the top of each\nbundle (default `false`).",
       "type": [
         "boolean",
         "null"
       ]
     },
     "minify": {
+      "description": "Whether `luck build` minifies its bundles (default `false`).",
       "type": [
         "boolean",
         "null"
       ]
     },
     "output": {
+      "description": "The file `luck build` writes the bundle of `entry` to, in place of one\nin `output_dir`.",
       "type": [
         "string",
         "null"
       ]
     },
     "output_dir": {
+      "description": "The directory `luck build` writes the bundle of `entry` to, under the\nentry's file name.",
       "type": [
         "string",
         "null"
       ]
     },
+    "overrides": {
+      "description": "Settings for the files some globs match, each over the ones before it.\nAn `extends` chain lists the overrides of the files it extends first,\nand every glob matches relative to the `luck.json` directory.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/OverrideConfig"
+      }
+    },
     "preamble": {
+      "description": "A comment `luck build` writes at the top of each bundle.",
       "type": [
         "string",
         "null"
@@ -131,12 +160,14 @@
       }
     },
     "root": {
+      "description": "Keeps the `extends` chain inside this file's directory.",
       "type": [
         "boolean",
         "null"
       ]
     },
     "search_paths": {
+      "description": "The Lua search path templates a `require` tries in order, relative to\nthe `luck.json` directory (default `?.lua` and `?/init.lua`). Luau\nresolves relative and `@alias` requires instead.",
       "type": [
         "array",
         "null"
@@ -436,7 +467,7 @@
           ]
         },
         "sort_requires": {
-          "description": "When true, sorts each run of consecutive `local NAME = require(...)`\nor `local NAME = game:GetService(...)` statements by name, where the\nrequire takes a string or a dotted path such as `script.Parent.Module`.\nA blank line ends a run. Defaults to `true`.",
+          "description": "When true, sorts each run of consecutive `local NAME = require(...)`\nor `local NAME = game:GetService(...)` statements by name, where the\nrequire takes a string or a dotted path such as `script.Parent.Module`.\nA blank line ends a run. Defaults to `false`, because a module's body\nruns at its first `require`, so sorting can change what a program does.",
           "type": [
             "boolean",
             "null"
@@ -514,6 +545,73 @@
         }
       },
       "additionalProperties": false
+    },
+    "LuaTarget": {
+      "description": "A Lua dialect: Lua 5.1 to 5.5, Luau, or Luau on Roblox.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "lua51",
+            "lua52",
+            "lua53",
+            "lua54",
+            "lua55",
+            "luau"
+          ]
+        },
+        {
+          "description": "Luau on Roblox: the same syntax as `Luau`, with the Roblox stdlib.",
+          "type": "string",
+          "const": "roblox"
+        }
+      ]
+    },
+    "OverrideConfig": {
+      "description": "Settings for the files some globs match, over the rest of the config.",
+      "type": "object",
+      "properties": {
+        "exclude_files": {
+          "description": "Globs of files this leaves alone, even when `files` takes them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "files": {
+          "description": "Globs of the files this applies to, matched as `include` is.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "format": {
+          "description": "Formatter settings over the `format` section's.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FormatConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lint": {
+          "description": "Linter settings over the `lint` section's, which merge as `extends`\nmerges them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LintConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "files"
+      ]
     },
     "ProfileOverrides": {
       "description": "A build profile, selected with `luck build --profile <name>`.\n\nIts `minify` and `transforms` replace the top-level ones. `--release` and\n`--dev` select the `release` and `dev` profiles.",
@@ -635,7 +733,7 @@
       ]
     },
     "RuleSettings": {
-      "description": "A level per rule, keyed by rule name. Only the rules listed here take\noptions.",
+      "description": "A level per rule, keyed by rule name. A name no rule has is an error, and\nonly the rules listed here take options.",
       "type": "object",
       "properties": {
         "cyclomatic_complexity": {

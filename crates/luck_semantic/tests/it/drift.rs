@@ -124,11 +124,11 @@ fn deprecation_fingerprint(entry: &StdlibEntry) -> String {
     entry.deprecation().map_or_else(
         || "live".to_owned(),
         |deprecation| {
-            format!(
-                "deprecated({}|{})",
-                deprecation.message,
-                deprecation.replace_template.unwrap_or("-")
-            )
+            let replacement = deprecation.replacement.map_or_else(
+                || "-".to_owned(),
+                |replacement| format!("{} exact={}", replacement.template, replacement.is_exact),
+            );
+            format!("deprecated({}|{replacement})", deprecation.message)
         },
     )
 }
@@ -423,7 +423,8 @@ fn shape_references_resolve_and_templates_fit_arity() {
             let mut check_template = |context: &str,
                                       deprecation: &StdlibDeprecation,
                                       budget: usize| {
-                if let Some(template) = &deprecation.replace_template {
+                if let Some(replacement) = &deprecation.replacement {
+                    let template = replacement.template;
                     let highest = max_placeholder(template);
                     if highest > budget {
                         violations.push(format!(

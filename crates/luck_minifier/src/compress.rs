@@ -31,7 +31,7 @@ use core::mem;
 use luck_allocator::{Allocator, List};
 use luck_ast::{
     AttributedName, BinaryOp, Block, Expression, FunctionArgs, FunctionBody, Statement, Suffix,
-    SuffixedExpression, TableConstructor, Type, Visitor as _, VisitorMut, is_prefix_expr,
+    SuffixedExpression, TableConstructor, Type, Visit as _, VisitMut, is_prefix_expr,
 };
 use luck_token::{LuaVersion, NumberSubtypes};
 
@@ -419,7 +419,8 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Expression::BinaryOp(run) => self.walk_run(run),
             Expression::UnaryOp(unary_op) => {
                 if self.descend() {
-                    self.visit_operand(&mut unary_op.operand, OperandPosition::Unary);
+                    let position = OperandPosition::Unary(unary_op.op);
+                    self.visit_operand(&mut unary_op.operand, position);
                 }
                 self.ascend();
             }
@@ -507,6 +508,12 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     self.has_changed = true;
                 }
             }
+            // Luau
+            Expression::TypeCast(_) => {
+                if self.config.simplify_parens && simplify_parens::strip(allocator, expr) {
+                    self.has_changed = true;
+                }
+            }
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -517,7 +524,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
             | Expression::Error(_) => {}
         }
     }
@@ -588,7 +594,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
     }
 }
 
-impl<'ast> VisitorMut<'ast> for Compressor<'_, 'ast> {
+impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
         true
@@ -617,22 +623,23 @@ impl<'ast> VisitorMut<'ast> for Compressor<'_, 'ast> {
 
     /// The prefix's own parentheses aren't the walk's to strip, since a
     /// literal such as `("s"):rep(2)` needs them.
-    fn visit_suffixed(&mut self, chain: &mut SuffixedExpression<'ast>) {
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &mut SuffixedExpression<'ast>) {
         if self.descend() {
-            if let Expression::Parenthesized(parenthesized) = &mut chain.prefix {
+            if let Expression::Parenthesized(parenthesized) = &mut suffixed_expr.prefix {
                 if self.descend() {
                     self.visit_expr(&mut parenthesized.expr);
                 }
                 self.ascend();
             } else {
-                self.visit_expr(&mut chain.prefix);
+                self.visit_expr(&mut suffixed_expr.prefix);
                 // Only an inlined value can leave a prefix that can't stand
                 // bare, as `x["k"]` with `x = 37.5` becomes `(37.5)["k"]`.
-                if !is_prefix_expr(&chain.prefix) {
-                    chain.prefix = parenthesize(self.allocator, chain.prefix.take());
+                if !is_prefix_expr(&suffixed_expr.prefix) {
+                    suffixed_expr.prefix =
+                        parenthesize(self.allocator, suffixed_expr.prefix.take());
                 }
             }
-            for suffix in &mut *chain.suffixes {
+            for suffix in &mut *suffixed_expr.suffixes {
                 match suffix {
                     Suffix::Field(_) => {}
                     Suffix::Index { index, .. } => {
@@ -660,63 +667,70 @@ impl<'ast> VisitorMut<'ast> for Compressor<'_, 'ast> {
                     }
                 }
             }
-            if self.config.simplify_parens && simplify_parens::strip_prefix(self.allocator, chain) {
+            if self.config.simplify_parens
+                && simplify_parens::strip_prefix(self.allocator, suffixed_expr)
+            {
                 self.has_changed = true;
             }
         }
         self.ascend();
     }
 
-    fn visit_function_args(&mut self, args: &mut FunctionArgs<'ast>) {
-        self.walk_function_args(args);
-        if self.config.simplify_parens && simplify_parens::strip_call_args(args) {
+    fn visit_function_args(&mut self, function_args: &mut FunctionArgs<'ast>) {
+        self.walk_function_args(function_args);
+        if self.config.simplify_parens && simplify_parens::strip_call_args(function_args) {
             self.has_changed = true;
         }
         if self.config.shorten_strings
-            && let FunctionArgs::StringLiteral(literal) = args
+            && let FunctionArgs::StringLiteral(literal) = function_args
             && self.respeller.shorten_string(self.allocator, self.version, literal)
         {
             self.has_changed = true;
         }
     }
 
-    fn visit_table_constructor(&mut self, table: &mut TableConstructor<'ast>) {
-        self.walk_table_constructor(table);
-        if self.config.simplify_indexes && simplify_indexes::simplify_table(table, self.version) {
+    fn visit_table_constructor(&mut self, table_constructor: &mut TableConstructor<'ast>) {
+        self.walk_table_constructor(table_constructor);
+        if self.config.simplify_indexes
+            && simplify_indexes::simplify_table(table_constructor, self.version)
+        {
             self.has_changed = true;
         }
     }
 
     /// The signature belongs to the scope around the function, as the bind
     /// walk counts it.
-    fn visit_function_body(&mut self, body: &mut FunctionBody<'ast>) {
-        let outer_registers = mem::replace(&mut self.live_registers, parameter_locals(body));
+    fn visit_function_body(&mut self, function_body: &mut FunctionBody<'ast>) {
+        let outer_registers =
+            mem::replace(&mut self.live_registers, parameter_locals(function_body));
         if self.descend() {
-            if let Some(generics) = &mut body.generics {
+            if let Some(generics) = &mut function_body.generics {
                 self.visit_generic_type_list(generics);
             }
-            for param in &mut body.params {
+            for param in &mut function_body.params {
                 if let Some(ty) = &mut param.type_annotation {
                     self.visit_type(ty);
                 }
             }
             if let Some(ty) =
-                body.vararg.as_mut().and_then(|vararg| vararg.type_annotation.as_mut())
+                function_body.vararg.as_mut().and_then(|vararg| vararg.type_annotation.as_mut())
             {
                 self.visit_type(ty);
             }
-            if let Some(ty) = &mut body.return_type {
+            if let Some(ty) = &mut function_body.return_type {
                 self.visit_type(ty);
             }
             self.function_depth = self.function_depth.saturating_add(1);
             let outer_has_changed = mem::take(&mut self.has_changed);
-            self.visit_block(&mut body.block);
-            if self.config.remove_dead_code && remove_dead_code::ends_in_bare_return(&body.block) {
-                body.block.last_stmt = None;
+            self.visit_block(&mut function_body.block);
+            if self.config.remove_dead_code
+                && remove_dead_code::ends_in_bare_return(&function_body.block)
+            {
+                function_body.block.last_stmt = None;
                 self.has_changed = true;
             }
             if self.config.lift_locals {
-                self.lift(body);
+                self.lift(function_body);
             }
             self.has_changed |= outer_has_changed;
             self.function_depth = self.function_depth.saturating_sub(1);

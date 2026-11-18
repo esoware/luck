@@ -9,10 +9,6 @@ enum LoopEnd {
     Until,
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the generator is one type with its grammar split by file"
-)]
 impl FullGenerator {
     pub(super) fn stmt(&mut self) {
         let can_nest = self.stmt_depth < MAX_STMT_DEPTH;

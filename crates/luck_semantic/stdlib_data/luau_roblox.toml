@@ -44,7 +44,8 @@ kind = "function"
 min_args = 0
 max_args = 1
 is_must_use = true
-deprecated = { message = "deprecated on Roblox; use gcinfo() instead", replace_template = "gcinfo()" }
+# `gcinfo` counts whole kilobytes, and `collectgarbage('count')` a fraction too.
+deprecated = { message = "deprecated on Roblox; use gcinfo() instead", replacement = { template = "gcinfo()", is_exact = false } }
 params = [
   { kind = "constant", values = ["count"], is_required = false },
 ]
@@ -516,7 +517,8 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_must_use = true
-deprecated = { message = "use the '#' length operator instead", replace_template = "#%1" }
+# `#` calls a table's `__len`, which `table.getn` ignores.
+deprecated = { message = "use the '#' length operator instead", replacement = { template = "#%1", is_exact = false } }
 params = [{ kind = "table" }]
 
 [globals.table.members.insert]
@@ -2084,7 +2086,8 @@ kind = "function"
 min_args = 0
 max_args = 0
 is_must_use = true
-deprecated = { message = "use time() instead", replace_template = "time()" }
+# `time` counts from the start of the game, and `elapsedTime` from the start of the process.
+deprecated = { message = "use time() instead", replacement = { template = "time()", is_exact = false } }
 params = []
 
 [globals.settings]
@@ -2124,7 +2127,7 @@ kind = "function"
 min_args = 0
 max_args = 0
 is_must_use = true
-deprecated = { message = "use game:GetService(\"Stats\") instead", replace_template = "game:GetService(\"Stats\")" }
+deprecated = { message = "use game:GetService(\"Stats\") instead", replacement = { template = "game:GetService(\"Stats\")", is_exact = true } }
 params = []
 
 [globals.printidentity]
@@ -2147,7 +2150,7 @@ kind = "function"
 min_args = 1
 max_args = -1
 is_must_use = true
-deprecated = { message = "pcall has supported yielding since 2014; use it directly", replace_template = "pcall(%1)" }
+deprecated = { message = "pcall has supported yielding since 2014; use it directly", replacement = { template = "pcall(%1)", is_exact = true } }
 params = [
   { kind = "function" },
   { kind = "vararg", is_required = false },
@@ -2160,7 +2163,8 @@ kind = "function"
 min_args = 0
 max_args = 1
 params = [{ kind = "number", is_required = false }]
-deprecated = { message = "use task.wait", replace_template = "task.wait(%1)" }
+# `wait` resumes on the throttled legacy scheduler, and `task.wait` on the next step.
+deprecated = { message = "use task.wait", replacement = { template = "task.wait(%1)", is_exact = false } }
 
 [globals.spawn]
 kind = "function"
@@ -2170,7 +2174,8 @@ params = [
   { kind = "any" },
   { kind = "vararg", is_required = false },
 ]
-deprecated = { message = "use task.spawn", replace_template = "task.spawn(%1)" }
+# `spawn` defers the call to the legacy scheduler, and `task.spawn` makes it at once.
+deprecated = { message = "use task.spawn", replacement = { template = "task.spawn(%1)", is_exact = false } }
 
 [globals.delay]
 kind = "function"
@@ -2181,7 +2186,8 @@ params = [
   { kind = "any" },
   { kind = "vararg", is_required = false },
 ]
-deprecated = { message = "use task.delay", replace_template = "task.delay(%1, %2)" }
+# `delay` waits on the throttled legacy scheduler, and `task.delay` doesn't.
+deprecated = { message = "use task.delay", replacement = { template = "task.delay(%1, %2)", is_exact = false } }
 
 # ---- Roblox datatype constructors ----
 # Each is a namespace covering the type's documented constructors and

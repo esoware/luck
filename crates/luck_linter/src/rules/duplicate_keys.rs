@@ -1,7 +1,7 @@
 use alloc::borrow::Cow;
 use core::{fmt, str};
 
-use luck_ast::{Expression, Field, Literal, TableConstructor};
+use luck_ast::{Expression, Field, GetSpan as _, Literal, TableConstructor};
 use luck_token::{LuaVersion, Span, decode_string};
 use rustc_hash::FxHashMap;
 

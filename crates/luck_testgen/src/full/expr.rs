@@ -1,9 +1,5 @@
 use super::{FullGenerator, Varargs};
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the generator is one type with its grammar split by file"
-)]
 impl FullGenerator {
     pub(super) fn condition(&mut self) -> String {
         let lhs = self.expr(1);

@@ -4,9 +4,10 @@ use luck_token::{LuaVersion, Span};
 
 use crate::config::LintConfig;
 use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
+use crate::fix::{self, FixKind};
 use crate::rule::{LintContext, Rule};
 use crate::rules::{RULES, RuleEntry};
-use crate::{bus, driver, fix};
+use crate::{bus, driver};
 
 pub(crate) fn run_rule(rule: &dyn Rule, source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
     run_rule_with_config(rule, source, version, &LintConfig::default())
@@ -25,19 +26,25 @@ pub(crate) fn run_rule_with_config(
     check(rule, source, standalone(version), config)
 }
 
-/// Applies the diagnostics' fixes the way `--fix` does, asserting that each
-/// diagnostic carries one and that the result re-parses.
+/// Applies one round of the diagnostics' fixes, whatever their kind, as
+/// `--fix-suggestions` does, asserting that each diagnostic carries one and
+/// that the result re-parses.
 pub(crate) fn fix_and_reparse(
     source: &str,
     diags: &[LintDiagnostic],
     version: LuaVersion,
 ) -> String {
     assert!(diags.iter().all(|diag| diag.fix.is_some()), "{diags:?}");
-    let fixed = fix::apply_one_pass(source, diags);
+    let fixed = applied(source, diags);
     let allocator = Allocator::new();
     let reparse = luck_parser::parse(&allocator, &fixed, version);
     assert!(reparse.errors.is_empty(), "reparse: {:?}", reparse.errors);
     fixed
+}
+
+/// `source` after one round of the diagnostics' fixes, whatever their kind.
+pub(crate) fn applied(source: &str, diags: &[LintDiagnostic]) -> String {
+    fix::apply(source, diags, FixKind::all()).unwrap_or_else(|| source.to_owned())
 }
 
 const fn standalone(version: LuaVersion) -> LuaTarget {
@@ -61,21 +68,32 @@ fn check(
     let parse = luck_parser::parse(&allocator, source, target.lua_version());
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
     let analysis = driver::analyze(&parse, target, config);
-    let nodes = analysis.nodes();
-    let context = LintContext::new(&parse, analysis.semantic(), nodes, config);
-    let entry = RULES
+    let context = LintContext::new(&parse, &analysis, config, FixKind::all());
+    let slot = RULES
         .iter()
-        .find(|entry| entry.rule().name() == rule.name())
+        .position(|entry| entry.rule().name() == rule.name())
         .expect("only registered rules are tested");
-    let findings = match *entry {
+    let findings = match RULES[slot] {
         RuleEntry::Whole(whole_rule) => whole_rule.check(&context),
         RuleEntry::Node(node_rule) => {
-            bus::run(&[node_rule], nodes.as_slice(), &context).pop().unwrap_or_default()
+            bus::run(&[node_rule], analysis.nodes().as_slice(), &context, &|| false)
+                .and_then(|mut findings| findings.pop())
+                .unwrap_or_default()
+        }
+        // It reads what the others reported, so the whole lint runs.
+        RuleEntry::UnusedLintFilter(_) => {
+            return driver::lint_analyzed(&parse, &analysis, config, FixKind::all(), &|| false)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|diag| diag.rule == rule.name())
+                .collect();
         }
     };
     // A rule the config leaves off still runs here, at its own severity.
     let severity = driver::rule_severity(rule, config).unwrap_or_else(|| rule.default_severity());
-    driver::into_diagnostics(entry.rule(), findings, severity).collect()
+    let mut diags = Vec::new();
+    driver::report(slot, findings, Some(severity), analysis.directives(), None, &mut diags);
+    diags
 }
 
 pub(crate) fn diagnostic(rule: &'static str, span: Span) -> LintDiagnostic {

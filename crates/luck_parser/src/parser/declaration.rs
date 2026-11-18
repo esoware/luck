@@ -1,9 +1,7 @@
 use luck_allocator::List;
 use luck_ast::{
-    Attribute, AttributedName, Expression, FunctionAttribute, FunctionDecl, FunctionName,
-    GlobalDeclaration, GlobalFunction, GlobalStar, LocalAssignment, LocalAssignmentKind,
-    LocalFunction, LocalFunctionKind, Name, Statement, TypeDeclaration, TypeDeclarationValue,
-    is_multi_value,
+    Attribute, AttributedName, Expression, FunctionAttribute, FunctionName, GetSpan as _,
+    LocalAssignmentKind, LocalFunctionKind, Name, Statement, TypeDeclarationValue, is_multi_value,
 };
 use luck_token::{Span, TokenKind};
 
@@ -37,10 +35,6 @@ fn declaration_span(
     start_span.merge(end_span)
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the parser is one type with its grammar split by file"
-)]
 impl<'ast> Parser<'ast> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     pub(super) fn parse_attributed_function(&mut self) -> Statement<'ast> {
@@ -76,7 +70,7 @@ impl<'ast> Parser<'ast> {
             return Statement::Error(start_span);
         };
         let span = start_span.merge(body.span);
-        Statement::FunctionDecl(self.alloc(FunctionDecl { span, attributes, name, body }))
+        Statement::new_function_decl(span, attributes, name, body, self.allocator)
     }
 
     fn parse_function_name(&mut self) -> FunctionName<'ast> {
@@ -100,7 +94,7 @@ impl<'ast> Parser<'ast> {
         });
         let end_span = method
             .map_or_else(|| names.last().map_or(first.span, |name| name.span), |name| name.span);
-        FunctionName { span: first.span.merge(end_span), names, method }
+        FunctionName::new(first.span.merge(end_span), names, method)
     }
 
     pub(super) fn parse_local_stmt(
@@ -145,7 +139,7 @@ impl<'ast> Parser<'ast> {
             return Statement::Error(start_span);
         };
         let span = start_span.merge(body.span);
-        Statement::LocalFunction(self.alloc(LocalFunction { span, attributes, name, body, kind }))
+        Statement::new_local_function(span, attributes, name, body, kind, self.allocator)
     }
 
     fn parse_local_assignment(
@@ -181,7 +175,7 @@ impl<'ast> Parser<'ast> {
             self.error(span, "missing initializer in `const` declaration");
         }
 
-        Statement::LocalAssignment(self.alloc(LocalAssignment { span, names, exprs, kind }))
+        Statement::new_local_assignment(span, names, exprs, kind, self.allocator)
     }
 
     /// The leading attribute is new in 5.5; in 5.4, attributes only follow
@@ -228,7 +222,7 @@ impl<'ast> Parser<'ast> {
         let type_annotation = self.try_parse_type_annotation();
         let attribute =
             self.try_parse_attribute().or(leading_attribute).map(|attribute| self.alloc(attribute));
-        Some(AttributedName { name, type_annotation, attribute })
+        Some(AttributedName::new(name, type_annotation, attribute))
     }
 
     pub(super) fn parse_global_stmt(&mut self) -> Statement<'ast> {
@@ -242,14 +236,14 @@ impl<'ast> Parser<'ast> {
                 return Statement::Error(global_span);
             };
             let span = global_span.merge(body.span);
-            return Statement::GlobalFunction(self.alloc(GlobalFunction { span, name, body }));
+            return Statement::new_global_function(span, name, body, self.allocator);
         }
 
         // `global *`
         if self.is_at(TokenKind::Star) {
             let star = self.advance();
             let span = global_span.merge(star);
-            return Statement::GlobalStar(self.alloc(GlobalStar { span, attribute: None }));
+            return Statement::new_global_star(span, None, self.allocator);
         }
 
         // `global <attrib> *` puts the attribute before the star. Otherwise
@@ -260,8 +254,7 @@ impl<'ast> Parser<'ast> {
             if self.is_at(TokenKind::Star) {
                 let star = self.advance();
                 let span = global_span.merge(star);
-                let global_star = GlobalStar { span, attribute: Some(attribute) };
-                return Statement::GlobalStar(self.alloc(global_star));
+                return Statement::new_global_star(span, Some(attribute), self.allocator);
             }
             let names = self.parse_attributed_names(Some(attribute));
             return self.finish_global_declaration(global_span, names, Some(attribute));
@@ -291,7 +284,7 @@ impl<'ast> Parser<'ast> {
 
         let exprs = if self.eat(TokenKind::Equal) { self.parse_expr_list() } else { List::new() };
         let span = declaration_span(global_span, &names, &exprs);
-        Statement::GlobalDeclaration(self.alloc(GlobalDeclaration { span, names, exprs }))
+        Statement::new_global_declaration(span, names, exprs, self.allocator)
     }
 
     /// 5.5 manual section 3.3.7: only local variables can have the close
@@ -318,13 +311,14 @@ impl<'ast> Parser<'ast> {
             };
             let span = start_span.merge(body.span);
             let value = TypeDeclarationValue::TypeFunction(self.alloc(body));
-            return Statement::TypeDeclaration(self.alloc(TypeDeclaration {
+            return Statement::new_type_declaration(
                 span,
                 is_exported,
                 name,
-                generics: None,
+                None,
                 value,
-            }));
+                self.allocator,
+            );
         }
 
         let name = self.expect_identifier_recover();
@@ -335,13 +329,14 @@ impl<'ast> Parser<'ast> {
         self.expect(TokenKind::Equal);
         let ty = self.parse_type();
         let span = start_span.merge(ty.span());
-        Statement::TypeDeclaration(self.alloc(TypeDeclaration {
+        Statement::new_type_declaration(
             span,
             is_exported,
             name,
             generics,
-            value: TypeDeclarationValue::Alias(ty),
-        }))
+            TypeDeclarationValue::Alias(ty),
+            self.allocator,
+        )
     }
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use luck_ast::Block;
 use luck_token::Span;
 
@@ -22,9 +24,10 @@ pub struct Dependency<'ast> {
 #[derive(Debug)]
 #[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the module")]
 pub struct ModuleInfo<'ast> {
-    /// The canonical path, in the [`normalize_path`](luck_resolver::normalize_path)
-    /// form, which keys the graph.
-    pub path: String,
+    /// The canonical path, from
+    /// [`FileSystem::canonicalize`](luck_resolver::FileSystem::canonicalize),
+    /// which keys the graph.
+    pub path: PathBuf,
     /// Project-relative path, built against the graph's project root.
     ///
     /// It's the only path the bundle may carry, in `-- module` comments and

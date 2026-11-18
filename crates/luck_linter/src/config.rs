@@ -11,10 +11,13 @@ use luck_core::DiagnosticSeverity;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "serde")]
 use serde::de::{
-    Deserialize, Deserializer, Error, IgnoredAny, IntoDeserializer as _, SeqAccess, Visitor,
+    Deserialize, DeserializeSeed, Deserializer, Error, IgnoredAny, IntoDeserializer as _,
+    MapAccess, SeqAccess, Visitor,
 };
 
 use crate::diagnostic::Category;
+#[cfg(feature = "serde")]
+use crate::rules::rule_named;
 
 /// Linter settings from luck.json.
 // `Serialize` prints it back in the shape it parses, for `--print-config`.
@@ -180,12 +183,12 @@ fn with_perf_alias(schema: &mut schemars::Schema) {
     }
 }
 
-/// A level per rule, keyed by rule name. Only the rules listed here take
-/// options.
+/// A level per rule, keyed by rule name. A name no rule has is an error, and
+/// only the rules listed here take options.
 // A rule with options has its own field, so options on any other rule, or of
 // the wrong shape, fail to deserialize.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RuleSettings {
     /// Reports nothing until its options set `max`.
@@ -235,6 +238,128 @@ impl RuleSettings {
             .into_iter()
             .chain(restricted_module_paths)
             .chain(self.levels.keys().map(String::as_str))
+    }
+}
+
+// Written by hand to read each entry straight from the source, so a format
+// that tracks positions, as `luck.json`'s does, places an error on the entry
+// at fault, where a flattened derive would place it on the whole map.
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for RuleSettings {
+    fn deserialize<Source>(deserializer: Source) -> Result<Self, Source::Error>
+    where
+        Source: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(RuleSettingsVisitor)
+    }
+}
+
+#[cfg(feature = "serde")]
+struct RuleSettingsVisitor;
+
+#[cfg(feature = "serde")]
+impl<'de> Visitor<'de> for RuleSettingsVisitor {
+    type Value = RuleSettings;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a setting per rule name")
+    }
+
+    fn visit_map<Access>(self, mut map: Access) -> Result<Self::Value, Access::Error>
+    where
+        Access: MapAccess<'de>,
+    {
+        let mut settings = RuleSettings::default();
+        while let Some(RuleName(name)) = map.next_key()? {
+            let is_repeated = match name {
+                "cyclomatic_complexity" => {
+                    settings.cyclomatic_complexity.replace(map.next_value()?).is_some()
+                }
+                "restricted_module_paths" => {
+                    settings.restricted_module_paths.replace(map.next_value()?).is_some()
+                }
+                _ => {
+                    let level = map.next_value_seed(BareLevel(name))?;
+                    settings.levels.insert(name.to_owned(), level).is_some()
+                }
+            };
+            if is_repeated {
+                return Err(Error::custom(format_args!("duplicate rule `{name}`")));
+            }
+        }
+        Ok(settings)
+    }
+}
+
+/// A key of `rules`.
+#[cfg(feature = "serde")]
+struct RuleName(&'static str);
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for RuleName {
+    fn deserialize<Source>(deserializer: Source) -> Result<Self, Source::Error>
+    where
+        Source: Deserializer<'de>,
+    {
+        deserializer.deserialize_str(RuleNameVisitor)
+    }
+}
+
+#[cfg(feature = "serde")]
+struct RuleNameVisitor;
+
+#[cfg(feature = "serde")]
+impl Visitor<'_> for RuleNameVisitor {
+    type Value = RuleName;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a rule name")
+    }
+
+    fn visit_str<Failure>(self, v: &str) -> Result<Self::Value, Failure>
+    where
+        Failure: Error,
+    {
+        rule_named(v).map(|rule| RuleName(rule.name())).map_err(Failure::custom)
+    }
+}
+
+/// The setting of the rule it names, which takes no options.
+#[cfg(feature = "serde")]
+struct BareLevel(&'static str);
+
+#[cfg(feature = "serde")]
+impl<'de> DeserializeSeed<'de> for BareLevel {
+    type Value = RuleLevel;
+
+    fn deserialize<Source>(self, deserializer: Source) -> Result<Self::Value, Source::Error>
+    where
+        Source: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Visitor<'de> for BareLevel {
+    type Value = RuleLevel;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a level")
+    }
+
+    fn visit_str<Failure>(self, v: &str) -> Result<Self::Value, Failure>
+    where
+        Failure: Error,
+    {
+        RuleLevel::deserialize(v.into_deserializer())
+    }
+
+    fn visit_seq<Access>(self, _seq: Access) -> Result<Self::Value, Access::Error>
+    where
+        Access: SeqAccess<'de>,
+    {
+        Err(Error::custom(format_args!("`{}` takes no options, so set only its level", self.0)))
     }
 }
 
@@ -442,11 +567,13 @@ mod tests {
 
     #[test]
     fn merge_onto_concatenates_lists_base_first_without_repeats() {
-        let base = lint_config(r#"{ "extra_globals": ["a", "b"], "rules": { "x": "off" } }"#);
-        let child = lint_config(r#"{ "extra_globals": ["b", "c"], "rules": { "y": "error" } }"#);
+        let base =
+            lint_config(r#"{ "extra_globals": ["a", "b"], "rules": { "shadowing": "off" } }"#);
+        let child =
+            lint_config(r#"{ "extra_globals": ["b", "c"], "rules": { "empty_block": "error" } }"#);
         let merged = child.merge_onto(base);
         assert_eq!(merged.extra_globals, ["a", "b", "c"]);
-        assert_eq!(merged.rules.names().collect::<Vec<_>>(), ["x", "y"]);
+        assert_eq!(merged.rules.names().collect::<Vec<_>>(), ["empty_block", "shadowing"]);
     }
 
     #[test]
@@ -545,7 +672,27 @@ mod tests {
     #[test]
     fn rejects_options_on_a_rule_that_takes_none() {
         let error = lint_error(r#"{ "rules": { "unused_variable": ["warn", { "max": 1 }] } }"#);
-        assert!(error.contains("sequence"), "{error}");
+        assert!(error.contains("`unused_variable` takes no options"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_name_no_rule_has_and_suggests_a_close_one() {
+        let typo = lint_error(r#"{ "rules": { "unsued_variable": "warn" } }"#);
+        assert!(
+            typo.contains("unknown lint rule `unsued_variable`, did you mean `unused_variable`?"),
+            "{typo}"
+        );
+        let pseudo_rule = lint_error(r#"{ "rules": { "parse_error": "off" } }"#);
+        assert!(pseudo_rule.contains("unknown lint rule `parse_error`"), "{pseudo_rule}");
+    }
+
+    #[test]
+    fn rejects_a_rule_set_twice() {
+        for rule in ["unused_variable", "cyclomatic_complexity"] {
+            let error =
+                lint_error(&format!(r#"{{ "rules": {{ "{rule}": "warn", "{rule}": "off" }} }}"#));
+            assert!(error.contains(&format!("duplicate rule `{rule}`")), "{error}");
+        }
     }
 
     #[test]

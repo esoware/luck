@@ -1,105 +1,60 @@
-use alloc::sync::Arc;
-use core::str::FromStr as _;
 use std::fs;
 use std::path::Path;
 
-use luck_lsp::{Backend, Notifier};
-use luck_token::index_to_offset;
-use tokio::sync::{RwLock, Semaphore};
-use tower_lsp_server::LanguageServer as _;
-use tower_lsp_server::ls_types::{
-    CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, CompletionParams,
-    CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
-    DocumentHighlightKind, DocumentHighlightParams, DocumentLinkParams,
-    DocumentRangeFormattingParams, DocumentSymbolParams, DocumentSymbolResponse,
-    FoldingRangeParams, FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse,
-    HoverContents, HoverParams, InitializeParams, MessageType, PartialResultParams, Position,
-    PrepareRenameResponse, Range, ReferenceContext, ReferenceParams, Registration, RenameParams,
-    SelectionRangeParams, SemanticTokensParams, SemanticTokensRangeParams,
-    SemanticTokensRangeResult, SemanticTokensResult, SignatureHelpParams,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, Uri, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
-    WorkspaceSymbolParams, WorkspaceSymbolResponse,
+use ls_types::notification::{Cancel, DidCloseTextDocument};
+use ls_types::request::{
+    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
+    DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
+    PrepareRenameRequest, RangeFormatting, References, RegisterCapability, Rename,
+    Request as LspRequest, SelectionRangeRequest, SemanticTokensFullRequest,
+    SemanticTokensRangeRequest, Shutdown, SignatureHelpRequest, WorkspaceSymbolRequest,
 };
+use ls_types::{
+    CancelParams, ClientCapabilities, CodeActionContext, CodeActionKind, CodeActionOrCommand,
+    CodeActionParams, CompletionParams, CompletionResponse,
+    DidChangeWatchedFilesClientCapabilities, DidCloseTextDocumentParams, DocumentFormattingParams,
+    DocumentHighlightKind, DocumentHighlightParams, DocumentLink, DocumentLinkParams,
+    DocumentRangeFormattingParams, DocumentSymbolParams, DocumentSymbolResponse, FileChangeType,
+    FoldingRangeParams, FormattingOptions, GeneralClientCapabilities, GotoDefinitionParams,
+    GotoDefinitionResponse, HoverContents, HoverParams, MessageType, NumberOrString,
+    PartialResultParams, Position, PositionEncodingKind, PrepareRenameResponse, Range,
+    ReferenceContext, ReferenceParams, RenameParams, SelectionRangeParams, SemanticTokensParams,
+    SemanticTokensRangeParams, SemanticTokensRangeResult, SemanticTokensResult,
+    SignatureHelpParams, TextDocumentContentChangeEvent, TextEdit, Uri, WorkDoneProgressParams,
+    WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+};
+use luck_token::index_to_offset;
+use serde_json::json;
 
-type PublishedRecord = (Uri, Vec<Diagnostic>, Option<i32>);
+use crate::common::{Client, document, position_params, workspace_uri};
 
-type MessageRecord = (MessageType, String);
+/// `luck/syntaxTree`, which the extension sends.
+enum SyntaxTree {}
 
-#[derive(Default, Clone, Debug)]
-struct CapturedNotifier {
-    published: Arc<RwLock<Vec<PublishedRecord>>>,
-    messages: Arc<RwLock<Vec<MessageRecord>>>,
+impl LspRequest for SyntaxTree {
+    type Params = serde_json::Value;
+    type Result = String;
+    const METHOD: &'static str = "luck/syntaxTree";
 }
 
-impl Notifier for CapturedNotifier {
-    async fn publish_diagnostics(&self, uri: Uri, diags: Vec<Diagnostic>, version: Option<i32>) {
-        self.published.write().await.push((uri, diags, version));
-    }
+/// `luck/fixAllWorkspace`, which the extension sends.
+enum FixAllWorkspace {}
 
-    async fn show_message(&self, message_type: MessageType, message: String) {
-        self.messages.write().await.push((message_type, message));
-    }
-
-    async fn log_message(&self, message_type: MessageType, message: String) {
-        self.messages.write().await.push((message_type, message));
-    }
-
-    async fn register_capability(&self, _registrations: Vec<Registration>) {}
+impl LspRequest for FixAllWorkspace {
+    type Params = serde_json::Value;
+    type Result = WorkspaceEdit;
+    const METHOD: &'static str = "luck/fixAllWorkspace";
 }
 
-impl CapturedNotifier {
-    async fn diagnostics_for(&self, uri: &Uri) -> Vec<Diagnostic> {
-        let published = self.published.read().await;
-        published
-            .iter()
-            .rev()
-            .find(|(other, _, _)| other == uri)
-            .map(|(_, diags, _)| diags.clone())
-            .unwrap_or_default()
-    }
-}
-
-fn workspace_uri(name: &str) -> Uri {
-    // `file:///` URIs work cross-platform for tests that never hit disk.
-    Uri::from_str(&format!("file:///tmp/{name}")).expect("hand-rolled URI is valid")
-}
-
-fn position_params(uri: &Uri, line: u32, utf16_column: u32) -> TextDocumentPositionParams {
-    TextDocumentPositionParams {
-        text_document: TextDocumentIdentifier { uri: uri.clone() },
-        position: Position { line, character: utf16_column },
-    }
-}
-
-async fn open(server: &Backend<CapturedNotifier>, uri: &Uri, text: &str) {
-    server
-        .did_open(DidOpenTextDocumentParams {
-            text_document: TextDocumentItem {
-                uri: uri.clone(),
-                language_id: "lua".to_owned(),
-                version: 1,
-                text: text.to_owned(),
-            },
-        })
-        .await;
-}
-
-async fn rename_refusal(
-    server: &Backend<CapturedNotifier>,
-    uri: &Uri,
-    new_name: &str,
-) -> Option<String> {
-    server
-        .rename(RenameParams {
+fn rename_refusal(client: &mut Client, uri: &Uri, new_name: &str) -> Option<String> {
+    client
+        .request_result::<Rename>(RenameParams {
             text_document_position: position_params(uri, 0, 8),
             new_name: new_name.to_owned(),
             work_done_progress_params: WorkDoneProgressParams::default(),
         })
-        .await
         .err()
-        .map(|e| e.message.into_owned())
+        .map(|refusal| refusal.message)
 }
 
 fn project_with_excluded_directory(directory: &Path) -> (Uri, Uri) {
@@ -122,7 +77,7 @@ fn project_with_excluded_directory(directory: &Path) -> (Uri, Uri) {
 
 fn fix_all_params(uri: &Uri) -> CodeActionParams {
     CodeActionParams {
-        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        text_document: document(uri),
         range: Range::default(),
         context: CodeActionContext {
             diagnostics: Vec::new(),
@@ -134,14 +89,45 @@ fn fix_all_params(uri: &Uri) -> CodeActionParams {
     }
 }
 
+fn formatting_params(uri: &Uri) -> DocumentFormattingParams {
+    DocumentFormattingParams {
+        text_document: document(uri),
+        options: formatting_options(),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    }
+}
+
 fn formatting_options() -> FormattingOptions {
     FormattingOptions { tab_size: 4, insert_spaces: false, ..Default::default() }
 }
 
-#[tokio::test]
-async fn initialize_advertises_required_capabilities() {
-    let server = Backend::new(CapturedNotifier::default());
-    let result = server.initialize(InitializeParams::default()).await.expect("initialize succeeds");
+fn document_symbols(client: &mut Client, uri: &Uri) -> Vec<String> {
+    let response = client
+        .request::<DocumentSymbolRequest>(DocumentSymbolParams {
+            text_document: document(uri),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .expect("the document is open");
+    let DocumentSymbolResponse::Nested(symbols) = response else {
+        panic!("document symbols should be nested");
+    };
+    symbols.into_iter().map(|symbol| symbol.name).collect()
+}
+
+fn document_links(client: &mut Client, uri: &Uri) -> Vec<DocumentLink> {
+    client
+        .request::<DocumentLinkRequest>(DocumentLinkParams {
+            text_document: document(uri),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .expect("the document is open")
+}
+
+#[test]
+fn initialize_advertises_required_capabilities() {
+    let (_client, result) = Client::start_with(ClientCapabilities::default());
     let capabilities = result.capabilities;
     assert!(capabilities.document_formatting_provider.is_some(), "formatting capability missing");
     assert!(
@@ -149,27 +135,71 @@ async fn initialize_advertises_required_capabilities() {
         "range formatting capability missing"
     );
     assert!(capabilities.text_document_sync.is_some(), "text sync capability missing");
+    assert_eq!(
+        capabilities.position_encoding,
+        Some(PositionEncodingKind::UTF16),
+        "a client that names no encoding gets UTF-16"
+    );
 }
 
-#[tokio::test]
-async fn formatting_normalizes_spacing() {
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
+fn client_offering(encodings: &[PositionEncodingKind]) -> (Client, InitializedEncoding) {
+    let capabilities = ClientCapabilities {
+        general: Some(GeneralClientCapabilities {
+            position_encodings: Some(encodings.to_vec()),
+            ..GeneralClientCapabilities::default()
+        }),
+        ..ClientCapabilities::default()
+    };
+    let (client, result) = Client::start_with(capabilities);
+    (client, result.capabilities.position_encoding)
+}
+
+type InitializedEncoding = Option<PositionEncodingKind>;
+
+#[test]
+fn a_client_that_offers_utf8_gets_byte_columns() {
+    let (mut client, encoding) =
+        client_offering(&[PositionEncodingKind::UTF16, PositionEncodingKind::UTF8]);
+    assert_eq!(encoding, Some(PositionEncodingKind::UTF8));
+    let uri = workspace_uri("utf8.lua");
+    // The crab is 4 bytes, so `target` starts at byte 23, UTF-16 unit 21.
+    client.open(&uri, "local s = \"\u{1F980}\" local target = 1\nprint(s, target)\n");
+    let prepared = client
+        .request::<PrepareRenameRequest>(position_params(&uri, 0, 25))
+        .expect("target should be renameable");
+    let PrepareRenameResponse::RangeWithPlaceholder { range, placeholder } = prepared else {
+        panic!("expected range with placeholder");
+    };
+    assert_eq!(placeholder, "target");
+    assert_eq!(range, Range::new(Position::new(0, 23), Position::new(0, 29)));
+}
+
+#[test]
+fn a_client_that_offers_only_utf32_gets_character_columns() {
+    let (mut client, encoding) = client_offering(&[PositionEncodingKind::UTF32]);
+    assert_eq!(encoding, Some(PositionEncodingKind::UTF32));
+    let uri = workspace_uri("utf32.lua");
+    // The crab is one character, so `target` starts at character 20.
+    client.open(&uri, "local s = \"\u{1F980}\" local target = 1\nprint(s, target)\n");
+    let prepared = client
+        .request::<PrepareRenameRequest>(position_params(&uri, 0, 22))
+        .expect("target should be renameable");
+    let PrepareRenameResponse::RangeWithPlaceholder { range, .. } = prepared else {
+        panic!("expected range with placeholder");
+    };
+    assert_eq!(range, Range::new(Position::new(0, 20), Position::new(0, 26)));
+}
+
+#[test]
+fn formatting_normalizes_spacing() {
+    let mut client = Client::start();
     let uri = workspace_uri("ugly.lua");
     // No spaces around `=`, extra spaces, and trailing whitespace.
     let ugly = "local x=1   \nlocal     y=2";
-    open(&server, &uri, ugly).await;
+    client.open(&uri, ugly);
 
-    let edits = server
-        .formatting(DocumentFormattingParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            options: formatting_options(),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-        })
-        .await
-        .expect("formatting returned an error")
-        .expect("formatter returned no edits");
-
+    let edits =
+        client.request::<Formatting>(formatting_params(&uri)).expect("formatter returned no edits");
     assert!(!edits.is_empty(), "ugly source should produce at least one edit");
     let new_text = &edits[0].new_text;
     assert!(new_text.contains("local x = 1"), "formatter normalizes spacing: {new_text}");
@@ -177,59 +207,135 @@ async fn formatting_normalizes_spacing() {
     assert_ne!(new_text.as_str(), ugly, "formatter must change ugly source");
 }
 
-#[tokio::test]
-async fn lint_diagnostics_are_opt_in_without_config() {
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
+/// The editor runs the rules `luck lint` runs on the same project.
+#[test]
+fn lint_runs_the_default_rules_without_config() {
+    let mut client = Client::start();
     let uri = workspace_uri("unused.lua");
-    // Linting is opt-in. With no `luck.json` for `/tmp/unused.lua`, only
-    // parse errors surface, so the unused local must not be flagged.
-    open(&server, &uri, "local unused = 1\n").await;
+    client.open(&uri, "local unused = 1\n");
 
-    let diags = notifier.diagnostics_for(&uri).await;
-    assert!(diags.is_empty(), "lint rules must be off without a lint config: {diags:?}");
+    let diags = client.diagnostics(&uri, Some(1i32));
+    assert!(
+        diags
+            .iter()
+            .any(|diag| diag.code == Some(NumberOrString::String("unused_variable".into()))),
+        "the correctness rules run by default, as they do in `luck lint`: {diags:?}"
+    );
 }
 
-#[tokio::test]
-async fn parse_errors_surface_without_config() {
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
+#[test]
+fn parse_errors_surface_without_config() {
+    let mut client = Client::start();
     let uri = workspace_uri("broken.lua");
-    // Parse errors surface even with linting off.
-    open(&server, &uri, "local x =\n").await;
-
-    let diags = notifier.diagnostics_for(&uri).await;
-    assert!(!diags.is_empty(), "parse errors must surface even when lint rules are disabled");
+    client.open(&uri, "local x =\n");
+    assert!(!client.diagnostics(&uri, Some(1i32)).is_empty(), "parse errors must surface");
 }
 
-#[tokio::test]
-async fn range_formatting_preserves_out_of_range_content() {
-    // The backend sends one whole-document edit, so this checks that text
+/// A broken `luck.json` is shown and published on the file, and its files
+/// lint under the defaults until it's fixed.
+#[test]
+fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let config_path = directory.path().join("luck.json");
+    fs::write(&config_path, "{\n  \"lua\": \"lua99\"\n}\n").expect("write luck.json");
+    let path = directory.path().join("main.lua");
+    fs::write(&path, "local unused = 1\n").expect("write main.lua");
+    let uri = Uri::from_file_path(&path).expect("file path URI");
+    let config_uri = Uri::from_file_path(&config_path).expect("file path URI");
+
+    let mut client = Client::start();
+    client.open(&uri, "local unused = 1\n");
+
+    let config_diags = client.diagnostics(&config_uri, None);
+    let [diag] = config_diags.as_slice() else { panic!("one config error: {config_diags:?}") };
+    assert_eq!(diag.code, Some(NumberOrString::String("E014".to_owned())));
+    assert!(diag.message.contains("unknown variant `lua99`"), "{}", diag.message);
+    assert_eq!(diag.range, Range::new(Position::new(1, 9), Position::new(1, 16)));
+    let errors = client.shown(MessageType::ERROR);
+    assert!(errors.iter().any(|text| text.contains("lua99")), "{errors:?}");
+    assert!(!client.diagnostics(&uri, Some(1i32)).is_empty(), "the defaults lint the file");
+
+    fs::write(&config_path, "{}").expect("fix luck.json");
+    client.file_changed(&config_path, FileChangeType::CHANGED);
+    assert!(client.diagnostics(&config_uri, None).is_empty(), "the fix clears the error");
+}
+
+#[test]
+fn an_override_layers_its_lint_settings_over_the_files_it_matches() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        directory.path().join("luck.json"),
+        r#"{ "overrides": [{ "files": ["spec/**"], "lint": { "rules": { "unused_variable": "off" } } }] }"#,
+    )
+    .expect("write luck.json");
+    fs::create_dir_all(directory.path().join("spec")).expect("mkdir spec");
+    let (source, spec) = (directory.path().join("a.lua"), directory.path().join("spec/a.lua"));
+    for path in [&source, &spec] {
+        fs::write(path, "local unused = 1\n").expect("write source");
+    }
+    let (source_uri, spec_uri) = (
+        Uri::from_file_path(&source).expect("file path URI"),
+        Uri::from_file_path(&spec).expect("file path URI"),
+    );
+
+    let mut client = Client::start();
+    client.open(&source_uri, "local unused = 1\n");
+    client.open(&spec_uri, "local unused = 1\n");
+    let source_diags = client.diagnostics(&source_uri, Some(1i32));
+    assert!(!source_diags.is_empty(), "the rule runs outside the override: {source_diags:?}");
+    let spec_diags = client.diagnostics(&spec_uri, Some(1i32));
+    assert!(spec_diags.is_empty(), "the override turns the rule off: {spec_diags:?}");
+}
+
+/// A file a `luck.json` extends is as much its settings as the file itself,
+/// but a JSON file no project reads, such as Rojo's sourcemap, isn't.
+#[test]
+fn a_change_to_an_extended_config_reloads_and_another_json_file_does_not() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let base = directory.path().join("base.json");
+    fs::write(&base, "{}").expect("write base.json");
+    fs::write(directory.path().join("luck.json"), r#"{ "extends": ["base.json"] }"#)
+        .expect("write luck.json");
+    let path = directory.path().join("main.lua");
+    fs::write(&path, "local count = 1\n").expect("write main.lua");
+    let uri = Uri::from_file_path(&path).expect("file path URI");
+
+    let mut client = Client::start();
+    client.open(&uri, "local count = 1\n");
+    assert_eq!(rename_refusal(&mut client, &uri, "vim"), None, "`vim` isn't configured yet");
+
+    fs::write(&base, r#"{ "lint": { "extra_globals": ["vim"] } }"#).expect("rewrite base.json");
+    let sourcemap = directory.path().join("sourcemap.json");
+    fs::write(&sourcemap, "{}").expect("write sourcemap.json");
+    client.file_changed(&sourcemap, FileChangeType::CHANGED);
+    assert_eq!(rename_refusal(&mut client, &uri, "vim"), None, "the sourcemap isn't settings");
+
+    client.file_changed(&base, FileChangeType::CHANGED);
+    assert!(rename_refusal(&mut client, &uri, "vim").is_some(), "the base's change took effect");
+}
+
+#[test]
+fn range_formatting_preserves_out_of_range_content() {
+    // The server sends one whole-document edit, so this checks that text
     // outside the range survives, not that the edit is narrowed.
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
+    let mut client = Client::start();
     let uri = workspace_uri("partial.lua");
     let source = "\
 local first=1
 local middle=2
 local last=3
 ";
-    open(&server, &uri, source).await;
+    client.open(&uri, source);
 
     // Only the middle line is in range; the first and third must come back
     // byte-identical.
-    let edits = server
-        .range_formatting(DocumentRangeFormattingParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            range: Range {
-                start: Position { line: 1, character: 0 },
-                end: Position { line: 1, character: 15 },
-            },
+    let edits = client
+        .request::<RangeFormatting>(DocumentRangeFormattingParams {
+            text_document: document(&uri),
+            range: Range::new(Position::new(1, 0), Position::new(1, 15)),
             options: formatting_options(),
             work_done_progress_params: WorkDoneProgressParams::default(),
         })
-        .await
-        .expect("range formatting errored")
         .expect("formatter returned no edits");
     assert!(!edits.is_empty(), "range formatter produced no edits");
     let new_text = &edits[0].new_text;
@@ -245,41 +351,95 @@ local last=3
     );
 }
 
-#[tokio::test]
-async fn formatting_unknown_document_returns_none() {
-    let server = Backend::new(CapturedNotifier::default());
-    let uri = workspace_uri("missing.lua");
-    let result = server
-        .formatting(DocumentFormattingParams {
-            text_document: TextDocumentIdentifier { uri },
-            options: formatting_options(),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-        })
-        .await
-        .expect("formatting errored");
+#[test]
+fn formatting_unknown_document_returns_none() {
+    let mut client = Client::start();
+    let result = client.request::<Formatting>(formatting_params(&workspace_uri("missing.lua")));
     assert!(result.is_none(), "formatting an unopened document should return None");
 }
 
-#[tokio::test]
-async fn shutdown_succeeds() {
-    let server = Backend::new(CapturedNotifier::default());
-    server.shutdown().await.expect("shutdown errored");
+#[test]
+fn shutdown_then_exit_ends_the_server_cleanly() {
+    let client = Client::start();
+    client.shut_down().expect("shutdown then exit is a clean end");
 }
 
-#[tokio::test]
-async fn hover_renders_stdlib_signature() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn exit_without_shutdown_ends_the_server_with_an_error() {
+    let client = Client::start();
+    let ended = client.exit();
+    assert!(ended.is_err(), "LSP has a server exit with an error code then: {ended:?}");
+}
+
+/// The server never waits on the client, so a request the client leaves
+/// unanswered holds up nothing.
+#[test]
+fn exit_ends_the_server_while_its_request_to_the_client_is_unanswered() {
+    let capabilities = ClientCapabilities {
+        workspace: Some(WorkspaceClientCapabilities {
+            did_change_watched_files: Some(DidChangeWatchedFilesClientCapabilities {
+                dynamic_registration: Some(true),
+                relative_pattern_support: None,
+            }),
+            ..WorkspaceClientCapabilities::default()
+        }),
+        ..ClientCapabilities::default()
+    };
+    let (mut client, _) = Client::start_with(capabilities);
+    let uri = workspace_uri("unanswered.lua");
+    client.open(&uri, "local unused = 1\n");
+    assert!(!client.diagnostics(&uri, Some(1i32)).is_empty(), "the server works meanwhile");
+    assert!(
+        client.server_requests().iter().any(|request| request.method == RegisterCapability::METHOD),
+        "a client that can watch files is asked to: {:?}",
+        client.server_requests()
+    );
+    client.shut_down().expect("the server ends while the client owes it an answer");
+}
+
+#[test]
+fn requests_after_shutdown_are_refused() {
+    let mut client = Client::start();
+    client.request::<Shutdown>(());
+    let refused = client.request_result::<Formatting>(formatting_params(&workspace_uri("a.lua")));
+    assert!(refused.is_err(), "{refused:?}");
+    client.exit().expect("exit after shutdown is a clean end");
+}
+
+#[test]
+fn a_cancelled_request_gets_exactly_one_answer() {
+    let mut client = Client::start();
+    let uri = workspace_uri("cancelled.lua");
+    client.open(&uri, "local value = 1\n");
+    let id = client.send::<SemanticTokensFullRequest>(SemanticTokensParams {
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+        text_document: document(&uri),
+    });
+    let as_json = serde_json::to_value(&id).expect("an id serializes");
+    let cancelled = serde_json::from_value(as_json).expect("an id is a number or a string");
+    client.notify::<Cancel>(CancelParams { id: cancelled });
+    match client.answer::<SemanticTokensFullRequest>(&id) {
+        Ok(tokens) => assert!(tokens.is_some(), "an answer that beat the cancel is whole"),
+        Err(error) => assert_eq!(error.code, -32800i32, "RequestCancelled: {error:?}"),
+    }
+    // A later request's answer comes after any second answer to the first.
+    assert_eq!(document_symbols(&mut client, &uri), ["value"]);
+    assert!(client.stray_responses().is_empty(), "{:?}", client.stray_responses());
+}
+
+#[test]
+fn hover_renders_stdlib_signature() {
+    let mut client = Client::start();
     let uri = workspace_uri("hover.lua");
     // Cursor on `format` in `string.format`.
-    open(&server, &uri, "local formatted = string.format(\"%d\", 1)\n").await;
+    client.open(&uri, "local formatted = string.format(\"%d\", 1)\n");
 
-    let hover = server
-        .hover(HoverParams {
+    let hover = client
+        .request::<HoverRequest>(HoverParams {
             text_document_position_params: position_params(&uri, 0, 27),
             work_done_progress_params: WorkDoneProgressParams::default(),
         })
-        .await
-        .expect("hover errored")
         .expect("cursor on string.format should hover");
     let HoverContents::Markup(markup) = hover.contents else {
         panic!("hover should return markup contents");
@@ -296,30 +456,26 @@ async fn hover_renders_stdlib_signature() {
     );
 }
 
-#[tokio::test]
-async fn completion_lists_locals_and_stdlib_globals() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn completion_lists_locals_and_stdlib_globals() {
+    let mut client = Client::start();
     let uri = workspace_uri("completion.lua");
     // A visible local plus a bare-identifier completion site inside a call.
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local myLocal = 1
 print(m)
 ",
-    )
-    .await;
+    );
 
-    let response = server
-        .completion(CompletionParams {
+    let response = client
+        .request::<Completion>(CompletionParams {
             text_document_position: position_params(&uri, 1, 7),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
             context: None,
         })
-        .await
-        .expect("completion errored")
         .expect("bare identifier completion should return items");
     let CompletionResponse::Array(items) = response else {
         panic!("completion should return an array response");
@@ -334,21 +490,19 @@ print(m)
     );
 }
 
-#[tokio::test]
-async fn signature_help_marks_active_parameter() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn signature_help_marks_active_parameter() {
+    let mut client = Client::start();
     let uri = workspace_uri("signature.lua");
     // Cursor lands on the second argument `5`, so parameter index 1 is active.
-    open(&server, &uri, "local x = string.format(\"a\", 5)\n").await;
+    client.open(&uri, "local x = string.format(\"a\", 5)\n");
 
-    let help = server
-        .signature_help(SignatureHelpParams {
+    let help = client
+        .request::<SignatureHelpRequest>(SignatureHelpParams {
             context: None,
             text_document_position_params: position_params(&uri, 0, 29),
             work_done_progress_params: WorkDoneProgressParams::default(),
         })
-        .await
-        .expect("signature help errored")
         .expect("cursor inside call args should return signature help");
     assert_eq!(
         help.active_parameter,
@@ -362,62 +516,41 @@ async fn signature_help_marks_active_parameter() {
     );
 }
 
-#[tokio::test]
-async fn document_symbol_reports_named_function() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn document_symbol_reports_named_function() {
+    let mut client = Client::start();
     let uri = workspace_uri("symbols.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local function greet(name)
     return name
 end
 ",
-    )
-    .await;
-
-    let response = server
-        .document_symbol(DocumentSymbolParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .await
-        .expect("document symbol errored")
-        .expect("document with a function should return symbols");
-    let DocumentSymbolResponse::Nested(symbols) = response else {
-        panic!("document symbols should be nested");
-    };
-    assert!(
-        symbols.iter().any(|symbol| symbol.name == "greet"),
-        "outline should contain the `greet` function symbol"
     );
+    let names = document_symbols(&mut client, &uri);
+    assert!(names.iter().any(|name| name == "greet"), "outline should contain `greet`: {names:?}");
 }
 
-#[tokio::test]
-async fn folding_range_covers_multiline_function() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn folding_range_covers_multiline_function() {
+    let mut client = Client::start();
     let uri = workspace_uri("folding.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local function greet(name)
     return name
 end
 ",
-    )
-    .await;
+    );
 
-    let ranges = server
-        .folding_range(FoldingRangeParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
+    let ranges = client
+        .request::<FoldingRangeRequest>(FoldingRangeParams {
+            text_document: document(&uri),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         })
-        .await
-        .expect("folding range errored")
         .expect("multi-line function should return folding ranges");
     assert!(
         ranges.iter().any(|range| range.start_line == 0 && range.end_line >= 2),
@@ -425,29 +558,25 @@ end
     );
 }
 
-#[tokio::test]
-async fn document_highlight_finds_all_occurrences() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn document_highlight_finds_all_occurrences() {
+    let mut client = Client::start();
     let uri = workspace_uri("highlight.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local count = 1
 count = count + 1
 ",
-    )
-    .await;
+    );
 
     // Cursor on the write target `count` on line 1.
-    let highlights = server
-        .document_highlight(DocumentHighlightParams {
+    let highlights = client
+        .request::<DocumentHighlightRequest>(DocumentHighlightParams {
             text_document_position_params: position_params(&uri, 1, 2),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         })
-        .await
-        .expect("document highlight errored")
         .expect("name under cursor should highlight");
     assert!(highlights.len() >= 2, "`count` occurs multiple times: {highlights:?}");
     assert!(
@@ -456,22 +585,20 @@ count = count + 1
     );
 }
 
-#[tokio::test]
-async fn selection_range_expands_from_identifier() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn selection_range_expands_from_identifier() {
+    let mut client = Client::start();
     let uri = workspace_uri("selection.lua");
-    open(&server, &uri, "local value = alpha.beta + 1\n").await;
+    client.open(&uri, "local value = alpha.beta + 1\n");
 
     // Cursor on `beta` inside the `alpha.beta` field access.
-    let ranges = server
-        .selection_range(SelectionRangeParams {
+    let ranges = client
+        .request::<SelectionRangeRequest>(SelectionRangeParams {
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            text_document: document(&uri),
             positions: vec![Position { line: 0, character: 20 }],
         })
-        .await
-        .expect("selection range errored")
         .expect("selection range should return a chain");
     // Each link's `parent` contains it, so the chain runs from the narrowest
     // span out to the widest.
@@ -494,39 +621,51 @@ async fn selection_range_expands_from_identifier() {
     );
 }
 
-#[tokio::test]
-async fn semantic_tokens_cover_every_identifier() {
-    let server = Backend::new(CapturedNotifier::default());
+fn semantic_tokens(client: &mut Client, uri: &Uri) -> Vec<ls_types::SemanticToken> {
+    let result = client
+        .request::<SemanticTokensFullRequest>(SemanticTokensParams {
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            text_document: document(uri),
+        })
+        .expect("a document with identifiers should tokenize");
+    let SemanticTokensResult::Tokens(tokens) = result else {
+        panic!("expected a full semantic token set");
+    };
+    tokens.data
+}
+
+#[test]
+fn semantic_tokens_cover_every_identifier() {
+    let mut client = Client::start();
     let uri = workspace_uri("tokens.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 print(math.pi)
 local mine = my_helper(1)
 ",
-    )
-    .await;
-
-    let result = server
-        .semantic_tokens_full(SemanticTokensParams {
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-        })
-        .await
-        .expect("semantic tokens errored")
-        .expect("a document with identifiers should tokenize");
-    let SemanticTokensResult::Tokens(tokens) = result else {
-        panic!("expected a full semantic token set");
-    };
+    );
     // print, math, pi, mine, my_helper: every identifier gets a token,
     // including stdlib members after a dot and unresolved globals.
-    assert_eq!(tokens.data.len(), 5, "every identifier should tokenize: {:?}", tokens.data);
+    let tokens = semantic_tokens(&mut client, &uri);
+    assert_eq!(tokens.len(), 5, "every identifier should tokenize: {tokens:?}");
 }
 
-#[tokio::test]
-async fn document_link_resolves_require_path() {
+#[test]
+fn semantic_tokens_count_the_session_s_units() {
+    let (mut client, _) = client_offering(&[PositionEncodingKind::UTF8]);
+    let uri = workspace_uri("wide_string.lua");
+    client.open(&uri, "local s = \"\u{1F980}\" local target = 1\n");
+    let tokens = semantic_tokens(&mut client, &uri);
+    let starts: Vec<(u32, u32)> =
+        tokens.iter().map(|token| (token.delta_start, token.length)).collect();
+    // `s` at byte 6, then `target` 17 bytes on, past the crab's 4.
+    assert_eq!(starts, [(6, 1), (17, 6)], "{tokens:?}");
+}
+
+#[test]
+fn document_link_resolves_require_path() {
     let directory = tempfile::tempdir().expect("tempdir");
     // Pin the project root here. Discovery walks up past the temp directory,
     // so without a config of its own this would resolve `?.lua` against
@@ -538,18 +677,9 @@ async fn document_link_resolves_require_path() {
     fs::write(&main_path, "local foo = require(\"foo\")\n").expect("write main.lua");
     let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
-    let server = Backend::new(CapturedNotifier::default());
-    open(&server, &uri, "local foo = require(\"foo\")\n").await;
-
-    let links = server
-        .document_link(DocumentLinkParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .await
-        .expect("document link errored")
-        .expect("require call should produce a document link");
+    let mut client = Client::start();
+    client.open(&uri, "local foo = require(\"foo\")\n");
+    let links = document_links(&mut client, &uri);
     assert_eq!(links.len(), 1, "exactly one require link expected");
     assert_eq!(
         links[0].tooltip.as_deref(),
@@ -564,8 +694,55 @@ async fn document_link_resolves_require_path() {
     );
 }
 
-#[tokio::test]
-async fn document_link_resolves_luau_relative_import() {
+/// The project keeps its resolver, and the client's watcher tells it what
+/// changed on disk.
+#[test]
+fn a_module_created_on_disk_links_once_the_watcher_reports_it() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+    let main_path = directory.path().join("main.lua");
+    let text = "local late = require(\"late\")\n";
+    fs::write(&main_path, text).expect("write main.lua");
+    let uri = Uri::from_file_path(&main_path).expect("file path URI");
+
+    let mut client = Client::start();
+    client.open(&uri, text);
+    assert!(document_links(&mut client, &uri).is_empty(), "`late.lua` doesn't exist yet");
+
+    let late = directory.path().join("late.lua");
+    fs::write(&late, "return {}\n").expect("write late.lua");
+    assert!(document_links(&mut client, &uri).is_empty(), "the resolver answers from its cache");
+    client.file_changed(&late, FileChangeType::CREATED);
+    let links = document_links(&mut client, &uri);
+    assert_eq!(links.len(), 1, "the created module links: {links:?}");
+}
+
+#[test]
+fn a_luaurc_change_reaches_the_project_s_resolver() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+    let shared = directory.path().join("shared");
+    fs::create_dir_all(&shared).expect("mkdir shared");
+    fs::write(shared.join("common.luau"), "return {}\n").expect("write common.luau");
+    let luaurc = directory.path().join(".luaurc");
+    fs::write(&luaurc, "{}").expect("write .luaurc");
+    let main_path = directory.path().join("main.luau");
+    let source = "local c = require(\"@shared/common\")\n";
+    fs::write(&main_path, source).expect("write main.luau");
+    let uri = Uri::from_file_path(&main_path).expect("file path URI");
+
+    let mut client = Client::start();
+    client.open_as(&uri, "luau", source);
+    assert!(document_links(&mut client, &uri).is_empty(), "no alias `shared` yet");
+
+    fs::write(&luaurc, json!({ "aliases": { "shared": "./shared" } }).to_string())
+        .expect("rewrite .luaurc");
+    client.file_changed(&luaurc, FileChangeType::CHANGED);
+    assert_eq!(document_links(&mut client, &uri).len(), 1, "the alias resolves");
+}
+
+#[test]
+fn document_link_resolves_luau_relative_import() {
     // Luau relative imports go through the shared resolver, so `./sibling`
     // survives instead of being mangled by a dots-to-slashes rewrite.
     let directory = tempfile::tempdir().expect("tempdir");
@@ -577,18 +754,9 @@ async fn document_link_resolves_luau_relative_import() {
     fs::write(&main_path, source).expect("write main.luau");
     let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
-    let server = Backend::new(CapturedNotifier::default());
-    open(&server, &uri, source).await;
-
-    let links = server
-        .document_link(DocumentLinkParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .await
-        .expect("document link errored")
-        .expect("relative require should produce a document link");
+    let mut client = Client::start();
+    client.open_as(&uri, "luau", source);
+    let links = document_links(&mut client, &uri);
     assert_eq!(links.len(), 1, "exactly one require link expected");
     let target = links[0].target.as_ref().expect("link should have a target");
     assert!(
@@ -598,8 +766,8 @@ async fn document_link_resolves_luau_relative_import() {
     );
 }
 
-#[tokio::test]
-async fn document_link_resolves_luau_alias_import() {
+#[test]
+fn document_link_resolves_luau_alias_import() {
     // `@alias` imports resolve through the `.luaurc` alias table.
     let directory = tempfile::tempdir().expect("tempdir");
     // Pins the dialect, so no `luck.json` above the temp root can pick it.
@@ -609,7 +777,7 @@ async fn document_link_resolves_luau_alias_import() {
     fs::write(shared.join("common.luau"), "return {}\n").expect("write common.luau");
     fs::write(
         directory.path().join(".luaurc"),
-        serde_json::json!({ "aliases": { "shared": "./shared" } }).to_string(),
+        json!({ "aliases": { "shared": "./shared" } }).to_string(),
     )
     .expect("write .luaurc");
     let main_path = directory.path().join("main.luau");
@@ -617,18 +785,9 @@ async fn document_link_resolves_luau_alias_import() {
     fs::write(&main_path, source).expect("write main.luau");
     let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
-    let server = Backend::new(CapturedNotifier::default());
-    open(&server, &uri, source).await;
-
-    let links = server
-        .document_link(DocumentLinkParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .await
-        .expect("document link errored")
-        .expect("alias require should produce a document link");
+    let mut client = Client::start();
+    client.open_as(&uri, "luau", source);
+    let links = document_links(&mut client, &uri);
     assert_eq!(links.len(), 1, "exactly one require link expected");
     let target = links[0].target.as_ref().expect("link should have a target");
     assert!(
@@ -638,10 +797,20 @@ async fn document_link_resolves_luau_alias_import() {
     );
 }
 
-#[tokio::test]
-async fn code_action_offers_lint_fix() {
+fn action_titles(actions: &[CodeActionOrCommand]) -> Vec<&str> {
+    actions
+        .iter()
+        .map(|action| match action {
+            CodeActionOrCommand::CodeAction(code_action) => code_action.title.as_str(),
+            CodeActionOrCommand::Command(command) => command.title.as_str(),
+        })
+        .collect()
+}
+
+#[test]
+fn code_action_offers_lint_fix() {
     let directory = tempfile::tempdir().expect("tempdir");
-    // Opt in to linting and enable a fixable style rule.
+    // Enable a fixable style rule.
     fs::write(
         directory.path().join("luck.json"),
         r#"{ "lint": { "rules": { "redundant_nil_init": "warn" } } }"#,
@@ -651,114 +820,104 @@ async fn code_action_offers_lint_fix() {
     fs::write(&file_path, "local x = nil\n").expect("write lua file");
     let uri = Uri::from_file_path(&file_path).expect("file path URI");
 
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
-    open(&server, &uri, "local x = nil\n").await;
-
+    let mut client = Client::start();
+    client.open(&uri, "local x = nil\n");
     // The enabled rule should have surfaced a diagnostic on open.
-    let diags = notifier.diagnostics_for(&uri).await;
+    let diags = client.diagnostics(&uri, Some(1i32));
     assert!(!diags.is_empty(), "the enabled lint rule should publish a diagnostic");
 
-    let actions = server
-        .code_action(CodeActionParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            range: Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: 13 },
-            },
+    let actions = client
+        .request::<CodeActionRequest>(CodeActionParams {
+            text_document: document(&uri),
+            range: Range::new(Position::new(0, 0), Position::new(0, 13)),
             context: CodeActionContext { diagnostics: diags, only: None, trigger_kind: None },
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         })
-        .await
-        .expect("code action errored")
         .expect("a fixable diagnostic should yield code actions");
-    let titles: Vec<&str> = actions
-        .iter()
-        .map(|action| match action {
-            CodeActionOrCommand::CodeAction(code_action) => code_action.title.as_str(),
-            CodeActionOrCommand::Command(command) => command.title.as_str(),
-        })
-        .collect();
+    let titles = action_titles(&actions);
     assert!(
         titles.iter().any(|title| title.contains("drop redundant `= nil` initializer")),
         "the redundant-nil fix should be offered: {titles:?}"
     );
 }
 
-#[tokio::test]
-async fn syntax_tree_request_dumps_ast() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn syntax_tree_request_dumps_ast() {
+    let mut client = Client::start();
     let uri = workspace_uri("tree.lua");
-    open(&server, &uri, "local x = 1\n").await;
-
-    let dump = server
-        .syntax_tree_request(serde_json::json!({
-            "textDocument": { "uri": uri.as_str() }
-        }))
-        .await
-        .expect("syntax tree request errored");
-    let text = dump.as_str().expect("syntax tree returns a string");
+    client.open(&uri, "local x = 1\n");
+    let dump = client.request::<SyntaxTree>(json!({ "textDocument": { "uri": uri.as_str() } }));
     assert!(
-        text.contains("LocalAssignment"),
-        "the AST dump should contain the parsed statement node: {text}"
+        dump.contains("LocalAssignment"),
+        "the AST dump should contain the parsed statement node: {dump}"
     );
+    let refused = client.request_result::<SyntaxTree>(json!({}));
+    assert!(refused.is_err(), "a request naming no document is refused: {refused:?}");
 }
 
-#[tokio::test]
-async fn goto_definition_jumps_to_declaration() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn goto_definition_jumps_to_declaration() {
+    let mut client = Client::start();
     let uri = workspace_uri("definition.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local value = 1
 print(value)
 ",
-    )
-    .await;
+    );
 
-    let response = server
-        .goto_definition(GotoDefinitionParams {
+    let response = client
+        .request::<GotoDefinition>(GotoDefinitionParams {
             text_document_position_params: position_params(&uri, 1, 8),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         })
-        .await
-        .expect("goto definition errored")
         .expect("local should have a definition");
     let GotoDefinitionResponse::Scalar(location) = response else {
         panic!("expected scalar location");
     };
     assert_eq!(location.uri, uri);
-    assert_eq!(location.range.start.line, 0);
-    assert_eq!(location.range.start.character, 6);
+    assert_eq!(location.range.start, Position::new(0, 6));
 }
 
-#[tokio::test]
-async fn goto_definition_returns_none_for_a_global() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn goto_definition_returns_none_for_a_global() {
+    let mut client = Client::start();
     let uri = workspace_uri("definition_global.lua");
-    open(&server, &uri, "print(1)\n").await;
+    client.open(&uri, "print(1)\n");
 
-    let response = server
-        .goto_definition(GotoDefinitionParams {
-            text_document_position_params: position_params(&uri, 0, 2),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .await
-        .expect("goto definition errored");
+    let response = client.request::<GotoDefinition>(GotoDefinitionParams {
+        text_document_position_params: position_params(&uri, 0, 2),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    });
     assert!(response.is_none(), "stdlib globals have no definition site");
 }
 
-#[tokio::test]
-async fn references_are_scope_exact_for_shadowed_names() {
-    let server = Backend::new(CapturedNotifier::default());
+fn references(
+    client: &mut Client,
+    uri: &Uri,
+    line: u32,
+    utf16_column: u32,
+    include_declaration: bool,
+) -> Vec<ls_types::Location> {
+    client
+        .request::<References>(ReferenceParams {
+            text_document_position: position_params(uri, line, utf16_column),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: ReferenceContext { include_declaration },
+        })
+        .expect("local should have references")
+}
+
+#[test]
+fn references_are_scope_exact_for_shadowed_names() {
+    let mut client = Client::start();
     let uri = workspace_uri("references.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local x = 1
@@ -768,20 +927,10 @@ do
 end
 print(x)
 ",
-    )
-    .await;
+    );
 
     // Cursor on the INNER x read at line 3.
-    let locations = server
-        .references(ReferenceParams {
-            text_document_position: position_params(&uri, 3, 10),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-            context: ReferenceContext { include_declaration: true },
-        })
-        .await
-        .expect("references errored")
-        .expect("local should have references");
+    let locations = references(&mut client, &uri, 3, 10, true);
     // Inner x: declaration on line 2 + read on line 3. The outer x's
     // spans (lines 0 and 5) must not appear.
     assert_eq!(locations.len(), 2, "{locations:?}");
@@ -793,155 +942,110 @@ print(x)
     );
 }
 
-#[tokio::test]
-async fn references_exclude_declaration_when_not_requested() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn references_exclude_declaration_when_not_requested() {
+    let mut client = Client::start();
     let uri = workspace_uri("references_no_decl.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local count = 1
 count = count + 1
 ",
-    )
-    .await;
+    );
 
-    let locations = server
-        .references(ReferenceParams {
-            text_document_position: position_params(&uri, 0, 8),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-            context: ReferenceContext { include_declaration: false },
-        })
-        .await
-        .expect("references errored")
-        .expect("local should have references");
+    let locations = references(&mut client, &uri, 0, 8, false);
     assert!(
         locations.iter().all(|location| location.range.start.line == 1),
         "declaration should be excluded: {locations:?}"
     );
 }
 
-#[tokio::test]
-async fn prepare_rename_accepts_local_and_rejects_global() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn prepare_rename_accepts_local_and_rejects_global() {
+    let mut client = Client::start();
     let uri = workspace_uri("prepare_rename.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local count = 1
 print(count)
 ",
-    )
-    .await;
+    );
 
-    let prepared = server
-        .prepare_rename(position_params(&uri, 0, 8))
-        .await
-        .expect("prepare rename errored")
+    let prepared = client
+        .request::<PrepareRenameRequest>(position_params(&uri, 0, 8))
         .expect("local should be renameable");
     let PrepareRenameResponse::RangeWithPlaceholder { placeholder, .. } = prepared else {
         panic!("expected range with placeholder");
     };
     assert_eq!(placeholder, "count");
 
-    let on_global =
-        server.prepare_rename(position_params(&uri, 1, 2)).await.expect("prepare rename errored");
+    let on_global = client.request::<PrepareRenameRequest>(position_params(&uri, 1, 2));
     assert!(on_global.is_none(), "globals must not be renameable");
 }
 
-#[tokio::test]
-async fn rename_updates_declaration_and_references() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn rename_updates_declaration_and_references() {
+    let mut client = Client::start();
     let uri = workspace_uri("rename.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local count = 1
 count = count + 1
 ",
-    )
-    .await;
+    );
 
-    let edit = server
-        .rename(RenameParams {
+    let edit = client
+        .request::<Rename>(RenameParams {
             text_document_position: position_params(&uri, 0, 8),
             new_name: "total".to_owned(),
             work_done_progress_params: WorkDoneProgressParams::default(),
         })
-        .await
-        .expect("rename errored")
         .expect("rename should produce an edit");
-    let edits = edit.changes.expect("changes map").remove(&uri).expect("edits for the document");
+    let edits: Vec<TextEdit> =
+        edit.changes.expect("changes map").remove(&uri).expect("edits for the document");
     assert_eq!(edits.len(), 3, "declaration + two references: {edits:?}");
     assert!(edits.iter().all(|text_edit| text_edit.new_text == "total"));
 }
 
-#[tokio::test]
-async fn rename_rejects_keywords_used_names_and_builtins() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn rename_rejects_keywords_used_names_and_builtins() {
+    let mut client = Client::start();
     let uri = workspace_uri("rename_reject.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local count = 1
 local other = count
 ",
-    )
-    .await;
-
-    let keyword = server
-        .rename(RenameParams {
-            text_document_position: position_params(&uri, 0, 8),
-            new_name: "end".to_owned(),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-        })
-        .await;
-    assert!(keyword.is_err(), "keywords are not identifiers");
-
-    let captured = server
-        .rename(RenameParams {
-            text_document_position: position_params(&uri, 0, 8),
-            new_name: "other".to_owned(),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-        })
-        .await;
-    assert!(captured.is_err(), "in-use names must be rejected");
-
-    let builtin = server
-        .rename(RenameParams {
-            text_document_position: position_params(&uri, 0, 8),
-            new_name: "print".to_owned(),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-        })
-        .await;
-    assert!(builtin.is_err(), "stdlib globals must be rejected");
+    );
+    for (new_name, why) in [
+        ("end", "keywords are not identifiers"),
+        ("other", "in-use names must be rejected"),
+        ("print", "stdlib globals must be rejected"),
+    ] {
+        assert!(rename_refusal(&mut client, &uri, new_name).is_some(), "{why}");
+    }
 }
 
-#[tokio::test]
-async fn prepare_rename_handles_utf16_offsets() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn prepare_rename_handles_utf16_offsets() {
+    let mut client = Client::start();
     let uri = workspace_uri("rename_utf16.lua");
     // The crab emoji is two UTF-16 units; positions after it require
     // real UTF-16 conversion, not byte arithmetic.
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local s = \"\u{1F980}\" local target = 1
 print(s, target)
 ",
-    )
-    .await;
+    );
 
-    let prepared = server
-        .prepare_rename(position_params(&uri, 0, 23))
-        .await
-        .expect("prepare rename errored")
+    let prepared = client
+        .request::<PrepareRenameRequest>(position_params(&uri, 0, 23))
         .expect("target should be renameable");
     let PrepareRenameResponse::RangeWithPlaceholder { placeholder, .. } = prepared else {
         panic!("expected range with placeholder");
@@ -949,133 +1053,100 @@ print(s, target)
     assert_eq!(placeholder, "target");
 }
 
-#[tokio::test]
-async fn workspace_symbols_filter_across_open_documents() {
-    let server = Backend::new(CapturedNotifier::default());
+fn workspace_symbols(client: &mut Client, query: &str) -> Vec<ls_types::SymbolInformation> {
+    let response = client
+        .request::<WorkspaceSymbolRequest>(WorkspaceSymbolParams {
+            query: query.to_owned(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .expect("symbols expected");
+    let WorkspaceSymbolResponse::Flat(symbols) = response else {
+        panic!("workspace symbols should be flat");
+    };
+    symbols
+}
+
+#[test]
+fn workspace_symbols_filter_across_open_documents() {
+    let mut client = Client::start();
     let first = workspace_uri("ws_first.lua");
     let second = workspace_uri("ws_second.lua");
-    open(
-        &server,
+    client.open(
         &first,
         "\
 local function setup_camera() end
 setup_camera()
 ",
-    )
-    .await;
-    open(
-        &server,
+    );
+    client.open(
         &second,
         "\
 local function teardown() end
 teardown()
 ",
-    )
-    .await;
+    );
 
-    let response = server
-        .symbol(WorkspaceSymbolParams {
-            query: "camera".to_owned(),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .await
-        .expect("workspace symbol errored")
-        .expect("symbols expected");
-    let WorkspaceSymbolResponse::Flat(symbols) = response else {
-        panic!("workspace symbols should be flat");
-    };
+    let symbols = workspace_symbols(&mut client, "camera");
     assert_eq!(symbols.len(), 1, "{symbols:?}");
     assert_eq!(symbols[0].name, "setup_camera");
     assert_eq!(symbols[0].location.uri, first);
 
-    let all_response = server
-        .symbol(WorkspaceSymbolParams {
-            query: String::new(),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .await
-        .expect("workspace symbol errored")
-        .expect("symbols expected");
-    let WorkspaceSymbolResponse::Flat(all) = all_response else {
-        panic!("workspace symbols should be flat");
-    };
+    let all = workspace_symbols(&mut client, "");
     assert!(all.len() >= 2, "empty query returns everything: {all:?}");
 }
 
-#[tokio::test]
-async fn semantic_tokens_range_returns_subset() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn semantic_tokens_range_returns_subset() {
+    let mut client = Client::start();
     let uri = workspace_uri("tokens_range.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 print(1)
 print(2)
 print(3)
 ",
-    )
-    .await;
+    );
 
-    let full_result = server
-        .semantic_tokens_full(SemanticTokensParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
+    let full = semantic_tokens(&mut client, &uri);
+    let ranged_result = client
+        .request::<SemanticTokensRangeRequest>(SemanticTokensRangeParams {
+            text_document: document(&uri),
+            range: Range::new(Position::new(1, 0), Position::new(1, 11)),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         })
-        .await
-        .expect("semantic tokens errored")
-        .expect("tokens expected");
-    let SemanticTokensResult::Tokens(full) = full_result else {
-        panic!("expected full tokens");
-    };
-
-    let ranged_result = server
-        .semantic_tokens_range(SemanticTokensRangeParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            range: Range {
-                start: Position { line: 1, character: 0 },
-                end: Position { line: 1, character: 11 },
-            },
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .await
-        .expect("semantic tokens range errored")
         .expect("tokens expected");
     let SemanticTokensRangeResult::Tokens(ranged) = ranged_result else {
         panic!("expected ranged tokens");
     };
     assert!(!ranged.data.is_empty(), "line 1 has tokens");
     assert!(
-        ranged.data.len() < full.data.len(),
+        ranged.data.len() < full.len(),
         "range must be a strict subset: {} vs {}",
         ranged.data.len(),
-        full.data.len()
+        full.len()
     );
     // Delta re-encoding: the first ranged token is absolute (line 1).
     assert_eq!(ranged.data[0].delta_line, 1);
 }
 
-#[tokio::test]
-async fn completion_offers_collectgarbage_options_inside_the_string() {
-    let server = Backend::new(CapturedNotifier::default());
+#[test]
+fn completion_offers_collectgarbage_options_inside_the_string() {
+    let mut client = Client::start();
     let uri = workspace_uri("gc.lua");
     let text = "collectgarbage('c')";
-    open(&server, &uri, text).await;
+    client.open(&uri, text);
 
     let utf16_column = index_to_offset(text.find("('").expect("literal") + 2);
-    let response = server
-        .completion(CompletionParams {
+    let response = client
+        .request::<Completion>(CompletionParams {
             text_document_position: position_params(&uri, 0, utf16_column),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
             context: None,
         })
-        .await
-        .expect("completion errored")
         .expect("constant completion should return items");
     let CompletionResponse::Array(items) = response else {
         panic!("completion should return an array response");
@@ -1088,41 +1159,23 @@ async fn completion_offers_collectgarbage_options_inside_the_string() {
     );
 }
 
-#[tokio::test]
-async fn formatting_unparsable_file_warns_and_returns_none() {
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
+#[test]
+fn formatting_unparsable_file_warns_and_returns_none() {
+    let mut client = Client::start();
     let uri = workspace_uri("unparsable.lua");
-    open(&server, &uri, "local x =\n").await;
+    client.open(&uri, "local x =\n");
 
-    let formatted = server
-        .formatting(DocumentFormattingParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            options: formatting_options(),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-        })
-        .await
-        .expect("formatting errored");
+    let formatted = client.request::<Formatting>(formatting_params(&uri));
     assert!(formatted.is_none(), "{formatted:?}");
-    let range_formatted = server
-        .range_formatting(DocumentRangeFormattingParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            range: Range::new(Position::new(0, 0), Position::new(0, 9)),
-            options: formatting_options(),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-        })
-        .await
-        .expect("range formatting errored");
+    let range_formatted = client.request::<RangeFormatting>(DocumentRangeFormattingParams {
+        text_document: document(&uri),
+        range: Range::new(Position::new(0, 0), Position::new(0, 9)),
+        options: formatting_options(),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    });
     assert!(range_formatted.is_none(), "{range_formatted:?}");
 
-    let warnings: Vec<String> = notifier
-        .messages
-        .read()
-        .await
-        .iter()
-        .filter(|(message_type, _)| *message_type == MessageType::WARNING)
-        .map(|(_, message)| message.clone())
-        .collect();
+    let warnings = client.shown(MessageType::WARNING);
     assert_eq!(warnings.len(), 2, "{warnings:?}");
     assert!(warnings[0].starts_with("luck: can't format file (parse error): "), "{warnings:?}");
     assert!(
@@ -1131,60 +1184,47 @@ async fn formatting_unparsable_file_warns_and_returns_none() {
     );
 }
 
-#[tokio::test]
-async fn did_change_applies_multi_change_batch_with_shifted_ranges() {
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
+#[test]
+fn did_change_applies_multi_change_batch_with_shifted_ranges() {
+    let mut client = Client::start();
     let uri = workspace_uri("batch.lua");
-    open(
-        &server,
+    client.open(
         &uri,
         "\
 local a = 1
 local b = 2
 local c = 3",
-    )
-    .await;
+    );
 
     // A single batch whose first edit inserts a line. The second edit's
     // range is expressed against the text the first one produced; applied
     // against the original lines it would rename `b` instead.
-    server
-        .did_change(DidChangeTextDocumentParams {
-            text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 2 },
-            content_changes: vec![
-                TextDocumentContentChangeEvent {
-                    range: Some(Range::new(Position::new(0, 0), Position::new(0, 11))),
-                    range_length: None,
-                    text: "\
+    client.change(
+        &uri,
+        2,
+        vec![
+            TextDocumentContentChangeEvent {
+                range: Some(Range::new(Position::new(0, 0), Position::new(0, 11))),
+                range_length: None,
+                text: "\
 local a = 10
 local aa = 11"
-                        .to_owned(),
-                },
-                TextDocumentContentChangeEvent {
-                    range: Some(Range::new(Position::new(3, 10), Position::new(3, 11))),
-                    range_length: None,
-                    text: "30".to_owned(),
-                },
-            ],
-        })
-        .await;
-
-    let republished_version =
-        notifier.published.read().await.last().map(|(_, _, version)| *version);
-    assert_eq!(
-        republished_version,
-        Some(Some(2i32)),
-        "the batch republishes diagnostics for the new version"
+                    .to_owned(),
+            },
+            TextDocumentContentChangeEvent {
+                range: Some(Range::new(Position::new(3, 10), Position::new(3, 11))),
+                range_length: None,
+                text: "30".to_owned(),
+            },
+        ],
     );
-    let response = server
-        .document_symbol(DocumentSymbolParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
+    let _republished = client.diagnostics(&uri, Some(2i32));
+    let response = client
+        .request::<DocumentSymbolRequest>(DocumentSymbolParams {
+            text_document: document(&uri),
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         })
-        .await
-        .expect("document symbol errored")
         .expect("document remains open after applying the batch");
     let DocumentSymbolResponse::Nested(symbols) = response else {
         panic!("document symbols should be nested");
@@ -1200,8 +1240,28 @@ local aa = 11"
     assert_eq!(symbols[3].range.end, Position::new(3, 12), "{symbols:?}");
 }
 
-#[tokio::test]
-async fn fix_all_workspace_collects_fixes_from_open_documents() {
+#[test]
+fn a_change_whose_range_does_not_fit_drops_the_document() {
+    let mut client = Client::start();
+    let uri = workspace_uri("desync.lua");
+    client.open(&uri, "local a = 1\n");
+    let _opened = client.diagnostics(&uri, Some(1i32));
+    client.change(
+        &uri,
+        2,
+        vec![TextDocumentContentChangeEvent {
+            range: Some(Range::new(Position::new(0, 5), Position::new(0, 2))),
+            range_length: None,
+            text: "x".to_owned(),
+        }],
+    );
+    assert!(client.diagnostics(&uri, None).is_empty(), "nothing stays shown for corrupt text");
+    let formatted = client.request::<Formatting>(formatting_params(&uri));
+    assert!(formatted.is_none(), "the document isn't served until it's reopened");
+}
+
+#[test]
+fn fix_all_workspace_collects_fixes_from_open_documents() {
     let directory = tempfile::tempdir().expect("tempdir");
     fs::write(
         directory.path().join("luck.json"),
@@ -1215,15 +1275,12 @@ async fn fix_all_workspace_collects_fixes_from_open_documents() {
     let fixable = Uri::from_file_path(&fixable_path).expect("file path URI");
     let clean = Uri::from_file_path(&clean_path).expect("file path URI");
 
-    let server = Backend::new(CapturedNotifier::default());
-    open(&server, &fixable, "local x = nil\n").await;
-    open(&server, &clean, "return 1\n").await;
+    let mut client = Client::start();
+    client.open(&fixable, "local x = nil\n");
+    client.open(&clean, "return 1\n");
 
-    let edit = server
-        .fix_all_workspace_request(serde_json::Value::Null)
-        .await
-        .expect("fix-all request errored");
-    let changes = edit.changes.expect("changes map");
+    let changes =
+        client.request::<FixAllWorkspace>(serde_json::Value::Null).changes.expect("changes map");
     assert_eq!(
         changes.keys().collect::<Vec<_>>(),
         [&fixable],
@@ -1232,74 +1289,42 @@ async fn fix_all_workspace_collects_fixes_from_open_documents() {
     assert!(!changes[&fixable].is_empty(), "{changes:?}");
 }
 
-#[tokio::test]
-async fn did_change_with_no_changes_stores_the_new_version() {
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
+#[test]
+fn did_change_with_no_changes_stores_the_new_version() {
+    let mut client = Client::start();
     let uri = workspace_uri("empty_change.lua");
-    open(&server, &uri, "local a = 1\n").await;
+    client.open(&uri, "local a = 1\n");
+    let _opened = client.diagnostics(&uri, Some(1i32));
 
-    server
-        .did_change(DidChangeTextDocumentParams {
-            text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 5 },
-            content_changes: Vec::new(),
-        })
-        .await;
-    let (publish_count, republished_version) = {
-        let published = notifier.published.read().await;
-        (published.len(), published.last().map(|(_, _, version)| *version))
-    };
-    assert_eq!(republished_version, Some(Some(5i32)), "the republish carries the new version");
+    client.change(&uri, 5, Vec::new());
+    let _republished = client.diagnostics(&uri, Some(5i32));
 
-    server
-        .did_change(DidChangeTextDocumentParams {
-            text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 5 },
-            content_changes: vec![TextDocumentContentChangeEvent {
-                range: None,
-                range_length: None,
-                text: "local b = 2\n".to_owned(),
-            }],
-        })
-        .await;
-    assert_eq!(
-        notifier.published.read().await.len(),
-        publish_count,
-        "a repeated version is stale and republishes nothing"
-    );
-    let response = server
-        .document_symbol(DocumentSymbolParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .await
-        .expect("document symbol errored")
-        .expect("document stays open");
-    let DocumentSymbolResponse::Nested(symbols) = response else {
-        panic!("document symbols should be nested");
-    };
-    assert_eq!(symbols.iter().map(|symbol| symbol.name.as_str()).collect::<Vec<_>>(), ["a"]);
+    // A repeated version is stale, so it changes and republishes nothing.
+    client.replace_all(&uri, 5, "local b = 2\n");
+    assert_eq!(document_symbols(&mut client, &uri), ["a"]);
+    let published = client
+        .notifications()
+        .iter()
+        .filter(|notification| notification.method == "textDocument/publishDiagnostics")
+        .count();
+    assert_eq!(published, 0, "{:?}", client.notifications());
 }
 
-#[tokio::test]
-async fn fix_all_workspace_skips_excluded_documents() {
+#[test]
+fn fix_all_workspace_skips_excluded_documents() {
     let directory = tempfile::tempdir().expect("tempdir");
     let (included, excluded) = project_with_excluded_directory(directory.path());
 
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
-    open(&server, &included, "local x = nil\n").await;
-    open(&server, &excluded, "local x = nil\n").await;
+    let mut client = Client::start();
+    client.open(&included, "local x = nil\n");
+    client.open(&excluded, "local x = nil\n");
     assert!(
-        notifier.diagnostics_for(&excluded).await.is_empty(),
+        client.diagnostics(&excluded, Some(1i32)).is_empty(),
         "an excluded document publishes nothing"
     );
 
-    let edit = server
-        .fix_all_workspace_request(serde_json::Value::Null)
-        .await
-        .expect("fix-all request errored");
-    let changes = edit.changes.expect("changes map");
+    let changes =
+        client.request::<FixAllWorkspace>(serde_json::Value::Null).changes.expect("changes map");
     assert_eq!(
         changes.keys().collect::<Vec<_>>(),
         [&included],
@@ -1307,59 +1332,52 @@ async fn fix_all_workspace_skips_excluded_documents() {
     );
 }
 
-#[tokio::test]
-async fn source_fix_all_skips_excluded_documents() {
+#[test]
+fn source_fix_all_skips_excluded_documents() {
     let directory = tempfile::tempdir().expect("tempdir");
     let (included, excluded) = project_with_excluded_directory(directory.path());
 
-    let server = Backend::new(CapturedNotifier::default());
-    open(&server, &included, "local x = nil\n").await;
-    open(&server, &excluded, "local x = nil\n").await;
+    let mut client = Client::start();
+    client.open(&included, "local x = nil\n");
+    client.open(&excluded, "local x = nil\n");
 
-    let excluded_actions = server
-        .code_action(fix_all_params(&excluded))
-        .await
-        .expect("code action errored")
+    let excluded_actions = client
+        .request::<CodeActionRequest>(fix_all_params(&excluded))
         .expect("the document is open");
     assert!(excluded_actions.is_empty(), "{excluded_actions:?}");
-    let included_actions = server
-        .code_action(fix_all_params(&included))
-        .await
-        .expect("code action errored")
+    let included_actions = client
+        .request::<CodeActionRequest>(fix_all_params(&included))
         .expect("the document is open");
     assert_eq!(included_actions.len(), 1, "{included_actions:?}");
 }
 
-#[tokio::test]
-async fn source_fix_all_stops_once_a_config_change_excludes_the_document() {
+#[test]
+fn source_fix_all_stops_once_a_config_change_excludes_the_document() {
     let directory = tempfile::tempdir().expect("tempdir");
     let (_included, excluded) = project_with_excluded_directory(directory.path());
+    let config_path = directory.path().join("luck.json");
     fs::write(
-        directory.path().join("luck.json"),
+        &config_path,
         r#"{ "lint": { "categories": { "correctness": "off" }, "rules": { "redundant_nil_init": "warn" } } }"#,
     )
     .expect("rewrite luck.json without the exclude");
 
-    let server = Backend::new(CapturedNotifier::default());
-    open(&server, &excluded, "local x = nil\n").await;
-    let before = server
-        .code_action(fix_all_params(&excluded))
-        .await
-        .expect("code action errored")
+    let mut client = Client::start();
+    client.open(&excluded, "local x = nil\n");
+    let before = client
+        .request::<CodeActionRequest>(fix_all_params(&excluded))
         .expect("the document is open");
     assert_eq!(before.len(), 1, "not excluded yet: {before:?}");
 
     fs::write(
-        directory.path().join("luck.json"),
+        &config_path,
         r#"{ "exclude": ["gen/**"], "lint": { "categories": { "correctness": "off" }, "rules": { "redundant_nil_init": "warn" } } }"#,
     )
     .expect("rewrite luck.json with the exclude");
-    server.did_change_watched_files(DidChangeWatchedFilesParams { changes: Vec::new() }).await;
+    client.file_changed(&config_path, FileChangeType::CHANGED);
 
-    let after = server
-        .code_action(fix_all_params(&excluded))
-        .await
-        .expect("code action errored")
+    let after = client
+        .request::<CodeActionRequest>(fix_all_params(&excluded))
         .expect("the document is open");
     assert!(after.is_empty(), "{after:?}");
 }
@@ -1368,6 +1386,8 @@ async fn source_fix_all_stops_once_a_config_change_excludes_the_document() {
 /// `file:///C%3A/...` that `Uri::from_file_path` builds.
 #[cfg(windows)]
 fn vscode_windows_uri(path: &Path) -> Uri {
+    use core::str::FromStr as _;
+
     let slashed = path.to_str().expect("UTF-8 temp path").replace('\\', "/");
     let (drive, rest) = slashed.split_once(':').expect("a drive letter");
     Uri::from_str(&format!("file:///{}%3A{rest}", drive.to_ascii_lowercase()))
@@ -1375,31 +1395,28 @@ fn vscode_windows_uri(path: &Path) -> Uri {
 }
 
 #[cfg(windows)]
-#[tokio::test]
-async fn a_vscode_windows_uri_finds_its_project_settings() {
-    use tower_lsp_server::ls_types::NumberOrString;
-
+#[test]
+fn a_vscode_windows_uri_finds_its_project_settings() {
     let directory = tempfile::tempdir().expect("tempdir");
     project_with_excluded_directory(directory.path());
     let included = vscode_windows_uri(&directory.path().join("kept.lua"));
     let excluded = vscode_windows_uri(&directory.path().join("gen").join("a.lua"));
 
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
-    open(&server, &included, "local x = nil\n").await;
-    open(&server, &excluded, "local x = nil\n").await;
-    let included_diags = notifier.diagnostics_for(&included).await;
+    let mut client = Client::start();
+    client.open(&included, "local x = nil\n");
+    client.open(&excluded, "local x = nil\n");
+    let included_diags = client.diagnostics(&included, Some(1i32));
     assert!(
         included_diags
             .iter()
             .any(|diag| diag.code == Some(NumberOrString::String("redundant_nil_init".to_owned()))),
         "luck.json's rules apply: {included_diags:?}"
     );
-    assert!(notifier.diagnostics_for(&excluded).await.is_empty(), "luck.json's exclude applies");
+    assert!(client.diagnostics(&excluded, Some(1i32)).is_empty(), "luck.json's exclude applies");
 }
 
-#[tokio::test]
-async fn rename_refuses_a_configured_extra_global() {
+#[test]
+fn rename_refuses_a_configured_extra_global() {
     let directory = tempfile::tempdir().expect("tempdir");
     fs::write(directory.path().join("luck.json"), r#"{ "lint": { "extra_globals": ["vim"] } }"#)
         .expect("write luck.json");
@@ -1407,159 +1424,82 @@ async fn rename_refuses_a_configured_extra_global() {
     fs::write(&path, "local count = 1\n").expect("write main.lua");
     let uri = Uri::from_file_path(&path).expect("file path URI");
 
-    let server = Backend::new(CapturedNotifier::default());
-    open(&server, &uri, "local count = 1\n").await;
+    let mut client = Client::start();
+    client.open(&uri, "local count = 1\n");
 
-    let refusal = rename_refusal(&server, &uri, "vim").await.expect("`vim` is configured");
+    let refusal = rename_refusal(&mut client, &uri, "vim").expect("`vim` is configured");
     assert!(refusal.contains("`vim` would shadow"), "{refusal}");
-    assert_eq!(rename_refusal(&server, &uri, "total").await, None);
+    assert_eq!(rename_refusal(&mut client, &uri, "total"), None);
 }
 
-#[tokio::test]
-async fn watched_config_change_reseeds_open_documents_with_extra_globals() {
+#[test]
+fn watched_config_change_reseeds_open_documents_with_extra_globals() {
     let directory = tempfile::tempdir().expect("tempdir");
-    fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+    let config_path = directory.path().join("luck.json");
+    fs::write(&config_path, "{}").expect("write luck.json");
     let path = directory.path().join("main.lua");
     fs::write(&path, "local count = 1\n").expect("write main.lua");
     let uri = Uri::from_file_path(&path).expect("file path URI");
 
-    let server = Backend::new(CapturedNotifier::default());
-    open(&server, &uri, "local count = 1\n").await;
-    assert_eq!(rename_refusal(&server, &uri, "vim").await, None, "`vim` isn't configured yet");
+    let mut client = Client::start();
+    client.open(&uri, "local count = 1\n");
+    assert_eq!(rename_refusal(&mut client, &uri, "vim"), None, "`vim` isn't configured yet");
 
-    fs::write(directory.path().join("luck.json"), r#"{ "lint": { "extra_globals": ["vim"] } }"#)
+    fs::write(&config_path, r#"{ "lint": { "extra_globals": ["vim"] } }"#)
         .expect("rewrite luck.json");
-    server.did_change_watched_files(DidChangeWatchedFilesParams { changes: Vec::new() }).await;
-    let refusal = rename_refusal(&server, &uri, "vim").await;
-    assert!(refusal.is_some(), "the config change took effect");
+    client.file_changed(&config_path, FileChangeType::CHANGED);
+    assert!(rename_refusal(&mut client, &uri, "vim").is_some(), "the config change took effect");
 }
 
-/// A document on disk under a `luck.json` of its own, so settings discovery
-/// has to leave the current task, as it does for a real client's file.
-fn file_in_project(directory: &Path, text: &str) -> Uri {
-    fs::write(directory.join("luck.json"), "{}").expect("write luck.json");
-    let path = directory.join("main.lua");
-    fs::write(&path, text).expect("write main.lua");
-    Uri::from_file_path(&path).expect("file path URI")
+#[test]
+fn a_change_sent_right_after_the_open_is_not_lost() {
+    let mut client = Client::start();
+    let uri = workspace_uri("quick.lua");
+    client.open(&uri, "local before = 1\n");
+    client.replace_all(&uri, 2, "local after = 2\n");
+    assert_eq!(document_symbols(&mut client, &uri), ["after"]);
 }
 
-fn replace_all(uri: &Uri, version: i32, text: &str) -> DidChangeTextDocumentParams {
-    DidChangeTextDocumentParams {
-        text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version },
-        content_changes: vec![TextDocumentContentChangeEvent {
-            range: None,
-            range_length: None,
-            text: text.to_owned(),
-        }],
-    }
-}
-
-#[tokio::test]
-async fn a_change_arriving_during_open_is_not_lost() {
-    // tower-lsp-server polls notifications concurrently, and `did_open`
-    // awaits settings discovery before it stores the document.
-    let directory = tempfile::tempdir().expect("tempdir");
-    let uri = file_in_project(directory.path(), "local before = 1\n");
-    let server = Backend::new(CapturedNotifier::default());
-
-    let opening = open(&server, &uri, "local before = 1\n");
-    let changing = server.did_change(replace_all(&uri, 2, "local after = 2\n"));
-    tokio::join!(opening, changing);
-
-    let response = server
-        .document_symbol(DocumentSymbolParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .await
-        .expect("document symbol errored")
-        .expect("the document is open");
-    let DocumentSymbolResponse::Nested(symbols) = response else {
-        panic!("document symbols should be nested");
-    };
-    let names: Vec<&str> = symbols.iter().map(|symbol| symbol.name.as_str()).collect();
-    assert_eq!(names, ["after"], "version 2 must not be dropped while version 1 is opening");
-}
-
-#[tokio::test]
-async fn closing_during_a_lint_leaves_no_diagnostics() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let uri = file_in_project(directory.path(), "local x =\n");
-    let notifier = CapturedNotifier::default();
-    let server = Backend::new(notifier.clone());
-    open(&server, &uri, "local x =\n").await;
-
-    let changing = server.did_change(replace_all(&uri, 2, "local y =\n"));
-    let closing = server.did_close(DidCloseTextDocumentParams {
-        text_document: TextDocumentIdentifier { uri: uri.clone() },
+#[test]
+fn a_close_leaves_no_diagnostics() {
+    let mut client = Client::start();
+    let uri = workspace_uri("closed.lua");
+    client.open(&uri, "local x =\n");
+    client.replace_all(&uri, 2, "local y =\n");
+    client.notify::<DidCloseTextDocument>(DidCloseTextDocumentParams {
+        text_document: document(&uri),
     });
-    tokio::join!(changing, closing);
-
-    let diags = notifier.diagnostics_for(&uri).await;
-    assert!(diags.is_empty(), "a closed document must end with no diagnostics: {diags:?}");
-}
-
-/// Holds version 2's publish until version 3's has landed, the order an older
-/// lint that finishes last produces.
-#[derive(Clone, Debug)]
-struct ReorderingNotifier {
-    published_versions: Arc<RwLock<Vec<Option<i32>>>>,
-    newer_published: Arc<Semaphore>,
-}
-
-impl Notifier for ReorderingNotifier {
-    async fn publish_diagnostics(
-        &self,
-        _uri: Uri,
-        _diagnostics: Vec<Diagnostic>,
-        version: Option<i32>,
-    ) {
-        if version == Some(2i32) {
-            let _permit = self.newer_published.acquire().await.expect("semaphore stays open");
-        }
-        self.published_versions.write().await.push(version);
-        if version == Some(3i32) {
-            self.newer_published.add_permits(1);
+    // Whatever version published before the close, the close clears it.
+    loop {
+        let published = client.next_published(&uri);
+        if published.version.is_none() {
+            assert!(published.diagnostics.is_empty(), "{published:?}");
+            break;
         }
     }
-
-    async fn show_message(&self, _message_type: MessageType, _message: String) {}
-
-    async fn log_message(&self, _message_type: MessageType, _message: String) {}
-
-    async fn register_capability(&self, _registrations: Vec<Registration>) {}
+    let leftovers = workspace_symbols(&mut client, "");
+    assert!(leftovers.is_empty(), "a closed document isn't searched: {leftovers:?}");
+    let late = client
+        .notifications()
+        .iter()
+        .filter(|notification| notification.method == "textDocument/publishDiagnostics")
+        .count();
+    assert_eq!(late, 0, "nothing publishes after the close: {:?}", client.notifications());
 }
 
-#[tokio::test]
-async fn a_superseded_lint_does_not_publish_after_the_newer_one() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let uri = file_in_project(directory.path(), "local one = 1\n");
-    let notifier = ReorderingNotifier {
-        published_versions: Arc::new(RwLock::new(Vec::new())),
-        newer_published: Arc::new(Semaphore::new(0)),
-    };
-    let server = Backend::new(notifier.clone());
-    server
-        .did_open(DidOpenTextDocumentParams {
-            text_document: TextDocumentItem {
-                uri: uri.clone(),
-                language_id: "lua".to_owned(),
-                version: 1,
-                text: "local one = 1\n".to_owned(),
-            },
-        })
-        .await;
-
-    tokio::join!(
-        server.did_change(replace_all(&uri, 2, "local two = 2\n")),
-        server.did_change(replace_all(&uri, 3, "local three = 3\n"))
-    );
-
-    let published_versions = notifier.published_versions.read().await.clone();
-    assert_eq!(
-        published_versions.last(),
-        Some(&Some(3i32)),
-        "the editor must end on the newest version's diagnostics: {published_versions:?}"
-    );
+#[test]
+fn publishes_follow_the_versions_in_order() {
+    let mut client = Client::start();
+    let uri = workspace_uri("versions.lua");
+    client.open(&uri, "local one = 1\n");
+    client.replace_all(&uri, 2, "local two = 2\n");
+    client.replace_all(&uri, 3, "local three = 3\n");
+    let mut versions = Vec::new();
+    while versions.last() != Some(&Some(3i32)) {
+        versions.push(client.next_published(&uri).version);
+    }
+    let mut sorted = versions.clone();
+    sorted.sort_unstable();
+    assert_eq!(versions, sorted, "no version publishes after a newer one: {versions:?}");
+    assert_eq!(document_symbols(&mut client, &uri), ["three"]);
 }

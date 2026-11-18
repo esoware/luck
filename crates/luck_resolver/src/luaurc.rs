@@ -1,11 +1,10 @@
 use alloc::sync::Arc;
 use core::ops::Deref;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use rustc_hash::FxHashMap;
 
-use crate::path::native_path;
+use crate::file_system::FileSystem;
 use crate::shared_cache::SharedCache;
 
 #[derive(Debug)]
@@ -20,8 +19,7 @@ pub(crate) enum AliasTarget {
     },
 }
 
-/// The `.luaurc` alias tables read so far, which are never reread, shared by
-/// every thread.
+/// The `.luaurc` alias tables read so far, shared by every thread.
 #[derive(Debug, Default)]
 pub(crate) struct AliasCache {
     declared_tables: SharedCache<PathBuf, Arc<DeclaredTable>>,
@@ -30,12 +28,21 @@ pub(crate) struct AliasCache {
 }
 
 impl AliasCache {
+    pub(crate) fn clear(&self) {
+        self.declared_tables.clear();
+        self.merged_tables.clear();
+    }
+
     /// The aliases in effect for a search starting at `directory`, keyed by
     /// lowercased name. Closer `.luaurc` files win, relative targets resolve
     /// against the `.luaurc` that declared them, and a malformed `.luaurc`
     /// hides everything declared above it, because Luau's upward search stops
     /// with an error there.
-    pub(crate) fn in_effect(&self, directory: &Path) -> Arc<FxHashMap<String, AliasTarget>> {
+    pub(crate) fn in_effect(
+        &self,
+        fs: &impl FileSystem,
+        directory: &Path,
+    ) -> Arc<FxHashMap<String, AliasTarget>> {
         self.merged_tables.get_or_insert_with(directory, || {
             let mut aliases = FxHashMap::default();
             // Only the requested directory gets a merged map. Each ancestor
@@ -44,7 +51,7 @@ impl AliasCache {
             for ancestor in ancestors.into_iter().rev() {
                 let table = self
                     .declared_tables
-                    .get_or_insert_with(ancestor, || Arc::new(read_declared_aliases(ancestor)));
+                    .get_or_insert_with(ancestor, || Arc::new(read_declared_aliases(fs, ancestor)));
                 if table.is_malformed {
                     aliases.clear();
                 }
@@ -73,11 +80,7 @@ impl AliasCache {
 fn alias_target(declaring_directory: &Path, written_target: &str) -> AliasTarget {
     let target = written_target.replace('\\', "/");
     target.strip_prefix('@').map_or_else(
-        || {
-            AliasTarget::Directory(lexically_normalized(
-                &declaring_directory.join(native_path(&target)),
-            ))
-        },
+        || AliasTarget::Directory(lexically_normalized(&declaring_directory.join(&target))),
         |chained| AliasTarget::Chained {
             target: chained.to_owned(),
             declared_in: declaring_directory.to_path_buf(),
@@ -119,12 +122,12 @@ impl Deref for DeclaredTable {
 }
 
 /// Empty when the file is missing, malformed, or declares none.
-fn read_declared_aliases(directory: &Path) -> DeclaredTable {
+fn read_declared_aliases(fs: &impl FileSystem, directory: &Path) -> DeclaredTable {
     let candidate = directory.join(".luaurc");
-    if !candidate.is_file() {
+    if !fs.metadata(&candidate).is_ok_and(|metadata| metadata.is_file) {
         return DeclaredTable::default();
     }
-    let parsed = fs::read(&candidate).ok().and_then(|contents| parse_aliases(&contents));
+    let parsed = fs.read(&candidate).ok().and_then(|contents| parse_aliases(&contents));
     let is_malformed = parsed.is_none();
     DeclaredTable { aliases: parsed.unwrap_or_default(), is_malformed }
 }
@@ -305,21 +308,23 @@ fn after_long_bracket(text: &[u8], level: usize) -> Option<&[u8]> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
 
-    use luck_token::{LuaVersion, Span};
+    use luck_token::LuaVersion;
 
     use super::*;
-    use crate::fixtures::{luau_project, project_with, request, write_files};
-    use crate::luau::ModuleProbes;
-    use crate::path::normalize_path;
-    use crate::{ResolveRequest, Resolver, luau};
+    use crate::cache::Cache;
+    use crate::file_system::FileSystemOs;
+    use crate::fixtures::{canonical, luau_project, project_with, write_files};
+    use crate::luau::Luau;
+    use crate::{ResolveError, ResolveOptions, Resolver};
 
     #[test]
     fn caches_only_requested_merged_maps_and_reuses_them() {
         let project = luau_project();
         // Cache keys derive from canonical `from_file` paths, so the direct
         // lookups must use the canonical directory too.
-        let source_directory = PathBuf::from(normalize_path(&project.path().join("src")));
+        let source_directory = canonical(&project.path().join("src"));
         let aliases: serde_json::Map<String, serde_json::Value> =
             (0u8..64).map(|i| (format!("alias{i}"), serde_json::json!("."))).collect();
         fs::write(
@@ -327,28 +332,28 @@ mod tests {
             serde_json::json!({"aliases": aliases}).to_string(),
         )
         .expect("write aliases");
-        let current = normalize_path(&source_directory.join("main.luau"));
-        let cache = AliasCache::default();
-        let cached = Arc::as_ptr(&cache.in_effect(&source_directory));
-        assert_eq!(cache.merged_tables.len(), 1);
-        assert_eq!(cache.declared_tables.len(), source_directory.ancestors().count());
-        assert_eq!(cache.in_effect(&source_directory).len(), 64);
+        let current = source_directory.join("main.luau");
+        let luau = Luau::default();
+        let cache = Cache::new(FileSystemOs);
+        let merged = Arc::as_ptr(&luau.aliases().in_effect(&FileSystemOs, &source_directory));
+        assert_eq!(luau.aliases().merged_tables.len(), 1);
+        assert_eq!(luau.aliases().declared_tables.len(), source_directory.ancestors().count());
+        assert_eq!(luau.aliases().in_effect(&FileSystemOs, &source_directory).len(), 64);
         for module in ["@alias0/utils", "@ALIAS63/utils", "@alias0/utils"] {
-            let resolved =
-                luau::resolve(&cache, &ModuleProbes::default(), &request(module, &current))
-                    .expect("resolve cached alias");
-            assert_eq!(resolved.path, normalize_path(&source_directory.join("utils.luau")));
-            assert!(resolved.warnings.is_empty(), "{:?}", resolved.warnings);
-            assert_eq!(Arc::as_ptr(&cache.in_effect(&source_directory)), cached);
-            assert_eq!(cache.merged_tables.len(), 1);
+            let resolved = luau.resolve(&cache, &current, module).expect("resolve cached alias");
+            assert_eq!(resolved.path, source_directory.join("utils.luau"));
+            assert!(!resolved.is_self_alias_shadowed);
+            let reused = luau.aliases().in_effect(&FileSystemOs, &source_directory);
+            assert_eq!(Arc::as_ptr(&reused), merged);
+            assert_eq!(luau.aliases().merged_tables.len(), 1);
         }
     }
 
     #[test]
     fn cached_aliases_preserve_case_shadowing_and_declaring_directory() {
         let project = luau_project();
-        let source_directory = project.path().join("src");
-        let sibling = project.path().join("sibling");
+        let source_directory = canonical(&project.path().join("src"));
+        let sibling = source_directory.with_file_name("sibling");
         fs::create_dir_all(&sibling).expect("create sibling");
         write_files(
             project.path(),
@@ -357,68 +362,62 @@ mod tests {
                 ("src/.luaurc", r#"{"aliases":{"sHaReD":"."}}"#),
             ],
         );
-        let current = normalize_path(&source_directory.join("main.luau"));
-        let sibling_file = normalize_path(&sibling.join("main.luau"));
-        let cache = AliasCache::default();
+        let current = source_directory.join("main.luau");
+        let sibling_file = sibling.join("main.luau");
+        let luau = Luau::default();
+        let cache = Cache::new(FileSystemOs);
         for _ in 0u8..2 {
             for module in ["@SHARED/utils", "@inherited/utils"] {
                 let resolved =
-                    luau::resolve(&cache, &ModuleProbes::default(), &request(module, &current))
-                        .expect("resolve inherited alias");
-                assert_eq!(resolved.path, normalize_path(&source_directory.join("utils.luau")));
+                    luau.resolve(&cache, &current, module).expect("resolve inherited alias");
+                assert_eq!(resolved.path, source_directory.join("utils.luau"));
             }
-            let error = luau::resolve(
-                &cache,
-                &ModuleProbes::default(),
-                &request("@SHARED/utils", &sibling_file),
-            )
-            .expect_err("sibling must not inherit child aliases");
-            assert_eq!(error.code, "E004");
+            let error = luau
+                .resolve(&cache, &sibling_file, "@SHARED/utils")
+                .expect_err("sibling must not inherit child aliases");
+            assert!(matches!(error, ResolveError::NotFound(_)), "{error:?}");
         }
-        assert_eq!(cache.merged_tables.len(), 2);
+        assert_eq!(luau.aliases().merged_tables.len(), 2);
     }
 
     #[test]
-    fn self_shadow_warnings_are_per_request_even_with_a_warm_cache() {
+    fn self_shadowing_is_reported_for_every_request_even_with_a_warm_cache() {
         let project = luau_project();
-        let source_directory = project.path().join("src");
+        let source_directory = canonical(&project.path().join("src"));
         write_files(project.path(), &[(".luaurc", r#"{"aliases":{"SeLf":"missing"}}"#)]);
-        let current = normalize_path(&source_directory.join("init.luau"));
-        let cache = AliasCache::default();
-        for span in [Span::new(0, 10), Span::new(20, 30)] {
-            let resolved = luau::resolve(
-                &cache,
-                &ModuleProbes::default(),
-                &ResolveRequest { module: "@SELF/utils", from_file: &current, span },
-            )
-            .expect("resolve built-in self");
-            assert_eq!(resolved.path, normalize_path(&source_directory.join("utils.luau")));
-            assert_eq!(resolved.warnings.len(), 1, "{:?}", resolved.warnings);
-            assert_eq!(resolved.warnings[0].code, "W004");
-            assert_eq!(resolved.warnings[0].span, span);
+        let current = source_directory.join("init.luau");
+        let luau = Luau::default();
+        let cache = Cache::new(FileSystemOs);
+        for _ in 0u8..2 {
+            let resolved =
+                luau.resolve(&cache, &current, "@SELF/utils").expect("resolve built-in self");
+            assert_eq!(resolved.path, source_directory.join("utils.luau"));
+            assert!(resolved.is_self_alias_shadowed);
         }
-        assert_eq!(cache.merged_tables.len(), 1);
+        assert_eq!(luau.aliases().merged_tables.len(), 1);
     }
 
     #[test]
-    fn alias_cache_changes_are_observed_only_by_a_fresh_resolver() {
+    fn a_resolver_sees_luaurc_edits_once_its_cache_clears() {
         for initial in [None, Some("{"), Some("{}"), Some(r#"{"aliases":{"cache_test":"."}}"#)] {
             let project = luau_project();
             // `nested/main.luau` never exists, so its path can't canonicalize
             // on its own and must start from the canonical `source_directory`.
-            let source_directory = PathBuf::from(normalize_path(&project.path().join("src")));
+            let source_directory = canonical(&project.path().join("src"));
             let nested = source_directory.join("nested");
             fs::create_dir_all(&nested).expect("create nested directory");
-            let current = normalize_path(&source_directory.join("main.luau"));
-            let nested_file = normalize_path(&nested.join("main.luau"));
+            let current = source_directory.join("main.luau");
+            let nested_file = nested.join("main.luau");
             if let Some(contents) = initial {
                 fs::write(source_directory.join(".luaurc"), contents)
                     .expect("write initial aliases");
             }
-            let resolver = Resolver::new(LuaVersion::Luau, &[], project.path());
-            let original = resolver
-                .resolve(&request("@cache_test/utils", &current))
-                .map(|resolved| resolved.path);
+            let resolver = Resolver::new(ResolveOptions {
+                version: LuaVersion::Luau,
+                search_paths: Vec::new(),
+                root: project.path().to_path_buf(),
+            });
+            let original = resolver.resolve(&current, "@cache_test/utils");
             fs::write(
                 source_directory.join(".luaurc"),
                 r#"{"aliases":{"cache_test":"../updated"}}"#,
@@ -426,17 +425,14 @@ mod tests {
             .expect("update aliases");
             write_files(project.path(), &[("updated/utils.luau", "return {}")]);
             for from_file in [&current, &nested_file] {
-                let cached = resolver
-                    .resolve(&request("@cache_test/utils", from_file))
-                    .map(|resolved| resolved.path);
-                match &original {
-                    Ok(path) => assert_eq!(cached.expect("cached alias"), *path),
-                    Err(_) => assert_eq!(cached.expect_err("cached missing alias").code, "E004"),
-                }
-                let fresh = Resolver::new(LuaVersion::Luau, &[], project.path())
-                    .resolve(&request("@cache_test/utils", from_file))
-                    .expect("fresh resolver observes edit");
-                assert_eq!(fresh.path, normalize_path(&project.path().join("updated/utils.luau")));
+                assert_eq!(resolver.resolve(from_file, "@cache_test/utils"), original);
+            }
+            resolver.clear_cache();
+            for from_file in [&current, &nested_file] {
+                let updated = resolver
+                    .resolve(from_file, "@cache_test/utils")
+                    .expect("a cleared resolver observes the edit");
+                assert_eq!(updated.path, canonical(&project.path().join("updated/utils.luau")));
             }
         }
     }
@@ -454,7 +450,7 @@ mod tests {
             },  // trailing comma
         }"#,
         )]);
-        let aliases = read_declared_aliases(project.path());
+        let aliases = read_declared_aliases(&FileSystemOs, project.path());
         assert_eq!(aliases.get("utils").map(String::as_str), Some("../shared/utils"));
         assert_eq!(aliases.get("components").map(String::as_str), Some("./components"));
     }
@@ -465,7 +461,7 @@ mod tests {
             ".luaurc",
             "-- line\r{ --[[ block\n}]] // line\n --[==[ ]] ]==] \"aliases\": {\"a\": \"./a\"} } --x",
         )]);
-        let declared = read_declared_aliases(project.path());
+        let declared = read_declared_aliases(&FileSystemOs, project.path());
         assert!(!declared.is_malformed);
         assert_eq!(declared.get("a").map(String::as_str), Some("./a"));
     }
@@ -478,19 +474,19 @@ mod tests {
 --[[ never closed
 {}",
         )]);
-        assert!(read_declared_aliases(project.path()).is_malformed);
+        assert!(read_declared_aliases(&FileSystemOs, project.path()).is_malformed);
     }
 
     #[test]
     fn luaurc_string_broken_by_a_carriage_return_is_malformed() {
         let project = project_with(&[(".luaurc", "{\"aliases\": {\"a\": \"./a\r\"}}")]);
-        assert!(read_declared_aliases(project.path()).is_malformed);
+        assert!(read_declared_aliases(&FileSystemOs, project.path()).is_malformed);
     }
 
     #[test]
     fn luaurc_boolean_alias_target_is_kept_as_its_text() {
         let project = project_with(&[(".luaurc", r#"{"aliases": {"a": true}}"#)]);
-        let declared = read_declared_aliases(project.path());
+        let declared = read_declared_aliases(&FileSystemOs, project.path());
         assert!(!declared.is_malformed);
         assert_eq!(declared.get("a").map(String::as_str), Some("true"));
     }
@@ -499,7 +495,7 @@ mod tests {
     fn luaurc_without_aliases_or_unparsable_declares_no_aliases() {
         for contents in ["{}", "not valid json {{{"] {
             let project = project_with(&[(".luaurc", contents)]);
-            assert!(read_declared_aliases(project.path()).is_empty(), "{contents}");
+            assert!(read_declared_aliases(&FileSystemOs, project.path()).is_empty(), "{contents}");
         }
     }
 }

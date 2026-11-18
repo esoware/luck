@@ -1,0 +1,14 @@
+codegen_lua53 Summary:
+AST Parsed     : 21/26 (80.77%)
+Positive Passed: 21/26 (80.77%)
+
+Not UTF-8: lua-5.3.4-tests/db.lua
+
+Not UTF-8: lua-5.3.4-tests/files.lua
+
+Not UTF-8: lua-5.3.4-tests/pm.lua
+
+Not UTF-8: lua-5.3.4-tests/sort.lua
+
+Not UTF-8: lua-5.3.4-tests/strings.lua
+

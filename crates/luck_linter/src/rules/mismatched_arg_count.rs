@@ -1,4 +1,4 @@
-use luck_ast::{Call, Expression, FunctionBody, Statement};
+use luck_ast::{Call, Expression, FunctionBody, GetSpan as _, Statement};
 use luck_semantic::ScopeTree;
 use rustc_hash::FxHashMap;
 

@@ -8,7 +8,7 @@
 //! `luck_ast::MAX_NESTING_DEPTH`. [`format()`] parses source text first, and
 //! [`format_parsed`] and [`format_range`] take an existing parse. The parse
 //! gets them blank-line preservation, `-- luck: format off` regions, and
-//! comments placed by byte position.
+//! comments, each placed at the nearest node boundary.
 //!
 //! Every entry point takes an arena the caller owns, and `format` parses into
 //! it. All of them build their element stream there, with the few texts they
@@ -41,7 +41,6 @@
 extern crate alloc;
 
 mod comments;
-mod directive;
 #[cfg(test)]
 mod fixtures;
 mod format;

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use luck_resolver::normalize_path;
+use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use predicates::prelude::*;
 use tempfile::TempDir;
 
@@ -101,7 +101,8 @@ fn rule_level_wins_over_a_category_flag() {
 fn github_format_prints_annotations_on_stdout() {
     let project = TempDir::new().expect("project");
     let main_path = write_file(project.path(), "src/main.lua", WARNING_AND_ERROR);
-    let file = normalize_path(&main_path).replace(':', "%3A");
+    let canonical = FileSystemOs.canonicalize(&main_path).expect("canonicalize");
+    let file = to_slash_lossy(&canonical).replace(':', "%3A");
 
     luck_in(&project.path().join("src"))
         .args(["lint", "--format", "github"])

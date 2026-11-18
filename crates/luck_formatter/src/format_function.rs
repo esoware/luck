@@ -1,7 +1,11 @@
-use luck_ast::{Expression, FunctionArgs, FunctionAttribute, FunctionBody, Parameter, VarArgParam};
+use core::iter;
 
-use crate::comments::ListKind;
-use crate::ir::Formatter;
+use luck_ast::{
+    Expression, FunctionArgs, FunctionAttribute, FunctionBody, GetSpan as _, Parameter, VarArgParam,
+};
+use luck_token::Span;
+
+use crate::ir::{Formatter, LineMode};
 use crate::{CallParentheses, SpaceAfterFunction};
 
 const fn is_single_string_arg(args: &[Expression<'_>]) -> bool {
@@ -17,10 +21,6 @@ fn is_block_arg(arg: &Expression<'_>) -> bool {
         || matches!(arg, Expression::TableConstructor(table) if !table.fields.is_empty())
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
     pub(crate) fn write_function_body(&mut self, body: &FunctionBody<'ast>) {
         // Luau: `<T, U...>` generic list before the parameter parens.
@@ -60,8 +60,16 @@ impl<'ast> Formatter<'ast> {
             self.space();
         }
 
-        if body.params.is_empty() && body.vararg.is_none() {
-            self.token("()");
+        // The tree keeps no span for the parentheses.
+        let open = body.generics.as_ref().map_or(body.span.start, |generics| generics.span.end);
+        let last_end = body
+            .vararg
+            .as_ref()
+            .map(|vararg| vararg.span.end)
+            .or_else(|| body.params.last().map(|param| param.span().end));
+        let closer = self.comments().closer_offset(last_end.unwrap_or(open), b')');
+        if last_end.is_none() {
+            self.write_dangling_list(("(", ")"), closer, LineMode::Soft);
             return;
         }
 
@@ -85,6 +93,7 @@ impl<'ast> Formatter<'ast> {
                     }
                     f.write_vararg_param(vararg);
                 }
+                f.write_closing_comments(closer, false);
             });
             grouped.soft_line();
             grouped.token(")");
@@ -92,70 +101,82 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn write_parameter(&mut self, param: &Parameter<'ast>) {
-        self.name(param.name);
-        // Luau: `: T` annotation.
-        if let Some(type_annotation) = &param.type_annotation {
-            self.token(":");
-            self.space();
-            self.write_type(type_annotation);
-        }
+        self.node(
+            || param.span(),
+            |f| {
+                f.name(param.name);
+                // Luau: `: T` annotation.
+                if let Some(type_annotation) = &param.type_annotation {
+                    f.token(":");
+                    f.space();
+                    f.write_type(type_annotation);
+                }
+            },
+        );
     }
 
     fn write_vararg_param(&mut self, vararg: &VarArgParam<'ast>) {
-        self.token("...");
-        // Lua 5.5: `...name`.
-        if let Some(name) = &vararg.name {
-            self.name(*name);
-        }
-        // Luau: `: T` annotation (may be a pack, e.g. `...number`).
-        if let Some(type_annotation) = &vararg.type_annotation {
-            self.token(":");
-            self.space();
-            self.write_type(type_annotation);
-        }
+        self.node(
+            || vararg.span,
+            |f| {
+                f.token("...");
+                // Lua 5.5: `...name`.
+                if let Some(name) = &vararg.name {
+                    f.name(*name);
+                }
+                // Luau: `: T` annotation (may be a pack, e.g. `...number`).
+                if let Some(type_annotation) = &vararg.type_annotation {
+                    f.token(":");
+                    f.space();
+                    f.write_type(type_annotation);
+                }
+            },
+        );
     }
 
     /// Arguments only exist on the bracketed form.
     pub(crate) fn write_function_attribute(&mut self, attribute: &FunctionAttribute<'ast>) {
-        self.token("@");
-        let Some(args) = &attribute.args else {
-            self.name(attribute.name);
-            return;
-        };
-        self.token("[");
-        self.name(attribute.name);
-        self.token("(");
-        for (i, arg) in args.iter().enumerate() {
-            if i > 0 {
-                self.token(",");
-                self.space();
-            }
-            self.write_expr(arg);
-        }
-        self.token(")");
-        self.token("]");
+        self.node(
+            || attribute.span,
+            |f| {
+                f.token("@");
+                let Some(args) = &attribute.args else {
+                    f.name(attribute.name);
+                    return;
+                };
+                f.token("[");
+                f.name(attribute.name);
+                if args.is_empty() {
+                    f.write_dangling_list(("(", ")"), attribute.span.end, LineMode::Soft);
+                } else {
+                    f.token("(");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            f.token(",");
+                            f.space();
+                        }
+                        f.write_expr(arg);
+                    }
+                    f.write_closing_comments(attribute.span.end, false);
+                    f.token(")");
+                }
+                f.token("]");
+            },
+        );
     }
 
+    /// Nothing inside the arguments takes a comment past their end, which
+    /// trails the call.
     pub(crate) fn write_function_args(&mut self, function_args: &FunctionArgs<'ast>) {
+        self.inside(function_args.span().end, |f| f.write_args_inside(function_args));
+    }
+
+    fn write_args_inside(&mut self, function_args: &FunctionArgs<'ast>) {
         let call_parentheses = self.options().call_parentheses;
         match function_args {
             FunctionArgs::Parenthesized { span, args } => {
-                // A comment between the parens has to keep them: dropping the
-                // parens or hugging a lone argument leaves nowhere to print it.
-                if self.comments().has_claimable_comments(*span, args.iter().map(Expression::span))
-                {
-                    self.space_before_call_paren();
-                    self.write_commented_list(
-                        ("(", ")"),
-                        *span,
-                        args,
-                        ListKind::CallArgs,
-                        Expression::span,
-                        Self::write_expr,
-                    );
-                    return;
-                }
-
+                // A comment between the parens and the lone argument would
+                // have nowhere to go without them.
                 let can_omit = match call_parentheses {
                     // `Input` preserves the source's choice, which had
                     // parentheses.
@@ -165,14 +186,16 @@ impl<'ast> Formatter<'ast> {
                     CallParentheses::None => {
                         is_single_string_arg(args) || is_single_table_arg(args)
                     }
-                };
+                } && !self
+                    .comments()
+                    .has_comment_outside(*span, args.iter().map(Expression::span));
 
                 if can_omit && let Some(expr) = args.first() {
                     self.space();
                     self.write_expr(expr);
                 } else {
                     self.space_before_call_paren();
-                    self.write_args_list(args);
+                    self.write_args_list(args, *span);
                 }
             }
             FunctionArgs::TableConstructor(table) => {
@@ -183,13 +206,29 @@ impl<'ast> Formatter<'ast> {
                     | CallParentheses::None
                     | CallParentheses::Input => true,
                 };
+                let write_table =
+                    |f: &mut Self| f.node(|| table.span, |inner| inner.write_table(table, false));
                 if should_keep_bare {
                     self.space();
-                    self.write_table(table, false);
+                    write_table(self);
+                } else if self.comments().has_line_ending_comment_before(table.span.start) {
+                    // As the parenthesized table reads back, where such a
+                    // comment between the parens keeps them off the table.
+                    self.space_before_call_paren();
+                    let group_id = self.group_id();
+                    self.group_with_id(group_id, |grouped| {
+                        grouped.token("(");
+                        grouped.indent_if_group_breaks(group_id, |f| {
+                            f.soft_line();
+                            write_table(f);
+                        });
+                        grouped.soft_line();
+                        grouped.token(")");
+                    });
                 } else {
                     self.space_before_call_paren();
                     self.token("(");
-                    self.write_table(table, false);
+                    write_table(self);
                     self.token(")");
                 }
             }
@@ -201,16 +240,19 @@ impl<'ast> Formatter<'ast> {
                     | CallParentheses::None
                     | CallParentheses::Input => true,
                 };
+                let write_string = |f: &mut Self| {
+                    f.node(|| literal.span, |inner| inner.write_string(literal.text));
+                };
                 if should_keep_bare {
                     self.space();
-                    self.write_string(literal.text);
+                    write_string(self);
                 } else {
                     self.space_before_call_paren();
                     self.group(|grouped| {
                         grouped.token("(");
                         grouped.indent(|f| {
                             f.soft_line();
-                            f.write_string(literal.text);
+                            write_string(f);
                         });
                         grouped.soft_line();
                         grouped.token(")");
@@ -229,17 +271,23 @@ impl<'ast> Formatter<'ast> {
     /// The arguments that are functions or tables with fields are hugged: a
     /// list too long for one line keeps the other arguments beside the parens
     /// and breaks inside those, as in `f(a, function()` or `f(a, {` ... `}, {`.
-    /// When another argument sits between two of them, or when that layout
-    /// doesn't fit, every argument gets its own line.
-    fn write_args_list(&mut self, args: &[Expression<'ast>]) {
+    /// When another argument sits between two of them, when a comment outside
+    /// them ends its line, or when that layout doesn't fit, every argument
+    /// gets its own line.
+    fn write_args_list(&mut self, args: &[Expression<'ast>], span: Span) {
         match args {
             [] => {
-                self.token("()");
+                self.write_dangling_list(("(", ")"), span.end, LineMode::Soft);
                 return;
             }
-            [arg @ (Expression::TableConstructor(_) | Expression::FunctionDef(_))] => {
+            [arg @ (Expression::TableConstructor(_) | Expression::FunctionDef(_))]
+                if !self
+                    .comments()
+                    .has_line_ending_comment_outside(span, iter::once(arg.span())) =>
+            {
                 self.token("(");
                 self.write_expr(arg);
+                self.write_closing_comments(span.end, false);
                 self.token(")");
                 return;
             }
@@ -252,6 +300,12 @@ impl<'ast> Formatter<'ast> {
             .skip_while(|is_block| !is_block)
             .skip_while(|is_block| *is_block)
             .any(|is_block| is_block);
+        let can_hug = !has_split_blocks
+            && args.iter().any(is_block_arg)
+            && !self.comments().has_line_ending_comment_outside(
+                span,
+                args.iter().filter(|arg| is_block_arg(arg)).map(Expression::span),
+            );
 
         let group_id = self.group_id();
         self.group_with_id(group_id, |grouped| {
@@ -263,9 +317,9 @@ impl<'ast> Formatter<'ast> {
                         f.token(",");
                         f.soft_line_or_space();
                     }
-                    let is_hugged = !has_split_blocks && is_block_arg(arg);
+                    let is_hugged = can_hug && is_block_arg(arg);
                     if is_hugged && let Expression::TableConstructor(table) = arg {
-                        f.write_table(table, true);
+                        f.node(|| table.span, |inner| inner.write_table(table, true));
                     } else if is_hugged {
                         let function_group = f.group_id();
                         f.hugged_group_with_id(function_group, |hugged| hugged.write_expr(arg));
@@ -273,6 +327,7 @@ impl<'ast> Formatter<'ast> {
                         f.write_expr(arg);
                     }
                 }
+                f.write_closing_comments(span.end, false);
             });
             grouped.soft_line();
             grouped.token(")");

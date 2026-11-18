@@ -4,8 +4,8 @@ use core::hash::Hash;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 
-/// A map every thread of a build reads and fills, which keeps the first value
-/// made for each key.
+/// A map every thread resolving through one resolver reads and fills, which
+/// keeps the first value made for each key until it's cleared.
 #[derive(Debug)]
 pub(crate) struct SharedCache<K, V> {
     map: RwLock<FxHashMap<K, V>>,
@@ -40,6 +40,10 @@ impl<K: Eq + Hash, V: Clone> SharedCache<K, V> {
         Q: Eq + Hash + ToOwned<Owned = K> + ?Sized,
     {
         self.get(key).unwrap_or_else(|| self.insert(key.to_owned(), make()))
+    }
+
+    pub(crate) fn clear(&self) {
+        self.map.write().clear();
     }
 
     #[cfg(test)]

@@ -7,10 +7,6 @@ use luck_token::{LuaVersion, decode_string, encode_string, encodes_to_at_least};
 
 use super::respell::Respeller;
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the respeller is one type with its respellings split by flag"
-)]
 impl Respeller {
     /// A string literal, as written, quotes or long brackets included.
     pub(super) fn shorten_string<'ast>(

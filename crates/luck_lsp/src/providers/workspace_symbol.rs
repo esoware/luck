@@ -5,24 +5,22 @@
     reason = "`SymbolInformation` has no constructor, so building one names its deprecated field"
 )]
 
-use alloc::sync::Arc;
-
-use tower_lsp_server::ls_types::{DocumentSymbol, Location, SymbolInformation, Uri};
+use ls_types::{DocumentSymbol, Location, SymbolInformation, Uri};
 
 use crate::document::DocumentState;
-use crate::providers::document_symbol;
 
 const MAX_RESULTS: usize = 1000;
 
-pub(crate) fn workspace_symbols(
-    documents: &[(Uri, Arc<DocumentState>)],
-    query: &str,
-) -> Vec<SymbolInformation> {
+/// Each version's outline is built once, so a query typed a letter at a time
+/// only filters.
+pub(crate) fn workspace_symbols<'document, I>(documents: I, query: &str) -> Vec<SymbolInformation>
+where
+    I: IntoIterator<Item = (&'document Uri, &'document DocumentState)>,
+{
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
     for (uri, document) in documents {
-        let symbols = document_symbol::document_symbols(document);
-        flatten(&symbols, uri, None, &query_lower, &mut results);
+        flatten(document.symbols(), uri, None, &query_lower, &mut results);
         if results.len() >= MAX_RESULTS {
             results.truncate(MAX_RESULTS);
             break;

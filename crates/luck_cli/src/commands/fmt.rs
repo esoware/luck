@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use luck_allocator::Allocator;
-use luck_config::{Editorconfigs, LuckConfig};
+use luck_config::{Editorconfigs, Project};
 use luck_formatter::FormatOptions;
-use luck_resolver::read_source_file;
+use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_token::LuaVersion;
 
 use crate::exit::{Exit, usage_error};
 use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
-use crate::project::{ProjectFile, config_for_one_shot, for_each_outcome_in_order, project_files};
+use crate::project::{ProjectFile, for_each_outcome_in_order, one_shot_project, project_files};
 use crate::render::render_source_errors;
 use crate::verbosity::Verbosity;
 
@@ -95,8 +95,8 @@ impl FmtArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         // Stdin mode ignores positional paths.
         if let Some(stdin_path) = self.stdin_filepath.as_deref() {
-            let config = config_for_one_shot(self.config.as_deref(), stdin_path)?;
-            return self.run_stdin(stdin_path, &config);
+            let project = one_shot_project(self.config.as_deref(), Path::new(stdin_path))?;
+            return self.run_stdin(stdin_path, &project);
         }
 
         // Range formatting is per-document: byte offsets are meaningless across
@@ -113,7 +113,7 @@ impl FmtArgs {
             self.config.as_deref(),
             &self.paths,
             self.no_error_on_unmatched_pattern,
-            |_| Ok(()),
+            None,
         )?;
 
         // Writing in place is the default, so --write needs no handling here.
@@ -182,10 +182,9 @@ impl FmtArgs {
     ///
     /// # Errors
     ///
-    /// Returns [`Exit::Usage`] on a bad range or dialect, and
-    /// [`Exit::Failure`] when stdin can't be read or formatted or `--check`
-    /// finds a difference.
-    fn run_stdin(&self, stdin_path: &str, luck_config: &LuckConfig) -> Result<(), Exit> {
+    /// Returns [`Exit::Usage`] on a bad range, and [`Exit::Failure`] when
+    /// stdin can't be read or formatted or `--check` finds a difference.
+    fn run_stdin(&self, stdin_path: &str, project: &Project) -> Result<(), Exit> {
         let source = read_stdin_source()?;
 
         let range = self.format_range(source.len()).map_err(|message| {
@@ -194,8 +193,8 @@ impl FmtArgs {
         })?;
 
         let file_path = Path::new(stdin_path);
-        let version = luck_config.target_for_path(file_path).map_err(usage_error)?.lua_version();
-        let options = self.format_options(&Editorconfigs::default(), luck_config, file_path);
+        let version = project.target_for(Some(file_path)).lua_version();
+        let options = self.format_options(&Editorconfigs::default(), project, file_path);
 
         match format_document(&Allocator::new(), &source, file_path, version, &options, range) {
             FormatOutcome::Failed(rendered) => {
@@ -233,10 +232,10 @@ impl FmtArgs {
         &self,
         allocator: &Allocator,
         editorconfigs: &Editorconfigs,
-        file: &ProjectFile<()>,
+        file: &ProjectFile,
     ) -> FileOutcome {
         let file_path = file.path.as_path();
-        let source = match read_source_file(file_path) {
+        let source = match FileSystemOs.read_to_string(file_path) {
             Ok(text) => text,
             Err(error) => {
                 return FileOutcome::Failed(
@@ -250,8 +249,8 @@ impl FmtArgs {
             Err(message) => return FileOutcome::RangeError(message),
         };
 
-        let options = self.format_options(editorconfigs, &file.project.config, file_path);
-        let version = file.target.lua_version();
+        let options = self.format_options(editorconfigs, &file.project, file_path);
+        let version = file.project.target_for(Some(file_path)).lua_version();
         let formatted =
             match format_document(allocator, &source, file_path, version, &options, range) {
                 FormatOutcome::Failed(rendered) => return FileOutcome::Failed(rendered),
@@ -269,18 +268,15 @@ impl FmtArgs {
         }
     }
 
-    /// The defaults, then the `.editorconfig` files above `file_path` unless
-    /// `--no-editorconfig`, then `luck_config`'s `format` section.
+    /// `project`'s options for `file_path`, from the `.editorconfig` files
+    /// above it too unless `--no-editorconfig`.
     fn format_options(
         &self,
         editorconfigs: &Editorconfigs,
-        luck_config: &LuckConfig,
+        project: &Project,
         file_path: &Path,
     ) -> FormatOptions {
-        let editorconfig_path = (!self.no_editorconfig).then_some(file_path);
-        FormatOptions::from(
-            &editorconfigs.resolved_format_config(luck_config.format, editorconfig_path),
-        )
+        project.format_options(Some(file_path), (!self.no_editorconfig).then_some(editorconfigs))
     }
 
     /// A missing start is 0, a missing end is the end of the source, and an
@@ -466,7 +462,7 @@ end
     fn formatted_document(flags: &[&str], source: &str, file_path: &Path) -> FormatOutcome {
         let options = fmt_args(flags).format_options(
             &Editorconfigs::default(),
-            &LuckConfig::default(),
+            &Project::defaults(PathBuf::from(".")),
             file_path,
         );
         format_document(&Allocator::new(), source, file_path, LuaVersion::Lua54, &options, None)

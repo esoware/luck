@@ -17,6 +17,9 @@ testing = []
 # Counts the arena's allocations for luck_allocs. Not public API.
 track_allocations = []
 
+[dependencies]
+thread_local = { workspace = true }
+
 [dev-dependencies]
 luck_allocator = { path = ".", features = ["testing"] }
 

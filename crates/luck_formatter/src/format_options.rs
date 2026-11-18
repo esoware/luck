@@ -9,6 +9,10 @@ pub struct FormatOptions {
     pub collapse_simple_statement: CollapseSimpleStatement,
     pub line_endings: LineEndings,
     pub block_newline_gaps: BlockNewlineGaps,
+    /// When true, a run of `local NAME = require(...)` and `GetService`
+    /// bindings prints sorted by name. A module's body runs at its first
+    /// `require`, so sorting can change what a program does, and it's off
+    /// unless asked for.
     pub sort_requires: bool,
     pub space_after_function_names: SpaceAfterFunction,
     /// When true, a trailing comma in a table constructor keeps the table
@@ -32,7 +36,7 @@ impl Default for FormatOptions {
             collapse_simple_statement: CollapseSimpleStatement::Never,
             line_endings: LineEndings::Unix,
             block_newline_gaps: BlockNewlineGaps::Never,
-            sort_requires: true,
+            sort_requires: false,
             space_after_function_names: SpaceAfterFunction::Never,
             magic_trailing_comma: true,
         }

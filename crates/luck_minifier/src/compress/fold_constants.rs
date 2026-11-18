@@ -3,7 +3,7 @@ use core::cmp::Ordering;
 use core::fmt::Write as _;
 
 use luck_allocator::{Allocator, Box};
-use luck_ast::{Expression, Literal, OneOrMore, UnaryOp, unwrap_parentheses};
+use luck_ast::{Expression, GetSpan as _, OneOrMore, unwrap_parentheses};
 use luck_token::{
     Associativity, BinOp, LuaNumber, LuaVersion, NumberSubtypes, Span, UnOp, decode_string,
     encode_string, parse_lua_number,
@@ -447,8 +447,8 @@ fn fold_concat<'ast>(
     joined.extend_from_slice(&right);
     let mut text = String::new();
     encode_string(&joined, &mut text);
-    let literal = Literal { text: allocator.alloc_str(&text), span: lhs.span().merge(rhs.span()) };
-    Some(Expression::StringLiteral(Box::new_in(literal, allocator)))
+    let span = lhs.span().merge(rhs.span());
+    Some(Expression::new_string_literal(allocator.alloc_str(&text), span, allocator))
 }
 
 fn fold_binary<'ast>(
@@ -567,14 +567,8 @@ fn make_lua_number_expr(
     span: Span,
 ) -> Option<Expression<'_>> {
     let has_int_subtype = subtypes == NumberSubtypes::IntFloat;
-    let number = |text: &str| {
-        let literal = Literal { text: allocator.alloc_str(text), span };
-        Expression::Number(Box::new_in(literal, allocator))
-    };
-    let negated = |operand| {
-        let negation = UnaryOp { span, op: UnOp::Neg, operand };
-        Expression::UnaryOp(Box::new_in(negation, allocator))
-    };
+    let number = |text: &str| Expression::new_number(allocator.alloc_str(text), span, allocator);
+    let negated = |operand| Expression::new_unary_op(span, UnOp::Neg, operand, allocator);
     match value {
         LuaNumber::Int(int_value) => {
             // `-9223372036854775808` is unary minus on a literal that

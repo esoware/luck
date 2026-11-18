@@ -7,11 +7,12 @@
 //! The parse core is always present. Every other stage sits behind its own
 //! feature, and `full` enables all of them:
 //!
-//! - `allocator` - The arena syntax trees live in, and a pool of arenas for
-//!   threads (always on)
+//! - `allocator` - The arena syntax trees live in, and arenas for threads
+//!   (always on)
 //! - `token` - Spans, `LuaVersion`, tokens, literal value semantics (always on)
 //! - `lexer` - Tokenizer (always on)
-//! - `ast` - AST nodes, `Visitor`, `VisitorMut`, `span()` accessors (always on)
+//! - `ast` - AST nodes and their builder, `Visit`, `VisitMut`, `AstKind`,
+//!   `GetSpan`, `ContentEq` (always on)
 //! - `parser` - Pratt + recursive-descent parser (always on)
 //! - `core` - Dialect targets, diagnostics (always on)
 //! - `codegen` - Compact printer (feature `codegen`)
@@ -35,8 +36,9 @@
 //! on its own: [`reset`](allocator::Allocator::reset) frees it all at once
 //! and keeps the memory, so one arena serves file after file. Threads take
 //! arenas from an [`allocator::AllocatorPool`], whose guard resets each one
-//! and hands it back when it drops. The bundler takes a slice of arenas and
-//! reads modules on one thread per arena.
+//! and hands it back when it drops. The bundler reads modules on rayon's
+//! pool, each into the arena its thread gets from an
+//! [`allocator::ThreadAllocators`].
 //!
 //! # Usage
 //!
@@ -113,20 +115,23 @@
 //! ```
 //!
 //! Lint, with feature `linter`. `linter::lint_parsed` lints a parse a caller
-//! already holds, and `linter::apply_fixes` returns the fixed source's parse,
-//! ready to lint again:
+//! already holds, and `linter::fix` applies the fixes of the kinds asked for
+//! until none is left, returning the fixed source's parse and diagnostics:
 //!
 //! ```
 //! # #[cfg(feature = "linter")] {
 //! use luck::allocator::Allocator;
 //! use luck::core::LuaTarget;
-//! use luck::linter::LintConfig;
+//! use luck::linter::{FixKind, LintConfig};
 //!
 //! let allocator = Allocator::new();
 //! let config = LintConfig::default();
 //! let source = "print(undefined_name)";
-//! let diags = luck::linter::lint(&allocator, source, LuaTarget::Lua54, &config);
+//! let diags = luck::linter::lint(&allocator, source, LuaTarget::Lua54, &config, FixKind::empty());
 //! assert_eq!(diags[0].rule, "undefined_variable");
+//!
+//! let fixed = luck::linter::fix(&allocator, "unpack(t)", LuaTarget::Lua54, &config, FixKind::Fix);
+//! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok("table.unpack(t)"));
 //! # }
 //! ```
 //!
@@ -143,26 +148,26 @@
 //! # }
 //! ```
 //!
-//! Bundle, with feature `bundler`. The result borrows no arena, so they can
-//! be reset or dropped right after:
+//! Bundle, with feature `bundler`. Modules are read on rayon's pool, so give
+//! its threads [`ast::MIN_STACK_BYTES`] of stack. The result borrows no arena,
+//! so they can be reset or dropped right after:
 //!
 //! ```no_run
 //! # #[cfg(feature = "bundler")] {
-//! use std::iter;
 //! use std::path::Path;
 //!
-//! use luck::allocator::Allocator;
+//! use luck::allocator::ThreadAllocators;
 //! use luck::bundler::{BundleOptions, DynamicRequire};
 //! use luck::token::LuaVersion;
 //!
-//! let mut arenas: Vec<Allocator> = iter::repeat_with(Allocator::new).take(8).collect();
 //! let options = BundleOptions {
 //!     version: LuaVersion::Lua54,
 //!     search_paths: &[],
 //!     project_root: Path::new("src"),
 //!     dynamic_require: DynamicRequire::default(),
 //! };
-//! let bundle = luck::bundler::bundle(&mut arenas, Path::new("src/main.lua"), &options).unwrap();
+//! let arenas = ThreadAllocators::new();
+//! let bundle = luck::bundler::bundle(&arenas, Path::new("src/main.lua"), &options).unwrap();
 //! println!("{}", bundle.output);
 //! # }
 //! ```

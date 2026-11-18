@@ -2,9 +2,8 @@ use core::mem;
 
 use luck_allocator::{List, ThinStr};
 use luck_ast::{
-    Assignment, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause, Expression,
-    GenericFor, GotoStatement, IfStatement, LabelStatement, LastStatement, MAX_NESTING_DEPTH, Name,
-    NumericFor, Parameter, RepeatLoop, ReturnStatement, Statement, Var, WhileLoop,
+    Block, ElseClause, ElseIfClause, Expression, GetSpan as _, LastStatement, MAX_NESTING_DEPTH,
+    Parameter, Statement, Var,
 };
 use luck_token::{CompoundOp, Span, TokenKind};
 
@@ -152,10 +151,6 @@ const fn continues_a_name(kind: TokenKind) -> bool {
     )
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the parser is one type with its grammar split by file"
-)]
 impl<'ast> Parser<'ast> {
     /// The block runs to a closer something open expects, or to the end of
     /// the source, so a stray closer is an error inside it rather than the
@@ -237,7 +232,7 @@ impl<'ast> Parser<'ast> {
         let stmts = List::split_off_in(&mut self.scratch.stmts, start, self.allocator);
         let end_span =
             if stmts.is_empty() && last_stmt.is_none() { start_span } else { self.previous_span };
-        Some(Block { span: start_span.merge(end_span), stmts, last_stmt })
+        Some(Block::new(start_span.merge(end_span), stmts, last_stmt))
     }
 
     /// A run of `;`, each an empty statement in 5.2+, and in 5.1 and Luau an
@@ -313,8 +308,8 @@ impl<'ast> Parser<'ast> {
         if deepest >= MAX_NESTING_DEPTH {
             return Statement::Error(span);
         }
-        let block = Block { span, stmts: List::new(), last_stmt: Some(last) };
-        Statement::DoBlock(self.alloc(DoBlock { span, block }))
+        let block = Block::new(span, List::new(), Some(last));
+        Statement::new_do_block(span, block, self.allocator)
     }
 
     fn parse_loop_block(&mut self) -> Option<Block<'ast>> {
@@ -435,7 +430,7 @@ impl<'ast> Parser<'ast> {
             semicolon.or_else(|| exprs.last().map(Expression::span)).unwrap_or(return_span);
 
         let span = return_span.merge(end_span);
-        LastStatement::Return(self.alloc(ReturnStatement { span, exprs }))
+        LastStatement::new_return(span, exprs, self.allocator)
     }
 
     fn parse_if_stmt(&mut self) -> Statement<'ast> {
@@ -458,7 +453,7 @@ impl<'ast> Parser<'ast> {
                 return Statement::Error(if_span);
             };
             let span = elseif_span.merge(clause_block.span);
-            let clause = ElseIfClause { span, condition: clause_condition, block: clause_block };
+            let clause = ElseIfClause::new(span, clause_condition, clause_block);
             self.scratch.elseif_clauses.push(clause);
         }
         let elseif_clauses =
@@ -470,7 +465,7 @@ impl<'ast> Parser<'ast> {
                 return Statement::Error(if_span);
             };
             let span = else_span.merge(else_block.span);
-            Some(ElseClause { span, block: else_block })
+            Some(ElseClause::new(span, else_block))
         } else {
             None
         };
@@ -480,13 +475,7 @@ impl<'ast> Parser<'ast> {
         let end_span = self.expect_keyword(TokenKind::End, Construct::IfStatement);
         let span = if_span.merge(end_span);
 
-        Statement::IfStatement(self.alloc(IfStatement {
-            span,
-            condition,
-            block,
-            elseif_clauses,
-            else_clause,
-        }))
+        Statement::new_if_stmt(span, condition, block, elseif_clauses, else_clause, self.allocator)
     }
 
     fn parse_while_loop(&mut self) -> Statement<'ast> {
@@ -500,7 +489,7 @@ impl<'ast> Parser<'ast> {
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(TokenKind::End, Construct::WhileLoop);
         let span = while_span.merge(end_span);
-        Statement::WhileLoop(self.alloc(WhileLoop { span, condition, block }))
+        Statement::new_while_loop(span, condition, block, self.allocator)
     }
 
     fn parse_do_block(&mut self) -> Statement<'ast> {
@@ -512,7 +501,7 @@ impl<'ast> Parser<'ast> {
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(TokenKind::End, Construct::DoBlock);
         let span = do_span.merge(end_span);
-        Statement::DoBlock(self.alloc(DoBlock { span, block }))
+        Statement::new_do_block(span, block, self.allocator)
     }
 
     fn parse_for_stmt(&mut self) -> Statement<'ast> {
@@ -543,7 +532,7 @@ impl<'ast> Parser<'ast> {
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(TokenKind::End, Construct::ForLoop);
         let span = for_span.merge(end_span);
-        Statement::NumericFor(self.alloc(NumericFor {
+        Statement::new_numeric_for(
             span,
             name,
             type_annotation,
@@ -551,7 +540,8 @@ impl<'ast> Parser<'ast> {
             limit,
             step,
             block,
-        }))
+            self.allocator,
+        )
     }
 
     fn parse_generic_for(&mut self, for_span: Span, first: Parameter<'ast>) -> Statement<'ast> {
@@ -573,7 +563,7 @@ impl<'ast> Parser<'ast> {
         self.close(Closer::BlockEnd);
         let end_span = self.expect_keyword(TokenKind::End, Construct::ForLoop);
         let span = for_span.merge(end_span);
-        Statement::GenericFor(self.alloc(GenericFor { span, names, exprs, block }))
+        Statement::new_generic_for(span, names, exprs, block, self.allocator)
     }
 
     fn parse_repeat_loop(&mut self) -> Statement<'ast> {
@@ -586,14 +576,14 @@ impl<'ast> Parser<'ast> {
         self.expect_keyword(TokenKind::Until, Construct::RepeatLoop);
         let condition = self.parse_expr(0);
         let span = repeat_span.merge(condition.span());
-        Statement::RepeatLoop(self.alloc(RepeatLoop { span, block, condition }))
+        Statement::new_repeat_loop(span, block, condition, self.allocator)
     }
 
     fn parse_goto_stmt(&mut self) -> Statement<'ast> {
         let goto_span = self.advance();
         let name = self.expect_identifier_recover();
         let span = goto_span.merge(name.span);
-        Statement::Goto(self.alloc(GotoStatement { span, name }))
+        Statement::new_goto(span, name, self.allocator)
     }
 
     fn parse_label_stmt(&mut self) -> Statement<'ast> {
@@ -601,7 +591,7 @@ impl<'ast> Parser<'ast> {
         let name = self.expect_identifier_recover();
         let colons_close = self.expect(TokenKind::DoubleColon);
         let span = colons_open.merge(colons_close);
-        Statement::Label(self.alloc(LabelStatement { span, name }))
+        Statement::new_label(span, name, self.allocator)
     }
 
     fn parse_assignment_or_call(&mut self) -> Statement<'ast> {
@@ -615,12 +605,7 @@ impl<'ast> Parser<'ast> {
             let value = self.parse_expr(0);
             let var = self.assignment_target(expr);
             let span = var.span().merge(value.span());
-            return Statement::CompoundAssignment(self.alloc(CompoundAssignment {
-                span,
-                var,
-                op,
-                expr: value,
-            }));
+            return Statement::new_compound_assignment(span, var, op, value, self.allocator);
         }
 
         // Assignment: `varlist = explist`.
@@ -676,7 +661,7 @@ impl<'ast> Parser<'ast> {
         let end_span = values.last().map_or(equal, Expression::span);
         let start_span = targets.first().map_or(equal, Var::span);
         let span = start_span.merge(end_span);
-        Statement::Assignment(self.alloc(Assignment { span, targets, values }))
+        Statement::new_assignment(span, targets, values, self.allocator)
     }
 
     #[cold]
@@ -696,9 +681,7 @@ impl<'ast> Parser<'ast> {
         match expr {
             Expression::Name(name) => Var::Name(name),
             Expression::Suffixed(chain) if chain.is_var() => Var::Suffixed(chain),
-            Expression::Error(span) => {
-                Var::Name(self.alloc(Name { text: ThinStr::new(""), index: None, span }))
-            }
+            Expression::Error(span) => Var::new_name(ThinStr::new(""), None, span, self.allocator),
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -717,7 +700,7 @@ impl<'ast> Parser<'ast> {
             | Expression::TypeCast(_) => {
                 let span = expr.span();
                 self.error(span, "invalid assignment target");
-                Var::Name(self.alloc(Name { text: ThinStr::new(""), index: None, span }))
+                Var::new_name(ThinStr::new(""), None, span, self.allocator)
             }
         }
     }

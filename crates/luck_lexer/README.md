@@ -4,7 +4,7 @@ The single-pass lexer for Lua 5.1 to 5.5 and Luau.
 
 ## Overview
 
-Source text goes in and two streams come out: the tokens, and the comments between them, which stay out of the syntax tree. A token holds no text, only its kind, span, and flags, so `Token::text` slices it from the source. The lexer recognizes a token that only some versions have, such as floor division, a hex float, or Luau's interpolated strings, only for those versions. It records each error and keeps going, so one pass reports them all.
+Source text goes in and two streams come out: the tokens, and the comments between them, which stay out of the syntax tree. Each comment carries what it tells a tool, read once from its text: prose, a Luau hot comment, or a `luck:` directive. A token holds no text, only its kind, span, and flags, so `Token::text` slices it from the source. The lexer recognizes a token that only some versions have, such as floor division, a hex float, or Luau's interpolated strings, only for those versions. It records each error and keeps going, so one pass reports them all.
 
 ## Usage
 

@@ -51,8 +51,7 @@ fn facts(tree: &ScopeTree<'_>, is_kept: impl Fn(&str) -> bool, is_every_name: bo
         if !is_kept(name) {
             continue;
         }
-        let found =
-            tree.reference_of(&Name { text: name.into(), index: None, span: reference.span });
+        let found = tree.reference_of(&Name::new(name.into(), None, reference.span));
         facts.push(format!(
             "reference {name} {:?} in {:?} {:?} to {:?} env {:?} declared {} global {} host {} \
              found {:?} local {}",
@@ -65,7 +64,7 @@ fn facts(tree: &ScopeTree<'_>, is_kept: impl Fn(&str) -> bool, is_every_name: bo
             tree.is_global(reference),
             tree.is_host_global(reference),
             found.map(|id| tree.reference(id).span),
-            tree.resolves_to_local(&Name { text: name.into(), index: None, span: reference.span }),
+            tree.resolves_to_local(&Name::new(name.into(), None, reference.span)),
         ));
     }
     facts

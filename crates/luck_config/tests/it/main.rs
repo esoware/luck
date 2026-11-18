@@ -8,8 +8,7 @@
 
 mod common;
 
-mod config_filter;
-mod config_load;
-mod config_resolve;
 mod editorconfig;
-mod format_options;
+mod filter;
+mod load;
+mod project;

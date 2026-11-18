@@ -14,6 +14,10 @@ use crate::rule::{CallSite, LintContext, NodeRule};
 /// saves.
 pub(crate) const MIN_PARALLEL_NODES: usize = 4096;
 
+/// How many nodes the bus dispatches between asking whether the lint was
+/// cancelled.
+const NODES_PER_CANCEL_CHECK: usize = 1024;
+
 thread_local! {
     /// For each node type, the indices of the rules subscribed to it. Kept
     /// per thread and reused across files so dispatch doesn't reallocate
@@ -71,10 +75,13 @@ pub(crate) fn run_in_parallel<'ast>(
     rules: &[&dyn NodeRule],
     nodes: &[AstNode<'ast>],
     context: &LintContext<'ast>,
-) -> Vec<Vec<Finding>> {
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<Vec<Finding>>> {
     let nodes_per_chunk = nodes.len().div_ceil(rayon::current_num_threads());
-    let chunk_results: Vec<Vec<Vec<Finding>>> =
-        nodes.par_chunks(nodes_per_chunk).map(|chunk| run(rules, chunk, context)).collect();
+    let chunk_results: Vec<Vec<Vec<Finding>>> = nodes
+        .par_chunks(nodes_per_chunk)
+        .map(|chunk| run(rules, chunk, context, is_cancelled))
+        .collect::<Option<_>>()?;
 
     let mut findings_by_rule = vec![Vec::new(); rules.len()];
     for chunk in chunk_results {
@@ -82,17 +89,19 @@ pub(crate) fn run_in_parallel<'ast>(
             rule_findings.append(&mut chunk_findings);
         }
     }
-    findings_by_rule
+    Some(findings_by_rule)
 }
 
-/// Each rule's findings, in node order.
+/// Each rule's findings, in node order, or `None` once `is_cancelled` says
+/// so.
 pub(crate) fn run<'ast>(
     rules: &[&dyn NodeRule],
     nodes: &[AstNode<'ast>],
     context: &LintContext<'ast>,
-) -> Vec<Vec<Finding>> {
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<Vec<Finding>>> {
     let mut findings_by_rule = vec![Vec::new(); rules.len()];
-    RULE_BUCKETS.with_borrow_mut(|buckets| {
+    let is_finished = RULE_BUCKETS.with_borrow_mut(|buckets| {
         for bucket in buckets.iter_mut() {
             bucket.clear();
         }
@@ -108,22 +117,34 @@ pub(crate) fn run<'ast>(
         }
 
         let mut callees = None;
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "hot loop; every index is in bounds by construction"
-        )]
-        for node in nodes {
-            let slots = &buckets[node.node_type.index()];
-            if slots.is_empty() {
-                continue;
+        for nodes_between_checks in nodes.chunks(NODES_PER_CANCEL_CHECK) {
+            if is_cancelled() {
+                return false;
             }
-            let site = call_site(node, &mut callees, context.semantic);
-            for &slot in slots {
-                dispatch(rules[slot], node, site.as_ref(), context, &mut findings_by_rule[slot]);
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "hot loop; every index is in bounds by construction"
+            )]
+            for node in nodes_between_checks {
+                let slots = &buckets[node.node_type.index()];
+                if slots.is_empty() {
+                    continue;
+                }
+                let site = call_site(node, &mut callees, context.semantic);
+                for &slot in slots {
+                    dispatch(
+                        rules[slot],
+                        node,
+                        site.as_ref(),
+                        context,
+                        &mut findings_by_rule[slot],
+                    );
+                }
             }
         }
+        true
     });
-    findings_by_rule
+    is_finished.then_some(findings_by_rule)
 }
 
 /// Re-runs every node rule on every node and checks that bucketed dispatch

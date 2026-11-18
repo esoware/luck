@@ -306,6 +306,16 @@ impl LuaVersion {
         }
     }
 
+    /// Whether a line comment opening with `--!`, such as `--!strict`, is a
+    /// hot comment, which Luau reads before the first token.
+    #[must_use]
+    pub const fn has_hot_comments(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
     /// Luau's lexer reads 0 as the end of input, and PUC Lua lexes a NUL like any other byte.
     #[must_use]
     pub const fn has_nul_source_end(self) -> bool {

@@ -2,7 +2,7 @@ use luck_ast::{Expression, Statement};
 use luck_token::{Span, offset_to_index};
 
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
+use crate::fix::{FixKind, TextEdit};
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
@@ -14,7 +14,8 @@ impl_rule!(
     "parenthesized_conditions",
     Style,
     Warning,
-    "unnecessary parentheses around condition"
+    "unnecessary parentheses around condition",
+    Fix
 );
 
 impl NodeRule for ParenthesizedConditions {
@@ -27,7 +28,6 @@ impl NodeRule for ParenthesizedConditions {
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let source = context.source;
         match stmt {
             Statement::IfStatement(if_stmt) => {
                 findings.extend(
@@ -35,7 +35,7 @@ impl NodeRule for ParenthesizedConditions {
                         &if_stmt.condition,
                         "unnecessary parentheses around `if` condition",
                         if_stmt.span,
-                        source,
+                        context,
                     )
                     .map(|finding| {
                         finding.with_help("Lua doesn't need parentheses around conditions")
@@ -46,7 +46,7 @@ impl NodeRule for ParenthesizedConditions {
                         &clause.condition,
                         "unnecessary parentheses around `elseif` condition",
                         clause.span,
-                        source,
+                        context,
                     ));
                 }
             }
@@ -55,7 +55,7 @@ impl NodeRule for ParenthesizedConditions {
                     &while_loop.condition,
                     "unnecessary parentheses around `while` condition",
                     while_loop.span,
-                    source,
+                    context,
                 ));
             }
             Statement::Assignment(_)
@@ -86,35 +86,37 @@ fn check_condition(
     condition: &Expression<'_>,
     message: &'static str,
     span: Span,
-    source: &str,
+    context: &LintContext<'_>,
 ) -> Option<Finding> {
     let Expression::Parenthesized(parenthesized) = condition else {
         return None;
     };
     let Span { start, end } = parenthesized.span;
-    let bytes = source.as_bytes();
-    let before = offset_to_index(start).checked_sub(1).and_then(|i| bytes.get(i));
-    let after = bytes.get(offset_to_index(end));
-    Some(Finding::new(message, span).with_fix(Fix {
-        description: "remove unnecessary parentheses".to_owned(),
-        edits: vec![
-            TextEdit {
-                span: Span::new(start, start.saturating_add(1)),
-                replacement: replacement_beside(before),
-            },
-            TextEdit {
-                span: Span::new(end.saturating_sub(1), end),
-                replacement: replacement_beside(after),
-            },
-        ],
+    Some(Finding::new(message, span).with_fix(context, FixKind::Fix, |fixer| {
+        let bytes = context.source.as_bytes();
+        let before = offset_to_index(start).checked_sub(1).and_then(|i| bytes.get(i));
+        let after = bytes.get(offset_to_index(end));
+        fixer.fix(
+            "remove unnecessary parentheses",
+            [
+                TextEdit {
+                    span: Span::new(start, start.saturating_add(1)),
+                    replacement: replacement_beside(before).into(),
+                },
+                TextEdit {
+                    span: Span::new(end.saturating_sub(1), end),
+                    replacement: replacement_beside(after).into(),
+                },
+            ],
+        )
     }))
 }
 
 /// What a deleted parenthesis leaves: a space if the byte beside it would
 /// otherwise run into the condition.
-fn replacement_beside(neighbor: Option<&u8>) -> String {
+fn replacement_beside(neighbor: Option<&u8>) -> &'static str {
     let is_word_byte = neighbor.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
-    if is_word_byte { " ".to_owned() } else { String::new() }
+    if is_word_byte { " " } else { "" }
 }
 
 #[cfg(test)]

@@ -3,12 +3,12 @@
     reason = "`DocumentSymbol` has no constructor, so building one names its deprecated field"
 )]
 
+use ls_types::{DocumentSymbol, SymbolKind};
 use luck_ast::{
     Assignment, Block, Expression, FunctionBody, FunctionName, Name, Statement, Suffix,
-    TypeDeclarationValue, Var, Visitor,
+    TypeDeclarationValue, Var, Visit,
 };
 use luck_token::Span;
-use tower_lsp_server::ls_types::{DocumentSymbol, SymbolKind};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::identifier;
@@ -28,7 +28,7 @@ struct SymbolEmitter<'document> {
     symbols: Vec<DocumentSymbol>,
 }
 
-impl<'ast> Visitor<'ast> for SymbolEmitter<'_> {
+impl<'ast> Visit<'ast> for SymbolEmitter<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             Statement::FunctionDecl(declaration) => {

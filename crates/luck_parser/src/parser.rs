@@ -60,7 +60,7 @@ fn parse_recording<'ast>(
     let lexer = match Lexer::new(source, version) {
         Ok(lexer) => lexer,
         Err(error) => {
-            let block = Block { span: Span::new(0, 0), stmts: List::new(), last_stmt: None };
+            let block = Block::new(Span::new(0, 0), List::new(), None);
             // The empty block's own level.
             let errors = vec![error];
             let parse = ParseResult {
@@ -279,11 +279,7 @@ impl<'ast> Parser<'ast> {
     /// the source, and the lexer is drained by then.
     fn parse_chunk(mut self) -> (ParseResult<'ast>, Option<Vec<Token>>) {
         let start_span = self.token.span;
-        let block = self.parse_block().unwrap_or(Block {
-            span: start_span,
-            stmts: List::new(),
-            last_stmt: None,
-        });
+        let block = self.parse_block().unwrap_or_else(|| Block::new(start_span, List::new(), None));
         let (comments, mut errors) = self.lexer.finish();
         errors.append(&mut self.errors);
         if self.has_type_function && errors.is_empty() {
@@ -373,7 +369,7 @@ impl<'ast> Parser<'ast> {
     #[inline]
     fn advance_leaf(&mut self) -> Literal<'ast> {
         let span = self.advance();
-        Literal { text: span.text(self.source), span }
+        Literal::new(span.text(self.source), span)
     }
 
     #[inline]
@@ -389,11 +385,7 @@ impl<'ast> Parser<'ast> {
         let span = self.advance();
         let index = self.counts.names;
         self.counts.names = index.wrapping_add(1);
-        Name {
-            text: ThinStr::new(span.text(self.source)),
-            index: Some(NameIndex::new(index)),
-            span,
-        }
+        Name::new(ThinStr::new(span.text(self.source)), Some(NameIndex::new(index)), span)
     }
 
     #[inline]
@@ -489,7 +481,7 @@ impl<'ast> Parser<'ast> {
             self.advance_name()
         } else {
             self.report_expected_identifier();
-            Name { text: ThinStr::new(""), index: None, span: self.token.span }
+            Name::new(ThinStr::new(""), None, self.token.span)
         }
     }
 

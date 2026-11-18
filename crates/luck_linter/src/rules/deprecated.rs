@@ -1,17 +1,18 @@
 use luck_allocator::Allocator;
-use luck_ast::{Call, Expression, LastStatement, Suffix, SuffixedExpression};
+use luck_ast::{Call, Expression, GetSpan as _, LastStatement, Suffix, SuffixedExpression};
 use luck_semantic::{
-    ResolvedCallee, SemanticAnalysis, StdlibDeprecation, StdlibEntry, StdlibFunction,
-    expand_replace_template,
+    ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction, expand_replace_template,
 };
 use luck_token::{index_to_offset, is_lua_whitespace, offset_to_index};
 
 use crate::call::{CallArgs, string_literal_value};
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit, comments_within};
+use crate::fix::{Fix, FixKind, RuleFixer};
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{CallPosition, CallSite, ChainPosition, LintContext, NodeRule, impl_rule};
 
+/// A replacement the catalog marks exact is a fix, and any other one a
+/// suggestion.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Deprecated;
 
@@ -20,7 +21,8 @@ impl_rule!(
     "deprecated",
     Correctness,
     Warning,
-    "use of a deprecated standard library function, argument, or value"
+    "use of a deprecated standard library function, argument, or value",
+    Fix | Suggestion
 );
 
 impl NodeRule for Deprecated {
@@ -53,12 +55,25 @@ fn check_call(site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec
 
     if let Some(deprecation) = entry.deprecation() {
         let name = callee.name();
-        let fix = replacement_fix(call, entry, position, &name, deprecation, context);
-        findings.push(
-            Finding::new(format!("`{name}` is deprecated"), call.span())
-                .with_help(deprecation.message)
-                .with_optional_fix(fix),
-        );
+        let finding = Finding::new(format!("`{name}` is deprecated"), call.span())
+            .with_help(deprecation.message);
+        findings.push(match deprecation.replacement {
+            Some(replacement) => {
+                let kind = if replacement.is_exact { FixKind::Fix } else { FixKind::Suggestion };
+                finding.with_fix(context, kind, |fixer| {
+                    replacement_fix(
+                        fixer,
+                        call,
+                        entry,
+                        position,
+                        &name,
+                        replacement.template,
+                        context,
+                    )
+                })
+            }
+            None => finding,
+        });
         return;
     }
 
@@ -127,28 +142,24 @@ fn deprecated_constants(
     })
 }
 
-/// The deprecation's replacement template filled in with the call's argument
-/// text, or `None` when there's no template or the result can't stand where
-/// the call does.
+/// The replacement `template` filled in with the call's argument text, or
+/// `None` when the result can't stand where the call does.
 fn replacement_fix(
+    fixer: RuleFixer,
     call: Call<'_>,
     entry: &StdlibEntry,
     position: CallPosition,
-    display_name: &str,
-    deprecation: &StdlibDeprecation,
+    name: &str,
+    template: &str,
     context: &LintContext<'_>,
 ) -> Option<Fix> {
-    let template = deprecation.replace_template.as_ref()?;
     let StdlibEntry::Function(function) = entry else {
         return None;
     };
     let args = CallArgs::new(call.args);
     // A template spells the positional arguments, which a method's receiver
-    // isn't among, and the argument text can't carry a comment between them.
-    if call.method.is_some()
-        || !function.accepts_arg_count(args.len())
-        || !comments_within(context.comments, call.span()).is_empty()
-    {
+    // isn't among.
+    if call.method.is_some() || !function.accepts_arg_count(args.len()) {
         return None;
     }
     let arg_texts: Vec<&str> = args.map(|arg| arg.span().text(context.source)).collect();
@@ -157,10 +168,8 @@ fn replacement_fix(
         return None;
     }
     let replacement = fit_to_position(expanded, call.span().end, position, context)?;
-    Some(Fix {
-        description: format!("replace deprecated `{display_name}` with `{replacement}`"),
-        edits: vec![TextEdit { span: call.span(), replacement }],
-    })
+    let message = format!("replace deprecated `{name}` with `{replacement}`");
+    Some(fixer.replace(message, call.span(), replacement))
 }
 
 /// Whether the name `expanded` starts with may not be the host's global at
@@ -296,13 +305,39 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::Deprecated;
+    use crate::diagnostic::LintDiagnostic;
+    use crate::fix::FixKind;
     use crate::fixtures::{fix_and_reparse, run_rule, run_rule_roblox};
 
     fn run_fix(source: &str, version: LuaVersion) -> Option<(String, String)> {
         let diags = run_rule(&Deprecated, source, version);
         let diag = diags.into_iter().find(|diag| diag.fix.is_some())?;
         let applied = fix_and_reparse(source, slice::from_ref(&diag), version);
-        Some((diag.fix?.description, applied))
+        Some((diag.fix?.message.into_owned(), applied))
+    }
+
+    fn fix_kind(diags: &[LintDiagnostic]) -> Option<FixKind> {
+        diags.first()?.fix.as_ref().map(|fix| fix.kind)
+    }
+
+    #[test]
+    fn flags_and_fixes_an_exact_replacement() {
+        let diags = run_rule(&Deprecated, "unpack(t)", LuaVersion::Lua54);
+        assert_eq!(fix_kind(&diags), Some(FixKind::Fix), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_and_suggests_a_replacement_that_changes_behavior() {
+        let getn = run_rule(&Deprecated, "local n = table.getn(t)", LuaVersion::Lua54);
+        assert_eq!(fix_kind(&getn), Some(FixKind::Suggestion), "`#` calls `__len`: {getn:?}");
+        let wait = run_rule_roblox(&Deprecated, "wait(1)");
+        assert_eq!(fix_kind(&wait), Some(FixKind::Suggestion), "{wait:?}");
+    }
+
+    #[test]
+    fn flags_and_fixes_keeping_a_comment_inside_an_argument() {
+        let (_, after) = run_fix("unpack(f(--[[why]] t))", LuaVersion::Lua54).unwrap();
+        assert_eq!(after, "table.unpack(f(--[[why]] t))");
     }
 
     #[test]

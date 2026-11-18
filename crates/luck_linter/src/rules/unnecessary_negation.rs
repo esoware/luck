@@ -1,8 +1,8 @@
-use luck_ast::Expression;
+use luck_ast::{Expression, GetSpan as _};
 use luck_token::{BinOp, Span, UnOp};
 
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
+use crate::fix::FixKind;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
@@ -14,7 +14,8 @@ impl_rule!(
     "unnecessary_negation",
     Style,
     Warning,
-    "negated comparison that could use the opposite operator"
+    "negated comparison that could use the opposite operator",
+    Fix
 );
 
 impl NodeRule for UnnecessaryNegation {
@@ -55,22 +56,23 @@ impl NodeRule for UnnecessaryNegation {
         // `not (a == b)`. Flipping `<` or `<=` changes the result for NaN
         // and can call a different metamethod.
         let is_equality = matches!(last.op, BinOp::Eq | BinOp::Ne);
-        let fix = is_equality.then(|| Fix {
-            description: "invert the comparison operator".to_owned(),
-            // Keep the parens. This node can't see its parent, and a bare
-            // comparison could regroup with a neighboring `..`, arithmetic,
-            // or comparison operator.
-            edits: vec![TextEdit {
-                span: unary.span,
-                replacement: format!("({lhs} {op_text} {rhs})"),
-            }],
-        });
         findings.push(
             Finding::new(
                 format!("negated comparison, consider `{lhs} {op_text} {rhs}`"),
                 unary.span,
             )
-            .with_optional_fix(fix),
+            .with_fix(context, FixKind::Fix, |fixer| {
+                // Keep the parens. This node can't see its parent, and a bare
+                // comparison could regroup with a neighboring `..`,
+                // arithmetic, or comparison operator.
+                is_equality.then(|| {
+                    fixer.replace(
+                        "invert the comparison operator",
+                        unary.span,
+                        format!("({lhs} {op_text} {rhs})"),
+                    )
+                })
+            }),
         );
     }
 }
@@ -181,5 +183,21 @@ mod tests {
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert_eq!(fixed, "local r = (x.y == f(1))");
+    }
+
+    #[test]
+    fn flags_without_fix_for_comment_beside_the_operator() {
+        let diags = run("local r = not (a --[[why]] == b)");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].fix.is_none(), "the fix would delete the comment: {diags:?}");
+    }
+
+    #[test]
+    fn flags_and_fixes_keeping_comment_inside_an_operand() {
+        let source = "local r = not (f(--[[why]] a) == b)";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local r = (f(--[[why]] a) ~= b)");
     }
 }

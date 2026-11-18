@@ -8,7 +8,7 @@ use core::mem;
 
 use luck_ast::{
     Block, Expression, FunctionBody, LocalFunction, MAX_NESTING_DEPTH, Name, Statement, Type, Var,
-    VisitorMut,
+    VisitMut,
 };
 use luck_token::LuaVersion;
 
@@ -229,7 +229,7 @@ impl<'ast> Binder<'_, 'ast> {
     }
 }
 
-impl<'ast> VisitorMut<'ast> for Binder<'_, 'ast> {
+impl<'ast> VisitMut<'ast> for Binder<'_, 'ast> {
     /// The walk goes no deeper than one level past the cap, so it's safe on a
     /// tree of any depth.
     fn descend(&mut self) -> bool {
@@ -251,20 +251,26 @@ impl<'ast> VisitorMut<'ast> for Binder<'_, 'ast> {
                 for expr in &mut local.exprs {
                     self.visit_expr(expr);
                 }
-                self.walk_attributed_names(&mut local.names);
+                for attributed in &mut local.names {
+                    self.visit_attributed_name(attributed);
+                }
                 let is_exported = local.kind.is_exported();
                 for attributed in &mut local.names {
                     self.declare(&mut attributed.name, is_exported);
                 }
             }
             Statement::LocalFunction(local_function) => {
-                self.walk_function_attributes(&mut local_function.attributes);
+                for attribute in &mut local_function.attributes {
+                    self.visit_function_attribute(attribute);
+                }
                 let is_exported = local_function.kind.is_exported();
                 let LocalFunction { name, body, .. } = &mut **local_function;
                 self.visit_function(body, false, Some((name, is_exported)));
             }
             Statement::FunctionDecl(function_decl) => {
-                self.walk_function_attributes(&mut function_decl.attributes);
+                for attribute in &mut function_decl.attributes {
+                    self.visit_function_attribute(attribute);
+                }
                 let is_method = function_decl.name.method.is_some();
                 self.visit_function(&mut function_decl.body, is_method, None);
                 if let Some(root) = function_decl.name.names.first_mut() {
@@ -336,7 +342,9 @@ impl<'ast> VisitorMut<'ast> for Binder<'_, 'ast> {
                 for expr in &mut global_declaration.exprs {
                     self.visit_expr(expr);
                 }
-                self.walk_attributed_names(&mut global_declaration.names);
+                for attributed in &mut global_declaration.names {
+                    self.visit_attributed_name(attributed);
+                }
                 for attributed in &mut global_declaration.names {
                     self.declare_global(&mut attributed.name);
                 }
@@ -365,16 +373,16 @@ impl<'ast> VisitorMut<'ast> for Binder<'_, 'ast> {
         self.walk_expr(expr);
     }
 
-    fn visit_assignment_target(&mut self, target: &mut Var<'ast>) {
-        if let Var::Name(name) = target {
+    fn visit_var(&mut self, var: &mut Var<'ast>) {
+        if let Var::Name(name) = var {
             self.reference(name, true);
             return;
         }
-        self.walk_assignment_target(target);
+        self.walk_var(var);
     }
 
-    fn visit_function_body(&mut self, body: &mut FunctionBody<'ast>) {
-        self.visit_function(body, false, None);
+    fn visit_function_body(&mut self, function_body: &mut FunctionBody<'ast>) {
+        self.visit_function(function_body, false, None);
     }
 
     fn visit_type(&mut self, ty: &mut Type<'ast>) {

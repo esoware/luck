@@ -1,4 +1,5 @@
-//! A run of requires prints sorted by the name each binds.
+//! With `sort_requires` on, a run of requires prints sorted by the name each
+//! binds.
 //!
 //! A run is two or more sortable statements a block prints one after another, outside any
 //! `-- luck: format off` region, with no blank line or comment line between them. A statement is

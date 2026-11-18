@@ -4,7 +4,8 @@
 //! [`LuaVersion`] (version-gated feature flags), [`TokenKind`]/[`Token`]
 //! (every Lua and Luau token, which holds no text and slices it from its
 //! source), the AST operators ([`BinOp`], [`UnOp`], [`CompoundOp`]),
-//! [`Comment`] (extracted comments with position metadata), [`SourceError`],
+//! [`Comment`] (extracted comments with position metadata), the comments that
+//! tell a tool what to do ([`CommentContent`], [`LintDirective`]), [`SourceError`],
 //! the literal semantics every crate shares ([`parse_lua_number`],
 //! [`decode_string`], [`encode_string`], [`short_string_body`]), the definition
 //! of a line break ([`line_breaks`], [`has_line_break`]) and the [`LineIndex`]
@@ -35,6 +36,7 @@ extern crate alloc;
 
 mod code_buffer;
 mod comment;
+mod directive;
 mod number;
 mod op;
 mod source_error;
@@ -46,6 +48,7 @@ mod whitespace;
 
 pub use code_buffer::CodeBuffer;
 pub use comment::{Comment, CommentKind, CommentPosition, chunk_header, leading_hot_comments};
+pub use directive::{CommentContent, LintDirective, LintExtent, LintVerb};
 pub use number::{LuaNumber, NumberSubtypes, parse_lua_number};
 pub use op::{Associativity, BinOp, CompoundOp, OperandSide, UnOp};
 pub use source_error::SourceError;

@@ -4,10 +4,10 @@
 
 use core::{iter, mem};
 
-use luck_allocator::{Allocator, Box, List};
+use luck_allocator::{Allocator, List};
 use luck_ast::{
-    BinaryLink, BinaryOp, Block, Expression, IfStatement, LastStatement, OneOrMore, Statement,
-    is_multi_value,
+    BinaryLink, BinaryOp, Block, Expression, GetSpan as _, IfStatement, LastStatement, OneOrMore,
+    Statement, is_multi_value,
 };
 use luck_token::BinOp;
 
@@ -97,9 +97,9 @@ fn logical<'ast>(
         return first_operand;
     };
     let span = first_operand.span().merge(links.last().operand.span());
-    let mut run = BinaryOp { span, first: first_operand, links };
+    let mut run = BinaryOp::boxed(span, first_operand, links, allocator);
     run.splice_operands(allocator);
-    Expression::BinaryOp(Box::new_in(run, allocator))
+    Expression::BinaryOp(run)
 }
 
 /// The condition and value of `if c then return v end`.
@@ -121,10 +121,6 @@ fn if_return_guard<'tree, 'ast>(
     Some((&if_stmt.condition, return_expr))
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the compressor is one type with its rewrites split by flag"
-)]
 impl<'ast> Compressor<'_, 'ast> {
     /// `if a then if b then X end end` becomes `if a and b then X end`, for
     /// every level of the run at once, so an `if` inside the run leaves its

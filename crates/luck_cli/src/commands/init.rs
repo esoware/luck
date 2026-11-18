@@ -94,37 +94,46 @@ fn init_config_content(target: LuaTarget) -> String {
 
 #[cfg(test)]
 mod tests {
-    use luck_config::parse_luck_config;
+    use luck_config::Project;
 
     use super::*;
 
+    /// The project the generated `luck.json` loads into, beside its entry.
+    fn initialized(target: LuaTarget) -> (String, Project) {
+        let content = init_config_content(target);
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("luck.json");
+        fs::write(&config_path, &content).expect("write luck.json");
+        let project = Project::load(&config_path).expect("generated luck.json should load");
+        (content, project)
+    }
+
+    fn targets(project: &Project) -> (LuaTarget, LuaTarget) {
+        let target_of = |name: &str| project.target_for(Some(Path::new(name)));
+        (target_of("a.lua"), target_of("a.luau"))
+    }
+
     #[test]
     fn init_config_default_sets_both_axes() {
-        let content = init_config_content(LuaTarget::Lua54);
-        let config = parse_luck_config(&content).expect("generated luck.json should parse");
-        assert_eq!(config.lua.as_deref(), Some("lua54"));
-        assert_eq!(config.luau.as_deref(), Some("luau"));
+        let (content, project) = initialized(LuaTarget::Lua54);
+        assert_eq!(targets(&project), (LuaTarget::Lua54, LuaTarget::Luau));
         assert!(content.contains("\"entry\": \"src/main.lua\""));
-        assert!(content.contains("search_paths"));
+        assert_eq!(project.search_paths(), ["src/?.lua", "src/?/init.lua"]);
     }
 
     #[test]
     fn init_config_lua_dialect_sets_lua_axis_only() {
-        let content = init_config_content(LuaTarget::Lua53);
-        let config = parse_luck_config(&content).expect("generated luck.json should parse");
-        assert_eq!(config.lua.as_deref(), Some("lua53"));
-        assert_eq!(config.luau.as_deref(), Some("luau"));
+        let (content, project) = initialized(LuaTarget::Lua53);
+        assert_eq!(targets(&project), (LuaTarget::Lua53, LuaTarget::Luau));
         assert!(content.contains("\"entry\": \"src/main.lua\""));
     }
 
     #[test]
     fn init_config_roblox_sets_luau_axis_and_luau_entry() {
-        let content = init_config_content(LuaTarget::LuauRoblox);
-        let config = parse_luck_config(&content).expect("generated luck.json should parse");
-        assert_eq!(config.lua.as_deref(), Some("lua54"));
-        assert_eq!(config.luau.as_deref(), Some("roblox"));
+        let (content, project) = initialized(LuaTarget::LuauRoblox);
+        assert_eq!(targets(&project), (LuaTarget::Lua54, LuaTarget::LuauRoblox));
         assert!(content.contains("\"entry\": \"src/main.luau\""));
         // Luau projects have no Lua-style search paths.
-        assert!(!content.contains("search_paths"));
+        assert_eq!(project.search_paths(), Vec::<String>::new());
     }
 }

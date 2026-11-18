@@ -1,4 +1,4 @@
-use luck_ast::{Call, ChainHead, Expression, FunctionArgs, Suffix};
+use luck_ast::{Call, ChainHead, Expression, FunctionArgs, GetSpan as _, Suffix};
 use luck_token::{BinOp, LuaVersion, UnOp};
 
 use crate::call::dotted_callee;

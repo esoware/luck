@@ -1,7 +1,8 @@
 use core::slice;
 
 use luck_ast::{
-    Call, Expression, FunctionArgs, Literal, Name, Suffix, TableConstructor, is_multi_value,
+    Call, Expression, FunctionArgs, GetSpan as _, Literal, Name, Suffix, TableConstructor,
+    is_multi_value,
 };
 use luck_semantic::SemanticAnalysis;
 use luck_token::{Span, short_string_body};

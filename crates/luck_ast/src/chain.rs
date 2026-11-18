@@ -6,6 +6,7 @@ use luck_token::{Associativity, BinOp, OperandSide, Span};
 
 use crate::expr::{BinaryLink, BinaryOp, Expression, FunctionArgs, Suffix, SuffixedExpression};
 use crate::leaf::Name;
+use crate::span::GetSpan;
 use crate::types::TypeArgs;
 
 /// A chain's prefix and its first few suffixes, read as one expression: what
@@ -45,9 +46,10 @@ impl<'ast> ChainHead<'ast> {
         let (last, before) = self.suffixes.split_last()?;
         Some((Self { prefix: self.prefix, suffixes: before }, last))
     }
+}
 
-    #[must_use]
-    pub fn span(self) -> Span {
+impl GetSpan for ChainHead<'_> {
+    fn span(&self) -> Span {
         let prefix_span = self.prefix.span();
         self.suffixes.last().map_or(prefix_span, |last| prefix_span.merge(last.span()))
     }
@@ -132,9 +134,10 @@ impl<'ast> Call<'ast> {
             Suffix::Field(_) | Suffix::Index { .. } | Suffix::TypeInstantiation { .. } => None,
         }
     }
+}
 
-    #[must_use]
-    pub fn span(self) -> Span {
+impl GetSpan for Call<'_> {
+    fn span(&self) -> Span {
         self.callee.span().merge(self.args.span())
     }
 }
@@ -248,7 +251,7 @@ impl<'ast> BinaryOp<'ast> {
                 continue;
             };
             let operand = leftmost_operand(link.operand, level, &mut pending);
-            self.links.push(BinaryLink { op: link.op, operand }, allocator);
+            self.links.push(BinaryLink::new(link.op, operand), allocator);
         }
     }
 }
@@ -285,8 +288,7 @@ mod tests {
         allocator: &'ast Allocator,
     ) -> Expression<'ast> {
         let suffixes = OneOrMore::new(suffix, allocator);
-        let chain = SuffixedExpression { span: Span::default(), prefix, suffixes };
-        Expression::Suffixed(Box::new_in(chain, allocator))
+        Expression::new_suffixed(Span::default(), prefix, suffixes, allocator)
     }
 
     fn unspliced_run<'ast>(
@@ -295,9 +297,8 @@ mod tests {
         operand: Expression<'ast>,
         allocator: &'ast Allocator,
     ) -> Expression<'ast> {
-        let links = OneOrMore::new(BinaryLink { op, operand }, allocator);
-        let run = BinaryOp { span: Span::default(), first, links };
-        Expression::BinaryOp(Box::new_in(run, allocator))
+        let links = OneOrMore::new(BinaryLink::new(op, operand), allocator);
+        Expression::new_binary_op(Span::default(), first, links, allocator)
     }
 
     #[test]

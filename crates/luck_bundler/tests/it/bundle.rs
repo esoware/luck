@@ -6,13 +6,14 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use luck_allocator::Allocator;
+use luck_allocator::{Allocator, ThreadAllocators};
 use luck_bundler::{BundleOptions, BundleResult, DependencyGraph, DynamicRequire};
 use luck_core::Diagnostic;
+use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::LuaVersion;
 use tempfile::TempDir;
 
-use crate::common::{arenas, bundle_both};
+use crate::common::{bundle_both, off_pool, on_pool};
 
 fn fixture_directory(dialect: &str, name: &str) -> PathBuf {
     let manifest_directory = env!("CARGO_MANIFEST_DIR");
@@ -796,6 +797,100 @@ require(\"b\")
     assert_eq!(files, ["a.lua", "b.lua"], "{errors:?}");
 }
 
+/// The canonical form of `directory`, as diagnostics write it.
+fn slashed_root(directory: &TempDir) -> String {
+    let canonical = FileSystemOs.canonicalize(directory.path()).expect("canonicalize");
+    to_slash_lossy(&canonical).into_owned()
+}
+
+#[test]
+fn unresolved_lua_require_lists_the_paths_it_searched() {
+    let directory = temp_project(&[("main.lua", b"require(\"missing.mod\")\n")]).expect("project");
+    let errors =
+        bundle_lua_project(directory.path()).expect_err("an unresolved module must not bundle");
+    let [error] = errors.as_slice() else {
+        panic!("expected one error: {errors:?}");
+    };
+    assert_eq!(error.code, "E004");
+    assert_eq!(error.file_path, format!("{}/main.lua", slashed_root(&directory)));
+    assert_eq!(error.message, "module not found: `missing.mod`");
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "\
+searched paths:
+  - `missing/mod.lua`"
+        )
+    );
+}
+
+#[test]
+fn unresolved_luau_require_lists_the_four_files_it_could_be() {
+    let directory = temp_project(&[("main.luau", b"require(\"./missing\")\n")]).expect("project");
+    let errors =
+        bundle_luau_project(directory.path()).expect_err("an unresolved module must not bundle");
+    let [error] = errors.as_slice() else {
+        panic!("expected one error: {errors:?}");
+    };
+    let base = format!("{}/./missing", slashed_root(&directory));
+    assert_eq!(error.code, "E004");
+    assert_eq!(
+        error.help,
+        Some(format!(
+            "\
+searched paths:
+  - `{base}.luau`
+  - `{base}.lua`
+  - `{base}/init.luau`
+  - `{base}/init.lua`"
+        ))
+    );
+}
+
+#[test]
+fn ambiguous_luau_require_names_both_files() {
+    let directory = temp_project(&[
+        ("main.luau", b"require(\"./util\")\n"),
+        ("util.luau", RETURN_ONE),
+        ("util.lua", RETURN_ONE),
+    ])
+    .expect("project");
+    let errors =
+        bundle_luau_project(directory.path()).expect_err("an ambiguous module must not bundle");
+    let [error] = errors.as_slice() else {
+        panic!("expected one error: {errors:?}");
+    };
+    let root = slashed_root(&directory);
+    assert_eq!(error.code, "E007");
+    assert_eq!(error.message, "ambiguous module resolution");
+    assert_eq!(
+        error.help,
+        Some(format!(
+            "ambiguity: both `{root}/util.luau` and `{root}/util.lua` exist, so remove one of \
+             the conflicting files"
+        ))
+    );
+}
+
+#[test]
+fn luaurc_alias_named_self_warns_w004_where_self_is_required() {
+    let directory = temp_project(&[
+        ("main.luau", b"return require(\"./pkg\")\n"),
+        (".luaurc", br#"{"aliases":{"self":"./elsewhere"}}"#),
+    ])
+    .expect("project");
+    let package = directory.path().join("pkg");
+    fs::create_dir_all(&package).expect("mkdir pkg");
+    fs::write(package.join("init.luau"), "return require(\"@self/x\")\n").expect("write init");
+    fs::write(package.join("x.luau"), RETURN_ONE).expect("write x");
+    let warnings = bundle_luau_project(directory.path()).expect("bundle failed").warnings;
+    let [warning] = warnings.as_slice() else {
+        panic!("expected one warning: {warnings:?}");
+    };
+    assert_eq!(warning.code, "W004");
+    assert_eq!(warning.file_path, format!("{}/pkg/init.luau", slashed_root(&directory)));
+}
+
 #[test]
 fn oversized_dependency_reports_e012_once_for_its_requirers() {
     let oversized = vec![b'-'; 10 * 1024 * 1024 + 1];
@@ -821,8 +916,8 @@ require(\"b\")
 /// same directories.
 ///
 /// Each module requires every module of its own directory, the first of the
-/// next, and, when `has_missing_requires`, one that doesn't exist, which is
-/// more than one task resolves, while the entry requires few.
+/// next, and, when `has_missing_requires`, one that doesn't exist, while the
+/// entry requires few.
 ///
 /// # Errors
 ///
@@ -873,14 +968,15 @@ fn threads_sharing_one_resolver_find_what_one_thread_does() {
                 project_root: directory.path(),
                 dynamic_require: DynamicRequire::default(),
             };
-            let one_thread = luck_bundler::bundle(&mut arenas(1), &entry, &options);
+            let bundle = || luck_bundler::bundle(&ThreadAllocators::new(), &entry, &options);
+            let one_thread = on_pool(1, bundle);
             match &one_thread {
                 Ok(bundled) => assert_eq!(bundled.source_files.len(), 161, "{version:?}"),
                 Err(errors) => assert_eq!(codes(errors), ["E004"; 160], "{version:?}"),
             }
             assert_eq!(one_thread.is_err(), has_missing_requires, "{version:?}");
             for _ in 0u8..4 {
-                let threaded = luck_bundler::bundle(&mut arenas(16), &entry, &options);
+                let threaded = on_pool(16, bundle);
                 assert_eq!(format!("{threaded:?}"), format!("{one_thread:?}"), "{version:?}");
             }
         }
@@ -901,18 +997,17 @@ require(\"b\")
         ("b.lua", RETURN_ONE),
     ])
     .expect("project");
-    let mut arenas = arenas(2);
-    let graph = DependencyGraph::build(
-        &mut arenas,
-        &directory.path().join("main.lua"),
-        &BundleOptions {
-            version: LuaVersion::Lua54,
-            search_paths: &["?.lua".to_owned()],
-            project_root: directory.path(),
-            dynamic_require: DynamicRequire::default(),
-        },
-    )
-    .expect("graph failed");
+    let arenas = ThreadAllocators::new();
+    let search_paths = ["?.lua".to_owned()];
+    let options = BundleOptions {
+        version: LuaVersion::Lua54,
+        search_paths: &search_paths,
+        project_root: directory.path(),
+        dynamic_require: DynamicRequire::default(),
+    };
+    let graph =
+        off_pool(|| DependencyGraph::build(&arenas, &directory.path().join("main.lua"), &options))
+            .expect("graph failed");
 
     let relative_paths: Vec<&str> =
         graph.modules.iter().map(|module| module.relative_path.as_str()).collect();

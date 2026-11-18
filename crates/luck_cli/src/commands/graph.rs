@@ -1,12 +1,13 @@
+use alloc::borrow::Cow;
+use std::path::{Path, PathBuf};
+
 use clap::{Args, ValueEnum};
-use luck_bundler::{BundleOptions, DependencyGraph, DynamicRequire, ModuleId};
+use luck_bundler::{DependencyGraph, DynamicRequire, ModuleId};
 use luck_core::LuaTarget;
+use luck_resolver::to_slash_lossy;
 
 use crate::exit::{Exit, fail_with_diags};
-use crate::project::{
-    bundle_arenas, config_for_one_shot, entry_and_root, resolve_configured_target,
-    resolve_dynamic_require,
-};
+use crate::project::{bundle_arenas, bundle_options, existing_file, one_shot_project};
 use crate::render::print_diags;
 use crate::verbosity::Verbosity;
 
@@ -25,7 +26,11 @@ pub(crate) struct GraphArgs {
     #[arg(short = 't', long = "target", value_name = "TARGET")]
     target: Option<LuaTarget>,
 
-    /// Search path template (repeatable).
+    /// Project config [default: discovered from entry directory].
+    #[arg(short = 'c', long = "config", value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    /// Search path template (repeatable) [default: luck.json's `search_paths`].
     #[arg(short = 's', long = "search-path", value_name = "PATTERN")]
     search_paths: Vec<String>,
 
@@ -33,7 +38,7 @@ pub(crate) struct GraphArgs {
     #[arg(long, value_enum, default_value_t = GraphFormat::Json)]
     format: GraphFormat,
 
-    /// How to treat require(expr): error, warn, or allow.
+    /// How to treat require(expr): error, warn, or allow [default: from luck.json].
     #[arg(long = "dynamic-require", value_name = "MODE")]
     dynamic_require: Option<DynamicRequire>,
 }
@@ -44,26 +49,15 @@ impl GraphArgs {
     /// Returns [`Exit::Usage`] on a bad config or entry path, and
     /// [`Exit::Failure`] when the graph can't be built.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
-        // `graph` takes no `-c`, so its config is always the discovered one.
-        let config = config_for_one_shot(None, &self.entry)?;
-        let target = resolve_configured_target(&config, self.target, &self.entry)?;
-        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require);
-
-        let (entry_path, project_root) = entry_and_root(&self.entry)?;
+        let entry_path = existing_file(&self.entry)?;
+        let project = one_shot_project(self.config.as_deref(), entry_path)?;
+        let target = self.target.unwrap_or_else(|| project.target_for(Some(entry_path)));
         let version = target.lua_version();
+        let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
 
-        let mut arenas = bundle_arenas();
-        let dependency_graph = DependencyGraph::build(
-            &mut arenas,
-            entry_path,
-            &BundleOptions {
-                version,
-                search_paths: &self.search_paths,
-                project_root,
-                dynamic_require,
-            },
-        )
-        .map_err(|errors| fail_with_diags(&errors, version))?;
+        let arenas = bundle_arenas();
+        let dependency_graph = DependencyGraph::build(&arenas, entry_path, &options)
+            .map_err(|errors| fail_with_diags(&errors, version))?;
 
         if verbosity != Verbosity::Quiet {
             print_diags(&dependency_graph.warnings, version);
@@ -80,18 +74,19 @@ impl GraphArgs {
 fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
     use serde_json::{Map, Value, json};
 
-    let module_path =
-        |id: ModuleId| dependency_graph.modules.get(id.0).map(|module| module.path.as_str());
+    let module_path = |id: ModuleId| {
+        dependency_graph.modules.get(id.0).map(|module| to_slash_lossy(&module.path))
+    };
 
     let mut modules_map = Map::new();
     for module in &dependency_graph.modules {
         let requires: Vec<&str> =
             module.dependencies.iter().map(|dependency| dependency.require_string).collect();
-        let resolved_paths: Vec<Option<&str>> =
+        let resolved_paths: Vec<Option<Cow<'_, str>>> =
             module.dependencies.iter().map(|dependency| module_path(dependency.target)).collect();
 
         modules_map.insert(
-            module.path.clone(),
+            to_slash_lossy(&module.path).into_owned(),
             json!({
                 "requires": requires,
                 "resolved_deps": resolved_paths,
@@ -99,7 +94,7 @@ fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
         );
     }
 
-    let ordered_paths: Vec<Option<&str>> =
+    let ordered_paths: Vec<Option<Cow<'_, str>>> =
         dependency_graph.topological_order.iter().map(|id| module_path(*id)).collect();
 
     let output = json!({
@@ -112,11 +107,13 @@ fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
 }
 
 fn print_graph_dot(dependency_graph: &DependencyGraph<'_>) {
+    // A double quote is the only character a DOT string escapes.
+    let quoted = |path: &Path| to_slash_lossy(path).replace('"', "\\\"");
     println!("digraph dependencies {{");
     for module in &dependency_graph.modules {
         for dependency in &module.dependencies {
             if let Some(target) = dependency_graph.modules.get(dependency.target.0) {
-                println!("  \"{}\" -> \"{}\";", module.path, target.path);
+                println!("  \"{}\" -> \"{}\";", quoted(&module.path), quoted(&target.path));
             }
         }
     }

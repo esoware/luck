@@ -124,7 +124,7 @@ params = [
 kind = "function"
 min_args = 1
 max_args = 2
-deprecated = { message = "deprecated since Lua 5.2; use 'load' instead", replace_template = "load(%1)" }
+deprecated = { message = "deprecated since Lua 5.2; use 'load' instead", replacement = { template = "load(%1)", is_exact = true } }
 params = [
   { kind = "string" },
   { kind = "string", is_required = false },
@@ -135,7 +135,7 @@ kind = "function"
 min_args = 1
 max_args = 3
 is_must_use = true
-deprecated = { message = "deprecated in Lua 5.2+; use 'table.unpack' instead", replace_template = "table.unpack(%1)" }
+deprecated = { message = "deprecated in Lua 5.2+; use 'table.unpack' instead", replacement = { template = "table.unpack(%1)", is_exact = true } }
 params = [
   { kind = "table" },
   { kind = "number", is_required = false },
@@ -340,7 +340,7 @@ kind = "function"
 min_args = 2
 max_args = 2
 is_must_use = true
-deprecated = { message = "use 'string.gmatch' instead", replace_template = "string.gmatch(%1, %2)" }
+deprecated = { message = "use 'string.gmatch' instead", replacement = { template = "string.gmatch(%1, %2)", is_exact = true } }
 params = [{ kind = "string" }, { kind = "string" }]
 
 [globals.string.members.gmatch]
@@ -498,7 +498,8 @@ kind = "function"
 min_args = 1
 max_args = 1
 is_must_use = true
-deprecated = { message = "use the '#' length operator instead", replace_template = "#%1" }
+# `#` calls a table's `__len`, which `table.getn` ignores.
+deprecated = { message = "use the '#' length operator instead", replacement = { template = "#%1", is_exact = false } }
 params = [{ kind = "table" }]
 
 [globals.table.members.maxn]
@@ -653,7 +654,7 @@ min_args = 2
 max_args = 2
 is_pure = true
 is_must_use = true
-deprecated = { message = "merged into math.atan in Lua 5.3; pass second arg to math.atan", replace_template = "math.atan(%1, %2)" }
+deprecated = { message = "merged into math.atan in Lua 5.3; pass second arg to math.atan", replacement = { template = "math.atan(%1, %2)", is_exact = true } }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.cosh]
@@ -691,7 +692,8 @@ min_args = 2
 max_args = 2
 is_pure = true
 is_must_use = true
-deprecated = { message = "deprecated since Lua 5.3; use x * 2^exp instead", replace_template = "(%1 * 2 ^ %2)" }
+# `2 ^ e` overflows where `math.ldexp` scales a small mantissa back into range.
+deprecated = { message = "deprecated since Lua 5.3; use x * 2^exp instead", replacement = { template = "(%1 * 2 ^ %2)", is_exact = false } }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.log10]
@@ -700,7 +702,7 @@ min_args = 1
 max_args = 1
 is_pure = true
 is_must_use = true
-deprecated = { message = "deprecated in Lua 5.2; pass 10 as second arg to math.log", replace_template = "math.log(%1, 10)" }
+deprecated = { message = "deprecated in Lua 5.2; pass 10 as second arg to math.log", replacement = { template = "math.log(%1, 10)", is_exact = true } }
 params = [{ kind = "number" }]
 
 [globals.math.members.mod]
@@ -718,7 +720,7 @@ min_args = 2
 max_args = 2
 is_pure = true
 is_must_use = true
-deprecated = { message = "deprecated since Lua 5.3; use '^' operator instead", replace_template = "(%1 ^ %2)" }
+deprecated = { message = "deprecated since Lua 5.3; use '^' operator instead", replacement = { template = "(%1 ^ %2)", is_exact = true } }
 params = [{ kind = "number" }, { kind = "number" }]
 
 [globals.math.members.sinh]

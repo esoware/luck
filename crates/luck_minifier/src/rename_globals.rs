@@ -6,7 +6,7 @@
 //! block that scopes nothing is unwrapped.
 
 use luck_ast::{
-    Assignment, Block, Expression, FunctionBody, LastStatement, Statement, Type, Var, Visitor,
+    Assignment, Block, Expression, FunctionBody, LastStatement, Statement, Type, Var, Visit,
 };
 use luck_token::LuaVersion;
 
@@ -39,7 +39,7 @@ pub(crate) fn renamable_globals(
             reads.visit_item(item);
             continue;
         };
-        reads.visit_assignment(assignment);
+        reads.read_assignment(assignment);
         for target in &assignment.targets {
             if let Some(name) = target_global(target)
                 && !function_globals.contains(&name)
@@ -95,7 +95,7 @@ fn function_globals(
     for item in top_level {
         match item {
             TopLevel::Stmt(Statement::Assignment(assignment)) => {
-                reads.visit_assignment(assignment);
+                reads.read_assignment(assignment);
                 for name in assignment.targets.iter().filter_map(target_global) {
                     if !reads.has(name)
                         && let Some(slot) = is_assigned_first.get_mut(name)
@@ -159,19 +159,19 @@ impl Reads {
 
     /// Every target's prefix and index is evaluated before any store, so
     /// `g, t[g] = 1, 2` reads `g` even though its own target comes first.
-    fn visit_assignment(&mut self, assignment: &Assignment<'_>) {
+    fn read_assignment(&mut self, assignment: &Assignment<'_>) {
         for expr in &assignment.values {
             self.visit_expr(expr);
         }
         for target in &assignment.targets {
             if !matches!(target, Var::Name(_)) {
-                self.visit_assignment_target(target);
+                self.visit_var(target);
             }
         }
     }
 }
 
-impl<'tree> Visitor<'tree> for Reads {
+impl<'tree> Visit<'tree> for Reads {
     fn visit_stmt(&mut self, stmt: &'tree Statement<'tree>) {
         // `function g.f()` and `function g:f()` read `g` to store into it. A
         // plain `function g()` only assigns it.
@@ -194,12 +194,12 @@ impl<'tree> Visitor<'tree> for Reads {
         self.walk_expr(expr);
     }
 
-    fn visit_assignment_target(&mut self, target: &'tree Var<'tree>) {
-        if let Var::Name(name) = target {
+    fn visit_var(&mut self, var: &'tree Var<'tree>) {
+        if let Var::Name(name) = var {
             self.read(name);
             return;
         }
-        self.walk_assignment_target(target);
+        self.walk_var(var);
     }
 
     // A function body's reads belong to its own scope.

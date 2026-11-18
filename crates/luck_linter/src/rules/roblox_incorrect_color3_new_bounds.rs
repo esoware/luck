@@ -3,6 +3,7 @@ use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::signed_number_value;
 use crate::roblox::global_new_call;
 use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
+use luck_ast::GetSpan as _;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxIncorrectColor3NewBounds;

@@ -1,8 +1,9 @@
 use luck_semantic::SymbolKind;
 
 use crate::diagnostic::Finding;
+use crate::fix::FixKind;
 use crate::rule::{LintContext, WholeRule, impl_rule};
-use crate::underscore_fix::UnderscoreFixes;
+use crate::underscore_fix::prefix_underscore;
 
 /// Flags a function parameter that's never referenced (Luacheck 212).
 ///
@@ -17,14 +18,14 @@ impl_rule!(
     "unused_argument",
     Style,
     Warning,
-    "function parameter is declared but never referenced"
+    "function parameter is declared but never referenced",
+    Suggestion
 );
 
 impl WholeRule for UnusedArgument {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
         let tree = semantic.scope_tree();
-        let fixes = UnderscoreFixes::new(semantic);
         let mut findings = Vec::new();
 
         for symbol in tree.symbols() {
@@ -46,7 +47,9 @@ impl WholeRule for UnusedArgument {
             findings.push(
                 Finding::new(format!("unused argument `{name}`"), symbol.definition_span)
                     .with_help("prefix with `_` to suppress this warning")
-                    .with_optional_fix(fixes.fix_for(symbol)),
+                    .with_fix(context, FixKind::Suggestion, |fixer| {
+                        prefix_underscore(fixer, semantic, symbol)
+                    }),
             );
         }
 
@@ -60,8 +63,7 @@ mod tests {
 
     use super::*;
     use crate::diagnostic::LintDiagnostic;
-    use crate::fix::apply_one_pass;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::fixtures::{applied, fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<LintDiagnostic> {
         run_rule(&UnusedArgument, source, LuaVersion::Lua54)
@@ -139,9 +141,9 @@ function obj:method(x) end";
         let source = "local function f(_a, a) return _a end";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_ne!(
-            apply_one_pass(source, &diags),
-            "local function f(_a, _a) return _a end",
+        assert_eq!(
+            applied(source, &diags),
+            source,
             "the rename shouldn't make `return _a` read the second parameter"
         );
     }

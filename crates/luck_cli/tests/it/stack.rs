@@ -30,6 +30,8 @@ fn every_command_gets_through_input_nested_to_the_cap() {
         assert_ran(&luck_in(directory.path()).args(command).assert());
     }
     for file in &files {
-        assert_ran(&luck_in(directory.path()).args(["minify", file.as_str()]).assert());
+        for command in ["minify", "bundle"] {
+            assert_ran(&luck_in(directory.path()).args([command, file.as_str()]).assert());
+        }
     }
 }

@@ -1,7 +1,7 @@
 use core::ops::Range;
 
 use luck_allocator::{Allocator, Box};
-use luck_ast::{Expression, Statement, Type, TypeDeclarationValue, TypeField};
+use luck_ast::{Expression, GetSpan as _, Statement, Type, TypeDeclarationValue, TypeField};
 use luck_token::LuaVersion;
 
 use crate::common::{assert_no_errors, parse_luau};

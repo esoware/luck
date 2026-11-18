@@ -5,10 +5,6 @@ use luck_ast::{
 
 use super::Printer;
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the printer is one type with its node families split by file"
-)]
 impl Printer {
     pub(super) fn print_type(&mut self, ty: &Type<'_>) {
         match ty {

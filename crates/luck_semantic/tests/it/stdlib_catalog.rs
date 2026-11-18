@@ -330,7 +330,14 @@ struct Value {
 struct Deprecation {
     message: String,
     #[serde(default)]
-    replace_template: Option<String>,
+    replacement: Option<Replacement>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Replacement {
+    template: String,
+    is_exact: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -580,7 +587,7 @@ fn derive_string_shape(
         // Replace templates number the subject `%1`, but a colon call
         // passes it as the receiver, so keep the message and drop the fix.
         if let Some(deprecation) = &mut method.deprecated {
-            deprecation.replace_template = None;
+            deprecation.replacement = None;
         }
         if STRING_RETURNING_MEMBERS.contains(&name.as_str()) {
             method.returns_shape = Some("string".to_owned());
@@ -737,12 +744,17 @@ fn constant(constant: &Constant) -> String {
 }
 
 fn deprecation(deprecation: &Deprecation) -> String {
-    let replace_template = deprecation
-        .replace_template
-        .as_ref()
-        .map_or_else(|| "None".to_owned(), |template| format!("Some({template:?})"));
+    let replacement = deprecation.replacement.as_ref().map_or_else(
+        || "None".to_owned(),
+        |replacement| {
+            format!(
+                "Some(StdlibReplacement {{ template: {:?}, is_exact: {} }})",
+                replacement.template, replacement.is_exact
+            )
+        },
+    );
     format!(
-        "Some(StdlibDeprecation {{ message: {:?}, replace_template: {replace_template} }})",
+        "Some(StdlibDeprecation {{ message: {:?}, replacement: {replacement} }})",
         deprecation.message
     )
 }
@@ -922,7 +934,7 @@ fn overloads_keep_their_order_and_deprecations() {
           ] }] },
           { min_args = 2, max_args = 2, params = [
             { kind = "number" },
-            { kind = "any", deprecated = { message = "unused", replace_template = "gc(%1)" } },
+            { kind = "any", deprecated = { message = "unused", replacement = { template = "gc(%1)", is_exact = true } } },
           ] },
         ]
         "#,
@@ -940,7 +952,8 @@ fn overloads_keep_their_order_and_deprecations() {
         Some("gone")
     );
     let deprecated = signatures[1].params[1].deprecated.as_ref().expect("param deprecation");
-    assert_eq!(deprecated.replace_template.as_deref(), Some("gc(%1)"));
+    let replacement = deprecated.replacement.as_ref().expect("param replacement");
+    assert_eq!((replacement.template.as_str(), replacement.is_exact), ("gc(%1)", true));
 }
 
 #[test]
@@ -1018,7 +1031,7 @@ fn the_string_shape_derives_methods_from_the_namespace() {
         min_args = 2
         max_args = 2
         params = [{ kind = "string" }, { kind = "number" }]
-        deprecated = { message = "old", replace_template = "%1:rep(%2)" }
+        deprecated = { message = "old", replacement = { template = "%1:rep(%2)", is_exact = true } }
         [globals.string.members.len]
         kind = "function"
         min_args = 1
@@ -1049,7 +1062,7 @@ fn the_string_shape_derives_methods_from_the_namespace() {
     assert_eq!((rep.signatures[0].min_args, rep.signatures[0].max_args), (1, Some(1)));
     assert_eq!(rep.returns_shape.as_deref(), Some("string"));
     let deprecation = rep.deprecated.as_ref().expect("the deprecation stays");
-    assert!(deprecation.replace_template.is_none(), "a template numbers the subject");
+    assert!(deprecation.replacement.is_none(), "a template numbers the subject");
     let Entry::Function(len) = &shape["len"] else {
         panic!("expected the hand-authored method");
     };

@@ -1,4 +1,4 @@
-use luck_ast::{BinaryLink, BinaryOp, Expression};
+use luck_ast::{BinaryLink, BinaryOp, Expression, GetSpan as _};
 use luck_token::{Associativity, BinOp, Span};
 
 /// One operator of a run, with what it applies to in the pairs the run

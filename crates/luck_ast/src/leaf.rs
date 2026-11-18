@@ -2,20 +2,22 @@ use core::fmt;
 use core::num::NonZeroU32;
 
 use luck_allocator::ThinStr;
+use luck_ast_macros::Ast;
 use luck_token::Span;
 
 /// An identifier: a variable, a field, a parameter, a label, a type, or an
 /// attribute. A name the parser found missing has empty text.
 ///
-/// Its [`NameIndex`] is a pass's numbering kept on the node, so `==` and
-/// `Debug` leave it out, and two names are equal when their text and span
-/// are.
-#[derive(Clone, Copy)]
+/// Its [`NameIndex`] is a pass's numbering kept on the node, so `==`,
+/// `Debug`, and `ContentEq` leave it out, and two names are equal when their
+/// text and span are.
+#[derive(Clone, Copy, Ast)]
 // In this order the text's length and the index share a word, between an
 // aligned pointer and an aligned span, which parses measurably faster.
 #[repr(C)]
 pub struct Name<'ast> {
     pub text: ThinStr<'ast>,
+    #[content_eq(skip)]
     pub index: Option<NameIndex>,
     pub span: Span,
 }
@@ -66,7 +68,7 @@ impl fmt::Debug for NameIndex {
 /// A string keeps its quotes or long brackets and its escapes, and an
 /// interpolated piece is what lies between its delimiters. The node holding it
 /// says which it is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
 pub struct Literal<'ast> {
     pub text: &'ast str,
     pub span: Span,
@@ -87,7 +89,7 @@ mod tests {
 
     #[test]
     fn equality_and_debug_leave_a_name_s_index_out() {
-        let name = Name { text: "x".into(), index: None, span: Span::new(0, 1) };
+        let name = Name::new("x".into(), None, Span::new(0, 1));
         let numbered = Name { index: Some(NameIndex::new(0)), ..name };
         assert_eq!(name, numbered);
         assert_eq!(

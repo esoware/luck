@@ -93,6 +93,26 @@ local self = setmetatable({
 }
 
 #[test]
+fn args_break_when_the_suffixes_after_them_overflow_the_line() {
+    // The arguments fit up to `)`, and `.field()` takes the line to 46
+    // columns.
+    let source = "someFunction(argumentOne, argumentTwo).field()\n";
+    let width = |line_width| FormatOptions { line_width, ..FormatOptions::default() };
+    assert_format_with(source, source, LuaVersion::Lua54, &width(46));
+    assert_format_with(
+        source,
+        "\
+someFunction(
+\targumentOne,
+\targumentTwo
+).field()
+",
+        LuaVersion::Lua54,
+        &width(45),
+    );
+}
+
+#[test]
 fn hugged_table_stays_flat_when_the_call_fits() {
     assert_format("create(\"Frame\", {Size = size})\n", "create(\"Frame\", { Size = size })\n");
 }

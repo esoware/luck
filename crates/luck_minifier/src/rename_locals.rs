@@ -14,7 +14,11 @@ mod scope_claims;
 use core::ptr;
 
 use luck_allocator::Allocator;
-use luck_ast::{Block, Expression, FunctionBody, Name, Statement, Var, VisitorMut};
+use luck_ast::{
+    Block, DoBlock, Expression, FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration,
+    GlobalFunction, IfStatement, LocalAssignment, LocalFunction, Name, NumericFor, RepeatLoop, Var,
+    VisitMut, WhileLoop,
+};
 use luck_token::LuaVersion;
 
 use self::candidate_pool::CandidatePool;
@@ -282,115 +286,112 @@ impl<'ast> Renamer<'_, 'ast> {
     }
 }
 
-impl<'ast> VisitorMut<'ast> for Renamer<'_, 'ast> {
-    fn visit_stmt(&mut self, stmt: &mut Statement<'ast>) {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                for expr in &mut local.exprs {
-                    self.visit_expr(expr);
-                }
-                self.walk_attributed_names(&mut local.names);
-                for attributed in &mut local.names {
-                    self.declare(&mut attributed.name);
-                }
+impl<'ast> VisitMut<'ast> for Renamer<'_, 'ast> {
+    fn visit_local_assignment(&mut self, local_assignment: &mut LocalAssignment<'ast>) {
+        for expr in &mut local_assignment.exprs {
+            self.visit_expr(expr);
+        }
+        for attributed in &mut local_assignment.names {
+            self.visit_attributed_name(attributed);
+        }
+        for attributed in &mut local_assignment.names {
+            self.declare(&mut attributed.name);
+        }
+    }
+
+    fn visit_local_function(&mut self, local_function: &mut LocalFunction<'ast>) {
+        self.visit_signature(&mut local_function.body);
+        self.declare(&mut local_function.name);
+        self.visit_function_scope(&mut local_function.body);
+    }
+
+    fn visit_function_decl(&mut self, function_decl: &mut FunctionDecl<'ast>) {
+        if !self.is_applying {
+            explicit_self::rewrite(self.allocator, self.bindings, function_decl);
+        }
+        self.visit_signature(&mut function_decl.body);
+        self.visit_function_scope(&mut function_decl.body);
+        if let Some(root) = function_decl.name.names.first_mut() {
+            self.reference(root);
+        }
+    }
+
+    fn visit_do_block(&mut self, do_block: &mut DoBlock<'ast>) {
+        self.visit_scoped_block(&mut do_block.block);
+    }
+
+    fn visit_while_loop(&mut self, while_loop: &mut WhileLoop<'ast>) {
+        self.visit_expr(&mut while_loop.condition);
+        self.visit_scoped_block(&mut while_loop.block);
+    }
+
+    fn visit_repeat_loop(&mut self, repeat_loop: &mut RepeatLoop<'ast>) {
+        // The condition sees the block's locals.
+        self.enter_scope();
+        self.visit_block(&mut repeat_loop.block);
+        self.visit_expr(&mut repeat_loop.condition);
+        self.exit_scope();
+    }
+
+    fn visit_if_stmt(&mut self, if_stmt: &mut IfStatement<'ast>) {
+        self.visit_expr(&mut if_stmt.condition);
+        self.visit_scoped_block(&mut if_stmt.block);
+        for clause in &mut if_stmt.elseif_clauses {
+            self.visit_expr(&mut clause.condition);
+            self.visit_scoped_block(&mut clause.block);
+        }
+        if let Some(else_clause) = &mut if_stmt.else_clause {
+            self.visit_scoped_block(&mut else_clause.block);
+        }
+    }
+
+    fn visit_numeric_for(&mut self, numeric_for: &mut NumericFor<'ast>) {
+        self.visit_expr(&mut numeric_for.start);
+        self.visit_expr(&mut numeric_for.limit);
+        if let Some(step) = &mut numeric_for.step {
+            self.visit_expr(step);
+        }
+        // Luau
+        if let Some(ty) = &mut numeric_for.type_annotation {
+            self.visit_type(ty);
+        }
+        self.enter_scope();
+        self.declare(&mut numeric_for.name);
+        self.visit_block(&mut numeric_for.block);
+        self.exit_scope();
+    }
+
+    fn visit_generic_for(&mut self, generic_for: &mut GenericFor<'ast>) {
+        for expr in &mut generic_for.exprs {
+            self.visit_expr(expr);
+        }
+        // Luau: every name binds after the whole list parses.
+        for param in &mut generic_for.names {
+            if let Some(ty) = &mut param.type_annotation {
+                self.visit_type(ty);
             }
-            Statement::LocalFunction(local_function) => {
-                self.visit_signature(&mut local_function.body);
-                self.declare(&mut local_function.name);
-                self.visit_function_scope(&mut local_function.body);
-            }
-            Statement::FunctionDecl(function_declaration) => {
-                if !self.is_applying {
-                    explicit_self::rewrite(self.allocator, self.bindings, function_declaration);
-                }
-                self.visit_signature(&mut function_declaration.body);
-                self.visit_function_scope(&mut function_declaration.body);
-                if let Some(root) = function_declaration.name.names.first_mut() {
-                    self.reference(root);
-                }
-            }
-            Statement::DoBlock(do_block) => self.visit_scoped_block(&mut do_block.block),
-            Statement::WhileLoop(while_loop) => {
-                self.visit_expr(&mut while_loop.condition);
-                self.visit_scoped_block(&mut while_loop.block);
-            }
-            Statement::RepeatLoop(repeat_loop) => {
-                // The condition sees the block's locals.
-                self.enter_scope();
-                self.visit_block(&mut repeat_loop.block);
-                self.visit_expr(&mut repeat_loop.condition);
-                self.exit_scope();
-            }
-            Statement::IfStatement(if_stmt) => {
-                self.visit_expr(&mut if_stmt.condition);
-                self.visit_scoped_block(&mut if_stmt.block);
-                for clause in &mut if_stmt.elseif_clauses {
-                    self.visit_expr(&mut clause.condition);
-                    self.visit_scoped_block(&mut clause.block);
-                }
-                if let Some(else_clause) = &mut if_stmt.else_clause {
-                    self.visit_scoped_block(&mut else_clause.block);
-                }
-            }
-            Statement::NumericFor(numeric_for) => {
-                self.visit_expr(&mut numeric_for.start);
-                self.visit_expr(&mut numeric_for.limit);
-                if let Some(step) = &mut numeric_for.step {
-                    self.visit_expr(step);
-                }
-                // Luau
-                if let Some(ty) = &mut numeric_for.type_annotation {
-                    self.visit_type(ty);
-                }
-                self.enter_scope();
-                self.declare(&mut numeric_for.name);
-                self.visit_block(&mut numeric_for.block);
-                self.exit_scope();
-            }
-            Statement::GenericFor(generic_for) => {
-                for expr in &mut generic_for.exprs {
-                    self.visit_expr(expr);
-                }
-                // Luau: every name binds after the whole list parses.
-                for param in &mut generic_for.names {
-                    if let Some(ty) = &mut param.type_annotation {
-                        self.visit_type(ty);
-                    }
-                }
-                self.enter_scope();
-                for param in &mut generic_for.names {
-                    self.declare(&mut param.name);
-                }
-                self.visit_block(&mut generic_for.block);
-                self.exit_scope();
-            }
-            // Lua 5.5: as with `local function`, the body sees the name.
-            Statement::GlobalFunction(global_function) => {
-                self.declare(&mut global_function.name);
-                self.visit_function_body(&mut global_function.body);
-            }
-            // Lua 5.5: as with `local`, the initializers see the outer scope.
-            Statement::GlobalDeclaration(global_declaration) => {
-                for expr in &mut global_declaration.exprs {
-                    self.visit_expr(expr);
-                }
-                for attributed in &mut global_declaration.names {
-                    self.declare(&mut attributed.name);
-                }
-            }
-            // These bind nothing themselves. The walk still reaches the
-            // functions they hold, Luau `type function` bodies and `typeof`
-            // included.
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::Error(_) => self.walk_stmt(stmt),
+        }
+        self.enter_scope();
+        for param in &mut generic_for.names {
+            self.declare(&mut param.name);
+        }
+        self.visit_block(&mut generic_for.block);
+        self.exit_scope();
+    }
+
+    // Lua 5.5: as with `local function`, the body sees the name.
+    fn visit_global_function(&mut self, global_function: &mut GlobalFunction<'ast>) {
+        self.declare(&mut global_function.name);
+        self.visit_function_body(&mut global_function.body);
+    }
+
+    // Lua 5.5: as with `local`, the initializers see the outer scope.
+    fn visit_global_declaration(&mut self, global_declaration: &mut GlobalDeclaration<'ast>) {
+        for expr in &mut global_declaration.exprs {
+            self.visit_expr(expr);
+        }
+        for attributed in &mut global_declaration.names {
+            self.declare(&mut attributed.name);
         }
     }
 
@@ -402,17 +403,17 @@ impl<'ast> VisitorMut<'ast> for Renamer<'_, 'ast> {
         self.walk_expr(expr);
     }
 
-    fn visit_assignment_target(&mut self, target: &mut Var<'ast>) {
-        if let Var::Name(name) = target {
+    fn visit_var(&mut self, var: &mut Var<'ast>) {
+        if let Var::Name(name) = var {
             self.reference(name);
             return;
         }
-        self.walk_assignment_target(target);
+        self.walk_var(var);
     }
 
-    fn visit_function_body(&mut self, body: &mut FunctionBody<'ast>) {
-        self.visit_signature(body);
-        self.visit_function_scope(body);
+    fn visit_function_body(&mut self, function_body: &mut FunctionBody<'ast>) {
+        self.visit_signature(function_body);
+        self.visit_function_scope(function_body);
     }
 }
 

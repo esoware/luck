@@ -12,10 +12,11 @@
 //! ```
 //! use luck_allocator::Allocator;
 //! use luck_core::LuaTarget;
-//! use luck_linter::LintConfig;
+//! use luck_linter::{FixKind, LintConfig};
 //!
 //! let allocator = Allocator::new();
-//! let diags = luck_linter::lint(&allocator, "print(1)", LuaTarget::Lua54, &LintConfig::default());
+//! let config = LintConfig::default();
+//! let diags = luck_linter::lint(&allocator, "print(1)", LuaTarget::Lua54, &config, FixKind::empty());
 //! assert!(diags.is_empty());
 //! ```
 
@@ -35,6 +36,7 @@ mod call;
 mod cfg;
 mod config;
 mod diagnostic;
+mod directives;
 mod driver;
 mod fix;
 #[cfg(test)]
@@ -49,7 +51,6 @@ mod roblox;
 mod rule;
 mod rules;
 mod suggest;
-mod suppression;
 mod underscore_fix;
 mod uninitialized;
 
@@ -59,9 +60,6 @@ pub use config::{
 };
 pub use diagnostic::{Category, LintDiagnostic, Severity};
 pub use driver::{Analysis, analyze, lint, lint_analyzed, lint_parsed};
-pub use fix::{
-    FIXPOINT_BUDGET, Fix, FixpointError, TextEdit, apply_fixes, apply_fixes_fixpoint,
-    non_overlapping_edits,
-};
+pub use fix::{Fix, FixError, FixKind, Fixed, TextEdit, fix, non_overlapping_edits};
 pub use rule::Rule;
-pub use rules::{rules, unknown_rule_names};
+pub use rules::{rule_named, rules};

@@ -25,10 +25,9 @@ fn print_block<'ast>(
     block: &'ast Block<'ast>,
     comments: Comments<'ast>,
     options: &FormatOptions,
-    should_sort_requires: bool,
 ) -> String {
     let mut f = Formatter::new(allocator, *options, comments);
-    if should_sort_requires {
+    if options.sort_requires {
         f = f.sorting_requires();
     }
     f.write_shebang();
@@ -74,7 +73,7 @@ pub fn format_block<'ast>(
             ),
         });
     }
-    Ok(print_block(allocator, block, comments, options, false))
+    Ok(print_block(allocator, block, comments, options))
 }
 
 /// Parses `source` into `allocator` and formats it. Input that fails to parse
@@ -106,7 +105,7 @@ pub fn format_parsed<'ast>(
         return FormatResult { output: String::new(), errors: parse.errors.clone() };
     }
     let comments = Comments::from_source(&parse.comments, parse.source, version);
-    let output = print_block(allocator, &parse.block, comments, options, options.sort_requires);
+    let output = print_block(allocator, &parse.block, comments, options);
     FormatResult { output, errors: Vec::new() }
 }
 
@@ -115,8 +114,8 @@ pub fn format_parsed<'ast>(
 ///
 /// Every byte outside them is copied as it was, including line endings and
 /// the end of the file, which is what an editor's "format selection" wants.
-/// `sort_requires` doesn't run in this mode. `parse` is as for
-/// [`format_parsed`].
+/// It never sorts requires, since a selection can split a run of them.
+/// `parse` is as for [`format_parsed`].
 #[must_use]
 pub fn format_range<'ast>(
     allocator: &'ast Allocator,

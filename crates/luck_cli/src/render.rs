@@ -3,10 +3,11 @@
 use core::fmt;
 use core::ops::Range;
 use std::io::{self, Write};
+use std::path::Path;
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
 use luck_core::{Diagnostic, DiagnosticSeverity};
-use luck_resolver::{native_path, read_source_file};
+use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_token::{LineIndex, LuaVersion, SourceError, chunk_start, offset_to_index};
 use rustc_hash::FxHashMap;
 
@@ -83,7 +84,7 @@ impl FileCache {
             if cache.files.contains_key(&diag.file_path) {
                 continue;
             }
-            if let Ok(source) = read_source_file(native_path(&diag.file_path)) {
+            if let Ok(source) = FileSystemOs.read_to_string(Path::new(&diag.file_path)) {
                 cache.files.insert(diag.file_path.clone(), CachedFile::new(&source, version));
             }
         }

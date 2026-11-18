@@ -3,10 +3,13 @@ use std::sync::OnceLock;
 use luck_ast::{Block, Call, Expression, Statement, SuffixedExpression, TableConstructor};
 use luck_parser::ParseResult;
 use luck_semantic::{ResolvedCallee, SemanticAnalysis};
-use luck_token::{Comment, LineIndex};
+use luck_token::{Comment, LineIndex, Span};
 
 use crate::config::LintConfig;
 use crate::diagnostic::{Category, Finding, Severity};
+use crate::directives::Directives;
+use crate::driver::Analysis;
+use crate::fix::FixKind;
 use crate::local_flow::LocalFlow;
 use crate::node_type::NodeTypeSet;
 use crate::nodes::Nodes;
@@ -18,9 +21,13 @@ pub(crate) struct LintContext<'ast> {
     pub block: &'ast Block<'ast>,
     pub nodes: &'ast Nodes<'ast>,
     pub semantic: &'ast SemanticAnalysis<'ast>,
+    pub directives: &'ast Directives,
     pub source: &'ast str,
     pub comments: &'ast [Comment],
     pub config: &'ast LintConfig,
+    /// The kinds of fix the host applies, which are the only ones rules
+    /// build.
+    pub fixes: FixKind,
     pub local_flow: OnceLock<LocalFlow>,
     pub line_index: OnceLock<LineIndex>,
 }
@@ -28,17 +35,19 @@ pub(crate) struct LintContext<'ast> {
 impl<'ast> LintContext<'ast> {
     pub(crate) fn new(
         parse: &'ast ParseResult<'_>,
-        semantic: &'ast SemanticAnalysis<'ast>,
-        nodes: &'ast Nodes<'ast>,
+        analysis: &'ast Analysis<'ast>,
         config: &'ast LintConfig,
+        fixes: FixKind,
     ) -> Self {
         Self {
             block: &parse.block,
-            nodes,
-            semantic,
+            nodes: analysis.nodes(),
+            semantic: analysis.semantic(),
+            directives: analysis.directives(),
             source: parse.source,
             comments: &parse.comments,
             config,
+            fixes,
             local_flow: OnceLock::new(),
             line_index: OnceLock::new(),
         }
@@ -50,6 +59,14 @@ impl<'ast> LintContext<'ast> {
 
     pub(crate) fn line_index(&self) -> &LineIndex {
         self.line_index.get_or_init(|| LineIndex::new(self.source, self.semantic.version()))
+    }
+
+    /// The comments that sit inside `span`, in source order.
+    pub(crate) fn comments_within(&self, span: Span) -> &'ast [Comment] {
+        let comments = self.comments;
+        let first = comments.partition_point(|comment| comment.span.start < span.start);
+        let last = comments.partition_point(|comment| comment.span.end <= span.end);
+        comments.get(first..last).unwrap_or_default()
     }
 }
 
@@ -64,10 +81,23 @@ pub trait Rule: Send + Sync {
     fn default_severity(&self) -> Severity;
 
     fn description(&self) -> &'static str;
+
+    /// The kinds the rule's fixes come in, empty when it offers none. Some
+    /// of its diagnostics may still have no fix.
+    fn fix_kind(&self) -> FixKind;
 }
 
+/// The last argument, when there is one, lists the kinds the rule's fixes
+/// come in, as in `Fix | Suggestion`.
 macro_rules! impl_rule {
-    ($rule:ident, $name:literal, $category:ident, $severity:ident, $description:literal) => {
+    (
+        $rule:ident,
+        $name:literal,
+        $category:ident,
+        $severity:ident,
+        $description:literal
+        $(, $($fix_kind:ident)|+)?
+    ) => {
         impl $crate::rule::Rule for $rule {
             fn name(&self) -> &'static str {
                 $name
@@ -80,6 +110,9 @@ macro_rules! impl_rule {
             }
             fn description(&self) -> &'static str {
                 $description
+            }
+            fn fix_kind(&self) -> $crate::fix::FixKind {
+                $crate::fix::FixKind::empty() $($(.union($crate::fix::FixKind::$fix_kind))+)?
             }
         }
     };

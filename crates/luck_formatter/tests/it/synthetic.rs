@@ -2,8 +2,8 @@
 //! on, as it always has in the source-based tests.
 
 use luck_ast::{
-    Block, FieldSpec, FunctionSignature, InterpolatedStringPart, MAX_NESTING_DEPTH, Synth,
-    SyntheticComment, Type, TypeFieldAccess, TypeFieldSpec, block_nesting_depth,
+    Block, FieldSpec, FunctionSignature, GetSpan as _, InterpolatedStringPart, MAX_NESTING_DEPTH,
+    Synth, SyntheticComment, Type, TypeFieldAccess, TypeFieldSpec, block_nesting_depth,
 };
 use luck_formatter::{CollapseSimpleStatement, Comments, FormatOptions, format_block};
 use luck_testgen::with_the_smallest_stack;
@@ -899,6 +899,30 @@ local b = 2
 local a = 1
 
 local b = 2
+",
+    );
+}
+
+#[test]
+fn sort_requires_orders_a_tree_built_in_code() {
+    let fixture = Fixture::default();
+    let synth = fixture.synth();
+    let require = |module| {
+        synth.local(&[module], [synth.call(synth.name_expr("require"), [synth.string(module)])])
+    };
+    let zeta = require("zeta");
+    let trailing = SyntheticComment::trailing(&zeta, "last");
+    let block = synth.block([zeta, require("alpha")], None);
+    let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
+    assert_format_block_with(
+        &fixture,
+        &block,
+        Comments::synthetic([trailing]),
+        LuaVersion::Lua54,
+        &options,
+        "\
+local alpha = require(\"alpha\")
+local zeta = require(\"zeta\") -- last
 ",
     );
 }

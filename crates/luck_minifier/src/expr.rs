@@ -1,8 +1,8 @@
 use core::iter;
 
-use luck_allocator::{Allocator, Box};
+use luck_allocator::Allocator;
 use luck_ast::{
-    BinaryOp, Expression, Field, Literal, MAX_NESTING_DEPTH, ParenthesizedExpression, Suffix,
+    BinaryOp, Expression, Field, GetSpan as _, Literal, MAX_NESTING_DEPTH, Suffix,
     expr_nesting_depth, is_multi_value, unwrap_parentheses,
 };
 use luck_token::{
@@ -289,80 +289,6 @@ fn is_effect_free(expr: &Expression<'_>, can_read_names: bool) -> bool {
     }
 }
 
-/// Whether `left` and `right` are one pure expression written twice, so
-/// either can stand for the other.
-///
-/// Spans don't count, and a function or a cast never matches, since telling
-/// two apart takes a whole body or type.
-pub(crate) fn is_same_pure_expr(left: &Expression<'_>, right: &Expression<'_>) -> bool {
-    match (left, right) {
-        (Expression::Nil(_), Expression::Nil(_))
-        | (Expression::True(_), Expression::True(_))
-        | (Expression::False(_), Expression::False(_))
-        | (Expression::VarArg(_), Expression::VarArg(_)) => true,
-        (Expression::Number(lhs), Expression::Number(rhs))
-        | (Expression::Integer(lhs), Expression::Integer(rhs))
-        | (Expression::StringLiteral(lhs), Expression::StringLiteral(rhs)) => lhs.text == rhs.text,
-        (Expression::Parenthesized(lhs), Expression::Parenthesized(rhs)) => {
-            is_same_pure_expr(&lhs.expr, &rhs.expr)
-        }
-        (Expression::UnaryOp(lhs), Expression::UnaryOp(rhs)) => {
-            lhs.op == rhs.op && is_same_pure_expr(&lhs.operand, &rhs.operand)
-        }
-        (Expression::BinaryOp(lhs), Expression::BinaryOp(rhs)) => {
-            lhs.links.len() == rhs.links.len()
-                && is_same_pure_expr(&lhs.first, &rhs.first)
-                && lhs.links.iter().zip(rhs.links.iter()).all(|(lhs_link, rhs_link)| {
-                    lhs_link.op == rhs_link.op
-                        && is_same_pure_expr(&lhs_link.operand, &rhs_link.operand)
-                })
-        }
-        (Expression::TableConstructor(lhs), Expression::TableConstructor(rhs)) => {
-            lhs.fields.len() == rhs.fields.len()
-                && lhs.fields.iter().zip(rhs.fields.iter()).all(|pair| match pair {
-                    (
-                        Field::Bracketed { key: lhs_key, value: lhs_value, .. },
-                        Field::Bracketed { key: rhs_key, value: rhs_value, .. },
-                    ) => {
-                        is_same_pure_expr(lhs_key, rhs_key)
-                            && is_same_pure_expr(lhs_value, rhs_value)
-                    }
-                    (
-                        Field::Named { name: lhs_name, value: lhs_value },
-                        Field::Named { name: rhs_name, value: rhs_value },
-                    ) => lhs_name.text == rhs_name.text && is_same_pure_expr(lhs_value, rhs_value),
-                    (Field::Positional(lhs_value), Field::Positional(rhs_value)) => {
-                        is_same_pure_expr(lhs_value, rhs_value)
-                    }
-                    (Field::Bracketed { .. } | Field::Named { .. } | Field::Positional(_), _) => {
-                        false
-                    }
-                })
-        }
-        (
-            Expression::Nil(_)
-            | Expression::True(_)
-            | Expression::False(_)
-            | Expression::VarArg(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::Parenthesized(_)
-            | Expression::UnaryOp(_)
-            | Expression::BinaryOp(_)
-            | Expression::TableConstructor(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_),
-            _,
-        ) => false,
-    }
-}
-
 /// Whether `key` is a table constructor `[key]` that can't raise: `nil` and
 /// NaN raise, and only a key spelled out as a literal is known to be neither.
 fn is_valid_table_key(key: &Expression<'_>) -> bool {
@@ -470,7 +396,7 @@ pub(crate) fn parenthesize<'ast>(
     expr: Expression<'ast>,
 ) -> Expression<'ast> {
     let span = expr.span();
-    Expression::Parenthesized(Box::new_in(ParenthesizedExpression { span, expr }, allocator))
+    Expression::new_parenthesized(span, expr, allocator)
 }
 
 /// Parenthesizes a call or `...` that replaces an `and`/`or`, which always

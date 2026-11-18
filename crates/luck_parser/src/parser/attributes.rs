@@ -5,7 +5,7 @@
 //! errors.
 
 use luck_allocator::List;
-use luck_ast::{Attribute, Expression, Field, FunctionAttribute, Name};
+use luck_ast::{Attribute, Expression, Field, FunctionAttribute, GetSpan as _, Name};
 use luck_token::{Span, TokenKind};
 
 use super::{Closer, Parser};
@@ -68,10 +68,6 @@ fn is_attribute_literal(expr: &Expression<'_>) -> bool {
     }
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the parser is one type with its grammar split by file"
-)]
 impl<'ast> Parser<'ast> {
     pub(super) fn try_parse_attribute(&mut self) -> Option<Attribute<'ast>> {
         (self.is_at(TokenKind::Less) && self.version.has_attributes())
@@ -88,7 +84,7 @@ impl<'ast> Parser<'ast> {
             self.error(name.span, format!("unknown attribute `{}`", name.text));
         }
         let close = self.expect(TokenKind::Greater);
-        Attribute { span: open.merge(close), name }
+        Attribute::new(open.merge(close), name)
     }
 
     /// Grammar: `attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'`
@@ -113,7 +109,7 @@ impl<'ast> Parser<'ast> {
                         .as_ref()
                         .and_then(|list| list.last())
                         .map_or(name.span, Expression::span);
-                    let attribute = FunctionAttribute { span: at_span.merge(end_span), name, args };
+                    let attribute = FunctionAttribute::new(at_span.merge(end_span), name, args);
                     self.scratch.attributes.push(attribute);
                     if !self.eat(TokenKind::Comma) {
                         break;
@@ -123,8 +119,7 @@ impl<'ast> Parser<'ast> {
             } else {
                 let name = self.expect_identifier_recover();
                 self.validate_function_attribute(name, None, start);
-                let attribute =
-                    FunctionAttribute { span: at_span.merge(name.span), name, args: None };
+                let attribute = FunctionAttribute::new(at_span.merge(name.span), name, None);
                 self.scratch.attributes.push(attribute);
             }
         }

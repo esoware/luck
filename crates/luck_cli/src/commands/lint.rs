@@ -6,16 +6,18 @@ use std::path::{self, Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
 use luck_allocator::Allocator;
-use luck_config::LuckConfig;
+use luck_config::Project;
 use luck_core::{Diagnostic, LuaTarget};
-use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
-use luck_resolver::{normalize_path, read_source_file};
+use luck_linter::{
+    Category, FixError, FixKind, Fixed, LintConfig, LintDiagnostic, RuleLevel, Severity,
+};
+use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::{LineIndex, LuaVersion};
 
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
 use crate::project::{
-    config_for_one_shot, for_each_outcome_in_order, project_files, resolve_project,
+    ProjectFile, for_each_outcome_in_order, one_shot_project, project_files, working_project,
 };
 use crate::render::{line_and_column, render_document_diags};
 use crate::verbosity::Verbosity;
@@ -52,20 +54,45 @@ const LEVEL_FLAGS: [(&str, char, RuleLevel, &str); 3] = [
     ),
 ];
 
-/// The `-A`, `-W`, and `-D` flags in command-line order, which a derived
-/// `Vec` per flag would lose.
-struct LevelFlags(Vec<(RuleLevel, String)>);
+/// What a `-A`, `-W`, or `-D` flag names.
+#[derive(Debug, Clone, Copy)]
+enum Leveled {
+    Category(Category),
+    Rule(&'static str),
+}
+
+/// # Errors
+///
+/// Returns the message for a name no category or rule has.
+fn leveled(name: &str) -> Result<Leveled, String> {
+    Category::from_name(name).map_or_else(
+        || luck_linter::rule_named(name).map(|rule| Leveled::Rule(rule.name())),
+        |category| Ok(Leveled::Category(category)),
+    )
+}
+
+/// The levels the `-A`, `-W`, and `-D` flags set, applied in command-line
+/// order, which a derived `Vec` per flag would lose, so the last flag to name
+/// a rule or a category decides it.
+struct LevelFlags(LintConfig);
 
 impl FromArgMatches for LevelFlags {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
-        let mut flags: Vec<(usize, RuleLevel, String)> = Vec::new();
+        let mut flags: Vec<(usize, RuleLevel, Leveled)> = Vec::new();
         for (id, _, level, _) in LEVEL_FLAGS {
             let indices = matches.indices_of(id).into_iter().flatten();
-            let names = matches.get_many::<String>(id).into_iter().flatten();
-            flags.extend(indices.zip(names).map(|(index, name)| (index, level, name.clone())));
+            let names = matches.get_many::<Leveled>(id).into_iter().flatten();
+            flags.extend(indices.zip(names).map(|(index, name)| (index, level, *name)));
         }
         flags.sort_by_key(|(index, ..)| *index);
-        Ok(Self(flags.into_iter().map(|(_, level, name)| (level, name)).collect()))
+        let mut levels = LintConfig::default();
+        for (_, level, name) in flags {
+            match name {
+                Leveled::Category(category) => levels.categories.set_level(category, level),
+                Leveled::Rule(rule) => levels.rules.set_level(rule, level),
+            }
+        }
+        Ok(Self(levels))
     }
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
@@ -82,6 +109,7 @@ impl Args for LevelFlags {
                     .short(short)
                     .long(id)
                     .value_name("NAME")
+                    .value_parser(leveled)
                     .action(ArgAction::Append)
                     .help(help),
             )
@@ -112,9 +140,14 @@ pub(crate) struct LintArgs {
     #[arg(long = "global", value_name = "NAME")]
     globals: Vec<String>,
 
-    /// Apply auto-fixes and write them back to source files.
+    /// Apply fixes until none is left, and write them back to source files.
     #[arg(long)]
     fix: bool,
+
+    /// Like --fix, but apply suggestions too, which may change what the code
+    /// does, as renaming an unused variable to `_x` does.
+    #[arg(long)]
+    fix_suggestions: bool,
 
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = LintFormat::Default)]
@@ -136,7 +169,7 @@ pub(crate) struct LintArgs {
     #[arg(long)]
     no_error_on_unmatched_pattern: bool,
 
-    /// Print the registered rule names and categories, then exit.
+    /// Print the registered rule names, categories, and fix kinds, then exit.
     #[arg(long)]
     rules: bool,
 
@@ -172,24 +205,30 @@ struct LintOutcome {
 impl LintArgs {
     /// # Errors
     ///
-    /// Returns [`Exit::Usage`] on a bad config, rule name, or path, or when
-    /// no file matches, and [`Exit::Failure`] when a file can't be read or
-    /// written back, or the findings fail the run under the exit-code policy.
+    /// Returns [`Exit::Usage`] on a bad config or path, or when no file
+    /// matches, and [`Exit::Failure`] when a file can't be read or written
+    /// back, or the findings fail the run under the exit-code policy.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         if self.rules {
             print_lint_rules();
             return Ok(());
         }
 
+        let overlay = self.lint_overlay();
         if self.print_config {
             let config_path = self.config.as_deref();
-            let config = match (self.stdin_filepath.as_deref(), self.paths.as_slice()) {
-                (Some(path), _) => config_for_one_shot(config_path, path)?,
-                (None, [path]) => config_for_one_shot(config_path, path)?,
-                (None, []) => resolve_project(config_path)?.config,
+            let path = match (self.stdin_filepath.as_deref(), self.paths.as_slice()) {
+                (Some(path), _) => Some(Path::new(path)),
+                (None, [path]) => Some(Path::new(path)),
+                (None, []) => None,
                 (None, _) => return Err(usage_error("`--print-config` takes at most one path")),
             };
-            print_lint_config(&self.lint_config(&config)?);
+            let mut project = match path {
+                Some(file) => one_shot_project(config_path, file)?,
+                None => working_project(config_path)?,
+            };
+            project.overlay_lint(&overlay);
+            print_lint_config(&project.lint_for(path));
             return Ok(());
         }
 
@@ -197,16 +236,16 @@ impl LintArgs {
 
         // Stdin mode ignores positional paths.
         if let Some(stdin_path) = self.stdin_filepath.as_deref() {
-            let config = config_for_one_shot(self.config.as_deref(), stdin_path)?;
-            let lint_config = self.lint_config(&config)?;
-            return self.run_stdin(stdin_path, &lint_config, &config, is_quiet);
+            let mut project = one_shot_project(self.config.as_deref(), Path::new(stdin_path))?;
+            project.overlay_lint(&overlay);
+            return self.run_stdin(stdin_path, &project, is_quiet);
         }
 
         let files = project_files(
             self.config.as_deref(),
             &self.paths,
             self.no_error_on_unmatched_pattern,
-            |config| self.lint_config(config),
+            Some(&overlay),
         )?;
 
         let mut total_errors = 0usize;
@@ -218,15 +257,7 @@ impl LintArgs {
             let mut stdout = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stdout().lock());
             for_each_outcome_in_order(
                 &files,
-                |file, allocator| {
-                    self.lint_file(
-                        allocator,
-                        &file.path,
-                        file.target,
-                        &file.project.settings,
-                        is_quiet,
-                    )
-                },
+                |file, allocator| self.lint_file(allocator, file, is_quiet),
                 |outcome| {
                     if let Some(note) = &outcome.note {
                         let _unused = writeln!(stderr, "{note}");
@@ -244,7 +275,7 @@ impl LintArgs {
             )
         }?;
 
-        if !self.silent && self.fix && total_fixed > 0 && !is_quiet {
+        if !self.silent && total_fixed > 0 && !is_quiet {
             eprintln!("Fixed {total_fixed} file(s)");
         }
 
@@ -264,35 +295,30 @@ impl LintArgs {
     ///
     /// # Errors
     ///
-    /// Returns [`Exit::Usage`] on a bad dialect, and [`Exit::Failure`] when
-    /// stdin can't be read or the findings fail the run under the exit-code
-    /// policy.
-    fn run_stdin(
-        &self,
-        stdin_path: &str,
-        lint_config: &LintConfig,
-        luck_config: &LuckConfig,
-        is_quiet: bool,
-    ) -> Result<(), Exit> {
+    /// Returns [`Exit::Failure`] when stdin can't be read, the fixes don't
+    /// converge, or the findings fail the run under the exit-code policy.
+    fn run_stdin(&self, stdin_path: &str, project: &Project, is_quiet: bool) -> Result<(), Exit> {
         let source = read_stdin_source()?;
 
-        let target = luck_config.target_for_path(Path::new(stdin_path)).map_err(usage_error)?;
-        let version = target.lua_version();
+        let path = Some(Path::new(stdin_path));
+        let (target, lint_config) = (project.target_for(path), project.lint_for(path));
         let allocator = Allocator::new();
-        let mut diags = luck_linter::lint(&allocator, &source, target, lint_config);
-        let mut current_source = source.as_str();
+        let fixes = self.fixes();
+        let (current_source, diags, fix_error) =
+            fixed_or_linted(&allocator, &source, target, &lint_config, fixes);
 
-        if self.fix {
-            if let Some(fixed) = luck_linter::apply_fixes(&allocator, &source, &diags, version) {
-                diags = luck_linter::lint_parsed(&fixed, target, lint_config);
-                current_source = fixed.source;
-            }
+        if !fixes.is_empty() {
             // Echo the source even with nothing to fix, since editors and
             // pipelines take stdout as the new file content.
             print!("{current_source}");
         }
+        if let Some(error) = &fix_error {
+            eprintln!("error: cannot fix `{stdin_path}`: {error}");
+        }
 
-        let (total_errors, total_warnings) = severity_counts(&diags);
+        let (finding_errors, total_warnings) = severity_counts(&diags);
+        let total_errors = finding_errors.saturating_add(usize::from(fix_error.is_some()));
+        let version = target.lua_version();
 
         if let Some(rendered) = self.rendered(stdin_path, current_source, diags, version, is_quiet)
         {
@@ -300,12 +326,23 @@ impl LintArgs {
                 Rendered::Pretty(pretty) => {
                     let _unused = io::stderr().write_all(&pretty);
                 }
-                Rendered::Lines(lines) if self.fix => eprint!("{lines}"),
+                Rendered::Lines(lines) if !fixes.is_empty() => eprint!("{lines}"),
                 Rendered::Lines(lines) => print!("{lines}"),
             }
         }
 
         self.exit_status(total_errors, total_warnings, is_quiet)
+    }
+
+    /// The kinds of fix the run applies.
+    const fn fixes(&self) -> FixKind {
+        if self.fix_suggestions {
+            FixKind::all()
+        } else if self.fix {
+            FixKind::Fix
+        } else {
+            FixKind::empty()
+        }
     }
 
     /// # Errors
@@ -335,15 +372,9 @@ impl LintArgs {
         Ok(())
     }
 
-    fn lint_file(
-        &self,
-        allocator: &Allocator,
-        file_path: &Path,
-        target: LuaTarget,
-        lint_config: &LintConfig,
-        is_quiet: bool,
-    ) -> LintOutcome {
-        let source = match read_source_file(file_path) {
+    fn lint_file(&self, allocator: &Allocator, file: &ProjectFile, is_quiet: bool) -> LintOutcome {
+        let file_path = file.path.as_path();
+        let source = match FileSystemOs.read_to_string(file_path) {
             Ok(text) => text,
             Err(error) => {
                 // A skipped file fails the run, so CI can't pass with files
@@ -358,28 +389,31 @@ impl LintArgs {
             }
         };
 
-        let version = target.lua_version();
-        let mut diags = luck_linter::lint(allocator, &source, target, lint_config);
-        let mut current_source = source.as_str();
+        let target = file.project.target_for(Some(file_path));
+        let lint_config = file.project.lint_for(Some(file_path));
+        let (fixed, fixed_diags, fix_error) =
+            fixed_or_linted(allocator, &source, target, &lint_config, self.fixes());
+        let mut note =
+            fix_error.map(|error| format!("error: cannot fix `{}`: {error}", file_path.display()));
         let mut is_fixed = false;
-        let mut note = None;
-
-        if self.fix
-            && let Some(fixed) = luck_linter::apply_fixes(allocator, &source, &diags, version)
-        {
-            if let Err(error) = fs::write(file_path, fixed.source) {
-                note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
-            } else {
-                is_fixed = true;
-                diags = luck_linter::lint_parsed(&fixed, target, lint_config);
-                current_source = fixed.source;
-            }
-        }
+        let (current_source, diags) = if fixed == source {
+            (fixed, fixed_diags)
+        } else if let Err(error) = fs::write(file_path, fixed) {
+            note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
+            let unfixed =
+                luck_linter::lint(allocator, &source, target, &lint_config, FixKind::empty());
+            (source.as_str(), unfixed)
+        } else {
+            is_fixed = true;
+            (fixed, fixed_diags)
+        };
 
         let (finding_errors, warning_count) = severity_counts(&diags);
+        let version = target.lua_version();
         let rendered =
             self.rendered(&file_path.to_string_lossy(), current_source, diags, version, is_quiet);
-        // A fix that couldn't be written fails the run, as an unread file does.
+        // Fixes that couldn't be made or written fail the run, as an unread
+        // file does.
         let error_count = finding_errors.saturating_add(usize::from(note.is_some()));
         LintOutcome { error_count, warning_count, is_fixed, note, rendered }
     }
@@ -459,7 +493,8 @@ impl LintArgs {
                 // relative to the workspace.
                 let label = Path::new(file_label);
                 let absolute = path::absolute(label).unwrap_or_else(|_| label.to_path_buf());
-                let file = annotation_property(&normalize_path(&absolute));
+                let canonical = FileSystemOs.canonicalize(&absolute).unwrap_or(absolute);
+                let file = annotation_property(&to_slash_lossy(&canonical));
                 let mut lines = String::new();
                 for diag in &diags {
                     let (line, column) = line_and_column(&line_index, source, diag.span.start);
@@ -483,37 +518,10 @@ impl LintArgs {
         }
     }
 
-    /// # Errors
-    ///
-    /// Reports the failure and returns [`Exit::Usage`] on an unknown rule
-    /// name.
-    fn lint_config(&self, luck_config: &LuckConfig) -> Result<LintConfig, Exit> {
-        let mut lint_config = luck_config.lint.clone().unwrap_or_default();
-
-        // Flags win over the config and apply in command-line order, so the
-        // last one to name a rule or a category decides it.
-        for (level, name) in &self.levels.0 {
-            match Category::from_name(name) {
-                Some(category) => lint_config.categories.set_level(category, *level),
-                None => lint_config.rules.set_level(name, *level),
-            }
-        }
-
-        lint_config.extra_globals.extend(self.globals.iter().cloned());
-
-        // Check rule names from both the config and the CLI, since an unknown one
-        // would otherwise be ignored silently.
-        let unknown_names = luck_linter::unknown_rule_names(&lint_config);
-        if !unknown_names.is_empty() {
-            let quoted_names: Vec<String> =
-                unknown_names.iter().map(|name| format!("`{name}`")).collect();
-            return Err(usage_error(format!(
-                "unknown lint rule name(s): {}",
-                quoted_names.join(", ")
-            )));
-        }
-
-        Ok(lint_config)
+    /// What the flags layer over every file's lint settings, the config's
+    /// overrides included.
+    fn lint_overlay(&self) -> LintConfig {
+        LintConfig { extra_globals: self.globals.clone(), ..self.levels.0.clone() }
     }
 }
 
@@ -529,18 +537,48 @@ fn annotation_property(text: &str) -> String {
     annotation_data(text).replace(':', "%3A").replace(',', "%2C")
 }
 
+/// `source` with its fixes of the kinds `fixes` holds applied, the fixed
+/// text's diagnostics, and why fixing failed, if it did. A failure leaves
+/// `source` as it was, with its own diagnostics.
+fn fixed_or_linted<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    target: LuaTarget,
+    lint_config: &LintConfig,
+    fixes: FixKind,
+) -> (&'ast str, Vec<LintDiagnostic>, Option<FixError>) {
+    let fix_error = if fixes.is_empty() {
+        None
+    } else {
+        match luck_linter::fix(allocator, source, target, lint_config, fixes) {
+            Ok(Fixed { parse, diags }) => return (parse.source, diags, None),
+            Err(error) => Some(error),
+        }
+    };
+    let diags = luck_linter::lint(allocator, source, target, lint_config, FixKind::empty());
+    (source, diags, fix_error)
+}
+
 /// Count `diags` by severity, as `(errors, warnings)`.
 fn severity_counts(diags: &[LintDiagnostic]) -> (usize, usize) {
     let count = |severity: Severity| diags.iter().filter(|diag| diag.severity == severity).count();
     (count(Severity::Error), count(Severity::Warning))
 }
 
+/// One line per rule: its name, its category, and the kinds its fixes come
+/// in, comma-separated and empty for a rule with none.
 fn print_lint_rules() {
-    let mut rules: Vec<(&str, &str)> =
-        luck_linter::rules().map(|rule| (rule.name(), rule.category().name())).collect();
-    rules.sort_unstable();
-    for (name, category) in rules {
-        println!("{name}\t{category}");
+    let mut rules: Vec<(&str, &str, FixKind)> = luck_linter::rules()
+        .map(|rule| (rule.name(), rule.category().name(), rule.fix_kind()))
+        .collect();
+    rules.sort_unstable_by_key(|&(name, ..)| name);
+    for (name, category, fix_kind) in rules {
+        let kinds: Vec<&str> = [(FixKind::Fix, "fix"), (FixKind::Suggestion, "suggestion")]
+            .into_iter()
+            .filter(|&(kind, _)| fix_kind.contains(kind))
+            .map(|(_, kind_name)| kind_name)
+            .collect();
+        println!("{name}\t{category}\t{}", kinds.join(","));
     }
 }
 
@@ -558,6 +596,7 @@ mod tests {
     use std::env;
 
     use clap::Parser as _;
+    use clap::error::ErrorKind;
 
     use super::*;
     use crate::cli::{Cli, Command};
@@ -580,8 +619,9 @@ mod tests {
     }
 
     fn resolved_lint_config(args: &LintArgs) -> LintConfig {
-        let project = resolve_project(args.config.as_deref()).expect("config resolves");
-        args.lint_config(&project.config).expect("lint config resolves")
+        let mut project = working_project(args.config.as_deref()).expect("config resolves");
+        project.overlay_lint(&args.lint_overlay());
+        LintConfig::clone(&project.lint_for(None))
     }
 
     fn lint_source(
@@ -589,7 +629,7 @@ mod tests {
         target: LuaTarget,
         lint_config: &LintConfig,
     ) -> Vec<LintDiagnostic> {
-        luck_linter::lint(&Allocator::new(), source, target, lint_config)
+        luck_linter::lint(&Allocator::new(), source, target, lint_config, FixKind::empty())
     }
 
     fn rendered_lines(format: &str, file_label: &str, source: &str) -> String {
@@ -617,14 +657,9 @@ mod tests {
             "luck.json",
         ]);
         assert_eq!(paths, vec!["src".to_owned(), "main.lua".to_owned()]);
-        assert_eq!(
-            levels.0,
-            [
-                (RuleLevel::Error, "undefined_variable".to_owned()),
-                (RuleLevel::Off, "style".to_owned()),
-                (RuleLevel::Warn, "shadowing".to_owned()),
-            ]
-        );
+        assert_eq!(levels.0.rules.level("undefined_variable"), Some(RuleLevel::Error));
+        assert_eq!(levels.0.categories.level(Category::Style), Some(RuleLevel::Off));
+        assert_eq!(levels.0.rules.level("shadowing"), Some(RuleLevel::Warn));
         assert!(fix);
         assert_eq!(config, Some(PathBuf::from("luck.json")));
     }
@@ -643,11 +678,11 @@ mod tests {
             ..
         } = lint_args(&[
             "--deny",
-            "x",
+            "shadowing",
             "--allow",
-            "y",
+            "perf",
             "--warn",
-            "z",
+            "empty_block",
             "--config",
             "c.json",
             "--max-warnings",
@@ -660,14 +695,9 @@ mod tests {
             "--format",
             "json",
         ]);
-        assert_eq!(
-            levels.0,
-            [
-                (RuleLevel::Error, "x".to_owned()),
-                (RuleLevel::Off, "y".to_owned()),
-                (RuleLevel::Warn, "z".to_owned()),
-            ]
-        );
+        assert_eq!(levels.0.rules.level("shadowing"), Some(RuleLevel::Error));
+        assert_eq!(levels.0.categories.level(Category::Performance), Some(RuleLevel::Off));
+        assert_eq!(levels.0.rules.level("empty_block"), Some(RuleLevel::Warn));
         assert_eq!(max_warnings, Some(3));
         assert!(deny_warnings);
         assert!(silent);
@@ -676,6 +706,14 @@ mod tests {
         assert!(print_config);
         assert!(matches!(format, LintFormat::Json));
         assert!(matches!(lint_args(&["-f", "github"]).format, LintFormat::Github));
+    }
+
+    #[test]
+    fn fix_flags_pick_the_kinds_of_fix_to_apply() {
+        assert_eq!(lint_args(&[]).fixes(), FixKind::empty());
+        assert_eq!(lint_args(&["--fix"]).fixes(), FixKind::Fix);
+        assert_eq!(lint_args(&["--fix-suggestions"]).fixes(), FixKind::all());
+        assert_eq!(lint_args(&["--fix", "--fix-suggestions"]).fixes(), FixKind::all());
     }
 
     #[test]
@@ -746,11 +784,17 @@ mod tests {
     }
 
     #[test]
-    fn lint_config_rejects_an_unknown_rule_name() {
-        let (_directory, config_arg) = project_with_config(r#"{"lua":"lua54"}"#);
-        let args = lint_args(&["-c", &config_arg, "-D", "not_a_real_rule"]);
-        let project = resolve_project(args.config.as_deref()).expect("config resolves");
-        assert_eq!(args.lint_config(&project.config).unwrap_err(), Exit::Usage);
+    fn level_flags_reject_a_name_no_rule_or_category_has() {
+        let Err(error) = Cli::try_parse_from(["luck", "lint", "-D", "unsued_variable"]) else {
+            panic!("an unknown rule must not parse");
+        };
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        assert!(
+            error
+                .to_string()
+                .contains("unknown lint rule `unsued_variable`, did you mean `unused_variable`?"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -815,7 +859,7 @@ print(a)",
         let working_directory = env::current_dir().expect("current directory");
         assert_eq!(
             file,
-            annotation_property(&normalize_path(&working_directory.join("src/a.lua")))
+            annotation_property(&to_slash_lossy(&working_directory.join(r"src\a.lua")))
         );
         assert_eq!(
             rest,
@@ -837,11 +881,10 @@ print(a)",
         let (directory, config_arg) = project_with_config(r#"{"luau":"roblox"}"#);
 
         let args = lint_args(&["-c", &config_arg]);
-        let project = resolve_project(args.config.as_deref()).expect("config resolves");
-        let lint_config = args.lint_config(&project.config).expect("lint config resolves");
-
+        let project = working_project(args.config.as_deref()).expect("config resolves");
         let luau_file = directory.path().join("main.luau");
-        let target = project.config.target_for_path(&luau_file).expect("luau target resolves");
+        let lint_config = project.lint_for(Some(&luau_file));
+        let target = project.target_for(Some(&luau_file));
         assert_eq!(target, LuaTarget::LuauRoblox);
 
         let diags = lint_source("print(game)", target, &lint_config);

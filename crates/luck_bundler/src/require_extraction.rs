@@ -1,6 +1,6 @@
 use luck_allocator::Allocator;
 use luck_ast::{
-    Block, Call, Expression, FunctionArgs, FunctionBody, Name, Statement, Suffix,
+    Block, Call, Expression, FunctionArgs, FunctionBody, GetSpan as _, Name, Statement, Suffix,
     SuffixedExpression, TreeCounts, Var,
 };
 use luck_core::Diagnostic;

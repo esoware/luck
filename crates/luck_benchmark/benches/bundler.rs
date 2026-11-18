@@ -3,15 +3,19 @@
     reason = "a test panics to fail, so a Panics section says nothing"
 )]
 
-use core::slice;
-
-use luck_allocator::Allocator;
+use luck_allocator::ThreadAllocators;
 use luck_benchmark::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use luck_benchmark_files::bundle_project_root;
 use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_token::LuaVersion;
+use rayon::ThreadPoolBuilder;
 
 fn bench_bundler(criterion: &mut Criterion) {
+    // A pool of only the bench thread reads every module on it, so no work
+    // waits on another thread or depends on the runner's core count.
+    let pool = ThreadPoolBuilder::new().num_threads(1).use_current_thread().build_global();
+    assert!(pool.is_ok(), "{:?}", pool.err());
+
     let root = bundle_project_root();
     let entry_path = root.join("main.lua");
     let search_paths = vec!["?.lua".to_owned(), "?/init.lua".to_owned()];
@@ -21,12 +25,10 @@ fn bench_bundler(criterion: &mut Criterion) {
         project_root: &root,
         dynamic_require: DynamicRequire::default(),
     };
-    // One arena keeps discovery on the bench thread, so no work waits on
-    // another thread or depends on the runner's core count.
-    let mut allocator = Allocator::new();
+    let mut arenas = ThreadAllocators::new();
     let mut bundle = || {
-        allocator.reset();
-        luck_bundler::bundle(slice::from_mut(&mut allocator), &entry_path, &options)
+        arenas.reset();
+        luck_bundler::bundle(&arenas, &entry_path, &options)
     };
     let bundled = bundle();
     assert!(bundled.is_ok(), "{:?}", bundled.err());

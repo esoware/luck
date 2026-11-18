@@ -5,8 +5,9 @@ use core::mem;
 use core::num::Saturating;
 
 use luck_ast::{
-    Block, Expression, FunctionBody, IfStatement, LastStatement, Name, RepeatLoop, Statement, Type,
-    Visitor, WhileLoop, unwrap_parentheses,
+    BinaryOp, Block, Expression, FunctionBody, GenericFor, GetSpan as _, IfExpression, IfStatement,
+    LastStatement, Name, NumericFor, RepeatLoop, Statement, Type, Visit, WhileLoop,
+    unwrap_parentheses,
 };
 use luck_semantic::SemanticAnalysis;
 use luck_token::{BinOp, Span};
@@ -548,64 +549,46 @@ impl DecisionPoints {
     }
 }
 
-impl<'ast> Visitor<'ast> for DecisionPoints {
-    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-        match stmt {
-            Statement::IfStatement(node) => self.count_clauses(node.elseif_clauses.len()),
-            Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_) => self.count += 1,
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-        self.walk_stmt(stmt);
+impl<'ast> Visit<'ast> for DecisionPoints {
+    fn visit_if_stmt(&mut self, if_stmt: &'ast IfStatement<'ast>) {
+        self.count_clauses(if_stmt.elseif_clauses.len());
+        self.walk_if_stmt(if_stmt);
     }
 
-    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
-        match expr {
-            Expression::BinaryOp(node) => {
-                if matches!(node.links.first().op, BinOp::And | BinOp::Or) {
-                    self.count += u32::try_from(node.links.len()).unwrap_or(u32::MAX);
-                }
-            }
-            // Luau
-            Expression::IfExpression(node) => self.count_clauses(node.elseif_clauses.len()),
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::UnaryOp(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => {}
-        }
-        self.walk_expr(expr);
+    fn visit_while_loop(&mut self, while_loop: &'ast WhileLoop<'ast>) {
+        self.count += 1;
+        self.walk_while_loop(while_loop);
     }
 
-    fn visit_function_body(&mut self, _body: &'ast FunctionBody<'ast>) {}
+    fn visit_repeat_loop(&mut self, repeat_loop: &'ast RepeatLoop<'ast>) {
+        self.count += 1;
+        self.walk_repeat_loop(repeat_loop);
+    }
+
+    fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor<'ast>) {
+        self.count += 1;
+        self.walk_numeric_for(numeric_for);
+    }
+
+    fn visit_generic_for(&mut self, generic_for: &'ast GenericFor<'ast>) {
+        self.count += 1;
+        self.walk_generic_for(generic_for);
+    }
+
+    fn visit_binary_op(&mut self, binary_op: &'ast BinaryOp<'ast>) {
+        if matches!(binary_op.links.first().op, BinOp::And | BinOp::Or) {
+            self.count += u32::try_from(binary_op.links.len()).unwrap_or(u32::MAX);
+        }
+        self.walk_binary_op(binary_op);
+    }
+
+    // Luau
+    fn visit_if_expr(&mut self, if_expr: &'ast IfExpression<'ast>) {
+        self.count_clauses(if_expr.elseif_clauses.len());
+        self.walk_if_expr(if_expr);
+    }
+
+    fn visit_function_body(&mut self, _function_body: &'ast FunctionBody<'ast>) {}
 
     fn visit_type(&mut self, _ty: &'ast Type<'ast>) {}
 }
@@ -933,35 +916,28 @@ do return end
     #[derive(Default)]
     struct LoopBodies<'ast>(Vec<(u32, &'ast Block<'ast>)>);
 
-    impl<'ast> Visitor<'ast> for LoopBodies<'ast> {
-        fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-            match stmt {
-                Statement::WhileLoop(node) => self.0.push((node.span.start, &node.block)),
-                Statement::RepeatLoop(node) => self.0.push((node.span.start, &node.block)),
-                Statement::NumericFor(node) => self.0.push((node.span.start, &node.block)),
-                Statement::GenericFor(node) => self.0.push((node.span.start, &node.block)),
-                Statement::Assignment(_)
-                | Statement::FunctionCall(_)
-                | Statement::DoBlock(_)
-                | Statement::IfStatement(_)
-                | Statement::FunctionDecl(_)
-                | Statement::LocalFunction(_)
-                | Statement::LocalAssignment(_)
-                | Statement::EmptyStatement(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_)
-                | Statement::GlobalStar(_)
-                | Statement::Break(_)
-                | Statement::CompoundAssignment(_)
-                | Statement::TypeDeclaration(_)
-                | Statement::Error(_) => {}
-            }
-            self.walk_stmt(stmt);
+    impl<'ast> Visit<'ast> for LoopBodies<'ast> {
+        fn visit_while_loop(&mut self, while_loop: &'ast WhileLoop<'ast>) {
+            self.0.push((while_loop.span.start, &while_loop.block));
+            self.walk_while_loop(while_loop);
         }
 
-        fn visit_function_body(&mut self, _body: &'ast FunctionBody<'ast>) {}
+        fn visit_repeat_loop(&mut self, repeat_loop: &'ast RepeatLoop<'ast>) {
+            self.0.push((repeat_loop.span.start, &repeat_loop.block));
+            self.walk_repeat_loop(repeat_loop);
+        }
+
+        fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor<'ast>) {
+            self.0.push((numeric_for.span.start, &numeric_for.block));
+            self.walk_numeric_for(numeric_for);
+        }
+
+        fn visit_generic_for(&mut self, generic_for: &'ast GenericFor<'ast>) {
+            self.0.push((generic_for.span.start, &generic_for.block));
+            self.walk_generic_for(generic_for);
+        }
+
+        fn visit_function_body(&mut self, _function_body: &'ast FunctionBody<'ast>) {}
     }
 
     #[test]

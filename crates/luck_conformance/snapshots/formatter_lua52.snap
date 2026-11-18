@@ -1,0 +1,16 @@
+formatter_lua52 Summary:
+AST Parsed     : 19/25 (76.00%)
+Positive Passed: 19/25 (76.00%)
+
+Not UTF-8: lua-5.2.2-tests/db.lua
+
+Not UTF-8: lua-5.2.2-tests/files.lua
+
+Not UTF-8: lua-5.2.2-tests/literals.lua
+
+Not UTF-8: lua-5.2.2-tests/pm.lua
+
+Not UTF-8: lua-5.2.2-tests/sort.lua
+
+Not UTF-8: lua-5.2.2-tests/strings.lua
+

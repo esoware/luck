@@ -2,14 +2,14 @@
 
 Lua/Luau language support powered by the luck toolchain:
 
-- **Diagnostics** from `luck_linter` on every change (lint rules are opt-in through `luck.json`, and parse errors always show)
+- **Diagnostics** from `luck_linter` on every change, with the rules `luck lint` runs on the same project, and a `luck.json` that doesn't load shown as an error on the file
 - **Formatting** + range formatting from `luck_formatter`
 - **Hover** with stdlib signatures, deprecation, and must-use / pure markers
 - **Completion** of stdlib globals, namespace members, locals, keywords, and constant string arguments such as Roblox service names
 - **Signature help** with active-parameter tracking
 - **Go to definition**, find references, and rename for locals, and `require` paths jump to the module file
 - **Document and workspace symbols**
-- **Code actions**: per-fix quickfix, `source.fixAll.luck`, "disable rule for this statement"
+- **Code actions**: a quick fix per fix or suggestion, `source.fixAll.luck` for every fix that keeps what the code does (suggestions, such as renaming an unused variable to `_x`, stay quick fixes), "disable rule for this statement"
 - **JS/TS-style highlighting** for Lua and Luau: variables, globals, properties, functions, types, and word operators use standard theme scopes, and semantic tokens add scope-aware classification and stdlib deprecation strikethrough
 - **Document highlights**, folding ranges, selection ranges, document links
 - **Snippets** for common Lua patterns

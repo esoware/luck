@@ -5,10 +5,6 @@ use luck_token::{SourceError, Span};
 
 use super::Diagnostic;
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "every numbered code and its wording stay in this file"
-)]
 impl Diagnostic {
     #[must_use]
     pub fn e002(file_path: &str, span: Span) -> Self {
@@ -77,7 +73,7 @@ impl Diagnostic {
     }
 
     #[must_use]
-    pub fn e004_luau_scheme(file_path: &str, span: Span, module_name: &str) -> Self {
+    pub fn e004_missing_prefix(file_path: &str, span: Span, module_name: &str) -> Self {
         Self::error_at(
             "E004",
             format!(
@@ -93,7 +89,7 @@ impl Diagnostic {
     }
 
     #[must_use]
-    pub fn e004_self_needs_subpath(file_path: &str, span: Span) -> Self {
+    pub fn e004_bare_self_alias(file_path: &str, span: Span) -> Self {
         Self::error_at(
             "E004",
             "`@self` can't be used alone, so use `@self/subpath`",
@@ -214,6 +210,12 @@ impl Diagnostic {
             "the bundle nests a module's code {wrapper_levels} levels deeper inside its loader \
              function, so nest this less deeply, such as by moving part of it into a local"
         ))
+    }
+
+    /// A `luck.json`, or a file it extends, that isn't a valid config.
+    #[must_use]
+    pub fn e014(file_path: &str, span: Span, problem: &str) -> Self {
+        Self::error_at("E014", format!("invalid config: {problem}"), file_path, span)
     }
 
     #[must_use]

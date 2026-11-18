@@ -130,9 +130,9 @@ return M -- done
 
 #[test]
 fn comment_inside_stmt_then_blank_line() {
-    // No emitter claims a comment between a callee and its argument list, so
-    // the call goes out verbatim, and the blank line after it has to survive
-    // the second pass.
+    // A comment between a callee and its argument list goes inside the
+    // parentheses, and the blank line after the call has to survive the
+    // second pass.
     assert_format(
         "\
 goto l x
@@ -143,9 +143,10 @@ c = x
 ",
         "\
 goto l
-x
---
-(\"\")
+x(
+\t--
+\t\"\"
+)
 
 c = x
 ",

@@ -1,4 +1,4 @@
-use luck_ast::{Call, FunctionArgs};
+use luck_ast::{Call, FunctionArgs, GetSpan as _};
 use luck_token::{LuaVersion, Span, has_line_break};
 
 use crate::diagnostic::Finding;

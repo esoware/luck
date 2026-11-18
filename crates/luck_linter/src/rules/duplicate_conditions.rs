@@ -1,7 +1,6 @@
 use core::iter;
 
-use luck_ast::Statement;
-use rustc_hash::FxHashSet;
+use luck_ast::{ContentEq as _, Expression, GetSpan as _, Statement};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -35,30 +34,25 @@ impl NodeRule for DuplicateConditions {
         if if_stmt.elseif_clauses.is_empty() {
             return;
         }
-        // Conditions compare by their source text.
-        let mut conditions = iter::once(&if_stmt.condition)
+        // A condition the parser found missing repeats nothing.
+        let conditions = iter::once(&if_stmt.condition)
             .chain(if_stmt.elseif_clauses.iter().map(|clause| &clause.condition))
-            .map(|condition| {
-                let span = condition.span();
-                (span.text(context.source).trim(), span)
-            });
-        let Some((if_text, _)) = conditions.next().filter(|(if_text, _)| !if_text.is_empty())
-        else {
-            return;
-        };
-        let mut earlier_texts = FxHashSet::from_iter([if_text]);
-        for (text, span) in conditions {
-            if !text.is_empty() && !earlier_texts.insert(text) {
-                findings.push(
-                    Finding::new(
-                        format!("duplicate condition `{text}` in `if`/`elseif` chain"),
-                        span,
-                    )
+            .filter(|condition| !matches!(condition, Expression::Error(_)));
+        let mut earlier: Vec<&Expression<'_>> =
+            Vec::with_capacity(if_stmt.elseif_clauses.len().saturating_add(1));
+        for condition in conditions {
+            if !earlier.iter().any(|&earlier_condition| earlier_condition.content_eq(condition)) {
+                earlier.push(condition);
+                continue;
+            }
+            let span = condition.span();
+            let text = span.text(context.source).trim();
+            findings.push(
+                Finding::new(format!("duplicate condition `{text}` in `if`/`elseif` chain"), span)
                     .with_help(
                         "the same condition is checked earlier, so this branch is unreachable unless the condition has side effects",
                     ),
-                );
-            }
+            );
         }
     }
 }
@@ -98,6 +92,18 @@ mod tests {
     #[test]
     fn ignores_if_without_elseif() {
         let diags = run("if a then x() end");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_a_repeat_spelled_with_other_spacing() {
+        let diags = run("if a==1 then x() elseif a == 1 then y() elseif ( a ) then z() end");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_conditions_that_differ_only_inside() {
+        let diags = run("if a == 1 then x() elseif a == 2 then y() elseif a.b == 1 then z() end");
         assert!(diags.is_empty(), "{diags:?}");
     }
 

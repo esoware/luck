@@ -11,10 +11,6 @@ use luck_token::NumberSubtypes;
 use super::respell::Respeller;
 use crate::expr::int_to_float;
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the respeller is one type with its respellings split by flag"
-)]
 impl Respeller {
     pub(super) fn shorten_number<'ast>(
         &mut self,

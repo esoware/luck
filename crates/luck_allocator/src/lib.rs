@@ -3,18 +3,20 @@
 //! The bump arena luck's syntax trees live in. An [`Allocator`] hands out memory that is freed all
 //! at once, when it's [`reset`](Allocator::reset) or dropped. A [`Box`] holds one value in it and a
 //! [`List`] a run of values, and neither is ever dropped. A [`ThinStr`] holds a `&str` in 12 bytes.
-//! An [`AllocatorPool`] recycles allocators across threads.
+//! An [`AllocatorPool`] recycles allocators across threads, and [`ThreadAllocators`] gives each
+//! thread one that outlives the thread's work.
 //!
-//! Everything but [`List`] and [`ThinStr`] is ported from `oxc_allocator` 0.159.0, at oxc commit
-//! `b6ff5069de518a3d8dfd75c931da12eb9746af15`, and kept close enough to it that a diff against
-//! that commit shows upstream's later fixes. Its arena derives from `bumpalo`. The notices for both
-//! are in `LICENSE`.
+//! Everything but [`List`], [`ThinStr`], and [`ThreadAllocators`] is ported from `oxc_allocator`
+//! 0.159.0, at oxc commit `b6ff5069de518a3d8dfd75c931da12eb9746af15`, and kept close enough to it
+//! that a diff against that commit shows upstream's later fixes. Its arena derives from `bumpalo`.
+//! The notices for both are in `LICENSE`.
 
 mod allocator;
 mod boxed;
 mod list;
 mod pool;
 mod thin_str;
+mod thread_allocators;
 #[cfg(feature = "track_allocations")]
 mod tracking;
 
@@ -29,3 +31,4 @@ pub use boxed::Box;
 pub use list::{List, ListIntoIter};
 pub use pool::{AllocatorGuard, AllocatorPool};
 pub use thin_str::ThinStr;
+pub use thread_allocators::ThreadAllocators;

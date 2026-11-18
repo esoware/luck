@@ -1,8 +1,6 @@
 use luck_allocator::Allocator;
 use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
-use luck_token::{
-    Comment, CommentKind, LuaVersion, SourceError, chunk_header, leading_hot_comments,
-};
+use luck_token::{CommentKind, LuaVersion, SourceError, chunk_header, leading_hot_comments};
 
 use crate::bind::bind;
 use crate::binding::Bindings;
@@ -32,11 +30,10 @@ pub fn minify<'ast>(
         .first()
         .filter(|comment| comment.kind == CommentKind::Shebang)
         .map(|comment| comment.span);
-    let hot_comments: &[Comment] = if version.is_luau() { &result.comments } else { &[] };
     let mut output = chunk_header(
         source,
         shebang,
-        leading_hot_comments(hot_comments, source).map(|comment| comment.span),
+        leading_hot_comments(&result.comments, result.block.span.start).map(|comment| comment.span),
     );
     if !minify_tree(allocator, &mut result.block, version, config, false) {
         return Err(vec![nesting_error(&result.block)]);

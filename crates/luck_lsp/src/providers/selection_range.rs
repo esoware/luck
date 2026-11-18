@@ -1,6 +1,8 @@
-use luck_ast::{Block, Expression, LastStatement, Statement, SuffixedExpression, Visitor};
+use ls_types::{Position, SelectionRange};
+use luck_ast::{
+    Block, Expression, GetSpan as _, LastStatement, Statement, SuffixedExpression, Visit,
+};
 use luck_token::{Associativity, Span};
-use tower_lsp_server::ls_types::{Position, SelectionRange};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::{statements_touching, touches};
@@ -55,7 +57,7 @@ impl SpanStack {
     }
 }
 
-impl<'ast> Visitor<'ast> for SpanStack {
+impl<'ast> Visit<'ast> for SpanStack {
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
         for stmt in statements_touching(block, self.offset) {
             self.visit_stmt(stmt);
@@ -70,10 +72,10 @@ impl<'ast> Visitor<'ast> for SpanStack {
         self.walk_stmt(stmt);
     }
 
-    fn visit_last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
-        if touches(last.span(), self.offset) {
-            self.record(last.span());
-            self.walk_last_stmt(last);
+    fn visit_last_stmt(&mut self, last_stmt: &'ast LastStatement<'ast>) {
+        if touches(last_stmt.span(), self.offset) {
+            self.record(last_stmt.span());
+            self.walk_last_stmt(last_stmt);
         }
     }
 
@@ -101,18 +103,18 @@ impl<'ast> Visitor<'ast> for SpanStack {
         self.walk_expr(expr);
     }
 
-    fn visit_suffixed(&mut self, chain: &'ast SuffixedExpression<'ast>) {
-        for count in (1..chain.suffixes.len()).rev() {
-            self.record(chain.head(count).span());
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
+        for count in (1..suffixed_expr.suffixes.len()).rev() {
+            self.record(suffixed_expr.head(count).span());
         }
-        self.walk_suffixed(chain);
+        self.walk_suffixed_expr(suffixed_expr);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use ls_types::Range;
     use luck_core::LuaTarget;
-    use tower_lsp_server::ls_types::Range;
 
     use super::*;
     use crate::fixtures::document;

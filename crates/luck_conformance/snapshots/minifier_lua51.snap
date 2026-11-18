@@ -1,0 +1,16 @@
+minifier_lua51 Summary:
+AST Parsed     : 16/22 (72.73%)
+Positive Passed: 16/22 (72.73%)
+
+Not UTF-8: lua5.1-tests/db.lua
+
+Not UTF-8: lua5.1-tests/files.lua
+
+Not UTF-8: lua5.1-tests/literals.lua
+
+Not UTF-8: lua5.1-tests/pm.lua
+
+Not UTF-8: lua5.1-tests/sort.lua
+
+Not UTF-8: lua5.1-tests/strings.lua
+

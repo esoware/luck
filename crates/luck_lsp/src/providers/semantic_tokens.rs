@@ -5,16 +5,16 @@
 use alloc::collections::BTreeMap;
 use core::iter;
 
-use luck_ast::{
-    Call, ChainHead, Expression, Field, GenericTypeList, Statement, Suffix, TableConstructor, Type,
-    TypeDeclarationValue, TypeField, Visitor,
-};
-use luck_semantic::{SemanticAnalysis, StdlibEntry, SymbolKind};
-use luck_token::{Span, Token, TokenKind, index_to_offset, offset_to_index};
-use tower_lsp_server::ls_types::{
+use ls_types::{
     Position, Range, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
     SemanticTokensLegend, SemanticTokensRangeResult, SemanticTokensResult,
 };
+use luck_ast::{
+    ChainHead, Expression, Field, GenericTypeList, Statement, Suffix, SuffixedExpression,
+    TableConstructor, Type, TypeDeclarationValue, TypeField, Visit,
+};
+use luck_semantic::{SemanticAnalysis, StdlibEntry, SymbolKind};
+use luck_token::{Span, Token, TokenKind, index_to_offset};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::identifier;
@@ -155,7 +155,7 @@ fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> Semantic
         data.push(SemanticToken {
             delta_line,
             delta_start,
-            length: utf16_length(document.text(), span),
+            length: document.length(span),
             token_type: classification.token_type,
             token_modifiers_bitset: classification.modifiers,
         });
@@ -492,7 +492,7 @@ impl Classifier<'_> {
     }
 }
 
-impl<'ast> Visitor<'ast> for Classifier<'_> {
+impl<'ast> Visit<'ast> for Classifier<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             // Luau
@@ -553,16 +553,18 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
         self.walk_stmt(stmt);
     }
 
-    fn visit_call(&mut self, call: Call<'ast>) {
-        match call.method {
-            Some(method) => self.retype(method.span, TYPE_METHOD),
-            None => self.callee(call.callee),
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
+        for call in suffixed_expr.calls() {
+            match call.method {
+                Some(method) => self.retype(method.span, TYPE_METHOD),
+                None => self.callee(call.callee),
+            }
         }
-        self.walk_call(call);
+        self.walk_suffixed_expr(suffixed_expr);
     }
 
-    fn visit_table_constructor(&mut self, table: &'ast TableConstructor<'ast>) {
-        for field in &table.fields {
+    fn visit_table_constructor(&mut self, table_constructor: &'ast TableConstructor<'ast>) {
+        for field in &table_constructor.fields {
             match field {
                 Field::Named { name, value } => {
                     let is_method = matches!(value, Expression::FunctionDef(_));
@@ -578,8 +580,8 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
         }
     }
 
-    fn visit_generic_type_list(&mut self, generics: &'ast GenericTypeList<'ast>) {
-        for param in &generics.params {
+    fn visit_generic_type_list(&mut self, generic_type_list: &'ast GenericTypeList<'ast>) {
+        for param in &generic_type_list.params {
             self.insert(param.name.span, TYPE_TYPE);
             if let Some(default) = &param.default {
                 self.visit_type(default);
@@ -685,20 +687,10 @@ const fn member_classify(entry: &StdlibEntry) -> Classification {
     classification
 }
 
-fn utf16_length(source: &str, span: Span) -> u32 {
-    let end = offset_to_index(span.end).min(source.len());
-    source.get(offset_to_index(span.start)..end).map_or(0, |text| {
-        if text.is_ascii() {
-            index_to_offset(text.len())
-        } else {
-            index_to_offset(text.encode_utf16().count())
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use luck_core::LuaTarget;
+    use luck_token::offset_to_index;
 
     use super::*;
     use crate::fixtures::document;

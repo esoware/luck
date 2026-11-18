@@ -1,7 +1,7 @@
 use core::ops::Range;
 
 use luck_allocator::Allocator;
-use luck_ast::{MAX_NESTING_DEPTH, Statement, Visitor, block_nesting_depth};
+use luck_ast::{MAX_NESTING_DEPTH, Statement, Visit, block_nesting_depth};
 use luck_parser::parse;
 use luck_testgen::with_the_smallest_stack;
 use luck_token::LuaVersion;
@@ -414,7 +414,7 @@ struct Levels {
     deepest: usize,
 }
 
-impl Visitor<'_> for Levels {
+impl Visit<'_> for Levels {
     fn descend(&mut self) -> bool {
         self.depth = self.depth.saturating_add(1);
         self.deepest = self.deepest.max(self.depth);

@@ -1,4 +1,5 @@
 use core::fmt::Display;
+use core::slice;
 use std::process::ExitCode;
 
 use luck_core::Diagnostic;
@@ -44,6 +45,13 @@ pub(crate) fn operation_error(message: impl Display) -> Exit {
 pub(crate) fn fail_with_diags(diags: &[Diagnostic], version: LuaVersion) -> Exit {
     print_diags(diags, version);
     Exit::Failure
+}
+
+/// A `luck.json` that doesn't load is a usage error.
+pub(crate) fn config_error(diag: &Diagnostic) -> Exit {
+    // Lua 5.4 ends a line where JSON5 does, but at the rare LS and PS.
+    print_diags(slice::from_ref(diag), LuaVersion::Lua54);
+    Exit::Usage
 }
 
 /// `source` is a document that isn't on disk, such as a bundle being minified

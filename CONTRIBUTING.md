@@ -60,7 +60,7 @@ Trailers go at the end, `Closes #N` before `Co-authored-by:`.
 
 ## Releases
 
-Every crate in the workspace and the VS Code extension share one version. It lives in `[workspace.package]` and the `luck*` entries of `[workspace.dependencies]` in the root `Cargo.toml`, and in `editors/vscode/package.json` and its `package-lock.json`. The language server reports it as `serverInfo.version`. `luck_testgen`, `luck_benchmark`, `luck_benchmark_files`, and `luck_allocs` aren't published, so the `luck_testgen` and `luck_benchmark_files` entries name only a path, which cargo drops from a published crate's dev-dependencies.
+Every crate in the workspace and the VS Code extension share one version. It lives in `[workspace.package]` and the `luck*` entries of `[workspace.dependencies]` in the root `Cargo.toml`, and in `editors/vscode/package.json` and its `package-lock.json`. The language server reports it as `serverInfo.version`. `luck_ast_tools`, `luck_testgen`, `luck_benchmark`, `luck_benchmark_files`, `luck_allocs`, and `luck_conformance` aren't published, so the `luck_testgen` and `luck_benchmark_files` entries name only a path, which cargo drops from a published crate's dev-dependencies.
 
 To release, run the Prepare release workflow from the Actions tab. It picks the next version from the commits since the last `v` tag: a minor bump if any is breaking or a `feat`, or else a patch bump if any is a `fix`, `perf`, or `revert`. Then it opens a `build(repo,vscode): release X.Y.Z` PR from the `release` branch, whose body is the release notes that `cliff.toml` builds from those commits' titles. If anything merges before the PR does, run the workflow again to update it.
 

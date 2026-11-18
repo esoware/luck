@@ -58,6 +58,28 @@ local total = first_value * second_value
 }
 
 #[test]
+fn args_measure_a_long_string_after_them_to_its_first_line_break() {
+    // `local v = f(aaaa)[ [[x` is 22 columns.
+    let source = "\
+local v = f(aaaa)[ [[x
+y]] ]
+";
+    let width = |line_width| FormatOptions { line_width, ..FormatOptions::default() };
+    assert_format_with(source, source, LuaVersion::Lua54, &width(22));
+    assert_format_with(
+        source,
+        "\
+local v = f(
+\taaaa
+)[ [[x
+y]] ]
+",
+        LuaVersion::Lua54,
+        &width(21),
+    );
+}
+
+#[test]
 fn multi_assignment() {
     assert_format("x,y=1,2\n", "x, y = 1, 2\n");
 }

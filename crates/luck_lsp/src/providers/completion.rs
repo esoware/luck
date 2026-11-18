@@ -2,14 +2,14 @@
 //! after the colon) gets no member completion. The dangling colon doesn't
 //! parse, so there's no AST to resolve the receiver from.
 
+use ls_types::{
+    CompletionItem, CompletionItemKind, CompletionItemTag, CompletionResponse, CompletionTextEdit,
+    Documentation, InsertTextFormat, MarkupContent, MarkupKind, Position, TextEdit,
+};
 use luck_ast::{Call, FunctionArgs, Literal, Name};
 use luck_semantic::{StdlibEntry, StdlibFunction};
 use luck_token::{Span, TokenKind, index_to_offset};
 use rustc_hash::FxHashSet;
-use tower_lsp_server::ls_types::{
-    CompletionItem, CompletionItemKind, CompletionItemTag, CompletionResponse, CompletionTextEdit,
-    Documentation, InsertTextFormat, MarkupContent, MarkupKind, Position, TextEdit,
-};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::{
@@ -81,7 +81,7 @@ fn member_completions(
     // A reference at the root is exact. Text mid-typing often has none, so
     // that case falls back to the nearest declaration before the cursor.
     let (root_local, reaches_host_global) =
-        tree.reference_of(&Name { text: root.into(), index: None, span: *root_span }).map_or_else(
+        tree.reference_of(&Name::new(root.into(), None, *root_span)).map_or_else(
             || {
                 let local = semantic.nearest_local(root, offset).map(|symbol| symbol.id);
                 (local, local.is_none())
@@ -304,8 +304,8 @@ const KEYWORD_COMPLETIONS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+    use ls_types::Range as LspRange;
     use luck_core::LuaTarget;
-    use tower_lsp_server::ls_types::Range as LspRange;
 
     use super::*;
     use crate::fixtures::document as document_for;

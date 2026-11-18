@@ -1,8 +1,8 @@
-use luck_ast::{Expression, FunctionAttribute, LastStatement, Statement};
-use luck_token::{CommentKind, Span, offset_to_index};
+use luck_ast::{Expression, FunctionAttribute, Statement};
+use luck_token::{Span, leading_hot_comments, offset_to_index};
 
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
+use crate::fix::FixKind;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
@@ -14,7 +14,8 @@ impl_rule!(
     "redundant_native_attribute",
     Style,
     Warning,
-    "`@native` attribute is redundant in a `--!native` module"
+    "`@native` attribute is redundant in a `--!native` module",
+    Fix
 );
 
 impl NodeRule for RedundantNativeAttribute {
@@ -73,12 +74,7 @@ fn check_attributes(
     context: &LintContext<'_>,
     findings: &mut Vec<Finding>,
 ) {
-    // Check for attributes first, since the directive scan reads the
-    // comments.
-    if attributes.is_empty()
-        || !context.semantic.version().is_luau()
-        || !has_native_directive(context)
-    {
+    if attributes.is_empty() || !has_native_directive(context) {
         return;
     }
     for attribute in attributes {
@@ -90,19 +86,22 @@ fn check_attributes(
                 "`@native` attribute is redundant in a `--!native` module",
                 attribute.span,
             )
-            .with_optional_fix(removal_fix(attribute, attributes, context.source)),
+            .with_fix(context, FixKind::Fix, |fixer| {
+                let span = removal_span(attribute, attributes, context.source)?;
+                Some(fixer.delete("remove the redundant `@native` attribute", span))
+            }),
         );
     }
 }
 
-/// Deletes `attribute` and one whitespace byte after it, so no doubled
-/// separator is left behind. A `@[...]` list keeps the fix only when
-/// `attribute` is its sole entry and nothing but its name sits in brackets.
-fn removal_fix(
+/// `attribute` and the space or line break after it, so no doubled separator
+/// is left behind. A `@[...]` list is removed only when `attribute` is its
+/// sole entry and nothing but its name sits in brackets.
+fn removal_span(
     attribute: &FunctionAttribute<'_>,
     attributes: &[FunctionAttribute<'_>],
     source: &str,
-) -> Option<Fix> {
+) -> Option<Span> {
     let bytes = source.as_bytes();
     let after_at = offset_to_index(attribute.span.start).saturating_add(1);
     let mut edit_end = offset_to_index(attribute.name.span.end);
@@ -125,40 +124,23 @@ fn removal_fix(
         }
         edit_end = close_index.saturating_add(1);
     }
-    let has_trailing_space = matches!(bytes.get(edit_end), Some(b' ' | b'\t' | b'\n' | b'\r'));
-    let span = Span::from_indices(
+    let separator_length = match bytes.get(edit_end..).unwrap_or_default() {
+        [b'\r', b'\n', ..] => 2,
+        [b' ' | b'\t' | b'\n' | b'\r', ..] => 1,
+        _ => 0,
+    };
+    Some(Span::from_indices(
         offset_to_index(attribute.span.start),
-        edit_end.saturating_add(usize::from(has_trailing_space)),
-    );
-    Some(Fix {
-        description: "remove the redundant `@native` attribute".to_owned(),
-        edits: vec![TextEdit { span, replacement: String::new() }],
-    })
+        edit_end.saturating_add(separator_length),
+    ))
 }
 
 /// Whether a `--!native` hot comment comes before any code. Luau ignores one
 /// placed later.
 fn has_native_directive(context: &LintContext<'_>) -> bool {
-    let block = context.block;
-    let first_code_start = block
-        .stmts
-        .first()
-        .map(Statement::span)
-        .or_else(|| block.last_stmt.as_ref().map(LastStatement::span))
-        .map(|span| span.start);
-    // Comments come in source order, so the scan stops at the first code.
-    context
-        .comments
-        .iter()
-        .take_while(|comment| first_code_start.is_none_or(|start| comment.span.start <= start))
-        .any(|comment| {
-            comment.kind == CommentKind::Line
-                && comment
-                    .span
-                    .text(context.source)
-                    .strip_prefix("--!")
-                    .is_some_and(|body| body.trim_end() == "native")
-        })
+    leading_hot_comments(context.comments, context.block.span.start).any(|comment| {
+        comment.span.text(context.source).get(3..).is_some_and(|word| word.trim_end() == "native")
+    })
 }
 
 #[cfg(test)]
@@ -312,5 +294,14 @@ function f() end",
     fn flags_with_directive_followed_by_trailing_space() {
         let diags = run("--!native \n@native function f() end");
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_and_fixes_removing_a_whole_crlf_line_break() {
+        let source = "--!native\r\n@native\r\nlocal function f() end\r\nf()";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
+        assert_eq!(fixed, "--!native\r\nlocal function f() end\r\nf()");
     }
 }

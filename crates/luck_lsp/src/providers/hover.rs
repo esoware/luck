@@ -1,6 +1,6 @@
+use ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 use luck_semantic::{StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibParam};
 use luck_token::LuaVersion;
-use tower_lsp_server::ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 
 use crate::document::DocumentState;
 use crate::providers::cursor::{CursorNode, TextKind, find_node_at, text_kind_at};

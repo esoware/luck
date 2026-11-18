@@ -1,0 +1,6 @@
+runtime_lua54 Summary:
+AST Parsed     : 29/30 (96.67%)
+Positive Passed: 29/30 (96.67%)
+
+Not UTF-8: lua-5.4.9-tests/strings.lua
+

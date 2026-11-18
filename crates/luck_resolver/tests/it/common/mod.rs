@@ -1,8 +1,8 @@
-use std::fs;
-use std::path::Path;
+use alloc::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::{fs, io};
 
-use luck_resolver::{ResolveRequest, normalize_path};
-use luck_token::Span;
+use luck_resolver::{DirEntry, FileMetadata, FileSystem, FileSystemOs};
 use tempfile::TempDir;
 
 pub(crate) fn project_with(files: &[(&str, &str)]) -> TempDir {
@@ -29,13 +29,67 @@ pub(crate) fn luau_project() -> TempDir {
     ])
 }
 
-pub(crate) fn normalized(project: &TempDir, relative_path: &str) -> String {
-    normalize_path(&project.path().join(relative_path))
+/// The canonical path of `relative_path` in `project`, which must exist.
+pub(crate) fn canonical(project: &TempDir, relative_path: &str) -> PathBuf {
+    FileSystemOs.canonicalize(&project.path().join(relative_path)).expect("canonicalize")
 }
 
-pub(crate) const fn request<'request>(
-    module: &'request str,
-    from_file: &'request str,
-) -> ResolveRequest<'request> {
-    ResolveRequest { module, from_file, span: Span::new(0, 10) }
+/// Files that exist only in memory, each directory implied by the files
+/// under it.
+#[derive(Debug)]
+pub(crate) struct MemoryFileSystem {
+    files: BTreeMap<PathBuf, Vec<u8>>,
+}
+
+impl MemoryFileSystem {
+    pub(crate) fn new(files: &[(&str, &str)]) -> Self {
+        Self {
+            files: files
+                .iter()
+                .map(|(path, contents)| (PathBuf::from(path), contents.as_bytes().to_vec()))
+                .collect(),
+        }
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        self.files.keys().any(|file| file != path && file.starts_with(path))
+    }
+}
+
+impl FileSystem for MemoryFileSystem {
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.files.get(path).cloned().ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+
+    fn metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        let is_file = self.files.contains_key(path);
+        let is_dir = self.is_dir(path);
+        if !is_file && !is_dir {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        Ok(FileMetadata { is_file, is_dir })
+    }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
+        if !self.is_dir(path) {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        let names: BTreeSet<&Path> = self
+            .files
+            .keys()
+            .filter_map(|file| file.strip_prefix(path).ok()?.iter().next().map(Path::new))
+            .collect();
+        Ok(names
+            .into_iter()
+            .map(|name| DirEntry {
+                name: name.as_os_str().to_owned(),
+                metadata: self.metadata(&path.join(name)).ok(),
+            })
+            .collect())
+    }
+
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        self.metadata(path)?;
+        Ok(path.to_path_buf())
+    }
 }

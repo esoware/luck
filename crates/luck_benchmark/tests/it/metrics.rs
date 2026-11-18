@@ -2,7 +2,8 @@
 //!
 //! Minified and gzipped sizes for every benchmark file and project go to
 //! `minsize.snap` next to this crate's `Cargo.toml`, and CI checks them. Byte
-//! counts are exact, so any size regression or win shows up as a diff.
+//! counts are exact, so any size regression or win shows up as a diff. Each
+//! file is minified twice, and a second pass that changes it fails the run.
 //!
 //! Both tests are `#[ignore]`d because they fetch the benchmark files (over the
 //! network on first run) and minify all of them. The benchmark workflow runs
@@ -47,7 +48,8 @@ fn gzipped_byte_count(text: &str) -> Result<usize, Box<dyn Error>> {
 
 /// # Errors
 ///
-/// Fails when `source` doesn't minify or the result can't be compressed.
+/// Fails when `source` doesn't minify, when minifying the result changes it
+/// again, or when the result can't be compressed.
 fn measure(
     allocator: &mut Allocator,
     name: &str,
@@ -58,8 +60,14 @@ fn measure(
     let normalized = source.replace("\r\n", "\n");
     let config = TransformConfig::default();
     allocator.reset();
-    let minified = luck_minifier::minify(allocator, &normalized, target.lua_version(), &config)
+    let version = target.lua_version();
+    let minified = luck_minifier::minify(allocator, &normalized, version, &config)
         .map_err(|errors| format!("{name} failed to minify: {errors:?}"))?;
+    let again = luck_minifier::minify(allocator, &minified, version, &config)
+        .map_err(|errors| format!("{name}'s minified output failed to minify: {errors:?}"))?;
+    if again != minified {
+        return Err(format!("{name}'s minified output changed when minified again").into());
+    }
     Ok(Row {
         name: name.to_owned(),
         original_bytes: normalized.len(),

@@ -14,9 +14,16 @@
 //! mutably may renumber. A tree is `Send` and `Sync`, and may join nodes from
 //! any number of arenas that outlive it.
 //!
-//! Two traversals share one walk: [`Visitor`] borrows the tree, and
-//! [`VisitorMut`] rewrites it in place. Override the `visit_*` method you
-//! care about and call `self.walk_*` to recurse.
+//! `luck_ast_tools` generates the tree's support code from its types. Two
+//! traversals share one walk: [`Visit`] borrows the
+//! tree, and [`VisitMut`] rewrites it in place. Each has a `visit_*` hook for
+//! every type, to override, and a `walk_*` method that visits what a node
+//! holds in source order, to call from it and recurse. [`Visit::enter_node`]
+//! is handed every node as an [`AstKind`]. [`GetSpan`] gives any node's span,
+//! [`ContentEq`] compares two trees leaving their spans out, and every node
+//! type has a `new` constructor, a `boxed` one where a field boxes it, and an
+//! enum a `new_*` one for each variant that holds a struct. [`Synth`] builds
+//! on those, adding the checks a tool that emits a tree needs.
 //!
 //! A run of suffixes (`a.b[c]:d()`) is one [`SuffixedExpression`], and a
 //! run of binary operators at one precedence level (`a + b - c`) is one
@@ -53,25 +60,25 @@
 extern crate alloc;
 
 mod chain;
+mod content_eq;
 mod counts;
 mod depth;
 mod expr;
 #[cfg(test)]
 mod fixtures;
 mod function;
-#[cfg(test)]
-mod layout;
+mod generated;
 mod leaf;
 mod one_or_more;
 mod query;
 mod span;
 mod stmt;
 mod synth;
+mod take;
 mod types;
-mod visitor;
-mod visitor_mut;
 
 pub use chain::{Call, ChainHead, DottedPath};
+pub use content_eq::ContentEq;
 pub use counts::TreeCounts;
 pub use depth::{
     MAX_NESTING_DEPTH, MIN_STACK_BYTES, block_nesting_depth, expr_nesting_depth,
@@ -83,12 +90,14 @@ pub use expr::{
     Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
+pub use generated::{AstKind, AstType, Visit, VisitMut};
 pub use leaf::{Literal, Name, NameIndex};
 pub use one_or_more::OneOrMore;
 pub use query::{
     expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,
     unwrap_parentheses,
 };
+pub use span::GetSpan;
 pub use stmt::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
     ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
@@ -106,5 +115,3 @@ pub use types::{
     IntersectionType, NamedType, OptionalType, ParenthesizedType, TableType, Type, TypeArgs,
     TypeField, TypeFieldAccess, TypePack, TypeofType, UnionType, VariadicType,
 };
-pub use visitor::Visitor;
-pub use visitor_mut::VisitorMut;

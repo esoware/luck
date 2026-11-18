@@ -20,13 +20,13 @@ impl WholeRule for GlobalUsedAsLocal {
         let mut global_references: Vec<&Reference> = tree.global_references().collect();
         global_references.sort_by_key(|reference| reference.name);
 
-        let mut findings = Vec::new();
+        let mut firsts: Vec<&Reference> = Vec::new();
         for references in global_references.chunk_by(|left, right| left.name == right.name) {
-            let Some(first) = references.iter().min_by_key(|reference| reference.span.start) else {
+            let Some(&first) = references.iter().min_by_key(|reference| reference.span.start)
+            else {
                 continue;
             };
-            let name = tree.name(first.name);
-            if name == "_" || context.semantic.is_known_global_name(first.name) {
+            if tree.name(first.name) == "_" || context.semantic.is_known_global_name(first.name) {
                 continue;
             }
             let is_assigned = references.iter().any(|reference| reference.kind.is_write());
@@ -42,16 +42,19 @@ impl WholeRule for GlobalUsedAsLocal {
             if !functions.all(|other| other == Some(function)) {
                 continue;
             }
-            findings.push(
+            firsts.push(first);
+        }
+        firsts.sort_by_key(|first| first.span.start);
+        firsts
+            .into_iter()
+            .map(|first| {
                 Finding::new(
-                    format!("global `{name}` is only used inside one function"),
+                    format!("global `{}` is only used inside one function", tree.name(first.name)),
                     first.span,
                 )
-                .with_help("declare it `local` inside that function"),
-            );
-        }
-        findings.sort_by_key(|finding| finding.span.start);
-        findings
+                .with_help("declare it `local` inside that function")
+            })
+            .collect()
     }
 }
 

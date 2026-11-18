@@ -4,7 +4,7 @@
 use luck_allocator::Allocator;
 use luck_ast::MIN_STACK_BYTES;
 use luck_core::LuaTarget;
-use luck_linter::{LintConfig, apply_fixes, lint_parsed};
+use luck_linter::{FixKind, LintConfig};
 use luck_testgen::{deep_and_long_sources, on_the_smallest_stack};
 use luck_token::LuaVersion;
 use rayon::ThreadPoolBuilder;
@@ -30,13 +30,13 @@ fn linting_and_fixing_fit_the_smallest_stack() {
         let pool =
             ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build().expect("the pool starts");
         let config = every_rule();
-        let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source, version);
         for &target in targets(version) {
-            let diags = pool.install(|| lint_parsed(&parsed, target, &config));
-            if let Some(fixed) = apply_fixes(&allocator, source, &diags, version) {
-                assert!(fixed.errors.is_empty(), "{:?}", fixed.errors.first());
-            }
+            pool.install(|| {
+                let allocator = Allocator::new();
+                let fixed = luck_linter::fix(&allocator, source, target, &config, FixKind::all())
+                    .expect("the fixes converge");
+                assert!(fixed.parse.errors.is_empty(), "{:?}", fixed.parse.errors.first());
+            });
         }
     });
 }

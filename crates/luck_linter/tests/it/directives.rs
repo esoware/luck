@@ -1,5 +1,6 @@
+use luck_allocator::Allocator;
 use luck_core::LuaTarget;
-use luck_linter::{LintConfig, LintDiagnostic, RuleLevel, Severity};
+use luck_linter::{FixKind, LintConfig, LintDiagnostic, RuleLevel, Severity};
 
 use crate::common::{lint, with_level};
 
@@ -208,6 +209,153 @@ local unused = 1",
     assert!(
         diags.iter().all(|diag| diag.rule != "unused_variable"),
         "a leveled block comment should work like `--[[`: {diags:?}"
+    );
+}
+
+#[test]
+fn deny_runs_a_rule_config_turns_off_only_where_it_applies() {
+    let source = "\
+local function f()
+  -- luck: deny(shadowing)
+  local f = 1
+  return f
+end
+local function g()
+  local g = 1
+  return g
+end
+return f, g";
+    let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
+    let shadowing: Vec<(&str, Severity)> = diags
+        .iter()
+        .filter(|diag| diag.rule == "shadowing")
+        .map(|diag| (&*diag.message, diag.severity))
+        .collect();
+    assert_eq!(shadowing.len(), 1, "{diags:?}");
+    assert!(shadowing[0].0.contains("`f`"), "{diags:?}");
+    assert_eq!(shadowing[0].1, Severity::Error);
+}
+
+#[test]
+fn warn_in_a_file_level_directive_runs_its_rule_everywhere() {
+    let source = "\
+-- #luck: warn(shadowing)
+local a = 1
+do
+  local a = 2
+  print(a)
+end
+print(a)";
+    let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
+    assert!(
+        diags.iter().any(|diag| diag.rule == "shadowing" && diag.severity == Severity::Warning),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn allow_inside_a_statement_with_none_after_it_covers_that_statement() {
+    let source = "\
+local t = {
+  a = 1,
+  a = 2, -- luck: allow(duplicate_keys)
+}
+return t";
+    let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn trailing_allow_after_a_separator_covers_the_stmt_before_it() {
+    let diags = lint(
+        "local unused = 1; -- luck: allow(unused_variable)",
+        LuaTarget::Lua54,
+        &LintConfig::default(),
+    );
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn formatter_directive_is_neither_lint_directive_nor_invalid() {
+    let diags = lint(
+        "\
+-- luck: format off
+local   _x = 1
+-- luck: format on",
+        LuaTarget::Lua54,
+        &LintConfig::default(),
+    );
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn parse_error_is_no_rule_a_directive_can_name() {
+    let diags = lint(
+        "\
+-- #luck: allow(parse_error)
+local _x = 1",
+        LuaTarget::Lua54,
+        &LintConfig::default(),
+    );
+    let rules: Vec<&str> = diags.iter().map(|diag| diag.rule).collect();
+    assert_eq!(rules, ["invalid_lint_filter"], "{diags:?}");
+    let broken = lint(
+        "\
+-- #luck: allow(parse_error)
+local x =",
+        LuaTarget::Lua54,
+        &LintConfig::default(),
+    );
+    let broken_rules: Vec<&str> = broken.iter().map(|diag| diag.rule).collect();
+    assert_eq!(broken_rules, ["parse_error"], "{broken:?}");
+}
+
+#[test]
+fn fix_removes_an_allow_that_silences_nothing() {
+    let source = "\
+local a = 1
+-- luck: allow(undefined_variable)
+print(a) -- luck: allow(unused_variable, undefined_variable)
+";
+    let allocator = Allocator::new();
+    let fixed = luck_linter::fix(
+        &allocator,
+        source,
+        LuaTarget::Lua54,
+        &LintConfig::default(),
+        FixKind::Fix,
+    )
+    .expect("fixes converge");
+    assert_eq!(
+        fixed.parse.source,
+        "\
+local a = 1
+print(a)
+"
+    );
+    assert_eq!(fixed.diags, []);
+}
+
+#[test]
+fn unused_allow_report_is_itself_a_rule_a_directive_can_allow() {
+    let source = "\
+-- #luck: allow(unused_lint_filter)
+-- luck: allow(undefined_variable)
+local a = 1
+print(a)";
+    assert_eq!(lint(source, LuaTarget::Lua54, &LintConfig::default()), []);
+    let mut config = LintConfig::default();
+    config.rules.set_level("unused_lint_filter", RuleLevel::Off);
+    assert_eq!(
+        lint(
+            "\
+-- luck: allow(undefined_variable)
+local a = 1
+print(a)",
+            LuaTarget::Lua54,
+            &config
+        ),
+        []
     );
 }
 

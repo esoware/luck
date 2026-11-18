@@ -1,91 +1,223 @@
+use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use core::cmp::Reverse;
 use core::error::Error;
 use core::fmt;
 use core::ops::Range;
 
+use bitflags::bitflags;
 use luck_allocator::Allocator;
 use luck_core::LuaTarget;
 use luck_parser::ParseResult;
-use luck_token::{Comment, LuaVersion, Span};
+use luck_token::Span;
 
 use crate::config::LintConfig;
 use crate::diagnostic::LintDiagnostic;
 use crate::driver::lint_parsed;
 
-/// Maximum fix-and-relint rounds. Needing more almost always means two rules
-/// are undoing each other.
-pub const FIXPOINT_BUDGET: usize = 10;
+/// `ESLint` stops at the same count. Needing more almost always means two
+/// rules are undoing each other.
+const ROUND_BUDGET: usize = 10;
 
+bitflags! {
+    /// A set of fix kinds: the kind of one fix, the kinds a rule's fixes come
+    /// in, or the kinds a host applies, which are the only ones the linter
+    /// builds.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct FixKind: u8 {
+        /// Keeps what the code does. `--fix` and the editor's fix-all apply
+        /// it.
+        const Fix = 1;
+        /// Can change what the code does, or hides a problem rather than
+        /// solving it, as renaming an unused variable to `_x` does. Only the
+        /// user applies it, as an editor quick fix or with
+        /// `--fix-suggestions`.
+        const Suggestion = 1 << 1;
+    }
+}
+
+/// Edits that fix one diagnostic, applied together or not at all, because
+/// half of them could change what the code means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fix {
-    pub description: String,
-    pub edits: Vec<TextEdit>,
+    /// Exactly one kind.
+    pub kind: FixKind,
+    /// What the fix does, which an editor shows as its code action.
+    pub message: Cow<'static, str>,
+    pub edits: Box<[TextEdit]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
     pub span: Span,
-    pub replacement: String,
+    pub replacement: Cow<'static, str>,
 }
 
-/// The comments that sit inside `span`, which a fix rewriting `span` would
-/// delete. `comments` is in source order.
-pub(crate) fn comments_within(comments: &[Comment], span: Span) -> &[Comment] {
-    let first = comments.partition_point(|comment| comment.span.start < span.start);
-    let last = comments.partition_point(|comment| comment.span.end <= span.end);
-    comments.get(first..last).unwrap_or_default()
+/// Builds a finding's fix, of the kind the rule reports it as. A rule gets
+/// one only when the host applies fixes of that kind.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RuleFixer {
+    kind: FixKind,
 }
 
-/// `source` with the fixes [`non_overlapping_edits`] keeps applied, parsed
-/// into `allocator` with its text, so a caller can lint the result without
-/// parsing it again.
+impl RuleFixer {
+    pub(crate) const fn new(kind: FixKind) -> Self {
+        Self { kind }
+    }
+
+    pub(crate) fn fix<Message, Edits>(self, message: Message, edits: Edits) -> Fix
+    where
+        Message: Into<Cow<'static, str>>,
+        Edits: Into<Box<[TextEdit]>>,
+    {
+        Fix { kind: self.kind, message: message.into(), edits: edits.into() }
+    }
+
+    pub(crate) fn replace<Message, Replacement>(
+        self,
+        message: Message,
+        span: Span,
+        replacement: Replacement,
+    ) -> Fix
+    where
+        Message: Into<Cow<'static, str>>,
+        Replacement: Into<Cow<'static, str>>,
+    {
+        self.fix(message, [TextEdit { span, replacement: replacement.into() }])
+    }
+
+    pub(crate) fn delete<Message>(self, message: Message, span: Span) -> Fix
+    where
+        Message: Into<Cow<'static, str>>,
+    {
+        self.replace(message, span, "")
+    }
+}
+
+/// What [`fix`] leaves once no fix of the kinds it applies is left.
+#[derive(Debug)]
+pub struct Fixed<'ast> {
+    /// The fixed source's parse, which is the parse of the source itself
+    /// when nothing applied.
+    pub parse: ParseResult<'ast>,
+    /// The fixed source's diagnostics.
+    pub diags: Vec<LintDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FixError {
+    /// Fixes were still coming after `rounds` rounds.
+    BudgetExhausted { rounds: usize },
+    /// The fixes of round `round`, counted from 1, together broke the
+    /// syntax, which fails with `message`.
+    ReparseFailed { round: usize, message: String },
+}
+
+impl fmt::Display for FixError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BudgetExhausted { rounds } => write!(
+                f,
+                "fixes kept coming after {rounds} rounds, so two rules may be undoing each other"
+            ),
+            Self::ReparseFailed { round, message } => {
+                write!(f, "the fixes of round {round} broke the syntax: {message}")
+            }
+        }
+    }
+}
+
+impl Error for FixError {}
+
+/// Lints `source` for `target` and applies its fixes of the kinds `fixes`
+/// holds, round after round, until none is left. Each round's text is parsed
+/// into `allocator` once, both to check it and to lint it.
 ///
-/// `None` when the fixes change nothing, or when the result doesn't parse, so
-/// a broken fix never reaches the user's file. [`apply_fixes_fixpoint`]
-/// re-lints and repeats until no fixes remain.
-#[must_use]
-pub fn apply_fixes<'ast>(
+/// Of two overlapping fixes a round applies one, and the next round lints
+/// again and applies the other if it still holds.
+///
+/// # Errors
+///
+/// [`FixError::BudgetExhausted`] when fixes are still coming after 10
+/// rounds, and [`FixError::ReparseFailed`] when a round's fixes break the
+/// syntax. Neither leaves a fixed text, so a caller writes back all of the
+/// fixes or none.
+///
+/// # Panics
+///
+/// In debug builds, as [`lint_parsed`] does.
+pub fn fix<'ast>(
     allocator: &'ast Allocator,
-    source: &str,
-    diags: &[LintDiagnostic],
-    version: LuaVersion,
-) -> Option<ParseResult<'ast>> {
-    if diags.iter().all(|diag| diag.fix.is_none()) {
-        return None;
-    }
-    let fixed = apply_one_pass(source, diags);
-    if fixed == source {
-        return None;
-    }
-    let parse = luck_parser::parse(allocator, allocator.alloc_str(&fixed), version);
-    parse.errors.is_empty().then_some(parse)
+    source: &'ast str,
+    target: LuaTarget,
+    config: &LintConfig,
+    fixes: FixKind,
+) -> Result<Fixed<'ast>, FixError> {
+    fix_within(allocator, source, target, config, fixes, ROUND_BUDGET)
 }
 
-pub(crate) fn apply_one_pass(source: &str, diags: &[LintDiagnostic]) -> String {
-    let mut fixed = String::with_capacity(source.len());
+/// # Errors
+///
+/// As for [`fix`], with `budget` as the limit.
+fn fix_within<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    target: LuaTarget,
+    config: &LintConfig,
+    fixes: FixKind,
+    budget: usize,
+) -> Result<Fixed<'ast>, FixError> {
+    let version = target.lua_version();
+    let mut parse = luck_parser::parse(allocator, source, version);
+    for round in 1..=budget {
+        let diags = lint_parsed(&parse, target, config, fixes);
+        let Some(text) = apply(parse.source, &diags, fixes) else {
+            return Ok(Fixed { parse, diags });
+        };
+        let reparse = luck_parser::parse(allocator, allocator.alloc_str(&text), version);
+        if let Some(error) = reparse.errors.first() {
+            return Err(FixError::ReparseFailed { round, message: error.message.clone() });
+        }
+        parse = reparse;
+    }
+    Err(FixError::BudgetExhausted { rounds: budget })
+}
+
+/// `source` with the fixes of `diags` of the kinds `fixes` holds that
+/// [`non_overlapping_edits`] keeps, or `None` when they change nothing.
+pub(crate) fn apply(source: &str, diags: &[LintDiagnostic], fixes: FixKind) -> Option<String> {
+    let edits = non_overlapping_edits(diags, fixes);
+    if edits.is_empty() {
+        return None;
+    }
+    let mut text = String::with_capacity(source.len());
     let mut copied_to = 0;
-    for edit in non_overlapping_edits(diags) {
+    for edit in edits {
         let Range { start, end } = Range::<usize>::from(edit.span);
-        fixed.push_str(source.get(copied_to..start).unwrap_or_default());
-        fixed.push_str(&edit.replacement);
+        text.push_str(source.get(copied_to..start).unwrap_or_default());
+        text.push_str(&edit.replacement);
         copied_to = end;
     }
-    fixed.push_str(source.get(copied_to..).unwrap_or_default());
-    fixed
+    text.push_str(source.get(copied_to..).unwrap_or_default());
+    (text != source).then_some(text)
 }
 
-/// The fixes reaching furthest into the source are taken first, so of two
-/// overlapping ones the later wins.
+/// The edits of `diags`'s fixes of the kinds `fixes` holds that one change
+/// can make together, in source order.
 ///
-/// A fix is kept or dropped whole, because half of a multi-edit fix changes
-/// the code's meaning, and a dropped one comes back on the next pass. Edits
-/// at one offset keep a fixed order, whichever rule produced them.
+/// The fixes reaching furthest into the source are taken first, so of two
+/// overlapping ones the later wins. A fix is kept or dropped whole, because
+/// half of a multi-edit fix changes the code's meaning. Edits at one offset
+/// keep a fixed order, whichever rule produced them.
 #[must_use]
-pub fn non_overlapping_edits(diags: &[LintDiagnostic]) -> Vec<&TextEdit> {
-    let mut fixes: Vec<&Fix> = diags.iter().filter_map(|diag| diag.fix.as_ref()).collect();
-    fixes.sort_by_key(|fix| {
-        let furthest_edit = fix
+pub fn non_overlapping_edits(diags: &[LintDiagnostic], fixes: FixKind) -> Vec<&TextEdit> {
+    let mut candidates: Vec<&Fix> = diags
+        .iter()
+        .filter_map(|diag| diag.fix.as_ref())
+        .filter(|candidate| fixes.contains(candidate.kind))
+        .collect();
+    candidates.sort_by_key(|candidate| {
+        let furthest_edit = candidate
             .edits
             .iter()
             .map(|edit| (edit.span.start, edit.span.end, Reverse(&edit.replacement)))
@@ -97,15 +229,15 @@ pub fn non_overlapping_edits(diags: &[LintDiagnostic]) -> Vec<&TextEdit> {
     // an offset is the one that can.
     let mut kept_spans: BTreeMap<u32, u32> = BTreeMap::new();
     let mut edits: Vec<&TextEdit> = Vec::new();
-    for fix in fixes {
-        if fix.edits.iter().any(|edit| overlaps_kept(&kept_spans, edit.span)) {
+    for candidate in candidates {
+        if candidate.edits.iter().any(|edit| overlaps_kept(&kept_spans, edit.span)) {
             continue;
         }
-        for edit in &fix.edits {
+        for edit in &candidate.edits {
             let end = kept_spans.entry(edit.span.start).or_insert(edit.span.end);
             *end = edit.span.end.max(*end);
         }
-        edits.extend(&fix.edits);
+        edits.extend(&candidate.edits);
     }
     edits.sort_by_key(|edit| (edit.span.start, edit.span.end, Reverse(&edit.replacement)));
     edits
@@ -119,263 +251,132 @@ fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
         || kept_spans.range(span.start..).next().is_some_and(is_overlapping)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FixpointError {
-    BudgetExhausted {
-        iterations: usize,
-    },
-    /// `iteration` counts from 0.
-    ReparseFailed {
-        iteration: usize,
-        message: String,
-    },
-}
-
-impl fmt::Display for FixpointError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::BudgetExhausted { iterations } => write!(
-                f,
-                "lint auto-fix did not converge within {iterations} iterations (possible rule cycle)"
-            ),
-            Self::ReparseFailed { iteration, message } => write!(
-                f,
-                "lint auto-fix produced unparseable output on iteration {iteration}: {message}"
-            ),
-        }
-    }
-}
-
-impl Error for FixpointError {}
-
-/// Lints `source` for `target` and applies the fixes, round after round,
-/// until none remain. Each round's source is parsed into `allocator` once,
-/// both to check it and to lint it.
-///
-/// Returns the last round's parse, whose text is the fixed source, and its
-/// diagnostics, none of which has a fix left to apply. The parse has errors
-/// only when `source` does.
-///
-/// # Errors
-///
-/// [`FixpointError::BudgetExhausted`] when fixes are still coming after
-/// [`FIXPOINT_BUDGET`] rounds, and [`FixpointError::ReparseFailed`] when a
-/// round's output doesn't parse.
-pub fn apply_fixes_fixpoint<'ast>(
-    allocator: &'ast Allocator,
-    source: &'ast str,
-    target: LuaTarget,
-    config: &LintConfig,
-) -> Result<(ParseResult<'ast>, Vec<LintDiagnostic>), FixpointError> {
-    fixpoint_within(allocator, source, target, config, FIXPOINT_BUDGET)
-}
-
-/// # Errors
-///
-/// As for [`apply_fixes_fixpoint`], with `budget` as the limit.
-fn fixpoint_within<'ast>(
-    allocator: &'ast Allocator,
-    source: &'ast str,
-    target: LuaTarget,
-    config: &LintConfig,
-    budget: usize,
-) -> Result<(ParseResult<'ast>, Vec<LintDiagnostic>), FixpointError> {
-    let version = target.lua_version();
-    let mut parse = luck_parser::parse(allocator, source, version);
-    for iteration in 0..budget {
-        let diags = lint_parsed(&parse, target, config);
-        if diags.iter().all(|diag| diag.fix.is_none()) {
-            return Ok((parse, diags));
-        }
-        let fixed = apply_one_pass(parse.source, &diags);
-        if fixed == parse.source {
-            return Ok((parse, diags));
-        }
-        let reparse = luck_parser::parse(allocator, allocator.alloc_str(&fixed), version);
-        if !reparse.errors.is_empty() {
-            let messages: Vec<&str> =
-                reparse.errors.iter().map(|error| error.message.as_str()).collect();
-            return Err(FixpointError::ReparseFailed { iteration, message: messages.join("; ") });
-        }
-        parse = reparse;
-    }
-    Err(FixpointError::BudgetExhausted { iterations: budget })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::RuleLevel;
     use crate::fixtures::diagnostic;
 
-    fn diag_with_edit(start: u32, end: u32, replacement: &str) -> LintDiagnostic {
-        let span = Span { start, end };
+    fn diag_with_fix(kind: FixKind, replacements: &[(u32, u32, &'static str)]) -> LintDiagnostic {
+        let edits: Box<[TextEdit]> = replacements
+            .iter()
+            .map(|&(start, end, replacement)| TextEdit {
+                span: Span::new(start, end),
+                replacement: replacement.into(),
+            })
+            .collect();
         LintDiagnostic {
-            fix: Some(Fix {
-                description: "test fix".to_owned(),
-                edits: vec![TextEdit { span, replacement: replacement.to_owned() }],
-            }),
-            ..diagnostic("test", span)
+            fix: Some(Fix { kind, message: "test fix".into(), edits }),
+            ..diagnostic("test", Span::new(0, 0))
         }
     }
 
-    fn enable(name: &str) -> LintConfig {
+    fn diag_with_edit(start: u32, end: u32, replacement: &'static str) -> LintDiagnostic {
+        diag_with_fix(FixKind::Fix, &[(start, end, replacement)])
+    }
+
+    fn enable(names: &[&str]) -> LintConfig {
         let mut config = LintConfig::default();
-        config.rules.set_level(name, RuleLevel::Warn);
+        for name in names {
+            config.rules.set_level(name, RuleLevel::Warn);
+        }
         config
     }
 
-    /// What `apply_fixes` leaves of `source`, which is `source` itself when
-    /// it applies nothing.
-    fn fixed(source: &str, diags: &[LintDiagnostic]) -> String {
-        let allocator = Allocator::new();
-        apply_fixes(&allocator, source, diags, LuaVersion::Lua54)
-            .map_or_else(|| source.to_owned(), |parse| parse.source.to_owned())
-    }
-
     /// # Errors
     ///
-    /// As for [`fixpoint_within`].
-    fn fixpoint_in(
-        source: &str,
-        config: &LintConfig,
-        budget: usize,
-    ) -> Result<String, FixpointError> {
+    /// As for [`fix_within`].
+    fn fixed_within(source: &str, config: &LintConfig, budget: usize) -> Result<String, FixError> {
         let allocator = Allocator::new();
-        fixpoint_within(&allocator, source, LuaTarget::Lua54, config, budget)
-            .map(|(parse, _)| parse.source.to_owned())
+        fix_within(&allocator, source, LuaTarget::Lua54, config, FixKind::Fix, budget)
+            .map(|fixed| fixed.parse.source.to_owned())
     }
 
-    /// # Errors
-    ///
-    /// As for [`apply_fixes_fixpoint`].
-    fn fixpoint(source: &str, config: &LintConfig) -> Result<String, FixpointError> {
-        fixpoint_in(source, config, FIXPOINT_BUDGET)
+    /// Every finding and diagnostic holds one, built or not.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn fix_is_six_words() {
+        assert_eq!(size_of::<Option<Fix>>(), 48);
     }
 
     #[test]
-    fn applies_one_fix() {
-        let diags = vec![diag_with_edit(6, 9, "_foo")];
-        assert_eq!(fixed("local foo = 1", &diags), "local _foo = 1");
-    }
-
-    #[test]
-    fn applies_every_non_overlapping_fix() {
+    fn applies_every_non_overlapping_edit() {
         let source = "\
 local foo = 1
 local bar = 2";
-        let diags = vec![diag_with_edit(6, 9, "_foo"), diag_with_edit(20, 23, "_bar")];
+        let diags = [diag_with_edit(6, 9, "_foo"), diag_with_edit(20, 23, "_bar")];
         assert_eq!(
-            fixed(source, &diags),
-            "\
+            apply(source, &diags, FixKind::Fix).as_deref(),
+            Some(
+                "\
 local _foo = 1
 local _bar = 2"
+            )
         );
     }
 
     #[test]
     fn overlapping_edit_that_starts_later_wins() {
-        let source = "abcdefghij";
-        let diags = vec![diag_with_edit(2, 6, "XX"), diag_with_edit(4, 8, "YY")];
-        // Mechanics test on non-Lua text, so bypass the reparse guard.
-        let fixed = apply_one_pass(source, &diags);
-        assert_eq!(fixed, "abcdYYij");
+        let diags = [diag_with_edit(2, 6, "XX"), diag_with_edit(4, 8, "YY")];
+        assert_eq!(apply("abcdefghij", &diags, FixKind::Fix).as_deref(), Some("abcdYYij"));
     }
 
     #[test]
     fn a_fix_overlapped_by_a_later_one_drops_whole() {
-        let source = "abcdefghij";
-        let span = Span { start: 0, end: 1 };
-        let overlapped_span = Span { start: 2, end: 6 };
-        let two_edit_fix = LintDiagnostic {
-            fix: Some(Fix {
-                description: "two edits".to_owned(),
-                edits: vec![
-                    TextEdit { span, replacement: "X".to_owned() },
-                    TextEdit { span: overlapped_span, replacement: "Y".to_owned() },
-                ],
-            }),
-            ..diagnostic("test", span)
-        };
-        let diags = vec![two_edit_fix, diag_with_edit(5, 8, "Z")];
-        // Mechanics test on non-Lua text, so bypass the reparse guard.
-        assert_eq!(apply_one_pass(source, &diags), "abcdeZij");
+        let diags =
+            [diag_with_fix(FixKind::Fix, &[(0, 1, "X"), (2, 6, "Y")]), diag_with_edit(5, 8, "Z")];
+        assert_eq!(apply("abcdefghij", &diags, FixKind::Fix).as_deref(), Some("abcdeZij"));
     }
 
     #[test]
-    fn unparseable_result_applies_nothing() {
-        let allocator = Allocator::new();
-        let diags = vec![diag_with_edit(6, 9, "end")];
-        assert!(apply_fixes(&allocator, "local foo = 1", &diags, LuaVersion::Lua54).is_none());
+    fn applies_only_the_kinds_asked_for() {
+        let diags = [
+            diag_with_fix(FixKind::Fix, &[(0, 1, "F")]),
+            diag_with_fix(FixKind::Suggestion, &[(2, 3, "S")]),
+        ];
+        assert_eq!(apply("abcd", &diags, FixKind::Fix).as_deref(), Some("Fbcd"));
+        assert_eq!(apply("abcd", &diags, FixKind::Suggestion).as_deref(), Some("abSd"));
+        assert_eq!(apply("abcd", &diags, FixKind::all()).as_deref(), Some("FbSd"));
+        assert_eq!(apply("abcd", &diags, FixKind::empty()), None);
     }
 
     #[test]
-    fn diags_without_fixes_apply_nothing() {
-        let allocator = Allocator::new();
-        let diags = vec![diagnostic("test", Span { start: 6, end: 7 })];
-        assert!(apply_fixes(&allocator, "local x = 1", &diags, LuaVersion::Lua54).is_none());
+    fn edits_that_change_nothing_apply_nothing() {
+        let diags = [diag_with_edit(0, 1, "a")];
+        assert_eq!(apply("abcd", &diags, FixKind::Fix), None);
+        assert_eq!(apply("abcd", &[diagnostic("test", Span::new(0, 1))], FixKind::Fix), None);
     }
 
     #[test]
-    fn no_diags_apply_nothing() {
-        let allocator = Allocator::new();
-        assert!(apply_fixes(&allocator, "local x = 1", &[], LuaVersion::Lua54).is_none());
-    }
-
-    #[test]
-    fn fixpoint_applies_fix_from_one_rule() {
-        // unused_variable will rename `unused` -> `_unused`; once renamed
-        // it's no longer flagged.
-        let config = enable("unused_variable");
-        assert_eq!(fixpoint("local unused = 1", &config).expect("fixpoint"), "local _unused = 1");
-    }
-
-    #[test]
-    fn fixpoint_applies_fixes_from_two_rules() {
-        // `redundant_nil_init` drops the `= nil` and `unused_variable`
-        // prefixes the name. The edits don't overlap, so both land in the
-        // first round and the second finds nothing left to fix.
-        let config = enable("redundant_nil_init");
-        assert_eq!(fixpoint("local unused = nil", &config).expect("fixpoint"), "local _unused");
-    }
-
-    #[test]
-    fn fixpoint_returns_source_when_no_rule_fires() {
-        let config = LintConfig::default();
+    fn fixes_from_two_rules_land_in_one_round() {
+        // Their edits don't overlap, so the first round applies both, and
+        // the second only confirms that none is left.
+        let config = enable(&["redundant_nil_init", "string_index_to_field"]);
         let source = "\
-local x = 1
-return x";
-        assert_eq!(fixpoint(source, &config).expect("fixpoint"), source);
-    }
-
-    #[test]
-    fn fixpoint_returns_the_last_round_s_diagnostics() {
-        let allocator = Allocator::new();
-        let config = enable("redundant_nil_init");
-        let (parse, diags) =
-            apply_fixes_fixpoint(&allocator, "local unused = nil", LuaTarget::Lua54, &config)
-                .expect("fixpoint");
-        assert_eq!(parse.source, "local _unused");
-        assert_eq!(diags, Vec::<LintDiagnostic>::new());
-    }
-
-    #[test]
-    fn fixpoint_reports_budget_exhausted() {
-        // The first round applies both fixes, and it takes a second round
-        // to see that none remain.
-        let config = enable("redundant_nil_init");
-        let result = fixpoint_in("local unused = nil", &config, 1);
+local a = t[\"key\"]
+local b = nil
+return a, b";
         assert_eq!(
-            result,
-            Err(FixpointError::BudgetExhausted { iterations: 1 }),
-            "one round can't confirm that no fixes remain"
+            fixed_within(source, &config, 2),
+            Ok("\
+local a = t.key
+local b
+return a, b"
+                .to_owned())
         );
     }
 
     #[test]
-    fn fixpoint_converges_within_its_budget() {
-        let config = enable("redundant_nil_init");
-        let result = fixpoint_in("local unused = nil", &config, 2);
-        assert_eq!(result.expect("fixpoint"), "local _unused");
+    fn spends_a_round_confirming_that_no_fix_is_left() {
+        // The inner negation wins the first round, since the outer fix
+        // overlaps it, and the outer one applies in the second.
+        let config = enable(&["unnecessary_negation"]);
+        let source = "return not (a == (not (b == c)))";
+        assert_eq!(fixed_within(source, &config, 3), Ok("return (a ~= ((b ~= c)))".to_owned()));
+        assert_eq!(
+            fixed_within(source, &config, 2),
+            Err(FixError::BudgetExhausted { rounds: 2 }),
+            "two rounds apply both fixes, and only a third confirms that none is left"
+        );
     }
 }
