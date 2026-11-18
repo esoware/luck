@@ -155,28 +155,21 @@ end
     assert_format_with(input, expected, LuaVersion::Lua54, &options);
 }
 
-#[test]
-fn sort_requires_on_by_default() {
-    assert_format(
-        "\
-local zeta = require(\"zeta\")
-local alpha = require(\"alpha\")
-",
-        "\
-local alpha = require(\"alpha\")
-local zeta = require(\"zeta\")
-",
-    );
+fn sorting_requires_options() -> FormatOptions {
+    FormatOptions { sort_requires: true, ..FormatOptions::default() }
+}
+
+fn assert_sorted(input: &str, expected: &str) {
+    assert_format_with(input, expected, LuaVersion::Lua54, &sorting_requires_options());
 }
 
 #[test]
-fn sort_requires_off_keeps_the_source_order() {
-    let options = FormatOptions { sort_requires: false, ..FormatOptions::default() };
+fn sort_requires_is_off_by_default() {
     let input = "\
 local zeta = require(\"zeta\")
 local alpha = require(\"alpha\")
 ";
-    assert_format_with(input, input, LuaVersion::Lua54, &options);
+    assert_format(input, input);
 }
 
 #[test]
@@ -191,13 +184,12 @@ local Apple = require(Packages.Apple)
 local Zebra = require(script.Parent.Zebra)
 ",
         LuaVersion::Luau,
-        &FormatOptions::default(),
+        &sorting_requires_options(),
     );
 }
 
 #[test]
 fn sort_requires_alphabetizes_consecutive() {
-    let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
     let input = "\
 local zeta = require(\"zeta\")
 local alpha = require(\"alpha\")
@@ -208,12 +200,11 @@ local alpha = require(\"alpha\")
 local mid = require(\"mid\")
 local zeta = require(\"zeta\")
 ";
-    assert_format_with(input, expected, LuaVersion::Lua54, &options);
+    assert_sorted(input, expected);
 }
 
 #[test]
 fn sort_requires_respects_blank_line_break() {
-    let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
     // A blank line splits the run into two single requires, so nothing is
     // reordered.
     let input = "\
@@ -226,12 +217,12 @@ local zeta = require(\"zeta\")
 
 local alpha = require(\"alpha\")
 ";
-    assert_format_with(input, expected, LuaVersion::Lua54, &options);
+    assert_sorted(input, expected);
 }
 
 #[test]
 fn sort_requires_keeps_a_header_comment_in_place() {
-    assert_format(
+    assert_sorted(
         "\
 -- a header
 local zeta = require(\"zeta\")
@@ -255,7 +246,7 @@ local zeta = require(\"zeta\")
 local alpha = require(\"alpha\")
 -- luck: format on
 ";
-    assert_format(input, input);
+    assert_sorted(input, input);
 }
 
 #[test]
@@ -272,7 +263,7 @@ local a, b = 1, 2
 local alpha = require(\"alpha\")
 ",
     ] {
-        assert_format(input, input);
+        assert_sorted(input, input);
     }
 }
 
@@ -282,12 +273,12 @@ fn sort_requires_keeps_requires_that_may_have_side_effects() {
 local zeta = require(\"zeta\")()
 local alpha = require(\"alpha\")()
 ";
-    assert_format(input, input);
+    assert_sorted(input, input);
 }
 
 #[test]
 fn sort_requires_orders_get_service_with_requires() {
-    assert_format(
+    assert_sorted(
         "\
 local zeta = require(\"zeta\")
 local alpha = game:GetService(\"Players\")
@@ -301,7 +292,7 @@ local zeta = require(\"zeta\")
 
 #[test]
 fn sort_requires_orders_requires_of_field_paths() {
-    assert_format(
+    assert_sorted(
         "\
 local Zebra = require(script.Parent.Zebra)
 local Apple = require(Packages.Apple)
@@ -321,7 +312,7 @@ fn sort_requires_keeps_a_require_of_a_path_rooted_in_the_run() {
 local Packages = require(script.Packages)
 local Apple = require(Packages.Apple)
 ";
-    assert_format(input, input);
+    assert_sorted(input, input);
 }
 
 #[test]
@@ -336,7 +327,7 @@ local Zebra = require(script[name])
 local Apple = require(script.Apple)
 ",
     ] {
-        assert_format(input, input);
+        assert_sorted(input, input);
     }
 }
 
@@ -354,7 +345,7 @@ local function f()
 \tlocal zeta = require(\"zeta\")
 end
 ";
-    assert_format(input, expected);
+    assert_sorted(input, expected);
 }
 
 #[test]
@@ -415,7 +406,7 @@ return function()
 \tlocal alpha = require(\"alpha\")
 end
 ";
-    assert_format(input, expected);
+    assert_sorted(input, expected);
 
     let luau_input = "\
 type function f()
@@ -437,12 +428,12 @@ x += function()
 \tlocal zeta = require(\"zeta\")
 end
 ";
-    assert_format_with(luau_input, luau_expected, LuaVersion::Luau, &FormatOptions::default());
+    assert_format_with(luau_input, luau_expected, LuaVersion::Luau, &sorting_requires_options());
 }
 
 #[test]
 fn sort_requires_moves_trailing_comments_with_their_stmts() {
-    assert_format(
+    assert_sorted(
         "\
 local zeta = require(\"zeta\") -- last
 local alpha = require(\"alpha\") --[[ first ]]
@@ -456,14 +447,14 @@ local zeta = require(\"zeta\") -- last
 
 #[test]
 fn sort_requires_orders_stmts_sharing_a_source_line_as_the_lines_they_print() {
-    assert_format(
+    assert_sorted(
         "local zeta = require(\"zeta\") local alpha = require(\"alpha\")\n",
         "\
 local alpha = require(\"alpha\")
 local zeta = require(\"zeta\")
 ",
     );
-    assert_format(
+    assert_sorted(
         "\
 local zeta = require(\"zeta\") -- z
 local beta = require(\"beta\") local alpha = require(\"alpha\") --[[ a ]]
@@ -696,7 +687,7 @@ fn preserving_gaps_options() -> FormatOptions {
 fn sort_requires_keeps_a_stmt_before_a_comment_at_eof() {
     // A last line with no newline must not swallow the next sorted line into
     // its comment.
-    assert_format(
+    assert_sorted(
         "\
 local z = require(\"z\")
 local a = require(\"a\") -- note",
@@ -709,7 +700,7 @@ local z = require(\"z\")
 
 #[test]
 fn sort_requires_keeps_a_comment_between_requires() {
-    assert_format(
+    assert_sorted(
         "\
 local b = require(\"b\")
 ; -- important
@@ -725,7 +716,7 @@ local a = require(\"a\")
 
 #[test]
 fn sort_requires_keeps_a_multi_line_comment_between_requires() {
-    assert_format(
+    assert_sorted(
         "\
 local z = require(\"z\") --[[
 ]] local a = require(\"a\")
@@ -740,7 +731,7 @@ local a = require(\"a\")
 
 #[test]
 fn sort_requires_keeps_a_require_inside_the_block_opened_on_its_line() {
-    assert_format(
+    assert_sorted(
         "\
 do local z = require(\"z\")
 local a = require(\"a\")
@@ -757,7 +748,7 @@ end
 
 #[test]
 fn sort_requires_keeps_the_end_closing_on_a_require_line() {
-    assert_format(
+    assert_sorted(
         "\
 if x then
 local z = require(\"z\")
@@ -778,7 +769,7 @@ fn sort_requires_keeps_a_binding_before_the_get_service_that_uses_it() {
 local zeta = require(\"z\")
 local alpha = zeta:GetService(\"x\")
 ";
-    assert_format(input, input);
+    assert_sorted(input, input);
 }
 
 #[test]
@@ -787,7 +778,7 @@ fn sort_requires_keeps_a_shadowing_require_before_its_callers() {
 local require = require(\"custom\")
 local a = require(\"a\")
 ";
-    assert_format(input, input);
+    assert_sorted(input, input);
 }
 
 #[test]
@@ -797,7 +788,7 @@ fn sort_requires_keeps_an_ignored_stmt_under_its_directive() {
 local   z  = require(\"z\")
 local a = require(\"a\")
 ";
-    assert_format(input, input);
+    assert_sorted(input, input);
 }
 
 #[test]
@@ -807,7 +798,7 @@ fn sort_requires_keeps_the_close_order_of_to_be_closed_variables() {
 local z <close> = require(\"z\")
 local a <close> = require(\"a\")
 ";
-    assert_format(input, input);
+    assert_sorted(input, input);
 }
 
 #[test]
@@ -889,7 +880,7 @@ fn a_long_run_of_requires_sorts_without_comparing_every_pair() {
     };
     let mut by_name: Vec<usize> = (0..count).collect();
     by_name.sort_by_key(usize::to_string);
-    assert_format(
+    assert_sorted(
         &(0..count).map(require_line).collect::<String>(),
         &by_name.into_iter().map(require_line).collect::<String>(),
     );

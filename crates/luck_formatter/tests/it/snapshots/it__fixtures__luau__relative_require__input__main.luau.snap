@@ -4,11 +4,11 @@ expression: snapshot
 input_file: tests/fixtures/luau/relative_require/input/main.luau
 ---
 -- line_width = 1
-local helper = require(
-	"./helper"
-)
 local utils = require(
 	"./utils"
+)
+local helper = require(
+	"./helper"
 )
 
 local sum = utils.add(
@@ -30,8 +30,8 @@ return {
 }
 
 -- line_width = 40
-local helper = require("./helper")
 local utils = require("./utils")
+local helper = require("./helper")
 
 local sum = utils.add(2, 3)
 local greeting = helper.greet("world")
@@ -43,8 +43,8 @@ return {
 }
 
 -- line_width = 80, 100, 120
-local helper = require("./helper")
 local utils = require("./utils")
+local helper = require("./helper")
 
 local sum = utils.add(2, 3)
 local greeting = helper.greet("world")

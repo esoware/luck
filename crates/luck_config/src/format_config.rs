@@ -31,7 +31,8 @@ pub(crate) struct FormatConfig {
     /// When true, sorts each run of consecutive `local NAME = require(...)`
     /// or `local NAME = game:GetService(...)` statements by name, where the
     /// require takes a string or a dotted path such as `script.Parent.Module`.
-    /// A blank line ends a run. Defaults to `true`.
+    /// A blank line ends a run. Defaults to `false`, because a module's body
+    /// runs at its first `require`, so sorting can change what a program does.
     pub sort_requires: Option<bool>,
     /// Where to put a space before `(`: `"never"` (default), `"definitions"`,
     /// `"calls"`, or `"always"` for both.

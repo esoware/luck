@@ -115,6 +115,26 @@ end
 }
 
 #[test]
+fn params_break_when_the_return_type_overflows_the_line() {
+    // The parameters fit up to `)`, and `: number` takes the line to 44
+    // columns.
+    let options = FormatOptions { line_width: 40, ..FormatOptions::default() };
+    assert_format_with(
+        "function M.add(a: number, b: number): number return a + b end\n",
+        "\
+function M.add(
+\ta: number,
+\tb: number
+): number
+\treturn a + b
+end
+",
+        LuaVersion::Luau,
+        &options,
+    );
+}
+
+#[test]
 fn type_cast() {
     assert_luau("local x = y :: number\n", "local x = y :: number\n");
 }

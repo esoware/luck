@@ -446,6 +446,23 @@ fn narrow() -> FormatOptions {
 }
 
 #[test]
+fn a_loop_header_breaks_its_call_when_do_overflows_the_line() {
+    // `for _, v in ipairs(someLongName)` is 32 columns, and ` do` makes it 35.
+    assert_format_with(
+        "for _, v in ipairs(someLongName) do print(v) end\n",
+        "\
+for _, v in ipairs(
+\tsomeLongName
+) do
+\tprint(v)
+end
+",
+        LuaVersion::Lua54,
+        &FormatOptions { line_width: 34, ..FormatOptions::default() },
+    );
+}
+
+#[test]
 fn assigned_values_move_to_the_next_line_when_only_it_fits_them() {
     for (source, expected, version) in [
         (

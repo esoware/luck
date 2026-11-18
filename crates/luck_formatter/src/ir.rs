@@ -102,14 +102,15 @@ pub(crate) enum FormatElement<'ast> {
 /// text again for every layout it tries.
 ///
 /// The top bit says a space follows the text, which saves the stream a
-/// `Space` after one text in five, and the rest are its columns.
+/// `Space` after one text in five. The next says the text spans lines, and
+/// the rest are the columns of its first line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TextWidth(u32);
 
 impl TextWidth {
     const SPACE_AFTER: u32 = 1 << 31;
-    const COLUMNS: u32 = Self::SPACE_AFTER - 1;
-    const MULTILINE: Self = Self(Self::COLUMNS);
+    const MULTILINE: u32 = 1 << 30;
+    const COLUMNS: u32 = Self::MULTILINE - 1;
 
     fn of(text: &str) -> Self {
         // Without a line break, `width` counts every ASCII character as one
@@ -124,27 +125,23 @@ impl TextWidth {
         if is_one_ascii_line {
             return Self::of_columns(text.len());
         }
-        if text.contains('\n') || text.contains('\r') {
-            return Self::MULTILINE;
-        }
-        Self::of_columns(text.width())
+        let first_line = text.split(['\n', '\r']).next().unwrap_or(text);
+        let width = Self::of_columns(first_line.width());
+        if first_line.len() == text.len() { width } else { Self(width.0 | Self::MULTILINE) }
     }
 
-    /// Any width past the line's compares the same, and `MULTILINE` takes
-    /// the widest.
+    /// Any width past the line's compares the same.
     fn of_columns(columns: usize) -> Self {
-        let widest = Self::COLUMNS - 1;
-        Self(u32::try_from(columns).unwrap_or(widest).min(widest))
+        Self(u32::try_from(columns).unwrap_or(Self::COLUMNS).min(Self::COLUMNS))
     }
 
-    /// `None` for text that spans lines.
-    pub(crate) fn columns(self) -> Option<usize> {
-        let columns = self.0 & Self::COLUMNS;
-        (columns != Self::COLUMNS).then(|| offset_to_index(columns))
+    /// The columns of the text's first line.
+    pub(crate) fn columns(self) -> usize {
+        offset_to_index(self.0 & Self::COLUMNS)
     }
 
-    const fn is_multiline(self) -> bool {
-        self.0 & Self::COLUMNS == Self::COLUMNS
+    pub(crate) const fn is_multiline(self) -> bool {
+        self.0 & Self::MULTILINE != 0
     }
 
     /// Whether a space follows the text, which then prints as a `Space`
@@ -180,9 +177,9 @@ pub(crate) struct Formatter<'ast> {
     options: FormatOptions,
     allocator: &'ast Allocator,
     comments: Comments<'ast>,
-    /// Whether a block printed here sorts its runs of requires. Only
-    /// [`crate::format()`] starts with it on, and a block inherits it from
-    /// the one around it.
+    /// Whether a block printed here sorts its runs of requires. A whole tree
+    /// starts with `sort_requires`, a range starts with it off, and a block
+    /// inherits it from the one around it.
     sorts_requires: bool,
     /// Where text the formatter rewrites is built before it moves to the
     /// arena, so every rewrite shares one heap buffer.
