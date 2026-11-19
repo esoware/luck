@@ -1,9 +1,9 @@
-use core::fmt;
 use core::num::NonZeroU32;
+use core::{fmt, str};
 
-use luck_allocator::ThinStr;
+use luck_allocator::{ThinBytes, ThinStr};
 use luck_ast_macros::Ast;
-use luck_token::Span;
+use luck_token::{LuaNumber, Span};
 
 /// An identifier: a variable, a field, a parameter, a label, a type, or an
 /// attribute. A name the parser found missing has empty text.
@@ -62,16 +62,62 @@ impl fmt::Debug for NameIndex {
     }
 }
 
-/// A number, an integer, a string, or a piece of an interpolated string, as
-/// written.
+/// A numeral's value, as its [`Chunk`](crate::Chunk)'s version reads it, and
+/// its spelling.
 ///
-/// A string keeps its quotes or long brackets and its escapes, and an
-/// interpolated piece is what lies between its delimiters. The node holding it
-/// says which it is.
+/// A float is never negative or NaN, since no numeral spells one, and is
+/// infinite only for a decimal past the largest double. An integer exists
+/// only where Lua 5.3+ reads one, and is negative only where hex digits wrap.
+/// `ContentEq` compares the value alone, so `16` and `0x10` hold the same
+/// tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
-pub struct Literal<'ast> {
-    pub text: &'ast str,
+pub struct NumberLiteral<'ast> {
+    pub value: LuaNumber,
+    /// The numeral as written, or `None` for one built in code, which a
+    /// printer spells from the value.
+    #[content_eq(skip)]
+    pub raw: Option<ThinStr<'ast>>,
     pub span: Span,
+    /// Whether a numeral spelled as an integer reads as that integer, as
+    /// `luck_token::Numeral::is_exact` says.
+    #[content_eq(skip)]
+    pub is_exact: bool,
+}
+
+/// Luau: an exact 64-bit integer, `123i`, negative where its hex or binary
+/// digits pass `i64::MAX`, and its spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
+pub struct IntegerLiteral<'ast> {
+    pub value: i64,
+    /// The literal as written, or `None` for one built in code.
+    #[content_eq(skip)]
+    pub raw: Option<ThinStr<'ast>>,
+    pub span: Span,
+}
+
+/// A string's value, bytes that need not be UTF-8, and its spelling.
+///
+/// A literal the parser read with nothing to decode borrows its value from
+/// the source. `ContentEq` compares the value alone, so `"a"`, `'\97'`, and
+/// `[[a]]` hold the same tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
+pub struct StringLiteral<'ast> {
+    pub value: ThinBytes<'ast>,
+    /// The literal as written, quotes or long brackets and escapes included,
+    /// or for a piece of an interpolated string, what lies between its
+    /// delimiters. `None` for one built in code, which a printer spells from
+    /// the value.
+    #[content_eq(skip)]
+    pub raw: Option<ThinStr<'ast>>,
+    pub span: Span,
+}
+
+impl<'ast> StringLiteral<'ast> {
+    /// The value as text, when it's UTF-8.
+    #[must_use]
+    pub fn as_str(&self) -> Option<&'ast str> {
+        str::from_utf8(self.value.as_bytes()).ok()
+    }
 }
 
 #[cfg(test)]

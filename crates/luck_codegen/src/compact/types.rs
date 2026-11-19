@@ -71,8 +71,7 @@ impl Printer {
             Type::Nil(_) => self.piece("nil"),
             Type::True(_) => self.piece("true"),
             Type::False(_) => self.piece("false"),
-            Type::StringLiteral(literal) => self.string(literal.text),
-            Type::Number(literal) => self.number(literal.text),
+            Type::StringLiteral(literal) => self.print_string(literal),
             Type::Variadic(variadic) => {
                 self.piece("...");
                 self.print_type(&variadic.ty);

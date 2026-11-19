@@ -8,7 +8,7 @@ use luck_ast_macros::Ast;
 use luck_token::Span;
 
 use crate::expr::Expression;
-use crate::leaf::{Literal, Name};
+use crate::leaf::{Name, StringLiteral};
 
 /// Two words, like [`Expression`].
 #[derive(Debug, PartialEq, Eq, Ast)]
@@ -30,10 +30,7 @@ pub enum Type<'ast> {
     Nil(Span),
     True(Span),
     False(Span),
-    StringLiteral(Box<'ast, Literal<'ast>>),
-    /// A numeral, which Luau rejects as a type. The parser accepts one so a
-    /// source carrying it keeps round-tripping.
-    Number(Box<'ast, Literal<'ast>>),
+    StringLiteral(Box<'ast, StringLiteral<'ast>>),
     Variadic(Box<'ast, VariadicType<'ast>>),
     GenericPack(Box<'ast, GenericPackType<'ast>>),
     Error(Span),

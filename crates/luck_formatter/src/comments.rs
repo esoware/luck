@@ -1110,7 +1110,7 @@ mod tests {
 local x = 1";
         let comments = [make_comment(0, 10, CommentKind::Line)];
         let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
-        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, FormatOptions::default(), store);
 
         assert!(!f.write_stmt_leading_comments(11));
         assert_eq!(texts(&f), ["-- leading"]);
@@ -1126,7 +1126,7 @@ local x = 1";
 local x = 1";
         let comments = luck_lexer::lex(source, LuaVersion::Lua54).comments;
         let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
-        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, FormatOptions::default(), store);
         assert!(f.write_stmt_leading_comments(16));
     }
 
@@ -1136,7 +1136,7 @@ local x = 1";
         let source = "--[[a\r\nb]]";
         let comments = [make_comment(0, 10, CommentKind::MultiLineBlock)];
         let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
-        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, FormatOptions::default(), store);
         f.write_leading_comments(10);
         assert_eq!(texts(&f), ["--[[a\nb]]"]);
     }
@@ -1224,7 +1224,7 @@ local x = 1";
             synthetic(5, "upvalue u0", CommentPosition::Leading),
             synthetic(5, "-- explicit marker", CommentPosition::Trailing),
         ]);
-        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, FormatOptions::default(), store);
 
         assert!(!f.write_stmt_leading_comments(5));
         assert_eq!(texts(&f), ["-- upvalue u0"], "marker prefix added to bare text");
@@ -1240,7 +1240,7 @@ local x = 1";
     fn synthetic_comments_stay_off_the_nodes_inside_a_statement() {
         let allocator = Allocator::new();
         let store = Comments::synthetic([synthetic(5, "kept", CommentPosition::Leading)]);
-        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, FormatOptions::default(), store);
         f.node(|| Span::new(5, 5), |_| {});
         assert_eq!(texts(&f), Vec::<&str>::new());
         f.write_stmt_leading_comments(5);
@@ -1254,7 +1254,7 @@ local x = 1";
         assert!(store.has_dangling_comments(9));
         assert!(!store.has_dangling_comments(8));
 
-        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, FormatOptions::default(), store);
         f.write_dangling_comments(9);
         assert_eq!(texts(&f), ["-- unreachable"]);
         assert!(!f.comments().has_dangling_comments(9));
@@ -1279,7 +1279,7 @@ local x = 1";
             synthetic(20, "second", CommentPosition::Leading),
             synthetic(10, "first", CommentPosition::Leading),
         ]);
-        let mut f = Formatter::new(&allocator, FormatOptions::default(), store);
+        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, FormatOptions::default(), store);
         f.write_remaining_comments(false);
         assert_eq!(texts(&f), ["-- first", "-- second"]);
     }

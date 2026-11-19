@@ -6,14 +6,14 @@ The bump arena that luck's syntax trees live in.
 
 An `Allocator` hands out memory from chunks it grows as needed and frees it all at once, when it is reset or dropped. Nothing in it is dropped on its own, so freeing a whole tree takes one step, and `reset` keeps the largest chunk for the next file. An arena serves one thread at a time. It is `Send` but not `Sync`, so each thread takes its own, from an `AllocatorPool` or a `ThreadAllocators`.
 
-Everything but `List`, `ThinStr`, and `ThreadAllocators` is ported from `oxc_allocator`, whose notices are in `LICENSE`.
+Everything but `List`, `ThinStr`, `ThinBytes`, and `ThreadAllocators` is ported from `oxc_allocator`, whose notices are in `LICENSE`.
 
 ## Usage
 
 - `Allocator`: the arena. `alloc` and `alloc_str` copy a value or a string into it, and `reset` empties it.
 - `Box`: one value in the arena, never dropped. `Box::new_in` refuses to compile for a type that needs `Drop`.
 - `List`: a run of values in the arena, built from an iterator or array of known length, or grown with `push`. It derefs to a slice.
-- `ThinStr`: a `&str` with a 32-bit length, so a node can pack a small field beside it.
+- `ThinStr` and `ThinBytes`: a `&str` and a `&[u8]` with a 32-bit length, so a node can pack a small field beside one.
 - `AllocatorPool`: arenas for a pool of threads. `get` returns an `AllocatorGuard`, which resets its arena and hands it back when it drops.
 - `ThreadAllocators`: an arena for each thread that asks for one, which lives as long as the set does, so what a thread pool's work builds outlives the work. `get` returns the calling thread's, and `reset` empties them all.
 

@@ -10,7 +10,7 @@
 use core::iter::{self, Peekable};
 use core::ops::Range;
 
-use luck_ast::{Block, GetSpan as _, Statement, Visit, stmt_starts_with_paren};
+use luck_ast::{Block, Chunk, GetSpan as _, Statement, Visit, stmt_starts_with_paren};
 use luck_token::{
     LuaVersion, Span, is_lua_whitespace, line_breaks, offset_to_index, strip_line_break,
 };
@@ -389,7 +389,7 @@ impl<'tree> Visit<'tree> for InnermostBlock<'tree, '_> {
     }
 }
 
-/// Format the statements of `block`, or of its innermost nested block that
+/// Format the statements of `chunk`, or of its innermost nested block that
 /// holds the whole of `range`, that overlap `range`.
 ///
 /// Returns the source span they replace, from the start of the first one's
@@ -397,13 +397,13 @@ impl<'tree> Visit<'tree> for InnermostBlock<'tree, '_> {
 /// there. `None` when no statement overlaps `range`.
 pub(crate) fn format_selection<'ast>(
     allocator: &'ast luck_allocator::Allocator,
-    block: &'ast Block<'ast>,
+    chunk: &'ast Chunk<'ast>,
     mut comments: Comments<'ast>,
     options: &FormatOptions,
     range: &Range<u32>,
 ) -> Option<(Span, String)> {
-    let mut finder = InnermostBlock { range, found: block };
-    finder.visit_block(block);
+    let mut finder = InnermostBlock { range, found: &chunk.block };
+    finder.visit_block(&chunk.block);
 
     let is_selected = |item: &BlockItem<'_, '_>| {
         let Span { start, end } = item.span();
@@ -420,7 +420,7 @@ pub(crate) fn format_selection<'ast>(
     let base_indent = Span::new(line_start, first_start).text(source);
     comments.restrict_to(Span::new(line_start, last_end));
 
-    let mut f = Formatter::new(allocator, *options, comments);
+    let mut f = Formatter::new(allocator, chunk.version, *options, comments);
     f.write_items(items, false);
     let end = f.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
     Some((Span::new(line_start, end), f.print(base_indent)))

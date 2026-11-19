@@ -27,14 +27,7 @@ const MAX_RESERVED_TOKENS: usize = 1 << 20;
 pub fn lex(source: &str, version: LuaVersion) -> LexResult {
     let mut lexer = match Lexer::new(source, version) {
         Ok(lexer) => lexer,
-        Err(error) => {
-            return LexResult {
-                tokens: Vec::new(),
-                comments: Vec::new(),
-                errors: vec![error],
-                unterminated: Vec::new(),
-            };
-        }
+        Err(error) => return LexResult { errors: vec![error], ..LexResult::default() },
     };
     let mut tokens = Vec::with_capacity(lexer.token_capacity());
     loop {
@@ -44,12 +37,7 @@ pub fn lex(source: &str, version: LuaVersion) -> LexResult {
             break;
         }
     }
-    LexResult {
-        tokens,
-        comments: lexer.comments,
-        errors: lexer.errors,
-        unterminated: lexer.unterminated,
-    }
+    LexResult { tokens, ..lexer.finish() }
 }
 
 #[derive(Debug)]
@@ -70,6 +58,7 @@ pub struct Lexer<'source> {
     /// string.
     interpolation_brace_depths: Vec<u32>,
     unterminated: Vec<Span>,
+    lenient_escapes: Vec<Span>,
 }
 
 impl<'source> Lexer<'source> {
@@ -107,6 +96,7 @@ impl<'source> Lexer<'source> {
             errors: Vec::new(),
             interpolation_brace_depths: Vec::new(),
             unterminated: Vec::new(),
+            lenient_escapes: Vec::new(),
         };
 
         lexer.cursor.advance_by(chunk_start(source, version));
@@ -119,8 +109,9 @@ impl<'source> Lexer<'source> {
     }
 
     /// Lex and return the next token on demand, without materializing the
-    /// whole stream. Comments and errors accumulate on the lexer; collect
-    /// them with [`Lexer::finish`] once the caller has drained to EOF.
+    /// whole stream. Comments, errors, and the rest accumulate on the lexer;
+    /// collect them with [`Lexer::finish`] once the caller has drained to
+    /// EOF.
     /// Returns the same EOF token forever once the source is exhausted.
     ///
     /// Always inlined, so call it from one place, as the parser does.
@@ -229,9 +220,17 @@ impl<'source> Lexer<'source> {
         self.cursor.rest().len().div_ceil(BYTES_PER_TOKEN).min(MAX_RESERVED_TOKENS)
     }
 
+    /// What the lexer gathered beside its tokens, which went to whoever
+    /// called [`Lexer::next_token`], so the result holds none.
     #[must_use]
-    pub fn finish(self) -> (Vec<Comment>, Vec<LexError>) {
-        (self.comments, self.errors)
+    pub fn finish(self) -> LexResult {
+        LexResult {
+            tokens: Vec::new(),
+            comments: self.comments,
+            errors: self.errors,
+            unterminated: self.unterminated,
+            lenient_escapes: self.lenient_escapes,
+        }
     }
 
     /// The spans of the string tokens and block comments lexed so far that a

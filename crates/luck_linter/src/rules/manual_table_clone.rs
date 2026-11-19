@@ -154,13 +154,11 @@ fn is_numeric_clone(
     destination: &Name<'_>,
     tree: &ScopeTree<'_>,
 ) -> bool {
-    let version = tree.version();
     let Some(source_table) = length_of_name(&loop_node.limit) else {
         return false;
     };
-    let has_unit_step =
-        loop_node.step.as_ref().is_none_or(|step| is_number_literal(step, 1.0, version));
-    is_number_literal(&loop_node.start, 1.0, version)
+    let has_unit_step = loop_node.step.as_ref().is_none_or(|step| is_number_literal(step, 1.0));
+    is_number_literal(&loop_node.start, 1.0)
         && has_unit_step
         && copied_value(&loop_node.block, destination, &loop_node.name, tree).is_some_and(
             |copied| {

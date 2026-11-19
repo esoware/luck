@@ -2,12 +2,10 @@ use core::iter;
 
 use luck_allocator::Allocator;
 use luck_ast::{
-    BinaryOp, Expression, Field, GetSpan as _, Literal, MAX_NESTING_DEPTH, Suffix,
-    expr_nesting_depth, is_multi_value, unwrap_parentheses,
+    BinaryOp, Expression, Field, GetSpan as _, MAX_NESTING_DEPTH, Suffix, expr_nesting_depth,
+    is_multi_value, unwrap_parentheses,
 };
-use luck_token::{
-    Associativity, BinOp, LuaNumber, NumberSubtypes, OperandSide, Span, UnOp, parse_lua_number,
-};
+use luck_token::{Associativity, BinOp, LuaNumber, OperandSide, Span, UnOp};
 
 pub(crate) fn extract_boolean(expr: &Expression<'_>) -> Option<bool> {
     match unwrap_parentheses(expr) {
@@ -67,9 +65,9 @@ pub(crate) fn constant_truthiness(expr: &Expression<'_>) -> Option<bool> {
 /// What the operators that can raise care about in a literal operand.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LiteralKind {
-    /// A number with no known exact integer representation.
+    /// A float, which the bitwise operators may refuse.
     Float,
-    /// A number the bitwise operators accept.
+    /// A Lua 5.3+ integer, which the bitwise operators accept.
     Integer,
     String,
     /// `nil`, a boolean, a Luau integer literal, or the result of `not`, an
@@ -93,7 +91,10 @@ impl LiteralKind {
 /// `nil + 1` and `1 < "a"` raise with no variable in sight.
 pub(crate) fn literal_kind(expr: &Expression<'_>) -> Option<LiteralKind> {
     match expr {
-        Expression::Number(literal) => Some(number_literal_kind(literal)),
+        Expression::Number(literal) => Some(match literal.value {
+            LuaNumber::Int(_) => LiteralKind::Integer,
+            LuaNumber::Float(_) => LiteralKind::Float,
+        }),
         Expression::StringLiteral(_) => Some(LiteralKind::String),
         Expression::Nil(_)
         | Expression::True(_)
@@ -115,14 +116,6 @@ pub(crate) fn literal_kind(expr: &Expression<'_>) -> Option<LiteralKind> {
         | Expression::IfExpression(_)
         | Expression::InterpolatedString(_)
         | Expression::Error(_) => None,
-    }
-}
-
-fn number_literal_kind(literal: &Literal<'_>) -> LiteralKind {
-    if matches!(parse_lua_number(literal.text, NumberSubtypes::IntFloat), Some(LuaNumber::Int(_))) {
-        LiteralKind::Integer
-    } else {
-        LiteralKind::Float
     }
 }
 
@@ -215,11 +208,7 @@ fn is_nonzero_number_literal(expr: &Expression<'_>) -> bool {
     let Expression::Number(literal) = unwrap_parentheses(expr) else {
         return false;
     };
-    match parse_lua_number(literal.text, NumberSubtypes::IntFloat) {
-        Some(LuaNumber::Int(value)) => value != 0,
-        Some(LuaNumber::Float(value)) => value != 0.0f64,
-        None => false,
-    }
+    literal.value.to_f64() != 0.0f64
 }
 
 /// A name read may be a global's, which fires `__index` on a metatabled
@@ -378,17 +367,6 @@ pub(crate) fn is_always_truthy(expr: &Expression<'_>) -> bool {
         | Expression::TypeCast(_)
         | Expression::Error(_) => false,
     }
-}
-
-/// Lua's integer-to-float conversion: C's `(double)` cast, which rounds to
-/// the nearest representable value.
-#[expect(
-    clippy::as_conversions,
-    clippy::cast_precision_loss,
-    reason = "the C cast Lua itself uses, and i64 has no From into f64"
-)]
-pub(crate) const fn int_to_float(value: i64) -> f64 {
-    value as f64
 }
 
 pub(crate) fn parenthesize<'ast>(

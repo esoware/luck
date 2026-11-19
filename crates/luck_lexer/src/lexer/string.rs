@@ -1,4 +1,4 @@
-use luck_token::{LuaVersion, Span, Token, TokenKind, is_lua_whitespace, unicode_escape_codepoint};
+use luck_token::{EscapeError, LuaVersion, Span, Token, TokenKind, read_escape};
 use memchr::memmem;
 
 use super::Lexer;
@@ -38,10 +38,8 @@ impl Lexer<'_> {
                 Some(b'\\') => {
                     self.cursor.bump();
                     // The next iteration reports the unterminated string.
-                    if let Some(escaped) = self.cursor.peek()
-                        && let Err(error) = scan_escape(&mut self.cursor, self.version, escaped)
-                    {
-                        self.errors.push(error);
+                    if self.cursor.peek().is_some() {
+                        self.scan_escape(false);
                     }
                 }
                 // The scan stops only at those bytes and at `quote`.
@@ -119,6 +117,41 @@ impl Lexer<'_> {
         token
     }
 
+    /// Consume one escape sequence, with the cursor on the byte after `\`,
+    /// as [`read_escape`] reads it for every stage. A malformed one goes to
+    /// `errors`, and one only Lua 5.1 and Luau read, as the character it
+    /// escapes, to `lenient_escapes`.
+    fn scan_escape(&mut self, is_interpolated: bool) {
+        let escape_start = self.cursor.position().saturating_sub(1);
+        let (length, meaning) = read_escape(self.cursor.rest(), is_interpolated, self.version);
+        match meaning {
+            Ok(escaped) => {
+                let character_start = self.cursor.position();
+                self.cursor.advance_by(length);
+                if escaped.is_lenient() {
+                    // The escape takes the first byte of a multi-byte
+                    // character, and its span takes the whole character.
+                    self.cursor.eat_rest_of_char(character_start);
+                    self.lenient_escapes.push(self.cursor.span_since(escape_start));
+                }
+            }
+            Err(EscapeError::Undefined) => {
+                let character_start = self.cursor.position();
+                let byte = self.cursor.peek().unwrap_or_default();
+                self.cursor.bump();
+                let character = self
+                    .cursor
+                    .eat_rest_of_char(character_start)
+                    .unwrap_or_else(|| char::from(byte));
+                self.reject(escape_start, format!("invalid escape sequence `\\{character}`"));
+            }
+            Err(error) => {
+                self.cursor.advance_by(length);
+                self.reject(escape_start, escape_message(error, self.version));
+            }
+        }
+    }
+
     /// Scan one piece of raw interpolated-string text that began at `start`,
     /// at its backtick or the `}` that resumed the string.
     ///
@@ -137,19 +170,11 @@ impl Lexer<'_> {
                 }
                 Some(b'\\') => {
                     self.cursor.bump();
-                    match self.cursor.peek() {
-                        // Escaped braces and backticks stay literal text.
-                        Some(b'{' | b'}' | b'`') => self.cursor.bump(),
-                        // Consuming `\u{...}` whole also keeps its `{` from
-                        // opening an interpolation.
-                        Some(escaped) => {
-                            if let Err(error) = scan_escape(&mut self.cursor, self.version, escaped)
-                            {
-                                self.errors.push(error);
-                            }
-                        }
-                        // The next iteration reports the unterminated string.
-                        None => {}
+                    // Consuming `\u{...}` whole also keeps its `{` from
+                    // opening an interpolation, and the next iteration
+                    // reports an unterminated string.
+                    if self.cursor.peek().is_some() {
+                        self.scan_escape(true);
                     }
                 }
                 Some(b'{') if self.cursor.peek_next() == Some(b'{') => {
@@ -178,126 +203,23 @@ impl Lexer<'_> {
     }
 }
 
-/// Consume one escape sequence, with the cursor on the byte after `\`,
-/// rejecting the forms `version` doesn't define. Shared by short strings and
-/// Luau interpolated strings.
-///
-/// # Errors
-///
-/// Returns a [`LexError`] for a malformed or undefined escape.
-fn scan_escape(cursor: &mut Cursor<'_>, version: LuaVersion, escaped: u8) -> Result<(), LexError> {
-    match escaped {
-        b'\n' => {
-            cursor.bump();
-            if version.has_lfcr_line_break() {
-                cursor.eat(b'\r');
-            }
+fn escape_message(error: EscapeError, version: LuaVersion) -> String {
+    match error {
+        EscapeError::DecimalTooLarge(value) => {
+            format!("decimal escape too large (`\\{value}`), maximum is `\\255`")
         }
-        b'\r' => {
-            cursor.bump();
-            cursor.eat(b'\n');
+        EscapeError::HexDigits(count) => {
+            format!("`\\x` escape requires exactly 2 hex digits, got {count}")
         }
-        c if c.is_ascii_digit() => scan_decimal_escape(cursor)?,
-        b'x' if version.has_hex_escape() => scan_hex_escape(cursor)?,
-        b'z' if version.has_whitespace_escape() => {
-            cursor.bump();
-            cursor.eat_while(is_lua_whitespace);
+        EscapeError::UnicodeBrace => "`\\u` escape requires `{`".to_owned(),
+        EscapeError::UnicodeDigits => "`\\u{}` requires at least one hex digit".to_owned(),
+        EscapeError::UnicodeTooLarge => {
+            let limit = if version.has_extended_unicode_escape() { "2^31" } else { "0x110000" };
+            format!("`\\u` codepoint too large (must be less than {limit})")
         }
-        b'u' if version.has_unicode_escape() => scan_unicode_escape(cursor, version)?,
-        b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'\'' | b'"' => {
-            cursor.bump();
-        }
-        // Lua 5.1 and Luau accept any other escaped character as that
-        // literal character; 5.2+ reject it.
-        _ if !version.has_strict_escapes() => cursor.bump(),
-        c => return Err(invalid_escape(cursor, c)),
+        EscapeError::UnicodeUnclosed => "`\\u` escape missing closing `}`".to_owned(),
+        EscapeError::Undefined => "invalid escape sequence".to_owned(),
     }
-    Ok(())
-}
-
-/// Consume `\ddd`, with the cursor on the first digit.
-///
-/// # Errors
-///
-/// Returns a [`LexError`] when the value doesn't fit a byte.
-fn scan_decimal_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
-    let digits_start = cursor.position();
-    let digit_count = cursor.rest().iter().take(3).take_while(|b| b.is_ascii_digit()).count();
-    cursor.advance_by(digit_count);
-    let value = cursor.text_since(digits_start).parse::<u16>().unwrap_or_default();
-    if value > 255 {
-        return Err(lex_error(
-            cursor.span_since(digits_start.saturating_sub(1)),
-            format!("decimal escape too large (`\\{value}`), maximum is `\\255`"),
-        ));
-    }
-    Ok(())
-}
-
-/// Consume `\xXX`, with the cursor on the `x`.
-///
-/// # Errors
-///
-/// Returns a [`LexError`] unless exactly two hex digits follow.
-fn scan_hex_escape(cursor: &mut Cursor<'_>) -> Result<(), LexError> {
-    let escape_start = cursor.position().saturating_sub(1);
-    cursor.bump();
-    for digit_count in 0..2u32 {
-        if !cursor.peek().is_some_and(|digit| digit.is_ascii_hexdigit()) {
-            return Err(lex_error(
-                cursor.span_since(escape_start),
-                format!("`\\x` escape requires exactly 2 hex digits, got {digit_count}"),
-            ));
-        }
-        cursor.bump();
-    }
-    Ok(())
-}
-
-/// Consume `\u{XXX}`, with the cursor on the `u`.
-///
-/// # Errors
-///
-/// Returns a [`LexError`] for missing braces, no digits, or a codepoint
-/// `version` doesn't allow.
-fn scan_unicode_escape(cursor: &mut Cursor<'_>, version: LuaVersion) -> Result<(), LexError> {
-    let escape_start = cursor.position().saturating_sub(1);
-    cursor.bump();
-    if !cursor.eat(b'{') {
-        return Err(lex_error(cursor.span_since(escape_start), "`\\u` escape requires `{`"));
-    }
-    let hex_start = cursor.position();
-    cursor.eat_while(|b| b.is_ascii_hexdigit());
-    let hex_digits = cursor.text_since(hex_start);
-    if hex_digits.is_empty() {
-        return Err(lex_error(
-            cursor.span_since(escape_start),
-            "`\\u{}` requires at least one hex digit",
-        ));
-    }
-    if unicode_escape_codepoint(hex_digits.as_bytes(), version).is_none() {
-        let limit = if version.has_extended_unicode_escape() { "2^31" } else { "0x110000" };
-        return Err(lex_error(
-            cursor.span_since(escape_start),
-            format!("`\\u` codepoint too large (must be less than {limit})"),
-        ));
-    }
-    if !cursor.eat(b'}') {
-        return Err(lex_error(cursor.span_since(escape_start), "`\\u` escape missing closing `}`"));
-    }
-    Ok(())
-}
-
-/// Consume the escaped `character` at the cursor and build the error for its
-/// undefined escape.
-fn invalid_escape(cursor: &mut Cursor<'_>, character: u8) -> LexError {
-    let character_start = cursor.position();
-    cursor.bump();
-    let escaped = cursor.eat_rest_of_char(character_start).unwrap_or_else(|| char::from(character));
-    lex_error(
-        cursor.span_since(character_start.saturating_sub(1)),
-        format!("invalid escape sequence `\\{escaped}`"),
-    )
 }
 
 /// Consume the rest of a long-bracket opener `=*[` after its first `[`, which

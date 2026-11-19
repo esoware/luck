@@ -20,7 +20,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use luck_allocator::{Allocator, Box, List, ThinStr};
 use luck_token::{LuaVersion, Span};
 
-use crate::leaf::{Literal, Name};
+use crate::leaf::Name;
 
 /// Node constructors for trees built without source text.
 ///
@@ -29,7 +29,7 @@ use crate::leaf::{Literal, Name};
 /// reimplement. They build every node with the tree's generated
 /// constructors, such as [`Expression::new_binary_op`](crate::Expression::new_binary_op),
 /// which take each field as given and check nothing. Nodes go in the
-/// [`Allocator`] the synthesizer is given, and every name and literal is
+/// [`Allocator`] the synthesizer is given, and every name and string is
 /// copied into it. Lists come in as arrays or as iterators of known length.
 ///
 /// `Synth` is `Copy`, and its methods take `&self`, so calls nest:
@@ -69,21 +69,17 @@ use crate::leaf::{Literal, Name};
 ///   field prefixes are wrapped unless they're already a var, call,
 ///   parenthesized expression, or type instantiation: `("s"):rep(2)`,
 ///   `({}).x`, `(function() end)()`.
-/// - **Escaping.** [`Synth::string`] and [`Synth::string_bytes`] produce the
-///   quoted literal text. Decimal escapes are always three digits, so a
-///   following literal digit can't extend them. Interpolated-string text
-///   escapes `` ` ``, `{`, and `\`. [`Synth::long_string`] falls back to the
-///   quoted form for carriage returns and NUL bytes.
-/// - **Numeric literals.** [`Synth::number_f64`] and [`Synth::number_i64`]
-///   render any value, including those with no literal form: negatives
-///   (unary minus node), infinities (`1/0`), NaN (`0/0`), and `i64::MIN`
-///   (hex, which wraps to the intended integer on Lua 5.3+). Integral floats
-///   get a `.0` suffix so they stay floats on 5.3+, and exponent form
-///   replaces the plain one whenever it's shorter (`1e300`). On a version
-///   pinned to a single-number dialect (5.1, 5.2, Luau), integral floats
-///   drop the `.0`, `i64::MIN` becomes an exact negated decimal literal, and
-///   other integers may round to the nearest double. NaN sign and payload
-///   aren't preserved.
+/// - **Literals from values.** A string literal holds its value, any bytes,
+///   and a number literal its [`LuaNumber`](luck_token::LuaNumber), and the
+///   printers spell each, escaping what needs it and keeping a float a float
+///   on Lua 5.3+. [`Synth::long_string`] also keeps a long-bracket spelling,
+///   which the formatter prints as is.
+/// - **Numbers no literal holds.** [`Synth::number_f64`] and
+///   [`Synth::number_i64`] build any value: a negative one as a unary minus,
+///   NaN as `0/0`, and `i64::MIN` as a literal on Lua 5.3+, which prints as
+///   the hex that wraps to it. On a version pinned to a single-number dialect
+///   (5.1, 5.2, Luau), every number is a float, and an integer may round to
+///   the nearest double. NaN sign and payload aren't preserved.
 /// - **Loud failure on invalid names.** [`Synth::name`] asserts, in release
 ///   builds too, that its argument is an identifier, so hostile input such
 ///   as bytecode debug info or obfuscated names fails fast instead of
@@ -108,7 +104,7 @@ use crate::leaf::{Literal, Name};
 /// - **Version gating.** Nothing stops you from synthesizing, say, a Lua 5.4
 ///   attribute for a Luau target, so pick constructors that match the
 ///   dialect. [`Synth::with_version`] pins name validity, field-name safety,
-///   number rendering, and block ends to one dialect, but deliberately
+///   number subtypes, and block ends to one dialect, but deliberately
 ///   doesn't gate constructs.
 /// - **Identifier validity.** For names that may not be identifiers (such as
 ///   bytecode debug info), build fields with [`Synth::field_or_index`] and
@@ -119,11 +115,10 @@ use crate::leaf::{Literal, Name};
 ///   [`is_valid_identifier`] / [`is_valid_identifier_in`] and rename them
 ///   yourself. Sanitized names are deterministic but can collide, so
 ///   deduplication is up to the caller.
-/// - **Raw text.** [`Synth::number`] and [`Synth::integer_literal`] take
-///   numeral text as written. The printers print each leaf as the tree holds
-///   it, so text that isn't one numeral prints output that doesn't read back
-///   as the tree. The same goes for a node built with its own constructor,
-///   with spans from [`Synth::next_span`].
+/// - **Spellings.** A literal built with its own constructor, with spans
+///   from [`Synth::next_span`], may carry a spelling, which the printers
+///   print unchecked, so one that doesn't spell its value prints output that
+///   doesn't read back as the tree.
 /// - **Type names.** A type reads a bare `typeof` as the start of
 ///   `typeof(expr)`, so [`Synth::ty_named`] or [`Synth::ty_generic`] given
 ///   `typeof` prints a type that doesn't read back. Don't build one: a type
@@ -137,11 +132,12 @@ use crate::leaf::{Literal, Name};
 ///   any depth without recursing past the cap.
 ///
 /// To print the result, put its block in a [`Chunk`](crate::Chunk) with the
-/// version it's written in, and pass that to `luck_formatter::format_chunk`,
-/// with any [`SyntheticComment`]s wrapped in `Comments::synthetic`, or to
-/// `luck_codegen::compact` for compact output. Both print each leaf as the
-/// tree holds it. `format_chunk` returns an error for a tree nested past the
-/// cap, and `compact` prints it as it is, output the parser refuses.
+/// version it's written in, which the printers spell its numbers for, and
+/// pass that to `luck_formatter::format_chunk`, with any
+/// [`SyntheticComment`]s wrapped in `Comments::synthetic`, or to
+/// `luck_codegen::compact` for compact output. `format_chunk` returns an
+/// error for a tree nested past the cap, and `compact` prints it as it is,
+/// output the parser refuses.
 ///
 /// # Usage
 ///
@@ -210,16 +206,15 @@ impl<'ast> Synth<'ast> {
         Self { allocator, spans, version: None }
     }
 
-    /// Pins name handling and number rendering to one dialect.
+    /// Pins name handling, number subtypes, and block ends to one dialect.
     ///
     /// [`Synth::name`] checks names against that dialect's keywords instead
     /// of only the ones every dialect reserves. [`Synth::field_or_index`] and
     /// [`Synth::record`] use the dot or named form for any name that's an
     /// identifier there (`t.goto` on Luau) instead of falling back to
-    /// brackets. [`Synth::number_f64`] and [`Synth::number_i64`] render for
-    /// that dialect's number model, and [`Synth::block`] leaves a `break`
-    /// that dialect takes anywhere as it is. It deliberately doesn't gate
-    /// which constructs you can build.
+    /// brackets. [`Synth::number_i64`] builds a float where every number is
+    /// one, and [`Synth::block`] leaves a `break` that dialect takes anywhere
+    /// as it is. It deliberately doesn't gate which constructs you can build.
     #[must_use]
     pub const fn with_version(mut self, version: LuaVersion) -> Self {
         self.version = Some(version);
@@ -274,11 +269,6 @@ impl<'ast> Synth<'ast> {
     fn boxed<T>(&self, value: T) -> Box<'ast, T> {
         Box::new_in(value, self.allocator)
     }
-
-    /// `text` copied into the arena, at a fresh span.
-    fn literal(&self, text: &str) -> Literal<'ast> {
-        Literal::new(self.allocator.alloc_str(text), self.next_span())
-    }
 }
 
 #[cfg(test)]
@@ -300,7 +290,7 @@ mod tests {
         let synth = fixture.synth();
         let first = synth.nil();
         let second = synth.nil();
-        let third = synth.number("3");
+        let third = synth.number_i64(3);
         assert!(second.span().start > first.span().start);
         assert!(third.span().start > second.span().start);
     }

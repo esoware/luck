@@ -1,5 +1,5 @@
-use luck_allocator::{Box, List, ThinStr};
-use luck_token::{BinOp, CompoundOp, LuaVersion, UnOp};
+use luck_allocator::{Box, List, ThinBytes, ThinStr};
+use luck_token::{BinOp, CompoundOp, LuaNumber, LuaVersion, UnOp};
 
 use crate::one_or_more::OneOrMore;
 
@@ -8,8 +8,8 @@ use crate::one_or_more::OneOrMore;
 /// It leaves out spans, a name's [`NameIndex`](crate::NameIndex), and the
 /// fields that record only how the source spelled a node, such as a table's
 /// trailing separator, so `a==1` and `a == 1` hold the same tree where `==`
-/// would tell them apart. A literal compares by its text as written, so
-/// `"x"` and `'x'` differ.
+/// would tell them apart. A literal compares by its value, so `"x"` and
+/// `'x'` hold the same tree, as `16` and `0x10` do.
 ///
 /// `luck_ast_tools` generates it for every type that derives `Ast`. Ported
 /// from `oxc_span`'s `ContentEq`.
@@ -34,6 +34,24 @@ impl ContentEq for str {
 }
 
 impl ContentEq for ThinStr<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl ContentEq for ThinBytes<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl ContentEq for LuaNumber {
+    fn content_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl ContentEq for i64 {
     fn content_eq(&self, other: &Self) -> bool {
         self == other
     }

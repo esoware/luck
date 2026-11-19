@@ -9,12 +9,12 @@ use crate::{
     FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
     FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, GetSpan,
     GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression, IfStatement,
-    InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement, Literal,
-    LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumericFor, OptionalType,
-    Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
-    Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs, TypeCast,
-    TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypeofType, UnaryOp, UnionType,
-    Var, VarArgParam, VariadicType, WhileLoop,
+    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement,
+    LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumberLiteral, NumericFor,
+    OptionalType, Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop,
+    ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression, TableConstructor,
+    TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField,
+    TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 impl GetSpan for Expression<'_> {
@@ -25,9 +25,9 @@ impl GetSpan for Expression<'_> {
             | Self::True(span)
             | Self::VarArg(span)
             | Self::Error(span) => *span,
-            Self::Number(literal) | Self::Integer(literal) | Self::StringLiteral(literal) => {
-                literal.span()
-            }
+            Self::Number(number_literal) => number_literal.span(),
+            Self::Integer(integer_literal) => integer_literal.span(),
+            Self::StringLiteral(string_literal) => string_literal.span(),
             Self::FunctionDef(function_def) => function_def.span(),
             Self::Name(name) => name.span(),
             Self::Suffixed(suffixed_expr) => suffixed_expr.span(),
@@ -85,7 +85,7 @@ impl GetSpan for FunctionArgs<'_> {
         match self {
             Self::Parenthesized { span, .. } | Self::Error(span) => *span,
             Self::TableConstructor(table_constructor) => table_constructor.span(),
-            Self::StringLiteral(literal) => literal.span(),
+            Self::StringLiteral(string_literal) => string_literal.span(),
         }
     }
 }
@@ -216,7 +216,21 @@ impl GetSpan for Name<'_> {
     }
 }
 
-impl GetSpan for Literal<'_> {
+impl GetSpan for NumberLiteral<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for IntegerLiteral<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for StringLiteral<'_> {
     #[inline]
     fn span(&self) -> Span {
         self.span
@@ -455,7 +469,7 @@ impl GetSpan for Type<'_> {
             Self::Parenthesized(parenthesized_type) => parenthesized_type.span(),
             Self::Pack(type_pack) => type_pack.span(),
             Self::Nil(span) | Self::True(span) | Self::False(span) | Self::Error(span) => *span,
-            Self::StringLiteral(literal) | Self::Number(literal) => literal.span(),
+            Self::StringLiteral(string_literal) => string_literal.span(),
             Self::Variadic(variadic_type) => variadic_type.span(),
             Self::GenericPack(generic_pack_type) => generic_pack_type.span(),
         }

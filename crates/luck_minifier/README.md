@@ -10,7 +10,7 @@ The work runs in three phases, each once:
 2. **Compression.** One in-place walk runs every rewrite as it leaves each node. Each rewrite keeps the counts accurate, so one walk reaches the fixpoint. It walks again only when it exposes a rewrite too late in the walk to make it.
 3. **Renaming.** Every local gets the shortest name its scopes allow.
 
-Then `luck_codegen::compact` prints the tree once. Every rewrite assumes a metamethod can run wherever Lua allows one, so only literal arithmetic folds, and folding reproduces the target's float arithmetic exactly. The output parses, and minifying it again changes nothing. The minifier keeps a shebang and Luau `--!` hot comments on top and drops every other comment.
+Then `luck_codegen::compact` prints the tree once, every literal in the shortest spelling of its value. Every rewrite assumes a metamethod can run wherever Lua allows one, so only literal arithmetic folds, and folding works on the values the parser decoded and reproduces the target's float arithmetic exactly. The output parses, and minifying it again changes nothing. The minifier keeps a shebang and Luau `--!` hot comments on top and drops every other comment.
 
 ## Features
 
@@ -18,11 +18,10 @@ Then `luck_codegen::compact` prints the tree once. Every rewrite assumes a metam
 
 - `remove_dead_code`: constant branches, loops that never run or run once, unused locals, and statements that do nothing.
 - `simplify_statements`: unwraps `do` blocks that scope nothing, merges nested `if`s, and turns `if ... return` runs into `and`/`or`.
-- `fold_constants`: evaluates operators over literals.
+- `fold_constants`: evaluates operators over literals, a string's length included.
 - `inline_locals`: replaces a local read once with its value, when that's a literal expression that can't raise an error.
 - `merge_locals`: joins neighboring `local`s, and neighboring assignments to locals, into one statement.
-- `simplify_indexes`: `t["x"]` to `t.x`, and `{[1] = a, [2] = b}` to `{a, b}`.
-- `shorten_strings` and `shorten_numbers`: the shortest spelling of the same value.
+- `simplify_indexes`: `t["x"]` to `t.x`, and `{[1] = a, [2] = b}` to `{a, b}`, however the key is spelled.
 - `simplify_parens`: drops parentheses that change neither grouping nor how many values an expression yields.
 - `lift_locals`: hoists a function's declarations to one `local` at its top.
 - `rename_locals`: gives locals the shortest names.

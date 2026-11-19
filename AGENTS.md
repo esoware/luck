@@ -36,7 +36,7 @@ Closes #24
 
 ### Output keeps the input's meaning
 
-- Purity analysis assumes metamethods. A variable read, an index, arithmetic, a comparison, or a concatenation can each call one, so only literal arithmetic is pure. Never fold `#"str"`, because escape sequences make its raw length unreliable.
+- Purity analysis assumes metamethods. A variable read, an index, arithmetic, a comparison, or a concatenation can each call one, so only literal arithmetic is pure.
 - Constant folding reproduces the target's float arithmetic exactly, so it never fuses or reorders an operation, as `mul_add` would.
 - `minify(minify(x)) == minify(x)` and `format(format(x)) == format(x)`, and both outputs reparse with no errors. Tests check both.
 - Emitters never read source text. Codegen and the formatter read it only for trivia and verbatim regions, and work without it, because a synthetic AST must still print.

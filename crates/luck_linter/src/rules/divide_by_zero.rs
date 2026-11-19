@@ -28,7 +28,7 @@ impl NodeRule for DivideByZero {
     fn on_expr(
         &self,
         expr: &Expression<'_>,
-        context: &LintContext<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         let Expression::BinaryOp(run) = expr else {
@@ -40,7 +40,7 @@ impl NodeRule for DivideByZero {
         for pair in operator_pairs(run) {
             if let Some(op_name) = divisive_op_name(pair.op)
                 && let Some(divisor) = pair.rhs
-                && is_number_literal(divisor, 0.0, context.semantic.version())
+                && is_number_literal(divisor, 0.0)
             {
                 findings.push(zero_divisor_finding(op_name, pair.span()));
             }
@@ -49,13 +49,13 @@ impl NodeRule for DivideByZero {
     fn on_stmt(
         &self,
         stmt: &Statement<'_>,
-        context: &LintContext<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         // Luau
         if let Statement::CompoundAssignment(compound) = stmt
             && let Some(op_name) = compound_divisive_op_name(compound.op)
-            && is_number_literal(&compound.expr, 0.0, context.semantic.version())
+            && is_number_literal(&compound.expr, 0.0)
         {
             findings.push(zero_divisor_finding(op_name, compound.span));
         }

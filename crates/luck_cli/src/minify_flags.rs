@@ -38,8 +38,6 @@ transform_flags! {
     inline_locals / no_inline_locals,
     merge_locals / no_merge_locals,
     simplify_indexes / no_simplify_indexes,
-    shorten_strings / no_shorten_strings,
-    shorten_numbers / no_shorten_numbers,
     simplify_parens / no_simplify_parens,
     rename_locals / no_rename_locals,
     lift_locals / no_lift_locals,

@@ -821,14 +821,6 @@
           "type": "boolean",
           "default": true
         },
-        "shorten_numbers": {
-          "type": "boolean",
-          "default": true
-        },
-        "shorten_strings": {
-          "type": "boolean",
-          "default": true
-        },
         "simplify_indexes": {
           "type": "boolean",
           "default": true

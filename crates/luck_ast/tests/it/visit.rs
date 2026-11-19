@@ -68,7 +68,7 @@ fn reaches_binary_operands() {
     // local x = 1 + 1: the sum and both operands.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let sum = synth.binary_op(synth.number("1"), BinOp::Add, synth.number("1"));
+    let sum = synth.binary_op(synth.number_i64(1), BinOp::Add, synth.number_i64(1));
     assert_eq!(expr_count(synth, [synth.local(&["x"], [sum])]), 3);
 }
 
@@ -77,7 +77,7 @@ fn reaches_table_fields() {
     // local t = {1, 1, 1}: the constructor and its three values.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let table = synth.array([synth.number("1"), synth.number("1"), synth.number("1")]);
+    let table = synth.array([synth.number_i64(1), synth.number_i64(1), synth.number_i64(1)]);
     assert_eq!(expr_count(synth, [synth.local(&["t"], [table])]), 4);
 }
 
@@ -86,8 +86,8 @@ fn visit_stmt_reaches_the_return_that_ends_a_block() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let block = synth.block([
-        synth.local(&["x"], [synth.number("1")]),
-        synth.local(&["y"], [synth.number("1")]),
+        synth.local(&["x"], [synth.number_i64(1)]),
+        synth.local(&["y"], [synth.number_i64(1)]),
         synth.return_([synth.name_expr("x")]),
     ]);
     assert_eq!(hook_counts(&block).statements, 3);
@@ -98,7 +98,7 @@ fn reaches_function_bodies() {
     // local function f(a) return a + 1 end: the sum and both operands.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.number("1"));
+    let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.number_i64(1));
     let body = synth.block([synth.return_([sum])]);
     assert_eq!(expr_count(synth, [synth.local_function("f", &["a"], body)]), 3);
 }
@@ -108,7 +108,7 @@ fn reaches_if_conditions_and_branches() {
     // if x then y = 1 else y = nil end: x, 1, and nil.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let then_block = synth.block([synth.assign([synth.name_var("y")], [synth.number("1")])]);
+    let then_block = synth.block([synth.assign([synth.name_var("y")], [synth.number_i64(1)])]);
     let else_block = synth.block([synth.assign([synth.name_var("y")], [synth.nil()])]);
     let if_stmt = synth.if_(synth.name_expr("x"), then_block, [], Some(else_block));
     assert_eq!(expr_count(synth, [if_stmt]), 3);
@@ -121,9 +121,9 @@ fn reaches_numeric_for_bounds_and_step() {
     let synth = fixture.synth();
     let numeric_for = synth.numeric_for(
         synth.param("i"),
-        synth.number("1"),
-        synth.number("10"),
-        Some(synth.number("2")),
+        synth.number_i64(1),
+        synth.number_i64(10),
+        Some(synth.number_i64(2)),
         synth.block([]),
     );
     assert_eq!(expr_count(synth, [numeric_for]), 3);

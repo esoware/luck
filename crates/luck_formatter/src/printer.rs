@@ -991,6 +991,7 @@ fn skip_conditional<'elements, 'ast>(
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
+    use luck_token::LuaVersion;
 
     use crate::comments::Comments;
     use crate::ir::Formatter;
@@ -1002,7 +1003,7 @@ mod tests {
         build: impl Fn(&mut Formatter<'_>),
     ) -> String {
         let allocator = Allocator::new();
-        let mut f = Formatter::new(&allocator, options, Comments::none());
+        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, options, Comments::none());
         build(&mut f);
         f.print(base_indent)
     }

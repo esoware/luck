@@ -1,9 +1,8 @@
-use luck_ast::{Expression, Literal};
+use luck_ast::{Expression, NumberLiteral};
 use luck_token::LuaVersion;
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::{IntegerDigits, integer_digits};
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Lua 5.1, 5.2, and Luau store every number as a double, so integers above
@@ -38,29 +37,24 @@ impl NodeRule for IntegerParsing {
     }
 }
 
-fn check_number(literal: &Literal<'_>, version: LuaVersion) -> Option<Finding> {
-    let raw = literal.text;
-    // Float spellings go unchecked, since nobody writes one expecting an
-    // exact integer.
-    let IntegerDigits { digits, radix } = integer_digits(raw)?;
-    let magnitude = u128::from_str_radix(&digits, radix);
+/// Flags a numeral spelled as an integer that doesn't read as that integer.
+///
+/// The parser read it as its reference does, and marked it so. A float
+/// spelling counts as exact, since nobody writes one expecting an exact
+/// integer.
+fn check_number(literal: &NumberLiteral<'_>, version: LuaVersion) -> Option<Finding> {
+    let raw = literal.raw?;
+    if literal.is_exact {
+        return None;
+    }
     let (message, help) = if !version.has_integer_subtype() {
-        // Without an integer subtype every number is a double. Text too
-        // large for `u128` counts as inexact.
-        if magnitude.is_ok_and(is_exact_in_double) {
-            return None;
-        }
         (
             format!(
                 "integer literal `{raw}` exceeds 2^53, so it loses precision when stored as a double"
             ),
             "use a smaller value or store as a string",
         )
-    } else if radix == 10 {
-        // Lua 5.3+ reads a decimal literal above `i64::MAX` as a float.
-        if digits.parse::<i64>().is_ok() {
-            return None;
-        }
+    } else if !raw.starts_with("0x") && !raw.starts_with("0X") {
         (
             format!(
                 "decimal integer `{raw}` exceeds 2^63-1, so it will be parsed as a float and lose precision"
@@ -68,10 +62,6 @@ fn check_number(literal: &Literal<'_>, version: LuaVersion) -> Option<Finding> {
             "use a hex literal or split into smaller values",
         )
     } else {
-        // Lua 5.3+ wraps a hex literal that overflows 64 bits.
-        if magnitude.is_ok_and(|v| v <= u128::from(u64::MAX)) {
-            return None;
-        }
         (
             format!(
                 "hex literal `{raw}` exceeds the 64-bit integer range, so it wraps around to a different value"
@@ -80,12 +70,6 @@ fn check_number(literal: &Literal<'_>, version: LuaVersion) -> Option<Finding> {
         )
     };
     Some(Finding::new(message, literal.span).with_help(help))
-}
-
-/// Whether a double holds `value` exactly, meaning its significant bits fit
-/// the 53-bit mantissa.
-const fn is_exact_in_double(value: u128) -> bool {
-    value.wrapping_shr(value.trailing_zeros()) < (1u128 << 53)
 }
 
 #[cfg(test)]

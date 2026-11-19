@@ -3,7 +3,7 @@ use luck_ast_macros::Ast;
 use luck_token::{BinOp, Span, UnOp};
 
 use crate::function::{FunctionAttribute, FunctionBody};
-use crate::leaf::{Literal, Name};
+use crate::leaf::{IntegerLiteral, Name, NumberLiteral, StringLiteral};
 use crate::one_or_more::OneOrMore;
 use crate::types::{Type, TypeArgs};
 
@@ -18,10 +18,10 @@ pub enum Expression<'ast> {
     Nil(Span),
     False(Span),
     True(Span),
-    Number(Box<'ast, Literal<'ast>>),
+    Number(Box<'ast, NumberLiteral<'ast>>),
     /// Luau: exact 64-bit integer literal with an `i` suffix.
-    Integer(Box<'ast, Literal<'ast>>),
-    StringLiteral(Box<'ast, Literal<'ast>>),
+    Integer(Box<'ast, IntegerLiteral<'ast>>),
+    StringLiteral(Box<'ast, StringLiteral<'ast>>),
     VarArg(Span),
     FunctionDef(Box<'ast, FunctionDef<'ast>>),
     Name(Box<'ast, Name<'ast>>),
@@ -93,7 +93,7 @@ pub enum FunctionArgs<'ast> {
         args: List<'ast, Expression<'ast>>,
     },
     TableConstructor(Box<'ast, TableConstructor<'ast>>),
-    StringLiteral(Literal<'ast>),
+    StringLiteral(Box<'ast, StringLiteral<'ast>>),
     /// Arguments the parser found missing, or a table argument the depth cap
     /// stopped.
     Error(Span),
@@ -193,8 +193,8 @@ pub struct ElseIfExprClause<'ast> {
     pub expr: Expression<'ast>,
 }
 
-/// Luau: `` `text{expr}text` ``. Each piece of text is as written, escapes
-/// included, and spans only itself, not its delimiters.
+/// Luau: `` `text{expr}text` ``. Each piece of text spans only itself, not
+/// its delimiters, and its spelling leaves them out too.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[visit(level)]
 pub struct InterpolatedString<'ast> {
@@ -202,12 +202,12 @@ pub struct InterpolatedString<'ast> {
     /// Each expression, with the text before it.
     pub segments: List<'ast, InterpolatedSegment<'ast>>,
     /// The text after the last expression, or all of it when there's none.
-    pub tail: Literal<'ast>,
+    pub tail: StringLiteral<'ast>,
 }
 
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct InterpolatedSegment<'ast> {
-    pub text: Literal<'ast>,
+    pub text: StringLiteral<'ast>,
     pub expr: Expression<'ast>,
 }
 

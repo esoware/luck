@@ -1,5 +1,5 @@
 use luck_ast::{ChainHead, Expression, GetSpan as _, Suffix, SuffixedExpression};
-use luck_token::{Span, TokenKind, short_string_body};
+use luck_token::{Span, TokenKind};
 
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
@@ -44,9 +44,8 @@ fn check_index(
     else {
         return None;
     };
-    // The body is the raw spelling. The shape check rejects the `\` of any
-    // escape, which could make the key differ from that spelling.
-    let name = short_string_body(literal.text)?;
+    // The key is its value, however it's spelled.
+    let name = literal.as_str()?;
     if !TokenKind::is_identifier_shaped(name)
         || TokenKind::is_reserved(name, context.semantic.version())
     {
@@ -55,7 +54,7 @@ fn check_index(
 
     // Replace everything after the head, brackets included.
     let span = Span::new(head.span().end, index_span.end);
-    let key = literal.text;
+    let key = literal.span.text(context.source);
     Some(
         Finding::new(format!("`[{key}]` is equivalent to `.{name}`"), span)
             .with_help("prefer dot access for identifier-safe keys")
@@ -152,9 +151,19 @@ mod tests {
     }
 
     #[test]
-    fn ignores_escape_sequence_key() {
+    fn ignores_a_key_whose_value_is_no_name() {
         let diags = run("local x = t[\"a\\nb\"]");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_a_key_spelled_with_escapes_or_long_brackets() {
+        let source = "local x = t[\"\\102oo\"] + t[ [[bar]] ]";
+        let diags = run(source);
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        assert_eq!(diags[0].message, "`[\"\\102oo\"]` is equivalent to `.foo`");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local x = t.foo + t.bar");
     }
 
     #[test]

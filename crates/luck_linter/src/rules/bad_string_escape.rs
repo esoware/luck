@@ -1,15 +1,12 @@
-use luck_ast::{Expression, FunctionArgs, Literal};
-use luck_token::{LuaVersion, Span, index_to_offset, short_string_body};
-
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{LintContext, WholeRule, impl_rule};
 
-/// Flags backslash escapes in short strings that the dialect doesn't define,
-/// which Lua 5.1 and Luau read as the bare character.
+/// Flags backslash escapes in strings that the dialect doesn't define, which
+/// Lua 5.1 and Luau read as the bare character.
 ///
-/// Every other version rejects these in the lexer, so a file on those targets
-/// that reaches the rules has none left to flag.
+/// The lexer notes each where it reads it. Every other version rejects these
+/// in the lexer, so a file on those targets that reaches the rules has none
+/// to flag.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BadStringEscape;
 
@@ -21,129 +18,33 @@ impl_rule!(
     "invalid backslash escape in string literal"
 );
 
-impl NodeRule for BadStringEscape {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[
-            NodeType::StringLiteral,
-            NodeType::InterpolatedString,
-            NodeType::FunctionCallStmt,
-            NodeType::FunctionCallExpr,
-        ])
-    }
-
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let version = context.semantic.version();
-        if let Expression::StringLiteral(literal) = expr {
-            check_literal(literal, version, findings);
-        }
-        if let Expression::InterpolatedString(interpolated) = expr {
-            for segment in &interpolated.segments {
-                check_piece(&segment.text, version, findings);
-            }
-            check_piece(&interpolated.tail, version, findings);
-        }
-    }
-
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let call = site.call;
-        if let FunctionArgs::StringLiteral(literal) = call.args {
-            check_literal(literal, context.semantic.version(), findings);
-        }
-    }
-}
-
-/// Long-bracket strings have no escapes, so only a quoted body is checked.
-fn check_literal(literal: &Literal<'_>, version: LuaVersion, findings: &mut Vec<Finding>) {
-    if let Some(body) = short_string_body(literal.text) {
-        check_escapes(body, literal.span.start.saturating_add(1), false, version, findings);
-    }
-}
-
-fn check_piece(piece: &Literal<'_>, version: LuaVersion, findings: &mut Vec<Finding>) {
-    check_escapes(piece.text, piece.span.start, true, version, findings);
-}
-
-fn escape_length(rest: &[u8], is_interpolated: bool, version: LuaVersion) -> Option<usize> {
-    match rest {
-        [b'\r', b'\n', ..] => Some(2),
-        [b'\n', b'\r', ..] if version.has_lfcr_line_break() => Some(2),
-        [
-            b'a' | b'b' | b'f' | b'n' | b'r' | b't' | b'v' | b'\\' | b'"' | b'\'' | b'\n' | b'\r',
-            ..,
-        ] => Some(1),
-        [b'x', ..] if version.has_hex_escape() => Some(1),
-        [b'z', ..] if version.has_whitespace_escape() => Some(1),
-        [b'u', ..] if version.has_unicode_escape() => Some(1),
-        // Luau: an escaped delimiter is literal text.
-        [b'{' | b'}' | b'`', ..] if is_interpolated => Some(1),
-        // `\ddd` takes up to three decimal digits.
-        [b'0'..=b'9', after_first @ ..] => {
-            let extra_digit_count =
-                after_first.iter().take(2).take_while(|b| b.is_ascii_digit()).count();
-            Some(extra_digit_count.saturating_add(1))
-        }
-        _ => None,
-    }
-}
-
-fn check_escapes(
-    body: &str,
-    body_start: u32,
-    is_interpolated: bool,
-    version: LuaVersion,
-    findings: &mut Vec<Finding>,
-) {
-    if version.has_strict_escapes() {
-        return;
-    }
-    let bytes = body.as_bytes();
-    let extended_escapes = if version.has_hex_escape() { " `\\xXX` `\\z` `\\u{XXX}`" } else { "" };
-    let mut index = 0usize;
-    while let Some(&byte) = bytes.get(index) {
-        let after_byte = index.saturating_add(1);
-        if byte != b'\\' {
-            index = after_byte;
-            continue;
-        }
-        let after = bytes.get(after_byte..).unwrap_or_default();
-        if let Some(consumed) = escape_length(after, is_interpolated, version) {
-            index = after_byte.saturating_add(consumed);
+impl WholeRule for BadStringEscape {
+    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+        let extended_escapes = if context.semantic.version().has_hex_escape() {
+            " `\\xXX` `\\z` `\\u{XXX}`"
         } else {
-            let bad_char =
-                body.get(after_byte..).and_then(|rest| rest.chars().next()).unwrap_or('?');
-            let display = if bad_char.is_ascii_control() || bad_char == ' ' {
-                format!("\\x{:02x}", u32::from(bad_char))
+            ""
+        };
+        let help = format!(
+            "valid escapes: `\\a` `\\b` `\\f` `\\n` `\\r` `\\t` `\\v` `\\\\` `\\\"` `\\'` \
+             `\\ddd`{extended_escapes}"
+        );
+        let findings = context.lenient_escapes.iter().map(|&span| {
+            let escaped = span.text(context.source).chars().nth(1).unwrap_or('?');
+            let display = if escaped.is_ascii_control() || escaped == ' ' {
+                format!("\\x{:02x}", u32::from(escaped))
             } else {
-                format!("\\{bad_char}")
+                format!("\\{escaped}")
             };
-            let escape_start = body_start.saturating_add(index_to_offset(index));
-            let escape_width = bad_char.len_utf8().saturating_add(1);
-            findings.push(
-                Finding::new(
-                    format!("invalid string escape `{display}`"),
-                    Span::new(
-                        escape_start,
-                        escape_start.saturating_add(index_to_offset(escape_width)),
-                    ),
-                )
-                .with_help(format!(
-                    "valid escapes: `\\a` `\\b` `\\f` `\\n` `\\r` `\\t` `\\v` `\\\\` `\\\"` `\\'` \
-                     `\\ddd`{extended_escapes}"
-                )),
-            );
-            index = after_byte.saturating_add(bad_char.len_utf8());
-        }
+            Finding::new(format!("invalid string escape `{display}`"), span).with_help(help.clone())
+        });
+        findings.collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::offset_to_index;
+    use luck_token::{LuaVersion, offset_to_index};
 
     use super::*;
     use crate::diagnostic::LintDiagnostic;

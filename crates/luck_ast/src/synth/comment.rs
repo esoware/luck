@@ -42,7 +42,7 @@ mod tests {
     fn comment_helpers_anchor_on_stmts() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let stmt = synth.local(&["x"], [synth.number("1")]);
+        let stmt = synth.local(&["x"], [synth.number_i64(1)]);
         let leading = SyntheticComment::leading(&stmt, "before");
         let trailing = SyntheticComment::trailing(&stmt, "after");
         assert_eq!(leading.attached_to, stmt.span().start);

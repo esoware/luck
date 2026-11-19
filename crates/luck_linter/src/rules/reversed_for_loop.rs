@@ -23,13 +23,12 @@ impl NodeRule for ReversedForLoop {
     fn on_stmt(
         &self,
         stmt: &Statement<'_>,
-        context: &LintContext<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let version = context.semantic.version();
         if let Statement::NumericFor(numeric_for) = stmt
-            && let Some(start) = signed_number_value(&numeric_for.start, version)
-            && let Some(limit) = signed_number_value(&numeric_for.limit, version)
+            && let Some(start) = signed_number_value(&numeric_for.start)
+            && let Some(limit) = signed_number_value(&numeric_for.limit)
             && start > limit
             && numeric_for.step.is_none()
         {

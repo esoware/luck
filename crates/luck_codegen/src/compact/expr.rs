@@ -14,13 +14,12 @@ impl Printer {
     pub(super) fn print_expr(&mut self, expr: &Expression<'_>) {
         match expr {
             Expression::Name(name) => self.name(name.text.as_str()),
-            Expression::Number(literal) | Expression::Integer(literal) => {
-                self.number(literal.text);
-            }
-            Expression::StringLiteral(literal) => self.string(literal.text),
+            Expression::Number(literal) => self.print_number(literal),
+            Expression::StringLiteral(literal) => self.print_string(literal),
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
+            | Expression::Integer(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
             | Expression::Suffixed(_)
@@ -37,10 +36,11 @@ impl Printer {
 
     fn print_other_expr(&mut self, expr: &Expression<'_>) {
         match expr {
-            Expression::Name(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_) => self.print_expr(expr),
+            Expression::Name(_) | Expression::Number(_) | Expression::StringLiteral(_) => {
+                self.print_expr(expr);
+            }
+            // Luau
+            Expression::Integer(literal) => self.print_integer(literal),
             Expression::Nil(_) => self.piece("nil"),
             Expression::False(_) => self.piece("false"),
             Expression::True(_) => self.piece("true"),
@@ -88,13 +88,13 @@ impl Printer {
             Expression::InterpolatedString(interpolated) => {
                 self.output.print_ascii_byte(b'`');
                 for segment in &interpolated.segments {
-                    self.output.print_str(segment.text.text);
+                    self.print_interpolated_text(&segment.text);
                     self.output.print_ascii_byte(b'{');
                     self.last = INTERPOLATION_BRACE;
                     self.print_expr(&segment.expr);
                     self.output.print_ascii_byte(b'}');
                 }
-                self.output.print_str(interpolated.tail.text);
+                self.print_interpolated_text(&interpolated.tail);
                 self.output.print_ascii_byte(b'`');
                 self.last = OTHER;
             }
@@ -158,7 +158,7 @@ impl Printer {
                 self.piece(")");
             }
             FunctionArgs::TableConstructor(table) => self.print_table(table),
-            FunctionArgs::StringLiteral(literal) => self.string(literal.text),
+            FunctionArgs::StringLiteral(literal) => self.print_string(literal),
             FunctionArgs::Error(_) => {}
         }
     }

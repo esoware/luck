@@ -1,5 +1,4 @@
 use luck_ast::Call;
-use luck_token::short_string_body;
 
 use crate::call::{CallArgs, is_global_call};
 use crate::diagnostic::Finding;
@@ -37,11 +36,10 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
     if !is_global_call(call, "require", context.semantic) {
         return None;
     }
-    // A computed path like `require(x .. y)` can't be checked.
+    // A computed path like `require(x .. y)` can't be checked, and a literal
+    // one is checked by its value, however it's spelled.
     let literal = CallArgs::new(call.args).next()?.string_literal()?;
-    // Escapes stay as written. Long-bracket strings give `None`; module paths
-    // rarely use them.
-    let path = short_string_body(literal.text)?;
+    let path = literal.as_str()?;
     let pattern = restricted_paths.iter().find(|pattern| path_matches(path, pattern))?;
     Some(
         Finding::new(format!("`require` of restricted module `{path}`"), literal.span)
@@ -137,5 +135,15 @@ require(p)",
     fn ignores_name_extending_wildcard_prefix() {
         let diags = run("require(\"forbiddenly\")", vec!["forbidden.*".to_owned()]);
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_a_path_spelled_with_escapes_or_long_brackets() {
+        for source in
+            [r#"require("forbidden\46sub")"#, "require[[forbidden]]", "require'\\x66orbidden'"]
+        {
+            let diags = run(source, vec!["forbidden.*".to_owned()]);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+        }
     }
 }

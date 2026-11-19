@@ -166,7 +166,7 @@ impl<'ast> Parser<'ast> {
                 List::from_array_in([expr], self.allocator)
             }
             _ => {
-                let literal = self.advance_literal();
+                let literal = self.advance_string();
                 List::from_array_in([Expression::StringLiteral(literal)], self.allocator)
             }
         };

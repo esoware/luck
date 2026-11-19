@@ -7,13 +7,13 @@ use crate::{
     FunctionArgs, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName,
     FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
     GenericTypeParam, GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression,
-    IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement,
-    Literal, LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall,
-    Name, NamedType, NumericFor, OptionalType, Parameter, ParenthesizedExpression,
-    ParenthesizedType, RepeatLoop, ReturnStatement, Statement, Suffix, SuffixedExpression,
-    TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
-    TypeField, TypeFieldAccess, TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam,
-    VariadicType, WhileLoop,
+    IfStatement, IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType,
+    LabelStatement, LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind,
+    MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType, Parameter,
+    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
+    StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
+    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypeFieldAccess, TypePack,
+    TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 impl ContentEq for Expression<'_> {
@@ -24,11 +24,9 @@ impl ContentEq for Expression<'_> {
             | (Self::True(_), Self::True(_))
             | (Self::VarArg(_), Self::VarArg(_))
             | (Self::Error(_), Self::Error(_)) => true,
-            (Self::Number(lhs), Self::Number(rhs))
-            | (Self::Integer(lhs), Self::Integer(rhs))
-            | (Self::StringLiteral(lhs), Self::StringLiteral(rhs)) => {
-                ContentEq::content_eq(lhs, rhs)
-            }
+            (Self::Number(lhs), Self::Number(rhs)) => ContentEq::content_eq(lhs, rhs),
+            (Self::Integer(lhs), Self::Integer(rhs)) => ContentEq::content_eq(lhs, rhs),
+            (Self::StringLiteral(lhs), Self::StringLiteral(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::FunctionDef(lhs), Self::FunctionDef(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::Name(lhs), Self::Name(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::Suffixed(lhs), Self::Suffixed(rhs)) => ContentEq::content_eq(lhs, rhs),
@@ -277,9 +275,21 @@ impl ContentEq for Name<'_> {
     }
 }
 
-impl ContentEq for Literal<'_> {
+impl ContentEq for NumberLiteral<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.text, &other.text)
+        ContentEq::content_eq(&self.value, &other.value)
+    }
+}
+
+impl ContentEq for IntegerLiteral<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.value, &other.value)
+    }
+}
+
+impl ContentEq for StringLiteral<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.value, &other.value)
     }
 }
 
@@ -568,8 +578,7 @@ impl ContentEq for Type<'_> {
             | (Self::True(_), Self::True(_))
             | (Self::False(_), Self::False(_))
             | (Self::Error(_), Self::Error(_)) => true,
-            (Self::StringLiteral(lhs), Self::StringLiteral(rhs))
-            | (Self::Number(lhs), Self::Number(rhs)) => ContentEq::content_eq(lhs, rhs),
+            (Self::StringLiteral(lhs), Self::StringLiteral(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::Variadic(lhs), Self::Variadic(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::GenericPack(lhs), Self::GenericPack(rhs)) => ContentEq::content_eq(lhs, rhs),
             (
@@ -587,7 +596,6 @@ impl ContentEq for Type<'_> {
                 | Self::True(_)
                 | Self::False(_)
                 | Self::StringLiteral(_)
-                | Self::Number(_)
                 | Self::Variadic(_)
                 | Self::GenericPack(_)
                 | Self::Error(_),

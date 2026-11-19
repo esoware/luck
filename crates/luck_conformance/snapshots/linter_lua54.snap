@@ -6108,19 +6108,19 @@ lua-5.4.9-tests/gc.lua
 24:10 no_implicit_globals: global variable `collectgarbage` used
 31:3 merge_adjacent_locals: adjacent `local` declarations can be merged
 31:13 no_implicit_globals: global variable `collectgarbage` used
-31:29 deprecated: `setpause` is a deprecated argument of `collectgarbage`
+31:28 deprecated: `setpause` is a deprecated argument of `collectgarbage`
 32:13 no_implicit_globals: global variable `collectgarbage` used
-32:29 deprecated: `setstepmul` is a deprecated argument of `collectgarbage`
+32:28 deprecated: `setstepmul` is a deprecated argument of `collectgarbage`
 38:7 no_implicit_globals: global variable `collectgarbage` used
-38:23 deprecated: `setpause` is a deprecated argument of `collectgarbage`
+38:22 deprecated: `setpause` is a deprecated argument of `collectgarbage`
 39:7 no_implicit_globals: global variable `collectgarbage` used
-39:23 deprecated: `setstepmul` is a deprecated argument of `collectgarbage`
+39:22 deprecated: `setstepmul` is a deprecated argument of `collectgarbage`
 40:7 no_implicit_globals: global variable `collectgarbage` used
 41:7 no_implicit_globals: global variable `collectgarbage` used
 45:3 no_implicit_globals: global variable `collectgarbage` used
-45:19 deprecated: `setpause` is a deprecated argument of `collectgarbage`
+45:18 deprecated: `setpause` is a deprecated argument of `collectgarbage`
 46:3 no_implicit_globals: global variable `collectgarbage` used
-46:19 deprecated: `setstepmul` is a deprecated argument of `collectgarbage`
+46:18 deprecated: `setstepmul` is a deprecated argument of `collectgarbage`
 47:3 no_implicit_globals: global variable `collectgarbage` used
 51:1 global_usage: global environment `_G` used
 51:1 no_implicit_globals: global variable `_G` used

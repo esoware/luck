@@ -46,17 +46,18 @@ fn words_glue_to_pieces_that_cannot_extend_them() {
 
 #[test]
 fn space_keeps_a_number_from_absorbing_the_next_piece() {
-    for (source, expected) in [
+    let (lua51, lua54) = (LuaVersion::Lua51, LuaVersion::Lua54);
+    for (source, expected, version) in [
         // A number reads on through letters, digits, and dots.
-        ("return 1 .. 2", "return 1 ..2"),
-        ("return 1.0 .. 'x'", "return 1.0 ..'x'"),
-        ("return 1. .. 'x'", "return 1. ..'x'"),
-        ("return .5 .. 'x'", "return.5 ..'x'"),
-        ("return 0xff .. 'x'", "return 0xff ..'x'"),
-        ("x = 1 and 2", "x=1 and 2"),
-        ("x = 1. or 2", "x=1. or 2"),
+        ("return 1 .. 2", "return 1 ..2", lua51),
+        ("return 1.0 .. 'x'", "return 1. ..'x'", lua54),
+        ("return .5 .. 'x'", "return.5 ..'x'", lua51),
+        ("return 0xffffffffffffffff .. 'x'", "return 0xffffffffffffffff ..'x'", lua54),
+        ("x = 1 and 2", "x=1 and 2", lua51),
+        ("x = 1.0 or 2", "x=1. or 2", lua54),
+        ("x = 1.0 or 2", "x=1 or 2", lua51),
     ] {
-        assert_compacts_to(source, expected, LuaVersion::Lua51);
+        assert_compacts_to(source, expected, version);
     }
 }
 
@@ -81,9 +82,11 @@ fn space_keeps_minuses_from_opening_a_comment() {
 
 #[test]
 fn space_keeps_a_bracket_from_opening_a_long_string() {
+    // Each value has more backslashes than its long brackets cost, so it
+    // keeps them.
     for (source, expected) in [
-        ("x = {[ [[key]] ] = 1}", "x={[ [[key]]]=1}"),
-        ("x = t[ [==[key]==] ]", "x=t[ [==[key]==]]"),
+        (r"x = {[ [[\\\]] ] = 1}", r"x={[ [[\\\]]]=1}"),
+        (r"x = t[ [==[]]\\\\\]==] ]", r"x=t[ [=[]]\\\\\]=]]"),
     ] {
         assert_compacts_to(source, expected, LuaVersion::Lua51);
     }

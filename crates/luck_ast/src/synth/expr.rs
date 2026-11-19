@@ -400,10 +400,10 @@ impl<'ast> Synth<'ast> {
         Expression::Suffixed(self.suffixed(callee, Suffix::Call(args)))
     }
 
-    /// `callee"content"`, the string argument form (content is unquoted).
+    /// `callee"content"`, the string argument form, whose value is `content`.
     #[must_use]
     pub fn call_string(&self, callee: Expression<'ast>, content: &str) -> Expression<'ast> {
-        let args = FunctionArgs::StringLiteral(self.quoted(content.as_bytes()));
+        let args = FunctionArgs::StringLiteral(self.boxed(self.string_literal(content.as_bytes())));
         Expression::Suffixed(self.suffixed(callee, Suffix::Call(args)))
     }
 
@@ -435,7 +435,7 @@ impl<'ast> Synth<'ast> {
         name: &str,
         content: &str,
     ) -> Expression<'ast> {
-        let args = FunctionArgs::StringLiteral(self.quoted(content.as_bytes()));
+        let args = FunctionArgs::StringLiteral(self.boxed(self.string_literal(content.as_bytes())));
         self.method_call_node(receiver, name, None, args)
     }
 
@@ -651,7 +651,8 @@ mod tests {
     fn binary_op_parenthesizes_if_expr_operands() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let if_expr = synth.if_expr(synth.boolean(true), synth.number("1"), [], synth.number("2"));
+        let if_expr =
+            synth.if_expr(synth.boolean(true), synth.number_i64(1), [], synth.number_i64(2));
         let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, if_expr);
         assert!(
             matches!(run(&sum).links.last().operand, Expression::Parenthesized(_)),
@@ -743,7 +744,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         // A string receiver must be parenthesized: ("s"):rep(2).
-        let called = synth.method_call(synth.string("s"), "rep", [synth.number("2")]);
+        let called = synth.method_call(synth.string("s"), "rep", [synth.number_i64(2)]);
         assert!(matches!(chain(&called).prefix, Expression::Parenthesized(_)));
 
         // A table prefix must be parenthesized: ({}).x.
@@ -757,7 +758,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let called = synth.call(synth.name_expr("f"), []);
-        let indexed = synth.index(synth.field(called, "x"), synth.number("1"));
+        let indexed = synth.index(synth.field(called, "x"), synth.number_i64(1));
         let method_run = synth.method_call(indexed, "m", []);
         assert!(matches!(chain(&method_run).prefix, Expression::Name(_)));
         assert!(matches!(
@@ -913,8 +914,8 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let table = synth.table([
-            FieldSpec::Positional(synth.number("1")),
-            FieldSpec::Named("a", synth.number("2")),
+            FieldSpec::Positional(synth.number_i64(1)),
+            FieldSpec::Named("a", synth.number_i64(2)),
             FieldSpec::Bracketed(synth.string("k"), synth.boolean(true)),
         ]);
         let Expression::TableConstructor(constructor) = &table else {
@@ -931,7 +932,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let Expression::TableConstructor(array) =
-            synth.array([synth.number("1"), synth.number("2")])
+            synth.array([synth.number_i64(1), synth.number_i64(2)])
         else {
             panic!("expected table");
         };
@@ -939,7 +940,7 @@ mod tests {
 
         // Unsafe keys fall back to the bracketed form.
         let Expression::TableConstructor(record) =
-            synth.record([("good", synth.number("1")), ("not valid", synth.number("2"))])
+            synth.record([("good", synth.number_i64(1)), ("not valid", synth.number_i64(2))])
         else {
             panic!("expected table");
         };
@@ -952,9 +953,9 @@ mod tests {
         let synth = fixture.synth();
         let expr = synth.if_expr(
             synth.boolean(true),
-            synth.number("1"),
-            [(synth.boolean(false), synth.number("2"))],
-            synth.number("3"),
+            synth.number_i64(1),
+            [(synth.boolean(false), synth.number_i64(2))],
+            synth.number_i64(3),
         );
         let Expression::IfExpression(if_expr) = &expr else {
             panic!("expected if expression");

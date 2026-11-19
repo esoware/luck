@@ -1,4 +1,4 @@
-use luck_token::{LuaVersion, Span, TokenKind};
+use luck_token::{LuaVersion, Span, TokenKind, read_integer};
 
 use crate::cursor::Cursor;
 use crate::lex_error::{LexError, lex_error};
@@ -128,7 +128,7 @@ fn scan_hex_number(
         }
     }
 
-    let is_integer = eat_integer_suffix(cursor, version, start, 16)?;
+    let is_integer = eat_integer_suffix(cursor, version, start)?;
 
     if (version.has_hex_scan_dots() && cursor.peek() == Some(b'.'))
         || is_touching_numeral(cursor, version)
@@ -162,7 +162,7 @@ fn scan_binary_number(
         ));
     }
 
-    let is_integer = eat_integer_suffix(cursor, version, start, 2)?;
+    let is_integer = eat_integer_suffix(cursor, version, start)?;
 
     if is_touching_numeral(cursor, version) {
         return Err(touching_letter_error(cursor, start));
@@ -214,7 +214,7 @@ fn scan_decimal_number(
             "the `i` integer suffix is not allowed on float literals",
         ));
     }
-    let is_integer = eat_integer_suffix(cursor, version, start, 10)?;
+    let is_integer = eat_integer_suffix(cursor, version, start)?;
 
     if is_touching_numeral(cursor, version) {
         return Err(touching_letter_error(cursor, start));
@@ -277,6 +277,9 @@ fn eat_exponent(cursor: &mut Cursor<'_>, version: LuaVersion) -> bool {
 /// Consume a Luau `i` suffix and any `_` after it, range-checking the
 /// integer, and return whether there was one.
 ///
+/// A decimal literal must fit an `i64`, while hexadecimal and binary ones may
+/// use all 64 bits, matching Luau's bit-pattern semantics.
+///
 /// # Errors
 ///
 /// Returns a [`LexError`] when the value doesn't fit in 64 bits.
@@ -284,12 +287,16 @@ fn eat_integer_suffix(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
-    radix: u32,
 ) -> Result<bool, LexError> {
     if !(version.has_luau_integer_literals() && cursor.eat(b'i')) {
         return Ok(false);
     }
-    validate_integer_range(cursor, start, radix)?;
+    if read_integer(cursor.text_since(start)).is_none() {
+        return Err(lex_error(
+            cursor.span_since(start),
+            "integer literal is outside the 64-bit range",
+        ));
+    }
     cursor.eat_while(|b| b == b'_');
     Ok(true)
 }
@@ -309,36 +316,4 @@ fn reject_adjacent_concat(cursor: &Cursor<'_>, start: usize) -> Result<(), LexEr
         ));
     }
     Ok(())
-}
-
-/// Range-check a numeral ending at the cursor with its `i` suffix consumed.
-///
-/// A decimal literal must fit an `i64`, while hexadecimal and binary ones may
-/// use all 64 bits, matching Luau's bit-pattern semantics.
-///
-/// # Errors
-///
-/// Returns a [`LexError`] when the value doesn't fit.
-fn validate_integer_range(cursor: &Cursor<'_>, start: usize, radix: u32) -> Result<(), LexError> {
-    let text = cursor.text_since(start);
-    let raw = text.strip_suffix('i').unwrap_or(text);
-    let normalized;
-    let spelled = if raw.contains('_') {
-        normalized = raw.replace('_', "");
-        normalized.as_str()
-    } else {
-        raw
-    };
-    let digits = if radix == 10 { spelled } else { spelled.get(2..).unwrap_or_default() };
-    let is_valid = if radix == 10 {
-        digits.parse::<i64>().is_ok()
-    } else {
-        u64::from_str_radix(digits, radix).is_ok()
-    };
-
-    if is_valid {
-        Ok(())
-    } else {
-        Err(lex_error(cursor.span_since(start), "integer literal is outside the 64-bit range"))
-    }
 }

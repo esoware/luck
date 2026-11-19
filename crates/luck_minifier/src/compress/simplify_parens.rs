@@ -148,8 +148,9 @@ pub(super) fn strip_call_args(args: &mut FunctionArgs<'_>) -> bool {
     let [arg] = &mut **exprs else {
         return false;
     };
-    if let Expression::StringLiteral(boxed) = arg {
-        let literal = **boxed;
+    if matches!(arg, Expression::StringLiteral(_))
+        && let Expression::StringLiteral(literal) = arg.take()
+    {
         *args = FunctionArgs::StringLiteral(literal);
         return true;
     }

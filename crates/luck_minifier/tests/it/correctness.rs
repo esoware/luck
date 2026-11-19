@@ -238,7 +238,7 @@ fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
     with_the_smallest_stack(|| {
         // The initializer is 31 levels deep, and its one use sits 15 levels
         // short of the cap.
-        let initializer = format!("{}#\"a\"{}", "#\"a\"+(".repeat(15), ")".repeat(15));
+        let initializer = format!("{}1/0{}", "1/0+(".repeat(15), ")".repeat(15));
         let source = format!(
             "\
     local x = {initializer}
@@ -376,7 +376,7 @@ fn a_tree_past_the_nesting_cap_keeps_its_names_and_spans() {
             }
             let identity = synth.block([synth.return_([synth.name_expr("a")])]);
             let block = synth.block([
-                synth.local(&["x"], [synth.number("1")]),
+                synth.local(&["x"], [synth.number_i64(1)]),
                 synth.local_function("f", &["a"], identity),
                 synth.call_stmt(synth.call(synth.name_expr("f"), [synth.name_expr("x")])),
                 synth.return_([expr]),

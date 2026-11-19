@@ -78,7 +78,6 @@ impl<'ast> Synth<'ast> {
             | Type::True(_)
             | Type::False(_)
             | Type::StringLiteral(_)
-            | Type::Number(_)
             | Type::Variadic(_)
             | Type::GenericPack(_)
             | Type::Error(_) => inner,
@@ -235,7 +234,7 @@ impl<'ast> Synth<'ast> {
 
     #[must_use]
     pub fn ty_singleton_string(&self, content: &str) -> Type<'ast> {
-        Type::StringLiteral(self.boxed(self.quoted(content.as_bytes())))
+        Type::StringLiteral(self.boxed(self.string_literal(content.as_bytes())))
     }
 
     #[must_use]
@@ -314,7 +313,6 @@ fn leading_name<'ast>(ty: &Type<'ast>) -> Option<&'ast str> {
             | Type::True(_)
             | Type::False(_)
             | Type::StringLiteral(_)
-            | Type::Number(_)
             | Type::Variadic(_)
             | Type::Error(_) => return None,
         };
@@ -368,7 +366,7 @@ mod tests {
         let Type::StringLiteral(literal) = synth.ty_singleton_string("a") else {
             panic!("expected a string singleton");
         };
-        assert_eq!(literal.text, "\"a\"");
+        assert_eq!(literal.value, &b"a"[..]);
 
         let named_param = synth.ty_function_full(
             Some(synth.generic_type_list([("T", true)])),

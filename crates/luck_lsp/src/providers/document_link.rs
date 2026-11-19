@@ -10,7 +10,6 @@ use std::path::PathBuf;
 use ls_types::{DocumentLink, Position, Uri};
 use luck_ast::{Block, Call, Expression, FunctionArgs, GetSpan as _, SuffixedExpression, Visit};
 use luck_resolver::Resolver;
-use luck_token::decode_string;
 
 use crate::document::{DocumentState, file_path};
 use crate::providers::cursor::{statements_touching, touches};
@@ -113,13 +112,10 @@ impl LinkCollector<'_> {
         if self.position.is_some_and(|position| position < range.start || position > range.end) {
             return;
         }
-        let Some(module) = decode_string(literal.text, self.document.lua_version())
-            .and_then(|decoded| String::from_utf8(decoded.into_owned()).ok())
-            .filter(|module| !module.is_empty())
-        else {
+        let Some(module) = literal.as_str().filter(|module| !module.is_empty()) else {
             return;
         };
-        let Ok(resolution) = self.resolver.resolve(&self.document_path, &module) else {
+        let Ok(resolution) = self.resolver.resolve(&self.document_path, module) else {
             return;
         };
         let Some(target) = Uri::from_file_path(&resolution.path) else {
@@ -128,7 +124,7 @@ impl LinkCollector<'_> {
         self.links.push(DocumentLink {
             range,
             target: Some(target),
-            tooltip: Some(module),
+            tooltip: Some(module.to_owned()),
             data: None,
         });
     }

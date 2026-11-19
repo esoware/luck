@@ -1,7 +1,7 @@
 use core::slice;
 
 use luck_ast::{
-    Block, Call, ChainHead, Expression, FunctionArgs, GetSpan as _, Literal, Name, Statement,
+    Block, Call, ChainHead, Expression, FunctionArgs, GetSpan as _, Name, Statement, StringLiteral,
     Suffix, SuffixedExpression, Var, Visit,
 };
 use luck_semantic::{ScopeTree, SymbolId, SymbolKind};
@@ -105,7 +105,7 @@ fn is_unclosed_block_comment(comment: &str) -> bool {
 
 /// Whether the string token starting where `literal` does runs to the end of
 /// its line or of the source without its closing delimiter.
-pub(crate) fn is_unterminated(document: &DocumentState, literal: &Literal<'_>) -> bool {
+pub(crate) fn is_unterminated(document: &DocumentState, literal: &StringLiteral<'_>) -> bool {
     let tokens = document.tokens();
     tokens
         .binary_search_by_key(&literal.span.start, |token| token.span.start)
@@ -388,7 +388,7 @@ impl<'document> CallSiteFinder<'document> {
 pub(crate) struct StringArgSite<'ast> {
     pub call: Call<'ast>,
     pub arg_index: usize,
-    pub literal: &'ast Literal<'ast>,
+    pub literal: &'ast StringLiteral<'ast>,
 }
 
 /// Find the innermost call whose argument list contains a string
@@ -432,7 +432,7 @@ impl<'ast> Visit<'ast> for StringArgFinder<'ast> {
 impl<'ast> StringArgFinder<'ast> {
     /// Inside the quotes, so a cursor next to the literal doesn't trigger
     /// value completion.
-    fn contains(&self, literal: &Literal<'_>) -> bool {
+    fn contains(&self, literal: &StringLiteral<'_>) -> bool {
         let span = literal.span;
         span.start < self.offset
             && (self.offset < span.end
@@ -452,7 +452,7 @@ impl<'ast> StringArgFinder<'ast> {
                     }
                 })
             }
-            FunctionArgs::StringLiteral(literal) if self.contains(literal) => Some((0, literal)),
+            FunctionArgs::StringLiteral(literal) if self.contains(literal) => Some((0, &**literal)),
             FunctionArgs::StringLiteral(_)
             | FunctionArgs::TableConstructor(_)
             | FunctionArgs::Error(_) => None,

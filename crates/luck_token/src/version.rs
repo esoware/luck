@@ -186,6 +186,17 @@ impl LuaVersion {
         }
     }
 
+    /// Whether a hex or binary numeral past 64 bits reads as 2^64, as Luau's
+    /// `strtoull` saturates. PUC Lua rounds it to the nearest double (5.1,
+    /// 5.2) or wraps it as an integer (5.3+).
+    #[must_use]
+    pub const fn has_saturating_hex_numerals(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
     /// Whether Luau's distinct 64-bit integer literals (`123i`) are supported.
     #[must_use]
     pub const fn has_luau_integer_literals(self) -> bool {

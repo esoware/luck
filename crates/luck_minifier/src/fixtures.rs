@@ -16,8 +16,6 @@ pub(crate) const NO_PASSES: TransformConfig = TransformConfig {
     inline_locals: false,
     merge_locals: false,
     simplify_indexes: false,
-    shorten_strings: false,
-    shorten_numbers: false,
     simplify_parens: false,
     rename_locals: false,
     lift_locals: false,

@@ -1,10 +1,11 @@
 use luck_ast::{Chunk, TreeCounts};
-use luck_token::Comment;
+use luck_token::{Comment, Span};
 
 pub type ParseError = luck_token::SourceError;
 
 /// Everything one parse found. The tree lives in the arena the parse was
-/// given, and its names and literals borrow `source`.
+/// given, and its names and literals borrow `source`, but for the string
+/// values decoding rewrote, which live in the arena.
 #[derive(Debug)]
 pub struct ParseResult<'ast> {
     pub source: &'ast str,
@@ -13,6 +14,8 @@ pub struct ParseResult<'ast> {
     pub comments: Vec<Comment>,
     /// Every lex and parse error, sorted by start offset.
     pub errors: Vec<ParseError>,
+    /// What the lexer's [`luck_lexer::LexResult::lenient_escapes`] holds.
+    pub lenient_escapes: Vec<Span>,
     /// How many levels deep the chunk's block nests, as the parser counted
     /// them toward [`luck_ast::MAX_NESTING_DEPTH`]. With no errors, that's
     /// never fewer than [`luck_ast::block_nesting_depth`] finds.

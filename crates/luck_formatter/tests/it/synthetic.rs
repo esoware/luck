@@ -8,7 +8,7 @@ use luck_ast::{
 };
 use luck_formatter::{CollapseSimpleStatement, Comments, FormatOptions, format_chunk};
 use luck_testgen::with_the_smallest_stack;
-use luck_token::{BinOp, LuaVersion, TokenKind, UnOp, decode_string};
+use luck_token::{BinOp, LuaVersion, StringValue, TokenKind, UnOp, decode_string};
 
 use crate::common::{Fixture, assert_format_with};
 
@@ -69,11 +69,12 @@ fn long_string_delimiters_and_bytes_roundtrip() {
                 .find(|token| token.kind == TokenKind::StringLiteral)
                 .expect("string literal")
                 .text(&expected);
-            assert_eq!(
-                decode_string(literal, version).as_deref(),
-                Some(content.as_bytes()),
-                "{version:?}: {expected}"
-            );
+            let mut decoded = Vec::new();
+            let value = match decode_string(literal, version, &mut decoded) {
+                StringValue::Verbatim(bytes) => bytes.to_vec(),
+                StringValue::Decoded => decoded,
+            };
+            assert_eq!(value, content.as_bytes(), "{version:?}: {expected}");
         }
     }
 }
@@ -329,8 +330,8 @@ fn mixed_stmts_roundtrip() {
 
     // local data = { 1, name = 2, ["k"] = true }
     let table = synth.table([
-        FieldSpec::Positional(synth.number("1")),
-        FieldSpec::Named("name", synth.number("2")),
+        FieldSpec::Positional(synth.number_i64(1)),
+        FieldSpec::Named("name", synth.number_i64(2)),
         FieldSpec::Bracketed(synth.string("k"), synth.boolean(true)),
     ]);
     let local_data = synth.local(&["data"], [table]);
@@ -344,7 +345,7 @@ fn mixed_stmts_roundtrip() {
     );
 
     // if data then data:insert(3) elseif false then else end
-    let method = synth.method_call(synth.name_expr("data"), "insert", [synth.number("3")]);
+    let method = synth.method_call(synth.name_expr("data"), "insert", [synth.number_i64(3)]);
     let if_stmt = synth.if_(
         synth.name_expr("data"),
         synth.block([synth.call_stmt(method)]),
@@ -414,7 +415,7 @@ fn if_expr_operand_roundtrips() {
     let synth = fixture.synth();
     // a or (if c then 1 else 2): unparenthesized, the if-expression's else
     // branch would swallow everything after it.
-    let if_expr = synth.if_expr(synth.name_expr("c"), synth.number("1"), [], synth.number("2"));
+    let if_expr = synth.if_expr(synth.name_expr("c"), synth.number_i64(1), [], synth.number_i64(2));
     let guarded = synth.binary_op(synth.name_expr("a"), BinOp::Or, if_expr);
     let block = synth.block([synth.return_([guarded])]);
     assert_format_block(&fixture, block, LuaVersion::Luau, "return a or (if c then 1 else 2)\n");
@@ -425,7 +426,7 @@ fn prefix_wrapping_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     // ("s"):rep(2) and ({}).field both need their receivers parenthesized.
-    let string_method = synth.method_call(synth.string("s"), "rep", [synth.number("2")]);
+    let string_method = synth.method_call(synth.string("s"), "rep", [synth.number_i64(2)]);
     let table_field = synth.field(synth.table([]), "field");
     let block = synth.block([synth.return_([string_method, table_field])]);
     assert_format_block(&fixture, block, LuaVersion::Luau, "return (\"s\"):rep(2), ({}).field\n");
@@ -493,8 +494,9 @@ fn numeric_specials_roundtrip() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
-        "return { 3.0, -2.5, 1 / 0, 0 / 0, -42, 0x8000000000000000 }\n",
+        LuaVersion::Lua54,
+        "return { 3.0, -2.5, 1e999, 0.0 / 0.0, -42, 0x8000000000000000 }
+",
     );
 }
 
@@ -522,7 +524,7 @@ fn attributed_local_roundtrips_in_lua54() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let stmt = synth
-        .local_full([synth.attributed_name("frozen", None, Some("const"))], [synth.number("1")]);
+        .local_full([synth.attributed_name("frozen", None, Some("const"))], [synth.number_i64(1)]);
     let block = synth.block([stmt]);
     assert_format_block(&fixture, block, LuaVersion::Lua54, "local frozen <const> = 1\n");
 }
@@ -779,7 +781,8 @@ fn exponent_number_roundtrips() {
 #[test]
 fn luau_pinned_numbers_roundtrip() {
     // Luau has no float subtype to preserve, so integral values print as
-    // plain digits and `i64::MIN` as a negated decimal.
+    // plain digits, or an exponent where that's shorter, and `i64::MIN` as a
+    // negated float.
     let fixture = Fixture::default();
     let synth = fixture.synth().with_version(LuaVersion::Luau);
     let values = [synth.number_f64(100.0), synth.number_f64(1.5), synth.number_i64(i64::MIN)];
@@ -788,7 +791,7 @@ fn luau_pinned_numbers_roundtrip() {
         &fixture,
         block,
         LuaVersion::Luau,
-        "return { 100, 1.5, -9223372036854775808 }\n",
+        "return { 100, 1.5, -9223372036854776e3 }\n",
     );
 }
 
@@ -825,7 +828,7 @@ fn version_pinned_keyword_field_roundtrips() {
 fn synthetic_comments_placed_around_stmt() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let stmt = synth.local(&["x"], [synth.number("1")]);
+    let stmt = synth.local(&["x"], [synth.number_i64(1)]);
     let leading = SyntheticComment::leading(&stmt, "leading note");
     let trailing = SyntheticComment::trailing(&stmt, "trailing note");
     let block = synth.block([stmt]);
@@ -866,8 +869,8 @@ end
 fn requested_blank_lines_separate_stmts() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let first = synth.local(&["a"], [synth.number("1")]);
-    let second = synth.local(&["b"], [synth.number("2")]);
+    let first = synth.local(&["a"], [synth.number_i64(1)]);
+    let second = synth.local(&["b"], [synth.number_i64(2)]);
     let blank_anchor = second.span().start;
     let chunk = Chunk::new(LuaVersion::Luau, synth.block([first, second]));
     let options = FormatOptions::default();
@@ -930,7 +933,7 @@ fn empty_block_formats_to_parseable_output() {
 fn last_stmt_only_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let block = synth.block([synth.return_([synth.number("42")])]);
+    let block = synth.block([synth.return_([synth.number_i64(42)])]);
     assert_format_block(&fixture, block, LuaVersion::Luau, "return 42\n");
 }
 
@@ -938,7 +941,7 @@ fn last_stmt_only_roundtrips() {
 fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let body_stmt = synth.local(&["x"], [synth.number("1")]);
+    let body_stmt = synth.local(&["x"], [synth.number_i64(1)]);
     let trailing = SyntheticComment::trailing(&body_stmt, "why");
     let body = synth.block([body_stmt]);
     let if_stmt = synth.if_(synth.name_expr("a"), body, [], None);
@@ -964,7 +967,7 @@ end
 fn multi_line_synthetic_comment_stays_a_comment() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let stmt = synth.local(&["x"], [synth.number("1")]);
+    let stmt = synth.local(&["x"], [synth.number_i64(1)]);
     let comment = SyntheticComment::leading(
         &stmt,
         "\
@@ -1041,7 +1044,7 @@ fn a_run_of_any_length_formats_as_one_level() {
     let mut sum = synth.name_expr("x");
     let mut methods = synth.name_expr("object");
     for _ in 0..links {
-        sum = synth.binary_op(sum, BinOp::Add, synth.number("1"));
+        sum = synth.binary_op(sum, BinOp::Add, synth.number_i64(1));
     }
     for _ in 0..calls {
         methods = synth.method_call(methods, "next", []);

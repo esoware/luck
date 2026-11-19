@@ -7,12 +7,12 @@ use crate::{
     FunctionArgs, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName,
     FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
     GenericTypeParam, GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression,
-    IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement,
-    Literal, LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumericFor, OptionalType,
-    Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
-    Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs, TypeCast,
-    TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypeofType, UnaryOp, UnionType,
-    Var, VarArgParam, VariadicType, WhileLoop,
+    IfStatement, IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType,
+    LabelStatement, LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumberLiteral,
+    NumericFor, OptionalType, Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop,
+    ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression, TableConstructor,
+    TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField,
+    TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 /// A walk over a tree that borrows it.
@@ -181,8 +181,18 @@ pub trait Visit<'ast> {
     }
 
     #[inline]
-    fn visit_literal(&mut self, literal: &'ast Literal<'ast>) {
-        self.walk_literal(literal);
+    fn visit_number_literal(&mut self, number_literal: &'ast NumberLiteral<'ast>) {
+        self.walk_number_literal(number_literal);
+    }
+
+    #[inline]
+    fn visit_integer_literal(&mut self, integer_literal: &'ast IntegerLiteral<'ast>) {
+        self.walk_integer_literal(integer_literal);
+    }
+
+    #[inline]
+    fn visit_string_literal(&mut self, string_literal: &'ast StringLiteral<'ast>) {
+        self.walk_string_literal(string_literal);
     }
 
     #[inline]
@@ -415,9 +425,9 @@ pub trait Visit<'ast> {
             | Expression::True(_)
             | Expression::VarArg(_)
             | Expression::Error(_) => {}
-            Expression::Number(literal)
-            | Expression::Integer(literal)
-            | Expression::StringLiteral(literal) => self.visit_literal(literal),
+            Expression::Number(number_literal) => self.visit_number_literal(number_literal),
+            Expression::Integer(integer_literal) => self.visit_integer_literal(integer_literal),
+            Expression::StringLiteral(string_literal) => self.visit_string_literal(string_literal),
             Expression::FunctionDef(function_def) => self.visit_function_def(function_def),
             Expression::Name(name) => self.visit_name(name),
             Expression::Suffixed(suffixed_expr) => self.visit_suffixed_expr(suffixed_expr),
@@ -490,7 +500,9 @@ pub trait Visit<'ast> {
             FunctionArgs::TableConstructor(table_constructor) => {
                 self.visit_table_constructor(table_constructor);
             }
-            FunctionArgs::StringLiteral(literal) => self.visit_literal(literal),
+            FunctionArgs::StringLiteral(string_literal) => {
+                self.visit_string_literal(string_literal);
+            }
             FunctionArgs::Error(_) => {}
         }
     }
@@ -610,7 +622,7 @@ pub trait Visit<'ast> {
             for interpolated_segment in &interpolated_string.segments {
                 self.visit_interpolated_segment(interpolated_segment);
             }
-            self.visit_literal(&interpolated_string.tail);
+            self.visit_string_literal(&interpolated_string.tail);
         }
         self.ascend();
         self.leave_node(kind);
@@ -620,7 +632,7 @@ pub trait Visit<'ast> {
     fn walk_interpolated_segment(&mut self, interpolated_segment: &'ast InterpolatedSegment<'ast>) {
         let kind = AstKind::InterpolatedSegment(interpolated_segment);
         self.enter_node(kind);
-        self.visit_literal(&interpolated_segment.text);
+        self.visit_string_literal(&interpolated_segment.text);
         self.visit_expr(&interpolated_segment.expr);
         self.leave_node(kind);
     }
@@ -708,8 +720,22 @@ pub trait Visit<'ast> {
     }
 
     #[inline]
-    fn walk_literal(&mut self, literal: &'ast Literal<'ast>) {
-        let kind = AstKind::Literal(literal);
+    fn walk_number_literal(&mut self, number_literal: &'ast NumberLiteral<'ast>) {
+        let kind = AstKind::NumberLiteral(number_literal);
+        self.enter_node(kind);
+        self.leave_node(kind);
+    }
+
+    #[inline]
+    fn walk_integer_literal(&mut self, integer_literal: &'ast IntegerLiteral<'ast>) {
+        let kind = AstKind::IntegerLiteral(integer_literal);
+        self.enter_node(kind);
+        self.leave_node(kind);
+    }
+
+    #[inline]
+    fn walk_string_literal(&mut self, string_literal: &'ast StringLiteral<'ast>) {
+        let kind = AstKind::StringLiteral(string_literal);
         self.enter_node(kind);
         self.leave_node(kind);
     }
@@ -1051,7 +1077,7 @@ pub trait Visit<'ast> {
             }
             Type::Pack(type_pack) => self.visit_type_pack(type_pack),
             Type::Nil(_) | Type::True(_) | Type::False(_) | Type::Error(_) => {}
-            Type::StringLiteral(literal) | Type::Number(literal) => self.visit_literal(literal),
+            Type::StringLiteral(string_literal) => self.visit_string_literal(string_literal),
             Type::Variadic(variadic_type) => self.visit_variadic_type(variadic_type),
             Type::GenericPack(generic_pack_type) => self.visit_generic_pack_type(generic_pack_type),
         }

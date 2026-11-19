@@ -31,7 +31,7 @@ fn a_capacity_hint_the_allocator_cannot_meet_is_dropped() {
     let allocator = Allocator::new();
     let spans = SpanCounter::new();
     let synth = Synth::new(&allocator, &spans);
-    let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([synth.number("1")])]));
+    let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([synth.number_i64(1)])]));
     for capacity in [usize::MAX, isize::MAX.unsigned_abs()] {
         let output = luck_codegen::compact_with_capacity(&chunk, capacity);
         assert_eq!(output, "return 1", "capacity {capacity}");
@@ -83,7 +83,7 @@ fn a_run_of_any_length_prints_as_one_level() {
     let mut sum = synth.name_expr("x");
     let mut calls = synth.name_expr("f");
     for _ in 0..200_000u32 {
-        sum = synth.binary_op(sum, BinOp::Add, synth.number("1"));
+        sum = synth.binary_op(sum, BinOp::Add, synth.number_i64(1));
     }
     for _ in 0..2_000u32 {
         calls = synth.call(calls, []);
@@ -216,7 +216,7 @@ fn calls_compact_to_minimal_whitespace() {
     for (source, expected) in [
         ("f ( 1 , 2 )", "f(1,2)"),
         ("f  \"hello\"", "f\"hello\""),
-        ("f  [[long]]", "f[[long]]"),
+        ("f  [[long]]", "f\"long\""),
         ("f  {  1  }", "f{1}"),
         ("a : b ( 1 )", "a:b(1)"),
         ("f ( g ( h ( 1 ) ) )", "f(g(h(1)))"),
@@ -282,7 +282,7 @@ local called = t.f<<number, string>>(value)",
         ("local  x  =  ( y  ::  number )  ::  string", "local x=(y::number)::string"),
         (
             "return 1i, 1_000_000i, 0xffffffffffffffffi, -123i",
-            "return 1i,1_000_000i,0xffffffffffffffffi,-123i",
+            "return 1i,1000000i,0xffffffffffffffffi,-123i",
         ),
         (
             "\
@@ -347,5 +347,42 @@ fn luau_types_compact_to_minimal_whitespace() {
         ("for  i :  number  = 1 , 10  do  end", "for i:number=1,10 do end"),
     ] {
         assert_compacts_to(source, expected, LuaVersion::Luau);
+    }
+}
+
+#[test]
+fn each_literal_takes_the_shortest_spelling_of_its_value() {
+    let (lua51, lua54, luau) = (LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau);
+    for (source, expected, version) in [
+        (r#"x = "\65\066" .. [[hello]] .. 'a\'b'"#, r#"x="AB".."hello".."a'b""#, lua54),
+        (r#"x = "say \"hi\"""#, r#"x='say "hi"'"#, lua54),
+        ("x = \"a\\nb\\nc\\nd\"", "x=[[a\nb\nc\nd]]", lua54),
+        ("x = 'a\tb'", "x='a\tb'", lua54),
+        ("x = 0x10, 1.50, 0.5, 1e2, 007", "x=16,1.5,.5,1e2,7", lua54),
+        ("x = 1.0, 1000, 100.0", "x=1.,1000,1e2", lua54),
+        ("x = 1.0, 1000, 0x10, 1_000", "x=1,1e3,16,1e3", luau),
+        ("x = 0x1p4, 0x.8", "x=16,.5", LuaVersion::Lua52),
+        // A spelling as long as the shortest stays.
+        ("x = 1e999, 9007199254740993", "x=1e999,9007199254740993", lua51),
+        ("x = 1e9999, 100000000000000000000", "x=1e999,1e20", lua51),
+        ("x = 0xFFi, 0b11i, 1_0i", "x=255i,3i,10i", luau),
+        (r"x = `a\x41{b}\u{42}`", "x=`aA{b}B`", luau),
+    ] {
+        assert_compacts_to(source, expected, version);
+    }
+}
+
+#[test]
+fn a_literal_built_in_code_prints_from_its_value() {
+    let allocator = Allocator::new();
+    let spans = SpanCounter::new();
+    for (version, expected) in [
+        (LuaVersion::Lua54, r#"return 3.,-1,'\255"'"#),
+        (LuaVersion::Lua51, r#"return 3,-1,'\255"'"#),
+    ] {
+        let synth = Synth::new(&allocator, &spans).with_version(version);
+        let values = [synth.number_f64(3.0), synth.number_i64(-1), synth.string_bytes(b"\xFF\"")];
+        let chunk = Chunk::new(version, synth.block([synth.return_(values)]));
+        assert_eq!(luck_codegen::compact(&chunk), expected, "{version:?}");
     }
 }

@@ -7,22 +7,26 @@ mod types;
 
 use core::mem;
 
-use luck_allocator::{Allocator, Box, List, ThinStr};
+use luck_allocator::{Allocator, Box, List, ThinBytes, ThinStr};
 use luck_ast::{
     AttributedName, BinaryLink, Block, Chunk, ElseIfClause, ElseIfExprClause, Expression, Field,
-    FunctionAttribute, FunctionTypeParam, GenericTypeParam, InterpolatedSegment, Literal,
-    MAX_NESTING_DEPTH, Name, NameIndex, Parameter, Statement, Suffix, TreeCounts, Type, TypeField,
-    Var,
+    FunctionAttribute, FunctionTypeParam, GenericTypeParam, IntegerLiteral, InterpolatedSegment,
+    MAX_NESTING_DEPTH, Name, NameIndex, NumberLiteral, Parameter, Statement, StringLiteral, Suffix,
+    TreeCounts, Type, TypeField, Var,
 };
 use luck_lexer::Lexer;
-use luck_token::{LuaVersion, Span, Token, TokenKind};
+use luck_token::{
+    LuaVersion, Span, StringValue, Token, TokenKind, decode_interpolated_text, decode_string,
+    read_integer, read_numeral,
+};
 use rustc_hash::FxHashSet;
 
 use crate::validate::check_type_functions;
 use crate::{ParseError, ParseResult};
 
 /// The tree and every list in it go in `allocator`, and its names and
-/// literals borrow `source`.
+/// literals borrow `source`, but for a string's value that decoding rewrote,
+/// which goes in `allocator` too.
 #[must_use]
 pub fn parse<'ast>(
     allocator: &'ast Allocator,
@@ -66,6 +70,7 @@ fn parse_recording<'ast>(
                 chunk: Chunk::new(version, block),
                 comments: Vec::new(),
                 errors: vec![error],
+                lenient_escapes: Vec::new(),
                 // The empty block's own level.
                 nesting_depth: 1,
                 counts: TreeCounts::default(),
@@ -92,6 +97,7 @@ fn parse_recording<'ast>(
         deepest_level: 0,
         block_depth: 0,
         scratch: Scratch::default(),
+        decoded: Vec::new(),
         function_scope: FunctionScope { is_chunk: true, is_vararg: true, is_in_loop: false },
         has_module_return: false,
         has_value_exports: false,
@@ -131,6 +137,9 @@ struct Parser<'ast> {
     /// The chunk's own block is 1.
     block_depth: u32,
     scratch: Scratch<'ast>,
+    /// Where a string's value goes while decoding rewrites it, before the
+    /// arena takes it.
+    decoded: Vec<u8>,
     function_scope: FunctionScope,
     has_module_return: bool,
     has_value_exports: bool,
@@ -280,7 +289,8 @@ impl<'ast> Parser<'ast> {
         let start_span = self.token.span;
         let block = self.parse_block().unwrap_or_else(|| Block::new(start_span, List::new()));
         let chunk = Chunk::new(self.version, block);
-        let (comments, mut errors) = self.lexer.finish();
+        let lexed = self.lexer.finish();
+        let mut errors = lexed.errors;
         errors.append(&mut self.errors);
         if self.has_type_function && errors.is_empty() {
             errors = check_type_functions(&chunk);
@@ -289,8 +299,9 @@ impl<'ast> Parser<'ast> {
         let parse = ParseResult {
             source: self.source,
             chunk,
-            comments,
+            comments: lexed.comments,
             errors,
+            lenient_escapes: lexed.lenient_escapes,
             nesting_depth: self.deepest_level,
             counts: self.counts,
         };
@@ -364,18 +375,52 @@ impl<'ast> Parser<'ast> {
         is_at_kind
     }
 
-    /// Consume the current identifier, number, or string as a leaf. The
-    /// caller has already matched its kind.
+    /// Consume the current number, whose kind the caller has matched, as a
+    /// literal holding its value.
     #[inline]
-    fn advance_leaf(&mut self) -> Literal<'ast> {
+    fn advance_number(&mut self) -> Box<'ast, NumberLiteral<'ast>> {
         let span = self.advance();
-        Literal::new(span.text(self.source), span)
+        let raw = span.text(self.source);
+        let numeral = read_numeral(raw, self.version);
+        let literal =
+            NumberLiteral::new(numeral.value, Some(ThinStr::new(raw)), span, numeral.is_exact);
+        self.alloc(literal)
     }
 
+    /// Luau: consume the current integer, whose kind the caller has matched,
+    /// which the lexer checked fits 64 bits.
+    fn advance_integer(&mut self) -> Box<'ast, IntegerLiteral<'ast>> {
+        let span = self.advance();
+        let raw = span.text(self.source);
+        let value = read_integer(raw).unwrap_or_default();
+        self.alloc(IntegerLiteral::new(value, Some(ThinStr::new(raw)), span))
+    }
+
+    /// Consume the current string, whose kind the caller has matched, as a
+    /// literal holding its value.
     #[inline]
-    fn advance_literal(&mut self) -> Box<'ast, Literal<'ast>> {
-        let literal = self.advance_leaf();
-        Box::new_in(literal, self.allocator)
+    fn advance_string(&mut self) -> Box<'ast, StringLiteral<'ast>> {
+        let span = self.advance();
+        let raw = span.text(self.source);
+        self.decoded.clear();
+        let value = match decode_string(raw, self.version, &mut self.decoded) {
+            StringValue::Verbatim(bytes) => bytes,
+            StringValue::Decoded => self.allocator.alloc_slice_copy(&self.decoded),
+        };
+        self.alloc(StringLiteral::new(ThinBytes::new(value), Some(ThinStr::new(raw)), span))
+    }
+
+    /// An interpolated string's piece of text, between its delimiters, as a
+    /// literal holding its value.
+    fn interpolated_text(&mut self, token: Token) -> StringLiteral<'ast> {
+        let span = token.text_span();
+        let raw = span.text(self.source);
+        self.decoded.clear();
+        let value = match decode_interpolated_text(raw, self.version, &mut self.decoded) {
+            StringValue::Verbatim(bytes) => bytes,
+            StringValue::Decoded => self.allocator.alloc_slice_copy(&self.decoded),
+        };
+        StringLiteral::new(ThinBytes::new(value), Some(ThinStr::new(raw)), span)
     }
 
     /// Consume the current identifier as a name. The caller has already

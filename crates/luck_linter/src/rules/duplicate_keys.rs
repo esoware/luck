@@ -1,13 +1,12 @@
-use alloc::borrow::Cow;
-use core::{fmt, str};
+use core::fmt;
+use core::ops::Neg as _;
 
-use luck_ast::{Expression, Field, GetSpan as _, Literal, TableConstructor};
-use luck_token::{LuaVersion, Span, decode_string};
+use luck_ast::{Expression, Field, GetSpan as _, TableConstructor};
+use luck_token::{LuaNumber, Span, UnOp};
 use rustc_hash::FxHashMap;
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::signed_number_value;
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -31,20 +30,16 @@ impl NodeRule for DuplicateKeys {
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let version = context.semantic.version();
         let mut first_spans: FxHashMap<Key<'_>, Span> = FxHashMap::default();
         for field in &table.fields {
             let keyed = match field {
-                Field::Named { name, .. } => {
-                    Some((Key::String(Cow::Borrowed(name.text.as_str())), name.span))
-                }
-                // Compare decoded values, since `["\97"]` and `["a"]` are the
-                // same key.
+                Field::Named { name, .. } => Some((Key::String(name.text.as_bytes()), name.span)),
+                // Values compare, so `["\97"]` and `["a"]` are the same key.
                 Field::Bracketed { key: Expression::StringLiteral(literal), .. } => {
-                    decoded_key(literal, version).map(|k| (Key::String(k), literal.span))
+                    Some((Key::String(literal.value.as_bytes()), literal.span))
                 }
                 Field::Bracketed { key: key_expr, .. } => {
-                    number_key(key_expr, version).map(|k| (k, key_expr.span()))
+                    number_key(key_expr).map(|k| (k, key_expr.span()))
                 }
                 Field::Positional(_) => None,
             };
@@ -66,42 +61,88 @@ impl NodeRule for DuplicateKeys {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum Key<'ast> {
-    String(Cow<'ast, str>),
-    /// A number literal's value, as bits with `-0.0` folded into `0.0`.
-    Number(u64),
+    String(&'ast [u8]),
+    /// A key with an integer's value, which a float with one is too, as
+    /// Lua 5.3+ converts it.
+    Integer(i64),
+    /// Any other float's bits.
+    Float(u64),
 }
 
 impl fmt::Display for Key<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::String(value) => write!(f, "{value}"),
-            Self::Number(bits) => write!(f, "{}", f64::from_bits(*bits)),
+            Self::String(value) => write!(f, "{}", value.escape_ascii()),
+            Self::Integer(value) => write!(f, "{value}"),
+            Self::Float(bits) => write!(f, "{}", f64::from_bits(*bits)),
         }
     }
 }
 
-/// A string literal's decoded value, borrowed when decoding changes nothing,
-/// or `None` when it doesn't decode to UTF-8.
-fn decoded_key<'ast>(literal: &Literal<'ast>, version: LuaVersion) -> Option<Cow<'ast, str>> {
-    match decode_string(literal.text, version)? {
-        Cow::Borrowed(bytes) => str::from_utf8(bytes).ok().map(Cow::Borrowed),
-        Cow::Owned(bytes) => String::from_utf8(bytes).ok().map(Cow::Owned),
+/// The key a number literal sets, possibly negated, so `1`, `1.0`, and
+/// `0x1` match, and so do `0` and `-0`.
+fn number_key(expr: &Expression<'_>) -> Option<Key<'static>> {
+    let value = signed_number(expr)?;
+    let float = match value {
+        LuaNumber::Int(integer) => return Some(Key::Integer(integer)),
+        LuaNumber::Float(float) => float,
+    };
+    if float.fract() == 0.0f64
+        && let Some(integer) = integral_float(float)
+    {
+        return Some(Key::Integer(integer));
+    }
+    Some(Key::Float(float.to_bits()))
+}
+
+/// A number literal's value under any number of unary minuses, negated as
+/// Lua negates it.
+fn signed_number(expr: &Expression<'_>) -> Option<LuaNumber> {
+    match expr {
+        Expression::Number(literal) => Some(literal.value),
+        Expression::UnaryOp(unary) if unary.op == UnOp::Neg => {
+            Some(match signed_number(&unary.operand)? {
+                LuaNumber::Int(integer) => LuaNumber::Int(integer.wrapping_neg()),
+                LuaNumber::Float(float) => LuaNumber::Float(float.neg()),
+            })
+        }
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_)
+        | Expression::Name(_)
+        | Expression::Suffixed(_)
+        | Expression::Parenthesized(_)
+        | Expression::TableConstructor(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::Error(_) => None,
     }
 }
 
-/// The key a number literal sets, so `1` and `1.0` match. A value of 2^53 or
-/// more isn't compared, since a double can't tell it from its neighbors.
-fn number_key(expr: &Expression<'_>, version: LuaVersion) -> Option<Key<'static>> {
-    let value = signed_number_value(expr, version)?;
-    (value.abs() < EXACT_DOUBLE_LIMIT)
-        .then(|| Key::Number(if value == 0.0f64 { 0 } else { value.to_bits() }))
+/// `float`, which has no fraction, as the integer it equals, when one does:
+/// one in `[-2^63, 2^63)`.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "every float in the range checked is an integer's exact value"
+)]
+fn integral_float(float: f64) -> Option<i64> {
+    // -2^63 and 2^63.
+    let range = f64::from_bits(0xC3E0_0000_0000_0000)..f64::from_bits(0x43E0_0000_0000_0000);
+    range.contains(&float).then_some(float as i64)
 }
-
-/// 2^53, the first double that can't hold an integer's value exactly.
-const EXACT_DOUBLE_LIMIT: f64 = 9_007_199_254_740_992.0;
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;
@@ -166,8 +207,21 @@ mod tests {
     }
 
     #[test]
-    fn ignores_integers_a_double_cannot_tell_apart() {
+    fn ignores_integers_lua53_tells_apart() {
         let diags = run("local t = { [9007199254740993] = 1, [9007199254740992] = 2 }");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_integers_that_read_as_one_double() {
+        let source = "local t = { [9007199254740993] = 1, [9007199254740992] = 2 }";
+        let diags = run_rule(&DuplicateKeys, source, LuaVersion::Lua51);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_keys_spelled_in_hex_or_long_brackets() {
+        let diags = run("local t = { [0x10] = 1, [16.0] = 2, x = 3, [ [[x]] ] = 4 }");
+        assert_eq!(diags.len(), 2, "{diags:?}");
     }
 }

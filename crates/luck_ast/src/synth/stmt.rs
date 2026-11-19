@@ -587,7 +587,7 @@ mod tests {
     fn builds_local_with_binary_op() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let sum = synth.binary_op(synth.number("1"), BinOp::Add, synth.number("2"));
+        let sum = synth.binary_op(synth.number_i64(1), BinOp::Add, synth.number_i64(2));
         let Statement::LocalAssignment(local) = synth.local(&["x"], [sum]) else {
             panic!("expected local assignment");
         };
@@ -672,7 +672,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let stmt =
-            synth.compound_assign(synth.name_var("counter"), CompoundOp::Add, synth.number("1"));
+            synth.compound_assign(synth.name_var("counter"), CompoundOp::Add, synth.number_i64(1));
         let Statement::CompoundAssignment(compound) = &stmt else {
             panic!("expected compound assignment");
         };
@@ -716,8 +716,8 @@ mod tests {
         let synth = fixture.synth();
         let stmt = synth.numeric_for(
             synth.param_typed("i", synth.ty_named("number")),
-            synth.number("1"),
-            synth.number("10"),
+            synth.number_i64(1),
+            synth.number_i64(10),
             None,
             synth.block([]),
         );

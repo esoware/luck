@@ -28,10 +28,8 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
         let Some(args) = global_new_call(call, "Color3", context.semantic) else {
             return;
         };
-        let has_out_of_bounds = args
-            .iter()
-            .filter_map(|arg| signed_number_value(arg, context.semantic.version()))
-            .any(|v| !(0.0f64..=1.0f64).contains(&v));
+        let has_out_of_bounds =
+            args.iter().filter_map(signed_number_value).any(|v| !(0.0f64..=1.0f64).contains(&v));
         if has_out_of_bounds {
             findings.push(
                 Finding::new("`Color3.new` components are on a 0 to 1 scale", call.span())

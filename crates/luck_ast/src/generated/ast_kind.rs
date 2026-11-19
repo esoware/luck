@@ -8,12 +8,12 @@ use crate::{
     DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, FunctionAttribute, FunctionBody,
     FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
     GenericPackType, GenericTypeList, GenericTypeParam, GetSpan, GlobalDeclaration, GlobalFunction,
-    GlobalStar, GotoStatement, IfExpression, IfStatement, InterpolatedSegment, InterpolatedString,
-    IntersectionType, LabelStatement, Literal, LocalAssignment, LocalFunction, MethodCall, Name,
-    NamedType, NumericFor, OptionalType, Parameter, ParenthesizedExpression, ParenthesizedType,
-    RepeatLoop, ReturnStatement, SuffixedExpression, TableConstructor, TableType, TypeArgs,
-    TypeCast, TypeDeclaration, TypePack, TypeofType, UnaryOp, UnionType, VarArgParam, VariadicType,
-    WhileLoop,
+    GlobalStar, GotoStatement, IfExpression, IfStatement, IntegerLiteral, InterpolatedSegment,
+    InterpolatedString, IntersectionType, LabelStatement, LocalAssignment, LocalFunction,
+    MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType, Parameter,
+    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, StringLiteral,
+    SuffixedExpression, TableConstructor, TableType, TypeArgs, TypeCast, TypeDeclaration, TypePack,
+    TypeofType, UnaryOp, UnionType, VarArgParam, VariadicType, WhileLoop,
 };
 
 /// Which kind of node an [`AstKind`] refers to.
@@ -38,7 +38,9 @@ pub enum AstType {
     VarArgParam,
     FunctionAttribute,
     Name,
-    Literal,
+    NumberLiteral,
+    IntegerLiteral,
+    StringLiteral,
     Chunk,
     Block,
     Assignment,
@@ -103,7 +105,9 @@ pub enum AstKind<'ast> {
     VarArgParam(&'ast VarArgParam<'ast>),
     FunctionAttribute(&'ast FunctionAttribute<'ast>),
     Name(&'ast Name<'ast>),
-    Literal(&'ast Literal<'ast>),
+    NumberLiteral(&'ast NumberLiteral<'ast>),
+    IntegerLiteral(&'ast IntegerLiteral<'ast>),
+    StringLiteral(&'ast StringLiteral<'ast>),
     Chunk(&'ast Chunk<'ast>),
     Block(&'ast Block<'ast>),
     Assignment(&'ast Assignment<'ast>),
@@ -169,7 +173,9 @@ impl<'ast> AstKind<'ast> {
             Self::VarArgParam(_) => AstType::VarArgParam,
             Self::FunctionAttribute(_) => AstType::FunctionAttribute,
             Self::Name(_) => AstType::Name,
-            Self::Literal(_) => AstType::Literal,
+            Self::NumberLiteral(_) => AstType::NumberLiteral,
+            Self::IntegerLiteral(_) => AstType::IntegerLiteral,
+            Self::StringLiteral(_) => AstType::StringLiteral,
             Self::Chunk(_) => AstType::Chunk,
             Self::Block(_) => AstType::Block,
             Self::Assignment(_) => AstType::Assignment,
@@ -347,8 +353,20 @@ impl<'ast> AstKind<'ast> {
 
     #[must_use]
     #[inline]
-    pub const fn as_literal(self) -> Option<&'ast Literal<'ast>> {
-        if let Self::Literal(literal) = self { Some(literal) } else { None }
+    pub const fn as_number_literal(self) -> Option<&'ast NumberLiteral<'ast>> {
+        if let Self::NumberLiteral(number_literal) = self { Some(number_literal) } else { None }
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn as_integer_literal(self) -> Option<&'ast IntegerLiteral<'ast>> {
+        if let Self::IntegerLiteral(integer_literal) = self { Some(integer_literal) } else { None }
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn as_string_literal(self) -> Option<&'ast StringLiteral<'ast>> {
+        if let Self::StringLiteral(string_literal) = self { Some(string_literal) } else { None }
     }
 
     #[must_use]
@@ -653,7 +671,9 @@ impl GetSpan for AstKind<'_> {
             Self::VarArgParam(var_arg_param) => var_arg_param.span(),
             Self::FunctionAttribute(function_attribute) => function_attribute.span(),
             Self::Name(name) => name.span(),
-            Self::Literal(literal) => literal.span(),
+            Self::NumberLiteral(number_literal) => number_literal.span(),
+            Self::IntegerLiteral(integer_literal) => integer_literal.span(),
+            Self::StringLiteral(string_literal) => string_literal.span(),
             Self::Chunk(chunk) => chunk.span(),
             Self::Block(block) => block.span(),
             Self::Assignment(assignment) => assignment.span(),

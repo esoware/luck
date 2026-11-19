@@ -3,7 +3,7 @@
 //! conversion is zero-copy.
 
 use core::iter;
-use core::mem::MaybeUninit;
+use core::mem::{self, MaybeUninit};
 
 /// INVARIANT: `bytes` is valid UTF-8 at every public-method boundary. All
 /// safe methods preserve it, so `into_string` can skip re-validation.
@@ -104,6 +104,25 @@ impl CodeBuffer {
         } else {
             print_slow(&mut self.bytes, text);
         }
+    }
+
+    /// Appends what `write` appends to the `String` it's handed, which is the
+    /// buffer itself, so nothing is copied.
+    #[inline]
+    #[expect(
+        unsafe_code,
+        reason = "a String over the buffer's bytes saves a copy of what's written"
+    )]
+    pub fn print_with<Write>(&mut self, write: Write)
+    where
+        Write: FnOnce(&mut String),
+    {
+        // SAFETY: The buffer's bytes are UTF-8, and a `String` appends only
+        // UTF-8, so the bytes it hands back keep them so. A panic in `write`
+        // leaves the buffer empty, which is UTF-8 too.
+        let mut text = unsafe { String::from_utf8_unchecked(mem::take(&mut self.bytes)) };
+        write(&mut text);
+        self.bytes = text.into_bytes();
     }
 
     #[inline]

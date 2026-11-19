@@ -273,9 +273,9 @@ fn interpolated_segments_preserve_raw_escapes_and_spans() {
         for token in &result.tokens {
             assert_eq!(&lexer.next_token(), token);
         }
-        let (comments, errors) = lexer.finish();
-        assert_eq!(comments, Vec::<Comment>::new());
-        assert!(errors.is_empty(), "{errors:?}");
+        let finished = lexer.finish();
+        assert_eq!(finished.comments, Vec::<Comment>::new());
+        assert!(finished.errors.is_empty(), "{:?}", finished.errors);
     }
 }
 

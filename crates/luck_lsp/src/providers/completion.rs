@@ -6,7 +6,7 @@ use ls_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionResponse, CompletionTextEdit,
     Documentation, InsertTextFormat, MarkupContent, MarkupKind, Position, TextEdit,
 };
-use luck_ast::{Call, FunctionArgs, Literal, Name};
+use luck_ast::{Call, FunctionArgs, Name, StringLiteral};
 use luck_semantic::{StdlibEntry, StdlibFunction};
 use luck_token::{Span, TokenKind, index_to_offset};
 use rustc_hash::FxHashSet;
@@ -189,11 +189,11 @@ fn call_arg_count(call: Call<'_>) -> usize {
 /// The part of a string literal between its delimiters. A long bracket's
 /// opener is `[`, any number of `=`, then `[`, and its closer mirrors it. An
 /// unterminated literal has no closer.
-fn string_interior(literal: &Literal<'_>, is_unterminated: bool) -> Span {
-    let delimiter_width =
-        index_to_offset(literal.text.strip_prefix('[').map_or(1, |after_bracket| {
-            after_bracket.bytes().take_while(|&b| b == b'=').count().saturating_add(2)
-        }));
+fn string_interior(literal: &StringLiteral<'_>, is_unterminated: bool) -> Span {
+    let raw = literal.raw.as_deref().unwrap_or_default();
+    let delimiter_width = index_to_offset(raw.strip_prefix('[').map_or(1, |after_bracket| {
+        after_bracket.bytes().take_while(|&b| b == b'=').count().saturating_add(2)
+    }));
     let closer_width = if is_unterminated { 0 } else { delimiter_width };
     Span::new(
         literal.span.start.saturating_add(delimiter_width),

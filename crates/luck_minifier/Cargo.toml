@@ -27,9 +27,7 @@ luck_codegen   = { workspace = true }
 luck_parser    = { workspace = true }
 luck_token     = { workspace = true }
 
-itoa       = { workspace = true }
 rustc-hash = { workspace = true }
-ryu        = { workspace = true }
 schemars   = { workspace = true, optional = true }
 serde      = { workspace = true, optional = true }
 

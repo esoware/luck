@@ -1,5 +1,5 @@
 use luck_ast::{Expression, NumericFor, Statement};
-use luck_token::{LuaVersion, UnOp};
+use luck_token::UnOp;
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
@@ -29,24 +29,21 @@ impl NodeRule for ForRange {
     fn on_stmt(
         &self,
         stmt: &Statement<'_>,
-        context: &LintContext<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         if let Statement::NumericFor(numeric_for) = stmt
-            && let Some((message, help)) = range_problem(numeric_for, context.semantic.version())
+            && let Some((message, help)) = range_problem(numeric_for)
         {
             findings.push(Finding::new(message, numeric_for.span).with_help(help));
         }
     }
 }
 
-fn range_problem(
-    numeric_for: &NumericFor<'_>,
-    version: LuaVersion,
-) -> Option<(String, &'static str)> {
-    let start = signed_number_value(&numeric_for.start, version);
-    let limit = signed_number_value(&numeric_for.limit, version);
-    let step = numeric_for.step.as_ref().and_then(|step| signed_number_value(step, version));
+fn range_problem(numeric_for: &NumericFor<'_>) -> Option<(String, &'static str)> {
+    let start = signed_number_value(&numeric_for.start);
+    let limit = signed_number_value(&numeric_for.limit);
+    let step = numeric_for.step.as_ref().and_then(signed_number_value);
 
     // A zero step loops forever before Lua 5.4 and raises an error from 5.4
     // on.
@@ -172,6 +169,8 @@ fn is_length_of_identifier(expr: &Expression<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;

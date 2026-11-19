@@ -7,7 +7,7 @@ use luck_allocator::Allocator;
 use luck_ast::MAX_NESTING_DEPTH;
 use luck_core::Diagnostic;
 use luck_token::{
-    LuaVersion, Span, chunk_header, chunk_start, encode_string, ends_with_line_break, line_breaks,
+    LuaVersion, Span, chunk_header, chunk_start, ends_with_line_break, line_breaks, spell_string,
 };
 use rustc_hash::FxHashSet;
 
@@ -112,7 +112,7 @@ impl Key<'_> {
     pub(crate) fn write(self, output: &mut String) {
         match self {
             Self::Slot(slot) => push_number(output, slot),
-            Self::Name(name) => encode_string(name.as_bytes(), output),
+            Self::Name(name) => spell_string(name.as_bytes()).write_to(output),
         }
     }
 
@@ -181,7 +181,7 @@ impl Registration<'_> {
                 name.write(output);
                 output.push_str("]=");
                 let path = modules.get(module.0).map_or("", |info| info.relative_path.as_str());
-                encode_string(path.as_bytes(), output);
+                spell_string(path.as_bytes()).write_to(output);
                 output.push('\n');
             }
         }

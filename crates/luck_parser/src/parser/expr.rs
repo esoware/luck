@@ -1,7 +1,7 @@
-use luck_allocator::{Box, List};
+use luck_allocator::{Box, List, ThinBytes};
 use luck_ast::{
     BinaryLink, ElseIfExprClause, Expression, Field, FunctionArgs, GetSpan as _,
-    InterpolatedSegment, Literal, OneOrMore, Suffix, TableConstructor, TypeArgs,
+    InterpolatedSegment, OneOrMore, StringLiteral, Suffix, TableConstructor, TypeArgs,
 };
 use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
@@ -131,8 +131,8 @@ impl<'ast> Parser<'ast> {
                 let prefix = Expression::Name(self.alloc(name));
                 self.parse_suffixes(prefix)
             }
-            TokenKind::Number => Expression::Number(self.advance_literal()),
-            TokenKind::StringLiteral => Expression::StringLiteral(self.advance_literal()),
+            TokenKind::Number => Expression::Number(self.advance_number()),
+            TokenKind::StringLiteral => Expression::StringLiteral(self.advance_string()),
             TokenKind::Nil => Expression::Nil(self.advance()),
             TokenKind::False => Expression::False(self.advance()),
             TokenKind::True => Expression::True(self.advance()),
@@ -145,7 +145,7 @@ impl<'ast> Parser<'ast> {
             TokenKind::Function => self.parse_function_def(),
             TokenKind::DotDotDot => self.parse_vararg(),
             // Luau
-            TokenKind::Integer => Expression::Integer(self.advance_literal()),
+            TokenKind::Integer => Expression::Integer(self.advance_integer()),
             // Luau: `simpleexp ::= attributes 'function' funcbody`
             TokenKind::At if self.version.has_function_attributes() => self.parse_function_def(),
             // Luau
@@ -341,11 +341,6 @@ impl<'ast> Parser<'ast> {
         )
     }
 
-    /// The text of an interpolated string piece, between its delimiters.
-    fn piece(&self, token: Token) -> Literal<'ast> {
-        Literal::new(token.text(self.source), token.text_span())
-    }
-
     fn parse_interpolated_string(&mut self) -> Expression<'ast> {
         let start_span = self.token.span;
         if !self.enter_depth() {
@@ -355,7 +350,7 @@ impl<'ast> Parser<'ast> {
         self.advance();
         if first.kind == TokenKind::InterpolatedStringSimple {
             self.exit_depth();
-            let tail = self.piece(first);
+            let tail = self.interpolated_text(first);
             return Expression::new_interpolated_string(
                 first.span,
                 List::new(),
@@ -374,11 +369,12 @@ impl<'ast> Parser<'ast> {
         let (end_span, tail) = if self.is_at(TokenKind::InterpolatedStringEnd) {
             let end = self.token;
             self.advance();
-            (end.span, self.piece(end))
+            (end.span, self.interpolated_text(end))
         } else {
             let end_span = self.report_unfinished_interpolated_string();
             let at = self.previous_span.end;
-            (end_span, Literal::new("", Span::new(at, at)))
+            let missing = StringLiteral::new(ThinBytes::new(b""), None, Span::new(at, at));
+            (end_span, missing)
         };
         self.close(Closer::StringSegment);
         self.exit_depth();
@@ -398,7 +394,7 @@ impl<'ast> Parser<'ast> {
         } else {
             self.parse_expr(0)
         };
-        let text = self.piece(literal);
+        let text = self.interpolated_text(literal);
         self.scratch.segments.push(InterpolatedSegment::new(text, expr));
     }
 
@@ -453,7 +449,7 @@ impl<'ast> Parser<'ast> {
                 self.parse_table_constructor()
                     .map_or(FunctionArgs::Error(open), FunctionArgs::TableConstructor)
             }
-            TokenKind::StringLiteral => FunctionArgs::StringLiteral(self.advance_leaf()),
+            TokenKind::StringLiteral => FunctionArgs::StringLiteral(self.advance_string()),
             _ => self.report_missing_args(),
         }
     }

@@ -5,7 +5,7 @@ use luck_ast::{
 };
 use luck_core::Diagnostic;
 use luck_semantic::{NodeSink, ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
-use luck_token::{LuaVersion, Span, StdlibEnvironment, decode_string};
+use luck_token::{LuaVersion, Span, StdlibEnvironment};
 use rustc_hash::FxHashSet;
 
 use crate::dynamic_require::DynamicRequire;
@@ -180,7 +180,7 @@ impl<'tree> Uses<'tree> {
             // and its bundle cache is private.
             Var::Suffixed(_) => {
                 if self.version.is_luau()
-                    && let Some(package) = package_loaded_root(target, self.version)
+                    && let Some(package) = package_loaded_root(target)
                 {
                     self.package_loaded_writes.push((package, target.span()));
                 }
@@ -407,22 +407,20 @@ impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
         }
     }
 
-    /// The argument of `call` when it's one string literal, with escapes
-    /// resolved and a long string's leading newline stripped. `None` if it
-    /// doesn't decode or the result isn't UTF-8.
+    /// The value of `call`'s argument when it's one string literal, copied
+    /// into the arena. `None` if the value isn't UTF-8.
     fn literal_require_string(&self, call: Call<'_>) -> Option<&'ast str> {
-        let literal_span = match call.args {
+        let literal = match call.args {
             FunctionArgs::Parenthesized { args, .. } => {
                 let [Expression::StringLiteral(literal)] = &**args else {
                     return None;
                 };
-                literal.span
+                literal
             }
-            FunctionArgs::StringLiteral(literal) => literal.span,
+            FunctionArgs::StringLiteral(literal) => literal,
             FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => return None,
         };
-        let decoded = decode_string(literal_span.text(self.source), self.version)?;
-        Some(self.allocator.alloc_str(str::from_utf8(&decoded).ok()?))
+        Some(self.allocator.alloc_str(literal.as_str()?))
     }
 
     /// W005 for `_G.require` or `_ENV.require`, the global `require` reached
@@ -447,12 +445,13 @@ fn is_standard_library(name: &str, version: LuaVersion) -> bool {
             ))
 }
 
-/// Whether `suffix` reads the field `key`, as `.key` or `["key"]`.
-fn is_key(suffix: &Suffix<'_>, key: &str, version: LuaVersion) -> bool {
+/// Whether `suffix` reads the field `key`, as `.key` or `["key"]`, however
+/// the string is spelled.
+fn is_key(suffix: &Suffix<'_>, key: &str) -> bool {
     match suffix {
         Suffix::Field(name) => name.text == key,
         Suffix::Index { index: Expression::StringLiteral(literal), .. } => {
-            decode_string(literal.text, version).is_some_and(|value| *value == *key.as_bytes())
+            literal.value == key.as_bytes()
         }
         Suffix::Index { .. }
         | Suffix::Call(_)
@@ -472,7 +471,7 @@ fn global_table_require<'chain>(
         return None;
     };
     ((table.text == "_G" || (table.text == "_ENV" && version.has_env_upvalue()))
-        && is_key(chain.suffixes.first(), "require", version))
+        && is_key(chain.suffixes.first(), "require"))
     .then_some(table)
 }
 
@@ -487,18 +486,14 @@ fn require_callee(call: Call<'_>) -> Option<&Name<'_>> {
 
 /// The `package` name when an assignment target is, or indexes into,
 /// `package.loaded` or `package["loaded"]`.
-fn package_loaded_root<'target>(
-    target: &'target Var<'_>,
-    version: LuaVersion,
-) -> Option<&'target Name<'target>> {
+fn package_loaded_root<'target>(target: &'target Var<'_>) -> Option<&'target Name<'target>> {
     let Var::Suffixed(chain) = target else {
         return None;
     };
     let Expression::Name(package) = &chain.prefix else {
         return None;
     };
-    (package.text == "package" && is_key(chain.suffixes.first(), "loaded", version))
-        .then_some(package)
+    (package.text == "package" && is_key(chain.suffixes.first(), "loaded")).then_some(package)
 }
 
 #[cfg(test)]

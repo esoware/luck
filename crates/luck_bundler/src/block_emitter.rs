@@ -1,6 +1,6 @@
 use core::mem;
 
-use luck_allocator::{Allocator, Box, List};
+use luck_allocator::{Allocator, Box, List, ThinBytes};
 use luck_ast::{
     Block, Chunk, Expression, FunctionArgs, FunctionName, GetSpan as _, LocalAssignment,
     LocalAssignmentKind, LocalFunction, LocalFunctionKind, MAX_NESTING_DEPTH, Name, OneOrMore,
@@ -8,7 +8,7 @@ use luck_ast::{
 };
 use luck_core::Diagnostic;
 use luck_resolver::to_slash_lossy;
-use luck_token::{LuaVersion, Span, chunk_header};
+use luck_token::{LuaNumber, LuaVersion, Span, chunk_header};
 
 use crate::emitter::{self, HOLE, Key, Plan, Wrapper};
 use crate::exports::contains_span;
@@ -155,8 +155,7 @@ pub(crate) fn rewrite_module<'ast>(
         return;
     }
     sites.sort_unstable();
-    let mut rewriter =
-        ModuleRewriter { allocator, module, plan, names, sites, key_text: String::new() };
+    let mut rewriter = ModuleRewriter { allocator, module, plan, names, sites };
     rewriter.visit_block(block);
     if has_exports {
         for stmt in &mut block.stmts {
@@ -188,7 +187,6 @@ struct ModuleRewriter<'module, 'ast> {
     /// Where each rewrite starts, sorted, so the walk skips any node that
     /// holds none.
     sites: Vec<u32>,
-    key_text: String,
 }
 
 impl<'ast> ModuleRewriter<'_, 'ast> {
@@ -198,7 +196,7 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
     }
 
     /// `require("name")` becomes a call of the loader with the module's key.
-    fn retarget_require(&mut self, chain: &mut SuffixedExpression<'ast>) {
+    fn retarget_require(&self, chain: &mut SuffixedExpression<'ast>) {
         let (Expression::Name(callee), Some(Suffix::Call(args))) =
             (&mut chain.prefix, chain.suffixes.first_mut())
         else {
@@ -226,13 +224,18 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
         };
     }
 
-    fn key_expr(&mut self, key: Key<'_>) -> Expression<'ast> {
-        self.key_text.clear();
-        key.write(&mut self.key_text);
-        let text = self.allocator.alloc_str(&self.key_text);
+    fn key_expr(&self, key: Key<'ast>) -> Expression<'ast> {
+        let span = Span::default();
         match key {
-            Key::Slot(_) => Expression::new_number(text, Span::default(), self.allocator),
-            Key::Name(_) => Expression::new_string_literal(text, Span::default(), self.allocator),
+            // Luau, where every number is a float.
+            Key::Slot(slot) => {
+                let value = LuaNumber::Float(f64::from(u32::try_from(slot).unwrap_or(u32::MAX)));
+                Expression::new_number(value, None, span, true, self.allocator)
+            }
+            Key::Name(name) => {
+                let value = ThinBytes::new(name.as_bytes());
+                Expression::new_string_literal(value, None, span, self.allocator)
+            }
         }
     }
 

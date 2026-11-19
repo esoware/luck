@@ -3,21 +3,26 @@
 
 use core::iter;
 
+use luck_allocator::ThinStr;
 use luck_ast::{
-    BinaryOp, Expression, FunctionDef, GetSpan as _, IfExpression, InterpolatedString, Suffix,
-    SuffixedExpression, UnaryOp, Var, expr_starts_with_brace,
+    BinaryOp, Expression, FunctionDef, GetSpan as _, IfExpression, IntegerLiteral,
+    InterpolatedString, NumberLiteral, StringLiteral, Suffix, SuffixedExpression, UnaryOp, Var,
+    expr_starts_with_brace,
 };
-use luck_token::UnOp;
+use luck_token::{UnOp, spell_integer, spell_number, spell_string, write_interpolated_text};
 
 use crate::ir::Formatter;
 use crate::numbers::normalize_number;
 use crate::quotes::requote;
 
-fn starts_with_bracket(expr: &Expression<'_>) -> bool {
+/// The string literal `expr` prints first, if one does.
+fn leading_string<'tree, 'ast>(
+    expr: &'tree Expression<'ast>,
+) -> Option<&'tree StringLiteral<'ast>> {
     let mut current = expr;
     loop {
         current = match current {
-            Expression::StringLiteral(literal) => return literal.text.starts_with('['),
+            Expression::StringLiteral(literal) => return Some(literal),
             Expression::BinaryOp(binary_op) => &binary_op.first,
             // Luau
             Expression::TypeCast(cast) => &cast.expr,
@@ -35,7 +40,7 @@ fn starts_with_bracket(expr: &Expression<'_>) -> bool {
             | Expression::UnaryOp(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
-            | Expression::Error(_) => return false,
+            | Expression::Error(_) => return None,
         };
     }
 }
@@ -74,10 +79,10 @@ impl<'ast> Formatter<'ast> {
                 Expression::False(_) => f.token("false"),
                 Expression::True(_) => f.token("true"),
                 Expression::VarArg(_) => f.token("..."),
-                Expression::Number(literal) | Expression::Integer(literal) => {
-                    f.write_number(literal.text);
-                }
-                Expression::StringLiteral(literal) => f.write_string(literal.text),
+                Expression::Number(literal) => f.write_number(literal),
+                // Luau
+                Expression::Integer(literal) => f.write_integer(literal),
+                Expression::StringLiteral(literal) => f.write_string(literal),
                 Expression::Name(name) => f.ascii(name.text.as_str()),
                 Expression::Suffixed(chain) => f.write_suffixed(chain),
                 Expression::BinaryOp(binary_op) => f.write_binary_chain(binary_op, true),
@@ -112,7 +117,35 @@ impl<'ast> Formatter<'ast> {
         );
     }
 
-    pub(crate) fn write_number(&mut self, text: &'ast str) {
+    /// The numeral as written, or for one built in code, the shortest that
+    /// spells its value, with a zero on the bare side of a point, normalized
+    /// either way.
+    fn write_number(&mut self, literal: &NumberLiteral<'ast>) {
+        let text = literal.raw.map_or_else(
+            || {
+                let spelling = spell_number(literal.value, self.version());
+                let (buffer, allocator) = self.scratch();
+                buffer.push_str(spelling.as_str());
+                if buffer.ends_with('.') {
+                    buffer.push('0');
+                }
+                allocator.alloc_str(buffer)
+            },
+            ThinStr::as_str,
+        );
+        self.write_numeral(text);
+    }
+
+    /// Luau: an integer, as [`Self::write_number`] writes a number.
+    fn write_integer(&mut self, literal: &IntegerLiteral<'ast>) {
+        let text = literal.raw.map_or_else(
+            || self.allocator().alloc_str(spell_integer(literal.value).as_str()),
+            ThinStr::as_str,
+        );
+        self.write_numeral(text);
+    }
+
+    fn write_numeral(&mut self, text: &'ast str) {
         let hex_case = self.options().hexadecimal_case;
         let (buffer, allocator) = self.scratch();
         let normalized = if normalize_number(text, hex_case, buffer) {
@@ -123,12 +156,40 @@ impl<'ast> Formatter<'ast> {
         self.ascii(normalized);
     }
 
-    pub(crate) fn write_string(&mut self, text: &'ast str) {
+    /// The literal as written, or for one built in code, the shortest that
+    /// spells its value, requoted either way.
+    pub(crate) fn write_string(&mut self, literal: &StringLiteral<'ast>) {
+        let text = self.string_spelling(literal);
         let quote_style = self.options().quote_style;
         let (buffer, allocator) = self.scratch();
         let requoted =
             if requote(text, quote_style, buffer) { allocator.alloc_str(buffer) } else { text };
         self.text(requoted);
+    }
+
+    fn string_spelling(&mut self, literal: &StringLiteral<'ast>) -> &'ast str {
+        if let Some(raw) = literal.raw {
+            return raw.as_str();
+        }
+        let (buffer, allocator) = self.scratch();
+        spell_string(&literal.value).write_to(buffer);
+        allocator.alloc_str(buffer)
+    }
+
+    /// Luau: a piece of an interpolated string, as written or escaped from
+    /// its value.
+    fn write_interpolated_text(&mut self, text: &StringLiteral<'ast>) {
+        let spelling = text.raw.map_or_else(
+            || {
+                let (buffer, allocator) = self.scratch();
+                write_interpolated_text(&text.value, buffer);
+                allocator.alloc_str(buffer)
+            },
+            ThinStr::as_str,
+        );
+        if !spelling.is_empty() {
+            self.text(spelling);
+        }
     }
 
     /// A function expression. Only one a statement assigns, which prints
@@ -154,7 +215,8 @@ impl<'ast> Formatter<'ast> {
     /// a long-string opener, so it's padded with spaces. `closer` is where
     /// the `]` is.
     pub(crate) fn write_bracketed_key(&mut self, key: &Expression<'ast>, closer: u32) {
-        let is_padded = starts_with_bracket(key);
+        let is_padded =
+            leading_string(key).is_some_and(|string| self.string_spelling(string).starts_with('['));
         self.token("[");
         if is_padded {
             self.space();
@@ -338,9 +400,7 @@ impl<'ast> Formatter<'ast> {
             .map(|segment| segment.text.span.start)
             .chain(iter::once(interpolated.tail.span.start));
         for (segment, closer) in interpolated.segments.iter().zip(closers) {
-            if !segment.text.text.is_empty() {
-                self.text(segment.text.text);
-            }
+            self.write_interpolated_text(&segment.text);
             self.token("{");
             let is_padded = expr_starts_with_brace(&segment.expr);
             if is_padded {
@@ -353,9 +413,7 @@ impl<'ast> Formatter<'ast> {
             }
             self.token("}");
         }
-        if !interpolated.tail.text.is_empty() {
-            self.text(interpolated.tail.text);
-        }
+        self.write_interpolated_text(&interpolated.tail);
         self.token("`");
     }
 }

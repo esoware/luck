@@ -98,8 +98,6 @@ fn minify_tree<'ast>(
         || config.inline_locals
         || config.merge_locals
         || config.simplify_indexes
-        || config.shorten_strings
-        || config.shorten_numbers
         || config.simplify_parens
         || config.lift_locals;
     let needs_bindings = config.remove_dead_code

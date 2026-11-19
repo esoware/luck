@@ -9,7 +9,7 @@ use luck_ast::{
     FunctionTypeParam, GenericTypeList, GenericTypeParam, GetSpan as _, Name, OptionalType, Type,
     TypeArgs, TypeField, TypeFieldAccess,
 };
-use luck_token::{Span, Token, TokenKind, decode_string};
+use luck_token::{Span, Token, TokenKind};
 
 use super::{Closer, Parser};
 
@@ -281,10 +281,7 @@ impl<'ast> Parser<'ast> {
             TokenKind::Nil => Type::Nil(self.advance()),
             TokenKind::True => Type::True(self.advance()),
             TokenKind::False => Type::False(self.advance()),
-            TokenKind::StringLiteral => Type::StringLiteral(self.advance_literal()),
-            // Luau has no number singleton, but accepting one keeps sources
-            // that carry it round-tripping.
-            TokenKind::Number | TokenKind::Integer => Type::Number(self.advance_literal()),
+            TokenKind::StringLiteral => Type::StringLiteral(self.advance_string()),
             TokenKind::LeftBrace => self.parse_table_type(),
             TokenKind::LeftParen => self.parse_paren_or_function_type(false),
             // `<T>(...) -> R` is a generic function type.
@@ -514,9 +511,8 @@ impl<'ast> Parser<'ast> {
                 TypeField::Indexer { span, key, .. } => {
                     // `["a"]: T` is a named field, as `parseTableType` builds it.
                     if let Type::StringLiteral(literal) = key {
-                        if decode_string(literal.text, self.version)
-                            .is_none_or(|bytes| bytes.contains(&0))
-                        {
+                        // The lexer reports a malformed escape on its own.
+                        if literal.value.contains(&0) {
                             self.error(
                                 *span,
                                 "string literal contains malformed escape sequence or `\\0`",

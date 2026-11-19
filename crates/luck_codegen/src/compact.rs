@@ -2,13 +2,16 @@ mod expr;
 mod stmt;
 mod types;
 
-use luck_ast::Chunk;
-use luck_token::CodeBuffer;
+use luck_ast::{Chunk, IntegerLiteral, NumberLiteral, StringLiteral};
+use luck_token::{
+    CodeBuffer, LuaVersion, spell_integer, spell_number, spell_string, write_interpolated_text,
+};
 
 use crate::separator::{DOT_DOT, LEFT_BRACKET, NUMBER, OTHER, WORD, class_of, merges_after};
 
-/// The output starts with no reserved capacity. Use
-/// [`compact_with_capacity`] when there's a useful size estimate.
+/// The chunk's version decides how a number is spelled. The output starts
+/// with no reserved capacity. Use [`compact_with_capacity`] when there's a
+/// useful size estimate.
 #[must_use]
 pub fn compact(chunk: &Chunk<'_>) -> String {
     compact_with_capacity(chunk, 0)
@@ -19,7 +22,11 @@ pub fn compact(chunk: &Chunk<'_>) -> String {
 /// length makes a good hint: compact output is rarely longer.
 #[must_use]
 pub fn compact_with_capacity(chunk: &Chunk<'_>, capacity: usize) -> String {
-    let mut printer = Printer { output: CodeBuffer::with_capacity(capacity), last: OTHER };
+    let mut printer = Printer {
+        output: CodeBuffer::with_capacity(capacity),
+        last: OTHER,
+        version: chunk.version,
+    };
     printer.print_block(&chunk.block);
     printer.output.into_string()
 }
@@ -28,6 +35,7 @@ struct Printer {
     output: CodeBuffer,
     /// The class of the last piece written, from `separator`.
     last: u8,
+    version: LuaVersion,
 }
 
 impl Printer {
@@ -80,6 +88,68 @@ impl Printer {
         self.emit(text, merges, OTHER);
     }
 
+    /// The shorter of the numeral as written and the shortest spelling of
+    /// its value, the spelling as written on a tie.
+    fn print_number(&mut self, literal: &NumberLiteral<'_>) {
+        if let Some(raw) = literal.raw
+            && is_shortest_numeral(raw.as_str(), self.version)
+        {
+            self.number(raw.as_str());
+            return;
+        }
+        let spelling = spell_number(literal.value, self.version);
+        self.number(shorter(literal.raw.as_deref(), spelling.as_str()));
+    }
+
+    /// Luau: an integer, as [`Self::print_number`] prints a number.
+    fn print_integer(&mut self, literal: &IntegerLiteral<'_>) {
+        let spelling = spell_integer(literal.value);
+        self.number(shorter(literal.raw.as_deref(), spelling.as_str()));
+    }
+
+    /// As [`Self::print_number`] prints a number. A quoted string with no
+    /// escape is as short as its value can be spelled.
+    fn print_string(&mut self, literal: &StringLiteral<'_>) {
+        if let Some(raw) = literal.raw
+            && raw.starts_with(['"', '\''])
+            && !raw.contains('\\')
+        {
+            self.string(raw.as_str());
+            return;
+        }
+        let spelling = spell_string(&literal.value);
+        if let Some(raw) = literal.raw
+            && raw.len() <= spelling.length()
+        {
+            self.string(raw.as_str());
+            return;
+        }
+        if spelling.is_long_bracket() && self.last & LEFT_BRACKET != OTHER {
+            self.output.print_ascii_byte(b' ');
+        }
+        self.output.print_with(|output| spelling.write_to(output));
+        self.last = OTHER;
+    }
+
+    /// Luau: a piece of an interpolated string's text, which nothing merges
+    /// with.
+    fn print_interpolated_text(&mut self, text: &StringLiteral<'_>) {
+        if let Some(raw) = text.raw
+            && !raw.contains('\\')
+        {
+            self.output.print_str(raw.as_str());
+            return;
+        }
+        let start = self.output.len();
+        self.output.print_with(|output| write_interpolated_text(&text.value, output));
+        if let Some(raw) = text.raw
+            && raw.len() <= self.output.len().saturating_sub(start)
+        {
+            self.output.truncate(start);
+            self.output.print_str(raw.as_str());
+        }
+    }
+
     fn list<T>(
         &mut self,
         items: &[T],
@@ -94,4 +164,24 @@ impl Printer {
             }
         }
     }
+}
+
+/// Whether `raw` is a decimal integer that no spelling of its value beats,
+/// as most numerals are.
+///
+/// That's twelve digits at most, which hex can't shorten, no leading zero,
+/// and, where every number is a float, too few trailing zeros for an
+/// exponent to pay off.
+fn is_shortest_numeral(raw: &str, version: LuaVersion) -> bool {
+    let bytes = raw.as_bytes();
+    bytes.len() <= 12
+        && bytes.iter().all(u8::is_ascii_digit)
+        && (bytes.len() == 1 || bytes.first() != Some(&b'0'))
+        && (version.has_integer_subtype()
+            || bytes.iter().rev().take_while(|&&b| b == b'0').count() < 3)
+}
+
+/// `raw` when it's no longer than `spelling`.
+fn shorter<'text>(raw: Option<&'text str>, spelling: &'text str) -> &'text str {
+    raw.filter(|written| written.len() <= spelling.len()).unwrap_or(spelling)
 }

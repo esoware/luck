@@ -3,8 +3,9 @@
 //! Prettier-style code formatter for Lua 5.1-5.5 and Luau.
 //!
 //! [`format_chunk()`] formats a tree directly, including one built in code
-//! with no source text. It prints each leaf's text as the tree holds it,
-//! unchecked, and returns an error only for a tree nested past
+//! with no source text. It prints each literal as the tree spells it,
+//! unchecked, or spells one built in code from its value, and returns an
+//! error only for a tree nested past
 //! `luck_ast::MAX_NESTING_DEPTH`. [`format()`] parses source text first, and
 //! [`format_parsed`] and [`format_range`] take an existing parse. The parse
 //! gets them blank-line preservation, `-- luck: format off` regions, and

@@ -1,13 +1,16 @@
-use luck_token::short_string_body;
-
 use crate::QuoteStyle;
 
 /// Writes `literal` requoted for `style` to `requoted` and returns true, or
 /// returns false when it stays as written.
+///
+/// It works on the spelling, escapes as written, so a requoted string keeps
+/// every escape but the quotes'.
 pub(crate) fn requote(literal: &str, style: QuoteStyle, requoted: &mut String) -> bool {
     // A long-bracket string has no quotes to swap.
-    let (Some(content), Some(current_quote)) = (short_string_body(literal), literal.chars().next())
-    else {
+    let Some(current_quote) = literal.chars().next().filter(|&c| matches!(c, '"' | '\'')) else {
+        return false;
+    };
+    let Some(content) = literal.get(1..).and_then(|rest| rest.strip_suffix(current_quote)) else {
         return false;
     };
     let target_quote = resolve_target_quote(style, content);

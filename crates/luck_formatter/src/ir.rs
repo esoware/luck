@@ -14,7 +14,7 @@ use core::ops::Range;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::Name;
-use luck_token::{Span, index_to_offset, offset_to_index};
+use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::FormatOptions;
@@ -179,6 +179,8 @@ pub(crate) struct Formatter<'ast> {
     /// No space joins an element before this one, which starts a run of
     /// elements an emitter moves or takes back as a unit.
     space_fence: usize,
+    /// The dialect a literal the tree doesn't spell is spelled for.
+    version: LuaVersion,
     options: FormatOptions,
     allocator: &'ast Allocator,
     comments: Comments<'ast>,
@@ -198,6 +200,7 @@ pub(crate) struct Formatter<'ast> {
 impl<'ast> Formatter<'ast> {
     pub(crate) fn new(
         allocator: &'ast Allocator,
+        version: LuaVersion,
         options: FormatOptions,
         comments: Comments<'ast>,
     ) -> Self {
@@ -211,6 +214,7 @@ impl<'ast> Formatter<'ast> {
             layout: Layout::with_capacity_in(capacity.div_ceil(8), allocator),
             text_bytes: 0,
             space_fence: 0,
+            version,
             options,
             allocator,
             comments,
@@ -273,6 +277,10 @@ impl<'ast> Formatter<'ast> {
 
     pub(crate) const fn options(&self) -> &FormatOptions {
         &self.options
+    }
+
+    pub(crate) const fn version(&self) -> LuaVersion {
+        self.version
     }
 
     pub(crate) const fn allocator(&self) -> &'ast Allocator {

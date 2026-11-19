@@ -1,6 +1,6 @@
-use luck_ast::{Call, Expression, Literal};
+use luck_ast::{Call, Expression, StringLiteral};
 use luck_semantic::SemanticAnalysis;
-use luck_token::{BinOp, LuaVersion, short_string_body};
+use luck_token::{BinOp, LuaVersion};
 
 use crate::binary::operator_pairs;
 use crate::call::{CallArgs, is_global_call};
@@ -49,12 +49,11 @@ impl NodeRule for UnknownType {
 
 fn check_literal(
     callee: &str,
-    literal: &Literal<'_>,
+    literal: &StringLiteral<'_>,
     context: &LintContext<'_>,
     findings: &mut Vec<Finding>,
 ) {
-    // An escape could spell a valid name, so only plain text is checked.
-    let Some(name) = short_string_body(literal.text).filter(|body| !body.contains('\\')) else {
+    let Some(name) = literal.as_str() else {
         return;
     };
     let primitives = primitive_type_names(context.semantic.version());
@@ -84,7 +83,7 @@ fn classify_comparison<'ast>(
     lhs: &'ast Expression<'ast>,
     rhs: &'ast Expression<'ast>,
     semantic: &SemanticAnalysis<'_>,
-) -> Option<(&'static str, &'ast Literal<'ast>)> {
+) -> Option<(&'static str, &'ast StringLiteral<'ast>)> {
     for (call_side, literal_side) in [(lhs, rhs), (rhs, lhs)] {
         let Expression::Suffixed(chain) = call_side else {
             continue;

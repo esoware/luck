@@ -1,11 +1,11 @@
 use core::slice;
 
 use luck_ast::{
-    Call, Expression, FunctionArgs, GetSpan as _, Literal, Name, Suffix, TableConstructor,
+    Call, Expression, FunctionArgs, GetSpan as _, Name, StringLiteral, Suffix, TableConstructor,
     is_multi_value,
 };
 use luck_semantic::SemanticAnalysis;
-use luck_token::{Span, short_string_body};
+use luck_token::Span;
 
 /// Whether `call` is a plain `name(...)` call to the host's global `name`. A
 /// method call, or a `name` the chunk shadows or rebinds, is user code.
@@ -35,7 +35,7 @@ pub(crate) fn dotted_callee(call: Call<'_>) -> Option<(&Name<'_>, &str)> {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum CallArg<'ast> {
     Expr(&'ast Expression<'ast>),
-    String(&'ast Literal<'ast>),
+    String(&'ast StringLiteral<'ast>),
     Table(&'ast TableConstructor<'ast>),
 }
 
@@ -48,7 +48,7 @@ impl<'ast> CallArg<'ast> {
         }
     }
 
-    pub(crate) fn string_literal(self) -> Option<&'ast Literal<'ast>> {
+    pub(crate) fn string_literal(self) -> Option<&'ast StringLiteral<'ast>> {
         match self {
             Self::Expr(Expression::StringLiteral(literal)) => Some(literal),
             Self::String(literal) => Some(literal),
@@ -98,12 +98,9 @@ impl<'ast> Iterator for CallArgs<'ast> {
 
 impl ExactSizeIterator for CallArgs<'_> {}
 
-/// Escapes stay undecoded, so a value spelled with escapes won't match a
-/// catalog constant. Long-bracket strings return `None`.
+/// A string literal argument's value, when it's UTF-8, and where the literal
+/// is.
 pub(crate) fn string_literal_value(arg: CallArg<'_>) -> Option<(&str, Span)> {
     let literal = arg.string_literal()?;
-    let body = short_string_body(literal.text)?;
-    let body_span =
-        Span::new(literal.span.start.saturating_add(1), literal.span.end.saturating_sub(1));
-    Some((body, body_span))
+    Some((literal.as_str()?, literal.span))
 }

@@ -8,19 +8,17 @@
 //! and one walk reaches the fixpoint. It walks again only when it leaves a
 //! rewrite behind that it could see but not make, after a fresh count.
 //!
-//! Each rewrite lives in the module named after the flag that turns it on,
-//! and `respell` holds what two flags share. Rewrites build their nodes in
-//! the shape the parser gives the text they print, which is what makes the
-//! fixpoint's own output a fixpoint.
+//! Each rewrite lives in the module named after the flag that turns it on.
+//! Rewrites build their nodes in the shape the parser gives the text they
+//! print, which is what makes the fixpoint's own output a fixpoint. A
+//! literal is a value, which `luck_codegen` spells the shortest way, so no
+//! rewrite respells one.
 
 mod fold_constants;
 mod inline_locals;
 mod lift_locals;
 mod merge_locals;
 mod remove_dead_code;
-mod respell;
-mod shorten_numbers;
-mod shorten_strings;
 mod simplify_indexes;
 mod simplify_parens;
 mod simplify_statements;
@@ -33,12 +31,11 @@ use luck_ast::{
     AttributedName, BinaryOp, Block, Expression, FunctionArgs, FunctionBody, Statement, Suffix,
     SuffixedExpression, TableConstructor, Type, Visit as _, VisitMut, is_prefix_expr,
 };
-use luck_token::{LuaVersion, NumberSubtypes};
+use luck_token::LuaVersion;
 
 use self::inline_locals::{OperandPosition, Value};
 use self::lift_locals::Lifter;
 use self::remove_dead_code::{UnusedLocalAction, unused_local_action};
-use self::respell::Respeller;
 use crate::binding::{Bindings, Counter, NONE, is_droppable_function, local_of};
 use crate::expr::{constant_truthiness, fits_at_depth, inner_operand_side, parenthesize};
 use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
@@ -72,7 +69,6 @@ pub(crate) fn compress<'ast>(
 pub(crate) struct Compressor<'walk, 'ast> {
     allocator: &'ast Allocator,
     version: LuaVersion,
-    subtypes: NumberSubtypes,
     config: TransformConfig,
     bindings: &'walk mut Bindings,
     has_changed: bool,
@@ -114,7 +110,6 @@ pub(crate) struct Compressor<'walk, 'ast> {
     /// Whether the `local` the walk enters next holds a late inlined read,
     /// so the names it declares are read only where the walk has been.
     is_late_read: bool,
-    respeller: Respeller,
     lifter: Lifter<'ast>,
 }
 
@@ -128,7 +123,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         Self {
             allocator,
             version,
-            subtypes: NumberSubtypes::from(version),
             config,
             bindings,
             has_changed: false,
@@ -148,7 +142,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             unwrapped_stmts: Vec::new(),
             is_in_if_run: false,
             is_late_read: false,
-            respeller: Respeller::default(),
             lifter: Lifter::default(),
         }
     }
@@ -306,7 +299,9 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     && remove_dead_code::is_empty_block(&do_block.block));
             }
             Statement::NumericFor(numeric_for) => {
-                if should_remove_dead_code && remove_dead_code::has_default_step(numeric_for) {
+                if should_remove_dead_code
+                    && remove_dead_code::has_default_step(numeric_for, self.version)
+                {
                     numeric_for.step = None;
                     self.has_changed = true;
                 }
@@ -484,65 +479,12 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     self.has_changed = true;
                 }
             }
-            Expression::StringLiteral(literal) => {
-                if self.config.shorten_strings
-                    && self.respeller.shorten_string(allocator, self.version, literal)
-                {
-                    self.has_changed = true;
-                }
-            }
-            Expression::Number(literal) => {
-                if self.config.shorten_numbers
-                    && self.respeller.shorten_number(allocator, self.subtypes, literal)
-                {
-                    self.has_changed = true;
-                }
-            }
-            // Luau
-            Expression::Integer(literal) => {
-                if self.config.shorten_numbers && self.respeller.shorten_integer(allocator, literal)
-                {
-                    self.has_changed = true;
-                }
-            }
             // Luau
             Expression::TypeCast(_) => {
                 if self.config.simplify_parens && simplify_parens::strip(allocator, expr) {
                     self.has_changed = true;
                 }
             }
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::TableConstructor(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::Error(_) => {}
-        }
-    }
-
-    /// Folds `expr` and uncounts the operands the fold drops. A literal the
-    /// fold leaves at either end of a run, or under a `-`, is one the walk
-    /// never reaches, so it takes its rewrites here, and the caller's take
-    /// a whole folded literal.
-    fn fold(&mut self, expr: &mut Expression<'ast>) -> bool {
-        let (allocator, version) = (self.allocator, self.version);
-        let mut counter = self.counter();
-        if !fold_constants::fold(allocator, version, expr, &mut |dropped| {
-            counter.visit_expr(dropped);
-        }) {
-            return false;
-        }
-        match expr {
-            Expression::BinaryOp(run) => {
-                self.leave_literal(&mut run.first);
-                self.leave_literal(&mut run.links.last_mut().operand);
-            }
-            Expression::UnaryOp(_) => self.leave_literal(expr),
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -553,41 +495,20 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Expression::FunctionDef(_)
             | Expression::Name(_)
             | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
             | Expression::Error(_) => {}
         }
-        true
     }
 
-    /// The rewrites of a folded literal, a negative number's numeral
-    /// included.
-    fn leave_literal(&mut self, expr: &mut Expression<'ast>) {
-        match expr {
-            Expression::Number(_) | Expression::StringLiteral(_) => self.leave_expr(expr, true),
-            Expression::UnaryOp(negation) if matches!(negation.operand, Expression::Number(_)) => {
-                self.leave_expr(&mut negation.operand, true);
-            }
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Integer(_)
-            | Expression::UnaryOp(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::BinaryOp(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => {}
-        }
+    /// Folds `expr` and uncounts the operands the fold drops.
+    fn fold(&mut self, expr: &mut Expression<'ast>) -> bool {
+        let (allocator, version) = (self.allocator, self.version);
+        let mut counter = self.counter();
+        fold_constants::fold(allocator, version, expr, &mut |dropped| {
+            counter.visit_expr(dropped);
+        })
     }
 }
 
@@ -673,12 +594,6 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
     fn visit_function_args(&mut self, function_args: &mut FunctionArgs<'ast>) {
         self.walk_function_args(function_args);
         if self.config.simplify_parens && simplify_parens::strip_call_args(function_args) {
-            self.has_changed = true;
-        }
-        if self.config.shorten_strings
-            && let FunctionArgs::StringLiteral(literal) = function_args
-            && self.respeller.shorten_string(self.allocator, self.version, literal)
-        {
             self.has_changed = true;
         }
     }

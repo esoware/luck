@@ -1,6 +1,6 @@
 linter_lua51 Summary:
 Files Linted   : 16/22
-Diagnostics    : 4978
+Diagnostics    : 4979
   3459 no_implicit_globals
    344 setting_global
    252 shadowing
@@ -34,6 +34,7 @@ Diagnostics    : 4978
      2 mutating_uninitialized
      2 redundant_nil_init
      1 divide_by_zero
+     1 format_string
      1 redundant_return
      1 reversed_for_loop
 
@@ -2936,6 +2937,7 @@ lua5.1-tests/constructs.lua
 222:14 setting_global: setting global variable `WX2` (missing `local`?)
 222:14 no_implicit_globals: global variable `WX2` used
 223:7 no_implicit_globals: global variable `string` used
+223:21 format_string: wrong argument count, format takes 8, got 9
 234:3 no_implicit_globals: global variable `assert` used
 234:10 no_implicit_globals: global variable `loadstring` used
 235:3 no_implicit_globals: global variable `assert` used

@@ -300,6 +300,20 @@ fn luau_undefined_escape_lexes_as_the_literal_character() {
 }
 
 #[test]
+fn records_where_each_lenient_escape_is() {
+    let source = "x = '\\q\\n\\\u{e9}' .. `\\w\\{{a}\\}`";
+    let result = lex(source, LuaVersion::Luau);
+    assert_eq!(result.errors, Vec::<SourceError>::new());
+    let escapes: Vec<&str> = result.lenient_escapes.iter().map(|span| span.text(source)).collect();
+    assert_eq!(escapes, ["\\q", "\\\u{e9}", "\\w"]);
+    let lua51 = lex("x = '\\x41\\z\\u{48}\\65'", LuaVersion::Lua51);
+    assert_eq!(lua51.lenient_escapes.len(), 3, "{:?}", lua51.lenient_escapes);
+    for version in [LuaVersion::Lua52, LuaVersion::Lua54] {
+        assert_eq!(lex("x = '\\x41\\z'", version).lenient_escapes, Vec::<Span>::new());
+    }
+}
+
+#[test]
 fn unicode_escape_above_10ffff_is_error_on_lua53_and_luau() {
     for version in [LuaVersion::Lua53, LuaVersion::Luau] {
         let result = lex(r#""\u{110000}""#, version);

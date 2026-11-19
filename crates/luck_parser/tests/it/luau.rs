@@ -128,7 +128,7 @@ fn interpolated_string_with_expr() {
     if let Expression::InterpolatedString(interpolated_string) = expr {
         assert_eq!(interpolated_string.segments.len(), 1);
         assert!(matches!(interpolated_string.segments[0].expr, Expression::Name(_)));
-        assert_eq!(interpolated_string.tail.text, "");
+        assert!(interpolated_string.tail.value.is_empty());
     } else {
         panic!("expected InterpolatedString");
     }
@@ -141,9 +141,12 @@ fn interpolated_string_multiple_exprs() {
     assert_no_errors(&result);
     let expr = local_value(&result);
     if let Expression::InterpolatedString(interpolated_string) = expr {
-        let texts: Vec<&str> =
-            interpolated_string.segments.iter().map(|segment| segment.text.text).collect();
-        assert_eq!(texts, ["a", "b"]);
+        let texts: Vec<&[u8]> = interpolated_string
+            .segments
+            .iter()
+            .map(|segment| segment.text.value.as_bytes())
+            .collect();
+        assert_eq!(texts, [b"a", b"b"]);
         assert!(matches!(
             &*interpolated_string.segments,
             [
@@ -151,7 +154,7 @@ fn interpolated_string_multiple_exprs() {
                 InterpolatedSegment { expr: Expression::Number(_), .. },
             ]
         ));
-        assert_eq!(interpolated_string.tail.text, "c");
+        assert_eq!(interpolated_string.tail.value, &b"c"[..]);
     } else {
         panic!("expected InterpolatedString");
     }

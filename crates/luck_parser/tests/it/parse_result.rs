@@ -51,8 +51,8 @@ fn the_tree_borrows_its_leaves_from_the_source() {
     };
     for (leaf, span) in [
         (local.names[0].name.text.as_str(), local.names[0].name.span),
-        (text.text, text.span),
-        (number.text, number.span),
+        (text.raw.expect("a parsed literal").as_str(), text.span),
+        (number.raw.expect("a parsed literal").as_str(), number.span),
     ] {
         assert!(ptr::eq(leaf, span.text(&source)), "{leaf}");
     }

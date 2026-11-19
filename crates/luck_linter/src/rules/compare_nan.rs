@@ -1,5 +1,5 @@
 use luck_ast::{Expression, unwrap_parentheses};
-use luck_token::{BinOp, LuaVersion};
+use luck_token::BinOp;
 
 use crate::binary::operator_pairs;
 use crate::diagnostic::Finding;
@@ -25,10 +25,9 @@ impl NodeRule for CompareNan {
     fn on_expr(
         &self,
         expr: &Expression<'_>,
-        context: &LintContext<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        let version = context.semantic.version();
         let Expression::BinaryOp(run) = expr else {
             return;
         };
@@ -36,9 +35,7 @@ impl NodeRule for CompareNan {
             return;
         }
         for pair in operator_pairs(run) {
-            let is_nan = |side: Option<&Expression<'_>>| {
-                side.is_some_and(|operand| is_nan_expr(operand, version))
-            };
+            let is_nan = |side: Option<&Expression<'_>>| side.is_some_and(is_nan_expr);
             if matches!(pair.op, BinOp::Eq | BinOp::Ne) && (is_nan(pair.lhs) || is_nan(pair.rhs)) {
                 findings.push(
                     Finding::new(
@@ -54,7 +51,7 @@ impl NodeRule for CompareNan {
 
 /// Whether `expr` divides a zero literal by a zero literal, each in any
 /// spelling, parentheses aside.
-fn is_nan_expr(expr: &Expression<'_>, version: LuaVersion) -> bool {
+fn is_nan_expr(expr: &Expression<'_>) -> bool {
     let Expression::BinaryOp(run) = unwrap_parentheses(expr) else {
         return false;
     };
@@ -62,12 +59,14 @@ fn is_nan_expr(expr: &Expression<'_>, version: LuaVersion) -> bool {
         return false;
     };
     division.op == BinOp::Div
-        && is_number_literal(&run.first, 0.0, version)
-        && is_number_literal(&division.operand, 0.0, version)
+        && is_number_literal(&run.first, 0.0)
+        && is_number_literal(&division.operand, 0.0)
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::LintDiagnostic;
     use crate::fixtures::run_rule;

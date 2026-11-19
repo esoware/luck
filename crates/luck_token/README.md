@@ -12,7 +12,8 @@ The types and rules every other luck crate builds on, except `luck_allocator`: p
 - `CommentContent::of` and `LintDirective::parse`: the one grammar of `luck:` directives, which the lexer reads each comment's content with, and the linter each lint directive's rules.
 - `BinOp`, `UnOp`, and `CompoundOp`: the operators, and each binary operator's precedence and associativity.
 - `SourceError`: the one error type of lexing, parsing, and formatting, a span and a message.
-- `parse_lua_number`, `decode_string`, and `encode_string`: what a numeral or a string literal means, shared by every stage that reads or writes one.
+- `read_numeral`, `read_integer`, `read_escape`, and `decode_string`: what a numeral, an escape, or a string literal means in each version, which the lexer checks and the parser decodes with. `LuaNumber` is a number's value, an integer or a float, and a string's is bytes.
+- `spell_number`, `spell_integer`, `spell_string`, `write_long_string`, and `write_interpolated_text`: the shortest literal that reads back as a value, for the printers. A number spells on the stack, and a string measures itself before it writes.
 - `line_breaks`, `has_line_break`, and `LineIndex`: what counts as a line break in each version, and line and column lookup.
 - `CodeBuffer`: the output buffer the printers write into.
 

@@ -42,7 +42,6 @@ fn flat_leading_name<'ast>(ty: &Type<'ast>) -> Option<&'ast str> {
             | Type::True(_)
             | Type::False(_)
             | Type::StringLiteral(_)
-            | Type::Number(_)
             | Type::Variadic(_)
             | Type::Error(_) => return None,
         };
@@ -129,8 +128,7 @@ impl<'ast> Formatter<'ast> {
             Type::Nil(_) => self.token("nil"),
             Type::True(_) => self.token("true"),
             Type::False(_) => self.token("false"),
-            Type::StringLiteral(literal) => self.write_string(literal.text),
-            Type::Number(literal) => self.ascii(literal.text),
+            Type::StringLiteral(literal) => self.write_string(literal),
             // Luau: `...T`.
             Type::Variadic(variadic) => {
                 self.token("...");

@@ -5,9 +5,10 @@
 //!
 //! [`compact()`] writes no comments, a space only where two pieces would
 //! otherwise lex as one token, and a `;` only before a statement that starts
-//! with `(` and would otherwise call the one before. It never reads source
-//! text, so a tree built in code prints too, and it prints each leaf's text
-//! as the tree holds it, unchecked.
+//! with `(` and would otherwise call the one before. It spells each literal
+//! the shortest way its value reads back in the chunk's version, or as the
+//! tree spells it when that's no longer, unchecked. It never reads source
+//! text, so a tree built in code prints too.
 //!
 //! It recurses once per level of nesting, so it takes a tree within
 //! `luck_ast::MAX_NESTING_DEPTH`, as `luck_parser` builds. Measure a tree
@@ -23,7 +24,7 @@
 //! let allocator = Allocator::new();
 //! let spans = SpanCounter::new();
 //! let synth = Synth::new(&allocator, &spans);
-//! let sum = synth.binary_op(synth.name_expr("a"), BinOp::Sub, synth.number(".5"));
+//! let sum = synth.binary_op(synth.name_expr("a"), BinOp::Sub, synth.number_f64(0.5));
 //! let block = synth.block([synth.local(&["x"], [sum]), synth.return_([synth.name_expr("x")])]);
 //! let chunk = Chunk::new(LuaVersion::Lua54, block);
 //! assert_eq!(luck_codegen::compact(&chunk), "local x=a-.5 return x");

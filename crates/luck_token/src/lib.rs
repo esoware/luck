@@ -6,10 +6,10 @@
 //! source), the AST operators ([`BinOp`], [`UnOp`], [`CompoundOp`]),
 //! [`Comment`] (extracted comments with position metadata), the comments that
 //! tell a tool what to do ([`CommentContent`], [`LintDirective`]), [`SourceError`],
-//! the literal semantics every crate shares ([`parse_lua_number`],
-//! [`decode_string`], [`encode_string`], [`short_string_body`]), the definition
-//! of a line break ([`line_breaks`], [`has_line_break`]) and the [`LineIndex`]
-//! over it, and the [`CodeBuffer`] output builder.
+//! what a literal means and how to spell a value ([`read_numeral`],
+//! [`read_escape`], [`decode_string`], [`spell_number`], [`spell_string`]),
+//! the definition of a line break ([`line_breaks`], [`has_line_break`]) and
+//! the [`LineIndex`] over it, and the [`CodeBuffer`] output builder.
 //!
 //! This crate has zero internal dependencies, and every luck crate but
 //! `luck_allocator` builds on it.
@@ -32,8 +32,6 @@
 //! assert_eq!(begin.text(source), "hello ");
 //! ```
 
-extern crate alloc;
-
 mod code_buffer;
 mod comment;
 mod directive;
@@ -49,12 +47,15 @@ mod whitespace;
 pub use code_buffer::CodeBuffer;
 pub use comment::{Comment, CommentKind, CommentPosition, chunk_header, leading_hot_comments};
 pub use directive::{CommentContent, LintDirective, LintExtent, LintVerb};
-pub use number::{LuaNumber, NumberSubtypes, parse_lua_number};
+pub use number::{
+    LuaNumber, NumberSpelling, Numeral, read_integer, read_numeral, spell_integer, spell_number,
+};
 pub use op::{Associativity, BinOp, CompoundOp, OperandSide, UnOp};
 pub use source_error::SourceError;
 pub use span::{Span, index_to_offset, offset_to_index};
 pub use string::{
-    decode_string, encode_string, encodes_to_at_least, short_string_body, unicode_escape_codepoint,
+    EscapeError, Escaped, StringSpelling, StringValue, decode_interpolated_text, decode_string,
+    read_escape, spell_string, write_interpolated_text, write_long_string,
 };
 pub use token::{Token, TokenKind};
 pub use version::{LuaVersion, MAX_ACTIVE_LOCALS, StdlibEnvironment};

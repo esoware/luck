@@ -15,13 +15,14 @@
 //! - **Compression**, one in-place walk that runs every rewrite as it leaves
 //!   each node: constant folding, dead-code and dead-local removal, inlining
 //!   single-use locals, merging neighboring locals, `if` and `return`
-//!   simplification, shorter literals, indexes, and parentheses, and lifting
-//!   nested declarations to the top of their function. Each rewrite keeps
-//!   the binding walk's counts true, so the walk reaches the fixpoint, and
-//!   walks again only for a rewrite it exposed too late to make.
+//!   simplification, shorter indexes and parentheses, and lifting nested
+//!   declarations to the top of their function. Each rewrite keeps the
+//!   binding walk's counts true, so the walk reaches the fixpoint, and walks
+//!   again only for a rewrite it exposed too late to make.
 //! - **Renaming**, which gives locals the shortest names their scopes allow.
 //!
-//! [`TransformConfig`] turns each rewrite on or off.
+//! [`TransformConfig`] turns each rewrite on or off. `luck_codegen` prints
+//! every literal in the shortest spelling of its value.
 //!
 //! # Usage
 //!
@@ -43,8 +44,6 @@
         reason = "a test panics to fail, so a Panics section says nothing"
     )
 )]
-
-extern crate alloc;
 
 mod bind;
 mod binding;

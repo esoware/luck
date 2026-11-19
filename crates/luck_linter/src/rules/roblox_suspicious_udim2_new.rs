@@ -31,10 +31,7 @@ impl NodeRule for RobloxSuspiciousUdim2New {
         if args.is_empty() || args.len() >= 4 {
             return;
         }
-        let values: Vec<f64> = args
-            .iter()
-            .filter_map(|arg| signed_number_value(arg, context.semantic.version()))
-            .collect();
+        let values: Vec<f64> = args.iter().filter_map(signed_number_value).collect();
         if values.len() != args.len() {
             return;
         }

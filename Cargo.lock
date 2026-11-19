@@ -1123,7 +1123,6 @@ dependencies = [
 name = "luck_minifier"
 version = "0.6.0"
 dependencies = [
- "itoa",
  "luck_allocator",
  "luck_ast",
  "luck_codegen",
@@ -1131,7 +1130,6 @@ dependencies = [
  "luck_testgen",
  "luck_token",
  "rustc-hash",
- "ryu",
  "schemars",
  "serde",
 ]
@@ -1652,12 +1650,6 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
-
-[[package]]
-name = "ryu"
-version = "1.0.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "same-file"

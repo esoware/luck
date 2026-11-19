@@ -1,5 +1,5 @@
-use luck_ast::{Call, Expression, Literal, unwrap_parentheses};
-use luck_token::{LuaVersion, Span, short_string_body};
+use luck_ast::{Call, Expression, StringLiteral, unwrap_parentheses};
+use luck_token::{LuaVersion, Span, index_to_offset};
 
 use crate::call::{CallArg, CallArgs, dotted_callee};
 use crate::diagnostic::Finding;
@@ -99,7 +99,7 @@ impl DslKind {
 /// The literal `dsl` reads from `call` and the arguments after it.
 ///
 /// In a method call the receiver is the format, but the subject of a pattern.
-fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal<'_>, CallArgs<'_>)> {
+fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&StringLiteral<'_>, CallArgs<'_>)> {
     let is_method = call.method.is_some();
     let mut args = CallArgs::new(call.args);
     if is_method && !dsl.is_pattern() {
@@ -117,7 +117,7 @@ fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&Literal<'_>, CallArgs<'
 
 fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Option<Finding> {
     let (literal, trailing_args) = dsl_literal(call, dsl)?;
-    let body = checkable_body(literal)?;
+    let body = literal.as_str()?;
     if dsl == DslKind::Find && is_plain_find(body, trailing_args.clone()) {
         return None;
     }
@@ -139,22 +139,6 @@ fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Optio
         Ok(None) => None,
         Err(error) => Some(literal_error(error, literal, body, noun)),
     }
-}
-
-/// The body of `literal`, or `None` for one that can't be checked here: a
-/// long-bracket string, or a body with a numeric escape, which could spell a
-/// character the DSL reads, since escapes stay undecoded.
-fn checkable_body<'ast>(literal: &Literal<'ast>) -> Option<&'ast str> {
-    let body = short_string_body(literal.text)?;
-    let mut bytes = body.bytes();
-    while let Some(byte) = bytes.next() {
-        if byte == b'\\'
-            && bytes.next().is_some_and(|escaped| matches!(escaped, b'0'..=b'9' | b'x' | b'u'))
-        {
-            return None;
-        }
-    }
-    Some(body)
 }
 
 /// Whether `string.find` searches for `pattern` as plain text instead of
@@ -194,24 +178,39 @@ fn check_gsub_replacement(call: Call<'_>, version: LuaVersion) -> Option<Finding
     let mut args = CallArgs::new(call.args);
     let pattern = args.nth(pattern_index).and_then(CallArg::string_literal);
     let replacement = args.next()?.string_literal()?;
-    let replacement_body = checkable_body(replacement)?;
+    let replacement_body = replacement.as_str()?;
     let capture_count =
-        pattern.and_then(checkable_body).and_then(|body| validate_lua_pattern(body).ok());
+        pattern.and_then(StringLiteral::as_str).and_then(|body| validate_lua_pattern(body).ok());
     validate_gsub_replacement(replacement_body, capture_count, version)
         .err()
         .map(|e| literal_error(e, replacement, replacement_body, "replacement"))
 }
 
-/// Reports `error` at its offset in the quoted `literal`, whose `body` the
-/// offset counts into, over the whole character there.
-fn literal_error(error: PatternError, literal: &Literal<'_>, body: &str, noun: &str) -> Finding {
+/// Reports `error` over the character at its offset in `body`, `literal`'s
+/// value.
+///
+/// That's where the value is in the source when it's the literal's own text,
+/// as it is with nothing to decode. Otherwise no offset in the value maps to
+/// one in the source, so it's the whole literal.
+fn literal_error(
+    error: PatternError,
+    literal: &StringLiteral<'_>,
+    body: &str,
+    noun: &str,
+) -> Finding {
+    let message = format!("invalid {noun}: {error}");
+    let verbatim_start = literal.raw.and_then(|raw| {
+        let raw_bytes = raw.as_bytes().as_ptr_range();
+        let value = literal.value.as_bytes().as_ptr();
+        raw_bytes.contains(&value).then(|| value.addr().wrapping_sub(raw_bytes.start.addr()))
+    });
+    let Some(value_start) = verbatim_start else {
+        return Finding::new(message, literal.span);
+    };
     let offset = error.offset();
     let width = body.get(offset..).and_then(|rest| rest.chars().next()).map_or(1, char::len_utf8);
-    Finding::new(
-        format!("invalid {noun}: {error}"),
-        Span::from_indices(offset, offset.saturating_add(width))
-            .shifted(literal.span.start.saturating_add(1)),
-    )
+    let start = literal.span.start.saturating_add(index_to_offset(value_start));
+    Finding::new(message, Span::from_indices(offset, offset.saturating_add(width)).shifted(start))
 }
 
 #[cfg(test)]
@@ -323,9 +322,19 @@ string.format(\"%d %d\", f())");
     }
 
     #[test]
-    fn ignores_long_bracket_strings() {
-        let diags = run("string.format([[%z]], 1)");
-        assert!(diags.is_empty(), "got: {diags:?}");
+    fn flags_a_long_bracket_format_where_its_text_is() {
+        let source = "string.format([==[\n%z]==], 1)";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+        assert_eq!(diags[0].span.text(source), "z");
+    }
+
+    #[test]
+    fn flags_a_format_spelled_with_escapes_over_the_whole_literal() {
+        let source = "string.format(\"\\37z\", 1)";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+        assert_eq!(diags[0].span.text(source), "\"\\37z\"");
     }
 
     #[test]

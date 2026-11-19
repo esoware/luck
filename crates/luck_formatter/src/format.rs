@@ -1,7 +1,7 @@
 use core::ops::Range;
 
 use luck_allocator::Allocator;
-use luck_ast::{Block, Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_parser::ParseResult;
 use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 
@@ -20,21 +20,21 @@ pub struct FormatResult {
 /// itself reports no others.
 pub type FormatError = luck_token::SourceError;
 
-fn print_block<'ast>(
+fn print_chunk<'ast>(
     allocator: &'ast Allocator,
-    block: &'ast Block<'ast>,
+    chunk: &'ast Chunk<'ast>,
     comments: Comments<'ast>,
     options: &FormatOptions,
 ) -> String {
-    let mut f = Formatter::new(allocator, *options, comments);
+    let mut f = Formatter::new(allocator, chunk.version, *options, comments);
     if options.sort_requires {
         f = f.sorting_requires();
     }
     f.write_shebang();
-    f.write_block(block);
+    f.write_block(&chunk.block);
     // Empty and error statements print nothing, so a block holding only
     // those must not open a line before the trailing comment flush.
-    let has_stmts = first_item_start(block).is_some();
+    let has_stmts = first_item_start(&chunk.block).is_some();
     f.write_remaining_comments(has_stmts);
     let mut output = f.print("");
 
@@ -48,7 +48,7 @@ fn print_block<'ast>(
 }
 
 /// Formats a tree, including one built in code with no source text, such as
-/// with `luck_ast::Synth`.
+/// with `luck_ast::Synth`, whose literals it spells for the chunk's version.
 ///
 /// Pass [`Comments::synthetic`] to attach generated comments (chain
 /// [`Comments::with_blank_before`] for blank lines between statements), or
@@ -65,16 +65,15 @@ pub fn format_chunk<'ast>(
     comments: Comments<'ast>,
     options: &FormatOptions,
 ) -> Result<String, FormatError> {
-    let block = &chunk.block;
-    if block_nesting_depth(block) > MAX_NESTING_DEPTH {
+    if block_nesting_depth(&chunk.block) > MAX_NESTING_DEPTH {
         return Err(FormatError {
-            span: block.span,
+            span: chunk.block.span,
             message: format!(
                 "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
             ),
         });
     }
-    Ok(print_block(allocator, block, comments, options))
+    Ok(print_chunk(allocator, chunk, comments, options))
 }
 
 /// Parses `source` into `allocator` and formats it. Input that fails to parse
@@ -105,7 +104,7 @@ pub fn format_parsed<'ast>(
         return FormatResult { output: String::new(), errors: parse.errors.clone() };
     }
     let comments = Comments::from_source(&parse.comments, parse.source, parse.chunk.version);
-    let output = print_block(allocator, &parse.chunk.block, comments, options);
+    let output = print_chunk(allocator, &parse.chunk, comments, options);
     FormatResult { output, errors: Vec::new() }
 }
 
@@ -129,7 +128,7 @@ pub fn format_range<'ast>(
     let source = parse.source;
     let offsets = index_to_offset(range.start)..index_to_offset(range.end);
     let comments = Comments::from_source(&parse.comments, source, parse.chunk.version);
-    let output = format_selection(allocator, &parse.chunk.block, comments, options, &offsets)
+    let output = format_selection(allocator, &parse.chunk, comments, options, &offsets)
         .map_or_else(
             || source.to_owned(),
             |(span, selected)| {

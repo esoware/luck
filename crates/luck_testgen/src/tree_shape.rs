@@ -1,21 +1,21 @@
 //! A tree printed without what a printer may change.
 //!
-//! That's spans, trailing separators in tables, a union's or
-//! intersection's leading operator, a string's quotes and escapes, a number's
-//! spelling, whether a lone string or table argument has parentheses, and every
-//! parenthesis that changes nothing. Precedence and associativity are in the
-//! tree, so the only parentheses that change something keep a call or `...`
-//! at the end of a list to one value, or keep a Luau integer literal under `-`
-//! from reading as a negative literal.
+//! That's spans, trailing separators in tables, a union's or intersection's
+//! leading operator, a literal's spelling, whether a lone string or table
+//! argument has parentheses, and every parenthesis that changes nothing.
+//! Precedence and associativity are in the tree, so the only parentheses that
+//! change something keep a call or `...` at the end of a list to one value,
+//! or keep a Luau integer literal under `-` from reading as a negative
+//! literal.
 
 use luck_ast::{
     Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, Expression, Field, FunctionArgs,
     FunctionAttribute, FunctionBody, FunctionName, FunctionTypeParam, GenericTypeList,
-    GenericTypeParam, IfStatement, Literal, Name, Parameter, Statement, Suffix, SuffixedExpression,
-    TableConstructor, Type, TypeArgs, TypeDeclaration, TypeDeclarationValue, TypeField, Var,
-    is_multi_value, unwrap_parentheses,
+    GenericTypeParam, IfStatement, Name, NumberLiteral, Parameter, Statement, StringLiteral,
+    Suffix, SuffixedExpression, TableConstructor, Type, TypeArgs, TypeDeclaration,
+    TypeDeclarationValue, TypeField, Var, is_multi_value, unwrap_parentheses,
 };
-use luck_token::{Associativity, LuaNumber, LuaVersion, UnOp, decode_string, parse_lua_number};
+use luck_token::{Associativity, LuaNumber, UnOp};
 
 /// `chunk` as one node per line, its children indented below it.
 ///
@@ -24,7 +24,7 @@ use luck_token::{Associativity, LuaNumber, LuaVersion, UnOp, decode_string, pars
 /// printer kept its meaning.
 #[must_use]
 pub fn tree_shape(chunk: &Chunk<'_>) -> String {
-    let mut printer = Printer { output: String::new(), depth: 0, version: chunk.version };
+    let mut printer = Printer { output: String::new(), depth: 0 };
     printer.block(&chunk.block);
     printer.output
 }
@@ -32,7 +32,6 @@ pub fn tree_shape(chunk: &Chunk<'_>) -> String {
 struct Printer {
     output: String,
     depth: usize,
-    version: LuaVersion,
 }
 
 impl Printer {
@@ -54,25 +53,16 @@ impl Printer {
         self.depth = self.depth.saturating_sub(1);
     }
 
-    /// A number by its value, which keeps an integer and a float apart where
-    /// the version tells them apart. A spelling with no exact value, such as
-    /// a hex float, is compared as written, up to case.
-    fn number(&self, literal: &Literal<'_>) -> String {
-        match parse_lua_number(literal.text, self.version.into()) {
-            Some(LuaNumber::Int(value)) => format!("int {value}"),
-            Some(LuaNumber::Float(value)) => format!("float {value:?}"),
-            None => format!("raw {}", literal.text.to_ascii_lowercase()),
+    /// A number by its value, which keeps an integer and a float apart.
+    fn number(literal: &NumberLiteral<'_>) -> String {
+        match literal.value {
+            LuaNumber::Int(value) => format!("int {value}"),
+            LuaNumber::Float(value) => format!("float {value:?}"),
         }
     }
 
-    fn string(&self, literal: &Literal<'_>) -> String {
-        let Some(bytes) = decode_string(literal.text, self.version) else {
-            return format!("raw {}", literal.text);
-        };
-        str::from_utf8(&bytes).map_or_else(
-            |_| format!("bytes \"{}\"", bytes.escape_ascii()),
-            |text| format!("{text:?}"),
-        )
+    fn string(literal: &StringLiteral<'_>) -> String {
+        format!("{:?}", literal.value)
     }
 
     fn block(&mut self, block: &Block<'_>) {
@@ -246,13 +236,13 @@ impl Printer {
             Expression::Nil(_) => self.line("Nil"),
             Expression::False(_) => self.line("False"),
             Expression::True(_) => self.line("True"),
-            Expression::Number(literal) | Expression::Integer(literal) => {
-                let number = self.number(literal);
-                self.line(&format!("Number {number}"));
+            Expression::Number(literal) => {
+                self.line(&format!("Number {}", Self::number(literal)));
             }
+            // Luau
+            Expression::Integer(literal) => self.line(&format!("Integer {}", literal.value)),
             Expression::StringLiteral(literal) => {
-                let string = self.string(literal);
-                self.line(&format!("String {string}"));
+                self.line(&format!("String {}", Self::string(literal)));
             }
             Expression::VarArg(_) => self.line("VarArg"),
             Expression::FunctionDef(def) => {
@@ -283,8 +273,7 @@ impl Printer {
                     && let Expression::Parenthesized(parenthesized) = &unary.operand
                     && let Expression::Integer(literal) = unwrap_parentheses(&parenthesized.expr)
                 {
-                    let number = self.number(literal);
-                    self.line(&format!("Parenthesized Number {number}"));
+                    self.line(&format!("Parenthesized Integer {}", literal.value));
                 } else {
                     self.expr(&unary.operand);
                 }
@@ -308,10 +297,10 @@ impl Printer {
             Expression::InterpolatedString(interpolated) => {
                 self.open("InterpolatedString");
                 for segment in &interpolated.segments {
-                    self.line(&format!("text {:?}", segment.text.text));
+                    self.line(&format!("text {}", Self::string(&segment.text)));
                     self.expr(&segment.expr);
                 }
-                self.line(&format!("text {:?}", interpolated.tail.text));
+                self.line(&format!("text {}", Self::string(&interpolated.tail)));
                 self.close();
             }
             // Luau
@@ -378,8 +367,7 @@ impl Printer {
             FunctionArgs::Parenthesized { args: exprs, .. } => self.list(exprs),
             FunctionArgs::TableConstructor(table) => self.table(table),
             FunctionArgs::StringLiteral(literal) => {
-                let string = self.string(literal);
-                self.line(&format!("String {string}"));
+                self.line(&format!("String {}", Self::string(literal)));
             }
             FunctionArgs::Error(_) => self.line("Error"),
         }
@@ -603,12 +591,7 @@ impl Printer {
             Type::True(_) => self.line("TrueType"),
             Type::False(_) => self.line("FalseType"),
             Type::StringLiteral(literal) => {
-                let string = self.string(literal);
-                self.line(&format!("StringType {string}"));
-            }
-            Type::Number(literal) => {
-                let number = self.number(literal);
-                self.line(&format!("NumberType {number}"));
+                self.line(&format!("StringType {}", Self::string(literal)));
             }
             Type::Variadic(variadic) => {
                 self.open("Variadic");
@@ -673,6 +656,7 @@ fn without_parentheses<'tree, 'ast>(ty: &'tree Type<'ast>) -> &'tree Type<'ast> 
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
+    use luck_token::LuaVersion;
 
     use super::*;
 

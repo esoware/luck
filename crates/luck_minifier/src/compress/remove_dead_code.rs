@@ -16,7 +16,7 @@ use luck_ast::{
     BinaryOp, Block, ContentEq as _, ElseClause, ElseIfClause, Expression, GetSpan as _,
     IfStatement, LocalAssignment, Name, NumericFor, OneOrMore, Statement, VisitMut as _,
 };
-use luck_token::{BinOp, LuaVersion, UnOp};
+use luck_token::{BinOp, LuaNumber, LuaVersion, UnOp};
 
 use super::Compressor;
 use super::simplify_parens;
@@ -33,9 +33,12 @@ pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
     block.stmts.is_empty()
 }
 
-/// A step of 1 is the default.
-pub(super) fn has_default_step(numeric_for: &NumericFor<'_>) -> bool {
-    matches!(&numeric_for.step, Some(Expression::Number(literal)) if literal.text == "1")
+/// A step of integer 1 is the default. On Lua 5.3+ a float step makes the
+/// loop a float one, so `1.0` isn't, but where every number is a float, it is.
+pub(super) fn has_default_step(numeric_for: &NumericFor<'_>, version: LuaVersion) -> bool {
+    let default =
+        if version.has_integer_subtype() { LuaNumber::Int(1) } else { LuaNumber::Float(1.0) };
+    matches!(&numeric_for.step, Some(Expression::Number(literal)) if literal.value == default)
 }
 
 /// Drops the `return` that ends `block`, a function's or the chunk's, when

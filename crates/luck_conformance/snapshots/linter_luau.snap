@@ -1,6 +1,6 @@
 linter_luau Summary:
 Files Linted   : 53/55
-Diagnostics    : 16072
+Diagnostics    : 16073
  12339 no_implicit_globals
    758 multiple_statements_per_line
    501 shadowing
@@ -38,10 +38,10 @@ Diagnostics    : 16072
      4 table_operations
      3 parenthesized_conditions
      3 redundant_return
+     2 format_string
      2 manual_table_clone
      2 reversed_for_loop
      1 bad_string_escape
-     1 format_string
      1 integer_parsing
      1 mismatched_arg_count
 
@@ -4618,6 +4618,7 @@ luau-0.740/constructs.luau
 222:14 setting_global: setting global variable `WX2` (missing `local`?)
 222:14 no_implicit_globals: global variable `WX2` used
 223:7 no_implicit_globals: global variable `string` used
+223:21 format_string: wrong argument count, format takes 8, got 9
 234:3 no_implicit_globals: global variable `assert` used
 234:10 no_implicit_globals: global variable `loadstring` used
 235:3 no_implicit_globals: global variable `assert` used
@@ -7253,7 +7254,7 @@ luau-0.740/gc.luau
 74:3 no_implicit_globals: global variable `a` used
 79:3 no_implicit_globals: global variable `collectgarbage` used
 80:3 no_implicit_globals: global variable `collectgarbage` used
-80:19 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
+80:18 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
 81:3 merge_adjacent_locals: adjacent `local` declarations can be merged
 82:3 redundant_nil_init: redundant `= nil` initializer, because uninitialized locals are `nil`
 87:3 no_implicit_globals: global variable `assert` used
@@ -7270,14 +7271,14 @@ luau-0.740/gc.luau
 106:13 no_implicit_globals: global variable `gcinfo` used
 107:3 no_implicit_globals: global variable `collectgarbage` used
 108:3 no_implicit_globals: global variable `collectgarbage` used
-108:19 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
+108:18 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
 109:3 redundant_nil_init: redundant `= nil` initializer, because uninitialized locals are `nil`
 109:9 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
 112:9 no_implicit_globals: global variable `gcinfo` used
 113:3 no_implicit_globals: global variable `assert` used
 114:3 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
 115:3 no_implicit_globals: global variable `collectgarbage` used
-115:19 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `restart`
+115:18 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `restart`
 118:9 no_implicit_globals: global variable `gcinfo` used
 119:3 no_implicit_globals: global variable `assert` used
 123:1 setting_global: setting global variable `lim` (missing `local`?)
@@ -7465,7 +7466,7 @@ luau-0.740/gc.luau
 240:5 undefined_variable: undefined variable `setblockallocations`
 240:5 no_implicit_globals: global variable `setblockallocations` used
 244:1 no_implicit_globals: global variable `collectgarbage` used
-244:17 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
+244:16 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
 245:1 merge_adjacent_locals: adjacent `local` declarations can be merged
 245:11 no_implicit_globals: global variable `newproxy` used
 247:22 multiple_statements_per_line: statement starts on the same line as the previous statement (line 247)
@@ -9660,7 +9661,7 @@ luau-0.740/locals.luau
 111:11 global_usage: global environment `_G` used
 111:11 no_implicit_globals: global variable `_G` used
 113:3 no_implicit_globals: global variable `collectgarbage` used
-113:19 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
+113:18 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
 114:9 shadowing: variable `a` shadows outer variable
 117:13 undefined_variable: undefined variable `querytab`
 117:13 no_implicit_globals: global variable `querytab` used

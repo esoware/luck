@@ -11,12 +11,14 @@
 //! A tree lives in a `luck_allocator` arena: every node is in a `Box` or a
 //! `List` there, and none needs dropping, so a tree is freed with its arena
 //! all at once. [`Expression`], [`Statement`], and [`Type`] are two words
-//! each. A leaf, a [`Name`] or a [`Literal`], holds its text as written: a
-//! parsed tree's borrows the source, and a built tree's lives in the arena,
-//! so a printer never needs the source. A name also holds a [`NameIndex`],
-//! a plain field that the parser numbers and a pass that holds the tree
-//! mutably may renumber. A tree is `Send` and `Sync`, and may join nodes from
-//! any number of arenas that outlive it.
+//! each. A [`Name`] holds its text, and a literal, a [`NumberLiteral`],
+//! [`IntegerLiteral`], or [`StringLiteral`], its value, which the parser
+//! decodes once, and its spelling as written, which a tree built in code
+//! leaves out. A parsed tree's leaves borrow the source, and a built tree's
+//! live in the arena, so a printer never needs the source. A name also holds
+//! a [`NameIndex`], a plain field that the parser numbers and a pass that
+//! holds the tree mutably may renumber. A tree is `Send` and `Sync`, and may
+//! join nodes from any number of arenas that outlive it.
 //!
 //! `luck_ast_tools` generates the tree's support code from its types. Two
 //! traversals share one walk: [`Visit`] borrows the
@@ -24,10 +26,11 @@
 //! every type, to override, and a `walk_*` method that visits what a node
 //! holds in source order, to call from it and recurse. [`Visit::enter_node`]
 //! is handed every node as an [`AstKind`]. [`GetSpan`] gives any node's span,
-//! [`ContentEq`] compares two trees leaving their spans out, and every node
-//! type has a `new` constructor, a `boxed` one where a field boxes it, and an
-//! enum a `new_*` one for each variant that holds a struct. [`Synth`] builds
-//! on those, adding the checks a tool that emits a tree needs.
+//! [`ContentEq`] compares two trees leaving their spans and spellings out,
+//! and every node type has a `new` constructor, a `boxed` one where a field
+//! boxes it, and an enum a `new_*` one for each variant that holds a struct.
+//! [`Synth`] builds on those, adding the checks a tool that emits a tree
+//! needs.
 //!
 //! A run of suffixes (`a.b[c]:d()`) is one [`SuffixedExpression`], and a
 //! run of binary operators at one precedence level (`a + b - c`) is one
@@ -49,8 +52,8 @@
 //! let allocator = Allocator::new();
 //! let spans = SpanCounter::new();
 //! let synth = Synth::new(&allocator, &spans);
-//! let expr = synth.number("42");
-//! assert!(matches!(expr, Expression::Number(literal) if literal.text == "42"));
+//! let expr = synth.number_f64(0.5);
+//! assert!(matches!(expr, Expression::Number(literal) if literal.value.to_f64() == 0.5));
 //! ```
 
 #![cfg_attr(
@@ -95,7 +98,7 @@ pub use expr::{
 };
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
 pub use generated::{AstKind, AstType, Visit, VisitMut};
-pub use leaf::{Literal, Name, NameIndex};
+pub use leaf::{IntegerLiteral, Name, NameIndex, NumberLiteral, StringLiteral};
 pub use one_or_more::OneOrMore;
 pub use query::{
     expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,

@@ -1,15 +1,10 @@
-use alloc::borrow::Cow;
 use core::cmp::Ordering;
-use core::fmt::Write as _;
 
-use luck_allocator::{Allocator, Box};
-use luck_ast::{Expression, GetSpan as _, OneOrMore, unwrap_parentheses};
-use luck_token::{
-    Associativity, BinOp, LuaNumber, LuaVersion, NumberSubtypes, Span, UnOp, decode_string,
-    encode_string, parse_lua_number,
-};
+use luck_allocator::{Allocator, Box, ThinBytes};
+use luck_ast::{Expression, GetSpan as _, NumberLiteral, OneOrMore, unwrap_parentheses};
+use luck_token::{Associativity, BinOp, LuaNumber, LuaVersion, Span, UnOp};
 
-use crate::expr::{boolean, extract_boolean, int_to_float, is_nil, truncate_multi_value};
+use crate::expr::{boolean, extract_boolean, is_nil, truncate_multi_value};
 
 /// Folds a run of binary operators or a unary operator over literals, and
 /// says whether it did. Hands `drop` each operand it drops that isn't a
@@ -23,9 +18,12 @@ pub(super) fn fold<'ast>(
     match expr {
         Expression::BinaryOp(run) => match run.precedence().1 {
             Associativity::Left => fold_left_run(allocator, version, expr, drop),
+            Associativity::Right if run.links.first().op == BinOp::Concat => {
+                fold_concat_run(allocator, expr)
+            }
             Associativity::Right => fold_right_run(allocator, version, expr),
         },
-        Expression::UnaryOp(_) => fold_unary(allocator, NumberSubtypes::from(version), expr),
+        Expression::UnaryOp(_) => fold_unary(allocator, version, expr),
         Expression::Nil(_)
         | Expression::False(_)
         | Expression::True(_)
@@ -105,8 +103,8 @@ fn fold_left_run<'ast>(
     true
 }
 
-/// Folds the run's `..` or `^` from the right for as long as they fold, as
-/// the nested pairs it groups into would.
+/// Folds the run's `^` from the right for as long as they fold, as the
+/// nested pairs it groups into would.
 fn fold_right_run<'ast>(
     allocator: &'ast Allocator,
     version: LuaVersion,
@@ -154,14 +152,12 @@ fn negate_number(number: LuaNumber) -> LuaNumber {
     }
 }
 
-/// Reads a number literal, possibly negated or parenthesized, with its
-/// subtype. Under [`NumberSubtypes::Unified`] (5.1, 5.2, Luau) every number
-/// is a float.
-fn extract_lua_number(expr: &Expression<'_>, subtypes: NumberSubtypes) -> Option<LuaNumber> {
+/// The value of a number literal, possibly negated or parenthesized.
+fn extract_lua_number(expr: &Expression<'_>) -> Option<LuaNumber> {
     match unwrap_parentheses(expr) {
-        Expression::Number(literal) => parse_lua_number(literal.text, subtypes),
+        Expression::Number(literal) => Some(literal.value),
         Expression::UnaryOp(unop) if unop.op == UnOp::Neg => {
-            extract_lua_number(&unop.operand, subtypes).map(negate_number)
+            extract_lua_number(&unop.operand).map(negate_number)
         }
         Expression::Nil(_)
         | Expression::False(_)
@@ -208,7 +204,7 @@ fn fold_numeric(
             BinOp::Mul => Some(Int(left.wrapping_mul(right))),
             // `/` and `^` always produce floats.
             BinOp::Div | BinOp::Pow => {
-                fold_float(int_to_float(left), op, int_to_float(right), version)
+                fold_float(Int(left).to_f64(), op, Int(right).to_f64(), version)
             }
             // Integer % 0 and // 0 raise at runtime, so never fold them.
             BinOp::Mod => floored_mod(left, right).map(Int),
@@ -234,7 +230,7 @@ fn fold_numeric(
             if !int_fits_f64(left) {
                 return None;
             }
-            fold_float(int_to_float(left), op, right, version)
+            fold_float(Int(left).to_f64(), op, right, version)
         }
         (Float(left), Int(right)) => {
             // 5.4+ compiles `x - 0` as an immediate add, so -0.0 keeps or loses
@@ -245,7 +241,7 @@ fn fold_numeric(
             if !int_fits_f64(right) || is_negative_zero_minus_zero {
                 return None;
             }
-            fold_float(left, op, int_to_float(right), version)
+            fold_float(left, op, Int(right).to_f64(), version)
         }
     }
 }
@@ -265,7 +261,7 @@ fn exact_power(base: f64, exponent: f64) -> Option<f64> {
     {
         return None;
     }
-    let exact_limit = int_to_float(1i64 << 53);
+    let exact_limit = LuaNumber::Int(1i64 << 53).to_f64();
     let mut power = 1.0f64;
     let mut remaining = exponent;
     while remaining >= 1.0f64 {
@@ -377,13 +373,13 @@ fn compare_numbers(lhs: LuaNumber, op: BinOp, rhs: LuaNumber) -> Option<bool> {
             if !int_fits_f64(left) {
                 return None;
             }
-            int_to_float(left).partial_cmp(&right)?
+            Int(left).to_f64().partial_cmp(&right)?
         }
         (Float(left), Int(right)) => {
             if !int_fits_f64(right) {
                 return None;
             }
-            left.partial_cmp(&int_to_float(right))?
+            left.partial_cmp(&Int(right).to_f64())?
         }
     };
     Some(match op {
@@ -411,44 +407,61 @@ fn compare_numbers(lhs: LuaNumber, op: BinOp, rhs: LuaNumber) -> Option<bool> {
     })
 }
 
-fn extract_string_bytes<'text>(
-    expr: &'text Expression<'_>,
-    version: LuaVersion,
-) -> Option<Cow<'text, [u8]>> {
+/// The value of a string literal, possibly parenthesized.
+fn extract_string<'ast>(expr: &Expression<'ast>) -> Option<ThinBytes<'ast>> {
     if let Expression::StringLiteral(literal) = unwrap_parentheses(expr) {
-        decode_string(literal.text, version)
+        Some(literal.value)
     } else {
         None
     }
 }
 
-/// Strings compare by decoded bytes, since `"\65"` and `"A"` are the same string.
-fn fold_equality(lhs: &Expression<'_>, rhs: &Expression<'_>, version: LuaVersion) -> Option<bool> {
-    if let Some(left) = extract_string_bytes(lhs, version)
-        && let Some(right) = extract_string_bytes(rhs, version)
+/// Strings compare by value, so `"\65"` and `"A"` are the same string.
+fn fold_equality(lhs: &Expression<'_>, rhs: &Expression<'_>) -> Option<bool> {
+    if let Some(left) = extract_string(lhs)
+        && let Some(right) = extract_string(rhs)
     {
         return Some(left == right);
     }
     Some(extract_boolean(lhs)? == extract_boolean(rhs)?)
 }
 
-/// Joins decoded bytes, since gluing raw text can merge escapes:
-/// `"\1" .. "2"` isn't `"\12"`.
-fn fold_concat<'ast>(
-    allocator: &'ast Allocator,
-    lhs: &Expression<'_>,
-    rhs: &Expression<'_>,
-    version: LuaVersion,
-) -> Option<Expression<'ast>> {
-    let left = extract_string_bytes(lhs, version)?;
-    let right = extract_string_bytes(rhs, version)?;
-    let mut joined = Vec::with_capacity(left.len().saturating_add(right.len()));
-    joined.extend_from_slice(&left);
-    joined.extend_from_slice(&right);
-    let mut text = String::new();
-    encode_string(&joined, &mut text);
-    let span = lhs.span().merge(rhs.span());
-    Some(Expression::new_string_literal(allocator.alloc_str(&text), span, allocator))
+/// Joins the string literals a run of `..` ends with into one.
+///
+/// `..` groups from the right, so those are the pairs it folds first, and
+/// they join in one copy however many there are. A string never joins a
+/// number, whose `tostring` is the target's.
+fn fold_concat_run<'ast>(allocator: &'ast Allocator, expr: &mut Expression<'ast>) -> bool {
+    let Expression::BinaryOp(boxed) = expr else {
+        return false;
+    };
+    let run = &mut **boxed;
+    let joined_links =
+        run.links.iter().rev().take_while(|link| extract_string(&link.operand).is_some()).count();
+    let first_link = run.links.len().saturating_sub(joined_links);
+    let is_whole_run = first_link == 0 && extract_string(&run.first).is_some();
+    if joined_links < 2 && !(is_whole_run && joined_links == 1) {
+        return false;
+    }
+    let tail = run.links.get(first_link..).unwrap_or_default().iter().map(|link| &link.operand);
+    let operands = is_whole_run.then_some(&run.first).into_iter().chain(tail);
+    let mut joined = Vec::new();
+    let mut span = None;
+    for operand in operands {
+        if let Some(string) = extract_string(operand) {
+            joined.extend_from_slice(&string);
+        }
+        span = Some(span.map_or_else(|| operand.span(), |start: Span| start.merge(operand.span())));
+    }
+    let value = ThinBytes::new(allocator.alloc_slice_copy(&joined));
+    let literal = Expression::new_string_literal(value, None, span.unwrap_or_default(), allocator);
+    if is_whole_run {
+        *expr = literal;
+    } else {
+        run.links.truncate(first_link.saturating_add(1));
+        run.links.last_mut().operand = literal;
+    }
+    true
 }
 
 fn fold_binary<'ast>(
@@ -458,13 +471,12 @@ fn fold_binary<'ast>(
     rhs: &Expression<'_>,
     version: LuaVersion,
 ) -> Option<BinaryFold<'ast>> {
-    let subtypes = NumberSubtypes::from(version);
     let span = lhs.span().merge(rhs.span());
-    if let Some(left) = extract_lua_number(lhs, subtypes)
-        && let Some(right) = extract_lua_number(rhs, subtypes)
+    if let Some(left) = extract_lua_number(lhs)
+        && let Some(right) = extract_lua_number(rhs)
     {
         if let Some(value) = fold_numeric(left, op, right, version)
-            && let Some(folded) = make_lua_number_expr(allocator, value, subtypes, span)
+            && let Some(folded) = make_lua_number_expr(allocator, value, span)
         {
             return Some(BinaryFold::Literal(folded));
         }
@@ -474,11 +486,12 @@ fn fold_binary<'ast>(
     }
 
     match op {
-        BinOp::Eq => fold_equality(lhs, rhs, version)
-            .map(|is_equal| BinaryFold::Literal(boolean(is_equal, span))),
-        BinOp::Ne => fold_equality(lhs, rhs, version)
-            .map(|is_equal| BinaryFold::Literal(boolean(!is_equal, span))),
-        BinOp::Concat => fold_concat(allocator, lhs, rhs, version).map(BinaryFold::Literal),
+        BinOp::Eq => {
+            fold_equality(lhs, rhs).map(|is_equal| BinaryFold::Literal(boolean(is_equal, span)))
+        }
+        BinOp::Ne => {
+            fold_equality(lhs, rhs).map(|is_equal| BinaryFold::Literal(boolean(!is_equal, span)))
+        }
         BinOp::And => match extract_boolean(lhs) {
             Some(true) => Some(BinaryFold::Right),
             Some(false) => Some(BinaryFold::Literal(boolean(false, span))),
@@ -489,7 +502,9 @@ fn fold_binary<'ast>(
             Some(false) => Some(BinaryFold::Right),
             None => is_nil(lhs).then_some(BinaryFold::Right),
         },
-        BinOp::Add
+        // A run of `..` folds as one, in `fold_concat_run`.
+        BinOp::Concat
+        | BinOp::Add
         | BinOp::Sub
         | BinOp::Mul
         | BinOp::Div
@@ -510,7 +525,7 @@ fn fold_binary<'ast>(
 
 fn fold_unary<'ast>(
     allocator: &'ast Allocator,
-    subtypes: NumberSubtypes,
+    version: LuaVersion,
     expr: &mut Expression<'ast>,
 ) -> bool {
     let Expression::UnaryOp(unop) = expr else {
@@ -524,8 +539,8 @@ fn fold_unary<'ast>(
             if matches!(unop.operand, Expression::Number(_)) {
                 return false;
             }
-            if let Some(number) = extract_lua_number(&unop.operand, subtypes) {
-                make_lua_number_expr(allocator, negate_number(number), subtypes, span)
+            if let Some(number) = extract_lua_number(&unop.operand) {
+                make_lua_number_expr(allocator, negate_number(number), span)
             } else if let Expression::UnaryOp(inner) = unwrap_parentheses(&unop.operand)
                 && inner.op == UnOp::Neg
                 && let Expression::Number(literal) = &inner.operand
@@ -549,7 +564,17 @@ fn fold_unary<'ast>(
                 None
             }
         }
-        UnOp::Len | UnOp::BitNot => None,
+        // `#` on a string is its byte count, which no metamethod changes.
+        UnOp::Len => extract_string(&unop.operand).and_then(|string| {
+            let length = i64::try_from(string.len()).ok()?;
+            let value = if version.has_integer_subtype() {
+                LuaNumber::Int(length)
+            } else {
+                LuaNumber::Float(LuaNumber::Int(length).to_f64())
+            };
+            make_lua_number_expr(allocator, value, span)
+        }),
+        UnOp::BitNot => None,
     };
     let Some(value) = folded else {
         return false;
@@ -558,46 +583,31 @@ fn fold_unary<'ast>(
     true
 }
 
-/// Builds the literal for a folded number, or `None` when no literal spells
-/// the value exactly under the target's number model.
+/// The expression for a folded number: a literal, under a `-` when the
+/// value is negative, or `None` for NaN, which no literal holds.
+///
+/// `i64::MIN` has no magnitude to negate, so it's a literal, which prints as
+/// the hex that wraps to it on Lua 5.3+. A negative zero keeps its sign
+/// under the `-`, since `1/-0` is `-inf`.
 fn make_lua_number_expr(
     allocator: &Allocator,
     value: LuaNumber,
-    subtypes: NumberSubtypes,
     span: Span,
 ) -> Option<Expression<'_>> {
-    let has_int_subtype = subtypes == NumberSubtypes::IntFloat;
-    let number = |text: &str| Expression::new_number(allocator.alloc_str(text), span, allocator);
+    let literal = |magnitude| {
+        Expression::Number(Box::new_in(NumberLiteral::new(magnitude, None, span, true), allocator))
+    };
     let negated = |operand| Expression::new_unary_op(span, UnOp::Neg, operand, allocator);
     match value {
-        LuaNumber::Int(int_value) => {
-            // `-9223372036854775808` is unary minus on a literal that
-            // overflows to a float in 5.3+, so i64::MIN has no decimal
-            // spelling.
-            if int_value == i64::MIN {
-                return None;
-            }
-            let magnitude = number(itoa::Buffer::new().format(int_value.unsigned_abs()));
-            Some(if int_value < 0 { negated(magnitude) } else { magnitude })
+        LuaNumber::Int(integer) => Some(match integer.checked_neg() {
+            Some(magnitude) if integer < 0 => negated(literal(LuaNumber::Int(magnitude))),
+            Some(_) | None => literal(value),
+        }),
+        LuaNumber::Float(float) if float.is_nan() => None,
+        LuaNumber::Float(float) if float.is_sign_negative() => {
+            Some(negated(literal(LuaNumber::Float(float.abs()))))
         }
-        LuaNumber::Float(float_value) => {
-            if !float_value.is_finite() {
-                return None;
-            }
-            // Preserve negative zero: 1/(-0) is -inf where 1/0 is inf.
-            if float_value == 0.0f64 && float_value.is_sign_negative() {
-                return Some(negated(number(if has_int_subtype { "0.0" } else { "0" })));
-            }
-            // Display gives the shortest round-trip digits. On 5.3+ the
-            // literal must still spell a float (`4.0`, not `4`).
-            let mut text = String::new();
-            write!(text, "{}", float_value.abs()).ok()?;
-            if has_int_subtype && !text.contains(['.', 'e', 'E']) {
-                text.push_str(".0");
-            }
-            let magnitude = number(&text);
-            Some(if float_value < 0.0f64 { negated(magnitude) } else { magnitude })
-        }
+        LuaNumber::Float(_) => Some(literal(value)),
     }
 }
 
@@ -661,17 +671,33 @@ mod tests {
     #[test]
     fn keeps_what_could_raise_or_call_a_metamethod() {
         for source in [
-            // #"str" must not be folded: escape sequences make the raw length
-            // unreliable.
-            "local x=#\"hello\"",
             "local x=1/0",
             "local x=5%0",
             // `+` may invoke an __add metamethod.
             "return a+0",
-            "local x=1e308*10",
+            "return#t",
         ] {
             assert_eq!(apply(source), source);
         }
+    }
+
+    #[test]
+    fn folds_the_length_of_a_string_by_its_value() {
+        for (source, expected, version) in [
+            ("return #\"hello\"", "return 5", LuaVersion::Lua54),
+            ("return #'\\65\\u{e9}' + 1", "return 4", LuaVersion::Lua54),
+            ("return #[[\nab]]", "return 2", LuaVersion::Lua51),
+            ("return #(\"ab\") * 1.5", "return 3", LuaVersion::Luau),
+        ] {
+            assert_eq!(apply_version(source, version), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn folds_an_overflow_to_infinity() {
+        assert_eq!(apply("local x = 1e308 * 10"), "local x=1e999");
+        assert_eq!(apply("local x = -1e308 * 10"), "local x=-1e999");
+        assert_eq!(apply("local x = 1e308 * 10 - 1e308 * 10"), "local x=1e999-1e999");
     }
 
     #[test]
@@ -691,7 +717,7 @@ mod tests {
 
     #[test]
     fn keeps_negative_zero() {
-        assert_eq!(apply("local x = 0.0 * -1"), "local x=-0.0");
+        assert_eq!(apply("local x = 0.0 * -1"), "local x=-0.");
     }
 
     #[test]
@@ -700,8 +726,8 @@ mod tests {
         // it folds. Its neighbor has no exact image and must not.
         for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
             for (source, expected) in [
-                ("return 0x8000000000000000 + 1.5\n", "return-9223372036854776000.0"),
-                ("return 1.5 + 0x8000000000000000\n", "return-9223372036854776000.0"),
+                ("return 0x8000000000000000 + 1.5\n", "return-9223372036854776e3"),
+                ("return 1.5 + 0x8000000000000000\n", "return-9223372036854776e3"),
                 ("return 0x8000000000000000 < 1.5\n", "return true"),
                 ("return 0x8000000000000001 + 1.5\n", "return 0x8000000000000001+1.5"),
             ] {
@@ -714,7 +740,7 @@ mod tests {
     fn folds_float_modulo_with_fmod_from_lua53() {
         // 5.3+ luai_nummod is fmod + sign fix: 1e16 % 3 == 1.0 exactly.
         // 5.1's floor formula really does produce 0.0, so mirror it.
-        assert_eq!(apply_version("return 1e16 % 3\n", LuaVersion::Lua54), "return 1.0");
+        assert_eq!(apply_version("return 1e16 % 3\n", LuaVersion::Lua54), "return 1.");
         assert_eq!(apply_version("return 1e16 % 3\n", LuaVersion::Lua51), "return 0");
     }
 
@@ -722,7 +748,7 @@ mod tests {
     fn folds_float_modulo_keeping_the_sign_of_zero_from_lua53() {
         // fmod(-6.0, 3.0) is -0.0 under 5.3+; the floor formula loses
         // the sign. Observable via 1/x and tostring.
-        assert_eq!(apply_version("return -6.0 % 3.0\n", LuaVersion::Lua54), "return-0.0");
+        assert_eq!(apply_version("return -6.0 % 3.0\n", LuaVersion::Lua54), "return-0.");
         assert_eq!(apply_version("return -6.0 % 3.0\n", LuaVersion::Lua51), "return 0");
     }
 
@@ -731,16 +757,16 @@ mod tests {
         // 5.4+ compiles `x - 0` to OP_ADDI with -0, and -0.0 + 0.0 is +0.0.
         for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
             let result = apply_version("return -0.0 - 0\n", version);
-            assert_ne!(result, "return-0.0", "{version:?} evaluates this to +0.0");
+            assert_ne!(result, "return-0.", "{version:?} evaluates this to +0.0");
         }
     }
 
     #[test]
     fn folds_integer_powers_with_an_exact_result() {
         for (source, expected) in [
-            ("return 2 ^ 10\n", "return 1024.0"),
-            ("return (-2) ^ 3\n", "return-8.0"),
-            ("return 7 ^ 0\n", "return 1.0"),
+            ("return 2 ^ 10\n", "return 1024."),
+            ("return (-2) ^ 3\n", "return-8."),
+            ("return 7 ^ 0\n", "return 1."),
             ("return 2 ^ 53\n", "return 2^53"),
         ] {
             assert_eq!(apply(source), expected, "source: {source}");
@@ -750,7 +776,7 @@ mod tests {
     #[test]
     fn keeps_exponentiation_with_an_inexact_result() {
         // An inexact `^` depends on the target's C pow.
-        assert_eq!(apply("return 0.3 ^ 3\n"), "return 0.3^3");
+        assert_eq!(apply("return 0.3 ^ 3\n"), "return.3^3");
     }
 
     #[test]
@@ -759,9 +785,10 @@ mod tests {
             // Left-associative: the folded prefix stays the run's first.
             ("return 1 + 2 + x + 3", "return 3+x+3"),
             // Right-associative: the folded suffix stays the run's last.
-            ("return x .. \"a\" .. \"b\"", "return x..\"ab\""),
+            ("return x .. \"a\" .. \"b\" .. 'c'", "return x..\"abc\""),
             ("return \"a\" .. \"b\" .. x", "return\"a\"..\"b\"..x"),
-            ("return 2 ^ 2 ^ 3", "return 256.0"),
+            ("return \"a\" .. (\"b\") .. \"\\\"\"", "return'ab\"'"),
+            ("return 2 ^ 2 ^ 3", "return 256."),
         ] {
             assert_eq!(apply(source), expected, "source: {source}");
         }
@@ -773,7 +800,7 @@ mod tests {
         for version in [LuaVersion::Lua51, LuaVersion::Luau] {
             assert_eq!(
                 minify_with("return -(-0x625)", version, &config),
-                "return 0x625",
+                "return 1573",
                 "{version:?}"
             );
         }
@@ -781,7 +808,7 @@ mod tests {
 
     #[test]
     fn a_negated_numeral_is_already_folded() {
-        for source in ["return-1", "return-1.5", "return-0x10"] {
+        for source in ["return-1", "return-1.5", "return-0xffffffffffffffff"] {
             assert_eq!(apply(source), source);
         }
         assert_eq!(apply("return - -1"), "return 1");

@@ -38,16 +38,14 @@ return x
 }
 
 #[test]
-fn keeps_length_of_a_string_literal() {
-    // #"str" must not be folded: escape sequences make the raw length
-    // unreliable.
+fn folds_the_length_of_a_string_literal_by_its_value() {
     let result = minify_lua54(
         "\
-local x = #\"hello\"
+local x = #\"h\\101llo\"
 return x
 ",
     );
-    assert!(result.contains('#'), "Got: {result}");
+    assert_eq!(result, "return 5");
 }
 
 #[test]
@@ -73,14 +71,14 @@ return x
 }
 
 #[test]
-fn keeps_multiplication_that_overflows_to_infinity() {
+fn folds_multiplication_that_overflows_to_infinity() {
     let result = minify_lua54(
         "\
 local x = 1e308 * 10
 return x
 ",
     );
-    assert!(result.contains('*'), "Should not fold to inf: {result}");
+    assert_eq!(result, "return 1e999");
 }
 
 #[test]

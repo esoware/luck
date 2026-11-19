@@ -24,6 +24,9 @@ pub(crate) struct LintContext<'ast> {
     pub directives: &'ast Directives,
     pub source: &'ast str,
     pub comments: &'ast [Comment],
+    /// Where each escape Lua 5.1 and Luau read as the character it escapes
+    /// is, as the lexer found them.
+    pub lenient_escapes: &'ast [Span],
     pub config: &'ast LintConfig,
     /// The kinds of fix the host applies, which are the only ones rules
     /// build.
@@ -46,6 +49,7 @@ impl<'ast> LintContext<'ast> {
             directives: analysis.directives(),
             source: parse.source,
             comments: &parse.comments,
+            lenient_escapes: &parse.lenient_escapes,
             config,
             fixes,
             local_flow: OnceLock::new(),

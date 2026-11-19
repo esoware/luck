@@ -241,7 +241,7 @@ impl<'ast> Formatter<'ast> {
                     | CallParentheses::Input => true,
                 };
                 let write_string = |f: &mut Self| {
-                    f.node(|| literal.span, |inner| inner.write_string(literal.text));
+                    f.node(|| literal.span, |inner| inner.write_string(literal));
                 };
                 if should_keep_bare {
                     self.space();

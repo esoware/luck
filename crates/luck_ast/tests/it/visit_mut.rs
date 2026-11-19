@@ -117,7 +117,7 @@ fn the_default_walk_leaves_the_tree_as_it_was() {
     // start, so the two trees are equal before the walk.
     fn build(fixture: &Fixture) -> Block<'_> {
         let synth = fixture.synth();
-        let sum = synth.binary_op(synth.number("1"), BinOp::Add, synth.number("2"));
+        let sum = synth.binary_op(synth.number_i64(1), BinOp::Add, synth.number_i64(2));
         let targets = [synth.field_var(synth.name_expr("a"), "b"), synth.name_var("c")];
         let values = [synth.name_expr("x"), synth.name_expr("x")];
         synth.block([synth.local(&["x"], [sum]), synth.assign(targets, values)])

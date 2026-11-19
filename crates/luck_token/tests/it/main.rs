@@ -3,8 +3,6 @@
     reason = "a test panics to fail, so a Panics section says nothing"
 )]
 
-extern crate alloc;
-
 mod code_buffer;
 mod comment;
 mod directive;

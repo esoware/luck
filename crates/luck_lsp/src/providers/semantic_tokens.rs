@@ -645,7 +645,6 @@ impl<'ast> Visit<'ast> for Classifier<'_> {
             | Type::True(_)
             | Type::False(_)
             | Type::StringLiteral(_)
-            | Type::Number(_)
             | Type::Error(_) => {}
         }
         self.walk_type(ty);

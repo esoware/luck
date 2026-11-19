@@ -12,7 +12,7 @@ pub(crate) fn render<'ast>(
     options: FormatOptions,
     write: impl FnOnce(&mut Formatter<'ast>),
 ) -> String {
-    let mut f = Formatter::new(allocator, options, Comments::none());
+    let mut f = Formatter::new(allocator, LuaVersion::Luau, options, Comments::none());
     write(&mut f);
     f.print("")
 }
