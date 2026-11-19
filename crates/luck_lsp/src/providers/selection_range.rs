@@ -1,7 +1,5 @@
 use ls_types::{Position, SelectionRange};
-use luck_ast::{
-    Block, Expression, GetSpan as _, LastStatement, Statement, SuffixedExpression, Visit,
-};
+use luck_ast::{Block, Expression, GetSpan as _, Statement, SuffixedExpression, Visit};
 use luck_token::{Associativity, Span};
 
 use crate::document::DocumentState;
@@ -22,7 +20,7 @@ pub(crate) fn selection_ranges(
 fn selection_for(document: &DocumentState, position: Position) -> SelectionRange {
     let offset = document.offset(position);
     let mut collector = SpanStack { offset, stack: Vec::new() };
-    collector.visit_block(&document.parse().block);
+    collector.visit_block(&document.parse().chunk.block);
     let first_kept = collector.stack.len().saturating_sub(MAX_SELECTION_DEPTH);
     collector.stack.drain(..first_kept);
 
@@ -62,21 +60,11 @@ impl<'ast> Visit<'ast> for SpanStack {
         for stmt in statements_touching(block, self.offset) {
             self.visit_stmt(stmt);
         }
-        if let Some(last) = &block.last_stmt {
-            self.visit_last_stmt(last);
-        }
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         self.record(stmt.span());
         self.walk_stmt(stmt);
-    }
-
-    fn visit_last_stmt(&mut self, last_stmt: &'ast LastStatement<'ast>) {
-        if touches(last_stmt.span(), self.offset) {
-            self.record(last_stmt.span());
-            self.walk_last_stmt(last_stmt);
-        }
     }
 
     /// A run steps out through each pair it groups into, as if it nested.

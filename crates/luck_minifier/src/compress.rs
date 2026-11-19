@@ -166,9 +166,8 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         self.live_registers = 0;
         self.visit_block(block);
         // The chunk is a function too, and returns nothing either way.
-        if self.config.remove_dead_code && remove_dead_code::ends_in_bare_return(block) {
-            block.last_stmt = None;
-            self.has_changed = true;
+        if self.config.remove_dead_code {
+            self.has_changed |= remove_dead_code::drop_bare_return(block);
         }
         self.needs_revisit |= self.has_depth_refusal.get() && self.has_changed;
         self.needs_revisit |= self.take_freed_names();
@@ -327,19 +326,17 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                 self.live_registers = outer_registers;
                 return true;
             }
-            // A Lua 5.2+ `;` never decides whether a label ends its block,
-            // since every Lua skips past it to see, and the printer puts one
-            // back before a statement that starts with `(`.
-            Statement::EmptyStatement(_) => return !should_remove_dead_code,
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::FunctionDecl(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
@@ -608,9 +605,6 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
         self.descend();
         let outer_registers = self.live_registers;
         self.visit_stmts(&mut block.stmts);
-        if let Some(last) = &mut block.last_stmt {
-            self.visit_last_stmt(last);
-        }
         self.finish_block(block, outer_registers);
         self.ascend();
     }
@@ -723,11 +717,8 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
             self.function_depth = self.function_depth.saturating_add(1);
             let outer_has_changed = mem::take(&mut self.has_changed);
             self.visit_block(&mut function_body.block);
-            if self.config.remove_dead_code
-                && remove_dead_code::ends_in_bare_return(&function_body.block)
-            {
-                function_body.block.last_stmt = None;
-                self.has_changed = true;
+            if self.config.remove_dead_code {
+                self.has_changed |= remove_dead_code::drop_bare_return(&mut function_body.block);
             }
             if self.config.lift_locals {
                 self.lift(function_body);

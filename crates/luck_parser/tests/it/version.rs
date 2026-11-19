@@ -15,7 +15,7 @@ fn goto_in_lua51_is_identifier() {
     // In Lua 5.1, `goto` is an ordinary identifier.
     let result = parse(&allocator, "goto = 1", LuaVersion::Lua51);
     assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::Assignment(_)));
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::Assignment(_)));
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn attribute_is_not_parsed_in_lua53() {
     // Lua 5.3 has no attributes, so the statement ends at `local x` and
     // `<const> = 5` is left over.
     let result = parse(&allocator, "local x <const> = 5", LuaVersion::Lua53);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert!(
             local.names.first().expect("declared name").attribute.is_none(),
             "should not parse attribute in Lua 5.3"
@@ -50,7 +50,7 @@ fn global_in_lua54_is_identifier() {
     // In Lua 5.4, `global` is an identifier, not a keyword.
     let result = parse(&allocator, "global = 1", LuaVersion::Lua54);
     assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::Assignment(_)));
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::Assignment(_)));
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn vararg_name_is_not_consumed_in_lua54() {
     // Lua 5.4 has no named varargs, so the vararg parameter stays unnamed.
     let result = parse(&allocator, "function f(...) return args end", LuaVersion::Lua54);
     assert_no_errors(&result);
-    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+    if let Statement::FunctionDecl(function_decl) = &result.chunk.block.stmts[0] {
         let vararg = function_decl.body.vararg.as_ref().expect("expected vararg");
         assert!(vararg.name.is_none(), "vararg should not have a name in Lua 5.4");
     } else {

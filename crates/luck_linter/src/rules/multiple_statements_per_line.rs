@@ -1,4 +1,4 @@
-use luck_ast::{GetSpan as _, LastStatement, Statement};
+use luck_ast::{GetSpan as _, Statement};
 use luck_token::Span;
 
 use crate::diagnostic::Finding;
@@ -27,14 +27,8 @@ impl WholeRule for MultipleStatementsPerLine {
         let mut findings = Vec::new();
         let mut spans: Vec<Span> = Vec::new();
         for block in context.nodes.blocks() {
-            // A bare `;` is a separator, not a statement.
-            let stmt_spans = block
-                .stmts
-                .iter()
-                .filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_)))
-                .map(Statement::span);
             spans.clear();
-            spans.extend(stmt_spans.chain(block.last_stmt.as_ref().map(LastStatement::span)));
+            spans.extend(block.stmts.iter().map(Statement::span));
 
             for (previous, next) in spans.iter().zip(spans.iter().skip(1)) {
                 // `end` is exclusive, so step back one byte to stay on the

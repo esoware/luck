@@ -17,7 +17,8 @@ For a parse, the formatter takes comments from the parse's comment list and plac
 
 - `format(allocator, source, version, &options)` parses and formats, returning a `FormatResult` with the output and any parse errors.
 - `format_parsed` formats a parse the caller holds, and `format_range` formats only the statements a byte range overlaps and copies the rest.
-- `format_block(allocator, &block, comments, &options)` formats a tree with no source, such as one built with `luck_ast::Synth`, with `Comments::synthetic` or `Comments::none`. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`.
+- `format_chunk(allocator, &chunk, comments, &options)` formats a tree with no source, such as one built with `luck_ast::Synth`, with `Comments::synthetic` or `Comments::none`. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`.
+- Every entry point that takes a tree reads its dialect from the tree's `Chunk`.
 
 ```rust
 use luck_allocator::Allocator;

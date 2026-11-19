@@ -12,7 +12,7 @@ impl Block<'_> {
     /// [`Expression::take`] does.
     #[must_use]
     pub const fn take(&mut self) -> Self {
-        mem::replace(self, Self::new(Span::new(0, 0), List::new(), None))
+        mem::replace(self, Self::new(Span::new(0, 0), List::new()))
     }
 }
 

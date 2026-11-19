@@ -152,9 +152,9 @@ x = 1
         ("f(x)(g)(y)", "f(x)(g)(y)", LuaVersion::Lua51),
         ("repeat until x;(f)()", "repeat until x;(f)()", LuaVersion::Lua51),
         ("local x;(f).y = 1", "local x;(f).y=1", LuaVersion::Lua51),
-        // Lua 5.2+: an empty statement is a `;` already.
+        // Lua 5.2+: the tree holds no `;`, so a run prints as the one a `(` needs.
         ("f(x);(g)(y)", "f(x);(g)(y)", LuaVersion::Lua52),
-        ("f(x);;(g)(y)", "f(x);;(g)(y)", LuaVersion::Lua52),
+        ("f(x);;(g)(y)", "f(x);(g)(y)", LuaVersion::Lua52),
         // Dropping the `;` would still parse, as `f()(g or h)<<T>>()`.
         ("f();(g or h)<<T>>()", "f();(g or h)<<T>>()", LuaVersion::Luau),
         ("f();(g or h)<<T>>.x = 1", "f();(g or h)<<T>>.x=1", LuaVersion::Luau),

@@ -73,13 +73,13 @@ pub fn bundle_minified(
     let warnings = mem::take(&mut graph.warnings);
     let source_files = graph.modules.iter().map(|module| module.path.clone()).collect();
     let source_byte_count = graph.modules.iter().map(|module| module.source.len()).sum();
-    let (mut block, mut output) = block_emitter::emit_block(allocator, graph, options.version)?;
+    let (mut chunk, mut output) = block_emitter::emit_chunk(allocator, graph, options.version)?;
     #[expect(
         clippy::expect_used,
         clippy::unwrap_in_result,
         reason = "the emitter refuses a tree past the cap"
     )]
-    let code = luck_minifier::minify_block(allocator, &mut block, options.version, transforms)
+    let code = luck_minifier::minify_chunk(allocator, &mut chunk, transforms)
         .expect("a bundle nests within the cap");
     if output.is_empty() {
         output = code;

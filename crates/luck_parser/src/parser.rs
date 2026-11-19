@@ -9,7 +9,7 @@ use core::mem;
 
 use luck_allocator::{Allocator, Box, List, ThinStr};
 use luck_ast::{
-    AttributedName, BinaryLink, Block, ElseIfClause, ElseIfExprClause, Expression, Field,
+    AttributedName, BinaryLink, Block, Chunk, ElseIfClause, ElseIfExprClause, Expression, Field,
     FunctionAttribute, FunctionTypeParam, GenericTypeParam, InterpolatedSegment, Literal,
     MAX_NESTING_DEPTH, Name, NameIndex, Parameter, Statement, Suffix, TreeCounts, Type, TypeField,
     Var,
@@ -60,14 +60,13 @@ fn parse_recording<'ast>(
     let lexer = match Lexer::new(source, version) {
         Ok(lexer) => lexer,
         Err(error) => {
-            let block = Block::new(Span::new(0, 0), List::new(), None);
-            // The empty block's own level.
-            let errors = vec![error];
+            let block = Block::new(Span::new(0, 0), List::new());
             let parse = ParseResult {
                 source,
-                block,
+                chunk: Chunk::new(version, block),
                 comments: Vec::new(),
-                errors,
+                errors: vec![error],
+                // The empty block's own level.
                 nesting_depth: 1,
                 counts: TreeCounts::default(),
             };
@@ -279,16 +278,17 @@ impl<'ast> Parser<'ast> {
     /// the source, and the lexer is drained by then.
     fn parse_chunk(mut self) -> (ParseResult<'ast>, Option<Vec<Token>>) {
         let start_span = self.token.span;
-        let block = self.parse_block().unwrap_or_else(|| Block::new(start_span, List::new(), None));
+        let block = self.parse_block().unwrap_or_else(|| Block::new(start_span, List::new()));
+        let chunk = Chunk::new(self.version, block);
         let (comments, mut errors) = self.lexer.finish();
         errors.append(&mut self.errors);
         if self.has_type_function && errors.is_empty() {
-            errors = check_type_functions(&block, self.version);
+            errors = check_type_functions(&chunk);
         }
         errors.sort_by_key(|e| e.span.start);
         let parse = ParseResult {
             source: self.source,
-            block,
+            chunk,
             comments,
             errors,
             nesting_depth: self.deepest_level,
@@ -658,7 +658,7 @@ mod tests {
         let allocator = Allocator::new();
         let result = parse(&allocator, source, version);
         assert!(result.errors.is_empty(), "{:?}\n{source}", result.errors.first());
-        (result.nesting_depth, block_nesting_depth(&result.block))
+        (result.nesting_depth, block_nesting_depth(&result.chunk.block))
     }
 
     #[test]

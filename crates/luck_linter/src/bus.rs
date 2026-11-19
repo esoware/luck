@@ -39,11 +39,8 @@ fn dispatch<'ast>(
         return;
     }
     match node.kind {
-        // A call node always has a site, and a last statement is in the table
-        // for suppression, with no hook of its own.
-        NodeKind::Statement(Statement::FunctionCall(_))
-        | NodeKind::Call { .. }
-        | NodeKind::LastStatement(_) => {}
+        // A call node always has a site.
+        NodeKind::Statement(Statement::FunctionCall(_)) | NodeKind::Call { .. } => {}
         NodeKind::Statement(stmt) => rule.on_stmt(stmt, context, findings),
         NodeKind::Expression(expr) => rule.on_expr(expr, context, findings),
         NodeKind::Table(table) => rule.on_table(table, context, findings),

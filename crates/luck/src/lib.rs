@@ -144,7 +144,7 @@
 //!
 //! let allocator = Allocator::new();
 //! let parsed = luck::parser::parse(&allocator, "local x = ( 1 )", LuaVersion::Lua54);
-//! assert_eq!(luck::codegen::compact(&parsed.block), "local x=(1)");
+//! assert_eq!(luck::codegen::compact(&parsed.chunk), "local x=(1)");
 //! # }
 //! ```
 //!

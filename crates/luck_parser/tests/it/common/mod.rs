@@ -16,8 +16,8 @@ pub(crate) fn parse_luau<'ast>(allocator: &'ast Allocator, source: &'ast str) ->
 
 /// The last initializer of a `local ... = <expr>` first statement.
 pub(crate) fn local_value<'ast>(result: &'ast ParseResult<'ast>) -> &'ast Expression<'ast> {
-    let Some(Statement::LocalAssignment(local)) = result.block.stmts.first() else {
-        panic!("expected LocalAssignment, got {:?}", result.block.stmts);
+    let Some(Statement::LocalAssignment(local)) = result.chunk.block.stmts.first() else {
+        panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts);
     };
     local.exprs.last().expect("assignment has values")
 }

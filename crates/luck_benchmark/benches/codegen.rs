@@ -13,7 +13,7 @@ fn bench_codegen(criterion: &mut Criterion) {
         let parse_result = file.parse(&allocator);
         group.bench_function(id, |bencher| {
             bencher.iter_with_large_drop(|| {
-                luck_codegen::compact_with_capacity(&parse_result.block, parse_result.source.len())
+                luck_codegen::compact_with_capacity(&parse_result.chunk, parse_result.source.len())
             });
         });
     }
@@ -26,7 +26,7 @@ fn bench_codegen(criterion: &mut Criterion) {
             bencher.iter(|| {
                 for parse_result in &parse_results {
                     black_box(luck_codegen::compact_with_capacity(
-                        black_box(&parse_result.block),
+                        black_box(&parse_result.chunk),
                         parse_result.source.len(),
                     ));
                 }

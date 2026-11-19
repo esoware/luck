@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Expression, Field, FunctionArgs, LastStatement, Statement, Suffix};
+use luck_ast::{Expression, Field, FunctionArgs, Statement, Suffix};
 use luck_parser::ParseResult;
 use luck_token::{BinOp, LuaVersion, UnOp};
 
@@ -16,8 +16,8 @@ fn do_end() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "do end");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    assert!(matches!(&result.block.stmts[0], Statement::DoBlock(_)));
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::DoBlock(_)));
 }
 
 #[test]
@@ -25,8 +25,8 @@ fn nested_do_blocks() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "do do do end end end");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::DoBlock(outer) = &result.block.stmts[0] {
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    if let Statement::DoBlock(outer) = &result.chunk.block.stmts[0] {
         assert_eq!(outer.block.stmts.len(), 1);
         if let Statement::DoBlock(middle) = &outer.block.stmts[0] {
             assert_eq!(middle.block.stmts.len(), 1);
@@ -44,8 +44,8 @@ fn while_loop() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "while true do end");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    if let Statement::WhileLoop(while_loop) = &result.chunk.block.stmts[0] {
         assert!(matches!(&while_loop.condition, Expression::True(_)));
     } else {
         panic!("expected WhileLoop");
@@ -57,8 +57,8 @@ fn repeat_until() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "repeat until false");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::RepeatLoop(repeat_loop) = &result.block.stmts[0] {
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    if let Statement::RepeatLoop(repeat_loop) = &result.chunk.block.stmts[0] {
         assert!(matches!(&repeat_loop.condition, Expression::False(_)));
     } else {
         panic!("expected RepeatLoop");
@@ -70,8 +70,8 @@ fn if_then_end() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "if true then end");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    assert!(matches!(&result.block.stmts[0], Statement::IfStatement(_)));
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::IfStatement(_)));
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn if_elseif_else() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "if x then a() elseif y then b() else c() end");
     assert_no_errors(&result);
-    if let Statement::IfStatement(if_stmt) = &result.block.stmts[0] {
+    if let Statement::IfStatement(if_stmt) = &result.chunk.block.stmts[0] {
         assert_eq!(if_stmt.elseif_clauses.len(), 1);
         assert!(if_stmt.else_clause.is_some());
     } else {
@@ -92,7 +92,7 @@ fn numeric_for_two_values() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "for i = 1, 10 do end");
     assert_no_errors(&result);
-    if let Statement::NumericFor(numeric_for) = &result.block.stmts[0] {
+    if let Statement::NumericFor(numeric_for) = &result.chunk.block.stmts[0] {
         assert!(numeric_for.step.is_none());
     } else {
         panic!("expected NumericFor");
@@ -104,7 +104,7 @@ fn numeric_for_three_values() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "for i = 1, 10, 2 do end");
     assert_no_errors(&result);
-    if let Statement::NumericFor(numeric_for) = &result.block.stmts[0] {
+    if let Statement::NumericFor(numeric_for) = &result.chunk.block.stmts[0] {
         assert!(numeric_for.step.is_some());
     } else {
         panic!("expected NumericFor");
@@ -116,7 +116,7 @@ fn generic_for() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "for k, v in pairs(t) do end");
     assert_no_errors(&result);
-    if let Statement::GenericFor(generic_for) = &result.block.stmts[0] {
+    if let Statement::GenericFor(generic_for) = &result.chunk.block.stmts[0] {
         assert_eq!(generic_for.names.len(), 2);
     } else {
         panic!("expected GenericFor");
@@ -128,7 +128,7 @@ fn function_decl_simple() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "function foo() end");
     assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::FunctionDecl(_)));
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::FunctionDecl(_)));
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn method_declaration() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "function a.b:c() end");
     assert_no_errors(&result);
-    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+    if let Statement::FunctionDecl(function_decl) = &result.chunk.block.stmts[0] {
         assert_eq!(function_decl.name.names.len(), 2); // a, b
         assert!(function_decl.name.method.is_some()); // :c
     } else {
@@ -149,7 +149,7 @@ fn local_function() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local function foo(x, y) return x end");
     assert_no_errors(&result);
-    if let Statement::LocalFunction(local_function) = &result.block.stmts[0] {
+    if let Statement::LocalFunction(local_function) = &result.chunk.block.stmts[0] {
         let param_count = local_function.body.params.len();
         assert_eq!(param_count, 2);
     } else {
@@ -162,7 +162,7 @@ fn local_assignment_no_value() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert!(local.exprs.is_empty());
     } else {
         panic!("expected LocalAssignment");
@@ -174,7 +174,7 @@ fn local_assignment_with_value() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = 42");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert!(!local.exprs.is_empty());
     } else {
         panic!("expected LocalAssignment");
@@ -186,7 +186,7 @@ fn local_multiple() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local a, b, c = 1, 2, 3");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         let name_count = local.names.len();
         assert_eq!(name_count, 3);
     } else {
@@ -199,7 +199,7 @@ fn simple_assignment() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "x = 1");
     assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::Assignment(_)));
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::Assignment(_)));
 }
 
 #[test]
@@ -207,7 +207,7 @@ fn multi_assignment() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a, b, c = 1, 2, 3");
     assert_no_errors(&result);
-    if let Statement::Assignment(assignment) = &result.block.stmts[0] {
+    if let Statement::Assignment(assignment) = &result.chunk.block.stmts[0] {
         let target_count = assignment.targets.len();
         assert_eq!(target_count, 3);
     } else {
@@ -220,7 +220,7 @@ fn assign_nested_field_access() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a.b.c = 1");
     assert_no_errors(&result);
-    let Statement::Assignment(assignment) = &result.block.stmts[0] else {
+    let Statement::Assignment(assignment) = &result.chunk.block.stmts[0] else {
         panic!("expected Assignment");
     };
     let target = assignment.targets.last().expect("assignment has target");
@@ -232,7 +232,7 @@ fn assign_index_target() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a[i] = 1");
     assert_no_errors(&result);
-    let Statement::Assignment(assignment) = &result.block.stmts[0] else {
+    let Statement::Assignment(assignment) = &result.chunk.block.stmts[0] else {
         panic!("expected Assignment");
     };
     let target = assignment.targets.last().expect("assignment has target");
@@ -244,7 +244,7 @@ fn assign_mixed_chain_target() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a.b[1]:c(2).d[3] = 5");
     assert_no_errors(&result);
-    let Statement::Assignment(assignment) = &result.block.stmts[0] else {
+    let Statement::Assignment(assignment) = &result.chunk.block.stmts[0] else {
         panic!("expected Assignment");
     };
     let target = assignment.targets.last().expect("assignment has target");
@@ -256,7 +256,7 @@ fn function_call_stmt() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "print(\"hello\")");
     assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::FunctionCall(_)));
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::FunctionCall(_)));
 }
 
 #[test]
@@ -264,7 +264,7 @@ fn method_call_stmt() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "obj:method(1, 2)");
     assert_no_errors(&result);
-    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
+    let Statement::FunctionCall(call) = &result.chunk.block.stmts[0] else {
         panic!("expected FunctionCall");
     };
     assert_eq!(chain_shape(call), "obj:method()");
@@ -275,7 +275,7 @@ fn call_with_string_arg() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "require \"foo\"");
     assert_no_errors(&result);
-    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
+    let Statement::FunctionCall(call) = &result.chunk.block.stmts[0] else {
         panic!("expected FunctionCall");
     };
     assert!(
@@ -288,7 +288,7 @@ fn call_with_table_arg() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "f{1, 2, 3}");
     assert_no_errors(&result);
-    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
+    let Statement::FunctionCall(call) = &result.chunk.block.stmts[0] else {
         panic!("expected FunctionCall");
     };
     assert!(
@@ -310,7 +310,7 @@ fn literal_true_false() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local a, b = true, false");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         let exprs = &local.exprs;
         let first = &exprs[0];
         assert!(matches!(first, Expression::True(_)));
@@ -513,7 +513,7 @@ fn chained_method_calls() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a:b(1):c(2)");
     assert_no_errors(&result);
-    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
+    let Statement::FunctionCall(call) = &result.chunk.block.stmts[0] else {
         panic!("expected FunctionCall");
     };
     assert_eq!(chain_shape(call), "a:b():c()");
@@ -524,7 +524,7 @@ fn chained_function_calls() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "f(1)(2)");
     assert_no_errors(&result);
-    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
+    let Statement::FunctionCall(call) = &result.chunk.block.stmts[0] else {
         panic!("expected FunctionCall");
     };
     assert_eq!(chain_shape(call), "f()()");
@@ -545,7 +545,7 @@ fn varargs_function() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "function f(...) return ... end");
     assert_no_errors(&result);
-    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+    if let Statement::FunctionDecl(function_decl) = &result.chunk.block.stmts[0] {
         assert!(function_decl.body.vararg.is_some());
     } else {
         panic!("expected FunctionDecl");
@@ -557,7 +557,7 @@ fn varargs_with_named_params() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "function f(a, b, ...) end");
     assert_no_errors(&result);
-    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+    if let Statement::FunctionDecl(function_decl) = &result.chunk.block.stmts[0] {
         assert!(function_decl.body.vararg.is_some());
         let param_count = function_decl.body.params.len();
         assert_eq!(param_count, 2);
@@ -571,10 +571,7 @@ fn return_no_values() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "return");
     assert_no_errors(&result);
-    assert!(matches!(
-        result.block.last_stmt.as_ref().expect("block has last statement"),
-        LastStatement::Return(_)
-    ));
+    assert!(matches!(*result.chunk.block.stmts, [Statement::Return(_)]));
 }
 
 #[test]
@@ -582,9 +579,7 @@ fn return_multiple_values() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "return 1, 2, 3");
     assert_no_errors(&result);
-    if let LastStatement::Return(return_stmt) =
-        result.block.last_stmt.as_ref().expect("block has last statement")
-    {
+    if let [Statement::Return(return_stmt)] = &*result.chunk.block.stmts {
         let n = return_stmt.exprs.len();
         assert_eq!(n, 3);
     } else {
@@ -595,13 +590,10 @@ fn return_multiple_values() {
 #[test]
 fn break_as_last_stmt() {
     let allocator = Allocator::new();
-    let result = parse_lua51(&allocator, "while true do break end");
+    let result = parse_lua51(&allocator, "while true do break; end");
     assert_no_errors(&result);
-    if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
-        assert!(matches!(
-            while_loop.block.last_stmt.as_ref().expect("block has last statement"),
-            LastStatement::Break(_)
-        ));
+    if let Statement::WhileLoop(while_loop) = &result.chunk.block.stmts[0] {
+        assert!(matches!(*while_loop.block.stmts, [Statement::Break(_)]));
     } else {
         panic!("expected WhileLoop");
     }
@@ -612,8 +604,7 @@ fn empty_program() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "");
     assert_no_errors(&result);
-    assert!(result.block.stmts.is_empty(), "{:?}", result.block.stmts);
-    assert!(result.block.last_stmt.is_none());
+    assert!(result.chunk.block.stmts.is_empty(), "{:?}", result.chunk.block.stmts);
 }
 
 #[test]
@@ -621,7 +612,7 @@ fn semicolon_separates_stmts_without_an_empty_stmt() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = 1; local y = 2");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 2);
+    assert_eq!(result.chunk.block.stmts.len(), 2);
 }
 
 #[test]
@@ -631,7 +622,7 @@ fn complex_expr_in_function() {
     assert_no_errors(&result);
     let expr = local_value(&result);
     if let Expression::FunctionDef(function_def) = expr {
-        assert!(function_def.body.block.last_stmt.is_some());
+        assert!(matches!(*function_def.body.block.stmts, [Statement::Return(_)]));
     } else {
         panic!("expected FunctionDef");
     }
@@ -668,7 +659,7 @@ fn field_access_then_call() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a.b.c()");
     assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::FunctionCall(_)));
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::FunctionCall(_)));
 }
 
 #[test]
@@ -685,7 +676,7 @@ print(result)
 ";
     let result = parse_lua51(&allocator, source);
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 5);
+    assert_eq!(result.chunk.block.stmts.len(), 5);
 }
 
 #[test]
@@ -729,7 +720,7 @@ fn consecutive_method_calls_four_deep() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a:b():c():d()");
     assert_no_errors(&result);
-    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
+    let Statement::FunctionCall(call) = &result.chunk.block.stmts[0] else {
         panic!("expected FunctionCall");
     };
     assert_eq!(chain_shape(call), "a:b():c():d()");
@@ -740,7 +731,7 @@ fn call_on_parenthesized_expr() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "(f)(x)");
     assert_no_errors(&result);
-    let Statement::FunctionCall(call) = &result.block.stmts[0] else {
+    let Statement::FunctionCall(call) = &result.chunk.block.stmts[0] else {
         panic!("expected FunctionCall");
     };
     assert_eq!(chain_shape(call), "()()");

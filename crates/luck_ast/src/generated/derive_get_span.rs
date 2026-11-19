@@ -4,13 +4,13 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, CompoundAssignment,
+    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment,
     DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs,
     FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
     FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, GetSpan,
     GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression, IfStatement,
-    InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement, LastStatement,
-    Literal, LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumericFor, OptionalType,
+    InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement, Literal,
+    LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumericFor, OptionalType,
     Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
     Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs, TypeCast,
     TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypeofType, UnaryOp, UnionType,
@@ -223,6 +223,13 @@ impl GetSpan for Literal<'_> {
     }
 }
 
+impl GetSpan for Chunk<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.block.span()
+    }
+}
+
 impl GetSpan for Block<'_> {
     #[inline]
     fn span(&self) -> Span {
@@ -244,7 +251,8 @@ impl GetSpan for Statement<'_> {
             Self::FunctionDecl(function_decl) => function_decl.span(),
             Self::LocalFunction(local_function) => local_function.span(),
             Self::LocalAssignment(local_assignment) => local_assignment.span(),
-            Self::EmptyStatement(span) | Self::Break(span) | Self::Error(span) => *span,
+            Self::Return(return_stmt) => return_stmt.span(),
+            Self::Break(span) | Self::Continue(span) | Self::Error(span) => *span,
             Self::Goto(goto_stmt) => goto_stmt.span(),
             Self::Label(label_stmt) => label_stmt.span(),
             Self::GlobalDeclaration(global_declaration) => global_declaration.span(),
@@ -252,15 +260,6 @@ impl GetSpan for Statement<'_> {
             Self::GlobalStar(global_star) => global_star.span(),
             Self::CompoundAssignment(compound_assignment) => compound_assignment.span(),
             Self::TypeDeclaration(type_declaration) => type_declaration.span(),
-        }
-    }
-}
-
-impl GetSpan for LastStatement<'_> {
-    fn span(&self) -> Span {
-        match self {
-            Self::Return(return_stmt) => return_stmt.span(),
-            Self::Break(span) | Self::Continue(span) | Self::Error(span) => *span,
         }
     }
 }

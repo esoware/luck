@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::Block;
+use luck_ast::Chunk;
 use luck_token::LuaVersion;
 
 use crate::bind::bind;
@@ -31,10 +31,10 @@ pub(crate) fn parse<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,
     version: LuaVersion,
-) -> Block<'ast> {
+) -> Chunk<'ast> {
     let result = luck_parser::parse(allocator, source, version);
     assert!(result.errors.is_empty(), "parse failed: {:?}\n{source}", result.errors);
-    result.block
+    result.chunk
 }
 
 /// Minifies `source` with `config`, and checks that the output reparses and
@@ -72,12 +72,12 @@ pub(crate) fn assert_lua55_renames(cases: &[(&str, &str)]) {
 /// One compression walk of `source`, after the bind walk, printed.
 pub(crate) fn walk_once(source: &str, config: TransformConfig) -> String {
     let allocator = Allocator::new();
-    let mut block = parse(&allocator, source, LuaVersion::Lua54);
+    let mut chunk = parse(&allocator, source, LuaVersion::Lua54);
     let mut bindings = Bindings::default();
     let names = &mut NameTable::default();
-    bind(&mut block, LuaVersion::Lua54, &mut bindings, names);
-    Compressor::new(&allocator, LuaVersion::Lua54, config, &mut bindings).walk(&mut block);
-    luck_codegen::compact(&block)
+    bind(&mut chunk.block, chunk.version, &mut bindings, names);
+    Compressor::new(&allocator, chunk.version, config, &mut bindings).walk(&mut chunk.block);
+    luck_codegen::compact(&chunk)
 }
 
 /// Binds and compresses `source` as a minify does, without renaming.
@@ -85,11 +85,11 @@ pub(crate) fn compressed<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,
     config: TransformConfig,
-) -> Block<'ast> {
-    let mut block = parse(allocator, source, LuaVersion::Lua54);
+) -> Chunk<'ast> {
+    let mut chunk = parse(allocator, source, LuaVersion::Lua54);
     let mut bindings = Bindings::default();
     let names = &mut NameTable::default();
-    bind(&mut block, LuaVersion::Lua54, &mut bindings, names);
-    compress(allocator, LuaVersion::Lua54, config, &mut bindings, &mut block);
-    block
+    bind(&mut chunk.block, chunk.version, &mut bindings, names);
+    compress(allocator, chunk.version, config, &mut bindings, &mut chunk.block);
+    chunk
 }

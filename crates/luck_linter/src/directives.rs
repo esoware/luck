@@ -8,7 +8,7 @@
 use core::cmp::Reverse;
 use core::ops::Range;
 
-use luck_ast::{GetSpan as _, LastStatement, Statement};
+use luck_ast::{GetSpan as _, Statement};
 use luck_token::{
     Comment, CommentContent, LintDirective, LintExtent, LintVerb, LuaVersion, SourceError, Span,
     has_line_break,
@@ -217,14 +217,12 @@ impl Directives {
                 .as_slice()
                 .iter()
                 .filter_map(|node| match node.kind {
-                    NodeKind::Statement(Statement::EmptyStatement(_) | Statement::Error(_))
-                    | NodeKind::LastStatement(LastStatement::Error(_))
+                    NodeKind::Statement(Statement::Error(_))
                     | NodeKind::Expression(_)
                     | NodeKind::Table(_)
                     | NodeKind::Chain(..)
                     | NodeKind::Call { .. } => None,
                     NodeKind::Statement(stmt) => Some(stmt.span()),
-                    NodeKind::LastStatement(last_stmt) => Some(last_stmt.span()),
                 })
                 .collect();
             stmts.sort_unstable_by_key(|stmt| stmt.start);
@@ -362,7 +360,7 @@ impl Cover<'_> {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_core::LuaTarget;
+    use luck_token::StdlibEnvironment;
 
     use super::*;
     use crate::config::LintConfig;
@@ -372,9 +370,9 @@ mod tests {
     /// at, for `rule`.
     fn verbs_at(source: &str, rule: &str, needles: &[&str]) -> Vec<Option<LintVerb>> {
         let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, source, LuaTarget::Lua54.lua_version());
+        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
-        let analysis = analyze(&parse, LuaTarget::Lua54, &LintConfig::default());
+        let analysis = analyze(&parse, StdlibEnvironment::Standalone, &LintConfig::default());
         let slot = RULES.iter().position(|entry| entry.rule().name() == rule).expect("a rule");
         let mut cover = analysis.directives().cover_of(slot);
         let mut offsets: Vec<u32> = needles
@@ -484,7 +482,7 @@ local c = 3";
 
     fn directives_of(source: &str) -> Directives {
         let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, source, LuaTarget::Lua54.lua_version());
+        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
         Directives::new(&parse.comments, source)
     }
 

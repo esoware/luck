@@ -1,6 +1,6 @@
 mod builder;
 
-use luck_ast::{Block, Name, TreeCounts};
+use luck_ast::{Chunk, Name, TreeCounts};
 use luck_token::{LuaVersion, Span, offset_to_index};
 use rustc_hash::FxHashMap;
 
@@ -196,27 +196,22 @@ impl ReferenceKind {
 }
 
 impl<'ast> ScopeTree<'ast> {
-    /// One walk over `block`, which recurses once per level of nesting, into
+    /// One walk over `chunk`, which recurses once per level of nesting, into
     /// tables sized from `counts`, the parse's or the default. With the
     /// parse's, [`Self::reference_of`] finds a name's reference by its
     /// [`NameIndex`](luck_ast::NameIndex).
     #[must_use]
-    pub fn build(block: &'ast Block<'ast>, counts: TreeCounts, version: LuaVersion) -> Self {
-        Self::build_with(block, counts, version, &mut ())
+    pub fn build(chunk: &'ast Chunk<'ast>, counts: TreeCounts) -> Self {
+        Self::build_with(chunk, counts, &mut ())
     }
 
     /// [`Self::build`], showing `sink` each node the walk reaches.
     #[must_use]
-    pub fn build_with<Sink>(
-        block: &'ast Block<'ast>,
-        counts: TreeCounts,
-        version: LuaVersion,
-        sink: &mut Sink,
-    ) -> Self
+    pub fn build_with<Sink>(chunk: &'ast Chunk<'ast>, counts: TreeCounts, sink: &mut Sink) -> Self
     where
         Sink: NodeSink<'ast>,
     {
-        build_with_initializers(block, counts, version, sink).0
+        build_with_initializers(chunk, counts, sink).0
     }
 
     /// [`Self::build_with`], recording only the symbols and references of
@@ -224,16 +219,11 @@ impl<'ast> ScopeTree<'ast> {
     /// a caller that asks about a few names. Every other name makes no
     /// reference in this tree.
     #[must_use]
-    pub fn build_for_names<Sink>(
-        block: &'ast Block<'ast>,
-        version: LuaVersion,
-        names: &[&str],
-        sink: &mut Sink,
-    ) -> Self
+    pub fn build_for_names<Sink>(chunk: &'ast Chunk<'ast>, names: &[&str], sink: &mut Sink) -> Self
     where
         Sink: NodeSink<'ast>,
     {
-        builder::build_for_names(block, version, names, sink)
+        builder::build_for_names(chunk, names, sink)
     }
 
     #[must_use]
@@ -457,11 +447,8 @@ mod tests {
     fn reference_at_finds_the_name_an_offset_touches() {
         let allocator = Allocator::new();
         let source = "local ab = 1 print(ab)";
-        let tree = ScopeTree::build(
-            parse(&allocator, source, LuaVersion::Lua54),
-            TreeCounts::default(),
-            LuaVersion::Lua54,
-        );
+        let tree =
+            ScopeTree::build(parse(&allocator, source, LuaVersion::Lua54), TreeCounts::default());
         let name_at = |offset| tree.reference_at(offset).map(|id| tree.reference(id).span);
         // `print` is 13..18 and `ab` 19..21.
         assert_eq!(name_at(13), Some(Span::new(13, 18)));

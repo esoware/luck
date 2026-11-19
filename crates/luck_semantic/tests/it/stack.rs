@@ -17,14 +17,14 @@ fn analyzing_fits_the_smallest_stack() {
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source, version);
         let counts = parsed.counts;
-        let block = allocator.alloc(parsed.block);
+        let chunk = allocator.alloc(parsed.chunk);
         let environments: &[StdlibEnvironment] = if version.is_luau() {
             &[StdlibEnvironment::Standalone, StdlibEnvironment::Roblox]
         } else {
             &[StdlibEnvironment::Standalone]
         };
         for &environment in environments {
-            let analysis = luck_semantic::analyze(block, counts, version, environment);
+            let analysis = luck_semantic::analyze(chunk, counts, environment);
             assert!(!analysis.scope_tree().scopes().is_empty(), "the chunk has a scope");
         }
     });

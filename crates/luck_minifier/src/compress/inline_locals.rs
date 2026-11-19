@@ -147,14 +147,6 @@ fn remove_stmt(stmts: &mut List<'_, Statement<'_>>, index: usize) {
     stmts.truncate(kept);
 }
 
-/// The statement of a block that holds a read: one of its statements, or
-/// its closing one.
-#[derive(Clone, Copy)]
-enum ReadSite {
-    Stmt(usize),
-    Last,
-}
-
 /// Finds a read of one binding.
 struct ReadFinder<'bindings> {
     bindings: &'bindings Bindings,
@@ -259,7 +251,7 @@ impl<'ast> Compressor<'_, 'ast> {
     pub(super) fn inline_late(&mut self, block: &mut Block<'ast>, outer_registers: usize) {
         while let Some((index, name_index, id)) = self.late_candidate(&block.stmts) {
             // A read in a `repeat`'s condition isn't the block's to walk.
-            let Some(read) = self.find_read(block, index, id) else {
+            let Some(read_index) = self.find_read(block, index, id) else {
                 self.needs_revisit = true;
                 return;
             };
@@ -273,31 +265,19 @@ impl<'ast> Compressor<'_, 'ast> {
             if !is_held {
                 continue;
             }
-            let before_read = match read {
-                ReadSite::Stmt(read_index) => read_index,
-                ReadSite::Last => block.stmts.len(),
-            };
             self.live_registers =
-                block.stmts.iter().take(before_read).fold(outer_registers, |registers, stmt| {
+                block.stmts.iter().take(read_index).fold(outer_registers, |registers, stmt| {
                     registers.saturating_add(super::merge_locals::declared_count(stmt))
                 });
-            let is_read_kept = match read {
-                ReadSite::Stmt(read_index) => block.stmts.get_mut(read_index).is_none_or(|stmt| {
-                    // The walk is past the reads of what the read's `local`
-                    // declares, so their values wait for a late inlining of
-                    // their own.
-                    self.is_late_read = matches!(stmt, Statement::LocalAssignment(_));
-                    let is_kept = self.visit_kept_stmt(stmt);
-                    self.is_late_read = false;
-                    is_kept
-                }),
-                ReadSite::Last => {
-                    if let Some(last) = &mut block.last_stmt {
-                        self.visit_last_stmt(last);
-                    }
-                    true
-                }
-            };
+            let is_read_kept = block.stmts.get_mut(read_index).is_none_or(|stmt| {
+                // The walk is past the reads of what the read's `local`
+                // declares, so their values wait for a late inlining of
+                // their own.
+                self.is_late_read = matches!(stmt, Statement::LocalAssignment(_));
+                let is_kept = self.visit_kept_stmt(stmt);
+                self.is_late_read = false;
+                is_kept
+            });
             self.live_registers = outer_registers;
             if let Some(unlanded) = self.unland(id) {
                 // Something kept the walk from the read, so the value goes
@@ -310,7 +290,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 self.needs_revisit = true;
                 continue;
             }
-            if !is_read_kept && let ReadSite::Stmt(read_index) = read {
+            if !is_read_kept {
                 remove_stmt(&mut block.stmts, read_index);
             }
             if let Some(Statement::LocalAssignment(declaration)) = block.stmts.get_mut(index) {
@@ -335,19 +315,18 @@ impl<'ast> Compressor<'_, 'ast> {
         }
     }
 
-    /// Where the one read of the local `id`, declared by the statement at
-    /// `index`, sits.
-    fn find_read(&self, block: &Block<'ast>, index: usize, id: usize) -> Option<ReadSite> {
+    /// The index of the statement that holds the one read of the local
+    /// `id`, declared by the statement at `index`.
+    fn find_read(&self, block: &Block<'ast>, index: usize, id: usize) -> Option<usize> {
         let mut finder = ReadFinder { bindings: &*self.bindings, id, is_found: false };
         let later = block.stmts.iter().enumerate().skip(index.saturating_add(1));
         for (read_index, stmt) in later {
             finder.visit_stmt(stmt);
             if finder.is_found {
-                return Some(ReadSite::Stmt(read_index));
+                return Some(read_index);
             }
         }
-        finder.visit_last_stmt(block.last_stmt.as_ref()?);
-        finder.is_found.then_some(ReadSite::Last)
+        None
     }
 
     /// The value of the local `id` if it's still held, which the walk then
@@ -496,7 +475,7 @@ mod tests {
     use core::fmt::Write as _;
 
     use luck_allocator::Allocator;
-    use luck_ast::{LastStatement, expr_nesting_depth};
+    use luck_ast::{Statement, expr_nesting_depth};
     use luck_token::LuaVersion;
 
     use crate::fixtures::{NO_PASSES, assert_outputs, compressed, minify_with, walk_once};
@@ -731,13 +710,13 @@ mod tests {
         let links = luck_token::MAX_ACTIVE_LOCALS - 1;
         let allocator = Allocator::new();
         let source = sum_chain(links);
-        let block = compressed(&allocator, &source, INLINING);
-        let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
+        let chunk = compressed(&allocator, &source, INLINING);
+        let [Statement::Return(return_stmt)] = &*chunk.block.stmts else {
             panic!("expected a return");
         };
         let run = return_stmt.exprs.first().expect("the return has its value");
         assert_eq!(expr_nesting_depth(run), 1, "the chain splices into one run");
-        assert_eq!(luck_codegen::compact(&block), format!("return 1{}", "+1".repeat(links)));
+        assert_eq!(luck_codegen::compact(&chunk), format!("return 1{}", "+1".repeat(links)));
 
         let mut concat = String::from("local x0 = \"z\"\n");
         for (i, previous) in (1..=links).zip(0usize..) {

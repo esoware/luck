@@ -10,11 +10,7 @@ use luck_token::LuaVersion;
 fn check(source: &str, version: LuaVersion) -> Vec<ParseError> {
     let allocator = Allocator::new();
     let result = luck_parser::parse(&allocator, source, version);
-    if result.errors.is_empty() {
-        luck_parser::validate(&result.block, version)
-    } else {
-        result.errors
-    }
+    if result.errors.is_empty() { luck_parser::validate(&result.chunk) } else { result.errors }
 }
 
 fn assert_no_errors(errors: &[ParseError]) {

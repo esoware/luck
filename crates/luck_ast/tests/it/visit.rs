@@ -60,7 +60,7 @@ where
     Stmts: IntoIterator<Item = Statement<'ast>>,
     Stmts::IntoIter: ExactSizeIterator,
 {
-    hook_counts(&synth.block(stmts, None)).expressions
+    hook_counts(&synth.block(stmts)).expressions
 }
 
 #[test]
@@ -82,14 +82,15 @@ fn reaches_table_fields() {
 }
 
 #[test]
-fn visit_stmt_skips_the_last_stmt() {
+fn visit_stmt_reaches_the_return_that_ends_a_block() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let block = synth.block(
-        [synth.local(&["x"], [synth.number("1")]), synth.local(&["y"], [synth.number("1")])],
-        Some(synth.return_([synth.name_expr("x")])),
-    );
-    assert_eq!(hook_counts(&block).statements, 2);
+    let block = synth.block([
+        synth.local(&["x"], [synth.number("1")]),
+        synth.local(&["y"], [synth.number("1")]),
+        synth.return_([synth.name_expr("x")]),
+    ]);
+    assert_eq!(hook_counts(&block).statements, 3);
 }
 
 #[test]
@@ -98,7 +99,7 @@ fn reaches_function_bodies() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.number("1"));
-    let body = synth.block([], Some(synth.return_([sum])));
+    let body = synth.block([synth.return_([sum])]);
     assert_eq!(expr_count(synth, [synth.local_function("f", &["a"], body)]), 3);
 }
 
@@ -107,8 +108,8 @@ fn reaches_if_conditions_and_branches() {
     // if x then y = 1 else y = nil end: x, 1, and nil.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let then_block = synth.block([synth.assign([synth.name_var("y")], [synth.number("1")])], None);
-    let else_block = synth.block([synth.assign([synth.name_var("y")], [synth.nil()])], None);
+    let then_block = synth.block([synth.assign([synth.name_var("y")], [synth.number("1")])]);
+    let else_block = synth.block([synth.assign([synth.name_var("y")], [synth.nil()])]);
     let if_stmt = synth.if_(synth.name_expr("x"), then_block, [], Some(else_block));
     assert_eq!(expr_count(synth, [if_stmt]), 3);
 }
@@ -123,7 +124,7 @@ fn reaches_numeric_for_bounds_and_step() {
         synth.number("1"),
         synth.number("10"),
         Some(synth.number("2")),
-        synth.block([], None),
+        synth.block([]),
     );
     assert_eq!(expr_count(synth, [numeric_for]), 3);
 }
@@ -141,7 +142,7 @@ fn reaches_interpolated_expressions_and_attribute_arguments() {
     let function = synth.function_def_full(
         [synth.function_attribute_with_args("deprecated", [synth.string("x")])],
         FunctionSignature::default(),
-        synth.block([], Some(synth.return_([interpolated]))),
+        synth.block([synth.return_([interpolated])]),
     );
     assert_eq!(expr_count(synth, [synth.local(&["f"], [function])]), 5);
 }
@@ -166,12 +167,11 @@ fn hooks_fire_in_stmt_and_expr_positions() {
             generics: Some(synth.generic_type_list([("T", false)])),
             ..FunctionSignature::default()
         },
-        synth.block([], None),
+        synth.block([]),
     );
     let table_call = synth.call_table(synth.name_expr("f"), []);
     let outer_call = synth.call(table_call, [generic_function]);
-    let block =
-        synth.block([synth.call_stmt(outer_call), synth.local(&["t"], [synth.table([])])], None);
+    let block = synth.block([synth.call_stmt(outer_call), synth.local(&["t"], [synth.table([])])]);
     let counts = hook_counts(&block);
     assert_eq!(counts.calls, 2, "{counts:?}");
     assert_eq!(counts.tables, 2, "{counts:?}");
@@ -197,7 +197,7 @@ fn reaches_every_name_in_source_order() {
     let call =
         synth.method_call(synth.field(synth.name_expr("t"), "a"), "m", [synth.name_expr("y")]);
     let local = synth.local_full([synth.attributed_name("x", None, Some("const"))], [call]);
-    let block = synth.block([local, synth.goto_("done"), synth.label("done")], None);
+    let block = synth.block([local, synth.goto_("done"), synth.label("done")]);
     let mut names = NameTexts::default();
     names.visit_block(&block);
     assert_eq!(names.0, ["x", "const", "t", "a", "m", "y", "done", "done"]);
@@ -211,7 +211,7 @@ fn reaches_the_names_in_types() {
     let ty = synth.ty_optional(synth.ty_generic("Map", [synth.ty_named("K"), synth.ty_named("V")]));
     let local = synth.local_full([synth.attributed_name("v", Some(ty), None)], [synth.nil()]);
     let mut names = NameTexts::default();
-    let block = synth.block([local], None);
+    let block = synth.block([local]);
     names.visit_block(&block);
     assert_eq!(names.0, ["v", "Map", "K", "V"]);
 }
@@ -237,7 +237,7 @@ fn enters_and_leaves_each_node_around_what_it_holds() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let negation = synth.unary_op(UnOp::Neg, synth.name_expr("x"));
-    let block = synth.block([], Some(synth.return_([negation])));
+    let block = synth.block([synth.return_([negation])]);
     let mut nodes = Nodes::default();
     nodes.visit_block(&block);
     assert_eq!(
@@ -293,7 +293,7 @@ fn skipping_a_level_skips_what_it_holds() {
     // return (x): the block is a level, so nothing in it is reached.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let block = synth.block([], Some(synth.return_([synth.parenthesized(synth.name_expr("x"))])));
+    let block = synth.block([synth.return_([synth.parenthesized(synth.name_expr("x"))])]);
     let mut shallow = Shallow(0);
     shallow.visit_block(&block);
     assert_eq!(shallow.0, 0);

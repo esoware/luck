@@ -1,15 +1,15 @@
-use luck_ast::{Expression, LastStatement, Statement};
+use luck_ast::{Expression, Statement};
 
-/// One variant per `Statement`, `LastStatement`, and `Expression` variant,
-/// and `FunctionCallExpr` for a call in a chain.
+/// One variant per `Statement` and `Expression` variant, and
+/// `FunctionCallExpr` for a call in a chain.
 ///
 /// `FunctionCallExpr` leaves out the call a call statement makes, which is
 /// that statement's `FunctionCallStmt`. `TableConstructor` also covers a
 /// `f{...}` argument, and `Suffixed` a chain in a call statement or an
 /// assignment target.
 ///
-/// `of_stmt`, `of_last_stmt`, and `of_expr` match exhaustively, so a new AST
-/// variant doesn't compile until it has a `NodeType`.
+/// `of_stmt` and `of_expr` match exhaustively, so a new AST variant doesn't
+/// compile until it has a `NodeType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub(crate) enum NodeType {
@@ -24,13 +24,14 @@ pub(crate) enum NodeType {
     FunctionDecl,
     LocalFunction,
     LocalAssignment,
-    EmptyStatement,
+    Return,
+    Break,
+    Continue,
     Goto,
     Label,
     GlobalDeclaration,
     GlobalFunction,
     GlobalStar,
-    Break,
     CompoundAssignment,
     TypeDeclaration,
     ErrorStmt,
@@ -53,15 +54,11 @@ pub(crate) enum NodeType {
     InterpolatedString,
     TypeCast,
     ErrorExpr,
-    Return,
-    LastBreak,
-    LastContinue,
-    ErrorLastStmt,
 }
 
 impl NodeType {
-    /// `ErrorLastStmt` must stay the last variant for this to count them all.
-    pub(crate) const COUNT: usize = Self::ErrorLastStmt.index() + 1;
+    /// `ErrorExpr` must stay the last variant for this to count them all.
+    pub(crate) const COUNT: usize = Self::ErrorExpr.index() + 1;
 
     #[expect(
         clippy::as_conversions,
@@ -84,7 +81,10 @@ impl NodeType {
             Statement::FunctionDecl(_) => Self::FunctionDecl,
             Statement::LocalFunction(_) => Self::LocalFunction,
             Statement::LocalAssignment(_) => Self::LocalAssignment,
-            Statement::EmptyStatement(_) => Self::EmptyStatement,
+            Statement::Return(_) => Self::Return,
+            Statement::Break(_) => Self::Break,
+            // Luau
+            Statement::Continue(_) => Self::Continue,
             // Lua 5.2+
             Statement::Goto(_) => Self::Goto,
             // Lua 5.2+
@@ -95,23 +95,11 @@ impl NodeType {
             Statement::GlobalFunction(_) => Self::GlobalFunction,
             // Lua 5.5
             Statement::GlobalStar(_) => Self::GlobalStar,
-            // Lua 5.2+
-            Statement::Break(_) => Self::Break,
             // Luau
             Statement::CompoundAssignment(_) => Self::CompoundAssignment,
             // Luau
             Statement::TypeDeclaration(_) => Self::TypeDeclaration,
             Statement::Error(_) => Self::ErrorStmt,
-        }
-    }
-
-    pub(crate) const fn of_last_stmt(last_stmt: &LastStatement<'_>) -> Self {
-        match last_stmt {
-            LastStatement::Return(_) => Self::Return,
-            LastStatement::Break(_) => Self::LastBreak,
-            // Luau
-            LastStatement::Continue(_) => Self::LastContinue,
-            LastStatement::Error(_) => Self::ErrorLastStmt,
         }
     }
 

@@ -9,7 +9,7 @@ use crate::common::{assert_no_errors, parse_luau};
 fn alias_type<'ast>(allocator: &'ast Allocator, source: &'ast str) -> Type<'ast> {
     let result = parse_luau(allocator, source);
     assert_no_errors(&result);
-    let stmt = result.block.stmts.into_iter().next().expect("a statement");
+    let stmt = result.chunk.block.stmts.into_iter().next().expect("a statement");
     let Statement::TypeDeclaration(type_declaration) = stmt else {
         panic!("expected TypeDeclaration, got {stmt:?}");
     };
@@ -133,7 +133,7 @@ fn question_marks_folded_into_a_return_pack_join_its_first_elements_run() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local function f(): (T?, ...U)?? end");
     assert_no_errors(&result);
-    let Statement::LocalFunction(function) = &result.block.stmts[0] else {
+    let Statement::LocalFunction(function) = &result.chunk.block.stmts[0] else {
         panic!("expected a local function");
     };
     let Some(Type::Pack(pack)) = &function.body.return_type else {
@@ -363,7 +363,7 @@ fn type_declaration_generic_defaults() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "type Foo<T = string, S... = ...string> = T");
     assert_no_errors(&result);
-    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
+    let Statement::TypeDeclaration(type_declaration) = &result.chunk.block.stmts[0] else {
         panic!("expected TypeDeclaration");
     };
     let generics = type_declaration.generics.as_ref().expect("generics");
@@ -377,7 +377,7 @@ fn local_annotation_preserved() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local x: number = 1");
     assert_no_errors(&result);
-    let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
+    let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] else {
         panic!("expected LocalAssignment");
     };
     let name = local.names.first().expect("name");
@@ -389,7 +389,7 @@ fn multi_local_annotations_preserved() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local a: number, b, c: string? = 1, 2, \"x\"");
     assert_no_errors(&result);
-    let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
+    let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] else {
         panic!("expected LocalAssignment");
     };
     let annotations: Vec<bool> =
@@ -402,7 +402,7 @@ fn numeric_for_annotation_preserved() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "for i: number = 1, 10 do end");
     assert_no_errors(&result);
-    let Statement::NumericFor(numeric_for) = &result.block.stmts[0] else {
+    let Statement::NumericFor(numeric_for) = &result.chunk.block.stmts[0] else {
         panic!("expected NumericFor");
     };
     assert!(numeric_for.type_annotation.is_some());
@@ -413,7 +413,7 @@ fn generic_for_annotations_preserved() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "for k: string, v: number in pairs(t) do end");
     assert_no_errors(&result);
-    let Statement::GenericFor(generic_for) = &result.block.stmts[0] else {
+    let Statement::GenericFor(generic_for) = &result.chunk.block.stmts[0] else {
         panic!("expected GenericFor");
     };
     assert!(generic_for.names.iter().all(|binding| binding.type_annotation.is_some()));
@@ -430,7 +430,7 @@ local function map<T, U>(items: {T}, fn: (T) -> U): {U}
 end",
     );
     assert_no_errors(&result);
-    let Statement::LocalFunction(local_function) = &result.block.stmts[0] else {
+    let Statement::LocalFunction(local_function) = &result.chunk.block.stmts[0] else {
         panic!("expected LocalFunction");
     };
     assert!(local_function.body.generics.is_some());

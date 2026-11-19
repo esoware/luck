@@ -6,10 +6,10 @@ use core::{iter, mem};
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
-    BinaryLink, BinaryOp, Block, Expression, GetSpan as _, IfStatement, LastStatement, OneOrMore,
-    Statement, is_multi_value,
+    BinaryLink, BinaryOp, Block, Expression, GetSpan as _, IfStatement, OneOrMore, Statement,
+    is_multi_value,
 };
-use luck_token::BinOp;
+use luck_token::{BinOp, LuaVersion};
 
 use super::Compressor;
 use crate::expr::{ends_in_if_expr, is_always_truthy, parenthesize};
@@ -34,22 +34,29 @@ const fn is_scoped_declaration(stmt: &Statement<'_>) -> bool {
         | Statement::NumericFor(_)
         | Statement::GenericFor(_)
         | Statement::FunctionDecl(_)
-        | Statement::EmptyStatement(_)
-        | Statement::Goto(_)
+        | Statement::Return(_)
         | Statement::Break(_)
+        | Statement::Continue(_)
+        | Statement::Goto(_)
         | Statement::CompoundAssignment(_)
         | Statement::Error(_) => false,
     }
 }
 
+/// Whether `block` ends in a statement that has to end the block it's in,
+/// so its statements can't go where others follow them.
+pub(super) fn ends_in_block_end(block: &Block<'_>, version: LuaVersion) -> bool {
+    block.stmts.last().is_some_and(|stmt| stmt.has_to_end_block(version))
+}
+
 /// Whether a `do` block's statements can take its place in the block around
-/// it: it scopes nothing, and its last statement, if any, can end that
-/// block, which `can_end_outer` says.
-fn can_unwrap(stmt: &Statement<'_>, can_end_outer: bool) -> bool {
+/// it: it scopes nothing, and it ends that block, which `is_last` says, or
+/// its own statements can go on where others follow.
+fn can_unwrap(stmt: &Statement<'_>, is_last: bool, version: LuaVersion) -> bool {
     let Statement::DoBlock(do_block) = stmt else {
         return false;
     };
-    (do_block.block.last_stmt.is_none() || can_end_outer)
+    (is_last || !ends_in_block_end(&do_block.block, version))
         && !do_block.block.stmts.iter().any(is_scoped_declaration)
 }
 
@@ -61,7 +68,6 @@ pub(super) fn has_no_else(if_stmt: &IfStatement<'_>) -> bool {
 /// [`Compressor::merge_nested_ifs`] can take into it.
 pub(super) fn holds_nested_if(if_stmt: &IfStatement<'_>) -> bool {
     has_no_else(if_stmt)
-        && if_stmt.block.last_stmt.is_none()
         && matches!(&*if_stmt.block.stmts, [Statement::IfStatement(inner)] if has_no_else(inner))
 }
 
@@ -109,10 +115,10 @@ fn if_return_guard<'tree, 'ast>(
     let Statement::IfStatement(if_stmt) = stmt else {
         return None;
     };
-    if !has_no_else(if_stmt) || !if_stmt.block.stmts.is_empty() {
+    if !has_no_else(if_stmt) {
         return None;
     }
-    let Some(LastStatement::Return(return_stmt)) = &if_stmt.block.last_stmt else {
+    let [Statement::Return(return_stmt)] = &*if_stmt.block.stmts else {
         return None;
     };
     let [return_expr] = &*return_stmt.exprs else {
@@ -136,13 +142,11 @@ impl<'ast> Compressor<'_, 'ast> {
         let mut head_depth = depth;
         while has_no_else(head) {
             let mut inner_conditions = Vec::new();
-            while head.block.last_stmt.is_none()
-                && matches!(
-                    &*head.block.stmts,
-                    [Statement::IfStatement(inner_if)]
-                        if has_no_else(inner_if) && self.fits(head_depth, 2, &inner_if.condition)
-                )
-                && (!inner_conditions.is_empty() || self.fits(head_depth, 2, &head.condition))
+            while matches!(
+                &*head.block.stmts,
+                [Statement::IfStatement(inner_if)]
+                    if has_no_else(inner_if) && self.fits(head_depth, 2, &inner_if.condition)
+            ) && (!inner_conditions.is_empty() || self.fits(head_depth, 2, &head.condition))
                 && let Some(Statement::IfStatement(inner_if)) =
                     head.block.stmts.first_mut().map(Statement::take)
             {
@@ -172,24 +176,20 @@ impl<'ast> Compressor<'_, 'ast> {
     /// place, as in `if true then f() end`, which dead-code removal leaves as
     /// `do f() end`.
     pub(super) fn unwrap_do_blocks(&mut self, block: &mut Block<'ast>) {
+        let version = self.version;
         let last_index = block.stmts.len().saturating_sub(1);
-        let can_end_block = block.last_stmt.is_none();
         let mut stmts = block.stmts.iter().enumerate();
-        if !stmts.any(|(i, stmt)| can_unwrap(stmt, can_end_block && i == last_index)) {
+        if !stmts.any(|(i, stmt)| can_unwrap(stmt, i == last_index, version)) {
             return;
         }
         self.unwrapped_stmts.clear();
         for (i, stmt) in mem::take(&mut block.stmts).into_iter().enumerate() {
-            if !can_unwrap(&stmt, can_end_block && i == last_index) {
+            if !can_unwrap(&stmt, i == last_index, version) {
                 self.unwrapped_stmts.push(stmt);
                 continue;
             }
             if let Statement::DoBlock(do_block) = stmt {
-                let inner = do_block.unbox().block;
-                self.unwrapped_stmts.extend(inner.stmts);
-                if inner.last_stmt.is_some() {
-                    block.last_stmt = inner.last_stmt;
-                }
+                self.unwrapped_stmts.extend(do_block.unbox().block.stmts);
             }
         }
         block.stmts = List::from_iter_in(self.unwrapped_stmts.drain(..), self.allocator);
@@ -202,8 +202,7 @@ impl<'ast> Compressor<'_, 'ast> {
     pub(super) fn convert_if_return_chain(&mut self, block: &mut Block<'ast>) {
         // The walk is inside the block, at its own level.
         let level = self.depth;
-        let Block { stmts, last_stmt, .. } = block;
-        let Some(LastStatement::Return(return_stmt)) = last_stmt else {
+        let Some((Statement::Return(return_stmt), stmts)) = block.stmts.split_last_mut() else {
             return;
         };
         let [fallback] = &mut *return_stmt.exprs else {
@@ -220,28 +219,26 @@ impl<'ast> Compressor<'_, 'ast> {
         let link_count = stmts
             .iter()
             .rev()
-            .take_while(|stmt| match if_return_guard(stmt) {
-                Some((condition, return_expr)) => {
+            .take_while(|stmt| {
+                if_return_guard(stmt).is_some_and(|(condition, return_expr)| {
                     is_always_truthy(return_expr)
                         && self.fits(level, 3, condition)
                         && self.fits(level, 3, return_expr)
-                }
-                None => matches!(stmt, Statement::EmptyStatement(_)),
+                })
             })
             .count();
-        let chain_start = stmts.len().saturating_sub(link_count);
-        let chain = stmts.get(chain_start..).unwrap_or_default();
-        let has_guard = chain.iter().any(|stmt| if_return_guard(stmt).is_some());
-        if !has_guard || !self.fits(level, 1, fallback) {
+        if link_count == 0 || !self.fits(level, 1, fallback) {
             return;
         }
+        let return_index = stmts.len();
+        let chain_start = return_index.saturating_sub(link_count);
         let allocator = self.allocator;
         let mut guards = Vec::with_capacity(link_count);
         for stmt in stmts.iter_mut().skip(chain_start) {
             let Statement::IfStatement(if_stmt) = stmt else {
                 continue;
             };
-            let Some(LastStatement::Return(guard_return)) = &mut if_stmt.block.last_stmt else {
+            let [Statement::Return(guard_return)] = &mut *if_stmt.block.stmts else {
                 continue;
             };
             let Some(value) = (*guard_return.exprs).first_mut().map(Expression::take) else {
@@ -251,7 +248,6 @@ impl<'ast> Compressor<'_, 'ast> {
             self.leave_expr(&mut guard, true);
             guards.push(guard);
         }
-        stmts.truncate(chain_start);
         let mut chain_values = guards.into_iter();
         let fallback_expr = fallback.take();
         *fallback = match chain_values.next() {
@@ -264,6 +260,9 @@ impl<'ast> Compressor<'_, 'ast> {
             None => fallback_expr,
         };
         self.leave_expr(fallback, false);
+        // The return takes the place of the first guard, and the guards go.
+        block.stmts.swap(chain_start, return_index);
+        block.stmts.truncate(chain_start.saturating_add(1));
         self.has_changed = true;
     }
 }
@@ -316,6 +315,16 @@ mod tests {
             minify_with("do global x end", LuaVersion::Lua55, &STATEMENTS),
             "do global x end"
         );
+    }
+
+    #[test]
+    fn unwraps_a_do_break_only_where_break_can_go_on() {
+        let source = "while a do do break end f() end";
+        assert_eq!(minify_with(source, LuaVersion::Lua54, &STATEMENTS), "while a do break f()end");
+        for version in [LuaVersion::Lua51, LuaVersion::Luau] {
+            let output = minify_with(source, version, &STATEMENTS);
+            assert_eq!(output, "while a do do break end f()end", "{version:?}");
+        }
     }
 
     #[test]
@@ -385,8 +394,8 @@ mod tests {
             ),
             ("if a or b then return 1 end return 0", "return(a or b)and 1 or 0"),
             ("if a and b then return 1 end return c or d", "return a and b and 1 or c or d"),
-            // Lua 5.2+ parses semicolons as statements, which must not break
-            // the chain.
+            ("f() if x then return 1 end return 0", "f()return x and 1 or 0"),
+            // A `;` between them doesn't break the chain.
             (
                 "if x then return 1 end; if y then return 2 end; return 0",
                 "return x and 1 or y and 2 or 0",

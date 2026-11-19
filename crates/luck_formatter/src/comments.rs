@@ -60,7 +60,7 @@ enum Store<'ast> {
     Empty,
 }
 
-/// The comments [`format_block`](crate::format_block()) places around a tree.
+/// The comments [`format_chunk`](crate::format_chunk()) places around a tree.
 #[derive(Debug)]
 pub struct Comments<'ast> {
     store: Store<'ast>,

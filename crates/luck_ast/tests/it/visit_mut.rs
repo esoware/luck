@@ -1,6 +1,6 @@
 use luck_ast::{
-    AstType, Block, Expression, FunctionArgs, FunctionBody, LastStatement, Name, NameIndex,
-    Statement, SuffixedExpression, Synth, TableConstructor, Visit, VisitMut,
+    AstType, Block, Expression, FunctionArgs, FunctionBody, Name, NameIndex, Statement,
+    SuffixedExpression, Synth, TableConstructor, Visit, VisitMut,
 };
 use luck_token::BinOp;
 
@@ -40,7 +40,7 @@ where
     Stmts: IntoIterator<Item = Statement<'ast>>,
     Stmts::IntoIter: ExactSizeIterator,
 {
-    let mut block = synth.block(stmts, None);
+    let mut block = synth.block(stmts);
     NilToFalse.visit_block(&mut block);
     let mut counts = NilFalseCounts::default();
     counts.visit_block(&block);
@@ -73,7 +73,7 @@ fn rewrites_reach_function_returns() {
     // local function f() return nil end
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let body = synth.block([], Some(synth.return_([synth.nil()])));
+    let body = synth.block([synth.return_([synth.nil()])]);
     assert_eq!(rewrite_counts(synth, [synth.local_function("f", &[], body)]), all_false(1));
 }
 
@@ -82,8 +82,8 @@ fn rewrites_reach_if_conditions_and_branches() {
     // if nil then x = nil else y = nil end
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let then_block = synth.block([synth.assign([synth.name_var("x")], [synth.nil()])], None);
-    let else_block = synth.block([synth.assign([synth.name_var("y")], [synth.nil()])], None);
+    let then_block = synth.block([synth.assign([synth.name_var("x")], [synth.nil()])]);
+    let else_block = synth.block([synth.assign([synth.name_var("y")], [synth.nil()])]);
     let if_stmt = synth.if_(synth.nil(), then_block, [], Some(else_block));
     assert_eq!(rewrite_counts(synth, [if_stmt]), all_false(3));
 }
@@ -98,11 +98,11 @@ fn rewrites_reach_loop_conditions_bounds_and_steps() {
         synth.nil(),
         synth.nil(),
         Some(synth.nil()),
-        synth.block([], None),
+        synth.block([]),
     );
     let stmts = [
-        synth.while_(synth.nil(), synth.block([], None)),
-        synth.repeat_(synth.block([], None), synth.nil()),
+        synth.while_(synth.nil(), synth.block([])),
+        synth.repeat_(synth.block([]), synth.nil()),
         numeric_for,
     ];
     assert_eq!(rewrite_counts(synth, stmts), all_false(5));
@@ -120,7 +120,7 @@ fn the_default_walk_leaves_the_tree_as_it_was() {
         let sum = synth.binary_op(synth.number("1"), BinOp::Add, synth.number("2"));
         let targets = [synth.field_var(synth.name_expr("a"), "b"), synth.name_var("c")];
         let values = [synth.name_expr("x"), synth.name_expr("x")];
-        synth.block([synth.local(&["x"], [sum]), synth.assign(targets, values)], None)
+        synth.block([synth.local(&["x"], [sum]), synth.assign(targets, values)])
     }
 
     let (walked_fixture, untouched_fixture) = (Fixture::default(), Fixture::default());
@@ -147,9 +147,9 @@ fn a_rewrite_can_restructure_through_take() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let grouped = synth.parenthesized(synth.parenthesized(synth.name_expr("x")));
-    let mut block = synth.block([], Some(synth.return_([grouped])));
+    let mut block = synth.block([synth.return_([grouped])]);
     Unparenthesize.visit_block(&mut block);
-    let Some(LastStatement::Return(returned)) = &block.last_stmt else {
+    let [Statement::Return(returned)] = &*block.stmts else {
         panic!("expected a return");
     };
     assert!(matches!(*returned.exprs, [Expression::Name(_)]));
@@ -179,7 +179,7 @@ fn a_rewrite_reaches_every_name() {
     let synth = fixture.synth();
     let call =
         synth.method_call(synth.field(synth.name_expr("t"), "a"), "m", [synth.name_expr("x")]);
-    let mut block = synth.block([synth.local(&["f"], [call])], None);
+    let mut block = synth.block([synth.local(&["f"], [call])]);
     Renumber.visit_block(&mut block);
     let mut indexes = Indexes::default();
     indexes.visit_block(&block);
@@ -229,14 +229,11 @@ fn hooks_fire_in_stmt_and_expr_positions() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let table_call = synth.call_table(synth.name_expr("f"), []);
-    let function = synth.function_def(&[], synth.block([], None));
-    let mut block = synth.block(
-        [
-            synth.call_stmt(synth.call(table_call, [function])),
-            synth.local(&["t"], [synth.table([])]),
-        ],
-        None,
-    );
+    let function = synth.function_def(&[], synth.block([]));
+    let mut block = synth.block([
+        synth.call_stmt(synth.call(table_call, [function])),
+        synth.local(&["t"], [synth.table([])]),
+    ]);
     let mut counts = HookCounts::default();
     counts.visit_block(&mut block);
     assert_eq!(counts, HookCounts { chains: 1, args: 2, tables: 2, bodies: 1, blocks: 2 });

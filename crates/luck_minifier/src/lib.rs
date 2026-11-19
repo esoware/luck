@@ -2,7 +2,7 @@
 //!
 //! Lua and Luau minification on the arena tree, in place.
 //!
-//! [`minify`] parses source into the caller's arena and [`minify_block`]
+//! [`minify`] parses source into the caller's arena and [`minify_chunk`]
 //! takes a tree. Both rewrite the tree in place and print it once, with
 //! [`luck_codegen::compact`].
 //!
@@ -59,5 +59,5 @@ mod rename_globals;
 mod rename_locals;
 mod transform_config;
 
-pub use pipeline::{minify, minify_block};
+pub use pipeline::{minify, minify_chunk};
 pub use transform_config::TransformConfig;

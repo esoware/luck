@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Block, Expression, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
+use luck_ast::{Chunk, Expression, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
 use luck_testgen::with_the_smallest_stack;
 use luck_token::{BinOp, LuaVersion, UnOp};
 
@@ -17,12 +17,12 @@ local value = - -1; return value .. '\u{e9}'",
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, &source, version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        let expected = luck_codegen::compact(&parsed.block);
+        let expected = luck_codegen::compact(&parsed.chunk);
         for capacity in [0, 1, expected.len(), expected.len() + 1, source.len()] {
-            let output = luck_codegen::compact_with_capacity(&parsed.block, capacity);
+            let output = luck_codegen::compact_with_capacity(&parsed.chunk, capacity);
             assert_eq!(output, expected);
         }
-        assert_reprints(&parsed.block, version);
+        assert_reprints(&parsed.chunk);
     }
 }
 
@@ -31,9 +31,9 @@ fn a_capacity_hint_the_allocator_cannot_meet_is_dropped() {
     let allocator = Allocator::new();
     let spans = SpanCounter::new();
     let synth = Synth::new(&allocator, &spans);
-    let block = synth.block([], Some(synth.return_([synth.number("1")])));
+    let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([synth.number("1")])]));
     for capacity in [usize::MAX, isize::MAX.unsigned_abs()] {
-        let output = luck_codegen::compact_with_capacity(&block, capacity);
+        let output = luck_codegen::compact_with_capacity(&chunk, capacity);
         assert_eq!(output, "return 1", "capacity {capacity}");
     }
 }
@@ -42,14 +42,14 @@ fn a_capacity_hint_the_allocator_cannot_meet_is_dropped() {
 type Wrap = for<'ast> fn(Synth<'ast>, Expression<'ast>) -> Expression<'ast>;
 
 /// `return x`, with `wrap` applied to `x` until the block nests `depth` deep.
-fn nested_return(synth: Synth<'_>, depth: usize, wrap: Wrap) -> Block<'_> {
+fn nested_return(synth: Synth<'_>, depth: usize, wrap: Wrap) -> Chunk<'_> {
     let mut expr = synth.name_expr("x");
     for _ in 1..depth {
         expr = wrap(synth, expr);
     }
-    let block = synth.block([], Some(synth.return_([expr])));
+    let block = synth.block([synth.return_([expr])]);
     assert_eq!(block_nesting_depth(&block), depth, "each wrap adds one level");
-    block
+    Chunk::new(LuaVersion::Lua54, block)
 }
 
 #[test]
@@ -66,11 +66,11 @@ fn a_tree_at_the_nesting_cap_prints_and_reparses() {
         for (label, wrap) in wraps {
             let allocator = Allocator::new();
             let spans = SpanCounter::new();
-            let block = nested_return(Synth::new(&allocator, &spans), MAX_NESTING_DEPTH, wrap);
-            let output = luck_codegen::compact(&block);
+            let chunk = nested_return(Synth::new(&allocator, &spans), MAX_NESTING_DEPTH, wrap);
+            let output = luck_codegen::compact(&chunk);
             let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Lua54);
             assert!(reparsed.errors.is_empty(), "{label}: {:?}", reparsed.errors.first());
-            assert_eq!(block_nesting_depth(&reparsed.block), MAX_NESTING_DEPTH, "{label}");
+            assert_eq!(block_nesting_depth(&reparsed.chunk.block), MAX_NESTING_DEPTH, "{label}");
         }
     });
 }
@@ -88,14 +88,14 @@ fn a_run_of_any_length_prints_as_one_level() {
     for _ in 0..2_000u32 {
         calls = synth.call(calls, []);
     }
-    let block = synth.block([], Some(synth.return_([sum, calls])));
-    assert_eq!(block_nesting_depth(&block), 2);
-    let output = luck_codegen::compact(&block);
+    let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([sum, calls])]));
+    assert_eq!(block_nesting_depth(&chunk.block), 2);
+    let output = luck_codegen::compact(&chunk);
     assert_eq!(output.len(), "return x".len() + 200_000 * 2 + ",f".len() + 2_000 * 2);
     let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Lua54);
     assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors.first());
-    assert_eq!(block_nesting_depth(&reparsed.block), 2);
-    assert_eq!(luck_codegen::compact(&reparsed.block), output);
+    assert_eq!(block_nesting_depth(&reparsed.chunk.block), 2);
+    assert_eq!(luck_codegen::compact(&reparsed.chunk), output);
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn compact_input_prints_unchanged() {
 fn version_gated_stmts_compact_to_minimal_whitespace() {
     for (source, expected, version) in [
         ("goto  skip  :: skip ::", "goto skip::skip::", LuaVersion::Lua52),
-        ("; ;", ";;", LuaVersion::Lua52),
+        ("; ;", "", LuaVersion::Lua52),
         ("local  x <const>, y <close> =  1, z", "local x<const>,y<close> =1,z", LuaVersion::Lua54),
         ("global  x", "global x", LuaVersion::Lua55),
         ("global  function  f ( )  end", "global function f()end", LuaVersion::Lua55),

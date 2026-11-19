@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_token::{CommentKind, LuaVersion, SourceError, chunk_header, leading_hot_comments};
 
 use crate::bind::bind;
@@ -33,12 +33,13 @@ pub fn minify<'ast>(
     let mut output = chunk_header(
         source,
         shebang,
-        leading_hot_comments(&result.comments, result.block.span.start).map(|comment| comment.span),
+        leading_hot_comments(&result.comments, result.chunk.block.span.start)
+            .map(|comment| comment.span),
     );
-    if !minify_tree(allocator, &mut result.block, version, config, false) {
-        return Err(vec![nesting_error(&result.block)]);
+    if !minify_tree(allocator, &mut result.chunk, config, false) {
+        return Err(vec![nesting_error(&result.chunk)]);
     }
-    let code = luck_codegen::compact(&result.block);
+    let code = luck_codegen::compact(&result.chunk);
     if output.is_empty() {
         return Ok(code);
     }
@@ -57,21 +58,20 @@ pub fn minify<'ast>(
 /// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
 /// which `luck_parser` never builds, and leaves the tree as it was but for
 /// its names' indexes.
-pub fn minify_block<'ast>(
+pub fn minify_chunk<'ast>(
     allocator: &'ast Allocator,
-    block: &mut Block<'ast>,
-    version: LuaVersion,
+    chunk: &mut Chunk<'ast>,
     config: &TransformConfig,
 ) -> Result<String, SourceError> {
-    if !minify_tree(allocator, block, version, config, true) {
-        return Err(nesting_error(block));
+    if !minify_tree(allocator, chunk, config, true) {
+        return Err(nesting_error(chunk));
     }
-    Ok(luck_codegen::compact(block))
+    Ok(luck_codegen::compact(chunk))
 }
 
-fn nesting_error(block: &Block<'_>) -> SourceError {
+fn nesting_error(chunk: &Chunk<'_>) -> SourceError {
     SourceError {
-        span: block.span,
+        span: chunk.block.span,
         message: format!(
             "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
         ),
@@ -80,17 +80,18 @@ fn nesting_error(block: &Block<'_>) -> SourceError {
 
 /// Binds the tree once, compresses it to its fixpoint, and names its locals
 /// once, as each phase is on, or leaves a tree nested deeper than
-/// [`MAX_NESTING_DEPTH`] as [`minify_block`] does and says so.
+/// [`MAX_NESTING_DEPTH`] as [`minify_chunk`] does and says so.
 ///
 /// Without `can_nest_too_deep`, for a tree `luck_parser` built, which never
 /// nests that deep, it spares measuring a tree it doesn't bind.
 fn minify_tree<'ast>(
     allocator: &'ast Allocator,
-    block: &mut Block<'ast>,
-    version: LuaVersion,
+    chunk: &mut Chunk<'ast>,
     config: &TransformConfig,
     can_nest_too_deep: bool,
 ) -> bool {
+    let version = chunk.version;
+    let block = &mut chunk.block;
     let should_compress = config.remove_dead_code
         || config.simplify_statements
         || config.fold_constants

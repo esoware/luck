@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_formatter::{Comments, FormatOptions, format, format_block};
+use luck_formatter::{Comments, FormatOptions, format, format_chunk};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
 use luck_testgen::{generate_full, generate_runtime_safe, tree_shape};
@@ -62,8 +62,8 @@ fn assert_same_tree(
     after: &ParseResult<'_>,
 ) {
     assert_eq!(
-        tree_shape(&before.block, program.version),
-        tree_shape(&after.block, program.version),
+        tree_shape(&before.chunk),
+        tree_shape(&after.chunk),
         "{}: {stage} changed the tree.\ninput:\n{}",
         program.label,
         program.source
@@ -97,21 +97,21 @@ fn format_reparses_and_is_idempotent() {
 /// The AST-in path: the parsed program, fed back as a bare AST with no
 /// source or comments, must still print valid Lua that formats as itself.
 #[test]
-fn format_block_without_source_reparses_and_formats_as_itself() {
+fn format_chunk_without_source_reparses_and_formats_as_itself() {
     let options = FormatOptions::default();
     let mut allocator = Allocator::new();
     for program in programs() {
         allocator.reset();
         let Program { source, version, label } = &program;
         let original = parse_cleanly(&allocator, &program, "generator", source);
-        let via_ast = format_block(&allocator, &original.block, Comments::none(), &options)
+        let via_ast = format_chunk(&allocator, &original.chunk, Comments::none(), &options)
             .expect("a parsed tree nests within the cap");
-        let reprinted = parse_cleanly(&allocator, &program, "format_block", &via_ast);
-        assert_same_tree(&program, "format_block", &original, &reprinted);
+        let reprinted = parse_cleanly(&allocator, &program, "format_chunk", &via_ast);
+        assert_same_tree(&program, "format_chunk", &original, &reprinted);
         let reformatted = format(&allocator, &via_ast, *version, &options);
         assert_eq!(
             via_ast, reformatted.output,
-            "{label}: format changed format_block's output.\ninput:\n{source}"
+            "{label}: format changed format_chunk's output.\ninput:\n{source}"
         );
     }
 }

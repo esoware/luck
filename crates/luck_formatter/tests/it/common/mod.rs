@@ -53,7 +53,7 @@ fn range_formatted(source: &str, range: Range<usize>) -> FormatResult {
     let allocator = Allocator::new();
     let version = LuaVersion::Lua54;
     let parse = luck_parser::parse(&allocator, source, version);
-    format_range(&allocator, &parse, version, &FormatOptions::default(), range)
+    format_range(&allocator, &parse, &FormatOptions::default(), range)
 }
 
 /// Nothing outside the selected statements changes, so the second pass finds

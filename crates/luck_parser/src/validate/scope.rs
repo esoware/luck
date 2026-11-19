@@ -9,7 +9,7 @@
 use core::mem;
 
 use luck_ast::{
-    Attribute, AttributedName, Block, Expression, FunctionBody, FunctionDecl, GenericFor,
+    Attribute, AttributedName, Block, Chunk, Expression, FunctionBody, FunctionDecl, GenericFor,
     GetSpan as _, Name, NumericFor, RepeatLoop, Statement, Type, TypeDeclarationValue, Var, Visit,
 };
 use luck_token::{LuaVersion, Span};
@@ -18,14 +18,14 @@ use super::continue_until::skipped_local_count;
 use super::gotos::{BlockStart, FunctionGotos, GotoTracker};
 use crate::ParseError;
 
-pub(super) fn check(block: &Block<'_>, version: LuaVersion) -> Vec<ParseError> {
-    ScopeChecker::run(block, version, false)
+pub(super) fn check(chunk: &Chunk<'_>) -> Vec<ParseError> {
+    ScopeChecker::run(chunk, false)
 }
 
 /// Report type functions that reference an outer local, a check Luau's parser
 /// makes as it reads the body. `parse` runs this because it tracks no locals.
-pub(crate) fn check_type_functions(block: &Block<'_>, version: LuaVersion) -> Vec<ParseError> {
-    ScopeChecker::run(block, version, true)
+pub(crate) fn check_type_functions(chunk: &Chunk<'_>) -> Vec<ParseError> {
+    ScopeChecker::run(chunk, true)
 }
 
 struct Binding<'ast> {
@@ -64,11 +64,8 @@ fn is_readonly_attribute(attribute: &Attribute<'_>) -> bool {
 }
 
 impl<'ast> ScopeChecker<'ast> {
-    fn run(
-        block: &'ast Block<'ast>,
-        version: LuaVersion,
-        is_type_function_pass: bool,
-    ) -> Vec<ParseError> {
+    fn run(chunk: &'ast Chunk<'ast>, is_type_function_pass: bool) -> Vec<ParseError> {
+        let version = chunk.version;
         let mut checker = Self {
             version,
             is_type_function_pass,
@@ -82,7 +79,7 @@ impl<'ast> ScopeChecker<'ast> {
         if version.has_env_upvalue() {
             checker.push_binding(Some("_ENV"), false, false);
         }
-        checker.visit_block(block);
+        checker.visit_block(&chunk.block);
         checker.gotos.leave_function(FunctionGotos::default());
         let mut errors = checker.errors;
         errors.extend(checker.gotos.into_errors());
@@ -210,15 +207,13 @@ impl<'ast> ScopeChecker<'ast> {
     ) {
         // `block_follow(ls, 0)`: a label ends its block only if nothing but
         // labels and `;` follow, not `return`, and not a repeat's `until`.
-        let trailing_start = if is_repeat_body || block.last_stmt.is_some() {
+        let trailing_start = if is_repeat_body {
             block.stmts.len()
         } else {
             block
                 .stmts
                 .iter()
-                .rposition(|stmt| {
-                    !matches!(stmt, Statement::Label(_) | Statement::EmptyStatement(_))
-                })
+                .rposition(|stmt| !matches!(stmt, Statement::Label(_)))
                 .map_or(0, |i| i.saturating_add(1))
         };
         for (i, stmt) in block.stmts.iter().enumerate() {
@@ -231,9 +226,6 @@ impl<'ast> ScopeChecker<'ast> {
             } else {
                 self.visit_stmt(stmt);
             }
-        }
-        if let Some(last) = &block.last_stmt {
-            self.visit_last_stmt(last);
         }
     }
 }
@@ -310,10 +302,11 @@ impl<'ast> Visit<'ast> for ScopeChecker<'ast> {
             | Statement::NumericFor(_)
             | Statement::GenericFor(_)
             | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
-            | Statement::Break(_)
             | Statement::Error(_) => self.walk_stmt(stmt),
         }
     }

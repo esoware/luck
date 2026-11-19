@@ -70,7 +70,7 @@ fn a_run_of_any_length_is_one_level() {
         let allocator = Allocator::new();
         let result = parse(&allocator, &source, version);
         assert!(result.errors.is_empty(), "{:?}: {:?}", source.get(..20), result.errors.first());
-        assert_eq!(block_nesting_depth(&result.block), 2, "{:?}", source.get(..20));
+        assert_eq!(block_nesting_depth(&result.chunk.block), 2, "{:?}", source.get(..20));
     }
 }
 #[test]
@@ -307,7 +307,7 @@ fn the_cap_bounds_the_depth_of_the_tree_exactly() {
                         shape.name,
                         result.errors.first()
                     );
-                    assert_eq!(block_nesting_depth(&result.block), depth, "{}", shape.name);
+                    assert_eq!(block_nesting_depth(&result.chunk.block), depth, "{}", shape.name);
                     assert_eq!(result.nesting_depth, depth, "{}", shape.name);
                 } else {
                     let [error] = result.errors.as_slice() else {
@@ -315,7 +315,7 @@ fn the_cap_bounds_the_depth_of_the_tree_exactly() {
                     };
                     assert!(error.message.contains("luck parser resource limit"), "{}", shape.name);
                     assert!(
-                        block_nesting_depth(&result.block) <= MAX_NESTING_DEPTH,
+                        block_nesting_depth(&result.chunk.block) <= MAX_NESTING_DEPTH,
                         "{}",
                         shape.name
                     );
@@ -356,7 +356,7 @@ fn each_construct_nests_as_deep_as_luau_reads_it() {
                 source.get(..24),
                 result.errors.first()
             );
-            deepest = deepest.max(block_nesting_depth(&result.block));
+            deepest = deepest.max(block_nesting_depth(&result.chunk.block));
         }
         assert_eq!(deepest, MAX_NESTING_DEPTH);
     });
@@ -399,13 +399,13 @@ fn a_run_counts_once_from_its_first_operand() {
         let bare_optionals = format!("type X = T{}", "?".repeat(5000));
         let optional_run = parse(&allocator, &bare_optionals, LuaVersion::Luau);
         assert!(optional_run.errors.is_empty(), "{:?}", optional_run.errors.first());
-        assert_eq!(block_nesting_depth(&optional_run.block), 2);
+        assert_eq!(block_nesting_depth(&optional_run.chunk.block), 2);
 
         let later_operand =
             format!("return 1+{}x{}{}", "(".repeat(tables), ")".repeat(tables), "+1".repeat(300));
         let result = parse(&allocator, &later_operand, LuaVersion::Lua54);
         assert!(result.errors.is_empty(), "{:?}", result.errors.first());
-        assert_eq!(block_nesting_depth(&result.block), MAX_NESTING_DEPTH);
+        assert_eq!(block_nesting_depth(&result.chunk.block), MAX_NESTING_DEPTH);
     });
 }
 /// Counts every level, where `block_nesting_depth` stops just past the cap.
@@ -458,7 +458,7 @@ fn a_tree_with_errors_stays_within_the_cap() {
             let result = parse(&allocator, source.as_str(), version);
             assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
             let mut levels = Levels { depth: 0, deepest: 0 };
-            levels.visit_block(&result.block);
+            levels.visit_block(&result.chunk.block);
             assert!(
                 levels.deepest <= MAX_NESTING_DEPTH,
                 "{}: {:?}",
@@ -482,17 +482,17 @@ fn an_if_cut_off_at_the_cap_keeps_its_clauses_to_itself() {
         );
         let result = parse(&allocator, &source, LuaVersion::Lua54);
         assert!(has_depth_limit_error(&result), "{:?}", result.errors);
-        let Some(Statement::IfStatement(outer)) = result.block.stmts.first() else {
-            panic!("{:?}", result.block.stmts.first());
+        let Some(Statement::IfStatement(outer)) = result.chunk.block.stmts.first() else {
+            panic!("{:?}", result.chunk.block.stmts.first());
         };
         assert_eq!(outer.elseif_clauses.len(), 1, "{:?}", outer.elseif_clauses);
     });
 }
 
-/// A misplaced last statement stands as the block around it while that block
-/// fits, and is an error node once it wouldn't.
+/// A misplaced last statement stays in its block, where it was written, so
+/// it nests no deeper than it reads.
 #[test]
-fn a_misplaced_last_statement_is_wrapped_only_within_the_cap() {
+fn a_misplaced_last_statement_nests_where_it_was_written() {
     with_the_smallest_stack(|| {
         let allocator = Allocator::new();
         let in_blocks = |blocks: usize, statement: &str| {
@@ -501,26 +501,17 @@ fn a_misplaced_last_statement_is_wrapped_only_within_the_cap() {
         let returning = |parentheses: usize| {
             format!("return {}a{}", "(".repeat(parentheses), ")".repeat(parentheses))
         };
-        for (version, source, wrapped_depth) in [
-            (
-                LuaVersion::Lua54,
-                in_blocks(MAX_NESTING_DEPTH - 6, &returning(4)),
-                Some(MAX_NESTING_DEPTH),
-            ),
-            (LuaVersion::Lua54, in_blocks(MAX_NESTING_DEPTH - 6, &returning(5)), None),
-            (LuaVersion::Lua51, in_blocks(MAX_NESTING_DEPTH - 2, "break"), Some(MAX_NESTING_DEPTH)),
-            (LuaVersion::Lua51, in_blocks(MAX_NESTING_DEPTH - 1, "break"), None),
+        for (version, source) in [
+            (LuaVersion::Lua54, in_blocks(MAX_NESTING_DEPTH - 6, &returning(5))),
+            (LuaVersion::Lua51, in_blocks(MAX_NESTING_DEPTH - 1, "break")),
         ] {
             let result = parse(&allocator, source.as_str(), version);
             let [error] = result.errors.as_slice() else {
                 panic!("{:?}", result.errors);
             };
             assert!(error.message.contains("must be the last statement"), "{error:?}");
-            let depth = block_nesting_depth(&result.block);
-            assert!(depth <= MAX_NESTING_DEPTH, "{depth}");
-            if let Some(expected) = wrapped_depth {
-                assert_eq!(depth, expected);
-            }
+            assert_eq!(result.nesting_depth, MAX_NESTING_DEPTH);
+            assert_eq!(block_nesting_depth(&result.chunk.block), MAX_NESTING_DEPTH);
         }
     });
 }
@@ -550,7 +541,7 @@ fn nesting_past_the_cap_ends_the_parse() {
             panic!("{:?}", result.errors);
         };
         assert!(error.message.contains("luck parser resource limit"), "{error:?}");
-        assert_eq!(result.block.stmts.len(), 1, "{:?}", result.block.stmts);
+        assert_eq!(result.chunk.block.stmts.len(), 1, "{:?}", result.chunk.block.stmts);
     });
 }
 

@@ -251,13 +251,14 @@ impl<'ast> Compressor<'_, 'ast> {
             | Statement::GenericFor(_)
             | Statement::FunctionDecl(_)
             | Statement::LocalFunction(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
@@ -340,13 +341,14 @@ pub(super) fn declared_count(stmt: &Statement<'_>) -> usize {
         | Statement::NumericFor(_)
         | Statement::GenericFor(_)
         | Statement::FunctionDecl(_)
-        | Statement::EmptyStatement(_)
+        | Statement::Return(_)
+        | Statement::Break(_)
+        | Statement::Continue(_)
         | Statement::Goto(_)
         | Statement::Label(_)
         | Statement::GlobalDeclaration(_)
         | Statement::GlobalFunction(_)
         | Statement::GlobalStar(_)
-        | Statement::Break(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => 0,
@@ -496,6 +498,7 @@ mod tests {
     fn largest_assignment_target_count(output: &str) -> usize {
         let allocator = Allocator::new();
         parse(&allocator, output, LuaVersion::Lua54)
+            .block
             .stmts
             .iter()
             .filter_map(|stmt| {

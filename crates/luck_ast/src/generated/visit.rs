@@ -2,17 +2,17 @@
 // `just ast` after changing one.
 
 use crate::{
-    Assignment, AstKind, Attribute, AttributedName, BinaryLink, BinaryOp, Block,
+    Assignment, AstKind, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk,
     CompoundAssignment, DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field,
     FunctionArgs, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName,
     FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
     GenericTypeParam, GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression,
     IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement,
-    LastStatement, Literal, LocalAssignment, LocalFunction, MethodCall, Name, NamedType,
-    NumericFor, OptionalType, Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop,
-    ReturnStatement, Statement, Suffix, SuffixedExpression, TableConstructor, TableType, Type,
-    TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypeofType,
-    UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
+    Literal, LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumericFor, OptionalType,
+    Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
+    Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs, TypeCast,
+    TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypeofType, UnaryOp, UnionType,
+    Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 /// A walk over a tree that borrows it.
@@ -186,6 +186,11 @@ pub trait Visit<'ast> {
     }
 
     #[inline]
+    fn visit_chunk(&mut self, chunk: &'ast Chunk<'ast>) {
+        self.walk_chunk(chunk);
+    }
+
+    #[inline]
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
         self.walk_block(block);
     }
@@ -193,11 +198,6 @@ pub trait Visit<'ast> {
     #[inline]
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         self.walk_stmt(stmt);
-    }
-
-    #[inline]
-    fn visit_last_stmt(&mut self, last_stmt: &'ast LastStatement<'ast>) {
-        self.walk_last_stmt(last_stmt);
     }
 
     #[inline]
@@ -715,15 +715,20 @@ pub trait Visit<'ast> {
     }
 
     #[inline]
+    fn walk_chunk(&mut self, chunk: &'ast Chunk<'ast>) {
+        let kind = AstKind::Chunk(chunk);
+        self.enter_node(kind);
+        self.visit_block(&chunk.block);
+        self.leave_node(kind);
+    }
+
+    #[inline]
     fn walk_block(&mut self, block: &'ast Block<'ast>) {
         let kind = AstKind::Block(block);
         self.enter_node(kind);
         if self.descend() {
             for stmt in &block.stmts {
                 self.visit_stmt(stmt);
-            }
-            if let Some(last_stmt) = &block.last_stmt {
-                self.visit_last_stmt(last_stmt);
             }
         }
         self.ascend();
@@ -745,7 +750,8 @@ pub trait Visit<'ast> {
             Statement::LocalAssignment(local_assignment) => {
                 self.visit_local_assignment(local_assignment);
             }
-            Statement::EmptyStatement(_) | Statement::Break(_) | Statement::Error(_) => {}
+            Statement::Return(return_stmt) => self.visit_return_stmt(return_stmt),
+            Statement::Break(_) | Statement::Continue(_) | Statement::Error(_) => {}
             Statement::Goto(goto_stmt) => self.visit_goto_stmt(goto_stmt),
             Statement::Label(label_stmt) => self.visit_label_stmt(label_stmt),
             Statement::GlobalDeclaration(global_declaration) => {
@@ -761,13 +767,6 @@ pub trait Visit<'ast> {
             Statement::TypeDeclaration(type_declaration) => {
                 self.visit_type_declaration(type_declaration);
             }
-        }
-    }
-
-    fn walk_last_stmt(&mut self, last_stmt: &'ast LastStatement<'ast>) {
-        match last_stmt {
-            LastStatement::Return(return_stmt) => self.visit_return_stmt(return_stmt),
-            LastStatement::Break(_) | LastStatement::Continue(_) | LastStatement::Error(_) => {}
         }
     }
 

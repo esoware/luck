@@ -37,7 +37,7 @@ fn bench_linter(criterion: &mut Criterion) {
             bencher.iter(|| {
                 luck_linter::lint_parsed(
                     black_box(&parse_result),
-                    file.target,
+                    file.target.stdlib_environment(),
                     &config,
                     FixKind::empty(),
                 )
@@ -54,7 +54,7 @@ fn bench_linter(criterion: &mut Criterion) {
                 for parse_result in &parse_results {
                     black_box(luck_linter::lint_parsed(
                         black_box(parse_result),
-                        project.target,
+                        project.target.stdlib_environment(),
                         &config,
                         FixKind::empty(),
                     ));

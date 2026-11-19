@@ -1,4 +1,4 @@
-use luck_ast::{Block, TreeCounts};
+use luck_ast::{Chunk, TreeCounts};
 use luck_token::Comment;
 
 pub type ParseError = luck_token::SourceError;
@@ -8,15 +8,16 @@ pub type ParseError = luck_token::SourceError;
 #[derive(Debug)]
 pub struct ParseResult<'ast> {
     pub source: &'ast str,
-    pub block: Block<'ast>,
+    /// The tree, in the version the source was parsed as.
+    pub chunk: Chunk<'ast>,
     pub comments: Vec<Comment>,
     /// Every lex and parse error, sorted by start offset.
     pub errors: Vec<ParseError>,
-    /// How many levels deep `block` nests, as the parser counted them toward
-    /// [`luck_ast::MAX_NESTING_DEPTH`]. With no errors, that's never fewer
-    /// than [`luck_ast::block_nesting_depth`] finds.
+    /// How many levels deep the chunk's block nests, as the parser counted
+    /// them toward [`luck_ast::MAX_NESTING_DEPTH`]. With no errors, that's
+    /// never fewer than [`luck_ast::block_nesting_depth`] finds.
     pub nesting_depth: usize,
-    /// What `block` holds, for `luck_semantic::analyze` to size its tables
+    /// What the chunk holds, for `luck_semantic::analyze` to size its tables
     /// from.
     pub counts: TreeCounts,
 }

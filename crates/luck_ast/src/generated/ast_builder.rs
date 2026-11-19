@@ -2,21 +2,20 @@
 // `just ast` after changing one.
 
 use luck_allocator::{Allocator, Box, List, ThinStr};
-use luck_token::{BinOp, CompoundOp, Span, UnOp};
+use luck_token::{BinOp, CompoundOp, LuaVersion, Span, UnOp};
 
 use crate::{
-    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, CompoundAssignment,
+    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment,
     DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs,
     FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
     FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam,
     GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression, IfStatement,
-    InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement, LastStatement,
-    Literal, LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall,
-    Name, NameIndex, NamedType, NumericFor, OneOrMore, OptionalType, Parameter,
-    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement, Suffix,
-    SuffixedExpression, TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration,
-    TypeDeclarationValue, TypeField, TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam,
-    VariadicType, WhileLoop,
+    InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement, Literal,
+    LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name,
+    NameIndex, NamedType, NumericFor, OneOrMore, OptionalType, Parameter, ParenthesizedExpression,
+    ParenthesizedType, RepeatLoop, ReturnStatement, Statement, Suffix, SuffixedExpression,
+    TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
+    TypeField, TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 impl<'ast> Expression<'ast> {
@@ -570,15 +569,19 @@ impl<'ast> Literal<'ast> {
     }
 }
 
+impl<'ast> Chunk<'ast> {
+    #[must_use]
+    #[inline]
+    pub const fn new(version: LuaVersion, block: Block<'ast>) -> Self {
+        Self { version, block }
+    }
+}
+
 impl<'ast> Block<'ast> {
     #[must_use]
     #[inline]
-    pub const fn new(
-        span: Span,
-        stmts: List<'ast, Statement<'ast>>,
-        last_stmt: Option<LastStatement<'ast>>,
-    ) -> Self {
-        Self { span, stmts, last_stmt }
+    pub const fn new(span: Span, stmts: List<'ast, Statement<'ast>>) -> Self {
+        Self { span, stmts }
     }
 }
 
@@ -729,6 +732,16 @@ impl<'ast> Statement<'ast> {
 
     #[must_use]
     #[inline]
+    pub fn new_return(
+        span: Span,
+        exprs: List<'ast, Expression<'ast>>,
+        allocator: &'ast Allocator,
+    ) -> Self {
+        Self::Return(ReturnStatement::boxed(span, exprs, allocator))
+    }
+
+    #[must_use]
+    #[inline]
     pub fn new_goto(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Self {
         Self::Goto(GotoStatement::boxed(span, name, allocator))
     }
@@ -801,18 +814,6 @@ impl<'ast> Statement<'ast> {
             value,
             allocator,
         ))
-    }
-}
-
-impl<'ast> LastStatement<'ast> {
-    #[must_use]
-    #[inline]
-    pub fn new_return(
-        span: Span,
-        exprs: List<'ast, Expression<'ast>>,
-        allocator: &'ast Allocator,
-    ) -> Self {
-        Self::Return(ReturnStatement::boxed(span, exprs, allocator))
     }
 }
 

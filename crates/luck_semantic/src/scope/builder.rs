@@ -2,13 +2,13 @@ use core::mem;
 use std::collections::hash_map::Entry;
 
 use luck_ast::{
-    Assignment, Block, CompoundAssignment, DoBlock, Expression, FunctionAttribute, FunctionBody,
-    FunctionDecl, GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar, IfStatement,
-    LastStatement, LocalAssignment, LocalFunction, Name, NumericFor, RepeatLoop, Statement,
+    Assignment, Block, Chunk, CompoundAssignment, DoBlock, Expression, FunctionAttribute,
+    FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration, GlobalFunction, GlobalStar,
+    IfStatement, LocalAssignment, LocalFunction, Name, NumericFor, RepeatLoop, Statement,
     SuffixedExpression, TableConstructor, TreeCounts, TypeDeclaration, TypeDeclarationValue, Var,
     Visit, WhileLoop,
 };
-use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
+use luck_token::{Span, index_to_offset, offset_to_index};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use super::{
@@ -25,28 +25,26 @@ type InitializedLocals<'ast> = Vec<(SymbolId, &'ast Expression<'ast>)>;
 ///
 /// A local comes before any initializer that can read it.
 pub(crate) fn build_with_initializers<'ast, Sink>(
-    block: &'ast Block<'ast>,
+    chunk: &'ast Chunk<'ast>,
     counts: TreeCounts,
-    version: LuaVersion,
     sink: &mut Sink,
 ) -> (ScopeTree<'ast>, InitializedLocals<'ast>)
 where
     Sink: NodeSink<'ast>,
 {
-    build(block, counts, version, AllNames, sink)
+    build(chunk, counts, AllNames, sink)
 }
 
 /// [`ScopeTree::build_for_names`].
 pub(crate) fn build_for_names<'ast, Sink>(
-    block: &'ast Block<'ast>,
-    version: LuaVersion,
+    chunk: &'ast Chunk<'ast>,
     names: &[&str],
     sink: &mut Sink,
 ) -> ScopeTree<'ast>
 where
     Sink: NodeSink<'ast>,
 {
-    build(block, TreeCounts::default(), version, NameSet::new(names), sink).0
+    build(chunk, TreeCounts::default(), NameSet::new(names), sink).0
 }
 
 /// Which names a build records.
@@ -93,9 +91,8 @@ fn name_bit(text: &str) -> u64 {
 }
 
 fn build<'ast, Sink, Filter>(
-    block: &'ast Block<'ast>,
+    chunk: &'ast Chunk<'ast>,
     counts: TreeCounts,
-    version: LuaVersion,
     filter: Filter,
     sink: &mut Sink,
 ) -> (ScopeTree<'ast>, InitializedLocals<'ast>)
@@ -115,7 +112,7 @@ where
     resolved_offsets.push(0);
     let mut builder = Builder {
         tree: ScopeTree {
-            version,
+            version: chunk.version,
             scopes,
             symbols: Vec::with_capacity(declarations),
             references: Vec::with_capacity(name_uses),
@@ -142,7 +139,7 @@ where
         filter,
         sink,
     };
-    builder.visit_block(block);
+    builder.visit_block(&chunk.block);
     builder.finish()
 }
 
@@ -716,11 +713,6 @@ where
         self.is_in_type_function = is_enclosed_by_type_function;
     }
 
-    fn visit_last_stmt(&mut self, last_stmt: &'ast LastStatement<'ast>) {
-        self.sink.last_stmt(last_stmt);
-        self.walk_last_stmt(last_stmt);
-    }
-
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
         self.sink.expr(expr);
         if let Expression::Name(name) = expr {
@@ -745,6 +737,7 @@ where
 mod tests {
     use luck_allocator::Allocator;
     use luck_ast::{NameIndex, VisitMut};
+    use luck_token::LuaVersion;
 
     use super::*;
     use crate::fixtures::parse;
@@ -754,7 +747,7 @@ mod tests {
         source: &'ast str,
         version: LuaVersion,
     ) -> ScopeTree<'ast> {
-        ScopeTree::build(parse(allocator, source, version), TreeCounts::default(), version)
+        ScopeTree::build(parse(allocator, source, version), TreeCounts::default())
     }
 
     fn scope_tree<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ScopeTree<'ast> {
@@ -1289,15 +1282,15 @@ t[x], x = x, function() y = x end",
     }
 
     /// Each reference a tree built from `counts` finds from the names of
-    /// `block`, and then each one a tree that searches positions finds.
+    /// `chunk`, and then each one a tree that searches positions finds.
     fn found_by_index_and_by_search(
-        block: &Block<'_>,
+        chunk: &Chunk<'_>,
         counts: TreeCounts,
     ) -> (Vec<Option<ReferenceId>>, Vec<Option<ReferenceId>>) {
-        let indexed = ScopeTree::build(block, counts, LuaVersion::Lua54);
-        let searched = ScopeTree::build(block, TreeCounts::default(), LuaVersion::Lua54);
+        let indexed = ScopeTree::build(chunk, counts);
+        let searched = ScopeTree::build(chunk, TreeCounts::default());
         let mut names = AllNames(Vec::new());
-        names.visit_block(block);
+        names.visit_chunk(chunk);
         (
             names.0.iter().map(|name| indexed.reference_of(name)).collect(),
             names.0.iter().map(|name| searched.reference_of(name)).collect(),
@@ -1313,7 +1306,7 @@ t[x], x = x, function(x) y = x.y end";
     fn a_parsed_tree_finds_a_name_s_reference_by_its_index() {
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, NAMES_OF_EVERY_KIND, LuaVersion::Lua54);
-        let (by_index, by_search) = found_by_index_and_by_search(&parsed.block, parsed.counts);
+        let (by_index, by_search) = found_by_index_and_by_search(&parsed.chunk, parsed.counts);
         assert_eq!(by_index, by_search);
         assert_eq!(by_index.iter().flatten().count(), 9, "{by_index:?}");
     }
@@ -1330,8 +1323,8 @@ t[x], x = x, function(x) y = x.y end";
 
         let allocator = Allocator::new();
         let mut parsed = luck_parser::parse(&allocator, NAMES_OF_EVERY_KIND, LuaVersion::Lua54);
-        Renumber.visit_block(&mut parsed.block);
-        let (by_index, by_search) = found_by_index_and_by_search(&parsed.block, parsed.counts);
+        Renumber.visit_block(&mut parsed.chunk.block);
+        let (by_index, by_search) = found_by_index_and_by_search(&parsed.chunk, parsed.counts);
         assert_eq!(by_index, by_search);
         assert_eq!(by_index.iter().flatten().count(), 9, "{by_index:?}");
     }

@@ -4,7 +4,7 @@ use ls_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
     CodeActionResponse, Diagnostic, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
 };
-use luck_ast::{Block, Expression, GetSpan as _, LastStatement, Statement, Visit};
+use luck_ast::{Block, Expression, GetSpan as _, Statement, Visit};
 use luck_linter::{Fix, FixKind, LintDiagnostic};
 use luck_token::{Span, has_line_break, is_lua_whitespace, offset_to_index};
 use rustc_hash::FxHashMap;
@@ -169,7 +169,7 @@ impl<'document> Disabler<'document> {
         let mut starts: Vec<(u32, usize)> = lint_starts.iter().copied().zip(0..).collect();
         starts.sort_unstable();
         let mut finder = StatementFinder { starts, ends: vec![None; lint_starts.len()] };
-        finder.visit_block(&document.parse().block);
+        finder.visit_block(&document.parse().chunk.block);
         Self { document, statement_ends: finder.ends }
     }
 
@@ -242,20 +242,11 @@ impl<'ast> Visit<'ast> for StatementFinder {
         for stmt in block.stmts.get(from..to).unwrap_or_default() {
             self.visit_stmt(stmt);
         }
-        if let Some(last_stmt) = &block.last_stmt {
-            self.visit_last_stmt(last_stmt);
-        }
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         if self.holds(stmt.span()) {
             self.walk_stmt(stmt);
-        }
-    }
-
-    fn visit_last_stmt(&mut self, last_stmt: &'ast LastStatement<'ast>) {
-        if self.holds(last_stmt.span()) {
-            self.walk_last_stmt(last_stmt);
         }
     }
 

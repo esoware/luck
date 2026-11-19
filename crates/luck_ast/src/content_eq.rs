@@ -1,5 +1,5 @@
 use luck_allocator::{Box, List, ThinStr};
-use luck_token::{BinOp, CompoundOp, UnOp};
+use luck_token::{BinOp, CompoundOp, LuaVersion, UnOp};
 
 use crate::one_or_more::OneOrMore;
 
@@ -64,6 +64,12 @@ impl ContentEq for UnOp {
 }
 
 impl ContentEq for CompoundOp {
+    fn content_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl ContentEq for LuaVersion {
     fn content_eq(&self, other: &Self) -> bool {
         self == other
     }

@@ -10,7 +10,7 @@ Scope analysis and standard library knowledge for Lua and Luau.
 
 ## Usage
 
-- `analyze(block, counts, version, environment)` returns a `SemanticAnalysis`, and `analyze_with` shows a `NodeSink` the walk. `SemanticAnalysis` answers `is_known_global` and `resolve_callee`, and holds the `ScopeTree`.
+- `analyze(chunk, counts, environment)` returns a `SemanticAnalysis` of a tree in the version its `Chunk` records, and `analyze_with` shows a `NodeSink` the walk. `SemanticAnalysis` answers `is_known_global` and `resolve_callee`, and holds the `ScopeTree`.
 - `ScopeTree`: `scopes()`, `symbols()`, and `references()`, with `Scope`, `Symbol`, and `Reference` and their ids. `reference_of` takes a tree's `Name` to its reference, `Reference::resolved` holds the symbol it reaches, and `resolved_references` lists a symbol's references. `build_for_names` records only the names a caller asks about.
 - `library_for(version, environment)` returns the catalog, a `StdlibLibrary`.
 
@@ -20,9 +20,8 @@ use luck_token::{LuaVersion, StdlibEnvironment};
 
 let allocator = Allocator::new();
 let parsed = luck_parser::parse(&allocator, "local greeting = 1 print(greeting)", LuaVersion::Lua54);
-let block = allocator.alloc(parsed.block);
-let analysis =
-    luck_semantic::analyze(block, parsed.counts, LuaVersion::Lua54, StdlibEnvironment::Standalone);
+let chunk = allocator.alloc(parsed.chunk);
+let analysis = luck_semantic::analyze(chunk, parsed.counts, StdlibEnvironment::Standalone);
 let tree = analysis.scope_tree();
 let greeting = tree.symbols()[0].id;
 assert_eq!(tree.resolved_references(greeting).len(), 1);

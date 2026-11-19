@@ -14,7 +14,7 @@ fn local_const_attribute() {
     let allocator = Allocator::new();
     let result = parse_lua54(&allocator, "local x <const> = 5");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert_eq!(local.names.len(), 1);
         let attribute = local
             .names
@@ -25,7 +25,7 @@ fn local_const_attribute() {
             .expect("expected attribute on x");
         assert_eq!(attribute.name.text, "const");
     } else {
-        panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
+        panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts[0]);
     }
 }
 
@@ -34,7 +34,7 @@ fn local_close_attribute() {
     let allocator = Allocator::new();
     let result = parse_lua54(&allocator, "local f <close> = io.open(\"file\")");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert_eq!(local.names.len(), 1);
         let attribute = local
             .names
@@ -55,7 +55,7 @@ fn trailing_attribute_applies_only_to_its_name() {
     // In `local a, b <const> = 1, 2` only `b` carries the attribute.
     let result = parse_lua54(&allocator, "local a, b <const> = 1, 2");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert_eq!(local.names.len(), 2);
         assert!(
             local.names.first().expect("declared name").attribute.is_none(),
@@ -75,7 +75,7 @@ fn each_name_keeps_its_own_attribute() {
     let allocator = Allocator::new();
     let result = parse_lua54(&allocator, "local a <const>, b <close> = 1, 2");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert_eq!(local.names.len(), 2);
         let attribute_a = local
             .names

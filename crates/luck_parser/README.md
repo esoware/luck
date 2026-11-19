@@ -10,10 +10,12 @@ An error doesn't stop the parse. The parser recovers and reports every error in 
 
 ## Usage
 
-- `parse(allocator, source, version)` returns a `ParseResult`: the source, the `Block`, the comments, the errors, the nesting depth, and the `TreeCounts`.
+- `parse(allocator, source, version)` returns a `ParseResult`: the source, the `Chunk`, which records `version` and holds the tree, the comments, the errors, the nesting depth, and the `TreeCounts`.
 - `parse_with_tokens` also returns every token it read, so a host that needs both lexes the source once.
 - `validate` runs the compile-time checks the parse skips: writes to read-only bindings, names no Lua 5.5 `global` declaration covers, `goto` and label resolution, and Luau's `continue` and `until` rule. Run it on a parse with no errors.
 - `ParseError` is `luck_token::SourceError`.
+
+Every dialect's source reads into the same shape: a `break`, a `continue`, or a `return` is a statement like any other, and a `;` is no node. A statement the grammar takes only at the end of its block but that has others after it is an error, and stays where it was written.
 
 ```rust
 use luck_allocator::Allocator;
@@ -22,5 +24,5 @@ use luck_token::LuaVersion;
 let allocator = Allocator::new();
 let result = luck_parser::parse(&allocator, "local x = 1 + 2", LuaVersion::Lua54);
 assert!(result.errors.is_empty());
-assert_eq!(result.block.stmts.len(), 1);
+assert_eq!(result.chunk.block.stmts.len(), 1);
 ```

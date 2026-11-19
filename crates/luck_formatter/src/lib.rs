@@ -2,7 +2,7 @@
 //!
 //! Prettier-style code formatter for Lua 5.1-5.5 and Luau.
 //!
-//! [`format_block()`] formats an AST directly, including one built in code
+//! [`format_chunk()`] formats a tree directly, including one built in code
 //! with no source text. It prints each leaf's text as the tree holds it,
 //! unchecked, and returns an error only for a tree nested past
 //! `luck_ast::MAX_NESTING_DEPTH`. [`format()`] parses source text first, and
@@ -58,7 +58,7 @@ mod quotes;
 mod sort_requires;
 
 pub use comments::Comments;
-pub use format::{FormatError, FormatResult, format, format_block, format_parsed, format_range};
+pub use format::{FormatError, FormatResult, format, format_chunk, format_parsed, format_range};
 pub use format_options::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
     IndentStyle, LineEndings, QuoteStyle, SpaceAfterFunction,

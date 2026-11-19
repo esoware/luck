@@ -50,7 +50,7 @@ mod tests {
         assert_eq!(trailing.attached_to, stmt.span().start);
         assert_eq!(trailing.position, CommentPosition::Trailing);
 
-        let block = synth.block([], None);
+        let block = synth.block([]);
         let dangling = SyntheticComment::dangling(&block, "unreachable");
         assert_eq!(dangling.attached_to, block.span.start);
         assert_eq!(dangling.position, CommentPosition::Leading);

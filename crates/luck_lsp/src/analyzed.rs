@@ -63,7 +63,7 @@ impl Analyzed {
             parse
         });
         let analyzed = AnalyzedCell::new(parsed, |cell| {
-            luck_linter::analyze(cell.borrow_dependent(), target, config)
+            luck_linter::analyze(cell.borrow_dependent(), target.stdlib_environment(), config)
         });
         (Self(analyzed), tokens)
     }

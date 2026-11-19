@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::Block;
+use luck_ast::Chunk;
 use luck_semantic::{StdlibLibrary, library_for};
 use luck_token::{LuaVersion, StdlibEnvironment};
 
@@ -9,10 +9,10 @@ pub(crate) fn parse<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,
     version: LuaVersion,
-) -> &'ast Block<'ast> {
+) -> &'ast Chunk<'ast> {
     let parsed = luck_parser::parse(allocator, source, version);
     assert!(parsed.errors.is_empty(), "{source}: {:?}", parsed.errors);
-    allocator.alloc(parsed.block)
+    allocator.alloc(parsed.chunk)
 }
 
 pub(crate) const NUMBERED_VERSIONS: [LuaVersion; 5] =

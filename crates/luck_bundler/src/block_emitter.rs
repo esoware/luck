@@ -2,7 +2,7 @@ use core::mem;
 
 use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
-    Block, Expression, FunctionArgs, FunctionName, GetSpan as _, LocalAssignment,
+    Block, Chunk, Expression, FunctionArgs, FunctionName, GetSpan as _, LocalAssignment,
     LocalAssignmentKind, LocalFunction, LocalFunctionKind, MAX_NESTING_DEPTH, Name, OneOrMore,
     Statement, Suffix, SuffixedExpression, Var, VisitMut, spans_past_nesting_cap,
 };
@@ -27,19 +27,19 @@ use crate::module::ModuleInfo;
 ///
 /// Returns an E013 for each construct a wrapper would nest past
 /// [`MAX_NESTING_DEPTH`], as [`emitter::emit`] does.
-pub(crate) fn emit_block<'ast>(
+pub(crate) fn emit_chunk<'ast>(
     allocator: &'ast Allocator,
     mut graph: DependencyGraph<'ast>,
     version: LuaVersion,
-) -> Result<(Block<'ast>, String), Vec<Diagnostic>> {
+) -> Result<(Chunk<'ast>, String), Vec<Diagnostic>> {
     let Some(entry) = graph.modules.get(graph.entry_id.0) else {
-        let empty = Block::new(Span::default(), List::new(), None);
-        return Ok((empty, String::new()));
+        let empty = Block::new(Span::default(), List::new());
+        return Ok((Chunk::new(version, empty), String::new()));
     };
     let header = chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied());
     if graph.modules.len() == 1 && entry.dependencies.is_empty() {
         let block = graph.modules.swap_remove(graph.entry_id.0).block;
-        return Ok((block, header));
+        return Ok((Chunk::new(version, block), header));
     }
 
     let plan = Plan::new(&graph, version);
@@ -61,10 +61,10 @@ pub(crate) fn emit_block<'ast>(
     }
 
     let skeleton = allocator.alloc_str(&emitter::skeleton(&graph, &plan, version));
-    let mut block = luck_parser::parse(allocator, skeleton, version).block;
+    let mut chunk = luck_parser::parse(allocator, skeleton, version).chunk;
     let mut filler = Filler { allocator, prefix: &plan.prefix, bodies: bodies.into_iter() };
-    filler.visit_block(&mut block);
-    Ok((block, header))
+    filler.visit_chunk(&mut chunk);
+    Ok((chunk, header))
 }
 
 /// Puts each module's body, in bundle order, in place of the hole the
@@ -89,34 +89,25 @@ where
     Bodies: Iterator<Item = Block<'ast>>,
 {
     /// A block's own statements are walked before its hole is filled, so no
-    /// module's are.
+    /// module's are. Only an export table's `return` follows a hole, and a
+    /// module with value exports has no `return` of its own.
     fn visit_block(&mut self, block: &mut Block<'ast>) {
         self.walk_block(block);
-        let hole = block.stmts.iter().position(|stmt| self.is_hole(stmt));
-        // Only the text needs the `;` that keeps a body opening with `(` from
-        // continuing the wrapper's statement.
-        let has_empty = block.stmts.iter().any(|stmt| matches!(stmt, Statement::EmptyStatement(_)));
-        if hole.is_none() && !has_empty {
+        let Some(hole) = block.stmts.iter().position(|stmt| self.is_hole(stmt)) else {
             return;
-        }
-        let mut body = hole.and_then(|_| self.bodies.next());
-        let capacity = block
-            .stmts
-            .len()
-            .saturating_add(body.as_ref().map_or(0, |filling| filling.stmts.len()));
+        };
+        let Some(mut body) = self.bodies.next() else {
+            return;
+        };
+        let capacity = block.stmts.len().saturating_add(body.stmts.len());
         let mut stmts = List::with_capacity_in(capacity, self.allocator);
         for (i, stmt) in mem::take(&mut block.stmts).into_iter().enumerate() {
-            if Some(i) == hole
-                && let Some(Block { stmts: body_stmts, last_stmt, .. }) = body.take()
-            {
-                for body_stmt in body_stmts {
-                    stmts.push(body_stmt, self.allocator);
-                }
-                block.last_stmt = block.last_stmt.take().or(last_stmt);
+            if i != hole {
+                stmts.push(stmt, self.allocator);
                 continue;
             }
-            if !matches!(stmt, Statement::EmptyStatement(_)) {
-                stmts.push(stmt, self.allocator);
+            for body_stmt in mem::take(&mut body.stmts) {
+                stmts.push(body_stmt, self.allocator);
             }
         }
         block.stmts = stmts;
@@ -316,13 +307,14 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
             | Statement::FunctionDecl(_)
             | Statement::LocalFunction(_)
             | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::Error(_)) => other,
         }

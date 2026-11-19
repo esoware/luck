@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
 use luck_ast::{
-    Expression, InterpolatedSegment, LastStatement, LocalAssignmentKind, LocalFunctionKind,
-    Statement, Suffix, TypeDeclarationValue, Var,
+    Expression, InterpolatedSegment, LocalAssignmentKind, LocalFunctionKind, Statement, Suffix,
+    TypeDeclarationValue, Var,
 };
 
 use crate::common::{
@@ -13,12 +13,12 @@ fn compound_assign_plus() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "x += 1");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] {
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    if let Statement::CompoundAssignment(compound_assignment) = &result.chunk.block.stmts[0] {
         assert!(matches!(&compound_assignment.var, Var::Name(name) if name.text == "x"));
         assert_eq!(compound_assignment.op, luck_token::CompoundOp::Add);
     } else {
-        panic!("expected CompoundAssignment, got {:?}", result.block.stmts[0]);
+        panic!("expected CompoundAssignment, got {:?}", result.chunk.block.stmts[0]);
     }
 }
 
@@ -27,8 +27,8 @@ fn compound_assign_index() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "t[i] *= 2");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] else {
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    let Statement::CompoundAssignment(compound_assignment) = &result.chunk.block.stmts[0] else {
         panic!("expected CompoundAssignment");
     };
     assert_eq!(chain_shape(target_chain(&compound_assignment.var)), "t[]");
@@ -40,8 +40,8 @@ fn compound_assign_field_concat() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, r#"a.b ..= "c""#);
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] else {
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    let Statement::CompoundAssignment(compound_assignment) = &result.chunk.block.stmts[0] else {
         panic!("expected CompoundAssignment");
     };
     assert_eq!(chain_shape(target_chain(&compound_assignment.var)), "a.b");
@@ -63,7 +63,7 @@ fn compound_assign_all_operators() {
     ] {
         let result = parse_luau(&allocator, source);
         assert_no_errors(&result);
-        if let Statement::CompoundAssignment(compound_assignment) = &result.block.stmts[0] {
+        if let Statement::CompoundAssignment(compound_assignment) = &result.chunk.block.stmts[0] {
             assert_eq!(compound_assignment.op, expected_op, "failed for: {source}");
         } else {
             panic!("expected CompoundAssignment for: {source}");
@@ -76,7 +76,7 @@ fn if_expr_simple() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local x = if a then 1 else 2");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
+    assert_eq!(result.chunk.block.stmts.len(), 1);
     let expr = local_value(&result);
     assert!(matches!(expr, Expression::IfExpression(_)));
     if let Expression::IfExpression(if_expr) = expr {
@@ -163,8 +163,8 @@ fn function_with_param_types() {
     let result =
         parse_luau(&allocator, "function f(a: string, b: number): boolean return true end");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    if let Statement::FunctionDecl(function_decl) = &result.chunk.block.stmts[0] {
         let param_count = function_decl.body.params.len();
         assert_eq!(param_count, 2);
         assert!(function_decl.body.return_type.is_some());
@@ -178,7 +178,7 @@ fn local_with_generic_type() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local t: Array<number> = {}");
     assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::LocalAssignment(_)));
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::LocalAssignment(_)));
 }
 
 #[test]
@@ -236,11 +236,11 @@ fn type_declaration_simple() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "type Foo = number");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] {
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    if let Statement::TypeDeclaration(type_declaration) = &result.chunk.block.stmts[0] {
         assert_eq!(type_declaration.name.text, "Foo");
     } else {
-        panic!("expected TypeDeclaration, got {:?}", result.block.stmts[0]);
+        panic!("expected TypeDeclaration, got {:?}", result.chunk.block.stmts[0]);
     }
 }
 
@@ -249,7 +249,7 @@ fn type_declaration_generic() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "type Pair<T> = { first: T, second: T }");
     assert_no_errors(&result);
-    if let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] {
+    if let Statement::TypeDeclaration(type_declaration) = &result.chunk.block.stmts[0] {
         assert!(type_declaration.generics.is_some());
     } else {
         panic!("expected TypeDeclaration");
@@ -261,7 +261,7 @@ fn export_type_declaration() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "export type Point = { x: number, y: number }");
     assert_no_errors(&result);
-    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
+    let Statement::TypeDeclaration(type_declaration) = &result.chunk.block.stmts[0] else {
         panic!("expected TypeDeclaration");
     };
     assert!(type_declaration.is_exported);
@@ -275,7 +275,7 @@ type A = number
 type B = string";
     let result = parse_luau(&allocator, source);
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 2);
+    assert_eq!(result.chunk.block.stmts.len(), 2);
 }
 
 #[test]
@@ -289,7 +289,7 @@ type function Id(t)
 end",
     );
     assert_no_errors(&result);
-    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
+    let Statement::TypeDeclaration(type_declaration) = &result.chunk.block.stmts[0] else {
         panic!("expected TypeDeclaration");
     };
     assert!(matches!(type_declaration.value, TypeDeclarationValue::TypeFunction(_)));
@@ -300,8 +300,8 @@ fn continue_in_for_loop() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "for i=1,10 do continue end");
     assert_no_errors(&result);
-    if let Statement::NumericFor(numeric_for) = &result.block.stmts[0] {
-        assert!(matches!(numeric_for.block.last_stmt.as_ref(), Some(LastStatement::Continue(_))));
+    if let Statement::NumericFor(numeric_for) = &result.chunk.block.stmts[0] {
+        assert!(matches!(*numeric_for.block.stmts, [Statement::Continue(_)]));
     } else {
         panic!("expected NumericFor");
     }
@@ -313,7 +313,7 @@ fn continue_as_local_name() {
     // `continue` used as a variable name parses as a local assignment.
     let result = parse_luau(&allocator, "local continue = 5");
     assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::LocalAssignment(_)));
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::LocalAssignment(_)));
 }
 
 #[test]
@@ -321,8 +321,8 @@ fn continue_in_while_loop() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "while true do continue end");
     assert_no_errors(&result);
-    if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
-        assert!(matches!(while_loop.block.last_stmt.as_ref(), Some(LastStatement::Continue(_))));
+    if let Statement::WhileLoop(while_loop) = &result.chunk.block.stmts[0] {
+        assert!(matches!(*while_loop.block.stmts, [Statement::Continue(_)]));
     } else {
         panic!("expected WhileLoop");
     }
@@ -333,19 +333,18 @@ fn if_at_stmt_start_is_an_if_stmt() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "if true then x = 1 end");
     assert_no_errors(&result);
-    assert!(matches!(&result.block.stmts[0], Statement::IfStatement(_)));
+    assert!(matches!(&result.chunk.block.stmts[0], Statement::IfStatement(_)));
 }
 
 #[test]
-fn break_is_a_last_stmt_in_luau() {
+fn break_ends_its_block_in_luau_as_a_statement() {
     let allocator = Allocator::new();
-    // Luau keeps 5.1's `laststat` grammar (extended with `continue`):
-    // break is a last statement, not a free-standing one.
+    // Luau keeps 5.1's `laststat` grammar, extended with `continue`, and
+    // its `break` is a statement in the tree, as every dialect's is.
     let result = parse_luau(&allocator, "while true do break end");
     assert_no_errors(&result);
-    if let Statement::WhileLoop(while_loop) = &result.block.stmts[0] {
-        assert!(while_loop.block.stmts.is_empty(), "{:?}", while_loop.block.stmts);
-        assert!(matches!(while_loop.block.last_stmt.as_ref(), Some(LastStatement::Break(_))));
+    if let Statement::WhileLoop(while_loop) = &result.chunk.block.stmts[0] {
+        assert!(matches!(*while_loop.block.stmts, [Statement::Break(_)]));
     } else {
         panic!("expected WhileLoop");
     }
@@ -366,9 +365,9 @@ fn continue_as_function_call() {
     let result = parse_luau(&allocator, source);
     assert_no_errors(&result);
     assert!(
-        matches!(&result.block.stmts[0], Statement::FunctionCall(_)),
+        matches!(&result.chunk.block.stmts[0], Statement::FunctionCall(_)),
         "expected FunctionCall, got {:?}",
-        result.block.stmts[0]
+        result.chunk.block.stmts[0]
     );
 }
 
@@ -379,9 +378,9 @@ fn continue_as_field_access() {
     let result = parse_luau(&allocator, source);
     assert_no_errors(&result);
     assert!(
-        matches!(&result.block.stmts[0], Statement::Assignment(_)),
+        matches!(&result.chunk.block.stmts[0], Statement::Assignment(_)),
         "expected Assignment via field access, got {:?}",
-        result.block.stmts[0]
+        result.chunk.block.stmts[0]
     );
 }
 
@@ -411,7 +410,7 @@ fn function_attributes_are_kept_on_ast() {
     let allocator = Allocator::new();
     let global = parse_luau(&allocator, "@native function f() end");
     assert_no_errors(&global);
-    if let Statement::FunctionDecl(function_decl) = &global.block.stmts[0] {
+    if let Statement::FunctionDecl(function_decl) = &global.chunk.block.stmts[0] {
         assert_eq!(function_decl.attributes.len(), 1);
     } else {
         panic!("expected FunctionDecl");
@@ -419,7 +418,7 @@ fn function_attributes_are_kept_on_ast() {
 
     let local = parse_luau(&allocator, "@native @checked local function g() end");
     assert_no_errors(&local);
-    if let Statement::LocalFunction(local_function) = &local.block.stmts[0] {
+    if let Statement::LocalFunction(local_function) = &local.chunk.block.stmts[0] {
         assert_eq!(local_function.attributes.len(), 2);
     } else {
         panic!("expected LocalFunction");
@@ -439,7 +438,7 @@ fn export_type_function_parses() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "export type function Id(t) return t end");
     assert_no_errors(&result);
-    if let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] {
+    if let Statement::TypeDeclaration(type_declaration) = &result.chunk.block.stmts[0] {
         assert!(type_declaration.is_exported);
         assert!(matches!(type_declaration.value, TypeDeclarationValue::TypeFunction(_)));
     } else {
@@ -471,11 +470,11 @@ fn const_bindings() {
     // Grammar: 'const' bindinglist '=' explist | 'const' 'function' NAME funcbody
     let result = parse_luau(&allocator, "const x = 1");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert_eq!(local.kind, LocalAssignmentKind::Const);
         assert!(!local.exprs.is_empty());
     } else {
-        panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
+        panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts[0]);
     }
 
     assert_no_errors(&parse_luau(&allocator, "const a, b = 1, 2"));
@@ -484,10 +483,10 @@ fn const_bindings() {
 
     let function = parse_luau(&allocator, "const function cf() end");
     assert_no_errors(&function);
-    if let Statement::LocalFunction(local_function) = &function.block.stmts[0] {
+    if let Statement::LocalFunction(local_function) = &function.chunk.block.stmts[0] {
         assert_eq!(local_function.kind, LocalFunctionKind::Const);
     } else {
-        panic!("expected LocalFunction, got {:?}", function.block.stmts[0]);
+        panic!("expected LocalFunction, got {:?}", function.chunk.block.stmts[0]);
     }
 }
 
@@ -589,9 +588,10 @@ local after = 1",
         panic!("{:?}", result.errors);
     };
     assert_eq!(error.message, "unterminated interpolated string");
-    let [Statement::LocalAssignment(_), Statement::LocalAssignment(after)] = &*result.block.stmts
+    let [Statement::LocalAssignment(_), Statement::LocalAssignment(after)] =
+        &*result.chunk.block.stmts
     else {
-        panic!("{:?}", result.block.stmts);
+        panic!("{:?}", result.chunk.block.stmts);
     };
     assert_eq!(after.names.first().map(|name| name.name.text.as_str()), Some("after"));
 }
@@ -605,10 +605,7 @@ fn integer_literals_have_a_distinct_ast_node() {
          0b1000000000000000000000000000000000000000000000000000000000000000i",
     );
     assert_no_errors(&result);
-    let Some(last) = result.block.last_stmt.as_ref() else {
-        panic!("expected return");
-    };
-    let LastStatement::Return(return_stmt) = last else {
+    let [Statement::Return(return_stmt)] = &*result.chunk.block.stmts else {
         panic!("expected return");
     };
     assert!(return_stmt.exprs.iter().all(|expr| matches!(expr, Expression::Integer(_))));
@@ -639,7 +636,7 @@ fn explicit_type_instantiation_is_a_suffix() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "return module.f<<number, string>>(value)");
     assert_no_errors(&result);
-    let Some(LastStatement::Return(return_stmt)) = result.block.last_stmt.as_ref() else {
+    let [Statement::Return(return_stmt)] = &*result.chunk.block.stmts else {
         panic!("expected return");
     };
     let call = chain(return_stmt.exprs.first().expect("a returned value"));
@@ -659,7 +656,7 @@ fn explicit_type_instantiation_is_a_suffix() {
     }
 
     let method = parse_luau(&allocator, "return t:f<<number, string>>()");
-    let Some(LastStatement::Return(method_return)) = method.block.last_stmt.as_ref() else {
+    let [Statement::Return(method_return)] = &*method.chunk.block.stmts else {
         panic!("expected return");
     };
     let method_chain = chain(method_return.exprs.first().expect("a returned value"));
@@ -685,9 +682,9 @@ export function run() return mutable end",
         Statement::LocalAssignment(local),
         Statement::LocalAssignment(constant),
         Statement::LocalFunction(function),
-    ] = &*result.block.stmts
+    ] = &*result.chunk.block.stmts
     else {
-        panic!("expected an exported local, const, and function: {:?}", result.block.stmts);
+        panic!("expected an exported local, const, and function: {:?}", result.chunk.block.stmts);
     };
     assert_eq!(local.kind, LocalAssignmentKind::ExportLocal);
     assert_eq!(constant.kind, LocalAssignmentKind::ExportConst);

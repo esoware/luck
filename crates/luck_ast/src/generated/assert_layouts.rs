@@ -4,21 +4,21 @@
 use luck_allocator::List;
 
 use crate::{
-    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, CompoundAssignment,
+    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment,
     DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs,
     FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
     FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam,
     GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression, IfStatement,
-    InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement, LastStatement,
-    Literal, LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall,
-    Name, NameIndex, NamedType, NumericFor, OptionalType, Parameter, ParenthesizedExpression,
+    InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement, Literal,
+    LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name,
+    NameIndex, NamedType, NumericFor, OptionalType, Parameter, ParenthesizedExpression,
     ParenthesizedType, RepeatLoop, ReturnStatement, Statement, Suffix, SuffixedExpression,
     TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
     TypeField, TypeFieldAccess, TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam,
     VariadicType, WhileLoop,
 };
 
-const LAYOUTS: [(&str, usize, usize); 81] = [
+const LAYOUTS: [(&str, usize, usize); 80] = [
     ("Expression", size_of::<Expression<'_>>(), align_of::<Expression<'_>>()),
     ("Var", size_of::<Var<'_>>(), align_of::<Var<'_>>()),
     (
@@ -59,9 +59,9 @@ const LAYOUTS: [(&str, usize, usize); 81] = [
     ("FunctionAttribute", size_of::<FunctionAttribute<'_>>(), align_of::<FunctionAttribute<'_>>()),
     ("Name", size_of::<Name<'_>>(), align_of::<Name<'_>>()),
     ("Literal", size_of::<Literal<'_>>(), align_of::<Literal<'_>>()),
+    ("Chunk", size_of::<Chunk<'_>>(), align_of::<Chunk<'_>>()),
     ("Block", size_of::<Block<'_>>(), align_of::<Block<'_>>()),
     ("Statement", size_of::<Statement<'_>>(), align_of::<Statement<'_>>()),
-    ("LastStatement", size_of::<LastStatement<'_>>(), align_of::<LastStatement<'_>>()),
     ("Assignment", size_of::<Assignment<'_>>(), align_of::<Assignment<'_>>()),
     ("DoBlock", size_of::<DoBlock<'_>>(), align_of::<DoBlock<'_>>()),
     ("WhileLoop", size_of::<WhileLoop<'_>>(), align_of::<WhileLoop<'_>>()),
@@ -122,11 +122,6 @@ const LAYOUTS: [(&str, usize, usize); 81] = [
         align_of::<Option<List<'_, Expression<'_>>>>(),
     ),
     ("Option<NameIndex>", size_of::<Option<NameIndex>>(), align_of::<Option<NameIndex>>()),
-    (
-        "Option<LastStatement>",
-        size_of::<Option<LastStatement<'_>>>(),
-        align_of::<Option<LastStatement<'_>>>(),
-    ),
     (
         "Option<ElseClause>",
         size_of::<Option<ElseClause<'_>>>(),

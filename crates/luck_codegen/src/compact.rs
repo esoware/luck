@@ -2,7 +2,7 @@ mod expr;
 mod stmt;
 mod types;
 
-use luck_ast::Block;
+use luck_ast::Chunk;
 use luck_token::CodeBuffer;
 
 use crate::separator::{DOT_DOT, LEFT_BRACKET, NUMBER, OTHER, WORD, class_of, merges_after};
@@ -10,17 +10,17 @@ use crate::separator::{DOT_DOT, LEFT_BRACKET, NUMBER, OTHER, WORD, class_of, mer
 /// The output starts with no reserved capacity. Use
 /// [`compact_with_capacity`] when there's a useful size estimate.
 #[must_use]
-pub fn compact(block: &Block<'_>) -> String {
-    compact_with_capacity(block, 0)
+pub fn compact(chunk: &Chunk<'_>) -> String {
+    compact_with_capacity(chunk, 0)
 }
 
 /// `capacity` bytes are reserved up front, and one the allocator can't meet
 /// is dropped, so the output never depends on it. A parsed tree's source
 /// length makes a good hint: compact output is rarely longer.
 #[must_use]
-pub fn compact_with_capacity(block: &Block<'_>, capacity: usize) -> String {
+pub fn compact_with_capacity(chunk: &Chunk<'_>, capacity: usize) -> String {
     let mut printer = Printer { output: CodeBuffer::with_capacity(capacity), last: OTHER };
-    printer.print_block(block);
+    printer.print_block(&chunk.block);
     printer.output.into_string()
 }
 

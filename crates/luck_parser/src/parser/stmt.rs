@@ -2,8 +2,7 @@ use core::mem;
 
 use luck_allocator::{List, ThinStr};
 use luck_ast::{
-    Block, ElseClause, ElseIfClause, Expression, GetSpan as _, LastStatement, MAX_NESTING_DEPTH,
-    Parameter, Statement, Var,
+    Block, ElseClause, ElseIfClause, Expression, GetSpan as _, Parameter, Statement, Var,
 };
 use luck_token::{CompoundOp, Span, TokenKind};
 
@@ -166,13 +165,11 @@ impl<'ast> Parser<'ast> {
 
         let start = self.scratch.stmts.len();
         // 5.1 and Luau have no empty statement (block ::= {stat [';']}), so
-        // a `;` may only follow a statement. 5.2+ treats a lone `;` as a
-        // statement.
+        // a `;` may only follow a statement.
         let mut can_take_separator = false;
-
-        let last_stmt = loop {
+        loop {
             if self.is_at(TokenKind::Semicolon) {
-                self.parse_semicolons(can_take_separator);
+                self.skip_semicolons(can_take_separator);
                 can_take_separator = false;
             }
 
@@ -181,82 +178,61 @@ impl<'ast> Parser<'ast> {
             }
 
             // No closer begins a statement, so the block's end is checked for
-            // last. A last statement comes with the deepest level it reaches.
-            let (last, deepest) = match self.peek() {
-                TokenKind::Eof => break None,
-                TokenKind::Return => {
-                    let outer = self.begin_operand();
-                    let last = self.parse_return_stmt();
-                    let deepest = self.deepest_level;
-                    self.end_operand(outer);
-                    (last, deepest)
-                }
-                TokenKind::Break if self.version.has_last_stmt_break() => {
-                    let span = self.advance_loop_exit("`break` outside a loop");
-                    self.eat(TokenKind::Semicolon);
-                    (LastStatement::Break(span), self.nesting_depth)
-                }
-                // Luau: `continue` is a contextual keyword, only ever a last
-                // statement. Before what makes a name a call or a target, as
-                // in `continue()` or `continue = 5`, it's an ordinary name.
-                TokenKind::Identifier if self.is_at_continue() => {
-                    let span = self.advance_loop_exit("`continue` outside a loop");
-                    self.eat(TokenKind::Semicolon);
-                    (LastStatement::Continue(span), self.nesting_depth)
-                }
-                kind if is_stmt_start(kind) => {
-                    let stmt = self.parse_stmt();
-                    self.scratch.stmts.push(stmt);
-                    can_take_separator = true;
-                    continue;
-                }
-                _ if self.is_at_expected_closer() => break None,
-                _ => {
-                    let stmt = self.report_unexpected_in_block();
-                    self.scratch.stmts.push(stmt);
-                    can_take_separator = true;
-                    continue;
-                }
+            // last.
+            let stmt = match self.peek() {
+                TokenKind::Eof => break,
+                kind if is_stmt_start(kind) => self.parse_stmt(),
+                _ if self.is_at_expected_closer() => break,
+                _ => self.report_unexpected_in_block(),
             };
-            if self.is_at_block_end() {
-                break Some(last);
+            if stmt.has_to_end_block(self.version) {
+                self.end_block_after(&stmt);
             }
-            let stmt = self.misplaced_last_stmt(last, deepest);
             self.scratch.stmts.push(stmt);
             can_take_separator = true;
-        };
+        }
 
         self.exit_depth();
         self.block_depth = self.block_depth.wrapping_sub(1);
 
         let stmts = List::split_off_in(&mut self.scratch.stmts, start, self.allocator);
-        let end_span =
-            if stmts.is_empty() && last_stmt.is_none() { start_span } else { self.previous_span };
-        Some(Block::new(start_span.merge(end_span), stmts, last_stmt))
+        let end_span = if stmts.is_empty() { start_span } else { self.previous_span };
+        Some(Block::new(start_span.merge(end_span), stmts))
     }
 
-    /// A run of `;`, each an empty statement in 5.2+, and in 5.1 and Luau an
-    /// error unless it follows a statement.
-    fn parse_semicolons(&mut self, can_take_separator: bool) {
-        let mut can_take = can_take_separator;
+    /// A run of `;`, which does nothing: each is an empty statement in 5.2+,
+    /// and in 5.1 and Luau one may follow a statement.
+    fn skip_semicolons(&mut self, can_take_separator: bool) {
+        let mut can_take = can_take_separator || self.version.has_empty_stmt();
         while self.is_at(TokenKind::Semicolon) {
-            if self.version.has_empty_stmt() {
-                let span = self.advance();
-                self.scratch.stmts.push(Statement::EmptyStatement(span));
-            } else {
-                let span = self.advance();
-                if !can_take {
-                    self.error(span, "unexpected token `;`");
-                }
-                can_take = false;
+            let span = self.advance();
+            if !can_take {
+                self.error(span, "unexpected token `;`");
             }
+            can_take = self.version.has_empty_stmt();
         }
     }
 
-    fn is_at_continue(&self) -> bool {
-        self.version.has_continue()
-            && self.current_text() == "continue"
-            && !continues_a_name(self.peek_next())
+    /// A statement that has to end its block, a `return`, `break`, or
+    /// `continue`, takes one `;`, which a `return` has taken already, and
+    /// then the block ends. A statement after it is an error, and stays in
+    /// the block, where it was written.
+    fn end_block_after(&mut self, stmt: &Statement<'ast>) {
+        let is_return = matches!(stmt, Statement::Return(_));
+        if !is_return {
+            self.eat(TokenKind::Semicolon);
+        }
+        if !self.is_at_block_end() && is_stmt_start(self.peek()) {
+            let keyword = if is_return {
+                "return"
+            } else if matches!(stmt, Statement::Break(_)) {
+                "break"
+            } else {
+                "continue"
+            };
+            let span = self.token.span;
+            self.syntax_error(span, format!("`{keyword}` must be the last statement in its block"));
+        }
     }
 
     /// A token that begins no statement. The block goes on at the next place
@@ -279,37 +255,6 @@ impl<'ast> Parser<'ast> {
         self.syntax_error(span, message);
         self.advance();
         Statement::Error(span)
-    }
-
-    /// A `return`, or in 5.1 and Luau a `break` or `continue`, that a
-    /// statement follows. It ends its block in every Lua, so the statements
-    /// after it are an error, and it stands as the `do ... end` around it
-    /// that would make them valid, so they and it stay in the tree. One whose
-    /// `deepest` level is already the depth cap, which the wrapper would
-    /// pass, is an error node instead.
-    #[cold]
-    #[inline(never)]
-    fn misplaced_last_stmt(
-        &mut self,
-        last: LastStatement<'ast>,
-        deepest: usize,
-    ) -> Statement<'ast> {
-        if is_stmt_start(self.peek()) {
-            let keyword = match &last {
-                LastStatement::Return(_) => "return",
-                LastStatement::Break(_) => "break",
-                LastStatement::Continue(_) => "continue",
-                LastStatement::Error(_) => "",
-            };
-            let span = self.token.span;
-            self.syntax_error(span, format!("`{keyword}` must be the last statement in its block"));
-        }
-        let span = last.span();
-        if deepest >= MAX_NESTING_DEPTH {
-            return Statement::Error(span);
-        }
-        let block = Block::new(span, List::new(), Some(last));
-        Statement::new_do_block(span, block, self.allocator)
     }
 
     fn parse_loop_block(&mut self) -> Option<Block<'ast>> {
@@ -342,10 +287,8 @@ impl<'ast> Parser<'ast> {
             TokenKind::Do => self.parse_do_block(),
             TokenKind::Repeat => self.parse_repeat_loop(),
             TokenKind::LeftParen => self.parse_assignment_or_call(),
-            // Lua 5.2+: `break` is an ordinary statement.
-            TokenKind::Break if !self.version.has_last_stmt_break() => {
-                Statement::Break(self.advance_loop_exit("`break` outside a loop"))
-            }
+            TokenKind::Return => self.parse_return_stmt(),
+            TokenKind::Break => Statement::Break(self.advance_loop_exit("`break` outside a loop")),
             // Lua 5.2+
             TokenKind::Goto if self.version.has_goto() => self.parse_goto_stmt(),
             // Lua 5.2+
@@ -358,13 +301,17 @@ impl<'ast> Parser<'ast> {
         }
     }
 
-    /// Luau's `type`, `export`, and `const`, and Lua 5.5's `global`, are
-    /// contextual keywords: each starts a declaration only when the next
-    /// token continues one, so in `const = 1`, `const()`, and `const.x`,
-    /// `const` is an ordinary name.
+    /// Luau's `continue`, `type`, `export`, and `const`, and Lua 5.5's
+    /// `global`, are contextual keywords: each starts its statement only when
+    /// the next token continues one, so in `const = 1`, `const()`, and
+    /// `const.x`, `const` is an ordinary name.
     fn parse_identifier_stmt(&mut self) -> Statement<'ast> {
         let next = self.peek_next();
         match self.current_text() {
+            // Luau
+            "continue" if self.version.has_continue() && !continues_a_name(next) => {
+                Statement::Continue(self.advance_loop_exit("`continue` outside a loop"))
+            }
             // Luau
             "type"
                 if self.version.has_type_syntax()
@@ -405,7 +352,7 @@ impl<'ast> Parser<'ast> {
         }
     }
 
-    fn parse_return_stmt(&mut self) -> LastStatement<'ast> {
+    fn parse_return_stmt(&mut self) -> Statement<'ast> {
         let return_span = self.advance();
 
         if self.function_scope.is_chunk {
@@ -430,7 +377,7 @@ impl<'ast> Parser<'ast> {
             semicolon.or_else(|| exprs.last().map(Expression::span)).unwrap_or(return_span);
 
         let span = return_span.merge(end_span);
-        LastStatement::new_return(span, exprs, self.allocator)
+        Statement::new_return(span, exprs, self.allocator)
     }
 
     fn parse_if_stmt(&mut self) -> Statement<'ast> {

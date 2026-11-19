@@ -56,13 +56,14 @@ impl NodeRule for EmptyBlock {
             | Statement::FunctionDecl(_)
             | Statement::LocalFunction(_)
             | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => return,
@@ -71,12 +72,8 @@ impl NodeRule for EmptyBlock {
     }
 }
 
-/// A `;` is no statement, so a body of only `;` is as empty as one of
-/// nothing, and the formatter prints it as one.
 fn check_body(block: &Block<'_>, message: &'static str, span: Span) -> Option<Finding> {
-    let is_empty = block.last_stmt.is_none()
-        && block.stmts.iter().all(|stmt| matches!(stmt, Statement::EmptyStatement(_)));
-    is_empty.then(|| Finding::new(message, span))
+    block.stmts.is_empty().then(|| Finding::new(message, span))
 }
 
 #[cfg(test)]

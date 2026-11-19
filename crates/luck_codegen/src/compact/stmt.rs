@@ -1,5 +1,5 @@
 use luck_ast::{
-    Attribute, AttributedName, Block, Expression, FunctionAttribute, FunctionBody, LastStatement,
+    Attribute, AttributedName, Block, Expression, FunctionAttribute, FunctionBody,
     LocalFunctionKind, Parameter, Statement, TypeDeclarationValue, stmt_starts_with_paren,
 };
 
@@ -14,18 +14,6 @@ impl Printer {
             }
             self.print_stmt(stmt);
             previous = Some(stmt);
-        }
-        if let Some(last) = &block.last_stmt {
-            match last {
-                LastStatement::Return(return_stmt) => {
-                    self.piece("return");
-                    self.list(&return_stmt.exprs, ",", Self::print_expr);
-                }
-                LastStatement::Break(_) => self.piece("break"),
-                // Luau
-                LastStatement::Continue(_) => self.piece("continue"),
-                LastStatement::Error(_) => {}
-            }
         }
     }
 
@@ -140,7 +128,13 @@ impl Printer {
                 self.list(&local.names, ",", Self::print_attributed_name);
                 self.print_values(&local.exprs);
             }
-            Statement::EmptyStatement(_) => self.piece(";"),
+            Statement::Return(return_stmt) => {
+                self.piece("return");
+                self.list(&return_stmt.exprs, ",", Self::print_expr);
+            }
+            Statement::Break(_) => self.piece("break"),
+            // Luau
+            Statement::Continue(_) => self.piece("continue"),
             // Lua 5.2+
             Statement::Goto(goto) => {
                 self.piece("goto");
@@ -172,8 +166,6 @@ impl Printer {
                 }
                 self.piece("*");
             }
-            // Lua 5.2+
-            Statement::Break(_) => self.piece("break"),
             // Luau
             Statement::CompoundAssignment(compound) => {
                 self.print_var(&compound.var);
@@ -291,13 +283,14 @@ impl Printer {
 }
 
 /// Whether `stmt` can end in an expression or a type, which a `(` printed
-/// right after it would call.
+/// right after it would call. A bare `return` would take it as its value.
 fn is_open(stmt: &Statement<'_>) -> bool {
     match stmt {
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::RepeatLoop(_)
         | Statement::LocalAssignment(_)
+        | Statement::Return(_)
         | Statement::GlobalDeclaration(_)
         | Statement::CompoundAssignment(_)
         // Prints nothing, so whatever it follows ends the output.
@@ -313,11 +306,11 @@ fn is_open(stmt: &Statement<'_>) -> bool {
         | Statement::GenericFor(_)
         | Statement::FunctionDecl(_)
         | Statement::LocalFunction(_)
-        | Statement::EmptyStatement(_)
+        | Statement::Break(_)
+        | Statement::Continue(_)
         | Statement::Goto(_)
         | Statement::Label(_)
         | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_)
-        | Statement::Break(_) => false,
+        | Statement::GlobalStar(_) => false,
     }
 }

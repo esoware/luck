@@ -222,7 +222,7 @@ impl DocumentState {
     }
 
     pub(crate) fn lua_version(&self) -> LuaVersion {
-        self.settings.target.lua_version()
+        self.parse().chunk.version
     }
 
     pub(crate) fn tokens(&self) -> &[Token] {
@@ -291,10 +291,10 @@ impl DocumentState {
         let options = &self.settings.format;
         // A scratch arena, so the formatting is freed as soon as it's done.
         let allocator = Allocator::new();
-        let (parse, version) = (self.parse(), self.lua_version());
+        let parse = self.parse();
         range.map_or_else(
-            || luck_formatter::format_parsed(&allocator, parse, version, options),
-            |bytes| luck_formatter::format_range(&allocator, parse, version, options, bytes),
+            || luck_formatter::format_parsed(&allocator, parse, options),
+            |bytes| luck_formatter::format_range(&allocator, parse, options, bytes),
         )
     }
 }

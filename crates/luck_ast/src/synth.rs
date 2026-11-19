@@ -95,6 +95,9 @@ use crate::leaf::{Literal, Name};
 ///   amortized constant time and arena space, and extending a
 ///   right-associative one (`..` or `^`) at its start shifts every link it
 ///   holds.
+/// - **Block ends.** [`Synth::block`] puts a `return`, a `continue`, or a
+///   `break` that the dialect takes only at the end of a block, but that has
+///   statements after it, in a `do ... end` of its own.
 ///
 /// # What the caller still owes
 ///
@@ -105,8 +108,8 @@ use crate::leaf::{Literal, Name};
 /// - **Version gating.** Nothing stops you from synthesizing, say, a Lua 5.4
 ///   attribute for a Luau target, so pick constructors that match the
 ///   dialect. [`Synth::with_version`] pins name validity, field-name safety,
-///   and number rendering to one dialect, but deliberately doesn't gate
-///   constructs.
+///   number rendering, and block ends to one dialect, but deliberately
+///   doesn't gate constructs.
 /// - **Identifier validity.** For names that may not be identifiers (such as
 ///   bytecode debug info), build fields with [`Synth::field_or_index`] and
 ///   table keys with [`Synth::record`], which fall back to the bracketed
@@ -133,11 +136,12 @@ use crate::leaf::{Literal, Name};
 ///   and [`expr_nesting_depth`](crate::expr_nesting_depth) measure a tree of
 ///   any depth without recursing past the cap.
 ///
-/// To format the result, pass it to `luck_formatter::format_block`, with any
-/// [`SyntheticComment`]s wrapped in `Comments::synthetic`. For compact
-/// output, call `luck_codegen::compact`. Both print each leaf as the tree
-/// holds it. `format_block` returns an error for a tree nested past the cap,
-/// and `compact` prints it as it is, output the parser refuses.
+/// To print the result, put its block in a [`Chunk`](crate::Chunk) with the
+/// version it's written in, and pass that to `luck_formatter::format_chunk`,
+/// with any [`SyntheticComment`]s wrapped in `Comments::synthetic`, or to
+/// `luck_codegen::compact` for compact output. Both print each leaf as the
+/// tree holds it. `format_chunk` returns an error for a tree nested past the
+/// cap, and `compact` prints it as it is, output the parser refuses.
 ///
 /// # Usage
 ///
@@ -156,7 +160,7 @@ use crate::leaf::{Literal, Name};
 ///     synth.binary_op(synth.name_expr("b"), BinOp::Mul, synth.number_i64(2)),
 /// );
 /// let stmt = synth.assign([synth.name_var("total")], [sum]);
-/// let block = synth.block([stmt], None);
+/// let block = synth.block([stmt]);
 /// assert_eq!(block.stmts.len(), 1);
 /// ```
 #[derive(Debug, Clone, Copy)]
@@ -213,8 +217,9 @@ impl<'ast> Synth<'ast> {
     /// [`Synth::record`] use the dot or named form for any name that's an
     /// identifier there (`t.goto` on Luau) instead of falling back to
     /// brackets. [`Synth::number_f64`] and [`Synth::number_i64`] render for
-    /// that dialect's number model. It deliberately doesn't gate which
-    /// constructs you can build.
+    /// that dialect's number model, and [`Synth::block`] leaves a `break`
+    /// that dialect takes anywhere as it is. It deliberately doesn't gate
+    /// which constructs you can build.
     #[must_use]
     pub const fn with_version(mut self, version: LuaVersion) -> Self {
         self.version = Some(version);
@@ -287,7 +292,7 @@ mod tests {
     use crate::expr::{Expression, FunctionArgs, Suffix};
     use crate::fixtures::Fixture;
     use crate::span::GetSpan as _;
-    use crate::stmt::LastStatement;
+    use crate::stmt::Statement;
 
     #[test]
     fn spans_are_monotonic() {
@@ -368,9 +373,9 @@ mod tests {
                 .collect();
             workers.into_iter().map(|worker| worker.join().unwrap()).collect()
         });
-        let tree = synth.block([], Some(synth.return_(pieces)));
+        let tree = synth.block([synth.return_(pieces)]);
         let mut offsets = Vec::new();
-        let Some(LastStatement::Return(returned)) = &tree.last_stmt else {
+        let [Statement::Return(returned)] = &*tree.stmts else {
             panic!("expected a return");
         };
         for piece in &returned.exprs {

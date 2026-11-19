@@ -20,7 +20,7 @@
 //! let allocator = Allocator::new();
 //! let result = luck_parser::parse(&allocator, "local x = 1 + 2", LuaVersion::Lua54);
 //! assert!(result.errors.is_empty());
-//! assert_eq!(result.block.stmts.len(), 1);
+//! assert_eq!(result.chunk.block.stmts.len(), 1);
 //! ```
 
 #![cfg_attr(

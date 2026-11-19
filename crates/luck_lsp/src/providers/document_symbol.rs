@@ -14,7 +14,7 @@ use crate::document::DocumentState;
 use crate::providers::cursor::identifier;
 
 pub(crate) fn document_symbols(document: &DocumentState) -> Vec<DocumentSymbol> {
-    outline(document, &document.parse().block)
+    outline(document, &document.parse().chunk.block)
 }
 
 fn outline(document: &DocumentState, block: &Block<'_>) -> Vec<DocumentSymbol> {
@@ -95,12 +95,13 @@ impl<'ast> Visit<'ast> for SymbolEmitter<'_> {
             | Statement::NumericFor(_)
             | Statement::GenericFor(_) => self.walk_stmt(stmt),
             Statement::FunctionCall(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
             | Statement::Error(_) => {}
         }

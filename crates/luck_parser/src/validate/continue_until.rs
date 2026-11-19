@@ -1,7 +1,7 @@
 //! Luau: a `continue` in a repeat body may not skip the declaration of a local
 //! that the `until` condition reads.
 
-use luck_ast::{Block, LastStatement, Statement};
+use luck_ast::{Block, Statement};
 
 /// How many locals `repeat_body` declares after its first `continue`, which
 /// are the top-level locals the `until` condition may not read.
@@ -26,13 +26,14 @@ pub(super) fn skipped_local_count(repeat_body: &Block<'_>) -> usize {
             | Statement::NumericFor(_)
             | Statement::GenericFor(_)
             | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => 0,
@@ -43,21 +44,19 @@ pub(super) fn skipped_local_count(repeat_body: &Block<'_>) -> usize {
 /// Index of the first top-level statement of `block` that contains a
 /// `continue` belonging to the enclosing repeat.
 ///
-/// Continues inside nested loops and function bodies don't count. A trailing
-/// `continue` returns `block.stmts.len()`.
+/// Continues inside nested loops and function bodies don't count.
 fn earliest_continue_stmt(block: &Block<'_>) -> Option<usize> {
-    block.stmts.iter().position(stmt_has_binding_continue).or_else(|| {
-        matches!(block.last_stmt, Some(LastStatement::Continue(_))).then_some(block.stmts.len())
-    })
+    block.stmts.iter().position(stmt_has_binding_continue)
 }
 
 fn block_has_binding_continue(block: &Block<'_>) -> bool {
-    matches!(block.last_stmt, Some(LastStatement::Continue(_)))
-        || block.stmts.iter().any(stmt_has_binding_continue)
+    block.stmts.iter().any(stmt_has_binding_continue)
 }
 
 fn stmt_has_binding_continue(stmt: &Statement<'_>) -> bool {
     match stmt {
+        // Luau
+        Statement::Continue(_) => true,
         Statement::DoBlock(do_block) => block_has_binding_continue(&do_block.block),
         Statement::IfStatement(if_stmt) => {
             block_has_binding_continue(&if_stmt.block)
@@ -80,13 +79,13 @@ fn stmt_has_binding_continue(stmt: &Statement<'_>) -> bool {
         | Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::LocalAssignment(_)
-        | Statement::EmptyStatement(_)
+        | Statement::Return(_)
+        | Statement::Break(_)
         | Statement::Goto(_)
         | Statement::Label(_)
         | Statement::GlobalDeclaration(_)
         | Statement::GlobalStar(_)
         | Statement::CompoundAssignment(_)
-        | Statement::Break(_)
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => false,
     }

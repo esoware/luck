@@ -170,7 +170,7 @@ fn fix_within<'ast>(
     let version = target.lua_version();
     let mut parse = luck_parser::parse(allocator, source, version);
     for round in 1..=budget {
-        let diags = lint_parsed(&parse, target, config, fixes);
+        let diags = lint_parsed(&parse, target.stdlib_environment(), config, fixes);
         let Some(text) = apply(parse.source, &diags, fixes) else {
             return Ok(Fixed { parse, diags });
         };

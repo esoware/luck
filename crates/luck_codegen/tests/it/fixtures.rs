@@ -25,11 +25,11 @@ fn every_fixture_compacts_to_output_that_compacts_to_itself() {
         if !parsed.errors.is_empty() {
             continue;
         }
-        let output = luck_codegen::compact(&parsed.block);
+        let output = luck_codegen::compact(&parsed.chunk);
         let reparsed = luck_parser::parse(&allocator, &output, version);
         if let Some(error) = reparsed.errors.first() {
             writeln!(report, "{}: {output}\n  {}", relative.display(), error.message).unwrap();
-        } else if luck_codegen::compact(&reparsed.block) == output {
+        } else if luck_codegen::compact(&reparsed.chunk) == output {
             round_trip_count += 1;
         } else {
             writeln!(report, "{}: compacting again changed {output}", relative.display()).unwrap();

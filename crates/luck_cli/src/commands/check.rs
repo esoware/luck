@@ -85,7 +85,7 @@ fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
     if result.errors.is_empty() {
         // The compile-time errors real Lua reports beyond the grammar, such as
         // const writes and unresolved gotos. Only `check` pays for this pass.
-        result.errors = luck_parser::validate(&result.block, version);
+        result.errors = luck_parser::validate(&result.chunk);
     }
     if result.errors.is_empty() {
         return None;

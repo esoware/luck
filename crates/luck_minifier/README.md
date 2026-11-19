@@ -33,7 +33,7 @@ The `serde` feature derives `Deserialize` for `TransformConfig`, the shape of `l
 ## Usage
 
 - `minify(allocator, source, version, &config)` parses into the arena and returns the minified source, or the parse errors.
-- `minify_block(allocator, &mut block, version, &config)` minifies a tree the caller holds. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`, and leaves the shebang and hot comments to the caller.
+- `minify_chunk(allocator, &mut chunk, &config)` minifies a tree the caller holds, in the version its `Chunk` records. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`, and leaves the shebang and hot comments to the caller.
 
 ```rust
 use luck_allocator::Allocator;

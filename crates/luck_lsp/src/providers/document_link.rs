@@ -45,7 +45,7 @@ fn collect_links(
         resolver: document.settings().project.resolver(document.lua_version()),
         links: Vec::new(),
     };
-    collector.visit_block(&document.parse().block);
+    collector.visit_block(&document.parse().chunk.block);
     collector.links
 }
 
@@ -68,11 +68,6 @@ impl<'ast> Visit<'ast> for LinkCollector<'_> {
         };
         for stmt in statements_touching(block, offset) {
             self.visit_stmt(stmt);
-        }
-        if let Some(last) = &block.last_stmt
-            && touches(last.span(), offset)
-        {
-            self.visit_last_stmt(last);
         }
     }
 

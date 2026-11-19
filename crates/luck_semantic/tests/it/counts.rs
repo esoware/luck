@@ -17,8 +17,8 @@ fn assert_counts_cover_the_tables(source: &str, version: LuaVersion) {
     let parsed = luck_parser::parse(&allocator, source, version);
     assert!(parsed.errors.is_empty(), "{:?}\n{source}", parsed.errors.first());
     let counts = parsed.counts;
-    let block = allocator.alloc(parsed.block);
-    let analysis = luck_semantic::analyze(block, counts, version, StdlibEnvironment::Standalone);
+    let chunk = allocator.alloc(parsed.chunk);
+    let analysis = luck_semantic::analyze(chunk, counts, StdlibEnvironment::Standalone);
     let tree = analysis.scope_tree();
     let declarations = usize::try_from(counts.declarations).unwrap();
     let name_uses = usize::try_from(counts.name_uses).unwrap();

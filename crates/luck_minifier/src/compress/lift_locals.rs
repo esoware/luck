@@ -18,14 +18,15 @@ use core::mem;
 
 use luck_allocator::{Box, List};
 use luck_ast::{
-    AttributedName, Block, Expression, FunctionBody, LastStatement, LocalAssignment,
-    LocalAssignmentKind, LocalFunction, LocalFunctionKind, Name, Statement, Type, Var, Visit,
+    AttributedName, Block, Expression, FunctionBody, LocalAssignment, LocalAssignmentKind,
+    LocalFunction, LocalFunctionKind, Name, Statement, Type, Var, Visit,
 };
 use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS};
 use rustc_hash::FxHashMap;
 
 use super::Compressor;
 use super::merge_locals::is_bare_local;
+use super::simplify_statements::ends_in_block_end;
 use crate::binding::{
     Bindings, RECEIVER_NAME_ID, VARARG_TABLE_NAME_ID, has_fixed_binding, local_index, local_of,
 };
@@ -108,6 +109,7 @@ impl Pressure {
                 | Statement::CompoundAssignment(_)
                 | Statement::FunctionDecl(_)
                 | Statement::LocalFunction(_)
+                | Statement::Return(_)
                 | Statement::GlobalDeclaration(_)
                 | Statement::GlobalFunction(_) => {
                     let mut counter = ExprCounter(0);
@@ -154,20 +156,16 @@ impl Pressure {
                     self.locals = self.locals.max(loop_active);
                     self.measure(&generic_for.block, loop_active);
                 }
-                Statement::EmptyStatement(_)
+                Statement::Break(_)
+                | Statement::Continue(_)
                 | Statement::Goto(_)
                 | Statement::Label(_)
                 | Statement::GlobalStar(_)
-                | Statement::Break(_)
                 | Statement::TypeDeclaration(_)
                 | Statement::Error(_) => {}
             }
             active = active.saturating_add(super::merge_locals::declared_count(stmt));
             self.locals = self.locals.max(active);
-        }
-        if let Some(LastStatement::Return(return_stmt)) = &block.last_stmt {
-            let exprs: Vec<&Expression<'_>> = return_stmt.exprs.iter().collect();
-            self.evaluate(active, &exprs);
         }
         active
     }
@@ -345,7 +343,7 @@ impl<'ast> Collector<'_, 'ast> {
                     if lifts_inner
                         && !keeps
                         && self.can_unwrap
-                        && do_block.block.last_stmt.is_none()
+                        && !ends_in_block_end(&do_block.block, self.version)
                     {
                         self.lifter.unwrapped_blocks =
                             self.lifter.unwrapped_blocks.saturating_add(1);
@@ -388,9 +386,10 @@ impl<'ast> Collector<'_, 'ast> {
                 Statement::Assignment(_)
                 | Statement::FunctionCall(_)
                 | Statement::FunctionDecl(_)
-                | Statement::EmptyStatement(_)
-                | Statement::Goto(_)
+                | Statement::Return(_)
                 | Statement::Break(_)
+                | Statement::Continue(_)
+                | Statement::Goto(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::Error(_) => {}
             }
@@ -566,13 +565,14 @@ impl<'ast> Compressor<'_, 'ast> {
                 Statement::Assignment(_)
                 | Statement::FunctionCall(_)
                 | Statement::FunctionDecl(_)
-                | Statement::EmptyStatement(_)
+                | Statement::Return(_)
+                | Statement::Break(_)
+                | Statement::Continue(_)
                 | Statement::Goto(_)
                 | Statement::Label(_)
                 | Statement::GlobalDeclaration(_)
                 | Statement::GlobalFunction(_)
                 | Statement::GlobalStar(_)
-                | Statement::Break(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::TypeDeclaration(_)
                 | Statement::Error(_) => {}
@@ -615,13 +615,14 @@ impl<'ast> Compressor<'_, 'ast> {
             | Statement::NumericFor(_)
             | Statement::GenericFor(_)
             | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_)) => {

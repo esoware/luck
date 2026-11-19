@@ -38,8 +38,8 @@ fn the_tree_borrows_its_leaves_from_the_source() {
     let result = parse(&allocator, &source, LuaVersion::Lua54);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert!(ptr::eq(result.source, source.as_str()));
-    let Some(Statement::LocalAssignment(local)) = result.block.stmts.first() else {
-        panic!("{:?}", result.block.stmts);
+    let Some(Statement::LocalAssignment(local)) = result.chunk.block.stmts.first() else {
+        panic!("{:?}", result.chunk.block.stmts);
     };
     let Some(Expression::BinaryOp(concat)) = local.exprs.first() else {
         panic!("{:?}", local.exprs);
@@ -69,7 +69,7 @@ fn declaration_without_values_spans_its_annotation_and_attribute() {
     ] {
         let result = parse(&allocator, source, version);
         assert!(result.errors.is_empty(), "{source}: {:?}", result.errors);
-        let statement_span = result.block.stmts[0].span();
+        let statement_span = result.chunk.block.stmts[0].span();
         assert_eq!(statement_span.text(source), source, "the statement must span all of {source}");
     }
 }
@@ -98,7 +98,7 @@ fn an_expression_list_nested_in_another_fills_a_list_of_exactly_its_length() {
     let result = parse(&allocator, source, LuaVersion::Lua54);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     let mut calls = ArgLists { source, lists: Vec::new() };
-    calls.visit_block(&result.block);
+    calls.visit_block(&result.chunk.block);
     assert_eq!(
         calls.lists,
         [

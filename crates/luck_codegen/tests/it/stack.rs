@@ -13,7 +13,7 @@ fn compacting_fits_the_smallest_stack() {
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source, version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.first());
-        let output = luck_codegen::compact(&parsed.block);
+        let output = luck_codegen::compact(&parsed.chunk);
         let reparsed = luck_parser::parse(&allocator, &output, version);
         assert!(reparsed.errors.is_empty(), "the output reparses");
     });
@@ -26,6 +26,6 @@ fn compacting_what_a_failed_parse_leaves_fits_the_smallest_stack() {
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source, version);
         assert!(!parsed.errors.is_empty(), "{:?}", source.get(..20));
-        let _output = luck_codegen::compact(&parsed.block);
+        let _output = luck_codegen::compact(&parsed.chunk);
     });
 }

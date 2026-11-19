@@ -1,10 +1,10 @@
-use luck_token::CompoundOp;
+use luck_token::{CompoundOp, LuaVersion};
 
 use crate::expr::{Expression, Var};
 use crate::function::{FunctionAttribute, Parameter};
 use crate::stmt::{
-    Attribute, AttributedName, Block, ElseClause, ElseIfClause, FunctionName, LastStatement,
-    LocalAssignmentKind, LocalFunctionKind, Statement, TypeDeclarationValue,
+    Attribute, AttributedName, Block, ElseClause, ElseIfClause, FunctionName, LocalAssignmentKind,
+    LocalFunctionKind, Statement, TypeDeclarationValue,
 };
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{GenericTypeList, Type};
@@ -481,45 +481,50 @@ impl<'ast> Synth<'ast> {
         Statement::new_label(self.next_span(), self.name(name), self.allocator)
     }
 
-    /// Lua 5.1 and Luau only allow `break` as the last statement, so use [`Synth::break_`] there.
     #[must_use]
-    pub fn break_stmt(&self) -> Statement<'ast> {
-        Statement::Break(self.next_span())
-    }
-
-    /// The formatter drops these; only compact output prints them.
-    #[must_use]
-    pub fn empty_stmt(&self) -> Statement<'ast> {
-        Statement::EmptyStatement(self.next_span())
-    }
-
-    #[must_use]
-    pub fn return_<Exprs>(&self, exprs: Exprs) -> LastStatement<'ast>
+    pub fn return_<Exprs>(&self, exprs: Exprs) -> Statement<'ast>
     where
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        LastStatement::new_return(self.next_span(), self.list(exprs), self.allocator)
+        Statement::new_return(self.next_span(), self.list(exprs), self.allocator)
     }
 
     #[must_use]
-    pub fn break_(&self) -> LastStatement<'ast> {
-        LastStatement::Break(self.next_span())
+    pub fn break_(&self) -> Statement<'ast> {
+        Statement::Break(self.next_span())
     }
 
     /// Luau: `continue`.
     #[must_use]
-    pub fn continue_(&self) -> LastStatement<'ast> {
-        LastStatement::Continue(self.next_span())
+    pub fn continue_(&self) -> Statement<'ast> {
+        Statement::Continue(self.next_span())
     }
 
+    /// A statement that has to end its block, in the pinned dialect or in
+    /// any when none is pinned, goes in a `do ... end` of its own when others
+    /// follow it, so the printed block reads back.
     #[must_use]
-    pub fn block<Stmts>(&self, stmts: Stmts, last: Option<LastStatement<'ast>>) -> Block<'ast>
+    pub fn block<Stmts>(&self, stmts: Stmts) -> Block<'ast>
     where
         Stmts: IntoIterator<Item = Statement<'ast>>,
         Stmts::IntoIter: ExactSizeIterator,
     {
-        Block::new(self.next_span(), self.list(stmts), last)
+        let given = stmts.into_iter();
+        let last_index = given.len().saturating_sub(1);
+        let ended = given.enumerate().map(|(i, stmt)| {
+            let has_to_end_block = self.version.map_or_else(
+                || LuaVersion::ALL.iter().any(|&version| stmt.has_to_end_block(version)),
+                |version| stmt.has_to_end_block(version),
+            );
+            if i < last_index && has_to_end_block {
+                let block = Block::new(self.next_span(), self.list([stmt]));
+                Statement::new_do_block(self.next_span(), block, self.allocator)
+            } else {
+                stmt
+            }
+        });
+        Block::new(self.next_span(), self.list(ended))
     }
 
     /// Luau: `[export] type name<generics> = value`.
@@ -573,7 +578,7 @@ impl<'ast> Synth<'ast> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{BinOp, LuaVersion};
+    use luck_token::BinOp;
 
     use super::*;
     use crate::fixtures::Fixture;
@@ -635,7 +640,7 @@ mod tests {
         assert_eq!(plain_local.kind, LocalAssignmentKind::Local);
 
         let function_stmt =
-            synth.const_function("pinned", [], FunctionSignature::default(), synth.block([], None));
+            synth.const_function("pinned", [], FunctionSignature::default(), synth.block([]));
         let Statement::LocalFunction(local_function) = &function_stmt else {
             panic!("expected local function");
         };
@@ -653,8 +658,7 @@ mod tests {
         };
         assert!(declaration.names.iter().all(|name| name.attribute.is_some()));
 
-        let function =
-            synth.global_function("main", FunctionSignature::default(), synth.block([], None));
+        let function = synth.global_function("main", FunctionSignature::default(), synth.block([]));
         assert!(matches!(function, Statement::GlobalFunction(_)));
 
         let Statement::GlobalStar(star) = synth.global_star(Some("const")) else {
@@ -682,8 +686,8 @@ mod tests {
         let synth = fixture.synth();
         let stmt = synth.if_(
             synth.boolean(true),
-            synth.block([], None),
-            [(synth.boolean(false), synth.block([], None))],
+            synth.block([]),
+            [(synth.boolean(false), synth.block([]))],
             None,
         );
         let Statement::IfStatement(if_stmt) = &stmt else {
@@ -698,8 +702,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let call = synth.call(synth.name_expr("pairs"), [synth.name_expr("t")]);
-        let stmt =
-            synth.generic_for([synth.param("k"), synth.param("v")], [call], synth.block([], None));
+        let stmt = synth.generic_for([synth.param("k"), synth.param("v")], [call], synth.block([]));
         let Statement::GenericFor(generic_for) = &stmt else {
             panic!("expected generic for");
         };
@@ -716,7 +719,7 @@ mod tests {
             synth.number("1"),
             synth.number("10"),
             None,
-            synth.block([], None),
+            synth.block([]),
         );
         let Statement::NumericFor(numeric_for) = &stmt else {
             panic!("expected numeric for");
@@ -733,21 +736,39 @@ mod tests {
     }
 
     #[test]
-    fn builds_continue_and_breaks() {
+    fn builds_loop_exits() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        assert!(matches!(synth.continue_(), LastStatement::Continue(_)));
-        assert!(matches!(synth.break_(), LastStatement::Break(_)));
-        assert!(matches!(synth.break_stmt(), Statement::Break(_)));
-        assert!(matches!(synth.empty_stmt(), Statement::EmptyStatement(_)));
+        assert!(matches!(synth.continue_(), Statement::Continue(_)));
+        assert!(matches!(synth.break_(), Statement::Break(_)));
+    }
+
+    #[test]
+    fn a_block_ends_what_has_to_end_it_where_others_follow() {
+        let fixture = Fixture::default();
+        let shapes = |synth: Synth<'_>| {
+            let call = || synth.call_stmt(synth.call(synth.name_expr("f"), []));
+            let block = synth.block([
+                synth.break_(),
+                call(),
+                synth.return_([]),
+                call(),
+                synth.continue_(),
+                synth.return_([]),
+            ]);
+            block.stmts.iter().map(|stmt| matches!(stmt, Statement::DoBlock(_))).collect::<Vec<_>>()
+        };
+        let unpinned = shapes(fixture.synth());
+        assert_eq!(unpinned, [true, false, true, false, true, false]);
+        let pinned = shapes(fixture.synth().with_version(LuaVersion::Lua54));
+        assert_eq!(pinned, [false, false, true, false, true, false]);
     }
 
     #[test]
     fn builds_function_declaration_with_method() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let stmt =
-            synth.function_decl(&["a", "b"], Some("greet"), &["self"], synth.block([], None));
+        let stmt = synth.function_decl(&["a", "b"], Some("greet"), &["self"], synth.block([]));
         let Statement::FunctionDecl(function_decl) = &stmt else {
             panic!("expected function declaration");
         };
@@ -779,7 +800,7 @@ mod tests {
         let synth = fixture.synth();
         let signature =
             FunctionSignature { params: vec![synth.param("ty")], ..FunctionSignature::default() };
-        let stmt = synth.type_function(false, "Partial", signature, synth.block([], None));
+        let stmt = synth.type_function(false, "Partial", signature, synth.block([]));
         let Statement::TypeDeclaration(declaration) = &stmt else {
             panic!("expected type declaration");
         };

@@ -447,9 +447,9 @@ mod tests {
 
     fn shape_of(source: &str, name: &str) -> Option<&'static str> {
         let allocator = Allocator::new();
-        let block = parse(&allocator, source, LuaVersion::Lua54);
+        let chunk = parse(&allocator, source, LuaVersion::Lua54);
         let (tree, initialized_locals) =
-            build_with_initializers(block, TreeCounts::default(), LuaVersion::Lua54, &mut ());
+            build_with_initializers(chunk, TreeCounts::default(), &mut ());
         let shapes = symbol_shapes(&tree, &SHAPED_LIBRARY, &initialized_locals);
         let symbol = tree.symbols().iter().find(|symbol| tree.name(symbol.name) == name)?;
         shapes.get(symbol.id.index()).copied().flatten()

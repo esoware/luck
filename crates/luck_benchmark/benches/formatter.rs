@@ -12,21 +12,19 @@ fn bench_formatter(criterion: &mut Criterion) {
 
     for file in test_files() {
         let id = BenchmarkId::from_parameter(file.file_name);
-        let version = file.target.lua_version();
         let allocator = Allocator::new();
         let parse_result = file.parse(&allocator);
         let mut scratch = Allocator::new();
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
                 scratch.reset();
-                format_parsed(&scratch, black_box(&parse_result), version, &options)
+                format_parsed(&scratch, black_box(&parse_result), &options)
             });
         });
     }
 
     for project in test_projects() {
         let id = BenchmarkId::from_parameter(project.name);
-        let version = project.target.lua_version();
         let allocator = Allocator::new();
         let parse_results = project.parse_files(&allocator);
         let mut scratch = Allocator::new();
@@ -34,7 +32,7 @@ fn bench_formatter(criterion: &mut Criterion) {
             bencher.iter(|| {
                 for parse_result in &parse_results {
                     scratch.reset();
-                    black_box(format_parsed(&scratch, black_box(parse_result), version, &options));
+                    black_box(format_parsed(&scratch, black_box(parse_result), &options));
                 }
             });
         });

@@ -138,7 +138,7 @@ fn option_sets() -> [FormatOptions; 3] {
 fn assert_comments_keep_the_tree(label: &str, source: &str, version: LuaVersion) {
     let allocator = Allocator::new();
     let original = luck_parser::parse(&allocator, source, version);
-    let expected_shape = tree_shape(&original.block, version);
+    let expected_shape = tree_shape(&original.chunk);
     for shape in Shape::ALL {
         let commented = with_a_comment_in_every_gap(source, version, shape);
         let commented_parse = luck_parser::parse(&allocator, &commented, version);
@@ -160,7 +160,7 @@ fn assert_comments_keep_the_tree(label: &str, source: &str, version: LuaVersion)
             let formatted = luck_parser::parse(&allocator, &output, version);
             assert!(formatted.errors.is_empty(), "{case}: {:?}\n{output}", formatted.errors);
             assert_eq!(
-                tree_shape(&formatted.block, version),
+                tree_shape(&formatted.chunk),
                 expected_shape,
                 "{case}: formatting changed the tree:\n{output}"
             );

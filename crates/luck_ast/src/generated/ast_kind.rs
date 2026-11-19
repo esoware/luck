@@ -4,7 +4,7 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, CompoundAssignment,
+    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment,
     DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, FunctionAttribute, FunctionBody,
     FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
     GenericPackType, GenericTypeList, GenericTypeParam, GetSpan, GlobalDeclaration, GlobalFunction,
@@ -39,6 +39,7 @@ pub enum AstType {
     FunctionAttribute,
     Name,
     Literal,
+    Chunk,
     Block,
     Assignment,
     DoBlock,
@@ -103,6 +104,7 @@ pub enum AstKind<'ast> {
     FunctionAttribute(&'ast FunctionAttribute<'ast>),
     Name(&'ast Name<'ast>),
     Literal(&'ast Literal<'ast>),
+    Chunk(&'ast Chunk<'ast>),
     Block(&'ast Block<'ast>),
     Assignment(&'ast Assignment<'ast>),
     DoBlock(&'ast DoBlock<'ast>),
@@ -168,6 +170,7 @@ impl<'ast> AstKind<'ast> {
             Self::FunctionAttribute(_) => AstType::FunctionAttribute,
             Self::Name(_) => AstType::Name,
             Self::Literal(_) => AstType::Literal,
+            Self::Chunk(_) => AstType::Chunk,
             Self::Block(_) => AstType::Block,
             Self::Assignment(_) => AstType::Assignment,
             Self::DoBlock(_) => AstType::DoBlock,
@@ -346,6 +349,12 @@ impl<'ast> AstKind<'ast> {
     #[inline]
     pub const fn as_literal(self) -> Option<&'ast Literal<'ast>> {
         if let Self::Literal(literal) = self { Some(literal) } else { None }
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn as_chunk(self) -> Option<&'ast Chunk<'ast>> {
+        if let Self::Chunk(chunk) = self { Some(chunk) } else { None }
     }
 
     #[must_use]
@@ -645,6 +654,7 @@ impl GetSpan for AstKind<'_> {
             Self::FunctionAttribute(function_attribute) => function_attribute.span(),
             Self::Name(name) => name.span(),
             Self::Literal(literal) => literal.span(),
+            Self::Chunk(chunk) => chunk.span(),
             Self::Block(block) => block.span(),
             Self::Assignment(assignment) => assignment.span(),
             Self::DoBlock(do_block) => do_block.span(),

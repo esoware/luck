@@ -2,7 +2,7 @@
 //!
 //! That's constant branches and the `if`s they leave, loops that run once or
 //! never, a default `for` step, a bare closing `return`, `cond and X or X`,
-//! empty statements, and `local`s nothing kept uses.
+//! and `local`s nothing kept uses.
 //!
 //! A local is referenced only in its block, so the walk drops a `local`
 //! nothing references as it reaches it, and those its rewrites leave
@@ -14,8 +14,7 @@ use core::mem;
 use luck_allocator::{Allocator, List};
 use luck_ast::{
     BinaryOp, Block, ContentEq as _, ElseClause, ElseIfClause, Expression, GetSpan as _,
-    IfStatement, LastStatement, LocalAssignment, Name, NumericFor, OneOrMore, Statement,
-    VisitMut as _,
+    IfStatement, LocalAssignment, Name, NumericFor, OneOrMore, Statement, VisitMut as _,
 };
 use luck_token::{BinOp, LuaVersion, UnOp};
 
@@ -31,7 +30,7 @@ use crate::expr::{
 };
 
 pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
-    block.stmts.is_empty() && block.last_stmt.is_none()
+    block.stmts.is_empty()
 }
 
 /// A step of 1 is the default.
@@ -39,21 +38,25 @@ pub(super) fn has_default_step(numeric_for: &NumericFor<'_>) -> bool {
     matches!(&numeric_for.step, Some(Expression::Number(literal)) if literal.text == "1")
 }
 
-/// Only a bare `return` is removable. `return nil` returns one value, and
+/// Drops the `return` that ends `block`, a function's or the chunk's, when
+/// it's bare, and says whether it did. `return nil` returns one value, and
 /// `select('#', f())` observes the difference.
-pub(super) fn ends_in_bare_return(block: &Block<'_>) -> bool {
-    matches!(&block.last_stmt, Some(LastStatement::Return(return_stmt)) if return_stmt.exprs.is_empty())
+pub(super) fn drop_bare_return(block: &mut Block<'_>) -> bool {
+    let is_bare = matches!(
+        block.stmts.last(),
+        Some(Statement::Return(return_stmt)) if return_stmt.exprs.is_empty()
+    );
+    if is_bare {
+        block.stmts.truncate(block.stmts.len().saturating_sub(1));
+    }
+    is_bare
 }
 
 /// Nested loops and function bodies aren't searched, since their exits can't
 /// reach this loop.
 fn has_loop_exit(block: &Block<'_>) -> bool {
-    if matches!(block.last_stmt, Some(LastStatement::Break(_) | LastStatement::Continue(_))) {
-        return true;
-    }
     block.stmts.iter().any(|stmt| match stmt {
-        // Lua 5.2+
-        Statement::Break(_) => true,
+        Statement::Break(_) | Statement::Continue(_) => true,
         Statement::DoBlock(do_block) => has_loop_exit(&do_block.block),
         Statement::IfStatement(if_stmt) => {
             has_loop_exit(&if_stmt.block)
@@ -70,7 +73,7 @@ fn has_loop_exit(block: &Block<'_>) -> bool {
         | Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::LocalAssignment(_)
-        | Statement::EmptyStatement(_)
+        | Statement::Return(_)
         | Statement::Goto(_)
         | Statement::Label(_)
         | Statement::GlobalDeclaration(_)
@@ -170,12 +173,14 @@ impl<'ast> Compressor<'_, 'ast> {
     /// references.
     pub(super) fn drop_unused(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
         let mut has_dropped = false;
+        // The statements that go whole, last first.
+        let mut dropped = Vec::new();
         for (index, stmt) in stmts.iter_mut().enumerate().rev() {
             match self.drop_unused_from(stmt, index) {
                 Dropped::Nothing => {}
                 Dropped::Part => has_dropped = true,
                 Dropped::Whole => {
-                    *stmt = Statement::EmptyStatement(stmt.span());
+                    dropped.push(index);
                     has_dropped = true;
                 }
             }
@@ -185,9 +190,10 @@ impl<'ast> Compressor<'_, 'ast> {
         }
         self.has_changed = true;
         let mut calls = self.late_calls.drain(..).rev().peekable();
+        let mut to_drop = dropped.into_iter().rev().peekable();
         let mut kept = Vec::with_capacity(stmts.len());
         for (index, stmt) in mem::take(stmts).into_iter().enumerate() {
-            if !matches!(stmt, Statement::EmptyStatement(_)) {
+            if to_drop.next_if_eq(&index).is_none() {
                 kept.push(stmt);
             }
             while let Some((_, call)) = calls.next_if(|&(call_index, _)| call_index == index) {
@@ -263,13 +269,14 @@ impl<'ast> Compressor<'_, 'ast> {
             | Statement::NumericFor(_)
             | Statement::GenericFor(_)
             | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => Dropped::Nothing,
@@ -537,9 +544,6 @@ impl<'ast> Compressor<'_, 'ast> {
         self.descend();
         let outer_registers = self.live_registers;
         self.visit_stmts(&mut repeat_loop.block.stmts);
-        if let Some(last) = &mut repeat_loop.block.last_stmt {
-            self.visit_last_stmt(last);
-        }
         self.ascend();
         self.visit_expr(&mut repeat_loop.condition);
         self.descend();

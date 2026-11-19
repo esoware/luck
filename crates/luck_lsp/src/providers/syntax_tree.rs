@@ -12,7 +12,7 @@ pub(crate) fn syntax_tree(document: &DocumentState) -> String {
     let mut dump = PrettyDump::default();
     #[expect(clippy::use_debug, reason = "this dump's format is the AST's `Debug` output")]
     // The only error is the limit, which ends the dump with its marker.
-    let _unused = write!(dump, "{:?}", document.parse().block);
+    let _unused = write!(dump, "{:?}", document.parse().chunk);
     dump.text
 }
 
@@ -174,7 +174,7 @@ mod tests {
         }
         for (version, text) in sources {
             let document = document(&text, target(version));
-            let expected = format!("{:#?}", document.parse().block);
+            let expected = format!("{:#?}", document.parse().chunk);
             if expected.len() <= MAX_DUMP_BYTES {
                 assert_eq!(syntax_tree(&document), expected, "{version:?}\n{text}");
             }

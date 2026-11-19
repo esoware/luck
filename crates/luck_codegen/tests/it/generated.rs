@@ -16,7 +16,7 @@ fn generated_programs_compact_to_output_that_compacts_to_itself() {
                 let allocator = Allocator::new();
                 let parsed = luck_parser::parse(&allocator, &source, version);
                 assert!(parsed.errors.is_empty(), "{version:?} seed {seed}: {:?}", parsed.errors);
-                assert_reprints(&parsed.block, version);
+                assert_reprints(&parsed.chunk);
             }
         }
     }

@@ -83,9 +83,9 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile) -> FileReport 
             &TestResult::ParseError(render_errors(&parse.errors, &lines)),
         );
     }
-    let codegen = guard(|| codegen(&allocator, &parse, version)).unwrap_or_else(|error| error);
+    let codegen = guard(|| codegen(&allocator, &parse)).unwrap_or_else(|error| error);
     let (formatter, format_output) =
-        guard(|| formatter(&allocator, &parse, version)).unwrap_or_else(|error| (error, None));
+        guard(|| formatter(&allocator, &parse)).unwrap_or_else(|error| (error, None));
     let (minifier, minify_output) =
         guard(|| minifier(&allocator, source, version)).unwrap_or_else(|error| (error, None));
     let linter = guard(|| lint(suite, &parse, &lines));
@@ -133,19 +133,19 @@ fn render_errors(errors: &[SourceError], lines: &LineIndex) -> String {
 }
 
 /// The output reparses, to the same tree, and prints as itself.
-fn codegen(allocator: &Allocator, parse: &ParseResult<'_>, version: LuaVersion) -> TestResult {
-    let output = luck_codegen::compact(&parse.block);
+fn codegen(allocator: &Allocator, parse: &ParseResult<'_>) -> TestResult {
+    let version = parse.chunk.version;
+    let output = luck_codegen::compact(&parse.chunk);
     let reparsed = luck_parser::parse(allocator, &output, version);
     if !reparsed.errors.is_empty() {
         let lines = LineIndex::new(&output, version);
         return TestResult::GenericError("Reparse", render_errors(&reparsed.errors, &lines));
     }
-    let (expected, actual) =
-        (tree_shape(&parse.block, version), tree_shape(&reparsed.block, version));
+    let (expected, actual) = (tree_shape(&parse.chunk), tree_shape(&reparsed.chunk));
     if actual != expected {
         return TestResult::Mismatch("Round trip", actual, expected);
     }
-    let again = luck_codegen::compact(&reparsed.block);
+    let again = luck_codegen::compact(&reparsed.chunk);
     if again != output {
         return TestResult::Mismatch("Idempotency", again, output);
     }
@@ -156,10 +156,10 @@ fn codegen(allocator: &Allocator, parse: &ParseResult<'_>, version: LuaVersion) 
 fn formatter<'ast>(
     allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
-    version: LuaVersion,
 ) -> (TestResult, Option<String>) {
+    let version = parse.chunk.version;
     let options = FormatOptions::default();
-    let first = luck_formatter::format_parsed(allocator, parse, version, &options);
+    let first = luck_formatter::format_parsed(allocator, parse, &options);
     if !first.errors.is_empty() {
         let lines = LineIndex::new(parse.source, version);
         return (TestResult::GenericError("Format", render_errors(&first.errors, &lines)), None);
@@ -168,10 +168,9 @@ fn formatter<'ast>(
     let result = {
         let reparsed = luck_parser::parse(allocator, &output, version);
         if reparsed.errors.is_empty() {
-            let (expected, actual) =
-                (tree_shape(&parse.block, version), tree_shape(&reparsed.block, version));
+            let (expected, actual) = (tree_shape(&parse.chunk), tree_shape(&reparsed.chunk));
             if actual == expected {
-                let again = luck_formatter::format_parsed(allocator, &reparsed, version, &options);
+                let again = luck_formatter::format_parsed(allocator, &reparsed, &options);
                 if again.output == output {
                     TestResult::Passed
                 } else {
@@ -224,14 +223,19 @@ fn lint(suite: &Suite, parse: &ParseResult<'_>, lines: &LineIndex) -> Vec<LintLi
         },
         ..LintConfig::default()
     };
-    luck_linter::lint_parsed(parse, suite.target, &every_rule, FixKind::empty())
-        .iter()
-        .map(|diagnostic| {
-            let (line, column) = lines.line_column(diagnostic.span.start);
-            LintLine {
-                rule: diagnostic.rule,
-                text: format!("{line}:{column} {}: {}", diagnostic.rule, diagnostic.message),
-            }
-        })
-        .collect()
+    luck_linter::lint_parsed(
+        parse,
+        suite.target.stdlib_environment(),
+        &every_rule,
+        FixKind::empty(),
+    )
+    .iter()
+    .map(|diagnostic| {
+        let (line, column) = lines.line_column(diagnostic.span.start);
+        LintLine {
+            rule: diagnostic.rule,
+            text: format!("{line}:{column} {}: {}", diagnostic.rule, diagnostic.message),
+        }
+    })
+    .collect()
 }

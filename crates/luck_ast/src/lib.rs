@@ -1,8 +1,12 @@
 //! # `luck_ast`
 //!
 //! The syntax tree of Lua 5.1 to 5.5 and Luau, and what walks, measures,
-//! queries, and builds it. A [`Block`] holds [`Statement`]s and an optional
-//! last statement; every value position is an [`Expression`].
+//! queries, and builds it. Every dialect's source reads into one shape. A
+//! tree's root is a [`Chunk`], which records the [`LuaVersion`] it's in and
+//! holds its [`Block`], a list of [`Statement`]s, and every value position
+//! is an [`Expression`].
+//!
+//! [`LuaVersion`]: luck_token::LuaVersion
 //!
 //! A tree lives in a `luck_allocator` arena: every node is in a `Box` or a
 //! `List` there, and none needs dropping, so a tree is freed with its arena
@@ -99,11 +103,11 @@ pub use query::{
 };
 pub use span::GetSpan;
 pub use stmt::{
-    Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
+    Assignment, Attribute, AttributedName, Block, Chunk, CompoundAssignment, DoBlock, ElseClause,
     ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
-    GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
-    LocalAssignmentKind, LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement,
-    Statement, TypeDeclaration, TypeDeclarationValue, WhileLoop,
+    GlobalStar, GotoStatement, IfStatement, LabelStatement, LocalAssignment, LocalAssignmentKind,
+    LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement, Statement,
+    TypeDeclaration, TypeDeclarationValue, WhileLoop,
 };
 pub use synth::{
     FieldSpec, FunctionSignature, InterpolatedStringPart, SpanCounter, Synth, SyntheticComment,

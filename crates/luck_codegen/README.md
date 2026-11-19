@@ -10,8 +10,8 @@ It recurses once per level of nesting, so it takes a tree within `luck_ast::MAX_
 
 ## Usage
 
-- `compact(&block)` returns the source.
-- `compact_with_capacity(&block, capacity)` reserves the output up front. A parsed tree's source length is a good hint.
+- `compact(&chunk)` returns the source of a tree, read in the version its `Chunk` records.
+- `compact_with_capacity(&chunk, capacity)` reserves the output up front. A parsed tree's source length is a good hint.
 
 ```rust
 use luck_allocator::Allocator;
@@ -19,5 +19,5 @@ use luck_token::LuaVersion;
 
 let allocator = Allocator::new();
 let parsed = luck_parser::parse(&allocator, "local x = ( 1 )", LuaVersion::Lua54);
-assert_eq!(luck_codegen::compact(&parsed.block), "local x=(1)");
+assert_eq!(luck_codegen::compact(&parsed.chunk), "local x=(1)");
 ```

@@ -1,7 +1,7 @@
 use core::ptr;
 
 use luck_allocator::Allocator;
-use luck_ast::{Call, Expression, LastStatement, Statement, TreeCounts, unwrap_parentheses};
+use luck_ast::{Call, Expression, Statement, TreeCounts, unwrap_parentheses};
 use luck_semantic::{
     StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, analyze,
     expand_replace_template, library_for,
@@ -1063,10 +1063,9 @@ fn settings_provider_shapes() {
 /// display path.
 fn resolve_last_call(source: &str) -> Option<String> {
     let allocator = Allocator::new();
-    let block = parse(&allocator, source, LuaVersion::Luau);
-    let analysis =
-        analyze(block, TreeCounts::default(), LuaVersion::Luau, StdlibEnvironment::Roblox);
-    let last_stmt = block.stmts.last()?;
+    let chunk = parse(&allocator, source, LuaVersion::Luau);
+    let analysis = analyze(chunk, TreeCounts::default(), StdlibEnvironment::Roblox);
+    let last_stmt = chunk.block.stmts.last()?;
     let chain = if let Statement::FunctionCall(chain) = last_stmt {
         chain
     } else if let Statement::LocalAssignment(local) = last_stmt
@@ -1084,10 +1083,9 @@ fn resolve_last_call(source: &str) -> Option<String> {
 /// alone.
 fn chain_callee_names(source: &str) -> Vec<Option<String>> {
     let allocator = Allocator::new();
-    let block = parse(&allocator, source, LuaVersion::Lua54);
-    let analysis =
-        analyze(block, TreeCounts::default(), LuaVersion::Lua54, StdlibEnvironment::Standalone);
-    let Some(Statement::FunctionCall(chain)) = block.stmts.last() else {
+    let chunk = parse(&allocator, source, LuaVersion::Lua54);
+    let analysis = analyze(chunk, TreeCounts::default(), StdlibEnvironment::Standalone);
+    let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
         panic!("the last statement must be a call");
     };
     let call_indexes = chain
@@ -1502,8 +1500,8 @@ where
 {
     let source = format!("return {text}");
     let allocator = Allocator::new();
-    let block = parse(&allocator, &source, version);
-    let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
+    let chunk = parse(&allocator, &source, version);
+    let [Statement::Return(return_stmt)] = &*chunk.block.stmts else {
         panic!("{text} must parse as a return");
     };
     is_expected(unwrap_parentheses(return_stmt.exprs.first().expect("one returned value")))

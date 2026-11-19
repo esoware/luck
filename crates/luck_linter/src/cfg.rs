@@ -6,8 +6,7 @@ use core::num::Saturating;
 
 use luck_ast::{
     BinaryOp, Block, Expression, FunctionBody, GenericFor, GetSpan as _, IfExpression, IfStatement,
-    LastStatement, Name, NumericFor, RepeatLoop, Statement, Type, Visit, WhileLoop,
-    unwrap_parentheses,
+    Name, NumericFor, RepeatLoop, Statement, Type, Visit, WhileLoop, unwrap_parentheses,
 };
 use luck_semantic::SemanticAnalysis;
 use luck_token::{BinOp, Span};
@@ -329,9 +328,6 @@ impl<'ast> GraphBuilder<'ast> {
         for stmt in &block.stmts {
             self.stmt(stmt);
         }
-        if let Some(last) = &block.last_stmt {
-            self.last_stmt(last);
-        }
         for name in self.label_names.drain(outer_label_count..) {
             if let Some(nodes) = self.labels.get_mut(name) {
                 nodes.pop();
@@ -388,9 +384,14 @@ impl<'ast> GraphBuilder<'ast> {
                     self.advance_to(target);
                 }
             }
-            // Lua 5.2+: `break` as an ordinary statement.
+            Statement::Return(node) => {
+                let exit =
+                    if node.exprs.is_empty() { Exit::ReturnEmpty } else { Exit::ReturnValue };
+                self.jump(node.span, exit.node());
+            }
             Statement::Break(span) => self.jump(*span, self.break_target),
-            Statement::EmptyStatement(_) => {}
+            // Luau
+            Statement::Continue(span) => self.jump(*span, self.continue_target),
             Statement::Assignment(_)
             | Statement::FunctionDecl(_)
             | Statement::LocalFunction(_)
@@ -401,22 +402,6 @@ impl<'ast> GraphBuilder<'ast> {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {
                 self.simple(stmt.span());
-            }
-        }
-    }
-
-    fn last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
-        match last {
-            LastStatement::Return(node) => {
-                let exit =
-                    if node.exprs.is_empty() { Exit::ReturnEmpty } else { Exit::ReturnValue };
-                self.jump(node.span, exit.node());
-            }
-            LastStatement::Break(span) => self.jump(*span, self.break_target),
-            // Luau
-            LastStatement::Continue(span) => self.jump(*span, self.continue_target),
-            LastStatement::Error(span) => {
-                self.code(*span);
             }
         }
     }
@@ -598,29 +583,29 @@ mod tests {
     use core::fmt::Write as _;
 
     use luck_allocator::Allocator;
-    use luck_ast::TreeCounts;
+    use luck_ast::{Chunk, TreeCounts};
     use luck_token::{LuaVersion, StdlibEnvironment};
 
     use super::*;
 
-    fn parse_block<'ast>(
+    fn parse_chunk<'ast>(
         allocator: &'ast Allocator,
         source: &'ast str,
         version: LuaVersion,
-    ) -> &'ast Block<'ast> {
+    ) -> &'ast Chunk<'ast> {
         let parse = luck_parser::parse(allocator, source, version);
         assert!(parse.errors.is_empty(), "parser errors for {source:?}: {:?}", parse.errors);
-        allocator.alloc(parse.block)
+        allocator.alloc(parse.chunk)
     }
 
-    fn analyze<'ast>(block: &'ast Block<'ast>, version: LuaVersion) -> SemanticAnalysis<'ast> {
-        luck_semantic::analyze(block, TreeCounts::default(), version, StdlibEnvironment::Standalone)
+    fn analyze<'ast>(chunk: &'ast Chunk<'ast>) -> SemanticAnalysis<'ast> {
+        luck_semantic::analyze(chunk, TreeCounts::default(), StdlibEnvironment::Standalone)
     }
 
     fn flow_of(source: &str, version: LuaVersion) -> FlowGraph {
         let allocator = Allocator::new();
-        let block = parse_block(&allocator, source, version);
-        FlowGraph::of_block(block, &analyze(block, version))
+        let chunk = parse_chunk(&allocator, source, version);
+        FlowGraph::of_block(&chunk.block, &analyze(chunk))
     }
 
     fn flow(source: &str) -> FlowGraph {
@@ -628,7 +613,7 @@ mod tests {
     }
 
     fn points(source: &str) -> u32 {
-        decision_points(parse_block(&Allocator::new(), source, LuaVersion::Lua54))
+        decision_points(&parse_chunk(&Allocator::new(), source, LuaVersion::Lua54).block)
     }
 
     #[test]
@@ -816,11 +801,11 @@ return 2",
     #[test]
     fn continue_of_the_analyzed_block_ends_it() {
         let allocator = Allocator::new();
-        let block = parse_block(&allocator, "for _ = 1, 3 do continue end", LuaVersion::Luau);
-        let Some(Statement::NumericFor(numeric_for)) = block.stmts.first() else {
+        let chunk = parse_chunk(&allocator, "for _ = 1, 3 do continue end", LuaVersion::Luau);
+        let Some(Statement::NumericFor(numeric_for)) = chunk.block.stmts.first() else {
             panic!("the statement must be a numeric for");
         };
-        let semantic = analyze(block, LuaVersion::Luau);
+        let semantic = analyze(chunk);
         assert!(FlowGraph::of_block(&numeric_for.block, &semantic).reaches(Exit::End));
     }
 
@@ -851,17 +836,17 @@ goto top",
     #[test]
     fn goto_to_a_label_outside_the_block_leaves_it() {
         let allocator = Allocator::new();
-        let block = parse_block(
+        let chunk = parse_chunk(
             &allocator,
             "\
 while true do goto done end
 ::done::",
             LuaVersion::Lua54,
         );
-        let Some(Statement::WhileLoop(while_loop)) = block.stmts.first() else {
+        let Some(Statement::WhileLoop(while_loop)) = chunk.block.stmts.first() else {
             panic!("the statement must be a while loop");
         };
-        let semantic = analyze(block, LuaVersion::Lua54);
+        let semantic = analyze(chunk);
         let graph = FlowGraph::of_block(&while_loop.block, &semantic);
         assert!(graph.reaches(Exit::Break));
         assert!(!graph.reaches(Exit::End));
@@ -967,12 +952,12 @@ do return end
         ];
         for (source, version) in sources {
             let allocator = Allocator::new();
-            let block = parse_block(&allocator, source, version);
-            let semantic = analyze(block, version);
+            let chunk = parse_chunk(&allocator, source, version);
+            let semantic = analyze(chunk);
             let nested: FxHashMap<u32, Exits> =
-                FlowGraph::of_block(block, &semantic).loop_exits().collect();
+                FlowGraph::of_block(&chunk.block, &semantic).loop_exits().collect();
             let mut bodies = LoopBodies::default();
-            bodies.visit_block(block);
+            bodies.visit_block(&chunk.block);
             assert!(!bodies.0.is_empty(), "{source}");
             for (start, body) in bodies.0 {
                 let alone = FlowGraph::of_block(body, &semantic).exits();

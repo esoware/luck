@@ -74,5 +74,5 @@ fn goto_and_labels_parse_in_lua53() {
     let allocator = Allocator::new();
     let result = parse_lua53(&allocator, "goto done ::done::");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 2);
+    assert_eq!(result.chunk.block.stmts.len(), 2);
 }

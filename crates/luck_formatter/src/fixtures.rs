@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::LastStatement;
+use luck_ast::Statement;
 use luck_token::LuaVersion;
 
 use crate::FormatOptions;
@@ -23,7 +23,7 @@ pub(crate) fn render_expr(source: &str, options: FormatOptions) -> String {
     let text = allocator.alloc_str(&format!("return {source}\n"));
     let parsed = luck_parser::parse(&allocator, text, LuaVersion::Luau);
     assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
-    let Some(LastStatement::Return(return_stmt)) = &parsed.block.last_stmt else {
+    let [Statement::Return(return_stmt)] = &*parsed.chunk.block.stmts else {
         panic!("expected a return statement");
     };
     let [expr] = &*return_stmt.exprs else {

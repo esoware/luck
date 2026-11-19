@@ -356,11 +356,12 @@ impl<'ast> VisitMut<'ast> for Binder<'_, 'ast> {
             | Statement::FunctionCall(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::Error(_) => self.walk_stmt(stmt),
         }
     }

@@ -17,15 +17,16 @@
 //!
 //! ```
 //! use luck_allocator::Allocator;
-//! use luck_ast::{SpanCounter, Synth};
-//! use luck_token::BinOp;
+//! use luck_ast::{Chunk, SpanCounter, Synth};
+//! use luck_token::{BinOp, LuaVersion};
 //!
 //! let allocator = Allocator::new();
 //! let spans = SpanCounter::new();
 //! let synth = Synth::new(&allocator, &spans);
 //! let sum = synth.binary_op(synth.name_expr("a"), BinOp::Sub, synth.number(".5"));
-//! let block = synth.block([synth.local(&["x"], [sum])], Some(synth.return_([synth.name_expr("x")])));
-//! assert_eq!(luck_codegen::compact(&block), "local x=a-.5 return x");
+//! let block = synth.block([synth.local(&["x"], [sum]), synth.return_([synth.name_expr("x")])]);
+//! let chunk = Chunk::new(LuaVersion::Lua54, block);
+//! assert_eq!(luck_codegen::compact(&chunk), "local x=a-.5 return x");
 //! ```
 
 #![cfg_attr(

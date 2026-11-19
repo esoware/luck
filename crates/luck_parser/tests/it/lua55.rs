@@ -26,7 +26,7 @@ fn global_stays_a_name_outside_a_declaration() {
         assert_no_errors(&result);
         assert!(
             !matches!(
-                result.block.stmts.first(),
+                result.chunk.block.stmts.first(),
                 Some(
                     Statement::GlobalDeclaration(_)
                         | Statement::GlobalFunction(_)
@@ -34,7 +34,7 @@ fn global_stays_a_name_outside_a_declaration() {
                 )
             ),
             "{source}: {:?}",
-            result.block.stmts
+            result.chunk.block.stmts
         );
     }
 }
@@ -49,7 +49,7 @@ fn global_declares_before_a_name_attribute_star_or_function() {
         assert_no_errors(&result);
         assert!(
             matches!(
-                result.block.stmts.first(),
+                result.chunk.block.stmts.first(),
                 Some(
                     Statement::GlobalDeclaration(_)
                         | Statement::GlobalFunction(_)
@@ -57,7 +57,7 @@ fn global_declares_before_a_name_attribute_star_or_function() {
                 )
             ),
             "{source}: {:?}",
-            result.block.stmts
+            result.chunk.block.stmts
         );
     }
 }
@@ -67,11 +67,11 @@ fn global_simple() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global x");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
+    assert_eq!(result.chunk.block.stmts.len(), 1);
     assert!(
-        matches!(&result.block.stmts[0], Statement::GlobalDeclaration(_)),
+        matches!(&result.chunk.block.stmts[0], Statement::GlobalDeclaration(_)),
         "expected GlobalDeclaration, got {:?}",
-        result.block.stmts[0]
+        result.chunk.block.stmts[0]
     );
 }
 
@@ -80,7 +80,7 @@ fn global_multiple_names() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global x, y");
     assert_no_errors(&result);
-    if let Statement::GlobalDeclaration(global) = &result.block.stmts[0] {
+    if let Statement::GlobalDeclaration(global) = &result.chunk.block.stmts[0] {
         let n = global.names.len();
         assert_eq!(n, 2);
     } else {
@@ -93,11 +93,11 @@ fn global_function() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global function f() end");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
+    assert_eq!(result.chunk.block.stmts.len(), 1);
     assert!(
-        matches!(&result.block.stmts[0], Statement::GlobalFunction(_)),
+        matches!(&result.chunk.block.stmts[0], Statement::GlobalFunction(_)),
         "expected GlobalFunction, got {:?}",
-        result.block.stmts[0]
+        result.chunk.block.stmts[0]
     );
 }
 
@@ -106,11 +106,11 @@ fn global_star() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global *");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::GlobalStar(global_star) = &result.block.stmts[0] {
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    if let Statement::GlobalStar(global_star) = &result.chunk.block.stmts[0] {
         assert!(global_star.attribute.is_none());
     } else {
-        panic!("expected GlobalStar, got {:?}", result.block.stmts[0]);
+        panic!("expected GlobalStar, got {:?}", result.chunk.block.stmts[0]);
     }
 }
 
@@ -119,12 +119,12 @@ fn global_star_with_attribute() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global <const> *");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 1);
-    if let Statement::GlobalStar(global_star) = &result.block.stmts[0] {
+    assert_eq!(result.chunk.block.stmts.len(), 1);
+    if let Statement::GlobalStar(global_star) = &result.chunk.block.stmts[0] {
         let attribute = global_star.attribute.as_ref().expect("expected attribute");
         assert_eq!(attribute.name.text, "const");
     } else {
-        panic!("expected GlobalStar, got {:?}", result.block.stmts[0]);
+        panic!("expected GlobalStar, got {:?}", result.chunk.block.stmts[0]);
     }
 }
 
@@ -133,7 +133,7 @@ fn local_attribute_before_first_name() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "local <close> f = io.open(\"file\")");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert_eq!(local.names.len(), 1);
         let attribute = local
             .names
@@ -144,7 +144,7 @@ fn local_attribute_before_first_name() {
             .expect("expected attribute on f");
         assert_eq!(attribute.name.text, "close");
     } else {
-        panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
+        panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts[0]);
     }
 }
 
@@ -153,12 +153,12 @@ fn named_vararg() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "function f(...args) return args end");
     assert_no_errors(&result);
-    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+    if let Statement::FunctionDecl(function_decl) = &result.chunk.block.stmts[0] {
         let vararg = function_decl.body.vararg.as_ref().expect("expected vararg");
         let vararg_name = vararg.name.as_ref().expect("expected named vararg");
         assert_eq!(vararg_name.text, "args");
     } else {
-        panic!("expected FunctionDecl, got {:?}", result.block.stmts[0]);
+        panic!("expected FunctionDecl, got {:?}", result.chunk.block.stmts[0]);
     }
 }
 
@@ -167,7 +167,7 @@ fn named_vararg_after_params() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "function f(a, b, ...rest) end");
     assert_no_errors(&result);
-    if let Statement::FunctionDecl(function_decl) = &result.block.stmts[0] {
+    if let Statement::FunctionDecl(function_decl) = &result.chunk.block.stmts[0] {
         let param_count = function_decl.body.params.len();
         assert_eq!(param_count, 2);
         let vararg = function_decl.body.vararg.as_ref().expect("expected vararg");
@@ -184,19 +184,19 @@ fn global_with_initializer() {
     // 5.5 manual section 3.3.7: stat ::= global attnamelist ['=' explist]
     let single = parse_lua55(&allocator, "global x = 1");
     assert_no_errors(&single);
-    if let Statement::GlobalDeclaration(global) = &single.block.stmts[0] {
+    if let Statement::GlobalDeclaration(global) = &single.chunk.block.stmts[0] {
         assert_eq!(global.exprs.len(), 1);
     } else {
-        panic!("expected GlobalDeclaration, got {:?}", single.block.stmts[0]);
+        panic!("expected GlobalDeclaration, got {:?}", single.chunk.block.stmts[0]);
     }
 
     let multiple = parse_lua55(&allocator, "global a, b = 1, 2");
     assert_no_errors(&multiple);
-    if let Statement::GlobalDeclaration(global) = &multiple.block.stmts[0] {
+    if let Statement::GlobalDeclaration(global) = &multiple.chunk.block.stmts[0] {
         assert_eq!(global.names.len(), 2);
         assert_eq!(global.exprs.len(), 2);
     } else {
-        panic!("expected GlobalDeclaration, got {:?}", multiple.block.stmts[0]);
+        panic!("expected GlobalDeclaration, got {:?}", multiple.chunk.block.stmts[0]);
     }
 }
 
@@ -205,10 +205,10 @@ fn global_attributed_with_initializer() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global x <const> = 1");
     assert_no_errors(&result);
-    if let Statement::GlobalDeclaration(global) = &result.block.stmts[0] {
+    if let Statement::GlobalDeclaration(global) = &result.chunk.block.stmts[0] {
         assert_eq!(global.exprs.len(), 1);
     } else {
-        panic!("expected GlobalDeclaration, got {:?}", result.block.stmts[0]);
+        panic!("expected GlobalDeclaration, got {:?}", result.chunk.block.stmts[0]);
     }
 }
 
@@ -219,7 +219,7 @@ fn leading_attribute_distributes_to_all_names() {
     // the list."
     let result = parse_lua55(&allocator, "local <const> x, y = 1, 2");
     assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.block.stmts[0] {
+    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         let attribute_names: Vec<_> = local
             .names
             .iter()
@@ -231,7 +231,7 @@ fn leading_attribute_distributes_to_all_names() {
             "leading attrib must apply to every name: {attribute_names:?}"
         );
     } else {
-        panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
+        panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts[0]);
     }
 }
 
@@ -241,8 +241,8 @@ fn trailing_attribute_replaces_the_leading_one_on_its_name() {
     // 5.5 `localstat`: `kind = getvarattribute(ls, defkind)`.
     let result = parse_lua55(&allocator, "local <const> x, y <close> = 1, 2");
     assert_no_errors(&result);
-    let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
-        panic!("expected LocalAssignment, got {:?}", result.block.stmts[0]);
+    let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] else {
+        panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts[0]);
     };
     let attribute_names: Vec<_> = local
         .names

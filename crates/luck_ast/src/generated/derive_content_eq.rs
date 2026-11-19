@@ -2,14 +2,14 @@
 // `just ast` after changing one.
 
 use crate::{
-    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, CompoundAssignment,
+    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment,
     ContentEq, DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field,
     FunctionArgs, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName,
     FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
     GenericTypeParam, GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression,
     IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement,
-    LastStatement, Literal, LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind,
-    MethodCall, Name, NamedType, NumericFor, OptionalType, Parameter, ParenthesizedExpression,
+    Literal, LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall,
+    Name, NamedType, NumericFor, OptionalType, Parameter, ParenthesizedExpression,
     ParenthesizedType, RepeatLoop, ReturnStatement, Statement, Suffix, SuffixedExpression,
     TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
     TypeField, TypeFieldAccess, TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam,
@@ -283,10 +283,16 @@ impl ContentEq for Literal<'_> {
     }
 }
 
+impl ContentEq for Chunk<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.version, &other.version)
+            && ContentEq::content_eq(&self.block, &other.block)
+    }
+}
+
 impl ContentEq for Block<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.stmts, &other.stmts)
-            && ContentEq::content_eq(&self.last_stmt, &other.last_stmt)
     }
 }
 
@@ -306,8 +312,9 @@ impl ContentEq for Statement<'_> {
             (Self::LocalAssignment(lhs), Self::LocalAssignment(rhs)) => {
                 ContentEq::content_eq(lhs, rhs)
             }
-            (Self::EmptyStatement(_), Self::EmptyStatement(_))
-            | (Self::Break(_), Self::Break(_))
+            (Self::Return(lhs), Self::Return(rhs)) => ContentEq::content_eq(lhs, rhs),
+            (Self::Break(_), Self::Break(_))
+            | (Self::Continue(_), Self::Continue(_))
             | (Self::Error(_), Self::Error(_)) => true,
             (Self::Goto(lhs), Self::Goto(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::Label(lhs), Self::Label(rhs)) => ContentEq::content_eq(lhs, rhs),
@@ -336,30 +343,19 @@ impl ContentEq for Statement<'_> {
                 | Self::FunctionDecl(_)
                 | Self::LocalFunction(_)
                 | Self::LocalAssignment(_)
-                | Self::EmptyStatement(_)
+                | Self::Return(_)
+                | Self::Break(_)
+                | Self::Continue(_)
                 | Self::Goto(_)
                 | Self::Label(_)
                 | Self::GlobalDeclaration(_)
                 | Self::GlobalFunction(_)
                 | Self::GlobalStar(_)
-                | Self::Break(_)
                 | Self::CompoundAssignment(_)
                 | Self::TypeDeclaration(_)
                 | Self::Error(_),
                 _,
             ) => false,
-        }
-    }
-}
-
-impl ContentEq for LastStatement<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Return(lhs), Self::Return(rhs)) => ContentEq::content_eq(lhs, rhs),
-            (Self::Break(_), Self::Break(_))
-            | (Self::Continue(_), Self::Continue(_))
-            | (Self::Error(_), Self::Error(_)) => true,
-            (Self::Return(_) | Self::Break(_) | Self::Continue(_) | Self::Error(_), _) => false,
         }
     }
 }

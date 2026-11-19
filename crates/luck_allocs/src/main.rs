@@ -118,26 +118,22 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
     let (mut parse, parser) =
         record_stats_in(allocator, || luck_parser::parse(allocator, source, version));
     assert!(parse.errors.is_empty(), "{}: {:?}", file.file_name, parse.errors);
+    let environment = target.stdlib_environment();
     let ((), semantic) = record_stats_in(allocator, || {
-        drop(luck_semantic::analyze(
-            &parse.block,
-            parse.counts,
-            version,
-            target.stdlib_environment(),
-        ));
+        drop(luck_semantic::analyze(&parse.chunk, parse.counts, environment));
     });
     let config = every_rule();
     let ((), linter) = record_stats_in(allocator, || {
-        drop(luck_linter::lint_parsed(&parse, target, &config, FixKind::empty()));
+        drop(luck_linter::lint_parsed(&parse, environment, &config, FixKind::empty()));
     });
-    let ((), codegen) = record_stats_in(allocator, || drop(luck_codegen::compact(&parse.block)));
+    let ((), codegen) = record_stats_in(allocator, || drop(luck_codegen::compact(&parse.chunk)));
     let options = FormatOptions::default();
     let ((), formatter) = record_stats_in(allocator, || {
-        drop(luck_formatter::format_parsed(allocator, &parse, version, &options));
+        drop(luck_formatter::format_parsed(allocator, &parse, &options));
     });
     let transforms = TransformConfig::default();
     let ((), minifier) = record_stats_in(allocator, || {
-        drop(luck_minifier::minify_block(allocator, &mut parse.block, version, &transforms));
+        drop(luck_minifier::minify_chunk(allocator, &mut parse.chunk, &transforms));
     });
     [lexer, parser, semantic, linter, codegen, formatter, minifier]
 }

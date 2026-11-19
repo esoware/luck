@@ -68,7 +68,7 @@ fn scope_tree_of<'ast>(
 ) -> ScopeTree<'ast> {
     let parsed = luck_parser::parse(allocator, output, version);
     assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
-    ScopeTree::build(allocator.alloc(parsed.block), parsed.counts, version)
+    ScopeTree::build(allocator.alloc(parsed.chunk), parsed.counts)
 }
 
 fn assert_reparses(output: &str, version: LuaVersion) {
@@ -300,7 +300,7 @@ _ENV = {}
     let parsed = luck_parser::parse(&allocator, &result.output, LuaVersion::Lua54);
     assert!(parsed.errors.is_empty(), "{:?}\n{}", parsed.errors, result.output);
     let mut env_calls = EnvCalls::default();
-    env_calls.visit_block(&parsed.block);
+    env_calls.visit_block(&parsed.chunk.block);
     assert_eq!(
         env_calls.0, 0,
         "`_ENV=_ENV` must not call `_ENV` with `(print)`:\n{}",

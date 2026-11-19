@@ -52,12 +52,13 @@ impl<'ast> FunctionNode<'ast> {
             | Statement::NumericFor(_)
             | Statement::GenericFor(_)
             | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
             | Statement::Error(_) => return None,
         };

@@ -103,7 +103,7 @@ mod tests {
             ..FunctionSignature::default()
         };
         let return_stmt = synth.return_([synth.name_expr("n")]);
-        let function = synth.function_def_full([], signature, synth.block([], Some(return_stmt)));
+        let function = synth.function_def_full([], signature, synth.block([return_stmt]));
 
         let Expression::FunctionDef(function_def) = &function else {
             panic!("expected function def");
@@ -129,7 +129,7 @@ mod tests {
             "id",
             [synth.function_attribute("native")],
             signature,
-            synth.block([], None),
+            synth.block([]),
         );
 
         let Statement::LocalFunction(local_function) = &stmt else {
@@ -148,7 +148,7 @@ mod tests {
             vararg: Some(synth.vararg_param(None)),
             ..FunctionSignature::default()
         };
-        let function = synth.function_def_full([], signature, synth.block([], None));
+        let function = synth.function_def_full([], signature, synth.block([]));
 
         let Expression::FunctionDef(function_def) = &function else {
             panic!("expected function def");

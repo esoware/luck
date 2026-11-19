@@ -44,13 +44,14 @@ impl UninitializedLocals {
             | Statement::GenericFor(_)
             | Statement::FunctionDecl(_)
             | Statement::LocalFunction(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }

@@ -12,19 +12,13 @@ fn bench_minifier(criterion: &mut Criterion) {
 
     for file in test_files() {
         let id = BenchmarkId::from_parameter(file.file_name);
-        let version = file.target.lua_version();
         let mut allocator = Allocator::new();
         group.bench_function(id, |bencher| {
             bencher.iter_with_setup_wrapper(|runner| {
                 allocator.reset();
                 let mut parse_result = file.parse(&allocator);
                 let _minified = runner.run(|| {
-                    luck_minifier::minify_block(
-                        &allocator,
-                        &mut parse_result.block,
-                        version,
-                        &config,
-                    )
+                    luck_minifier::minify_chunk(&allocator, &mut parse_result.chunk, &config)
                 });
             });
         });
@@ -32,7 +26,6 @@ fn bench_minifier(criterion: &mut Criterion) {
 
     for project in test_projects() {
         let id = BenchmarkId::from_parameter(project.name);
-        let version = project.target.lua_version();
         let mut allocator = Allocator::new();
         group.bench_function(id, |bencher| {
             bencher.iter_with_setup_wrapper(|runner| {
@@ -42,10 +35,9 @@ fn bench_minifier(criterion: &mut Criterion) {
                     parse_results
                         .iter_mut()
                         .map(|parse_result| {
-                            luck_minifier::minify_block(
+                            luck_minifier::minify_chunk(
                                 &allocator,
-                                &mut parse_result.block,
-                                version,
+                                &mut parse_result.chunk,
                                 &config,
                             )
                         })

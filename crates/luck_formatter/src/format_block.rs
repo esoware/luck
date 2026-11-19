@@ -10,7 +10,7 @@
 use core::iter::{self, Peekable};
 use core::ops::Range;
 
-use luck_ast::{Block, GetSpan as _, LastStatement, Statement, Visit, stmt_starts_with_paren};
+use luck_ast::{Block, GetSpan as _, Statement, Visit, stmt_starts_with_paren};
 use luck_token::{
     LuaVersion, Span, is_lua_whitespace, line_breaks, offset_to_index, strip_line_break,
 };
@@ -23,7 +23,6 @@ use crate::{BlockNewlineGaps, Comments, FormatOptions};
 #[derive(Debug, Clone, Copy)]
 enum BlockItem<'block, 'ast> {
     Stmt(&'block Statement<'ast>),
-    Last(&'block LastStatement<'ast>),
     Verbatim { span: Span, has_leading_paren: bool },
 }
 
@@ -32,21 +31,17 @@ impl BlockItem<'_, '_> {
     /// so it ends at its last value here: a comment there trails the values.
     fn span(self) -> Span {
         match self {
-            Self::Stmt(stmt) => stmt.span(),
-            Self::Last(LastStatement::Return(return_stmt)) => {
+            Self::Stmt(Statement::Return(return_stmt)) => {
                 let span = return_stmt.span;
                 return_stmt.exprs.last().map_or(span, |last| Span::new(span.start, last.span().end))
             }
-            Self::Last(last_stmt) => last_stmt.span(),
+            Self::Stmt(stmt) => stmt.span(),
             Self::Verbatim { span, .. } => span,
         }
     }
 
     /// Declarations that read better with a blank line around them when the
     /// input carries no source to scan (synthetic ASTs).
-    ///
-    /// A last statement (`return`, `break`, `continue`) never wants one of
-    /// its own.
     const fn should_surround_with_blank(self) -> bool {
         match self {
             Self::Stmt(stmt) => matches!(
@@ -56,34 +51,23 @@ impl BlockItem<'_, '_> {
                     | Statement::GlobalFunction(_)
                     | Statement::TypeDeclaration(_)
             ),
-            Self::Last(_) | Self::Verbatim { .. } => false,
+            Self::Verbatim { .. } => false,
         }
     }
 
     fn starts_with_paren(self) -> bool {
         match self {
             Self::Stmt(stmt) => stmt_starts_with_paren(stmt),
-            Self::Last(_) => false,
             Self::Verbatim { has_leading_paren, .. } => has_leading_paren,
         }
     }
 }
 
-/// A bare `;` and a parse-error placeholder print nothing, so they get no separator either.
+/// A parse-error placeholder prints nothing, so it gets no separator either.
 fn printed_items<'block, 'ast>(
     block: &'block Block<'ast>,
 ) -> impl Iterator<Item = BlockItem<'block, 'ast>> + Clone {
-    let stmts = block
-        .stmts
-        .iter()
-        .filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_) | Statement::Error(_)))
-        .map(BlockItem::Stmt);
-    let last_stmt = block
-        .last_stmt
-        .as_ref()
-        .filter(|last_stmt| !matches!(last_stmt, LastStatement::Error(_)))
-        .map(BlockItem::Last);
-    stmts.chain(last_stmt)
+    block.stmts.iter().filter(|stmt| !matches!(stmt, Statement::Error(_))).map(BlockItem::Stmt)
 }
 
 pub(crate) fn first_item_start(block: &Block<'_>) -> Option<u32> {
@@ -201,7 +185,7 @@ impl<'ast> Formatter<'ast> {
                     {
                         sortable_require(stmt)
                     }
-                    BlockItem::Stmt(_) | BlockItem::Last(_) | BlockItem::Verbatim { .. } => None,
+                    BlockItem::Stmt(_) | BlockItem::Verbatim { .. } => None,
                 };
                 match sortable {
                     Some(require) => requires.push(require, item_start..self.element_count()),
@@ -326,7 +310,6 @@ impl<'ast> Formatter<'ast> {
         let end = item.span().end;
         match item {
             BlockItem::Stmt(stmt) => self.inside(end, |f| f.write_stmt(stmt)),
-            BlockItem::Last(last_stmt) => self.inside(end, |f| f.write_last_stmt(last_stmt)),
             BlockItem::Verbatim { span, .. } => self.write_exact(span),
         }
     }

@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
 use luck_ast::{
-    Block, Call, Expression, FunctionArgs, FunctionBody, GetSpan as _, Name, Statement, Suffix,
-    SuffixedExpression, TreeCounts, Var,
+    Block, Call, Chunk, Expression, FunctionArgs, FunctionBody, GetSpan as _, Name, Statement,
+    Suffix, SuffixedExpression, TreeCounts, Var,
 };
 use luck_core::Diagnostic;
 use luck_semantic::{NodeSink, ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
@@ -56,18 +56,18 @@ pub(crate) struct ExtractedRequires<'ast> {
 /// is the parse's.
 pub(crate) fn extract_requires<'ast>(
     allocator: &'ast Allocator,
-    block: &Block<'_>,
+    chunk: &Chunk<'_>,
     counts: TreeCounts,
     source: &'ast str,
     file_path: &str,
-    version: LuaVersion,
     dynamic_require: DynamicRequire,
 ) -> ExtractedRequires<'ast> {
+    let (version, block) = (chunk.version, &chunk.block);
     let mut uses = Uses::new(version);
     let tree = if counts_upvalues(version) || has_exports(block, version) {
-        ScopeTree::build_with(block, counts, version, &mut uses)
+        ScopeTree::build_with(chunk, counts, &mut uses)
     } else {
-        ScopeTree::build_for_names(block, version, &ASKED_NAMES, &mut uses)
+        ScopeTree::build_for_names(chunk, &ASKED_NAMES, &mut uses)
     };
     RequireFinder::new(allocator, source, file_path, version, dynamic_require, &tree)
         .read(block, uses)
@@ -523,11 +523,10 @@ mod tests {
         assert!(parsed.errors.is_empty(), "parse failed: {:?}", parsed.errors);
         extract_requires(
             allocator,
-            &parsed.block,
+            &parsed.chunk,
             parsed.counts,
             source,
             "test.lua",
-            version,
             dynamic_require,
         )
     }
@@ -966,12 +965,12 @@ obj.require(\"x\")
         if !parsed.errors.is_empty() {
             return None;
         }
-        let block = allocator.alloc(parsed.block);
+        let chunk = allocator.alloc(parsed.chunk);
         let mut uses = Uses::new(version);
-        let tree = ScopeTree::build_with(block, parsed.counts, version, &mut uses);
+        let tree = ScopeTree::build_with(chunk, parsed.counts, &mut uses);
         let finder =
             RequireFinder::new(allocator, source, "test.lua", version, DynamicRequire::Warn, &tree);
-        Some(finder.read(block, uses))
+        Some(finder.read(&chunk.block, uses))
     }
 
     fn assert_asked_names_answer_alone(source: &str, version: LuaVersion) {

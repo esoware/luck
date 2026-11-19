@@ -1,4 +1,4 @@
-use luck_ast::{Block, Call, SuffixedExpression, TreeCounts};
+use luck_ast::{Call, Chunk, SuffixedExpression, TreeCounts};
 use luck_token::{LuaVersion, StdlibEnvironment};
 
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
@@ -26,36 +26,34 @@ struct HostGlobal {
     is_extra: bool,
 }
 
-/// `block`'s scope tree, its tables sized from `counts`, the parse's or the
-/// default.
+/// `chunk`'s scope tree, its tables sized from `counts`, the parse's or the
+/// default, read against the stdlib of its version in `environment`.
 ///
 /// The environment only matters for Luau, where `Roblox` selects the
 /// Roblox runtime's stdlib and `Standalone` open-source Luau's. The scope
 /// tree is the same either way.
 #[must_use]
 pub fn analyze<'ast>(
-    block: &'ast Block<'ast>,
+    chunk: &'ast Chunk<'ast>,
     counts: TreeCounts,
-    version: LuaVersion,
     environment: StdlibEnvironment,
 ) -> SemanticAnalysis<'ast> {
-    analyze_with(block, counts, version, environment, &mut ())
+    analyze_with(chunk, counts, environment, &mut ())
 }
 
 /// [`analyze`], showing `sink` each node the walk reaches.
 #[must_use]
 pub fn analyze_with<'ast, Sink>(
-    block: &'ast Block<'ast>,
+    chunk: &'ast Chunk<'ast>,
     counts: TreeCounts,
-    version: LuaVersion,
     environment: StdlibEnvironment,
     sink: &mut Sink,
 ) -> SemanticAnalysis<'ast>
 where
     Sink: NodeSink<'ast>,
 {
-    let (scope_tree, initialized_locals) = build_with_initializers(block, counts, version, sink);
-    let stdlib = library_for(version, environment);
+    let (scope_tree, initialized_locals) = build_with_initializers(chunk, counts, sink);
+    let stdlib = library_for(chunk.version, environment);
     let symbol_shapes = symbol_shapes(&scope_tree, stdlib, &initialized_locals);
     let host_globals = scope_tree
         .names()
@@ -226,7 +224,7 @@ impl<'ast> SemanticAnalysis<'ast> {
 mod tests {
     use luck_allocator::Allocator;
     use luck_ast::{
-        Expression, FunctionBody, GetSpan as _, LastStatement, Name, Statement, TableConstructor,
+        Block, Expression, FunctionBody, GetSpan as _, Name, Statement, TableConstructor,
     };
 
     use super::*;
@@ -240,7 +238,6 @@ mod tests {
         analyze(
             parse(allocator, source, version),
             TreeCounts::default(),
-            version,
             StdlibEnvironment::Standalone,
         )
     }
@@ -362,11 +359,9 @@ return y",
     #[test]
     fn roblox_globals_known_only_in_roblox_environment() {
         let allocator = Allocator::new();
-        let block = parse(&allocator, "print(game, bit32)", LuaVersion::Luau);
-        let standalone =
-            analyze(block, TreeCounts::default(), LuaVersion::Luau, StdlibEnvironment::Standalone);
-        let roblox =
-            analyze(block, TreeCounts::default(), LuaVersion::Luau, StdlibEnvironment::Roblox);
+        let chunk = parse(&allocator, "print(game, bit32)", LuaVersion::Luau);
+        let standalone = analyze(chunk, TreeCounts::default(), StdlibEnvironment::Standalone);
+        let roblox = analyze(chunk, TreeCounts::default(), StdlibEnvironment::Roblox);
         assert!(!standalone.is_known_global("game"));
         assert!(roblox.is_known_global("game"));
         assert!(standalone.is_known_global("bit32"));
@@ -375,10 +370,9 @@ return y",
 
     fn resolve_last_statement_call(source: &str, version: LuaVersion) -> Option<String> {
         let allocator = Allocator::new();
-        let block = parse(&allocator, source, version);
-        let analysis =
-            analyze(block, TreeCounts::default(), version, StdlibEnvironment::Standalone);
-        let Some(Statement::FunctionCall(chain)) = block.stmts.last() else {
+        let chunk = parse(&allocator, source, version);
+        let analysis = analyze(chunk, TreeCounts::default(), StdlibEnvironment::Standalone);
+        let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
             panic!("the last statement must be a call");
         };
         analysis.resolve_callee(chain.last_call()?).map(|callee| callee.name())
@@ -533,9 +527,7 @@ end",
         fn stmt(&mut self, stmt: &'ast Statement<'ast>) {
             self.seen.push(format!("stmt {}", stmt.span().text(self.source)));
         }
-        fn last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
-            self.seen.push(format!("last {}", last.span().text(self.source)));
-        }
+
         fn expr(&mut self, expr: &'ast Expression<'ast>) {
             self.seen.push(format!("expr {}", expr.span().text(self.source)));
         }
@@ -553,19 +545,18 @@ end",
         let allocator = Allocator::new();
         let source = "t.x = f({}, function(a) return a end)
 return t";
-        let block = parse(&allocator, source, LuaVersion::Lua54);
+        let chunk = parse(&allocator, source, LuaVersion::Lua54);
         let mut recorder = Recorder { source, seen: Vec::new() };
         let _analysis = analyze_with(
-            block,
+            chunk,
             TreeCounts::default(),
-            LuaVersion::Lua54,
             StdlibEnvironment::Standalone,
             &mut recorder,
         );
         assert_eq!(
             recorder.seen,
             [
-                "block 1",
+                "block 2",
                 "stmt t.x = f({}, function(a) return a end)",
                 "expr f({}, function(a) return a end)",
                 "chain f({}, function(a) return a end)",
@@ -574,12 +565,12 @@ return t";
                 "table 0",
                 "expr function(a) return a end",
                 "body 1",
-                "block 0",
-                "last return a",
+                "block 1",
+                "stmt return a",
                 "expr a",
                 "target t.x",
                 "expr t",
-                "last return t",
+                "stmt return t",
                 "expr t",
             ]
         );

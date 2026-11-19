@@ -38,7 +38,7 @@ fn first_unreachable_stmt<'ast>(
         .iter()
         .skip_while(|stmt| !matches!(stmt, Statement::Break(_)))
         .skip(1)
-        .filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_) | Statement::Label(_)));
+        .filter(|stmt| !matches!(stmt, Statement::Label(_)));
     code_after_break.clone().next()?;
     let graph = FlowGraph::of_block(block, semantic);
     code_after_break.find(|stmt| !graph.can_run(stmt.span().start))

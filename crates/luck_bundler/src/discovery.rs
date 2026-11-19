@@ -123,11 +123,10 @@ pub(crate) fn parse_module<'ast>(
         exports,
     } = extract_requires(
         allocator,
-        &parsed.block,
+        &parsed.chunk,
         parsed.counts,
         source,
         &file_path,
-        version,
         dynamic_require,
     );
     drop(file_path);
@@ -138,7 +137,7 @@ pub(crate) fn parse_module<'ast>(
             warnings.push(diag);
         }
     }
-    let hot_comments = leading_hot_comments(&parsed.comments, parsed.block.span.start)
+    let hot_comments = leading_hot_comments(&parsed.comments, parsed.chunk.block.span.start)
         .map(|comment| comment.span)
         .collect();
     let shebang = parsed
@@ -150,7 +149,7 @@ pub(crate) fn parse_module<'ast>(
         path,
         relative_path,
         source,
-        block: parsed.block,
+        block: parsed.chunk.block,
         nesting_depth: parsed.nesting_depth,
         dependencies: Vec::new(),
         dynamic_callees,

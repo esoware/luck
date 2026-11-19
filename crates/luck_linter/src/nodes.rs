@@ -5,7 +5,7 @@
 use core::ptr;
 
 use luck_ast::{
-    Block, Call, Expression, FunctionBody, LastStatement, Statement, Suffix, SuffixedExpression,
+    Block, Call, Chunk, Expression, FunctionBody, Statement, Suffix, SuffixedExpression,
     TableConstructor,
 };
 use luck_semantic::NodeSink;
@@ -18,7 +18,6 @@ use crate::uninitialized::UninitializedLocals;
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum NodeKind<'ast> {
     Statement(&'ast Statement<'ast>),
-    LastStatement(&'ast LastStatement<'ast>),
     /// Never an `Expression::TableConstructor`, which is a [`Self::Table`], or
     /// an `Expression::Suffixed`, which is a [`Self::Chain`].
     Expression(&'ast Expression<'ast>),
@@ -55,7 +54,6 @@ impl<'ast> AstNode<'ast> {
                 Some((chain, usize::try_from(index).ok()?, CallPosition::Expression))
             }
             NodeKind::Statement(_)
-            | NodeKind::LastStatement(_)
             | NodeKind::Expression(_)
             | NodeKind::Table(_)
             | NodeKind::Chain(..) => None,
@@ -102,12 +100,11 @@ impl<'ast> Nodes<'ast> {
     }
 }
 
-/// Each statement of `block` with the one after it, ignoring `;`.
+/// Each statement of `block` with the one after it.
 pub(crate) fn adjacent_stmts<'ast>(
     block: &'ast Block<'ast>,
 ) -> impl Iterator<Item = (&'ast Statement<'ast>, &'ast Statement<'ast>)> {
-    let stmts = block.stmts.iter().filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_)));
-    stmts.clone().zip(stmts.skip(1))
+    block.stmts.iter().zip(block.stmts.iter().skip(1))
 }
 
 /// Builds a document's [`Nodes`] as the semantic walk hands it each node.
@@ -120,7 +117,8 @@ pub(crate) struct NodeCollector<'ast> {
 }
 
 impl<'ast> NodeCollector<'ast> {
-    pub(crate) fn new(block: &'ast Block<'ast>) -> Self {
+    pub(crate) fn new(chunk: &'ast Chunk<'ast>) -> Self {
+        let block = &chunk.block;
         Self {
             nodes: Nodes {
                 // Code takes about a node per 16 bytes.
@@ -161,10 +159,6 @@ impl<'ast> NodeSink<'ast> for NodeCollector<'ast> {
             self.push_node(NodeKind::Statement(stmt), NodeType::of_stmt(stmt));
         }
         self.nodes.uninitialized_locals.record(stmt);
-    }
-
-    fn last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
-        self.push_node(NodeKind::LastStatement(last), NodeType::of_last_stmt(last));
     }
 
     fn expr(&mut self, expr: &'ast Expression<'ast>) {
@@ -212,12 +206,11 @@ mod tests {
 
     use super::*;
 
-    fn collect<'ast>(block: &'ast Block<'ast>) -> Nodes<'ast> {
-        let mut collector = NodeCollector::new(block);
+    fn collect<'ast>(chunk: &'ast Chunk<'ast>) -> Nodes<'ast> {
+        let mut collector = NodeCollector::new(chunk);
         let _semantic = luck_semantic::analyze_with(
-            block,
+            chunk,
             TreeCounts::default(),
-            LuaVersion::Lua54,
             StdlibEnvironment::Standalone,
             &mut collector,
         );
@@ -236,7 +229,7 @@ t.x = a",
             LuaVersion::Lua54,
         );
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
-        let nodes = collect(&parse.block);
+        let nodes = collect(&parse.chunk);
         let node_types: Vec<NodeType> =
             nodes.as_slice().iter().map(|node| node.node_type).collect();
         assert_eq!(
@@ -276,8 +269,8 @@ end";
         let allocator = Allocator::new();
         let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
-        let nodes = collect(&parse.block);
-        assert_eq!(nodes.blocks().first().map(|first| first.span), Some(parse.block.span));
+        let nodes = collect(&parse.chunk);
+        assert_eq!(nodes.blocks().first().map(|first| first.span), Some(parse.chunk.block.span));
         // The chunk, the `do` body, the function body, then the `if` and
         // `else` bodies.
         let stmt_counts: Vec<usize> =

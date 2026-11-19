@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Call, Expression, GetSpan as _, LastStatement, Suffix, SuffixedExpression};
+use luck_ast::{Call, Expression, GetSpan as _, Statement, Suffix, SuffixedExpression};
 use luck_semantic::{
     ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction, expand_replace_template,
 };
@@ -206,8 +206,8 @@ fn fit_to_position(
         return None;
     }
     let is_unary = matches!(
-        parse.block.last_stmt.as_ref(),
-        Some(LastStatement::Return(returned))
+        &*parse.chunk.block.stmts,
+        [Statement::Return(returned)]
             if matches!(returned.exprs.first(), Some(Expression::UnaryOp(_)))
     );
     // A unary expression stops at an operator binding looser than it, but

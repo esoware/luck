@@ -35,7 +35,7 @@ fn parsing_comparing_and_validating_fit_the_smallest_stack() {
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.first());
         let other_allocator = Allocator::new();
         let again = luck_parser::parse(&other_allocator, source, version);
-        assert!(again.block == parsed.block, "a reparse equals the first parse");
-        assert!(luck_parser::validate(&parsed.block, version).is_empty(), "the source is valid");
+        assert!(again.chunk.block == parsed.chunk.block, "a reparse equals the first parse");
+        assert!(luck_parser::validate(&parsed.chunk).is_empty(), "the source is valid");
     });
 }

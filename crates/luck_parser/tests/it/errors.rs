@@ -1,7 +1,7 @@
 use core::ops::Range;
 
 use luck_allocator::Allocator;
-use luck_ast::{Expression, FunctionArgs, LastStatement, Statement};
+use luck_ast::{Expression, FunctionArgs, Statement};
 use luck_parser::ParseResult;
 use luck_token::LuaVersion;
 
@@ -36,7 +36,7 @@ local = 5
 local y = 10",
     );
     assert!(!result.errors.is_empty(), "should have errors from first statement");
-    let has_valid_local = result.block.stmts.iter().any(|stmt| {
+    let has_valid_local = result.chunk.block.stmts.iter().any(|stmt| {
         matches!(stmt, Statement::LocalAssignment(local) if {
             local.names.last().is_some_and(|attributed| attributed.name.text == "y")
         })
@@ -69,7 +69,8 @@ fn unexpected_token_becomes_an_error_stmt() {
     let allocator = Allocator::new();
     let result = parse(&allocator, ") local x = 1");
     assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
-    let has_error_node = result.block.stmts.iter().any(|stmt| matches!(stmt, Statement::Error(_)));
+    let has_error_node =
+        result.chunk.block.stmts.iter().any(|stmt| matches!(stmt, Statement::Error(_)));
     assert!(has_error_node, "should have an Error statement node");
 }
 
@@ -122,8 +123,8 @@ local after = 1"
         if message.starts_with("unterminated long") {
             continue;
         }
-        let Some(Statement::LocalAssignment(after)) = result.block.stmts.last() else {
-            panic!("{broken:?}: {:?}", result.block.stmts.last());
+        let Some(Statement::LocalAssignment(after)) = result.chunk.block.stmts.last() else {
+            panic!("{broken:?}: {:?}", result.chunk.block.stmts.last());
         };
         assert_eq!(after.names.first().map(|name| name.name.text.as_str()), Some("after"));
     }
@@ -178,6 +179,29 @@ x() end",
             "x",
         ),
     ]);
+}
+
+/// Lua 5.1 and Luau take one `;` after a statement, a last one included, and
+/// 5.2+ any number but after a `return`, whose own `;` ends its block.
+#[test]
+fn semicolons_follow_each_grammar() {
+    let allocator = Allocator::new();
+    for (version, source, is_valid) in [
+        (LuaVersion::Lua51, "x = 1; y = 2;", true),
+        (LuaVersion::Lua51, "x = 1;;", false),
+        (LuaVersion::Lua51, "do ; end", false),
+        (LuaVersion::Lua51, "while a do break; end", true),
+        (LuaVersion::Lua51, "while a do break;; end", false),
+        (LuaVersion::Luau, "while a do continue; end", true),
+        (LuaVersion::Luau, "while a do continue;; end", false),
+        (LuaVersion::Lua54, "do ;; end x = 1;;", true),
+        (LuaVersion::Lua54, "while a do break;; end", true),
+        (LuaVersion::Lua54, "return;", true),
+        (LuaVersion::Lua54, "return 1;;", false),
+    ] {
+        let result = luck_parser::parse(&allocator, source, version);
+        assert_eq!(result.errors.is_empty(), is_valid, "{version:?} {source}: {:?}", result.errors);
+    }
 }
 
 /// A string cut off at its line is its lexer error alone, and a broken
@@ -282,8 +306,8 @@ local after = 1";
     let errors: Vec<(&str, &str)> =
         result.errors.iter().map(|e| (e.message.as_str(), e.span.text(source))).collect();
     assert_eq!(errors, [("expected function arguments", "local")]);
-    let Some(Statement::Assignment(assignment)) = result.block.stmts.first() else {
-        panic!("{:?}", result.block.stmts);
+    let Some(Statement::Assignment(assignment)) = result.chunk.block.stmts.first() else {
+        panic!("{:?}", result.chunk.block.stmts);
     };
     let Some(Expression::Suffixed(chain)) = assignment.values.first() else {
         panic!("{:?}", assignment.values);
@@ -327,15 +351,12 @@ local a = 1
 return a
 local b = 2",
     );
-    let [Statement::LocalAssignment(_), Statement::DoBlock(wrapped), Statement::LocalAssignment(b)] =
-        &*result.block.stmts
+    let [Statement::LocalAssignment(_), Statement::Return(_), Statement::LocalAssignment(b)] =
+        &*result.chunk.block.stmts
     else {
-        panic!("{:?}", result.block.stmts);
+        panic!("{:?}", result.chunk.block.stmts);
     };
-    assert!(wrapped.block.stmts.is_empty(), "{:?}", wrapped.block.stmts);
-    assert!(matches!(wrapped.block.last_stmt.as_ref(), Some(LastStatement::Return(_))));
     assert_eq!(b.names.first().map(|name| name.name.text.as_str()), Some("b"));
-    assert!(result.block.last_stmt.is_none());
 }
 
 /// An error in one statement doesn't hide one in the next.

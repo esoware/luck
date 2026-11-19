@@ -8,8 +8,8 @@ use core::{iter, slice};
 
 use luck_ast::{
     Assignment, AttributedName, Block, CompoundAssignment, Expression, FunctionAttribute,
-    FunctionName, GenericFor, GetSpan as _, IfStatement, LastStatement, LocalAssignment,
-    LocalFunctionKind, NumericFor, Statement, Type, TypeDeclaration, TypeDeclarationValue,
+    FunctionName, GenericFor, GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind,
+    NumericFor, ReturnStatement, Statement, Type, TypeDeclaration, TypeDeclarationValue,
     unwrap_parentheses,
 };
 
@@ -28,11 +28,9 @@ fn is_bracketed(items: &[Expression<'_>]) -> bool {
 }
 
 /// Whether a block is simple enough to collapse onto one line: a single
-/// statement with no terminator, or a lone terminator (return/break/continue).
+/// statement.
 fn is_simple_block(block: &Block<'_>) -> bool {
-    let stmt_count =
-        block.stmts.iter().filter(|stmt| !matches!(stmt, Statement::EmptyStatement(_))).count();
-    matches!((stmt_count, &block.last_stmt), (0, Some(_)) | (1, None))
+    block.stmts.len() == 1
 }
 
 impl<'ast> Formatter<'ast> {
@@ -95,6 +93,10 @@ impl<'ast> Formatter<'ast> {
             Statement::IfStatement(if_stmt) => self.write_if(if_stmt),
             Statement::NumericFor(numeric_for) => self.write_numeric_for(numeric_for),
             Statement::GenericFor(generic_for) => self.write_generic_for(generic_for),
+            Statement::Return(return_stmt) => self.write_return(return_stmt),
+            Statement::Break(_) => self.token("break"),
+            // Luau
+            Statement::Continue(_) => self.token("continue"),
             // Lua 5.2+
             Statement::Goto(goto) => {
                 self.token("goto");
@@ -140,35 +142,23 @@ impl<'ast> Formatter<'ast> {
             Statement::CompoundAssignment(compound) => self.write_compound_assignment(compound),
             // Luau
             Statement::TypeDeclaration(declaration) => self.write_type_declaration(declaration),
-            // Lua 5.2+: `break` as a mid-block statement.
-            Statement::Break(_) => self.token("break"),
-            // The block loop drops `;`, and a parse-recovery placeholder has
-            // no text to print.
-            Statement::EmptyStatement(_) | Statement::Error(_) => {}
+            // A parse-recovery placeholder has no text to print.
+            Statement::Error(_) => {}
         }
     }
 
-    pub(crate) fn write_last_stmt(&mut self, last_stmt: &LastStatement<'ast>) {
-        match last_stmt {
-            LastStatement::Return(return_stmt) => {
-                let Some(first) = return_stmt.exprs.first() else {
-                    self.token("return");
-                    return;
-                };
-                self.group(|grouped| {
-                    grouped.token("return");
-                    grouped.space();
-                    grouped.write_after_operator(first.span().start, |f| {
-                        f.write_expr_list(&return_stmt.exprs);
-                    });
-                });
-            }
-            LastStatement::Break(_) => self.token("break"),
-            // Luau
-            LastStatement::Continue(_) => self.token("continue"),
-            // Parse-recovery placeholder: nothing to print.
-            LastStatement::Error(_) => {}
-        }
+    fn write_return(&mut self, return_stmt: &ReturnStatement<'ast>) {
+        let Some(first) = return_stmt.exprs.first() else {
+            self.token("return");
+            return;
+        };
+        self.group(|grouped| {
+            grouped.token("return");
+            grouped.space();
+            grouped.write_after_operator(first.span().start, |f| {
+                f.write_expr_list(&return_stmt.exprs);
+            });
+        });
     }
 
     /// The block, then `end` on a line of its own.

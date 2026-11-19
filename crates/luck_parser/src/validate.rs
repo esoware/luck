@@ -2,8 +2,7 @@ mod continue_until;
 mod gotos;
 mod scope;
 
-use luck_ast::Block;
-use luck_token::LuaVersion;
+use luck_ast::Chunk;
 
 pub(crate) use self::scope::check_type_functions;
 use crate::ParseError;
@@ -17,9 +16,10 @@ use crate::ParseError;
 /// Run it only on a clean parse, since a recovered AST produces misleading
 /// follow-on errors.
 #[must_use]
-pub fn validate(block: &Block<'_>, version: LuaVersion) -> Vec<ParseError> {
+pub fn validate(chunk: &Chunk<'_>) -> Vec<ParseError> {
+    let version = chunk.version;
     if version.has_goto() || version.has_read_only_bindings() || version.has_continue() {
-        scope::check(block, version)
+        scope::check(chunk)
     } else {
         Vec::new()
     }

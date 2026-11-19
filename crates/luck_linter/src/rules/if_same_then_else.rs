@@ -31,8 +31,7 @@ impl NodeRule for IfSameThenElse {
         let Some(else_clause) = &if_stmt.else_clause else {
             return;
         };
-        let is_empty = if_stmt.block.stmts.is_empty() && if_stmt.block.last_stmt.is_none();
-        if !is_empty && if_stmt.block.content_eq(&else_clause.block) {
+        if !if_stmt.block.stmts.is_empty() && if_stmt.block.content_eq(&else_clause.block) {
             let finding =
                 Finding::new("`if` and `else` branches have identical bodies", if_stmt.span);
             // An `elseif` keeps the first condition meaningful.

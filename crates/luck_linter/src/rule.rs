@@ -40,7 +40,7 @@ impl<'ast> LintContext<'ast> {
         fixes: FixKind,
     ) -> Self {
         Self {
-            block: &parse.block,
+            block: &parse.chunk.block,
             nodes: analysis.nodes(),
             semantic: analysis.semantic(),
             directives: analysis.directives(),

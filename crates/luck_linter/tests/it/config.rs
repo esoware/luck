@@ -5,7 +5,7 @@ use luck_linter::{
     RestrictedModulePathsOptions, Rule, RuleLevel, RuleSetting, Severity, analyze, lint_analyzed,
     lint_parsed, rule_named, rules,
 };
-use luck_token::LuaVersion;
+use luck_token::{LuaVersion, StdlibEnvironment};
 
 use crate::common::{disable, enable, lint};
 
@@ -40,13 +40,13 @@ fn analyze_defines_the_extra_globals_of_its_config() {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, "return vim", LuaVersion::Lua54);
     let config = LintConfig::default();
-    let without_vim = analyze(&parse, LuaTarget::Lua54, &config);
+    let without_vim = analyze(&parse, StdlibEnvironment::Standalone, &config);
     let flagged = lint_analyzed(&parse, &without_vim, &config, FixKind::empty(), &|| false)
         .expect("nothing cancels it");
     assert!(flagged.iter().any(|diag| diag.rule == "undefined_variable"), "{flagged:?}");
 
     let with_vim = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
-    let analysis = analyze(&parse, LuaTarget::Lua54, &with_vim);
+    let analysis = analyze(&parse, StdlibEnvironment::Standalone, &with_vim);
     assert!(analysis.semantic().is_known_global("vim"));
     let quiet = lint_analyzed(&parse, &analysis, &with_vim, FixKind::empty(), &|| false)
         .expect("nothing cancels it");
@@ -58,7 +58,7 @@ fn lint_analyzed_reports_parse_errors_without_running_rules() {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, "local x =", LuaVersion::Lua54);
     let config = LintConfig::default();
-    let analysis = analyze(&parse, LuaTarget::Lua54, &config);
+    let analysis = analyze(&parse, StdlibEnvironment::Standalone, &config);
     let diags = lint_analyzed(&parse, &analysis, &config, FixKind::empty(), &|| true)
         .expect("a parse error is reported before any rule could be cancelled");
     assert!(!diags.is_empty(), "{diags:?}");
@@ -69,7 +69,12 @@ fn lint_analyzed_reports_parse_errors_without_running_rules() {
 fn lint_parsed_reports_parse_errors_without_running_rules() {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, "local x =", LuaVersion::Lua54);
-    let diags = lint_parsed(&parse, LuaTarget::Lua54, &LintConfig::default(), FixKind::empty());
+    let diags = lint_parsed(
+        &parse,
+        StdlibEnvironment::Standalone,
+        &LintConfig::default(),
+        FixKind::empty(),
+    );
     assert!(!diags.is_empty(), "{diags:?}");
     assert!(diags.iter().all(|diag| diag.rule == "parse_error"), "{diags:?}");
 }

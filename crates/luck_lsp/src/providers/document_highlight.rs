@@ -11,7 +11,7 @@ pub(crate) fn document_highlights(
     position: Position,
 ) -> Vec<DocumentHighlight> {
     let offset = document.offset(position);
-    let Some(node) = find_node_at(&document.parse().block, offset) else {
+    let Some(node) = find_node_at(&document.parse().chunk.block, offset) else {
         return Vec::new();
     };
     let tree = document.tree();

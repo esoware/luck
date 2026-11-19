@@ -1,6 +1,4 @@
-use luck_ast::{
-    Block, Expression, FunctionBody, LastStatement, Statement, SuffixedExpression, TableConstructor,
-};
+use luck_ast::{Block, Expression, FunctionBody, Statement, SuffixedExpression, TableConstructor};
 
 /// Sees each node as [`analyze_with`](crate::analyze_with) or
 /// [`ScopeTree::build_with`](crate::ScopeTree::build_with) reaches it.
@@ -16,7 +14,6 @@ pub trait NodeSink<'ast> {
     /// Before the body's block.
     fn function_body(&mut self, _body: &'ast FunctionBody<'ast>) {}
     fn stmt(&mut self, _stmt: &'ast Statement<'ast>) {}
-    fn last_stmt(&mut self, _last: &'ast LastStatement<'ast>) {}
     /// Every expression, a chain or a table included, before
     /// [`Self::chain`] or [`Self::table`] gets it.
     fn expr(&mut self, _expr: &'ast Expression<'ast>) {}

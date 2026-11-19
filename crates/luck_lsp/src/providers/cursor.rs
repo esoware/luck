@@ -284,11 +284,6 @@ impl<'ast> Visit<'ast> for NodeFinder<'ast> {
         for stmt in statements_touching(block, self.offset) {
             self.visit_stmt(stmt);
         }
-        if let Some(last) = &block.last_stmt
-            && touches(last.span(), self.offset)
-        {
-            self.visit_last_stmt(last);
-        }
     }
 
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
@@ -325,7 +320,7 @@ pub(crate) struct CallSite<'ast> {
 pub(crate) fn find_call_site_at(document: &DocumentState, offset: u32) -> Option<CallSite<'_>> {
     let mut finder =
         CallSiteFinder { offset, source: document.text(), tokens: document.tokens(), result: None };
-    finder.visit_block(&document.parse().block);
+    finder.visit_block(&document.parse().chunk.block);
     finder.result
 }
 
@@ -340,11 +335,6 @@ impl<'document> Visit<'document> for CallSiteFinder<'document> {
     fn visit_block(&mut self, block: &'document Block<'document>) {
         for stmt in statements_touching(block, self.offset) {
             self.visit_stmt(stmt);
-        }
-        if let Some(last) = &block.last_stmt
-            && touches(last.span(), self.offset)
-        {
-            self.visit_last_stmt(last);
         }
     }
 
@@ -408,7 +398,7 @@ pub(crate) fn find_string_arg_at(
     offset: u32,
 ) -> Option<StringArgSite<'_>> {
     let mut finder = StringArgFinder { document, offset, result: None };
-    finder.visit_block(&document.parse().block);
+    finder.visit_block(&document.parse().chunk.block);
     finder.result
 }
 
@@ -422,11 +412,6 @@ impl<'ast> Visit<'ast> for StringArgFinder<'ast> {
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
         for stmt in statements_touching(block, self.offset) {
             self.visit_stmt(stmt);
-        }
-        if let Some(last) = &block.last_stmt
-            && touches(last.span(), self.offset)
-        {
-            self.visit_last_stmt(last);
         }
     }
 
@@ -560,7 +545,7 @@ x = \"b|\"
     #[test]
     fn a_walk_toward_the_cursor_reads_only_the_statements_that_touch_it() {
         let document = document("f()g() h()", LuaTarget::Lua54);
-        let block = &document.parse().block;
+        let block = &document.parse().chunk.block;
         let spans_at = |offset| {
             statements_touching(block, offset).map(|stmt| (stmt.span().start, stmt.span().end))
         };

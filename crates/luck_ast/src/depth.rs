@@ -152,7 +152,7 @@ mod tests {
     use crate::synth::{FunctionSignature, Synth};
 
     fn return_depth<'ast>(synth: Synth<'ast>, expr: Expression<'ast>) -> usize {
-        block_nesting_depth(&synth.block([], Some(synth.return_([expr]))))
+        block_nesting_depth(&synth.block([synth.return_([expr])]))
     }
 
     #[test]
@@ -199,7 +199,7 @@ mod tests {
     fn a_function_adds_its_body_and_its_block() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let function = synth.function_def(&[], synth.block([], None));
+        let function = synth.function_def(&[], synth.block([]));
         assert_eq!(expr_nesting_depth(&function), 2);
     }
 
@@ -289,7 +289,7 @@ mod tests {
         let (deep, deeper) = (groups(10), groups(12));
         let expected = [group_span(&deep, 8), group_span(&deeper, 8)];
         let pair = synth.call(synth.name_expr("f"), [deep, deeper]);
-        let block = synth.block([synth.call_stmt(pair)], None);
+        let block = synth.block([synth.call_stmt(pair)]);
         // The block and the call take two levels, so seven groups of each
         // argument fit under the cap from nine levels below it.
         assert_eq!(spans_past_nesting_cap(&block, MAX_NESTING_DEPTH - 9), expected);
@@ -300,9 +300,9 @@ mod tests {
     fn nested_blocks_count_one_level_each() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let mut block = synth.block([], None);
+        let mut block = synth.block([]);
         for _ in 0..9u32 {
-            block = synth.block([synth.do_block(block)], None);
+            block = synth.block([synth.do_block(block)]);
         }
         assert_eq!(block_nesting_depth(&block), 10);
     }
@@ -329,11 +329,8 @@ mod tests {
         let synth = fixture.synth();
         let nested = synth.array([synth.array([synth.array([])])]);
         let attribute = synth.function_attribute_with_args("deprecated", [nested]);
-        let function = synth.function_def_full(
-            [attribute],
-            FunctionSignature::default(),
-            synth.block([], None),
-        );
+        let function =
+            synth.function_def_full([attribute], FunctionSignature::default(), synth.block([]));
         assert_eq!(expr_nesting_depth(&function), 4);
     }
 }

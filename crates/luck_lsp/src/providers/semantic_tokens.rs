@@ -132,7 +132,7 @@ pub(crate) fn classify(document: &DocumentState) -> Highlights {
     };
     classifier.classify_scope_names();
     classifier.classify_members();
-    classifier.visit_block(&document.parse().block);
+    classifier.visit_block(&document.parse().chunk.block);
     classifier.propagate_to_references();
     classifier.finish()
 }
@@ -546,8 +546,9 @@ impl<'ast> Visit<'ast> for Classifier<'_> {
             | Statement::GlobalStar(_)
             | Statement::Goto(_)
             | Statement::Label(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
             | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Error(_) => {}
         }
         self.walk_stmt(stmt);

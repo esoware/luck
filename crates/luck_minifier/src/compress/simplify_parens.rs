@@ -220,7 +220,7 @@ fn can_unwrap_in_unary(op: UnOp, inner: &Expression<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_ast::{LastStatement, expr_nesting_depth};
+    use luck_ast::{Statement, expr_nesting_depth};
     use luck_token::LuaVersion;
 
     use crate::fixtures::{NO_PASSES, compressed, minify_with};
@@ -290,7 +290,7 @@ mod tests {
                 ("return (a.b).c", "return a.b.c"),
                 ("return (f()).x", "return f().x"),
                 ("return ((x)):m()", "return x:m()"),
-                ("f(); (g)()", "f();g()"),
+                ("f(); (g)()", "f()g()"),
             ],
         );
     }
@@ -324,8 +324,8 @@ mod tests {
     fn a_run_freed_of_its_parens_joins_the_run_around_it() {
         let allocator = Allocator::new();
         let source = "return (a + b) - c, x .. (y .. z), (a * b) + c";
-        let block = compressed(&allocator, source, PARENS);
-        let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
+        let chunk = compressed(&allocator, source, PARENS);
+        let [Statement::Return(return_stmt)] = &*chunk.block.stmts else {
             panic!("expected a return");
         };
         let depths: Vec<usize> = return_stmt.exprs.iter().map(expr_nesting_depth).collect();

@@ -320,8 +320,8 @@ fn format_document(
         ));
     }
     let result = range.map_or_else(
-        || luck_formatter::format_parsed(allocator, &parse, version, options),
-        |byte_range| luck_formatter::format_range(allocator, &parse, version, options, byte_range),
+        || luck_formatter::format_parsed(allocator, &parse, options),
+        |byte_range| luck_formatter::format_range(allocator, &parse, options, byte_range),
     );
     if result.output == source {
         FormatOutcome::Unchanged

@@ -67,7 +67,7 @@ fn check(
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, source, target.lua_version());
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
-    let analysis = driver::analyze(&parse, target, config);
+    let analysis = driver::analyze(&parse, target.stdlib_environment(), config);
     let context = LintContext::new(&parse, &analysis, config, FixKind::all());
     let slot = RULES
         .iter()

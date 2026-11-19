@@ -5,9 +5,7 @@
 //! count as the top level's, which keeps the answer the same once a `do`
 //! block that scopes nothing is unwrapped.
 
-use luck_ast::{
-    Assignment, Block, Expression, FunctionBody, LastStatement, Statement, Type, Var, Visit,
-};
+use luck_ast::{Assignment, Block, Expression, FunctionBody, Statement, Type, Var, Visit};
 use luck_token::LuaVersion;
 
 use crate::binding::{Bindings, global_of, is_env_binding};
@@ -34,9 +32,9 @@ pub(crate) fn renamable_globals(
     let mut reads = Reads::new(name_count);
     let mut is_assign_first = vec![false; name_count];
     let mut assign_first = Vec::new();
-    for item in &top_level {
-        let TopLevel::Stmt(Statement::Assignment(assignment)) = item else {
-            reads.visit_item(item);
+    for &stmt in &top_level {
+        let Statement::Assignment(assignment) = stmt else {
+            reads.visit_stmt(stmt);
             continue;
         };
         reads.read_assignment(assignment);
@@ -58,21 +56,14 @@ pub(crate) fn renamable_globals(
     renamable
 }
 
-/// A top-level statement, or the closing statement of a top-level `do`.
-enum TopLevel<'tree, 'ast> {
-    Stmt(&'tree Statement<'ast>),
-    Last(&'tree LastStatement<'ast>),
-}
-
-fn flatten<'tree, 'ast>(block: &'tree Block<'ast>, top_level: &mut Vec<TopLevel<'tree, 'ast>>) {
+/// The top level's statements, with each top-level `do` block's in its
+/// place.
+fn flatten<'tree, 'ast>(block: &'tree Block<'ast>, top_level: &mut Vec<&'tree Statement<'ast>>) {
     for stmt in &block.stmts {
         if let Statement::DoBlock(do_block) = stmt {
             flatten(&do_block.block, top_level);
-            if let Some(last) = &do_block.block.last_stmt {
-                top_level.push(TopLevel::Last(last));
-            }
         } else {
-            top_level.push(TopLevel::Stmt(stmt));
+            top_level.push(stmt);
         }
     }
 }
@@ -84,7 +75,7 @@ fn target_global(target: &Var<'_>) -> Option<usize> {
 /// The name of each top-level `function g()` nothing at the top level reads
 /// before it, unless an assignment to `g` came first, once each.
 fn function_globals(
-    top_level: &[TopLevel<'_, '_>],
+    top_level: &[&Statement<'_>],
     name_count: usize,
     is_excluded: &impl Fn(usize) -> bool,
 ) -> Vec<usize> {
@@ -92,9 +83,9 @@ fn function_globals(
     let mut is_assigned_first = vec![false; name_count];
     let mut is_taken = vec![false; name_count];
     let mut function_globals = Vec::new();
-    for item in top_level {
-        match item {
-            TopLevel::Stmt(Statement::Assignment(assignment)) => {
+    for &stmt in top_level {
+        match stmt {
+            Statement::Assignment(assignment) => {
                 reads.read_assignment(assignment);
                 for name in assignment.targets.iter().filter_map(target_global) {
                     if !reads.has(name)
@@ -104,13 +95,13 @@ fn function_globals(
                     }
                 }
             }
-            TopLevel::Stmt(Statement::FunctionDecl(function_declaration)) => {
+            Statement::FunctionDecl(function_declaration) => {
                 let defined = match &*function_declaration.name.names {
                     [root] if function_declaration.name.method.is_none() => global_of(root),
                     _ => None,
                 };
                 let Some(name) = defined else {
-                    reads.visit_item(item);
+                    reads.visit_stmt(stmt);
                     continue;
                 };
                 let is_read_first =
@@ -124,7 +115,26 @@ fn function_globals(
                     function_globals.push(name);
                 }
             }
-            TopLevel::Stmt(_) | TopLevel::Last(_) => reads.visit_item(item),
+            Statement::FunctionCall(_)
+            | Statement::DoBlock(_)
+            | Statement::WhileLoop(_)
+            | Statement::RepeatLoop(_)
+            | Statement::IfStatement(_)
+            | Statement::NumericFor(_)
+            | Statement::GenericFor(_)
+            | Statement::LocalFunction(_)
+            | Statement::LocalAssignment(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
+            | Statement::Goto(_)
+            | Statement::Label(_)
+            | Statement::GlobalDeclaration(_)
+            | Statement::GlobalFunction(_)
+            | Statement::GlobalStar(_)
+            | Statement::CompoundAssignment(_)
+            | Statement::TypeDeclaration(_)
+            | Statement::Error(_) => reads.visit_stmt(stmt),
         }
     }
     function_globals
@@ -147,13 +157,6 @@ impl Reads {
     fn read(&mut self, name: &luck_ast::Name<'_>) {
         if let Some(slot) = global_of(name).and_then(|global| self.is_read.get_mut(global)) {
             *slot = true;
-        }
-    }
-
-    fn visit_item(&mut self, item: &TopLevel<'_, '_>) {
-        match item {
-            TopLevel::Stmt(stmt) => self.visit_stmt(stmt),
-            TopLevel::Last(last) => self.visit_last_stmt(last),
         }
     }
 

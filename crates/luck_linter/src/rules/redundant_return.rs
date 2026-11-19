@@ -1,4 +1,4 @@
-use luck_ast::{Block, LastStatement};
+use luck_ast::{Block, Statement};
 
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
@@ -30,7 +30,7 @@ impl WholeRule for RedundantReturn {
 }
 
 fn check_tail(block: &Block<'_>, context: &LintContext<'_>) -> Option<Finding> {
-    let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
+    let Some(Statement::Return(return_stmt)) = block.stmts.last() else {
         return None;
     };
     if !return_stmt.exprs.is_empty() {

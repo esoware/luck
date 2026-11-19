@@ -1,7 +1,7 @@
 use core::ops::Range;
 
 use luck_allocator::Allocator;
-use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::{Block, Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_parser::ParseResult;
 use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 
@@ -59,12 +59,13 @@ fn print_block<'ast>(
 ///
 /// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
 /// which `luck_parser` never builds and would refuse to read back.
-pub fn format_block<'ast>(
+pub fn format_chunk<'ast>(
     allocator: &'ast Allocator,
-    block: &'ast Block<'ast>,
+    chunk: &'ast Chunk<'ast>,
     comments: Comments<'ast>,
     options: &FormatOptions,
 ) -> Result<String, FormatError> {
+    let block = &chunk.block;
     if block_nesting_depth(block) > MAX_NESTING_DEPTH {
         return Err(FormatError {
             span: block.span,
@@ -86,26 +87,25 @@ pub fn format(
     options: &FormatOptions,
 ) -> FormatResult {
     let parse = luck_parser::parse(allocator, source, version);
-    format_parsed(allocator, &parse, version, options)
+    format_parsed(allocator, &parse, options)
 }
 
 /// [`format()`] without the parse, for a host that already holds one.
 ///
-/// `parse` must come from `luck_parser` at `version`. One with errors returns
-/// empty output and those errors. Text the formatter rewrites goes in
-/// `allocator`, which may be the one the tree lives in.
+/// A parse with errors returns empty output and those errors. Text the
+/// formatter rewrites goes in `allocator`, which may be the one the tree
+/// lives in.
 #[must_use]
 pub fn format_parsed<'ast>(
     allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
-    version: LuaVersion,
     options: &FormatOptions,
 ) -> FormatResult {
     if !parse.errors.is_empty() {
         return FormatResult { output: String::new(), errors: parse.errors.clone() };
     }
-    let comments = Comments::from_source(&parse.comments, parse.source, version);
-    let output = print_block(allocator, &parse.block, comments, options);
+    let comments = Comments::from_source(&parse.comments, parse.source, parse.chunk.version);
+    let output = print_block(allocator, &parse.chunk.block, comments, options);
     FormatResult { output, errors: Vec::new() }
 }
 
@@ -120,7 +120,6 @@ pub fn format_parsed<'ast>(
 pub fn format_range<'ast>(
     allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
-    version: LuaVersion,
     options: &FormatOptions,
     range: Range<usize>,
 ) -> FormatResult {
@@ -129,8 +128,8 @@ pub fn format_range<'ast>(
     }
     let source = parse.source;
     let offsets = index_to_offset(range.start)..index_to_offset(range.end);
-    let comments = Comments::from_source(&parse.comments, source, version);
-    let output = format_selection(allocator, &parse.block, comments, options, &offsets)
+    let comments = Comments::from_source(&parse.comments, source, parse.chunk.version);
+    let output = format_selection(allocator, &parse.chunk.block, comments, options, &offsets)
         .map_or_else(
             || source.to_owned(),
             |(span, selected)| {

@@ -11,7 +11,7 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
     if text_kind_at(document, offset) != TextKind::Code {
         return None;
     }
-    let node = find_node_at(&document.parse().block, offset)?;
+    let node = find_node_at(&document.parse().chunk.block, offset)?;
     let path = node.path();
     let semantic = document.semantic();
     let tree = semantic.scope_tree();

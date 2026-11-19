@@ -79,11 +79,11 @@ fn check(source: &str, version: LuaVersion) -> bool {
         return false;
     }
     let counts = parsed.counts;
-    let block = allocator.alloc(parsed.block);
-    let whole = ScopeTree::build(block, counts, version);
+    let chunk = allocator.alloc(parsed.chunk);
+    let whole = ScopeTree::build(chunk, counts);
     let every_name: Vec<&str> = whole.names().map(|(_, name)| name).collect();
 
-    let rebuilt = ScopeTree::build_for_names(block, version, &every_name, &mut ());
+    let rebuilt = ScopeTree::build_for_names(chunk, &every_name, &mut ());
     assert_eq!(
         format!("{:?}{:?}", rebuilt.symbols(), rebuilt.references()),
         format!("{:?}{:?}", whole.symbols(), whole.references()),
@@ -98,7 +98,7 @@ fn check(source: &str, version: LuaVersion) -> bool {
     let [evens, odds] =
         [0, 1].map(|first| every_name.iter().copied().skip(first).step_by(2).collect::<Vec<_>>());
     for names in [&["require", "_G", "package", "module"][..], &evens, &odds, &[]] {
-        let some = ScopeTree::build_for_names(block, version, names, &mut ());
+        let some = ScopeTree::build_for_names(chunk, names, &mut ());
         let is_kept = |name: &str| name == "_ENV" || names.contains(&name);
         assert_eq!(
             facts(&some, is_kept, false),

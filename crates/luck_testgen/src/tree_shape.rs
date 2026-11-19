@@ -1,6 +1,6 @@
 //! A tree printed without what a printer may change.
 //!
-//! That's spans, `;` separators, trailing separators in tables, a union's or
+//! That's spans, trailing separators in tables, a union's or
 //! intersection's leading operator, a string's quotes and escapes, a number's
 //! spelling, whether a lone string or table argument has parentheses, and every
 //! parenthesis that changes nothing. Precedence and associativity are in the
@@ -9,23 +9,23 @@
 //! from reading as a negative literal.
 
 use luck_ast::{
-    Attribute, AttributedName, BinaryLink, BinaryOp, Block, Expression, Field, FunctionArgs,
+    Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, Expression, Field, FunctionArgs,
     FunctionAttribute, FunctionBody, FunctionName, FunctionTypeParam, GenericTypeList,
-    GenericTypeParam, IfStatement, LastStatement, Literal, Name, Parameter, Statement, Suffix,
-    SuffixedExpression, TableConstructor, Type, TypeArgs, TypeDeclaration, TypeDeclarationValue,
-    TypeField, Var, is_multi_value, unwrap_parentheses,
+    GenericTypeParam, IfStatement, Literal, Name, Parameter, Statement, Suffix, SuffixedExpression,
+    TableConstructor, Type, TypeArgs, TypeDeclaration, TypeDeclarationValue, TypeField, Var,
+    is_multi_value, unwrap_parentheses,
 };
 use luck_token::{Associativity, LuaNumber, LuaVersion, UnOp, decode_string, parse_lua_number};
 
-/// `block` as one node per line, its children indented below it.
+/// `chunk` as one node per line, its children indented below it.
 ///
 /// Two trees print the same when a printer may turn one into the other, so
 /// comparing a tree with the parse of its printed output checks that the
 /// printer kept its meaning.
 #[must_use]
-pub fn tree_shape(block: &Block<'_>, version: LuaVersion) -> String {
-    let mut printer = Printer { output: String::new(), depth: 0, version };
-    printer.block(block);
+pub fn tree_shape(chunk: &Chunk<'_>) -> String {
+    let mut printer = Printer { output: String::new(), depth: 0, version: chunk.version };
+    printer.block(&chunk.block);
     printer.output
 }
 
@@ -79,9 +79,6 @@ impl Printer {
         self.open("Block");
         for stmt in &block.stmts {
             self.stmt(stmt);
-        }
-        if let Some(last) = &block.last_stmt {
-            self.last_stmt(last);
         }
         self.close();
     }
@@ -154,8 +151,10 @@ impl Printer {
                 self.exprs("values", &assignment.exprs);
                 self.close();
             }
-            // `;` separates statements, and a printer may add or drop one.
-            Statement::EmptyStatement(_) => {}
+            Statement::Return(return_stmt) => self.exprs("Return", &return_stmt.exprs),
+            Statement::Break(_) => self.line("Break"),
+            // Luau
+            Statement::Continue(_) => self.line("Continue"),
             // Lua 5.2+
             Statement::Goto(goto) => self.line(&format!("Goto {}", goto.name.text)),
             // Lua 5.2+
@@ -179,7 +178,6 @@ impl Printer {
                 self.attribute(star.attribute.as_ref());
                 self.close();
             }
-            Statement::Break(_) => self.line("Break"),
             // Luau
             Statement::CompoundAssignment(assignment) => {
                 self.open(&format!("CompoundAssignment {:?}", assignment.op));
@@ -220,16 +218,6 @@ impl Printer {
             TypeDeclarationValue::TypeFunction(body) => self.function_body(body),
         }
         self.close();
-    }
-
-    fn last_stmt(&mut self, last: &LastStatement<'_>) {
-        match last {
-            LastStatement::Return(stmt) => self.exprs("Return", &stmt.exprs),
-            LastStatement::Break(_) => self.line("Break"),
-            // Luau
-            LastStatement::Continue(_) => self.line("Continue"),
-            LastStatement::Error(_) => self.line("Error"),
-        }
     }
 
     fn exprs(&mut self, label: &str, exprs: &[Expression<'_>]) {
@@ -692,7 +680,7 @@ mod tests {
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source, version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        tree_shape(&parsed.block, version)
+        tree_shape(&parsed.chunk)
     }
 
     #[test]

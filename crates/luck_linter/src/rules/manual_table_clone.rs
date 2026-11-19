@@ -105,13 +105,14 @@ fn manual_copy_span(
         | Statement::FunctionDecl(_)
         | Statement::LocalFunction(_)
         | Statement::LocalAssignment(_)
-        | Statement::EmptyStatement(_)
+        | Statement::Return(_)
         | Statement::Goto(_)
         | Statement::Label(_)
         | Statement::GlobalDeclaration(_)
         | Statement::GlobalFunction(_)
         | Statement::GlobalStar(_)
         | Statement::Break(_)
+        | Statement::Continue(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => false,
@@ -178,9 +179,6 @@ fn copied_value<'ast>(
     key: &Name<'_>,
     tree: &ScopeTree<'_>,
 ) -> Option<&'ast Expression<'ast>> {
-    if body.last_stmt.is_some() {
-        return None;
-    }
     let [Statement::Assignment(assignment)] = &*body.stmts else {
         return None;
     };
