@@ -16,7 +16,7 @@
 //!
 //! let allocator = Allocator::new();
 //! let config = LintConfig::default();
-//! let diags = luck_linter::lint(&allocator, "print(1)", LuaTarget::Lua54, &config, FixKind::empty());
+//! let diags = luck_linter::lint(&allocator, b"print(1)", LuaTarget::Lua54, &config, FixKind::empty());
 //! assert!(diags.is_empty());
 //! ```
 

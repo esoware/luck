@@ -16,7 +16,7 @@ fn numerals_keep_their_spelling() {
 #[test]
 fn decimal_float_lexes_in_every_version() {
     for version in LuaVersion::ALL {
-        let result = lex("3.14e2", version);
+        let result = lex(b"3.14e2", version);
         assert!(result.errors.is_empty(), "3.14e2 should work in {version:?}");
     }
 }
@@ -34,18 +34,18 @@ fn number_adjacent_to_concat_is_malformed() {
     // "malformed number", never `1 .. 2`.
     for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau] {
         for source in ["return 1..2", "return 1.5..2"] {
-            let result = lex(source, version);
+            let result = lex(source.as_bytes(), version);
             assert!(!result.errors.is_empty(), "{source} must be malformed under {version:?}");
         }
     }
     // Only the 5.2+ scanners keep consuming dots past an exponent.
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
-        let result = lex("return 1e5..2", version);
+        let result = lex(b"return 1e5..2", version);
         assert!(!result.errors.is_empty(), "1e5..2 must be malformed under {version:?}");
     }
     // With a space the concat is valid.
     for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau] {
-        let result = lex("return 1 ..2", version);
+        let result = lex(b"return 1 ..2", version);
         assert!(result.errors.is_empty(), "spaced concat lexes: {version:?}");
     }
 }
@@ -54,13 +54,13 @@ fn number_adjacent_to_concat_is_malformed() {
 fn hex_number_adjacent_to_concat_is_malformed_on_lua52_and_later() {
     // The 5.1 and Luau scanners stop at the dot after a radix prefix, so
     // `0xFF..2` is a valid concat there. 5.2+ fails in the hex-float path.
-    assert_eq!(lex("return 0xFF..2", LuaVersion::Lua51).errors, Vec::<Diagnostic>::new());
-    assert_ne!(lex("return 0xFF..2", LuaVersion::Lua54).errors, Vec::<Diagnostic>::new());
+    assert_eq!(lex(b"return 0xFF..2", LuaVersion::Lua51).errors, Vec::<Diagnostic>::new());
+    assert_ne!(lex(b"return 0xFF..2", LuaVersion::Lua54).errors, Vec::<Diagnostic>::new());
 }
 
 #[test]
 fn hex_literal_without_digits_is_error() {
-    let result = lex("0x", LuaVersion::Lua54);
+    let result = lex(b"0x", LuaVersion::Lua54);
     assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("hex literal requires at least one digit"));
 }
@@ -72,11 +72,14 @@ fn digitless_hex_prefix_is_error_in_every_version() {
     // than emitting `0x` as a number and leaving the dots to lex as concat.
     for version in LuaVersion::ALL {
         for source in ["0x", "0x.", "0x..1"] {
-            assert!(!lex(source, version).errors.is_empty(), "{version:?} must reject {source}");
+            assert!(
+                !lex(source.as_bytes(), version).errors.is_empty(),
+                "{version:?} must reject {source}"
+            );
         }
     }
     // Underscores separate digits but aren't digits themselves.
-    assert_ne!(lex("0x_", LuaVersion::Luau).errors, Vec::<Diagnostic>::new());
+    assert_ne!(lex(b"0x_", LuaVersion::Luau).errors, Vec::<Diagnostic>::new());
 }
 
 #[test]
@@ -95,7 +98,7 @@ fn hex_floats_lex_in_lua52_plus() {
 #[test]
 fn hex_float_is_error_in_lua51_and_luau() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-        let result = lex("0x1.Fp10", version);
+        let result = lex(b"0x1.Fp10", version);
         assert!(!result.errors.is_empty(), "hex float should error in {version:?}");
     }
 }
@@ -107,13 +110,13 @@ fn hex_float_exponent_is_optional() {
             assert_eq!(tokens_in(source, version), [(TokenKind::Number, source)], "{version:?}");
         }
         for source in ["0x.", "0xp2", "0x1.p", "0x.1p+", "0x1..2"] {
-            let result = lex(source, version);
+            let result = lex(source.as_bytes(), version);
             assert!(!result.errors.is_empty(), "{version:?} {source}");
         }
     }
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         for source in ["0x.1", "0X0.41", "0xA.8"] {
-            assert!(!lex(source, version).errors.is_empty(), "{version:?} {source}");
+            assert!(!lex(source.as_bytes(), version).errors.is_empty(), "{version:?} {source}");
         }
     }
 }
@@ -124,7 +127,10 @@ fn hex_numeral_touching_a_letter_is_error_on_strict_versions() {
     // `0xFF.f` followed by the name `oo`.
     for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
         for source in ["0xFF.foo", "0x1.5g", "0x1.5p2x", "0x1_2"] {
-            assert!(!lex(source, version).errors.is_empty(), "{version:?} must reject {source}");
+            assert!(
+                !lex(source.as_bytes(), version).errors.is_empty(),
+                "{version:?} must reject {source}"
+            );
         }
     }
     // 5.2 and 5.3 have no touching-a-letter check, so the numeral just ends.
@@ -143,7 +149,7 @@ fn hex_numeral_touching_a_letter_is_error_on_strict_versions() {
         }
     }
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-        assert!(!lex("0xFFz", version).errors.is_empty(), "{version:?} must reject 0xFFz");
+        assert!(!lex(b"0xFFz", version).errors.is_empty(), "{version:?} must reject 0xFFz");
     }
 }
 
@@ -164,7 +170,7 @@ fn binary_literal_lexes_only_in_luau() {
 
 #[test]
 fn binary_literal_without_digits_is_error() {
-    let result = lex("0b", LuaVersion::Luau);
+    let result = lex(b"0b", LuaVersion::Luau);
     assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("binary literal requires at least one digit"));
 }
@@ -182,7 +188,10 @@ fn underscore_separators_lex_only_in_luau() {
     // Real Luau strips underscores anywhere before conversion, so
     // prefix-adjacent, doubled, and trailing underscores all lex.
     for source in ["0x_FF", "0b_0101_0101", "100_", "1__2", "0xFF_"] {
-        assert!(lex(source, LuaVersion::Luau).errors.is_empty(), "{source} must lex under Luau");
+        assert!(
+            lex(source.as_bytes(), LuaVersion::Luau).errors.is_empty(),
+            "{source} must lex under Luau"
+        );
     }
 
     // 5.1, 5.4, and 5.5 read a touching `_` as part of a malformed numeral.
@@ -220,12 +229,15 @@ fn integer_suffix_lexes_only_on_luau_integers_within_64_bits() {
         "0x10000000000000000i",
         "0b10000000000000000000000000000000000000000000000000000000000000000i",
     ] {
-        assert!(!lex(source, LuaVersion::Luau).errors.is_empty(), "{source} must overflow");
+        assert!(
+            !lex(source.as_bytes(), LuaVersion::Luau).errors.is_empty(),
+            "{source} must overflow"
+        );
     }
 
     for source in ["2.5i", "1e5i", "1E5i", "1.i"] {
         assert!(
-            !lex(source, LuaVersion::Luau).errors.is_empty(),
+            !lex(source.as_bytes(), LuaVersion::Luau).errors.is_empty(),
             "{source} must be a malformed integer"
         );
     }
@@ -240,7 +252,7 @@ fn integer_suffix_lexes_only_on_luau_integers_within_64_bits() {
 }
 
 fn assert_malformed_number(source: &str, version: LuaVersion) {
-    let result = lex(source, version);
+    let result = lex(source.as_bytes(), version);
     assert!(
         result.errors.iter().any(|e| e.message.starts_with("malformed number")),
         "{source} under {version:?}: {:?}",
@@ -290,7 +302,7 @@ fn decimal_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
 
 #[test]
 fn malformed_decimal_numeral_error_spans_the_numeral_and_the_letter() {
-    let result = lex("x = 12ab", LuaVersion::Lua54);
+    let result = lex(b"x = 12ab", LuaVersion::Lua54);
     assert_eq!(result.errors[0].span, Some(Span::new(4, 7)));
 }
 
@@ -319,13 +331,13 @@ fn integer_range_normalization_preserves_boundaries_and_spans() {
         for spelling in [digits, separated.as_str()] {
             let literal = format!("{radix}{spelling}i");
             let source = format!("  {literal}");
-            let result = lex(&source, LuaVersion::Luau);
+            let result = lex(source.as_bytes(), LuaVersion::Luau);
             assert_eq!(result.errors.is_empty(), is_valid, "{source}: {:?}", result.errors);
             let span = Span::from_indices(2, source.len());
             if is_valid {
                 let token = result.tokens[0];
                 assert_eq!(
-                    (token.kind, token.text(&source)),
+                    (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap()),
                     (TokenKind::Integer, literal.as_str())
                 );
                 assert_eq!(result.tokens[0].span, span);
@@ -341,7 +353,7 @@ fn integer_range_normalization_preserves_boundaries_and_spans() {
 #[test]
 fn decimal_exponent_directly_before_concat_lexes_on_lua51_and_luau() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-        let result = lex("return 1e5..2", version);
+        let result = lex(b"return 1e5..2", version);
         assert_eq!(
             result.errors,
             Vec::<Diagnostic>::new(),
@@ -353,7 +365,7 @@ fn decimal_exponent_directly_before_concat_lexes_on_lua51_and_luau() {
 #[test]
 fn luau_hex_and_binary_numerals_directly_before_concat_lex() {
     for source in ["return 0xFF..2", "return 0b1..2"] {
-        let result = lex(source, LuaVersion::Luau);
+        let result = lex(source.as_bytes(), LuaVersion::Luau);
         assert_eq!(
             result.errors,
             Vec::<Diagnostic>::new(),
@@ -366,7 +378,7 @@ fn luau_hex_and_binary_numerals_directly_before_concat_lex() {
 fn hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let source = "x=0x1g=2";
-        let result = lex(source, version);
+        let result = lex(source.as_bytes(), version);
         assert_eq!(
             result.errors,
             Vec::<Diagnostic>::new(),
@@ -376,7 +388,10 @@ fn hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
             panic!("{:?}", result.tokens);
         };
         assert_eq!(
-            [(number.kind, number.text(source)), (name.kind, name.text(source))],
+            [
+                (number.kind, str::from_utf8(number.text(source.as_bytes())).unwrap()),
+                (name.kind, str::from_utf8(name.text(source.as_bytes())).unwrap())
+            ],
             [(TokenKind::Number, "0x1"), (TokenKind::Identifier, "g")]
         );
     }
@@ -385,7 +400,7 @@ fn hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
 #[test]
 fn dot_zero_x_is_malformed_on_lua52_and_lua53() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
-        let result = lex("x=.0x1=2", version);
+        let result = lex(b"x=.0x1=2", version);
         assert!(
             !result.errors.is_empty(),
             "`.0x1` should be a malformed number under {version:?}, not `.0` and `x1`: {:?}",
@@ -396,7 +411,7 @@ fn dot_zero_x_is_malformed_on_lua52_and_lua53() {
 
 #[test]
 fn luau_binary_numeral_touching_a_letter_is_malformed() {
-    let result = lex("x=0b1y=2", LuaVersion::Luau);
+    let result = lex(b"x=0b1y=2", LuaVersion::Luau);
     assert!(
         !result.errors.is_empty(),
         "`0b1y` should be a malformed number in Luau, not `0b1` and `y`: {:?}",
@@ -406,7 +421,7 @@ fn luau_binary_numeral_touching_a_letter_is_malformed() {
 
 #[test]
 fn luau_binary_literal_of_only_underscores_is_error() {
-    let result = lex("return 0b_", LuaVersion::Luau);
+    let result = lex(b"return 0b_", LuaVersion::Luau);
     assert!(
         !result.errors.is_empty(),
         "`0b_` has no digits, so it should be a malformed number: {:?}",
@@ -417,7 +432,7 @@ fn luau_binary_literal_of_only_underscores_is_error() {
 #[test]
 fn luau_exponent_of_only_underscores_is_error() {
     for source in ["return 1e_", "return 1e+_"] {
-        let result = lex(source, LuaVersion::Luau);
+        let result = lex(source.as_bytes(), LuaVersion::Luau);
         assert!(
             !result.errors.is_empty(),
             "`{source}` has no exponent digits, so it should be a malformed number: {:?}",
@@ -438,7 +453,7 @@ fn luau_underscore_after_integer_suffix_lexes() {
 #[test]
 fn luau_underscore_inside_radix_prefix_lexes() {
     for source in ["return 0_x1", "return 0_b1"] {
-        let result = lex(source, LuaVersion::Luau);
+        let result = lex(source.as_bytes(), LuaVersion::Luau);
         assert_eq!(
             result.errors,
             Vec::<Diagnostic>::new(),

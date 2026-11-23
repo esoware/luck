@@ -25,7 +25,7 @@ const MAX_RESERVED_TOKENS: usize = 1 << 20;
 /// A source over 4 GiB yields only the error [`Lexer::new`] reports, with no
 /// tokens.
 #[must_use]
-pub fn lex(source: &str, version: LuaVersion) -> LexResult {
+pub fn lex(source: &[u8], version: LuaVersion) -> LexResult {
     let mut lexer = match Lexer::new(source, version) {
         Ok(lexer) => lexer,
         Err(error) => return LexResult { errors: vec![error], ..LexResult::default() },
@@ -70,7 +70,7 @@ impl<'source> Lexer<'source> {
     ///
     /// Returns an E008 for a source over 4 GiB, which `u32` spans can't
     /// address.
-    pub fn new(source: &'source str, version: LuaVersion) -> Result<Self, Diagnostic> {
+    pub fn new(source: &'source [u8], version: LuaVersion) -> Result<Self, Diagnostic> {
         if u32::try_from(source.len()).is_err() {
             return Err(Diagnostic::e008(
                 Span::new(0, 0),
@@ -82,7 +82,7 @@ impl<'source> Lexer<'source> {
         }
 
         let source_end = if version.has_nul_source_end() {
-            memchr::memchr(0, source.as_bytes()).unwrap_or(source.len())
+            memchr::memchr(0, source).unwrap_or(source.len())
         } else {
             source.len()
         };
@@ -471,7 +471,10 @@ impl<'source> Lexer<'source> {
 
     #[cold]
     fn reject_unexpected_character(&mut self, start: usize, byte: u8) {
-        let unexpected = self.cursor.eat_rest_of_char(start).unwrap_or_else(|| char::from(byte));
-        self.reject(start, format!("unexpected character `{unexpected}`"));
+        let message = self.cursor.eat_rest_of_char(start).map_or_else(
+            || format!("unexpected byte 0x{byte:02X}"),
+            |unexpected| format!("unexpected character `{unexpected}`"),
+        );
+        self.reject(start, message);
     }
 }

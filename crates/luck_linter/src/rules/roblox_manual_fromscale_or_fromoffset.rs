@@ -50,15 +50,22 @@ impl NodeRule for RobloxManualFromScaleOrFromOffset {
         } else {
             return;
         };
-        let first_text = first_arg.span().text(context.source);
-        let second_text = second_arg.span().text(context.source);
-        let replacement = format!("UDim2.{constructor}({first_text}, {second_text})");
+        let replacement = [
+            b"UDim2.",
+            constructor.as_bytes(),
+            b"(",
+            first_arg.span().text(context.source),
+            b", ",
+            second_arg.span().text(context.source),
+            b")",
+        ]
+        .concat();
         findings.push(
             Finding::new(
                 format!("this `UDim2.new` can be written as `UDim2.{constructor}`"),
                 call.span(),
             )
-            .with_help(format!("use `{replacement}`"))
+            .with_help(format!("use `{}`", String::from_utf8_lossy(&replacement)))
             .with_fix(context, FixKind::Fix, |fixer| {
                 fixer.replace(
                     format!("replace with `UDim2.{constructor}`"),

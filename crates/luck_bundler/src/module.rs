@@ -33,7 +33,8 @@ pub struct ModuleInfo<'ast> {
     /// It's the only path the bundle may carry, in `-- module` comments and
     /// in the loader data 5.2+ chunks receive.
     pub relative_path: String,
-    pub source: &'ast str,
+    /// Bytes, as Lua reads them, which the bundle copies as written.
+    pub source: &'ast [u8],
     pub block: Block<'ast>,
     /// `block`'s depth as its parse counted it, never below what
     /// [`luck_ast::block_nesting_depth`] finds.

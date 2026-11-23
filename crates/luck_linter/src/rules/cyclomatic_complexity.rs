@@ -52,7 +52,7 @@ fn check_function(function: FunctionNode<'_>, context: &LintContext<'_>) -> Opti
         // Slice the name from source so `mod.f` and `a.b:c` appear whole.
         let label = function.name_span.map_or_else(
             || "(anonymous)".to_owned(),
-            |name_span| format!("`{}`", name_span.text(context.source)),
+            |name_span| format!("`{}`", String::from_utf8_lossy(name_span.text(context.source))),
         );
         Finding::new(
             format!(

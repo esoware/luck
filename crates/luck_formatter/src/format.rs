@@ -4,7 +4,7 @@ use luck_allocator::Allocator;
 use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_diagnostics::Diagnostic;
 use luck_parser::{Groupings, ParseResult};
-use luck_token::{LuaVersion, index_to_offset, offset_to_index};
+use luck_token::{LuaVersion, index_to_offset, is_lua_whitespace, offset_to_index};
 
 use crate::comments::Comments;
 use crate::format_block::{first_item_start, format_selection};
@@ -13,7 +13,8 @@ use crate::{FormatOptions, LineEndings};
 
 #[derive(Debug, Clone)]
 pub struct FormatResult {
-    pub output: String,
+    /// Bytes, as the source is, which are UTF-8 when the source is.
+    pub output: Vec<u8>,
     /// The parse's errors, each an E008. Formatting itself reports none.
     pub errors: Vec<Diagnostic>,
 }
@@ -24,7 +25,7 @@ fn print_chunk<'ast>(
     comments: Comments<'ast>,
     groupings: Option<&'ast Groupings>,
     options: &FormatOptions,
-) -> String {
+) -> Vec<u8> {
     let mut f = Formatter::new(allocator, chunk.version, *options, comments);
     if let Some(parse_groupings) = groupings {
         f = f.with_groupings(parse_groupings);
@@ -38,13 +39,16 @@ fn print_chunk<'ast>(
     // those must not open a line before the trailing comment flush.
     let has_stmts = first_item_start(&chunk.block).is_some();
     f.write_remaining_comments(has_stmts);
-    let mut output = f.print("");
+    let mut output = f.print(b"");
 
-    let trimmed = output.trim_end();
-    output.truncate(trimmed.len());
-    output.push_str(match options.line_endings {
-        LineEndings::Unix => "\n",
-        LineEndings::Windows => "\r\n",
+    let trimmed_length = output
+        .iter()
+        .rposition(|&b| !is_lua_whitespace(b))
+        .map_or(0, |last| last.saturating_add(1));
+    output.truncate(trimmed_length);
+    output.extend_from_slice(match options.line_endings {
+        LineEndings::Unix => b"\n",
+        LineEndings::Windows => b"\r\n",
     });
     output
 }
@@ -66,7 +70,7 @@ pub fn format_chunk<'ast>(
     chunk: &'ast Chunk<'ast>,
     comments: Comments<'ast>,
     options: &FormatOptions,
-) -> Result<String, Diagnostic> {
+) -> Result<Vec<u8>, Diagnostic> {
     if block_nesting_depth(&chunk.block) > MAX_NESTING_DEPTH {
         return Err(Diagnostic::e008(
             chunk.block.span,
@@ -78,10 +82,13 @@ pub fn format_chunk<'ast>(
 
 /// Parses `source` into `allocator` and formats it. Input that fails to parse
 /// returns empty output with its parse errors in `FormatResult::errors`.
+///
+/// `source` is bytes, as Lua reads it, and the formatter copies a comment or
+/// a string that isn't UTF-8 as written.
 #[must_use]
 pub fn format(
     allocator: &Allocator,
-    source: &str,
+    source: &[u8],
     version: LuaVersion,
     options: &FormatOptions,
 ) -> FormatResult {
@@ -101,7 +108,7 @@ pub fn format_parsed<'ast>(
     options: &FormatOptions,
 ) -> FormatResult {
     if !parse.errors.is_empty() {
-        return FormatResult { output: String::new(), errors: parse.errors.clone() };
+        return FormatResult { output: Vec::new(), errors: parse.errors.clone() };
     }
     let comments = Comments::from_source(&parse.comments, parse.source, parse.chunk.version);
     let output = print_chunk(allocator, &parse.chunk, comments, Some(&parse.groupings), options);
@@ -123,7 +130,7 @@ pub fn format_range<'ast>(
     range: Range<usize>,
 ) -> FormatResult {
     if !parse.errors.is_empty() {
-        return FormatResult { output: String::new(), errors: parse.errors.clone() };
+        return FormatResult { output: Vec::new(), errors: parse.errors.clone() };
     }
     let source = parse.source;
     let offsets = index_to_offset(range.start)..index_to_offset(range.end);
@@ -133,11 +140,7 @@ pub fn format_range<'ast>(
         |(span, selected)| {
             let before = source.get(..offset_to_index(span.start)).unwrap_or_default();
             let after = source.get(offset_to_index(span.end)..).unwrap_or_default();
-            let mut spliced = String::with_capacity(source.len());
-            spliced.push_str(before);
-            spliced.push_str(&selected);
-            spliced.push_str(after);
-            spliced
+            [before, &selected, after].concat()
         },
     );
     FormatResult { output, errors: Vec::new() }

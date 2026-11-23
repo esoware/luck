@@ -9,7 +9,7 @@ use luck_token::LuaVersion;
 /// reports them.
 fn check(source: &str, version: LuaVersion) -> Vec<Diagnostic> {
     let allocator = Allocator::new();
-    let result = luck_parser::parse(&allocator, source, version);
+    let result = luck_parser::parse(&allocator, source.as_bytes(), version);
     if result.errors.is_empty() { luck_parser::validate(&result.chunk) } else { result.errors }
 }
 

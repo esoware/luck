@@ -34,7 +34,7 @@ fn fixtures_outside_errors_parse_cleanly() {
     for path in &files {
         let relative = path.strip_prefix(&root).expect("fixture is under the root");
         let source = fs::read_to_string(path).expect("failed to read fixture file");
-        let result = parse(&allocator, &source, detect_version(relative));
+        let result = parse(&allocator, source.as_bytes(), detect_version(relative));
 
         if is_error_fixture(relative) {
             // Fixtures under `errors/` may or may not parse.
@@ -74,7 +74,12 @@ fn every_fixture_parses_with_the_tokens_it_lexes_to() {
         let source = fs::read_to_string(path).expect("failed to read fixture file");
         let version = detect_version(relative);
         let allocator = Allocator::new();
-        let (_, tokens) = parse_with_tokens(&allocator, &source, version);
-        assert_eq!(tokens, luck_lexer::lex(&source, version).tokens, "{}", relative.display());
+        let (_, tokens) = parse_with_tokens(&allocator, source.as_bytes(), version);
+        assert_eq!(
+            tokens,
+            luck_lexer::lex(source.as_bytes(), version).tokens,
+            "{}",
+            relative.display()
+        );
     }
 }

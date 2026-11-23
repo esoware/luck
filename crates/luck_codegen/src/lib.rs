@@ -10,7 +10,9 @@
 //! expression goes, the fewest that read back as the same tree. It spells
 //! each literal the shortest way its value reads back in the chunk's
 //! version, or as the tree spells it when that's no longer, unchecked. It
-//! never reads source text, so a tree built in code prints too.
+//! never reads source text, so a tree built in code prints too. It writes
+//! bytes, as a source is, which are UTF-8 unless a literal as the tree
+//! spells it isn't.
 //!
 //! It recurses once per level of nesting, so it takes a tree within
 //! `luck_ast::MAX_NESTING_DEPTH`, as `luck_parser` builds. Measure a tree
@@ -29,7 +31,7 @@
 //! let sum = synth.binary_op(synth.name_expr("a"), BinOp::Sub, synth.number_f64(0.5));
 //! let block = synth.block([synth.local(&["x"], [sum]), synth.return_([synth.name_expr("x")])]);
 //! let chunk = Chunk::new(LuaVersion::Lua54, block);
-//! assert_eq!(luck_codegen::compact(&chunk), "local x=a-.5 return x");
+//! assert_eq!(luck_codegen::compact(&chunk), b"local x=a-.5 return x");
 //! ```
 
 #![cfg_attr(

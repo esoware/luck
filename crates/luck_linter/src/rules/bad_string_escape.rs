@@ -30,11 +30,14 @@ impl WholeRule for BadStringEscape {
              `\\ddd`{extended_escapes}"
         );
         let findings = context.lenient_escapes.iter().map(|&span| {
-            let escaped = span.text(context.source).chars().nth(1).unwrap_or('?');
-            let display = if escaped.is_ascii_control() || escaped == ' ' {
-                format!("\\x{:02x}", u32::from(escaped))
-            } else {
-                format!("\\{escaped}")
+            let escaped = span.text(context.source).get(1..).unwrap_or_default();
+            // The escape takes one byte, and its span the whole character.
+            let display = match str::from_utf8(escaped).ok().and_then(|text| text.chars().next()) {
+                Some(character) if character.is_ascii_control() || character == ' ' => {
+                    format!("\\x{:02x}", u32::from(character))
+                }
+                Some(character) => format!("\\{character}"),
+                None => format!("\\x{:02x}", escaped.first().copied().unwrap_or_default()),
             };
             Finding::new(format!("invalid string escape `{display}`"), span).with_help(help.clone())
         });
@@ -128,8 +131,9 @@ local x = 1
 local x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e
 ";
         let diags = run(source, LuaVersion::Lua51);
-        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span().text(source)).collect();
-        assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");
+        let flagged: Vec<&[u8]> =
+            diags.iter().map(|diag| diag.span().text(source.as_bytes())).collect();
+        assert_eq!(flagged, [b"\\q", b"\\w"], "{diags:?}");
         assert_eq!(offset_to_index(diags[0].span().start), source.find("= \"").unwrap() + 3);
     }
 
@@ -157,16 +161,18 @@ local x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e
     fn flags_unknown_escapes_in_interpolated_string_segments() {
         let source = "local x = `a\\q{1}b\\w`";
         let diags = run(source, LuaVersion::Luau);
-        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span().text(source)).collect();
-        assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");
+        let flagged: Vec<&[u8]> =
+            diags.iter().map(|diag| diag.span().text(source.as_bytes())).collect();
+        assert_eq!(flagged, [b"\\q", b"\\w"], "{diags:?}");
     }
 
     #[test]
     fn flags_unknown_escapes_in_a_backtick_string_without_holes() {
         let source = "local x = `a\\qb\\{c}\\w`";
         let diags = run(source, LuaVersion::Luau);
-        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span().text(source)).collect();
-        assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");
+        let flagged: Vec<&[u8]> =
+            diags.iter().map(|diag| diag.span().text(source.as_bytes())).collect();
+        assert_eq!(flagged, [b"\\q", b"\\w"], "{diags:?}");
     }
 
     #[test]
@@ -187,8 +193,8 @@ local x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e
         let diags = run(source, LuaVersion::Lua51);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(
-            diags[0].span().text(source),
-            "\\\u{e9}",
+            diags[0].span().text(source.as_bytes()),
+            "\\\u{e9}".as_bytes(),
             "the span should cover the whole character: {diags:?}"
         );
     }

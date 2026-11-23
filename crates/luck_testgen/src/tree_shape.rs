@@ -662,7 +662,7 @@ mod tests {
 
     fn shape(source: &str, version: LuaVersion) -> String {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source, version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         tree_shape(&parsed.chunk)
     }

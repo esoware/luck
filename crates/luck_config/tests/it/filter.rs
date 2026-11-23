@@ -32,7 +32,7 @@ fn a_bad_glob_is_an_error_on_the_glob() {
     let (_, diag) = load_error(&directory.path().join("luck.json"));
     assert_eq!(diag.code, "E014");
     assert!(diag.message.contains("invalid glob pattern `src/{a,b`"), "{diag:?}");
-    assert_eq!(diag.span.map(|span| span.text(text)), Some(r#""src/{a,b""#));
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""src/{a,b""#[..]));
 }
 
 #[test]

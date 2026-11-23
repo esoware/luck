@@ -70,7 +70,7 @@ impl Shape {
 /// where a line break would change what the source means, before a call's `(`
 /// in Lua 5.1 and Luau, which reads it as a new statement.
 fn with_a_comment_in_every_gap(source: &str, version: LuaVersion, shape: Shape) -> String {
-    let lexed = luck_lexer::lex(source, version);
+    let lexed = luck_lexer::lex(source.as_bytes(), version);
     let mut commented = String::new();
     let mut copied = 0;
     for (index, pair) in lexed.tokens.windows(2).enumerate() {
@@ -85,11 +85,14 @@ fn with_a_comment_in_every_gap(source: &str, version: LuaVersion, shape: Shape) 
         {
             continue;
         }
-        commented.push_str(Span::new(copied, token.span.end).text(source));
+        commented.push_str(
+            str::from_utf8(Span::new(copied, token.span.end).text(source.as_bytes())).unwrap(),
+        );
         commented.push_str(&shape.text(index));
         copied = token.span.end;
     }
-    commented.push_str(Span::new(copied, index_to_offset(source.len())).text(source));
+    let rest = Span::new(copied, index_to_offset(source.len())).text(source.as_bytes());
+    commented.push_str(str::from_utf8(rest).unwrap());
     commented
 }
 
@@ -98,7 +101,10 @@ fn comment_texts(parse: &ParseResult<'_>) -> Vec<String> {
     let mut texts: Vec<String> = parse
         .comments
         .iter()
-        .map(|comment| comment.span.text(parse.source).replace("\r\n", "\n").trim_end().to_owned())
+        .map(|comment| {
+            let text = String::from_utf8_lossy(comment.span.text(parse.source));
+            text.replace("\r\n", "\n").trim_end().to_owned()
+        })
         .collect();
     texts.sort_unstable();
     texts
@@ -137,11 +143,11 @@ fn option_sets() -> [FormatOptions; 3] {
 
 fn assert_comments_keep_the_tree(label: &str, source: &str, version: LuaVersion) {
     let allocator = Allocator::new();
-    let original = luck_parser::parse(&allocator, source, version);
+    let original = luck_parser::parse(&allocator, source.as_bytes(), version);
     let expected_shape = tree_shape(&original.chunk);
     for shape in Shape::ALL {
         let commented = with_a_comment_in_every_gap(source, version, shape);
-        let commented_parse = luck_parser::parse(&allocator, &commented, version);
+        let commented_parse = luck_parser::parse(&allocator, commented.as_bytes(), version);
         assert!(
             commented_parse.errors.is_empty(),
             "{label}, {shape:?}: the commented source parses: {:?}\n{commented}",
@@ -150,14 +156,19 @@ fn assert_comments_keep_the_tree(label: &str, source: &str, version: LuaVersion)
         let written = comment_texts(&commented_parse);
         for (set, options) in option_sets().iter().enumerate() {
             let case = format!("{label}, {shape:?}, option set {set}");
-            let output = format(&allocator, &commented, version, options).output;
-            let again = format(&allocator, &output, version, options).output;
+            let output = String::from_utf8(
+                format(&allocator, commented.as_bytes(), version, options).output,
+            )
+            .unwrap();
+            let again =
+                String::from_utf8(format(&allocator, output.as_bytes(), version, options).output)
+                    .unwrap();
             assert!(
                 again == output,
                 "{case}: not idempotent:\n{}",
                 first_difference(&output, &again)
             );
-            let formatted = luck_parser::parse(&allocator, &output, version);
+            let formatted = luck_parser::parse(&allocator, output.as_bytes(), version);
             assert!(formatted.errors.is_empty(), "{case}: {:?}\n{output}", formatted.errors);
             assert_eq!(
                 tree_shape(&formatted.chunk),

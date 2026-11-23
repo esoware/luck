@@ -34,14 +34,15 @@ pub(crate) fn fix_and_reparse(source: &str, diags: &[Message], version: LuaVersi
     assert!(diags.iter().all(|diag| diag.fix.is_some()), "{diags:?}");
     let fixed = applied(source, diags);
     let allocator = Allocator::new();
-    let reparse = luck_parser::parse(&allocator, &fixed, version);
+    let reparse = luck_parser::parse(&allocator, fixed.as_bytes(), version);
     assert!(reparse.errors.is_empty(), "reparse: {:?}", reparse.errors);
     fixed
 }
 
 /// `source` after one round of the messages' fixes, whatever their kind.
 pub(crate) fn applied(source: &str, diags: &[Message]) -> String {
-    fix::apply(source, diags, FixKind::all()).unwrap_or_else(|| source.to_owned())
+    fix::apply(source.as_bytes(), diags, FixKind::all())
+        .map_or_else(|| source.to_owned(), |fixed| String::from_utf8(fixed).unwrap())
 }
 
 const fn standalone(version: LuaVersion) -> LuaTarget {
@@ -57,7 +58,7 @@ const fn standalone(version: LuaVersion) -> LuaTarget {
 
 fn check(rule: &dyn Rule, source: &str, target: LuaTarget, config: &LintConfig) -> Vec<Message> {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse(&allocator, source, target.lua_version());
+    let parse = luck_parser::parse(&allocator, source.as_bytes(), target.lua_version());
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
     let analysis = driver::analyze(&parse, target.stdlib_environment(), config);
     let context = LintContext::new(&parse, &analysis, config, FixKind::all());
@@ -90,7 +91,11 @@ fn check(rule: &dyn Rule, source: &str, target: LuaTarget, config: &LintConfig) 
 
 /// The text each of `message`'s labels points at in `source`, in order.
 pub(crate) fn labeled<'source>(message: &Message, source: &'source str) -> Vec<&'source str> {
-    message.labels.iter().map(|label| label.span.text(source)).collect()
+    message
+        .labels
+        .iter()
+        .map(|label| str::from_utf8(label.span.text(source.as_bytes())).unwrap())
+        .collect()
 }
 
 /// A message with no fix, at `span`.

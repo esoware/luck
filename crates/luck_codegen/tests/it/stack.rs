@@ -11,7 +11,7 @@ use luck_testgen::{
 fn compacting_fits_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source, version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.first());
         let output = luck_codegen::compact(&parsed.chunk);
         let reparsed = luck_parser::parse(&allocator, &output, version);
@@ -24,7 +24,7 @@ fn compacting_what_a_failed_parse_leaves_fits_the_smallest_stack() {
     let sources = sources_past_the_nesting_cap().into_iter().chain(broken_sources());
     on_the_smallest_stack(sources, |source, version| {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source, version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert!(!parsed.errors.is_empty(), "{:?}", source.get(..20));
         let _output = luck_codegen::compact(&parsed.chunk);
     });

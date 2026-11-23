@@ -340,7 +340,7 @@ impl Token {
     /// brackets included. Escapes stay as written.
     #[inline]
     #[must_use]
-    pub fn text(self, source: &str) -> &str {
+    pub fn text(self, source: &[u8]) -> &[u8] {
         self.text_span().text(source)
     }
 
@@ -369,20 +369,21 @@ impl Token {
     /// How an error message names this token: its kind, followed by its text
     /// for a name or a numeral.
     #[must_use]
-    pub fn display(self, source: &str) -> impl fmt::Display {
+    pub fn display(self, source: &[u8]) -> impl fmt::Display {
         TokenDisplay { kind: self.kind, text: self.text(source) }
     }
 }
 
 struct TokenDisplay<'source> {
     kind: TokenKind,
-    text: &'source str,
+    text: &'source [u8],
 }
 
 impl fmt::Display for TokenDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if matches!(self.kind, TokenKind::Identifier | TokenKind::Number | TokenKind::Integer) {
-            write!(f, "{} `{}`", self.kind, self.text)
+            // A name or a numeral is ASCII, which this writes as it is.
+            write!(f, "{} `{}`", self.kind, self.text.escape_ascii())
         } else {
             self.kind.fmt(f)
         }

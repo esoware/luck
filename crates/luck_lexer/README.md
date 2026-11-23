@@ -4,7 +4,7 @@ The single-pass lexer for Lua 5.1 to 5.5 and Luau.
 
 ## Overview
 
-Source text goes in and two streams come out: the tokens, and the comments between them, which stay out of the syntax tree. Each comment carries what it tells a tool, read once from its text: prose, a Luau hot comment, or a `luck:` directive. A token holds no text, only its kind, span, and flags, so `Token::text` slices it from the source. The lexer recognizes a token that only some versions have, such as floor division, a hex float, or Luau's interpolated strings, only for those versions. It checks every escape with the one escape reader in `luck_token`, the parser's too, records each error and keeps going, so one pass reports them all, and notes each escape only Lua 5.1 and Luau take, which they read as the character it escapes.
+A source goes in, as bytes, which Lua reads it as, so a string or a comment may hold any byte, and two streams come out: the tokens, and the comments between them, which stay out of the syntax tree. Each comment carries what it tells a tool, read once from its text: prose, a Luau hot comment, or a `luck:` directive. A token holds no text, only its kind, span, and flags, so `Token::text` slices its bytes from the source. The lexer recognizes a token that only some versions have, such as floor division, a hex float, or Luau's interpolated strings, only for those versions. It checks every escape with the one escape reader in `luck_token`, the parser's too, records each error and keeps going, so one pass reports them all, and notes each escape only Lua 5.1 and Luau take, which they read as the character it escapes.
 
 ## Usage
 
@@ -15,9 +15,9 @@ Source text goes in and two streams come out: the tokens, and the comments betwe
 ```rust
 use luck_token::{LuaVersion, TokenKind};
 
-let source = "local x = 42";
+let source = b"local x = 42";
 let result = luck_lexer::lex(source, LuaVersion::Lua54);
 assert!(result.errors.is_empty());
 let name = result.tokens[1];
-assert_eq!((name.kind, name.text(source)), (TokenKind::Identifier, "x"));
+assert_eq!((name.kind, name.text(source)), (TokenKind::Identifier, &b"x"[..]));
 ```

@@ -124,22 +124,26 @@ fn simple_binding<'ast>(
 
 /// Builds the merged statement from source slices, which keeps the
 /// author's formatting.
-fn build_merged(source: &str, first: &SimpleBinding<'_>, second: &SimpleBinding<'_>) -> String {
-    let first_declaration = first.declaration.text(source);
-    let second_declaration = second.declaration.text(source);
-
-    let first_expr = first.initializer.text(source);
-    let second_expr = second.initializer.text(source);
-
+fn build_merged(source: &[u8], first: &SimpleBinding<'_>, second: &SimpleBinding<'_>) -> Vec<u8> {
     // Attributes are per name: `local a <const>, b <const> = ...`.
-    let attribute_suffix = first
+    let (space, attribute) = first
         .attribute
-        .map_or_else(String::new, |attribute| format!(" {}", attribute.span.text(source)));
-
-    format!(
-        "local {first_declaration}{attribute_suffix}, {second_declaration}{attribute_suffix} = \
-         {first_expr}, {second_expr}"
-    )
+        .map_or((&b""[..], &b""[..]), |attribute| (b" ", attribute.span.text(source)));
+    [
+        &b"local "[..],
+        first.declaration.text(source),
+        space,
+        attribute,
+        b", ",
+        second.declaration.text(source),
+        space,
+        attribute,
+        b" = ",
+        first.initializer.text(source),
+        b", ",
+        second.initializer.text(source),
+    ]
+    .concat()
 }
 
 #[cfg(test)]

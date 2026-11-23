@@ -25,7 +25,7 @@ use crate::rules::{RULES, RuleEntry};
 #[must_use]
 pub fn lint(
     allocator: &Allocator,
-    source: &str,
+    source: &[u8],
     target: LuaTarget,
     config: &LintConfig,
     fixes: FixKind,
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn a_config_that_runs_no_rule_builds_no_node_table() {
         let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, "local x = nil print(x)", LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, b"local x = nil print(x)", LuaVersion::Lua54);
         let silent = silent();
         let unlinted = analyze(&parse, StdlibEnvironment::Standalone, &silent);
         assert!(unlinted.nodes().as_slice().is_empty());
@@ -344,7 +344,7 @@ mod tests {
 local x = nil -- luck: deny(redundant_nil_init)
 local y = nil
 print(x, y)";
-        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let silent = silent();
         let analysis = analyze(&parse, StdlibEnvironment::Standalone, &silent);
         assert!(!analysis.nodes().as_slice().is_empty());
@@ -359,7 +359,7 @@ print(x, y)";
     fn a_cancelled_lint_returns_nothing() {
         let allocator = Allocator::new();
         let source = "local x = nil -- luck: deny(redundant_nil_init)";
-        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let silent = silent();
         let analysis = analyze(&parse, StdlibEnvironment::Standalone, &silent);
         let cancelled = lint_analyzed(&parse, &analysis, &silent, FixKind::empty(), &|| true);
@@ -373,7 +373,7 @@ print(x, y)";
 -- luck: allow(undefined_variable)
 local x = 1
 print(x)";
-        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let questions = |config: &LintConfig| {
             let analysis = analyze(&parse, StdlibEnvironment::Standalone, config);
             let asked = AtomicUsize::new(0);

@@ -1,5 +1,6 @@
+use std::fs;
+use std::io::{self, Read as _, Write as _};
 use std::path::Path;
-use std::{fs, io};
 
 use crate::exit::{Exit, operation_error};
 
@@ -24,23 +25,28 @@ pub(crate) fn format_size(bytes: usize) -> String {
     }
 }
 
+/// `content` is bytes, as a Lua source is, which reach stdout or the file
+/// as they are.
+///
 /// # Errors
 ///
-/// Reports the failure and returns [`Exit::Failure`] when `output_path` can't
-/// be written.
-pub(crate) fn write_output(output_path: Option<&Path>, content: &str) -> Result<(), Exit> {
+/// Reports the failure and returns [`Exit::Failure`] when `output_path` or
+/// stdout can't be written.
+pub(crate) fn write_output(output_path: Option<&Path>, content: &[u8]) -> Result<(), Exit> {
     if let Some(path) = output_path {
         return write_output_file(path, content);
     }
-    print!("{content}");
-    Ok(())
+    io::stdout()
+        .lock()
+        .write_all(content)
+        .map_err(|e| operation_error(format!("failed to write output: {e}")))
 }
 
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Failure`] when `path` or its
 /// parent directory can't be written.
-pub(crate) fn write_output_file(path: &Path, content: &str) -> Result<(), Exit> {
+pub(crate) fn write_output_file(path: &Path, content: &[u8]) -> Result<(), Exit> {
     if let Some(parent) = path.parent()
         && !parent.exists()
     {
@@ -50,11 +56,17 @@ pub(crate) fn write_output_file(path: &Path, content: &str) -> Result<(), Exit> 
     fs::write(path, content).map_err(|e| operation_error(format!("failed to write output: {e}")))
 }
 
+/// Bytes, as Lua reads a source.
+///
 /// # Errors
 ///
 /// Reports the failure and returns [`Exit::Failure`] when stdin can't be
 /// read.
-pub(crate) fn read_stdin_source() -> Result<String, Exit> {
-    io::read_to_string(io::stdin())
-        .map_err(|e| operation_error(format!("failed to read stdin: {e}")))
+pub(crate) fn read_stdin_source() -> Result<Vec<u8>, Exit> {
+    let mut source = Vec::new();
+    io::stdin()
+        .lock()
+        .read_to_end(&mut source)
+        .map_err(|e| operation_error(format!("failed to read stdin: {e}")))?;
+    Ok(source)
 }

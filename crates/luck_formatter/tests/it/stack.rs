@@ -10,7 +10,7 @@ fn formatting_fits_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
         let allocator = Allocator::new();
         let options = FormatOptions::default();
-        let formatted = format(&allocator, source, version, &options);
+        let formatted = format(&allocator, source.as_bytes(), version, &options);
         assert!(formatted.errors.is_empty(), "{:?}", formatted.errors.first());
         let reparsed = luck_parser::parse(&allocator, &formatted.output, version);
         assert!(reparsed.errors.is_empty(), "the output reparses");

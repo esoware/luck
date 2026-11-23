@@ -58,7 +58,7 @@ pub(crate) fn config_error(file: &FileDiagnostics) -> Exit {
 /// or stdin, which `label` names.
 pub(crate) fn fail_with_document_errors(
     label: &str,
-    source: &str,
+    source: &[u8],
     errors: &[Diagnostic],
     version: LuaVersion,
 ) -> Exit {

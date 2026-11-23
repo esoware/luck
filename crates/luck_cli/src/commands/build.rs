@@ -289,7 +289,7 @@ fn watched_directories(files: &[PathBuf]) -> Vec<PathBuf> {
 
 /// `output` with `config`'s preamble on top, after the BOM and shebang line a
 /// loader only skips at the very start of a chunk.
-fn with_preamble(config: &BuildConfig, output: String, version: LuaVersion) -> String {
+fn with_preamble(config: &BuildConfig, output: Vec<u8>, version: LuaVersion) -> Vec<u8> {
     let mut lines = Vec::new();
 
     if let Some(text) = &config.preamble {
@@ -313,11 +313,13 @@ fn with_preamble(config: &BuildConfig, output: String, version: LuaVersion) -> S
     let preamble = lines.join("\n");
 
     let (bom, chunk) = output.split_at(chunk_start(&output, version));
-    if !has_shebang(chunk.as_bytes(), version) {
-        return format!("{bom}{preamble}\n{chunk}");
+    if !has_shebang(chunk, version) {
+        return [bom, preamble.as_bytes(), b"\n", chunk].concat();
     }
-    let (shebang, body) = chunk.split_once('\n').unwrap_or((chunk, ""));
-    format!("{bom}{shebang}\n{preamble}\n{body}")
+    let shebang_length = chunk.iter().position(|&b| b == b'\n').unwrap_or(chunk.len());
+    let (shebang, from_line_break) = chunk.split_at(shebang_length);
+    let body = from_line_break.get(1..).unwrap_or_default();
+    [bom, shebang, b"\n", preamble.as_bytes(), b"\n", body].concat()
 }
 
 /// Blocks until a relevant file changes, then drains what's queued behind it.

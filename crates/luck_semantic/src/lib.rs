@@ -22,7 +22,7 @@
 //! use luck_token::{LuaVersion, StdlibEnvironment};
 //!
 //! let allocator = Allocator::new();
-//! let parsed = luck_parser::parse(&allocator, "local greeting = 1 print(greeting)", LuaVersion::Lua54);
+//! let parsed = luck_parser::parse(&allocator, b"local greeting = 1 print(greeting)", LuaVersion::Lua54);
 //! let chunk = allocator.alloc(parsed.chunk);
 //! let analysis = luck_semantic::analyze(chunk, parsed.counts, StdlibEnvironment::Standalone);
 //! let tree = analysis.scope_tree();

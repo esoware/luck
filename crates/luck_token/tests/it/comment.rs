@@ -11,7 +11,7 @@ fn comment_at(source: &str, text: &str, kind: CommentKind) -> Comment {
         kind,
         position: CommentPosition::Leading,
         is_followed_by_newline: true,
-        content: CommentContent::of(text, kind, LuaVersion::Luau),
+        content: CommentContent::of(text.as_bytes(), kind, LuaVersion::Luau),
     }
 }
 
@@ -23,7 +23,7 @@ fn hot_comment_texts<'source>(
     let first_token_start =
         source.find(first_token).map_or(u32::MAX, |start| u32::try_from(start).unwrap_or(u32::MAX));
     leading_hot_comments(comments, first_token_start)
-        .map(|comment| comment.span.text(source))
+        .map(|comment| str::from_utf8(comment.span.text(source.as_bytes())).unwrap_or_default())
         .collect()
 }
 

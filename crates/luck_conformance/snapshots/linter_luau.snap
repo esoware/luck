@@ -1,37 +1,37 @@
 linter_luau Summary:
-Files Linted   : 53/55
-Diagnostics    : 16073
- 12339 no_implicit_globals
-   758 multiple_statements_per_line
-   501 shadowing
-   442 setting_global
+Files Linted   : 55/55
+Diagnostics    : 16601
+ 12790 no_implicit_globals
+   765 multiple_statements_per_line
+   513 shadowing
+   481 setting_global
    277 undefined_variable
-   246 merge_adjacent_locals
+   247 merge_adjacent_locals
    214 placeholder_read
-   175 redefining_local
-   174 must_use
+   179 redefining_local
+   177 must_use
    150 unused_loop_variable
-   109 unused_argument
+   110 unused_argument
    103 value_overwritten_before_read
-    95 unused_variable
+    97 unused_variable
     61 divide_by_zero
     54 unnecessary_negation
     43 empty_block
     37 unbalanced_assignment
-    33 global_usage
-    30 deprecated
-    27 mixed_table
+    36 global_usage
+    31 deprecated
+    28 mixed_table
     22 unnecessary_assert
     21 string_index_to_field
-    19 duplicate_function
+    20 duplicate_function
     19 incorrect_stdlib_use
     16 redundant_nil_init
     13 comparison_precedence
+    13 implicit_return
     13 loop_executes_once
     12 duplicate_keys
     12 global_used_as_local
     11 for_range
-    11 implicit_return
      6 accessing_uninitialized
      6 compare_nan
      5 set_but_never_read
@@ -44,10 +44,6 @@ Diagnostics    : 16073
      1 bad_string_escape
      1 integer_parsing
      1 mismatched_arg_count
-
-Not UTF-8: luau-0.740/literals.luau
-
-Not UTF-8: luau-0.740/pm.luau
 
 luau-0.740/apicalls.luau
 2:1 no_implicit_globals: global variable `print` used
@@ -9553,6 +9549,84 @@ luau-0.740/jit_inliner.luau
 121:9 empty_block: empty `while` loop body
 124:5 placeholder_read: read of `_`, but convention is to use `_` only for ignored bindings
 
+luau-0.740/literals.luau
+3:1 no_implicit_globals: global variable `print` used
+5:36 no_implicit_globals: global variable `assert` used
+5:43 no_implicit_globals: global variable `loadstring` used
+12:1 no_implicit_globals: global variable `assert` used
+16:1 no_implicit_globals: global variable `assert` used
+16:8 no_implicit_globals: global variable `string` used
+19:1 no_implicit_globals: global variable `assert` used
+20:1 no_implicit_globals: global variable `assert` used
+21:1 no_implicit_globals: global variable `assert` used
+22:1 no_implicit_globals: global variable `assert` used
+23:1 no_implicit_globals: global variable `assert` used
+25:1 no_implicit_globals: global variable `assert` used
+29:1 setting_global: setting global variable `var` (missing `local`?)
+29:1 no_implicit_globals: global variable `var` used
+29:7 no_implicit_globals: global variable `string` used
+30:1 setting_global: setting global variable `prog` (missing `local`?)
+30:1 no_implicit_globals: global variable `prog` used
+30:8 no_implicit_globals: global variable `string` used
+30:32 no_implicit_globals: global variable `var` used
+31:10 no_implicit_globals: global variable `prog` used
+32:1 no_implicit_globals: global variable `assert` used
+32:30 no_implicit_globals: global variable `var` used
+33:1 setting_global: setting global variable `var` (missing `local`?)
+33:1 no_implicit_globals: global variable `var` used
+34:1 no_implicit_globals: global variable `print` used
+37:1 no_implicit_globals: global variable `assert` used
+40:1 no_implicit_globals: global variable `assert` used
+43:1 no_implicit_globals: global variable `assert` used
+45:1 setting_global: setting global variable `b` (missing `local`?)
+45:1 no_implicit_globals: global variable `b` used
+46:1 no_implicit_globals: global variable `assert` used
+46:8 no_implicit_globals: global variable `string` used
+46:19 no_implicit_globals: global variable `b` used
+47:1 setting_global: setting global variable `prog` (missing `local`?)
+47:1 no_implicit_globals: global variable `prog` used
+93:1 no_implicit_globals: global variable `print` used
+94:1 setting_global: setting global variable `x` (missing `local`?)
+94:1 no_implicit_globals: global variable `x` used
+95:10 no_implicit_globals: global variable `prog` used
+96:1 no_implicit_globals: global variable `assert` used
+96:8 no_implicit_globals: global variable `x` used
+98:1 setting_global: setting global variable `prog` (missing `local`?)
+98:1 no_implicit_globals: global variable `prog` used
+99:1 setting_global: setting global variable `a` (missing `local`?)
+99:1 no_implicit_globals: global variable `a` used
+100:1 setting_global: setting global variable `b` (missing `local`?)
+100:1 no_implicit_globals: global variable `b` used
+104:1 setting_global: setting global variable `prog` (missing `local`?)
+104:1 no_implicit_globals: global variable `prog` used
+118:13 no_implicit_globals: global variable `pairs` used
+119:9 unused_variable: unused variable `prog`
+119:15 unused_variable: unused variable `nn`
+119:20 no_implicit_globals: global variable `string` used
+119:32 no_implicit_globals: global variable `prog` used
+126:1 setting_global: setting global variable `a` (missing `local`?)
+126:1 no_implicit_globals: global variable `a` used
+127:1 no_implicit_globals: global variable `assert` used
+127:8 no_implicit_globals: global variable `a` used
+129:1 setting_global: setting global variable `a` (missing `local`?)
+129:1 no_implicit_globals: global variable `a` used
+130:1 no_implicit_globals: global variable `assert` used
+130:8 no_implicit_globals: global variable `a` used
+132:1 setting_global: setting global variable `a` (missing `local`?)
+132:1 no_implicit_globals: global variable `a` used
+133:1 no_implicit_globals: global variable `assert` used
+133:8 no_implicit_globals: global variable `a` used
+135:1 setting_global: setting global variable `a` (missing `local`?)
+135:1 no_implicit_globals: global variable `a` used
+136:1 no_implicit_globals: global variable `assert` used
+136:8 no_implicit_globals: global variable `a` used
+147:1 merge_adjacent_locals: adjacent `local` declarations can be merged
+150:16 no_implicit_globals: global variable `coroutine` used
+152:17 no_implicit_globals: global variable `pairs` used
+158:10 no_implicit_globals: global variable `coroutine` used
+159:3 no_implicit_globals: global variable `assert` used
+159:15 no_implicit_globals: global variable `loadstring` used
+
 luau-0.740/locals.luau
 3:1 no_implicit_globals: global variable `print` used
 7:12 shadowing: variable `i` shadows outer variable
@@ -12966,6 +13040,460 @@ luau-0.740/pcall.luau
 337:2 no_implicit_globals: global variable `assert` used
 341:1 no_implicit_globals: global variable `setfenv` used
 341:25 no_implicit_globals: global variable `getfenv` used
+
+luau-0.740/pm.luau
+3:1 no_implicit_globals: global variable `print` used
+5:1 implicit_return: function returns on some paths but falls through on others
+5:10 setting_global: setting global variable `f` (missing `local`?)
+5:10 no_implicit_globals: global variable `f` used
+6:15 no_implicit_globals: global variable `string` used
+7:20 no_implicit_globals: global variable `string` used
+10:10 setting_global: setting global variable `f1` (missing `local`?)
+10:10 no_implicit_globals: global variable `f1` used
+11:7 no_implicit_globals: global variable `string` used
+11:45 shadowing: variable `s` shadows outer variable
+12:7 no_implicit_globals: global variable `string` used
+13:7 no_implicit_globals: global variable `string` used
+14:14 no_implicit_globals: global variable `string` used
+15:10 no_implicit_globals: global variable `string` used
+18:1 setting_global: setting global variable `a` (missing `local`?)
+18:1 no_implicit_globals: global variable `a` used
+18:3 setting_global: setting global variable `b` (missing `local`?)
+18:3 no_implicit_globals: global variable `b` used
+18:7 no_implicit_globals: global variable `string` used
+19:1 no_implicit_globals: global variable `assert` used
+19:8 no_implicit_globals: global variable `a` used
+19:19 no_implicit_globals: global variable `b` used
+20:1 setting_global: setting global variable `a` (missing `local`?)
+20:1 no_implicit_globals: global variable `a` used
+20:3 setting_global: setting global variable `b` (missing `local`?)
+20:3 no_implicit_globals: global variable `b` used
+20:7 no_implicit_globals: global variable `string` used
+21:1 no_implicit_globals: global variable `assert` used
+21:8 no_implicit_globals: global variable `a` used
+21:19 no_implicit_globals: global variable `b` used
+22:1 setting_global: setting global variable `a` (missing `local`?)
+22:1 no_implicit_globals: global variable `a` used
+22:3 setting_global: setting global variable `b` (missing `local`?)
+22:3 no_implicit_globals: global variable `b` used
+22:7 no_implicit_globals: global variable `string` used
+23:1 no_implicit_globals: global variable `assert` used
+23:8 no_implicit_globals: global variable `a` used
+23:19 no_implicit_globals: global variable `b` used
+24:1 setting_global: setting global variable `a` (missing `local`?)
+24:1 no_implicit_globals: global variable `a` used
+24:3 setting_global: setting global variable `b` (missing `local`?)
+24:3 no_implicit_globals: global variable `b` used
+24:7 no_implicit_globals: global variable `string` used
+25:1 no_implicit_globals: global variable `assert` used
+25:8 no_implicit_globals: global variable `a` used
+25:19 no_implicit_globals: global variable `b` used
+26:1 setting_global: setting global variable `a` (missing `local`?)
+26:1 no_implicit_globals: global variable `a` used
+26:3 setting_global: setting global variable `b` (missing `local`?)
+26:3 no_implicit_globals: global variable `b` used
+26:7 no_implicit_globals: global variable `string` used
+27:1 no_implicit_globals: global variable `assert` used
+27:8 no_implicit_globals: global variable `a` used
+27:19 no_implicit_globals: global variable `b` used
+28:1 setting_global: setting global variable `a` (missing `local`?)
+28:1 no_implicit_globals: global variable `a` used
+28:3 setting_global: setting global variable `b` (missing `local`?)
+28:3 no_implicit_globals: global variable `b` used
+28:7 no_implicit_globals: global variable `string` used
+29:1 no_implicit_globals: global variable `assert` used
+29:8 no_implicit_globals: global variable `a` used
+29:19 no_implicit_globals: global variable `b` used
+30:1 setting_global: setting global variable `a` (missing `local`?)
+30:1 no_implicit_globals: global variable `a` used
+30:3 setting_global: setting global variable `b` (missing `local`?)
+30:3 no_implicit_globals: global variable `b` used
+30:7 no_implicit_globals: global variable `string` used
+31:1 no_implicit_globals: global variable `assert` used
+31:8 no_implicit_globals: global variable `a` used
+31:20 no_implicit_globals: global variable `b` used
+32:1 no_implicit_globals: global variable `assert` used
+32:8 no_implicit_globals: global variable `string` used
+33:1 no_implicit_globals: global variable `assert` used
+33:8 no_implicit_globals: global variable `string` used
+34:1 no_implicit_globals: global variable `assert` used
+34:8 no_implicit_globals: global variable `string` used
+35:1 no_implicit_globals: global variable `assert` used
+35:8 no_implicit_globals: global variable `string` used
+37:1 no_implicit_globals: global variable `assert` used
+37:8 no_implicit_globals: global variable `f` used
+38:1 no_implicit_globals: global variable `assert` used
+38:8 no_implicit_globals: global variable `f` used
+40:1 no_implicit_globals: global variable `assert` used
+40:8 no_implicit_globals: global variable `f` used
+42:1 no_implicit_globals: global variable `assert` used
+42:8 no_implicit_globals: global variable `f` used
+43:1 no_implicit_globals: global variable `assert` used
+43:8 no_implicit_globals: global variable `f` used
+44:1 no_implicit_globals: global variable `assert` used
+44:8 no_implicit_globals: global variable `f` used
+45:1 no_implicit_globals: global variable `assert` used
+45:8 no_implicit_globals: global variable `f` used
+46:1 no_implicit_globals: global variable `assert` used
+46:8 no_implicit_globals: global variable `f` used
+47:1 no_implicit_globals: global variable `assert` used
+47:8 no_implicit_globals: global variable `f` used
+48:1 no_implicit_globals: global variable `assert` used
+48:8 no_implicit_globals: global variable `f` used
+49:1 no_implicit_globals: global variable `assert` used
+49:8 no_implicit_globals: global variable `f` used
+50:1 no_implicit_globals: global variable `assert` used
+50:8 no_implicit_globals: global variable `f` used
+51:1 no_implicit_globals: global variable `assert` used
+51:8 no_implicit_globals: global variable `f` used
+52:1 no_implicit_globals: global variable `assert` used
+52:8 no_implicit_globals: global variable `f` used
+53:1 no_implicit_globals: global variable `assert` used
+53:8 no_implicit_globals: global variable `f` used
+54:1 no_implicit_globals: global variable `assert` used
+54:8 no_implicit_globals: global variable `f` used
+55:1 no_implicit_globals: global variable `assert` used
+55:8 no_implicit_globals: global variable `f` used
+56:1 no_implicit_globals: global variable `assert` used
+56:8 no_implicit_globals: global variable `f` used
+57:1 no_implicit_globals: global variable `assert` used
+57:8 no_implicit_globals: global variable `f` used
+58:1 no_implicit_globals: global variable `assert` used
+58:8 no_implicit_globals: global variable `f` used
+59:1 no_implicit_globals: global variable `assert` used
+59:8 no_implicit_globals: global variable `f` used
+60:1 no_implicit_globals: global variable `assert` used
+60:8 no_implicit_globals: global variable `f` used
+61:1 no_implicit_globals: global variable `assert` used
+61:8 no_implicit_globals: global variable `f` used
+62:1 no_implicit_globals: global variable `assert` used
+62:8 no_implicit_globals: global variable `f` used
+63:1 no_implicit_globals: global variable `assert` used
+63:8 no_implicit_globals: global variable `f` used
+64:1 no_implicit_globals: global variable `assert` used
+64:8 no_implicit_globals: global variable `f` used
+65:1 no_implicit_globals: global variable `assert` used
+65:8 no_implicit_globals: global variable `f` used
+66:1 no_implicit_globals: global variable `assert` used
+66:8 no_implicit_globals: global variable `f` used
+67:1 no_implicit_globals: global variable `assert` used
+67:8 no_implicit_globals: global variable `f` used
+68:1 no_implicit_globals: global variable `assert` used
+68:8 no_implicit_globals: global variable `f` used
+69:1 no_implicit_globals: global variable `assert` used
+69:8 no_implicit_globals: global variable `f` used
+70:1 no_implicit_globals: global variable `assert` used
+70:8 no_implicit_globals: global variable `f` used
+71:1 no_implicit_globals: global variable `assert` used
+71:8 no_implicit_globals: global variable `f` used
+72:1 no_implicit_globals: global variable `assert` used
+72:8 no_implicit_globals: global variable `f` used
+73:1 no_implicit_globals: global variable `assert` used
+73:8 no_implicit_globals: global variable `f` used
+74:1 no_implicit_globals: global variable `assert` used
+74:8 no_implicit_globals: global variable `f` used
+75:1 no_implicit_globals: global variable `assert` used
+75:8 no_implicit_globals: global variable `f` used
+76:1 no_implicit_globals: global variable `assert` used
+76:8 no_implicit_globals: global variable `f` used
+77:1 no_implicit_globals: global variable `print` used
+79:1 no_implicit_globals: global variable `assert` used
+79:8 no_implicit_globals: global variable `f1` used
+80:1 no_implicit_globals: global variable `assert` used
+80:8 no_implicit_globals: global variable `f1` used
+81:1 no_implicit_globals: global variable `assert` used
+81:8 no_implicit_globals: global variable `f1` used
+82:1 no_implicit_globals: global variable `assert` used
+82:8 no_implicit_globals: global variable `string` used
+84:1 implicit_return: function returns on some paths but falls through on others
+90:13 no_implicit_globals: global variable `string` used
+92:1 no_implicit_globals: global variable `assert` used
+92:8 no_implicit_globals: global variable `string` used
+94:10 setting_global: setting global variable `strset` (missing `local`?)
+94:10 no_implicit_globals: global variable `strset` used
+96:3 must_use: return value of `string.gsub` is discarded
+96:3 no_implicit_globals: global variable `string` used
+100:1 no_implicit_globals: global variable `assert` used
+100:8 no_implicit_globals: global variable `string` used
+100:19 no_implicit_globals: global variable `strset` used
+102:1 no_implicit_globals: global variable `assert` used
+102:8 no_implicit_globals: global variable `strset` used
+103:1 no_implicit_globals: global variable `assert` used
+103:8 no_implicit_globals: global variable `strset` used
+103:29 no_implicit_globals: global variable `strset` used
+104:1 no_implicit_globals: global variable `assert` used
+104:8 no_implicit_globals: global variable `strset` used
+105:1 no_implicit_globals: global variable `assert` used
+105:8 no_implicit_globals: global variable `strset` used
+105:27 no_implicit_globals: global variable `strset` used
+106:1 no_implicit_globals: global variable `assert` used
+106:8 no_implicit_globals: global variable `strset` used
+107:1 no_implicit_globals: global variable `assert` used
+107:8 no_implicit_globals: global variable `strset` used
+108:1 no_implicit_globals: global variable `assert` used
+108:8 no_implicit_globals: global variable `strset` used
+109:1 no_implicit_globals: global variable `assert` used
+109:8 no_implicit_globals: global variable `strset` used
+109:24 no_implicit_globals: global variable `strset` used
+110:1 no_implicit_globals: global variable `assert` used
+110:8 no_implicit_globals: global variable `strset` used
+110:23 no_implicit_globals: global variable `strset` used
+111:1 no_implicit_globals: global variable `print` used
+113:1 no_implicit_globals: global variable `assert` used
+113:8 no_implicit_globals: global variable `string` used
+114:1 no_implicit_globals: global variable `assert` used
+114:8 no_implicit_globals: global variable `string` used
+115:1 no_implicit_globals: global variable `assert` used
+115:8 no_implicit_globals: global variable `string` used
+116:1 no_implicit_globals: global variable `assert` used
+116:8 no_implicit_globals: global variable `string` used
+117:1 no_implicit_globals: global variable `assert` used
+117:8 no_implicit_globals: global variable `string` used
+118:23 no_implicit_globals: global variable `string` used
+119:1 no_implicit_globals: global variable `assert` used
+120:15 no_implicit_globals: global variable `string` used
+121:1 no_implicit_globals: global variable `assert` used
+122:1 no_implicit_globals: global variable `print` used
+124:1 no_implicit_globals: global variable `assert` used
+124:8 no_implicit_globals: global variable `string` used
+125:1 no_implicit_globals: global variable `assert` used
+125:8 no_implicit_globals: global variable `string` used
+126:1 no_implicit_globals: global variable `assert` used
+126:8 no_implicit_globals: global variable `string` used
+127:1 no_implicit_globals: global variable `assert` used
+127:8 no_implicit_globals: global variable `string` used
+128:1 setting_global: setting global variable `t` (missing `local`?)
+128:1 no_implicit_globals: global variable `t` used
+129:8 no_implicit_globals: global variable `string` used
+129:20 no_implicit_globals: global variable `t` used
+130:1 no_implicit_globals: global variable `assert` used
+130:18 no_implicit_globals: global variable `string` used
+130:30 no_implicit_globals: global variable `t` used
+131:8 no_implicit_globals: global variable `string` used
+132:1 no_implicit_globals: global variable `assert` used
+133:1 no_implicit_globals: global variable `assert` used
+133:8 no_implicit_globals: global variable `string` used
+134:1 no_implicit_globals: global variable `assert` used
+134:8 no_implicit_globals: global variable `string` used
+136:1 no_implicit_globals: global variable `assert` used
+136:8 no_implicit_globals: global variable `string` used
+137:1 no_implicit_globals: global variable `assert` used
+137:8 no_implicit_globals: global variable `string` used
+138:1 no_implicit_globals: global variable `assert` used
+138:8 no_implicit_globals: global variable `string` used
+139:1 no_implicit_globals: global variable `assert` used
+139:8 no_implicit_globals: global variable `string` used
+140:1 no_implicit_globals: global variable `assert` used
+140:8 no_implicit_globals: global variable `string` used
+141:1 no_implicit_globals: global variable `print` used
+143:1 no_implicit_globals: global variable `assert` used
+143:8 no_implicit_globals: global variable `string` used
+143:60 no_implicit_globals: global variable `string` used
+147:34 no_implicit_globals: global variable `rawset` used
+147:41 global_usage: global environment `_G` used
+147:41 no_implicit_globals: global variable `_G` used
+148:3 must_use: return value of `string.gsub` is discarded
+148:3 no_implicit_globals: global variable `string` used
+149:3 no_implicit_globals: global variable `assert` used
+149:10 global_usage: global environment `_G` used
+149:10 no_implicit_globals: global variable `_G` used
+149:30 global_usage: global environment `_G` used
+149:30 no_implicit_globals: global variable `_G` used
+152:10 setting_global: setting global variable `f` (missing `local`?)
+152:10 no_implicit_globals: global variable `f` used
+152:10 duplicate_function: duplicate function definition `f`
+152:12 shadowing: variable `a` shadows outer variable
+152:14 shadowing: variable `b` shadows outer variable
+152:24 no_implicit_globals: global variable `string` used
+153:1 no_implicit_globals: global variable `assert` used
+153:8 no_implicit_globals: global variable `string` used
+153:83 no_implicit_globals: global variable `f` used
+156:36 no_implicit_globals: global variable `loadstring` used
+157:1 no_implicit_globals: global variable `assert` used
+157:8 no_implicit_globals: global variable `string` used
+160:1 setting_global: setting global variable `x` (missing `local`?)
+160:1 no_implicit_globals: global variable `x` used
+160:5 no_implicit_globals: global variable `string` used
+162:1 no_implicit_globals: global variable `assert` used
+162:8 no_implicit_globals: global variable `x` used
+164:1 setting_global: setting global variable `t` (missing `local`?)
+164:1 no_implicit_globals: global variable `t` used
+165:1 setting_global: setting global variable `s` (missing `local`?)
+165:1 no_implicit_globals: global variable `s` used
+166:1 setting_global: setting global variable `r` (missing `local`?)
+166:1 no_implicit_globals: global variable `r` used
+166:5 no_implicit_globals: global variable `string` used
+166:17 no_implicit_globals: global variable `s` used
+166:43 shadowing: variable `a` shadows outer variable
+166:47 shadowing: variable `b` shadows outer variable
+167:7 no_implicit_globals: global variable `assert` used
+167:14 no_implicit_globals: global variable `string` used
+168:7 no_implicit_globals: global variable `t` used
+170:1 no_implicit_globals: global variable `assert` used
+170:8 no_implicit_globals: global variable `s` used
+170:13 no_implicit_globals: global variable `r` used
+170:19 no_implicit_globals: global variable `t` used
+170:33 no_implicit_globals: global variable `t` used
+170:47 no_implicit_globals: global variable `t` used
+170:61 no_implicit_globals: global variable `t` used
+173:10 setting_global: setting global variable `isbalanced` (missing `local`?)
+173:10 no_implicit_globals: global variable `isbalanced` used
+174:10 no_implicit_globals: global variable `string` used
+174:22 no_implicit_globals: global variable `string` used
+177:1 no_implicit_globals: global variable `assert` used
+177:8 no_implicit_globals: global variable `isbalanced` used
+178:1 no_implicit_globals: global variable `assert` used
+178:12 no_implicit_globals: global variable `isbalanced` used
+179:1 no_implicit_globals: global variable `assert` used
+179:8 no_implicit_globals: global variable `string` used
+182:11 mixed_table: table mixes positional and record fields, so iteration with `ipairs` will skip the record fields
+183:1 no_implicit_globals: global variable `assert` used
+183:8 no_implicit_globals: global variable `string` used
+183:65 multiple_statements_per_line: statement starts on the same line as the previous statement
+187:1 must_use: return value of `string.gsub` is discarded
+187:1 no_implicit_globals: global variable `string` used
+187:67 multiple_statements_per_line: statement starts on the same line as the previous statement
+188:1 no_implicit_globals: global variable `assert` used
+191:1 no_implicit_globals: global variable `assert` used
+191:8 no_implicit_globals: global variable `string` used
+192:34 multiple_statements_per_line: statement starts on the same line as the previous statement
+193:1 no_implicit_globals: global variable `assert` used
+195:1 no_implicit_globals: global variable `assert` used
+195:12 no_implicit_globals: global variable `pcall` used
+195:18 no_implicit_globals: global variable `string` used
+195:44 no_implicit_globals: global variable `print` used
+196:1 no_implicit_globals: global variable `assert` used
+196:12 no_implicit_globals: global variable `pcall` used
+196:18 no_implicit_globals: global variable `string` used
+196:44 no_implicit_globals: global variable `print` used
+197:1 no_implicit_globals: global variable `assert` used
+197:12 no_implicit_globals: global variable `pcall` used
+197:18 no_implicit_globals: global variable `string` used
+198:1 no_implicit_globals: global variable `assert` used
+198:12 no_implicit_globals: global variable `pcall` used
+198:18 no_implicit_globals: global variable `string` used
+199:1 no_implicit_globals: global variable `assert` used
+199:12 no_implicit_globals: global variable `pcall` used
+199:18 no_implicit_globals: global variable `string` used
+200:1 no_implicit_globals: global variable `assert` used
+200:12 no_implicit_globals: global variable `pcall` used
+200:18 no_implicit_globals: global variable `string` used
+203:7 shadowing: variable `a` shadows outer variable
+203:7 redefining_local: local `a` is redeclared in the same block
+203:11 no_implicit_globals: global variable `string` used
+204:1 no_implicit_globals: global variable `assert` used
+204:8 no_implicit_globals: global variable `string` used
+205:1 no_implicit_globals: global variable `assert` used
+205:12 no_implicit_globals: global variable `string` used
+206:1 no_implicit_globals: global variable `assert` used
+206:8 no_implicit_globals: global variable `string` used
+209:10 setting_global: setting global variable `rev` (missing `local`?)
+209:10 no_implicit_globals: global variable `rev` used
+210:10 no_implicit_globals: global variable `string` used
+210:46 shadowing: variable `c` shadows outer variable
+210:59 no_implicit_globals: global variable `rev` used
+213:11 no_implicit_globals: global variable `string` used
+214:1 no_implicit_globals: global variable `assert` used
+214:8 no_implicit_globals: global variable `rev` used
+214:12 no_implicit_globals: global variable `rev` used
+218:1 no_implicit_globals: global variable `assert` used
+218:8 no_implicit_globals: global variable `string` used
+219:1 no_implicit_globals: global variable `assert` used
+219:8 no_implicit_globals: global variable `string` used
+220:1 no_implicit_globals: global variable `assert` used
+220:8 no_implicit_globals: global variable `string` used
+221:1 no_implicit_globals: global variable `assert` used
+221:8 no_implicit_globals: global variable `string` used
+223:1 no_implicit_globals: global variable `assert` used
+223:8 no_implicit_globals: global variable `string` used
+225:9 multiple_statements_per_line: statement starts on the same line as the previous statement
+225:9 no_implicit_globals: global variable `setmetatable` used
+225:46 shadowing: variable `t` shadows outer variable
+225:46 unused_argument: unused argument `t`
+225:58 no_implicit_globals: global variable `string` used
+226:1 no_implicit_globals: global variable `assert` used
+226:8 no_implicit_globals: global variable `string` used
+231:7 shadowing: variable `a` shadows outer variable
+231:7 redefining_local: local `a` is redeclared in the same block
+232:10 no_implicit_globals: global variable `string` used
+232:42 no_implicit_globals: global variable `assert` used
+232:60 multiple_statements_per_line: statement starts on the same line as the previous statement
+233:1 no_implicit_globals: global variable `assert` used
+236:10 no_implicit_globals: global variable `string` used
+237:18 multiple_statements_per_line: statement starts on the same line as the previous statement
+239:1 no_implicit_globals: global variable `assert` used
+242:10 no_implicit_globals: global variable `string` used
+243:3 no_implicit_globals: global variable `assert` used
+243:15 no_implicit_globals: global variable `table` used
+245:1 no_implicit_globals: global variable `assert` used
+245:8 deprecated: `table.getn` is deprecated
+245:8 no_implicit_globals: global variable `table` used
+248:12 no_implicit_globals: global variable `string` used
+252:12 no_implicit_globals: global variable `pairs` used
+252:24 no_implicit_globals: global variable `assert` used
+252:44 multiple_statements_per_line: statement starts on the same line as the previous statement
+253:1 no_implicit_globals: global variable `assert` used
+258:1 no_implicit_globals: global variable `assert` used
+258:8 no_implicit_globals: global variable `string` used
+259:1 no_implicit_globals: global variable `assert` used
+259:8 no_implicit_globals: global variable `string` used
+260:1 no_implicit_globals: global variable `assert` used
+260:8 no_implicit_globals: global variable `string` used
+261:1 no_implicit_globals: global variable `assert` used
+261:8 no_implicit_globals: global variable `string` used
+262:1 no_implicit_globals: global variable `assert` used
+262:8 no_implicit_globals: global variable `string` used
+263:1 no_implicit_globals: global variable `assert` used
+263:8 no_implicit_globals: global variable `string` used
+265:1 no_implicit_globals: global variable `assert` used
+265:8 no_implicit_globals: global variable `string` used
+266:1 no_implicit_globals: global variable `assert` used
+266:8 no_implicit_globals: global variable `string` used
+267:1 no_implicit_globals: global variable `assert` used
+267:8 no_implicit_globals: global variable `string` used
+268:1 no_implicit_globals: global variable `assert` used
+268:8 no_implicit_globals: global variable `string` used
+269:1 no_implicit_globals: global variable `assert` used
+269:8 no_implicit_globals: global variable `string` used
+270:1 no_implicit_globals: global variable `assert` used
+270:12 no_implicit_globals: global variable `string` used
+271:1 no_implicit_globals: global variable `assert` used
+271:12 no_implicit_globals: global variable `string` used
+273:10 shadowing: variable `e` shadows outer variable
+273:10 redefining_local: local `e` is redeclared in the same block
+273:14 no_implicit_globals: global variable `string` used
+274:1 no_implicit_globals: global variable `assert` used
+275:11 no_implicit_globals: global variable `string` used
+276:1 no_implicit_globals: global variable `assert` used
+278:7 shadowing: variable `a` shadows outer variable
+278:7 redefining_local: local `a` is redeclared in the same block
+279:5 shadowing: variable `k` shadows outer variable
+279:10 no_implicit_globals: global variable `string` used
+280:3 no_implicit_globals: global variable `assert` used
+280:10 no_implicit_globals: global variable `table` used
+282:1 no_implicit_globals: global variable `assert` used
+288:18 no_implicit_globals: global variable `pcall` used
+288:24 no_implicit_globals: global variable `string` used
+289:3 no_implicit_globals: global variable `assert` used
+289:20 no_implicit_globals: global variable `string` used
+305:1 no_implicit_globals: global variable `assert` used
+305:8 no_implicit_globals: global variable `string` used
+306:1 no_implicit_globals: global variable `assert` used
+306:8 no_implicit_globals: global variable `string` used
+307:1 no_implicit_globals: global variable `assert` used
+307:8 no_implicit_globals: global variable `string` used
+308:1 no_implicit_globals: global variable `assert` used
+308:8 no_implicit_globals: global variable `string` used
+309:1 no_implicit_globals: global variable `assert` used
+309:8 no_implicit_globals: global variable `string` used
+310:1 no_implicit_globals: global variable `assert` used
+310:8 no_implicit_globals: global variable `string` used
+311:1 no_implicit_globals: global variable `assert` used
+311:8 no_implicit_globals: global variable `string` used
+314:1 no_implicit_globals: global variable `assert` used
+314:8 no_implicit_globals: global variable `string` used
+315:1 no_implicit_globals: global variable `assert` used
+315:8 no_implicit_globals: global variable `string` used
 
 luau-0.740/safeenv.luau
 2:1 no_implicit_globals: global variable `print` used

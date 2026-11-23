@@ -107,7 +107,7 @@ end
     assert!(result.contains("identity<<T>>"), "{result}");
     assert!(result.contains(":T"), "{result}");
     let allocator = Allocator::new();
-    let reparsed = luck_parser::parse(&allocator, &result, LuaVersion::Luau);
+    let reparsed = luck_parser::parse(&allocator, result.as_bytes(), LuaVersion::Luau);
     assert!(
         reparsed.errors.is_empty(),
         "minified merged-RFC syntax must reparse: {:?}\n{result}",

@@ -16,7 +16,7 @@ use luck_ast::{
 use luck_semantic::{SemanticAnalysis, StdlibEntry, SymbolKind};
 use luck_token::{Span, Token, TokenKind, index_to_offset};
 
-use crate::document::DocumentState;
+use crate::document::{DocumentState, span_text};
 use crate::providers::cursor::identifier;
 
 const TOKEN_TYPES: &[SemanticTokenType] = &[
@@ -367,7 +367,7 @@ impl Classifier<'_> {
                 link_one_back = None;
                 continue;
             }
-            let name = token.text(source);
+            let name = span_text(source, token.span);
             let separator = index.checked_sub(1).and_then(|before| tokens.get(before));
             let is_after_dot = separator.is_some_and(|before| before.kind == TokenKind::Dot);
             let is_member =
@@ -380,7 +380,7 @@ impl Classifier<'_> {
                 link_before.and_then(|link| Some((tokens.get(index.checked_sub(2)?)?, link)));
             let entry = chain_before.and_then(|(before, link)| match link {
                 ChainLink::Root => {
-                    let root = before.text(source);
+                    let root = span_text(source, before.span);
                     let start = before.span.start;
                     let reference = iter::from_fn(|| {
                         references.next_if(|reference| reference.span.start <= start)
@@ -742,7 +742,7 @@ mod tests {
                     Position::new(position.line, position.character.saturating_add(token.length));
                 let span = Span::new(document.offset(position), document.offset(previous_end));
                 Highlight {
-                    text: span.text(document.text()).to_owned(),
+                    text: span_text(document.text(), span).to_owned(),
                     kind: legend
                         .token_types
                         .get(offset_to_index(token.token_type))

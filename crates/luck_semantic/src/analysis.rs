@@ -513,7 +513,7 @@ end",
 
     /// Each node the walk shows, by the hook that saw it and its text.
     struct Recorder<'ast> {
-        source: &'ast str,
+        source: &'ast [u8],
         seen: Vec<String>,
     }
 
@@ -525,14 +525,14 @@ end",
             self.seen.push(format!("body {}", body.params.len()));
         }
         fn stmt(&mut self, stmt: &'ast Statement<'ast>) {
-            self.seen.push(format!("stmt {}", stmt.span().text(self.source)));
+            self.seen.push(format!("stmt {}", stmt.span().text(self.source).escape_ascii()));
         }
 
         fn expr(&mut self, expr: &'ast Expression<'ast>) {
-            self.seen.push(format!("expr {}", expr.span().text(self.source)));
+            self.seen.push(format!("expr {}", expr.span().text(self.source).escape_ascii()));
         }
         fn chain(&mut self, chain: &'ast SuffixedExpression<'ast>, is_target: bool) {
-            let text = chain.span.text(self.source);
+            let text = chain.span.text(self.source).escape_ascii();
             self.seen.push(format!("{} {text}", if is_target { "target" } else { "chain" }));
         }
         fn table(&mut self, table: &'ast TableConstructor<'ast>) {
@@ -546,7 +546,7 @@ end",
         let source = "t.x = f({}, function(a) return a end)
 return t";
         let chunk = parse(&allocator, source, LuaVersion::Lua54);
-        let mut recorder = Recorder { source, seen: Vec::new() };
+        let mut recorder = Recorder { source: source.as_bytes(), seen: Vec::new() };
         let _analysis = analyze_with(
             chunk,
             TreeCounts::default(),

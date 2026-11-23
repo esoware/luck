@@ -8,7 +8,7 @@
 
 use core::iter;
 
-use luck_allocator::ThinStr;
+use luck_allocator::ThinBytes;
 use luck_ast::{
     BinaryOp, Expression, FunctionDef, GetSpan as _, IfExpression, IntegerLiteral,
     InterpolatedString, NumberLiteral, Slot, StringLiteral, Suffix, SuffixedExpression, UnaryOp,
@@ -189,7 +189,7 @@ impl<'ast> Formatter<'ast> {
             // Luau
             Expression::Integer(literal) => self.write_integer(literal),
             Expression::StringLiteral(literal) => self.write_string(literal),
-            Expression::Name(name) => self.ascii(name.text.as_str()),
+            Expression::Name(name) => self.ascii(name.text.as_bytes()),
             Expression::Suffixed(chain) => self.write_suffixed(chain),
             Expression::BinaryOp(binary_op) => self.write_binary_chain(binary_op, true, slot),
             Expression::UnaryOp(unary_op) => self.write_unary(unary_op, slot),
@@ -230,13 +230,13 @@ impl<'ast> Formatter<'ast> {
             || {
                 let spelling = spell_number(literal.value, self.version());
                 let (buffer, allocator) = self.scratch();
-                buffer.push_str(spelling.as_str());
-                if buffer.ends_with('.') {
-                    buffer.push('0');
+                buffer.extend_from_slice(spelling.as_str().as_bytes());
+                if buffer.ends_with(b".") {
+                    buffer.push(b'0');
                 }
-                allocator.alloc_str(buffer)
+                &*allocator.alloc_slice_copy(buffer)
             },
-            ThinStr::as_str,
+            |raw| raw.as_bytes(),
         );
         self.write_numeral(text);
     }
@@ -244,17 +244,22 @@ impl<'ast> Formatter<'ast> {
     /// Luau: an integer, as [`Self::write_number`] writes a number.
     fn write_integer(&mut self, literal: &IntegerLiteral<'ast>) {
         let text = literal.raw.map_or_else(
-            || self.allocator().alloc_str(spell_integer(literal.value).as_str()),
-            ThinStr::as_str,
+            || {
+                &*self
+                    .allocator()
+                    .alloc_slice_copy(spell_integer(literal.value).as_str().as_bytes())
+            },
+            |raw| raw.as_bytes(),
         );
         self.write_numeral(text);
     }
 
-    fn write_numeral(&mut self, text: &'ast str) {
+    /// `text` is a numeral, which is ASCII.
+    fn write_numeral(&mut self, text: &'ast [u8]) {
         let hex_case = self.options().hexadecimal_case;
         let (buffer, allocator) = self.scratch();
         let normalized = if normalize_number(text, hex_case, buffer) {
-            allocator.alloc_str(buffer)
+            allocator.alloc_slice_copy(buffer)
         } else {
             text
         };
@@ -267,18 +272,21 @@ impl<'ast> Formatter<'ast> {
         let text = self.string_spelling(literal);
         let quote_style = self.options().quote_style;
         let (buffer, allocator) = self.scratch();
-        let requoted =
-            if requote(text, quote_style, buffer) { allocator.alloc_str(buffer) } else { text };
+        let requoted = if requote(text, quote_style, buffer) {
+            allocator.alloc_slice_copy(buffer)
+        } else {
+            text
+        };
         self.text(requoted);
     }
 
-    fn string_spelling(&mut self, literal: &StringLiteral<'ast>) -> &'ast str {
+    fn string_spelling(&mut self, literal: &StringLiteral<'ast>) -> &'ast [u8] {
         if let Some(raw) = literal.raw {
-            return raw.as_str();
+            return raw.as_bytes();
         }
         let (buffer, allocator) = self.scratch();
         spell_string(&literal.value).write_to(buffer);
-        allocator.alloc_str(buffer)
+        allocator.alloc_slice_copy(buffer)
     }
 
     /// Luau: a piece of an interpolated string, as written or escaped from
@@ -288,9 +296,9 @@ impl<'ast> Formatter<'ast> {
             || {
                 let (buffer, allocator) = self.scratch();
                 write_interpolated_text(&text.value, buffer);
-                allocator.alloc_str(buffer)
+                allocator.alloc_slice_copy(buffer)
             },
-            ThinStr::as_str,
+            ThinBytes::as_bytes,
         );
         if !spelling.is_empty() {
             self.text(spelling);
@@ -323,7 +331,7 @@ impl<'ast> Formatter<'ast> {
         let is_padded = matches!(
             self.first_printed(key, Slot::FREE),
             Some(Expression::StringLiteral(literal))
-                if self.string_spelling(literal).starts_with('[')
+                if self.string_spelling(literal).first() == Some(&b'[')
         );
         self.token("[");
         if is_padded {

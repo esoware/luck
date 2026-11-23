@@ -12,7 +12,7 @@ use luck_ast::is_valid_identifier_in;
 use luck_semantic::{SymbolId, SymbolKind};
 use luck_token::Span;
 
-use crate::document::DocumentState;
+use crate::document::{DocumentState, span_text};
 use crate::providers::cursor::local_at;
 
 pub(crate) fn prepare(
@@ -22,7 +22,7 @@ pub(crate) fn prepare(
     let (_, span) = rename_target(document, document.offset(position)).ok().flatten()?;
     Some(PrepareRenameResponse::RangeWithPlaceholder {
         range: document.range(span),
-        placeholder: span.text(document.text()).to_owned(),
+        placeholder: span_text(document.text(), span).to_owned(),
     })
 }
 

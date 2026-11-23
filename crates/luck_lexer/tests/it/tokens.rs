@@ -129,7 +129,9 @@ f --[[ g ]] h";
     let breaks: Vec<(&str, bool)> = result
         .tokens
         .iter()
-        .map(|token| (token.text(source), token.has_line_break_before))
+        .map(|token| {
+            (str::from_utf8(token.text(source.as_bytes())).unwrap(), token.has_line_break_before)
+        })
         .collect();
     assert_eq!(
         breaks,
@@ -148,7 +150,7 @@ f --[[ g ]] h";
 #[test]
 fn only_luau_reads_a_lone_cr_as_no_line_break() {
     for version in LuaVersion::ALL {
-        let result = lex("a\rb", version);
+        let result = lex(b"a\rb", version);
         assert_eq!(result.tokens[1].has_line_break_before, !version.is_luau(), "{version:?}");
     }
 }
@@ -180,7 +182,7 @@ comment ]] -- line \u{1F600}\r
     for version in LuaVersion::ALL {
         // `get` refuses a cut inside a char.
         for prefix in (0..=source.len()).filter_map(|length| source.get(..length)) {
-            let result = lex(prefix, version);
+            let result = lex(prefix.as_bytes(), version);
             let end = u32::try_from(prefix.len()).expect("the source is short");
             let (eof, tokens) = result.tokens.split_last().expect("an EOF token");
             assert_eq!(eof.kind, TokenKind::Eof, "{version:?} {prefix:?}");
@@ -278,16 +280,41 @@ fn dot_runs_lex_as_varargs_concat_and_dot() {
 
 #[test]
 fn bom_is_skipped() {
-    let result = lex("\u{FEFF}local x = 1", LuaVersion::Lua54);
+    let result = lex("\u{FEFF}local x = 1".as_bytes(), LuaVersion::Lua54);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert_eq!(result.tokens[0].kind, TokenKind::Local);
 }
 
 #[test]
 fn non_ascii_unexpected_char_is_one_error() {
-    let result = lex("local caf\u{e9} = 1", LuaVersion::Lua54);
+    let result = lex("local caf\u{e9} = 1".as_bytes(), LuaVersion::Lua54);
     assert_eq!(result.errors.len(), 1, "errors: {:?}", result.errors);
     assert!(result.errors[0].message.contains('\u{e9}'));
+}
+
+#[test]
+fn each_unexpected_byte_that_is_not_utf8_is_one_error() {
+    let result = lex(b"local caf\xE9\x80 = 1", LuaVersion::Lua51);
+    let errors: Vec<(&str, Option<Span>)> =
+        result.errors.iter().map(|e| (&*e.message, e.span)).collect();
+    assert_eq!(
+        errors,
+        [
+            ("unexpected byte 0xE9", Some(Span::new(9, 10))),
+            ("unexpected byte 0x80", Some(Span::new(10, 11)))
+        ]
+    );
+    let kinds: Vec<TokenKind> = result.tokens.iter().map(|token| token.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            TokenKind::Local,
+            TokenKind::Identifier,
+            TokenKind::Equal,
+            TokenKind::Number,
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
@@ -384,12 +411,12 @@ fn lua52_double_slash_lexes_as_two_slashes() {
 fn standalone_tilde_lexes_only_in_lua53_plus() {
     // Lua 5.3+ supports bitwise NOT; Luau doesn't.
     for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
-        let result = lex("~", version);
+        let result = lex(b"~", version);
         assert!(result.errors.is_empty(), "~ should work in {version:?}");
         assert_eq!(result.tokens[0].kind, TokenKind::Tilde);
     }
     for version in [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Luau] {
-        let result = lex("~", version);
+        let result = lex(b"~", version);
         assert!(!result.errors.is_empty(), "standalone ~ should error in {version:?}");
     }
 }
@@ -397,7 +424,7 @@ fn standalone_tilde_lexes_only_in_lua53_plus() {
 #[test]
 fn tilde_equal_lexes_in_every_version() {
     for version in LuaVersion::ALL {
-        let result = lex("~=", version);
+        let result = lex(b"~=", version);
         assert!(result.errors.is_empty(), "~= failed in {version:?}");
         assert_eq!(result.tokens[0].kind, TokenKind::TildeEqual);
     }
@@ -415,8 +442,8 @@ fn ampersand_and_pipe_lex_only_in_lua53_plus_and_luau() {
         assert_eq!(first_kind_in("|", version), TokenKind::Pipe, "| should work in {version:?}");
     }
     for version in [LuaVersion::Lua51, LuaVersion::Lua52] {
-        assert!(!lex("&", version).errors.is_empty(), "& should error in {version:?}");
-        assert!(!lex("|", version).errors.is_empty(), "| should error in {version:?}");
+        assert!(!lex(b"&", version).errors.is_empty(), "& should error in {version:?}");
+        assert!(!lex(b"|", version).errors.is_empty(), "| should error in {version:?}");
     }
 }
 
@@ -551,7 +578,7 @@ fn at_lexes_only_in_luau() {
         LuaVersion::Lua54,
         LuaVersion::Lua55,
     ] {
-        assert!(!lex("@", version).errors.is_empty(), "@ should error in {version:?}");
+        assert!(!lex(b"@", version).errors.is_empty(), "@ should error in {version:?}");
     }
 }
 
@@ -562,7 +589,7 @@ fn luau_attribute_lexes_as_at_and_a_name() {
 
 #[test]
 fn luau_nul_byte_ends_the_source() {
-    let result = lex("return 1\0$", LuaVersion::Luau);
+    let result = lex(b"return 1\0$", LuaVersion::Luau);
     assert!(
         result.errors.is_empty(),
         "Luau reads a raw NUL as end of input, so the bytes after it should not be lexed: {:?}",
@@ -574,7 +601,7 @@ fn luau_nul_byte_ends_the_source() {
 #[test]
 fn bom_is_an_error_on_lua51_and_luau() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-        let result = lex("\u{FEFF}return 1", version);
+        let result = lex("\u{FEFF}return 1".as_bytes(), version);
         assert!(
             !result.errors.is_empty(),
             "a leading BOM fails to compile under {version:?}, so it should be reported: {:?}",

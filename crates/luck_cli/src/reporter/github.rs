@@ -91,8 +91,11 @@ print(a)";
         .with_label(Span::new(6, 7), "a label")
         .with_help("prefix with `_` to suppress this warning");
         let mut output = Vec::new();
-        let source =
-            SourceFile { label: r"src\a.lua", text: Some(text), version: LuaVersion::Lua54 };
+        let source = SourceFile {
+            label: r"src\a.lua",
+            text: Some(text.as_bytes()),
+            version: LuaVersion::Lua54,
+        };
         GithubReporter.render(source, &[diag], &mut output);
         let lines = String::from_utf8(output).expect("annotations are UTF-8");
         let (file, rest) = lines

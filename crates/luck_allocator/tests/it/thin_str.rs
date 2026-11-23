@@ -21,6 +21,16 @@ fn gives_back_the_str_it_was_made_from() {
 }
 
 #[test]
+fn takes_bytes_that_are_ascii_and_nothing_else() {
+    let bytes = b"name_2";
+    let thin = ThinStr::from_ascii(bytes).expect("ASCII is text");
+    assert!(ptr::eq(thin.as_bytes(), bytes.as_slice()));
+    assert_eq!(ThinStr::from_ascii(b"").map(ThinStr::as_str), Some(""));
+    assert_eq!(ThinStr::from_ascii("caf\u{e9}".as_bytes()), None);
+    assert_eq!(ThinStr::from_ascii(b"caf\xE9"), None);
+}
+
+#[test]
 fn compares_and_prints_as_its_str() {
     let thin = ThinStr::from("name");
     assert_eq!(thin, ThinStr::new(&String::from("name")));

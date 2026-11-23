@@ -593,7 +593,7 @@ mod tests {
         source: &'ast str,
         version: LuaVersion,
     ) -> &'ast Chunk<'ast> {
-        let parse = luck_parser::parse(allocator, source, version);
+        let parse = luck_parser::parse(allocator, source.as_bytes(), version);
         assert!(parse.errors.is_empty(), "parser errors for {source:?}: {:?}", parse.errors);
         allocator.alloc(parse.chunk)
     }

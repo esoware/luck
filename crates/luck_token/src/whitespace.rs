@@ -28,8 +28,7 @@ pub const fn strip_line_break(bytes: &[u8], version: LuaVersion) -> Option<&[u8]
     }
 }
 
-pub fn line_breaks(text: &str, version: LuaVersion) -> impl Iterator<Item = Range<usize>> {
-    let bytes = text.as_bytes();
+pub fn line_breaks(bytes: &[u8], version: LuaVersion) -> impl Iterator<Item = Range<usize>> {
     let mut position = 0usize;
     iter::from_fn(move || {
         let rest = bytes.get(position..)?;
@@ -50,20 +49,25 @@ pub fn line_breaks(text: &str, version: LuaVersion) -> impl Iterator<Item = Rang
 }
 
 #[must_use]
-pub fn has_line_break(text: &str, version: LuaVersion) -> bool {
-    line_breaks(text, version).next().is_some()
+pub fn has_line_break(bytes: &[u8], version: LuaVersion) -> bool {
+    line_breaks(bytes, version).next().is_some()
 }
 
 #[must_use]
-pub fn ends_with_line_break(text: &str, version: LuaVersion) -> bool {
-    text.ends_with('\n') || (version.has_lfcr_line_break() && text.ends_with('\r'))
+pub const fn ends_with_line_break(bytes: &[u8], version: LuaVersion) -> bool {
+    match bytes {
+        [.., b'\n'] => true,
+        [.., b'\r'] => version.has_lfcr_line_break(),
+        _ => false,
+    }
 }
 
 /// The byte offset `source`'s code starts at: past a UTF-8 BOM where
 /// `version`'s loader skips one, else 0.
 #[must_use]
-pub fn chunk_start(source: &str, version: LuaVersion) -> usize {
-    if version.has_bom_skip() && source.starts_with('\u{FEFF}') { '\u{FEFF}'.len_utf8() } else { 0 }
+pub fn chunk_start(source: &[u8], version: LuaVersion) -> usize {
+    const BOM: &[u8] = "\u{FEFF}".as_bytes();
+    if version.has_bom_skip() && source.starts_with(BOM) { BOM.len() } else { 0 }
 }
 
 /// Where each line of a source starts, with lines broken as `version` breaks
@@ -75,13 +79,13 @@ pub struct LineIndex {
 
 impl LineIndex {
     #[must_use]
-    pub fn new(source: &str, version: LuaVersion) -> Self {
+    pub fn new(source: &[u8], version: LuaVersion) -> Self {
         let first_line_start = chunk_start(source, version);
         let chunk = source.get(first_line_start..).unwrap_or_default();
         // Loaders skip a shebang line up to its LF, so a CR in it starts no
         // line.
-        let shebang_length = if has_shebang(chunk.as_bytes(), version) {
-            memchr::memchr(b'\n', chunk.as_bytes()).unwrap_or(chunk.len())
+        let shebang_length = if has_shebang(chunk, version) {
+            memchr::memchr(b'\n', chunk).unwrap_or(chunk.len())
         } else {
             0
         };

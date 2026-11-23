@@ -808,8 +808,10 @@ fn format_edits(
         session.send(Task::Notify(Notification::new(ShowMessage::METHOD.to_owned(), warning)));
         return None;
     }
-    if result.output == document.text() {
+    if result.output == document.text().as_bytes() {
         return Some(Vec::new());
     }
-    Some(vec![TextEdit { range: document.full_range(), new_text: result.output }])
+    // A text that's UTF-8 formats as UTF-8.
+    let new_text = String::from_utf8_lossy(&result.output).into_owned();
+    Some(vec![TextEdit { range: document.full_range(), new_text }])
 }

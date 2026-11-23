@@ -12,7 +12,7 @@ use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_token::LuaVersion;
 
 use crate::exit::{Exit, operation_error, usage_error};
-use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
+use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source, write_output};
 use crate::project::{
     ProjectFile, for_each_outcome_in_order, one_shot_project, project_files, working_project,
 };
@@ -320,7 +320,7 @@ impl LintArgs {
         if !fixes.is_empty() {
             // Echo the source even with nothing to fix, since editors and
             // pipelines take stdout as the new file content.
-            print!("{current_source}");
+            write_output(None, current_source)?;
         }
         if let Some(error) = &fix_error {
             eprintln!("error: cannot fix `{stdin_path}`: {error}");
@@ -380,8 +380,8 @@ impl LintArgs {
 
     fn lint_file(&self, allocator: &Allocator, file: &ProjectFile, is_quiet: bool) -> LintOutcome {
         let file_path = file.path.as_path();
-        let source = match FileSystemOs.read_to_string(file_path) {
-            Ok(text) => text,
+        let source = match FileSystemOs.read(file_path) {
+            Ok(bytes) => bytes,
             Err(error) => {
                 // A skipped file fails the run, so CI can't pass with files
                 // left unlinted.
@@ -408,7 +408,7 @@ impl LintArgs {
             note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
             let unfixed =
                 luck_linter::lint(allocator, &source, target, &lint_config, FixKind::empty());
-            (source.as_str(), unfixed)
+            (source.as_slice(), unfixed)
         } else {
             is_fixed = true;
             (fixed, fixed_messages)
@@ -430,7 +430,7 @@ impl LintArgs {
     fn rendered(
         &self,
         label: &str,
-        source: &str,
+        source: &[u8],
         messages: Vec<Message>,
         version: LuaVersion,
         is_quiet: bool,
@@ -461,11 +461,11 @@ impl LintArgs {
 /// `source` as it was, with its own messages.
 fn fixed_or_linted<'ast>(
     allocator: &'ast Allocator,
-    source: &'ast str,
+    source: &'ast [u8],
     target: LuaTarget,
     lint_config: &LintConfig,
     fixes: FixKind,
-) -> (&'ast str, Vec<Message>, Option<FixError>) {
+) -> (&'ast [u8], Vec<Message>, Option<FixError>) {
     let fix_error = if fixes.is_empty() {
         None
     } else {
@@ -543,7 +543,13 @@ mod tests {
     }
 
     fn lint_source(source: &str, target: LuaTarget, lint_config: &LintConfig) -> Vec<Message> {
-        luck_linter::lint(&Allocator::new(), source, target, lint_config, FixKind::empty())
+        luck_linter::lint(
+            &Allocator::new(),
+            source.as_bytes(),
+            target,
+            lint_config,
+            FixKind::empty(),
+        )
     }
 
     #[test]
@@ -710,8 +716,13 @@ print(undefined_var)";
         let diags = lint_source(source, LuaTarget::Lua54, &LintConfig::default());
         let args = lint_args(&["--format", "json"]);
         let lines_when = |is_quiet: bool| {
-            let rendered =
-                args.rendered("a.lua", source, diags.clone(), LuaVersion::Lua54, is_quiet);
+            let rendered = args.rendered(
+                "a.lua",
+                source.as_bytes(),
+                diags.clone(),
+                LuaVersion::Lua54,
+                is_quiet,
+            );
             String::from_utf8(rendered).expect("JSON is UTF-8")
         };
 
@@ -728,7 +739,7 @@ print(undefined_var)";
         assert!(!diags.is_empty(), "{diags:?}");
         let rendered = lint_args(&["--silent"]).rendered(
             "a.lua",
-            "print(undefined_var)",
+            b"print(undefined_var)",
             diags,
             LuaVersion::Lua54,
             false,

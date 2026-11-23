@@ -11,24 +11,29 @@ const SIMPLE: TokenKind = TokenKind::InterpolatedStringSimple;
 
 /// Every token's kind and text but the closing `Eof`'s, errors or not.
 fn pieces(source: &str) -> Vec<(TokenKind, &str)> {
-    lex(source, LuaVersion::Luau)
+    lex(source.as_bytes(), LuaVersion::Luau)
         .tokens
         .into_iter()
         .filter(|token| token.kind != TokenKind::Eof)
-        .map(|token| (token.kind, token.text(source)))
+        .map(|token| {
+            (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap_or_default())
+        })
         .collect()
 }
 
 #[test]
 fn interpolated_string_without_exprs_lexes_as_one_simple_token() {
     for (source, text) in [("`hello`", "hello"), ("``", "")] {
-        let result = lex(source, LuaVersion::Luau);
+        let result = lex(source.as_bytes(), LuaVersion::Luau);
         assert_eq!(result.errors, Vec::<Diagnostic>::new(), "{source:?}");
         let [simple, eof] = result.tokens.as_slice() else {
             panic!("{source:?}: {:?}", result.tokens);
         };
-        assert_eq!((simple.kind, simple.text(source)), (SIMPLE, text));
-        assert_eq!(simple.span.text(source), source);
+        assert_eq!(
+            (simple.kind, str::from_utf8(simple.text(source.as_bytes())).unwrap()),
+            (SIMPLE, text)
+        );
+        assert_eq!(str::from_utf8(simple.span.text(source.as_bytes())).unwrap(), source);
         assert!(!simple.is_unterminated);
         assert_eq!(eof.kind, TokenKind::Eof);
     }
@@ -37,9 +42,13 @@ fn interpolated_string_without_exprs_lexes_as_one_simple_token() {
 #[test]
 fn each_piece_spans_its_delimiters_and_carries_the_text_between_them() {
     let source = "`a{x}b{y}c`";
-    let result = lex(source, LuaVersion::Luau);
+    let result = lex(source.as_bytes(), LuaVersion::Luau);
     assert_eq!(result.errors, Vec::<Diagnostic>::new());
-    let spans: Vec<&str> = result.tokens.iter().map(|token| token.span.text(source)).collect();
+    let spans: Vec<&str> = result
+        .tokens
+        .iter()
+        .map(|token| str::from_utf8(token.span.text(source.as_bytes())).unwrap())
+        .collect();
     assert_eq!(spans, ["`a{", "x", "}b{", "y", "}c`", ""]);
     assert_eq!(
         tokens_in(source, LuaVersion::Luau),
@@ -114,14 +123,14 @@ fn a_string_inside_a_hole_opens_its_own_pieces() {
 
 #[test]
 fn unterminated_interpolated_string_is_error() {
-    let result = lex("`hello", LuaVersion::Luau);
+    let result = lex(b"`hello", LuaVersion::Luau);
     assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("unterminated"));
 }
 
 #[test]
 fn interpolated_string_double_brace_is_error() {
-    let result = lex("`{{x}}`", LuaVersion::Luau);
+    let result = lex(b"`{{x}}`", LuaVersion::Luau);
     assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("`{{` is not allowed"));
 }
@@ -164,14 +173,14 @@ y",
         ),
     ];
     for (source, expected, (message, text)) in cases {
-        let result = lex(source, LuaVersion::Luau);
+        let result = lex(source.as_bytes(), LuaVersion::Luau);
         assert_eq!(pieces(source), expected, "{source:?}");
         let [error] = result.errors.as_slice() else {
             panic!("{source:?}: {:?}", result.errors);
         };
         assert_eq!(
-            (&*error.message, error.span.map(|span| span.text(source))),
-            (message, Some(text)),
+            (&*error.message, error.span.map(|span| span.text(source.as_bytes()))),
+            (message, Some(text.as_bytes())),
             "{source:?}"
         );
     }
@@ -195,14 +204,18 @@ y",
         ("`a\\`", vec!["`a\\`"]),
         ("`{x}a{y}b`", vec![]),
     ] {
-        let result = lex(source, LuaVersion::Luau);
-        let texts: Vec<&str> = result.unterminated.iter().map(|span| span.text(source)).collect();
+        let result = lex(source.as_bytes(), LuaVersion::Luau);
+        let texts: Vec<&str> = result
+            .unterminated
+            .iter()
+            .map(|span| str::from_utf8(span.text(source.as_bytes())).unwrap())
+            .collect();
         assert_eq!(texts, cut_off, "{source:?}");
         let flagged: Vec<&str> = result
             .tokens
             .iter()
             .filter(|token| token.is_unterminated)
-            .map(|token| token.span.text(source))
+            .map(|token| str::from_utf8(token.span.text(source.as_bytes())).unwrap())
             .collect();
         assert_eq!(flagged, cut_off, "{source:?}");
     }
@@ -225,7 +238,7 @@ fn backtick_is_an_unexpected_character_outside_luau() {
         LuaVersion::Lua55,
     ] {
         for source in ["`hello`", "`a \\\r\n{n}`"] {
-            let result = lex(source, version);
+            let result = lex(source.as_bytes(), version);
             assert!(
                 result.errors.iter().any(|e| e.message == "unexpected character ```"),
                 "{version:?} {source:?}: {:?}",
@@ -259,7 +272,7 @@ fn interpolated_segments_preserve_raw_escapes_and_spans() {
     for count in [1, 64] {
         let text = "\u{e9}\\n\\u{41}\\{\\`\\\\\\z \r\n \u{6f22}".repeat(count);
         let source = format!("`{text}{{x}}{text}{{y}}{text}`");
-        let result = lex(&source, LuaVersion::Luau);
+        let result = lex(source.as_bytes(), LuaVersion::Luau);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         for (i, kind, spelling) in [
             (0, BEGIN, format!("`{text}{{")),
@@ -267,10 +280,14 @@ fn interpolated_segments_preserve_raw_escapes_and_spans() {
             (4, END, format!("}}{text}`")),
         ] {
             let token = result.tokens[i];
-            assert_eq!((token.kind, token.text(&source)), (kind, text.as_str()));
-            assert_eq!(token.span.text(&source), spelling);
+            assert_eq!(
+                (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap()),
+                (kind, text.as_str())
+            );
+            assert_eq!(token.span.text(source.as_bytes()), spelling.as_bytes());
         }
-        let mut lexer = Lexer::new(&source, LuaVersion::Luau).expect("source fits u32 spans");
+        let mut lexer =
+            Lexer::new(source.as_bytes(), LuaVersion::Luau).expect("source fits u32 spans");
         for token in &result.tokens {
             assert_eq!(&lexer.next_token(), token);
         }
@@ -321,7 +338,7 @@ fn interpolated_string_rejects_unescaped_line_breaks() {
             format!("`{{n}}a{line_break}{{m}}`"),
             format!("`{{n}}a{line_break}`"),
         ] {
-            let result = lex(&source, LuaVersion::Luau);
+            let result = lex(source.as_bytes(), LuaVersion::Luau);
             assert!(
                 result.errors.iter().any(|e| e.message == "unterminated interpolated string"),
                 "{source:?}: {:?}",
@@ -334,7 +351,7 @@ fn interpolated_string_rejects_unescaped_line_breaks() {
 #[test]
 fn interpolated_string_validates_escapes_like_short_strings() {
     for source in [r"`\u{}`", r"`\u41`", r"`\u{41`", r"`\999`", r"`\xZZ`", r"`{n} \256`"] {
-        let result = lex(source, LuaVersion::Luau);
+        let result = lex(source.as_bytes(), LuaVersion::Luau);
         assert!(!result.errors.is_empty(), "{source:?} must be rejected");
     }
     for source in [
@@ -348,7 +365,7 @@ fn interpolated_string_validates_escapes_like_short_strings() {
         "`\\\r\n`",
         r"`{n} \n {m}`",
     ] {
-        let result = lex(source, LuaVersion::Luau);
+        let result = lex(source.as_bytes(), LuaVersion::Luau);
         assert!(result.errors.is_empty(), "{source:?}: {:?}", result.errors);
     }
 }

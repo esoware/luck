@@ -9,7 +9,7 @@ use crate::groupings::Groupings;
 /// values decoding rewrote, which live in the arena.
 #[derive(Debug)]
 pub struct ParseResult<'ast> {
-    pub source: &'ast str,
+    pub source: &'ast [u8],
     /// The tree, in the version the source was parsed as.
     pub chunk: Chunk<'ast>,
     pub comments: Vec<Comment>,

@@ -44,8 +44,8 @@ y = 0x --[[ open",
 
     for version in LuaVersion::ALL {
         for source in &sources {
-            let materialized = lex(source, version);
-            let mut lexer = Lexer::new(source, version).expect("source fits u32 spans");
+            let materialized = lex(source.as_bytes(), version);
+            let mut lexer = Lexer::new(source.as_bytes(), version).expect("source fits u32 spans");
             let mut streamed = Vec::new();
             loop {
                 let token = lexer.next_token();

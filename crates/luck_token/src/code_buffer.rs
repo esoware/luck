@@ -1,12 +1,8 @@
-//! Skips per-push UTF-8 machinery for the ASCII punctuation that dominates
-//! generated code, while holding a UTF-8 invariant so the final `String`
-//! conversion is zero-copy.
-
 use core::iter;
-use core::mem::{self, MaybeUninit};
+use core::mem::MaybeUninit;
 
-/// INVARIANT: `bytes` is valid UTF-8 at every public-method boundary. All
-/// safe methods preserve it, so `into_string` can skip re-validation.
+/// Bytes, as a Lua source is, so a printer copies a string or a comment that
+/// isn't UTF-8 as it was written.
 #[derive(Debug, Default)]
 pub struct CodeBuffer {
     bytes: Vec<u8>,
@@ -35,22 +31,15 @@ impl CodeBuffer {
         self.bytes.is_empty()
     }
 
-    /// The assertion compiles away for a literal byte, and the grow path is
-    /// outlined so a push with spare capacity stays a load, store, and
-    /// increment.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `byte` is not ASCII.
+    /// The grow path is outlined so a push with spare capacity stays a load,
+    /// store, and increment.
     #[inline]
-    pub fn print_ascii_byte(&mut self, byte: u8) {
+    pub fn print_byte(&mut self, byte: u8) {
         #[cold]
         #[inline(never)]
         fn push_slow(bytes: &mut Vec<u8>, byte: u8) {
             bytes.push(byte);
         }
-
-        assert!(byte.is_ascii(), "byte {byte} is not ASCII");
 
         if self.bytes.len() < self.bytes.capacity() {
             self.bytes.push(byte);
@@ -59,30 +48,24 @@ impl CodeBuffer {
         }
     }
 
-    /// # Panics
-    ///
-    /// Panics if `byte` is not ASCII.
     #[inline]
-    pub fn print_ascii_repeat(&mut self, byte: u8, count: usize) {
-        assert!(byte.is_ascii(), "byte {byte} is not ASCII");
+    pub fn print_repeat(&mut self, byte: u8, count: usize) {
         self.bytes.extend(iter::repeat_n(byte, count));
     }
 
-    /// A string of at most 16 bytes, as nearly every piece of code is, is
-    /// copied as two overlapping words of one width instead of with a
-    /// `memcpy` call, and a string known at compile time folds to its
-    /// stores. Any other takes a cold path out of line, which prints about 1%
-    /// faster than inlining it.
+    /// At most 16 bytes, as nearly every piece of code is, are copied as two
+    /// overlapping words of one width instead of with a `memcpy` call, and
+    /// bytes known at compile time fold to their stores. Any more take a
+    /// cold path out of line, which prints about 1% faster than inlining it.
     #[inline]
-    #[expect(unsafe_code, reason = "extending the vector calls memcpy for every short string")]
-    pub fn print_str(&mut self, text: &str) {
+    #[expect(unsafe_code, reason = "extending the vector calls memcpy for every short piece")]
+    pub fn print_bytes(&mut self, source: &[u8]) {
         #[cold]
         #[inline(never)]
-        fn print_slow(bytes: &mut Vec<u8>, text: &str) {
-            bytes.extend_from_slice(text.as_bytes());
+        fn print_slow(bytes: &mut Vec<u8>, source: &[u8]) {
+            bytes.extend_from_slice(source);
         }
 
-        let source = text.as_bytes();
         let count = source.len();
         let length = self.bytes.len();
         if count <= 16
@@ -95,34 +78,25 @@ impl CodeBuffer {
                 1 => copy_overlapping::<1>(source, window),
                 0 => {}
             }
-            // SAFETY: The `count` bytes past `length` now hold `text`, so
-            // they're initialized and keep the buffer UTF-8, and they were
-            // spare capacity, so the sum can't wrap.
+            // SAFETY: The `count` bytes past `length` now hold `source`, so
+            // they're initialized, and they were spare capacity, so the sum
+            // can't wrap.
             unsafe {
                 self.bytes.set_len(length.wrapping_add(count));
             }
         } else {
-            print_slow(&mut self.bytes, text);
+            print_slow(&mut self.bytes, source);
         }
     }
 
-    /// Appends what `write` appends to the `String` it's handed, which is the
+    /// Appends what `write` appends to the vector it's handed, which is the
     /// buffer itself, so nothing is copied.
     #[inline]
-    #[expect(
-        unsafe_code,
-        reason = "a String over the buffer's bytes saves a copy of what's written"
-    )]
     pub fn print_with<Write>(&mut self, write: Write)
     where
-        Write: FnOnce(&mut String),
+        Write: FnOnce(&mut Vec<u8>),
     {
-        // SAFETY: The buffer's bytes are UTF-8, and a `String` appends only
-        // UTF-8, so the bytes it hands back keep them so. A panic in `write`
-        // leaves the buffer empty, which is UTF-8 too.
-        let mut text = unsafe { String::from_utf8_unchecked(mem::take(&mut self.bytes)) };
-        write(&mut text);
-        self.bytes = text.into_bytes();
+        write(&mut self.bytes);
     }
 
     #[inline]
@@ -131,31 +105,15 @@ impl CodeBuffer {
         &self.bytes
     }
 
-    /// The cut must land on a UTF-8 boundary (always true when the removed bytes are ASCII).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the cut would split a UTF-8 sequence.
     #[inline]
     pub fn truncate(&mut self, new_length: usize) {
-        assert!(
-            self.bytes.get(new_length).is_none_or(|b| b & 0xC0 != 0x80),
-            "truncation must land on a UTF-8 boundary"
-        );
         self.bytes.truncate(new_length);
     }
 
     #[inline]
     #[must_use]
-    #[expect(
-        unsafe_code,
-        reason = "valid UTF-8 by construction; the safe form would revalidate all output"
-    )]
-    pub fn into_string(self) -> String {
-        debug_assert!(str::from_utf8(&self.bytes).is_ok(), "CodeBuffer must hold valid UTF-8");
-        // SAFETY: Every method keeps `bytes` valid UTF-8, and `truncate`
-        // asserts that its cut lands on a character boundary.
-        unsafe { String::from_utf8_unchecked(self.bytes) }
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 }
 

@@ -8,7 +8,7 @@ use crate::common::{
 };
 
 fn parse_lua51<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
-    luck_parser::parse(allocator, source, LuaVersion::Lua51)
+    luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Lua51)
 }
 
 #[test]
@@ -792,12 +792,12 @@ fn a_call_spans_the_parentheses_its_callee_is_in() {
         .filter_map(|stmt| {
             if let Statement::FunctionCall(chain) = stmt { chain.last_call() } else { None }
         })
-        .map(|call| call.span().text(source))
+        .map(|call| str::from_utf8(call.span().text(source.as_bytes())).unwrap())
         .collect();
     assert_eq!(calls, ["(f)(x)", "(\"s\"):rep(2)", "(a).b.c()"]);
     let Some(Statement::FunctionCall(fields)) = result.chunk.block.stmts.last() else {
         panic!("expected a call last");
     };
-    assert_eq!(fields.head(1).span().text(source), "(a).b");
-    assert_eq!(fields.head(0).span().text(source), "a", "a prefix alone is itself");
+    assert_eq!(fields.head(1).span().text(source.as_bytes()), b"(a).b");
+    assert_eq!(fields.head(0).span().text(source.as_bytes()), b"a", "a prefix alone is itself");
 }

@@ -1,7 +1,22 @@
+use luck_allocator::Allocator;
 use luck_core::LuaTarget;
-use luck_linter::LintConfig;
+use luck_linter::{FixKind, LintConfig};
+use luck_token::Span;
 
 use crate::common::{enable, lint};
+
+/// A Latin-1 source lints as Lua reads it, and an escape of one of its bytes
+/// names the byte.
+#[test]
+fn flags_a_lenient_escape_of_a_byte_that_is_not_utf8() {
+    let source = b"print('caf\\\xE9') -- d\xE9j\xE0";
+    let config = enable("bad_string_escape");
+    let diags =
+        luck_linter::lint(&Allocator::new(), source, LuaTarget::Lua51, &config, FixKind::empty());
+    let found: Vec<(&str, &str, Span)> =
+        diags.iter().map(|diag| (diag.code, &*diag.message, diag.span())).collect();
+    assert_eq!(found, [("bad_string_escape", "invalid string escape `\\xe9`", Span::new(10, 12))]);
+}
 
 #[test]
 fn flags_undefined_variable() {

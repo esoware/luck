@@ -105,10 +105,10 @@ pub struct StringLiteral<'ast> {
     pub value: ThinBytes<'ast>,
     /// The literal as written, quotes or long brackets and escapes included,
     /// or for a piece of an interpolated string, what lies between its
-    /// delimiters. `None` for one built in code, which a printer spells from
-    /// the value.
+    /// delimiters. Bytes, as the source is, which need not be UTF-8. `None`
+    /// for one built in code, which a printer spells from the value.
     #[content_eq(skip)]
-    pub raw: Option<ThinStr<'ast>>,
+    pub raw: Option<ThinBytes<'ast>>,
     pub span: Span,
 }
 

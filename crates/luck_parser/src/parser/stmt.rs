@@ -305,34 +305,34 @@ impl<'ast> Parser<'ast> {
         let next = self.peek_next();
         match self.current_text() {
             // Luau
-            "continue" if self.version.has_continue() && !continues_a_name(next) => {
+            b"continue" if self.version.has_continue() && !continues_a_name(next) => {
                 Statement::Continue(self.advance_loop_exit("`continue` outside a loop"))
             }
             // Luau
-            "type"
+            b"type"
                 if self.version.has_type_syntax()
                     && matches!(next, TokenKind::Identifier | TokenKind::Function) =>
             {
                 self.parse_type_declaration(None)
             }
             // Luau
-            "export"
+            b"export"
                 if self.version.has_type_syntax()
                     && (matches!(next, TokenKind::Local | TokenKind::Function)
                         || (next == TokenKind::Identifier
-                            && matches!(self.next_text(), "type" | "const"))) =>
+                            && matches!(self.next_text(), b"type" | b"const"))) =>
             {
                 self.parse_export_stmt(List::new())
             }
             // Luau
-            "const"
+            b"const"
                 if self.version.has_const_stmt()
                     && matches!(next, TokenKind::Identifier | TokenKind::Function) =>
             {
                 self.parse_const_stmt(List::new())
             }
             // Lua 5.5
-            "global"
+            b"global"
                 if self.version.has_global()
                     && matches!(
                         next,

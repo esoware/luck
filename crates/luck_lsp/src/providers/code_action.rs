@@ -129,7 +129,7 @@ fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
         .iter()
         .map(|edit| TextEdit {
             range: document.range(edit.span),
-            new_text: edit.replacement.clone().into_owned(),
+            new_text: String::from_utf8_lossy(&edit.replacement).into_owned(),
         })
         .collect()
 }
@@ -145,7 +145,7 @@ fn all_fix_edits(document: &DocumentState, lints: &[Message]) -> Vec<TextEdit> {
         .into_iter()
         .map(|edit| TextEdit {
             range: positions.range(edit.span),
-            new_text: edit.replacement.clone().into_owned(),
+            new_text: String::from_utf8_lossy(&edit.replacement).into_owned(),
         })
         .collect()
 }
@@ -182,8 +182,8 @@ impl<'document> Disabler<'document> {
         let rest = self.document.text().get(offset_to_index(statement_end)..).unwrap_or_default();
         let blank_length = rest.bytes().take_while(|&b| is_lua_whitespace(b)).count();
         let blank = rest.get(..blank_length).unwrap_or_default();
-        let is_line_end =
-            blank_length == rest.len() || has_line_break(blank, self.document.lua_version());
+        let is_line_end = blank_length == rest.len()
+            || has_line_break(blank.as_bytes(), self.document.lua_version());
         let new_text = if is_line_end {
             format!(" -- luck: allow({rule})")
         } else {
@@ -495,7 +495,7 @@ local u = second_missing
     }
 
     fn linter_edit(start: u32, end: u32) -> LinterTextEdit {
-        LinterTextEdit { span: Span::new(start, end), replacement: "x".into() }
+        LinterTextEdit { span: Span::new(start, end), replacement: b"x".as_slice().into() }
     }
 
     /// An unused variable, whose rename is a suggestion, beside a redundant

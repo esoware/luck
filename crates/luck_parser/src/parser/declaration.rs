@@ -16,10 +16,10 @@ impl<'ast> Parser<'ast> {
         match self.peek() {
             TokenKind::Local => self.parse_local_stmt(attributes),
             TokenKind::Function => self.parse_function_decl(attributes),
-            TokenKind::Identifier if self.current_text() == "export" => {
+            TokenKind::Identifier if self.current_text() == b"export" => {
                 self.parse_export_stmt(attributes)
             }
-            TokenKind::Identifier if self.current_text() == "const" => {
+            TokenKind::Identifier if self.current_text() == b"const" => {
                 self.parse_const_stmt(attributes)
             }
             _ => {
@@ -365,7 +365,7 @@ impl<'ast> Parser<'ast> {
             TokenKind::Function => {
                 self.parse_local_function(export_span, attributes, LocalFunctionKind::Export)
             }
-            TokenKind::Identifier if self.current_text() == "const" => {
+            TokenKind::Identifier if self.current_text() == b"const" => {
                 self.advance();
                 if !attributes.is_empty() {
                     self.error(export_span, "attributes are only allowed on exported functions");

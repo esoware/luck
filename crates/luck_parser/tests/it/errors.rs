@@ -6,7 +6,7 @@ use luck_parser::ParseResult;
 use luck_token::LuaVersion;
 
 fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
-    luck_parser::parse(allocator, source, LuaVersion::Lua54)
+    luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Lua54)
 }
 
 #[test]
@@ -120,10 +120,13 @@ fn assert_one_error_then_the_rest(cases: &[(LuaVersion, &str, &str, &str)]) {
 local after = 1"
         );
         let allocator = Allocator::new();
-        let result = luck_parser::parse(&allocator, source.as_str(), version);
-        let errors: Vec<(&str, &str)> =
-            result.errors.iter().map(|e| (&*e.message, e.span.unwrap().text(&source))).collect();
-        assert_eq!(errors, [(message, text)], "{broken:?}");
+        let result = luck_parser::parse(&allocator, source.as_bytes(), version);
+        let errors: Vec<(&str, &[u8])> = result
+            .errors
+            .iter()
+            .map(|e| (&*e.message, e.span.unwrap().text(source.as_bytes())))
+            .collect();
+        assert_eq!(errors, [(message, text.as_bytes())], "{broken:?}");
         if message.starts_with("unterminated long") {
             continue;
         }
@@ -203,7 +206,7 @@ fn semicolons_follow_each_grammar() {
         (LuaVersion::Lua54, "return;", true),
         (LuaVersion::Lua54, "return 1;;", false),
     ] {
-        let result = luck_parser::parse(&allocator, source, version);
+        let result = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert_eq!(result.errors.is_empty(), is_valid, "{version:?} {source}: {:?}", result.errors);
     }
 }
@@ -290,12 +293,15 @@ end",
         let result = parse(&allocator, source);
         let cut_off =
             source.find("--").and_then(|start| source.get(start..)).expect("a comment opener");
-        let errors: Vec<(&str, &str)> =
-            result.errors.iter().map(|e| (&*e.message, e.span.unwrap().text(source))).collect();
-        assert_eq!(errors, [("unterminated block comment", cut_off)], "{source:?}");
-        let comments: Vec<&str> =
-            result.comments.iter().map(|comment| comment.span.text(source)).collect();
-        assert_eq!(comments, [cut_off], "{source:?}");
+        let errors: Vec<(&str, &[u8])> = result
+            .errors
+            .iter()
+            .map(|e| (&*e.message, e.span.unwrap().text(source.as_bytes())))
+            .collect();
+        assert_eq!(errors, [("unterminated block comment", cut_off.as_bytes())], "{source:?}");
+        let comments: Vec<&[u8]> =
+            result.comments.iter().map(|comment| comment.span.text(source.as_bytes())).collect();
+        assert_eq!(comments, [cut_off.as_bytes()], "{source:?}");
     }
 }
 
@@ -308,9 +314,12 @@ fn a_method_call_without_arguments_has_error_arguments() {
 x = a:b
 local after = 1";
     let result = parse(&allocator, source);
-    let errors: Vec<(&str, &str)> =
-        result.errors.iter().map(|e| (&*e.message, e.span.unwrap().text(source))).collect();
-    assert_eq!(errors, [("expected function arguments", "local")]);
+    let errors: Vec<(&str, &[u8])> = result
+        .errors
+        .iter()
+        .map(|e| (&*e.message, e.span.unwrap().text(source.as_bytes())))
+        .collect();
+    assert_eq!(errors, [("expected function arguments", &b"local"[..])]);
     let Some(Statement::Assignment(assignment)) = result.chunk.block.stmts.first() else {
         panic!("{:?}", result.chunk.block.stmts);
     };
@@ -321,7 +330,7 @@ local after = 1";
     let FunctionArgs::Error(span) = call.args else {
         panic!("{:?}", call.args);
     };
-    assert_eq!(span.text(source), "local");
+    assert_eq!(span.text(source.as_bytes()), b"local");
 }
 
 /// Each construct left open at the end of the file is the one error there.
@@ -363,25 +372,32 @@ fn an_unclosed_construct_is_labeled_where_it_opened() {
         (LuaVersion::Luau, "local x: A<B", "<"),
         (LuaVersion::Luau, "local s = `a{b c}`", "{"),
     ] {
-        let result = luck_parser::parse(&allocator, source, version);
+        let result = luck_parser::parse(&allocator, source.as_bytes(), version);
         let [error] = result.errors.as_slice() else {
             panic!("{source:?}: {:?}", result.errors);
         };
-        let labels: Vec<(&str, &str)> =
-            error.labels.iter().map(|label| (label.span.text(source), &*label.message)).collect();
+        let labels: Vec<(&[u8], &str)> = error
+            .labels
+            .iter()
+            .map(|label| (label.span.text(source.as_bytes()), &*label.message))
+            .collect();
         let unclosed = format!("unclosed `{opener}`");
-        assert_eq!(labels, [(opener, unclosed.as_str())], "{source:?}");
+        assert_eq!(labels, [(opener.as_bytes(), unclosed.as_str())], "{source:?}");
     }
 }
 
 /// The labels of the one error in `source`, by the text each points at.
-fn labels_of(source: &str) -> Vec<(&str, String)> {
+fn labels_of(source: &str) -> Vec<(&[u8], String)> {
     let allocator = Allocator::new();
     let result = parse(&allocator, source);
     let [error] = result.errors.as_slice() else {
         panic!("{source:?}: {:?}", result.errors);
     };
-    error.labels.iter().map(|label| (label.span.text(source), label.message.to_string())).collect()
+    error
+        .labels
+        .iter()
+        .map(|label| (label.span.text(source.as_bytes()), label.message.to_string()))
+        .collect()
 }
 
 /// A missing `end` also points at the latest construct inside the one left
@@ -434,7 +450,7 @@ end
         let labels = labels_of(source);
         assert_eq!(
             labels.get(1),
-            Some(&(suspect.0, suspect.1.to_owned())),
+            Some(&(suspect.0.as_bytes(), suspect.1.to_owned())),
             "{source:?} {labels:?}"
         );
     }
@@ -491,6 +507,7 @@ x = = 2
 f(a b)
 local ok = 3";
     let result = parse(&allocator, source);
-    let texts: Vec<&str> = result.errors.iter().map(|e| e.span.unwrap().text(source)).collect();
-    assert_eq!(texts, ["=", "=", "b"], "{:?}", result.errors);
+    let texts: Vec<&[u8]> =
+        result.errors.iter().map(|e| e.span.unwrap().text(source.as_bytes())).collect();
+    assert_eq!(texts, [b"=", b"=", b"b"], "{:?}", result.errors);
 }

@@ -40,9 +40,9 @@ struct Row {
 /// # Errors
 ///
 /// Fails when the encoder can't write.
-fn gzipped_byte_count(text: &str) -> Result<usize, Box<dyn Error>> {
+fn gzipped_byte_count(bytes: &[u8]) -> Result<usize, Box<dyn Error>> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(text.as_bytes())?;
+    encoder.write_all(bytes)?;
     Ok(encoder.finish()?.len())
 }
 
@@ -53,11 +53,16 @@ fn gzipped_byte_count(text: &str) -> Result<usize, Box<dyn Error>> {
 fn measure(
     allocator: &mut Allocator,
     name: &str,
-    source: &str,
+    source: &[u8],
     target: LuaTarget,
 ) -> Result<Row, Box<dyn Error>> {
     // Downloaded benchmark files keep whatever line endings upstream committed.
-    let normalized = source.replace("\r\n", "\n");
+    let normalized: Vec<u8> = source
+        .iter()
+        .enumerate()
+        .filter(|&(i, &b)| b != b'\r' || source.get(i.saturating_add(1)) != Some(&b'\n'))
+        .map(|(_, &b)| b)
+        .collect();
     let config = TransformConfig::default();
     allocator.reset();
     let version = target.lua_version();

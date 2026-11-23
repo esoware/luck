@@ -11,8 +11,6 @@ pub(crate) enum TestResult {
     Passed,
     /// luck parsed a file the reference interpreter rejects.
     IncorrectlyPassed,
-    /// luck reads only UTF-8, and some suite files hold Latin-1 text.
-    NotUtf8,
     /// Every error, one per line.
     ParseError(String),
     /// luck rejected a file the reference interpreter rejects too, with its
@@ -38,7 +36,6 @@ impl CoverageResult {
             TestResult::Passed => !self.should_fail,
             TestResult::CorrectError(_) => true,
             TestResult::IncorrectlyPassed
-            | TestResult::NotUtf8
             | TestResult::ParseError(_)
             | TestResult::Mismatch(..)
             | TestResult::GenericError(..) => false,
@@ -51,7 +48,7 @@ impl CoverageResult {
             | TestResult::IncorrectlyPassed
             | TestResult::Mismatch(..)
             | TestResult::GenericError(..) => true,
-            TestResult::NotUtf8 | TestResult::ParseError(_) | TestResult::CorrectError(_) => false,
+            TestResult::ParseError(_) | TestResult::CorrectError(_) => false,
         }
     }
 }
@@ -104,7 +101,6 @@ pub(crate) fn failures(results: &[CoverageResult]) -> String {
         let (label, detail) = match result {
             TestResult::Passed | TestResult::CorrectError(_) => continue,
             TestResult::IncorrectlyPassed => ("Expect Syntax Error: ", None),
-            TestResult::NotUtf8 => ("Not UTF-8: ", None),
             TestResult::ParseError(errors) => ("Expect to Parse: ", Some(errors)),
             TestResult::Mismatch(case, _actual, _expected) => {
                 listed.push_str(case);

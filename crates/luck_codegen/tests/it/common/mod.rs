@@ -5,9 +5,10 @@ use luck_token::LuaVersion;
 
 pub(crate) fn assert_compacts_to(source: &str, expected: &str, version: LuaVersion) {
     let allocator = Allocator::new();
-    let parsed = luck_parser::parse(&allocator, source, version);
+    let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
     assert!(parsed.errors.is_empty(), "parse errors for {source:?}: {:?}", parsed.errors);
-    assert_eq!(luck_codegen::compact(&parsed.chunk), expected, "input: {source:?}");
+    let output = String::from_utf8(luck_codegen::compact(&parsed.chunk)).unwrap();
+    assert_eq!(output, expected, "input: {source:?}");
     assert_reprints(&parsed.chunk);
 }
 
@@ -18,15 +19,16 @@ pub(crate) fn assert_reprints(chunk: &Chunk<'_>) {
     let output = luck_codegen::compact(chunk);
     let allocator = Allocator::new();
     let reparsed = luck_parser::parse(&allocator, &output, chunk.version);
+    let text = String::from_utf8_lossy(&output);
     assert!(
         reparsed.errors.is_empty(),
-        "compact output {output:?} doesn't re-parse: {:?}",
+        "compact output {text:?} doesn't re-parse: {:?}",
         reparsed.errors.first()
     );
     assert_eq!(
         tree_shape(&reparsed.chunk),
         tree_shape(chunk),
-        "compact output {output:?} parses to a different tree"
+        "compact output {text:?} parses to a different tree"
     );
     assert_eq!(luck_codegen::compact(&reparsed.chunk), output, "compacting again changed it");
 }

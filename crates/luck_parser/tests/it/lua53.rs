@@ -6,7 +6,7 @@ use luck_token::{BinOp, LuaVersion, UnOp};
 use crate::common::{assert_no_errors, local_value, run_operands, run_ops};
 
 fn parse_lua53<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
-    luck_parser::parse(allocator, source, LuaVersion::Lua53)
+    luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Lua53)
 }
 
 #[test]

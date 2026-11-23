@@ -3,7 +3,7 @@ use luck_core::LuaTarget;
 use luck_linter::{FixKind, LintConfig, Message, RuleLevel};
 
 pub(crate) fn lint(source: &str, target: LuaTarget, config: &LintConfig) -> Vec<Message> {
-    luck_linter::lint(&Allocator::new(), source, target, config, FixKind::empty())
+    luck_linter::lint(&Allocator::new(), source.as_bytes(), target, config, FixKind::empty())
 }
 
 pub(crate) fn with_level(name: &str, level: RuleLevel) -> LintConfig {

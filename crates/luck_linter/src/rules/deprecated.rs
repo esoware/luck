@@ -166,22 +166,25 @@ fn replacement_fix(
     if call.method.is_some() || !function.accepts_arg_count(args.len()) {
         return None;
     }
-    let arg_texts: Vec<&str> = args.map(|arg| arg.span().text(context.source)).collect();
+    let arg_texts: Vec<&[u8]> = args.map(|arg| arg.span().text(context.source)).collect();
     let expanded = expand_replace_template(template, &arg_texts);
     if starts_with_rebound_name(&expanded, call.span().start, context.semantic) {
         return None;
     }
     let replacement = fit_to_position(expanded, call.span().end, position, context)?;
-    let message = format!("replace deprecated `{name}` with `{replacement}`");
+    let message =
+        format!("replace deprecated `{name}` with `{}`", String::from_utf8_lossy(&replacement));
     Some(fixer.replace(message, call.span(), replacement))
 }
 
 /// Whether the name `expanded` starts with may not be the host's global at
 /// `offset`, because a local before it or a write in the chunk rebinds it.
-fn starts_with_rebound_name(expanded: &str, offset: u32, semantic: &SemanticAnalysis<'_>) -> bool {
-    let name_length =
-        expanded.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(expanded.len());
-    let name = expanded.get(..name_length).unwrap_or_default();
+fn starts_with_rebound_name(expanded: &[u8], offset: u32, semantic: &SemanticAnalysis<'_>) -> bool {
+    let name_length = expanded
+        .iter()
+        .position(|&b| !b.is_ascii_alphanumeric() && b != b'_')
+        .unwrap_or(expanded.len());
+    let name = str::from_utf8(expanded.get(..name_length).unwrap_or_default()).unwrap_or_default();
     let tree = semantic.scope_tree();
     !name.is_empty()
         && (semantic.nearest_local(name, offset).is_some()
@@ -192,19 +195,19 @@ fn starts_with_rebound_name(expanded: &str, offset: u32, semantic: &SemanticAnal
 /// parse there. Parsing inside a block keeps a leading `#` from reading as a
 /// shebang line.
 fn fit_to_position(
-    expanded: String,
+    expanded: Vec<u8>,
     call_end: u32,
     position: CallPosition,
     context: &LintContext<'_>,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     let version = context.semantic.version();
     let allocator = Allocator::new();
     if position == CallPosition::Statement {
-        let statement = format!("do {expanded} end");
+        let statement = [&b"do "[..], &expanded, b" end"].concat();
         let parse = luck_parser::parse(&allocator, &statement, version);
         return parse.errors.is_empty().then_some(expanded);
     }
-    let return_stmt = format!("return {expanded}");
+    let return_stmt = [&b"return "[..], &expanded].concat();
     let parse = luck_parser::parse(&allocator, &return_stmt, version);
     if !parse.errors.is_empty() {
         return None;
@@ -217,13 +220,13 @@ fn fit_to_position(
     // A unary expression stops at an operator binding looser than it, but
     // not at `^` or a suffix, which would capture only its operand.
     let should_group = is_unary && is_followed_by_tighter_binding(call_end, context);
-    Some(if should_group { format!("({expanded})") } else { expanded })
+    Some(if should_group { [&b"("[..], &expanded, b")"].concat() } else { expanded })
 }
 
 /// Whether the next token after `offset` binds tighter than a unary operator:
 /// `^`, or a suffix that continues the expression.
 fn is_followed_by_tighter_binding(offset: u32, context: &LintContext<'_>) -> bool {
-    let bytes = context.source.as_bytes();
+    let bytes = context.source;
     let mut index = offset_to_index(offset);
     loop {
         index = index.saturating_add(

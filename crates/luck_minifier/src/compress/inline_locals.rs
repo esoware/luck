@@ -605,7 +605,10 @@ mod tests {
         };
         let run = return_stmt.exprs.first().expect("the return has its value");
         assert_eq!(expr_nesting_depth(run), 1, "the chain splices into one run");
-        assert_eq!(luck_codegen::compact(&chunk), format!("return 1{}", "+1".repeat(links)));
+        assert_eq!(
+            luck_codegen::compact(&chunk),
+            format!("return 1{}", "+1".repeat(links)).into_bytes()
+        );
 
         let mut concat = String::from("local x0 = \"z\"\n");
         for (i, previous) in (1..=links).zip(0usize..) {

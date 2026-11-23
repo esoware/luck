@@ -440,58 +440,63 @@ impl StdlibLibrary {
 ///
 /// A missing argument expands to nothing; the caller decides whether the fix
 /// is still useful.
+///
+/// Each argument is source as written, bytes that need not be UTF-8, and so
+/// is the expansion.
 #[must_use]
-pub fn expand_replace_template(template: &str, args: &[&str]) -> String {
-    let mut output = String::with_capacity(template.len());
-    let mut remaining = template;
-    while let Some((literal, after_percent)) = remaining.split_once('%') {
-        output.push_str(literal);
-        let mut after_percent_chars = after_percent.chars();
-        match after_percent_chars.next() {
-            Some('%') => {
-                output.push('%');
-                remaining = after_percent_chars.as_str();
+pub fn expand_replace_template(template: &str, args: &[&[u8]]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(template.len());
+    let mut remaining = template.as_bytes();
+    while let Some(percent) = remaining.iter().position(|&b| b == b'%') {
+        let (literal, from_percent) = remaining.split_at_checked(percent).unwrap_or_default();
+        output.extend_from_slice(literal);
+        let after_percent = from_percent.get(1..).unwrap_or_default();
+        match after_percent.split_first() {
+            Some((b'%', after_escape)) => {
+                output.push(b'%');
+                remaining = after_escape;
             }
-            Some(digit) if digit.is_ascii_digit() => {
-                remaining = after_percent_chars.as_str();
-                let Some(from_argument) = digit
-                    .to_digit(10)
-                    .and_then(|position| position.checked_sub(1))
-                    .and_then(|i| args.get(offset_to_index(i)..))
+            Some((&digit, after_digit)) if digit.is_ascii_digit() => {
+                remaining = after_digit;
+                let Some(from_argument) = usize::from(digit.wrapping_sub(b'0'))
+                    .checked_sub(1)
+                    .and_then(|i| args.get(i..))
                 else {
                     continue;
                 };
-                let Some(arg) = from_argument.first() else {
+                let Some(&arg) = from_argument.first() else {
                     continue;
                 };
-                let after_placeholder = remaining.trim_start();
-                let is_in_argument_list = output.trim_end().ends_with(['(', ','])
-                    && after_placeholder.starts_with([')', ',']);
-                if is_in_argument_list && after_placeholder.starts_with(')') {
-                    output.push_str(&from_argument.join(", "));
+                let after_placeholder = remaining.trim_ascii_start().first();
+                let is_in_argument_list =
+                    matches!(output.trim_ascii_end().last(), Some(b'(' | b','))
+                        && matches!(after_placeholder, Some(b')' | b','));
+                if is_in_argument_list && after_placeholder == Some(&b')') {
+                    output.extend_from_slice(&from_argument.join(&b", "[..]));
                 } else if is_in_argument_list || is_bare_operand(arg) {
-                    output.push_str(arg);
+                    output.extend_from_slice(arg);
                 } else {
-                    output.push('(');
-                    output.push_str(arg);
-                    output.push(')');
+                    output.push(b'(');
+                    output.extend_from_slice(arg);
+                    output.push(b')');
                 }
             }
             _ => {
-                output.push('%');
+                output.push(b'%');
                 remaining = after_percent;
             }
         }
     }
-    output.push_str(remaining);
+    output.extend_from_slice(remaining);
     output
 }
 
 /// No operator can split one. Anything else gets grouped, which is harmless:
 /// a parenthesized call only keeps its first value, and an operand takes one
 /// value anyway.
-fn is_bare_operand(arg: &str) -> bool {
-    !arg.contains("..") && arg.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+fn is_bare_operand(arg: &[u8]) -> bool {
+    !arg.windows(2).any(|pair| pair == b"..")
+        && arg.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
 }
 
 #[cfg(test)]
@@ -537,47 +542,47 @@ mod tests {
         assert_eq!(OVERLOADED.signature_index_for_active_param(1), 1);
     }
 
+    /// `template` expanded with `args`, which the tests spell as text.
+    fn expand(template: &str, args: &[&str]) -> String {
+        let arg_bytes: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();
+        String::from_utf8(expand_replace_template(template, &arg_bytes)).unwrap()
+    }
+
     #[test]
     fn replace_template_substitutes_numbered_args() {
-        assert_eq!(expand_replace_template("#%1", &["t"]), "#t");
-        assert_eq!(expand_replace_template("%1 ^ %2", &["a", "b"]), "a ^ b");
-        assert_eq!(expand_replace_template("load(%1)", &["x"]), "load(x)");
+        assert_eq!(expand("#%1", &["t"]), "#t");
+        assert_eq!(expand("%1 ^ %2", &["a", "b"]), "a ^ b");
+        assert_eq!(expand("load(%1)", &["x"]), "load(x)");
     }
 
     #[test]
     fn replace_template_unescapes_double_percent() {
-        assert_eq!(expand_replace_template("100%% %1", &["x"]), "100% x");
+        assert_eq!(expand("100%% %1", &["x"]), "100% x");
     }
 
     #[test]
     fn replace_template_expands_missing_arg_to_nothing() {
-        assert_eq!(expand_replace_template("%1 + %2", &["a"]), "a + ");
+        assert_eq!(expand("%1 + %2", &["a"]), "a + ");
     }
 
     #[test]
     fn replace_template_groups_compound_operands() {
-        assert_eq!(expand_replace_template("(%1 ^ %2)", &["a + 1", "b"]), "((a + 1) ^ b)");
-        assert_eq!(expand_replace_template("#%1", &["a or b"]), "#(a or b)");
-        assert_eq!(expand_replace_template("#%1", &["..."]), "#(...)");
-        assert_eq!(expand_replace_template("#%1", &["a.b.c"]), "#a.b.c");
-        assert_eq!(expand_replace_template("(%1 ^ %2)", &["a", "-1"]), "(a ^ (-1))");
+        assert_eq!(expand("(%1 ^ %2)", &["a + 1", "b"]), "((a + 1) ^ b)");
+        assert_eq!(expand("#%1", &["a or b"]), "#(a or b)");
+        assert_eq!(expand("#%1", &["..."]), "#(...)");
+        assert_eq!(expand("#%1", &["a.b.c"]), "#a.b.c");
+        assert_eq!(expand("(%1 ^ %2)", &["a", "-1"]), "(a ^ (-1))");
     }
 
     #[test]
     fn replace_template_keeps_call_arguments_verbatim() {
-        assert_eq!(expand_replace_template("math.log(%1, 10)", &["a + 1"]), "math.log(a + 1, 10)");
-        assert_eq!(
-            expand_replace_template("string.gmatch(%1, %2)", &["s", "p .. q"]),
-            "string.gmatch(s, p .. q)"
-        );
+        assert_eq!(expand("math.log(%1, 10)", &["a + 1"]), "math.log(a + 1, 10)");
+        assert_eq!(expand("string.gmatch(%1, %2)", &["s", "p .. q"]), "string.gmatch(s, p .. q)");
     }
 
     #[test]
     fn replace_template_forwards_trailing_arguments() {
-        assert_eq!(
-            expand_replace_template("table.unpack(%1)", &["t", "2", "#t"]),
-            "table.unpack(t, 2, #t)"
-        );
-        assert_eq!(expand_replace_template("task.wait(%1)", &[]), "task.wait()");
+        assert_eq!(expand("table.unpack(%1)", &["t", "2", "#t"]), "table.unpack(t, 2, #t)");
+        assert_eq!(expand("task.wait(%1)", &[]), "task.wait()");
     }
 }

@@ -11,7 +11,7 @@ pub(crate) fn assert_no_errors(result: &ParseResult<'_>) {
 }
 
 pub(crate) fn parse_luau<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
-    luck_parser::parse(allocator, source, LuaVersion::Luau)
+    luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Luau)
 }
 
 /// The last initializer of a `local ... = <expr>` first statement.

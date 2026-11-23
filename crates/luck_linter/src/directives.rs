@@ -100,7 +100,7 @@ pub(crate) struct Directives {
 impl Directives {
     /// The directives in `comments`. Those on a statement cover nothing until
     /// [`Self::cover_statements`] finds it.
-    pub(crate) fn new(comments: &[Comment], source: &str) -> Self {
+    pub(crate) fn new(comments: &[Comment], source: &[u8]) -> Self {
         let mut directives = Self::default();
         let mut open_regions: Vec<OpenRegion<'_>> = Vec::new();
         for comment in comments {
@@ -128,7 +128,7 @@ impl Directives {
         &mut self,
         span: Span,
         directive: LintDirective,
-        source: &'source str,
+        source: &'source [u8],
         open_regions: &mut Vec<OpenRegion<'source>>,
     ) {
         let LintDirective { verb, extent, list } = directive;
@@ -136,10 +136,10 @@ impl Directives {
         let first = self.entries.len();
         for name in directive.rules(source) {
             let target = match name.text(source) {
-                "*" => Target::Every,
+                b"*" => Target::Every,
                 text => RULES
                     .iter()
-                    .position(|entry| entry.rule().name() == text)
+                    .position(|entry| entry.rule().name().as_bytes() == text)
                     .map_or(Target::Unknown, Target::Rule),
             };
             if verb != LintVerb::Allow {
@@ -215,7 +215,7 @@ impl Directives {
     pub(crate) fn cover_statements(
         &mut self,
         nodes: &Nodes<'_>,
-        source: &str,
+        source: &[u8],
         version: LuaVersion,
     ) {
         if self.list.iter().any(|directive| directive.extent == LintExtent::Statement) {
@@ -307,7 +307,7 @@ impl Directives {
 /// A region's `start` that no `end` has closed yet.
 struct OpenRegion<'source> {
     entry: usize,
-    name: &'source str,
+    name: &'source [u8],
     verb: LintVerb,
     /// Where it starts covering.
     from: u32,
@@ -376,7 +376,7 @@ mod tests {
     /// at, for `rule`.
     fn verbs_at(source: &str, rule: &str, needles: &[&str]) -> Vec<Option<LintVerb>> {
         let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let analysis = analyze(&parse, StdlibEnvironment::Standalone, &LintConfig::default());
         let slot = RULES.iter().position(|entry| entry.rule().name() == rule).expect("a rule");
@@ -488,8 +488,8 @@ local c = 3";
 
     fn directives_of(source: &str) -> Directives {
         let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
-        Directives::new(&parse.comments, source)
+        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        Directives::new(&parse.comments, source.as_bytes())
     }
 
     #[test]
@@ -522,6 +522,9 @@ local a = 1";
             panic!("{:?}", directives.errors());
         };
         assert_eq!(directives.errors().len(), 1, "{:?}", directives.errors());
-        assert_eq!((verb, name.text(source)), (LintVerb::Allow, "unused_variable"));
+        assert_eq!(
+            (verb, name.text(source.as_bytes())),
+            (LintVerb::Allow, &b"unused_variable"[..])
+        );
     }
 }

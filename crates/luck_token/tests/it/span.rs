@@ -36,14 +36,15 @@ fn span_shifted_moves_both_ends_saturating_at_the_cap() {
 }
 
 #[test]
-fn span_text_reads_the_covered_source() {
-    assert_eq!(Span::new(6, 7).text("local x = 1"), "x");
+fn span_text_reads_the_covered_bytes() {
+    assert_eq!(Span::new(6, 7).text(b"local x = 1"), b"x");
+    assert_eq!(Span::new(1, 2).text("\u{e9}".as_bytes()), b"\xA9");
+    assert_eq!(Span::new(1, 3).text(b"'\xE9'"), b"\xE9'");
 }
 
 #[test]
-fn span_text_is_empty_for_a_range_that_splits_or_overruns_the_source() {
-    assert_eq!(Span::new(1, 2).text("\u{e9}"), "");
-    assert_eq!(Span::new(0, 9).text("abc"), "");
+fn span_text_is_empty_for_a_range_that_overruns_the_source() {
+    assert_eq!(Span::new(0, 9).text(b"abc"), b"");
 }
 
 #[test]

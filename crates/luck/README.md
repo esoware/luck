@@ -29,7 +29,7 @@ use luck::allocator::Allocator;
 use luck::token::LuaVersion;
 
 let mut allocator = Allocator::new();
-for source in ["local x = 1", "return x"] {
+for source in [&b"local x = 1"[..], b"return x"] {
     let parsed = luck::parser::parse(&allocator, source, LuaVersion::Lua54);
     assert!(parsed.errors.is_empty());
     // The parse borrows the arena, so it goes first.
@@ -47,6 +47,6 @@ use luck::token::LuaVersion;
 
 let allocator = Allocator::new();
 let formatted =
-    luck::formatter::format(&allocator, "local x=1", LuaVersion::Lua54, &FormatOptions::default());
-assert_eq!(formatted.output, "local x = 1\n");
+    luck::formatter::format(&allocator, b"local x=1", LuaVersion::Lua54, &FormatOptions::default());
+assert_eq!(formatted.output, b"local x = 1\n");
 ```

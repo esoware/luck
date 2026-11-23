@@ -922,6 +922,7 @@ dependencies = [
  "luck_semantic",
  "luck_testgen",
  "luck_token",
+ "memchr",
  "petgraph",
  "rayon",
  "rustc-hash",
@@ -1048,6 +1049,7 @@ dependencies = [
  "luck_parser",
  "luck_testgen",
  "luck_token",
+ "memchr",
  "rustc-hash",
  "schemars",
  "serde",
@@ -1078,6 +1080,7 @@ dependencies = [
  "luck_semantic",
  "luck_testgen",
  "luck_token",
+ "memchr",
  "rayon",
  "rustc-hash",
  "schemars",
@@ -1171,7 +1174,6 @@ dependencies = [
  "parking_lot",
  "rustc-hash",
  "serde_json",
- "simdutf8",
  "tempfile",
 ]
 

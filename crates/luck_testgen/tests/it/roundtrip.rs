@@ -40,14 +40,15 @@ fn parse_cleanly<'ast>(
     allocator: &'ast Allocator,
     program: &Program,
     stage: &str,
-    output: &'ast str,
+    output: &'ast [u8],
 ) -> ParseResult<'ast> {
     let parsed = luck_parser::parse(allocator, output, program.version);
     assert!(
         parsed.errors.is_empty(),
-        "{}: {stage} output failed to parse.\ninput:\n{}\noutput:\n{output}\nerrors: {:?}",
+        "{}: {stage} output failed to parse.\ninput:\n{}\noutput:\n{}\nerrors: {:?}",
         program.label,
         program.source,
+        String::from_utf8_lossy(output),
         parsed.errors
     );
     parsed
@@ -77,8 +78,8 @@ fn format_reparses_and_is_idempotent() {
     for program in programs() {
         allocator.reset();
         let Program { source, version, label } = &program;
-        let original = parse_cleanly(&allocator, &program, "generator", source);
-        let first = format(&allocator, source, *version, &options);
+        let original = parse_cleanly(&allocator, &program, "generator", source.as_bytes());
+        let first = format(&allocator, source.as_bytes(), *version, &options);
         assert!(
             first.errors.is_empty(),
             "{label}: format errored:\n{source}\nerrors: {:?}",
@@ -103,7 +104,7 @@ fn format_chunk_without_source_reparses_and_formats_as_itself() {
     for program in programs() {
         allocator.reset();
         let Program { source, version, label } = &program;
-        let original = parse_cleanly(&allocator, &program, "generator", source);
+        let original = parse_cleanly(&allocator, &program, "generator", source.as_bytes());
         let via_ast = format_chunk(&allocator, &original.chunk, Comments::none(), &options)
             .expect("a parsed tree nests within the cap");
         let reprinted = parse_cleanly(&allocator, &program, "format_chunk", &via_ast);
@@ -125,13 +126,14 @@ fn formatting_minified_output_reparses_and_is_idempotent() {
     for program in programs() {
         allocator.reset();
         let Program { source, version, label } = &program;
-        let minified = luck_minifier::minify(&allocator, source, *version, &config)
+        let minified = luck_minifier::minify(&allocator, source.as_bytes(), *version, &config)
             .unwrap_or_else(|errors| panic!("{label}: minify errored: {errors:?}\n{source}"));
         let minified_parse = parse_cleanly(&allocator, &program, "minify", &minified);
         let first = format(&allocator, &minified, *version, &options);
+        let minified_text = String::from_utf8_lossy(&minified);
         assert!(
             first.errors.is_empty(),
-            "{label}: format errored on minified output:\n{minified}\nerrors: {:?}",
+            "{label}: format errored on minified output:\n{minified_text}\nerrors: {:?}",
             first.errors
         );
         let formatted = parse_cleanly(&allocator, &program, "format of minify", &first.output);
@@ -139,7 +141,7 @@ fn formatting_minified_output_reparses_and_is_idempotent() {
         let second = format(&allocator, &first.output, *version, &options);
         assert_eq!(
             first.output, second.output,
-            "{label}: format not idempotent on minified output.\nminified:\n{minified}"
+            "{label}: format not idempotent on minified output.\nminified:\n{minified_text}"
         );
     }
 }

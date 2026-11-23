@@ -37,12 +37,12 @@ impl CommentContent {
     /// What a comment of `kind` says in `version`, from its `text`, delimiters
     /// included.
     #[must_use]
-    pub fn of(text: &str, kind: CommentKind, version: LuaVersion) -> Self {
+    pub fn of(text: &[u8], kind: CommentKind, version: LuaVersion) -> Self {
         if kind == CommentKind::Line
             && version.has_hot_comments()
-            && let Some(word) = text.strip_prefix("--!")
+            && let Some(word) = text.strip_prefix(b"--!")
         {
-            return if word.starts_with(|c: char| c != ' ' && c != '\t') {
+            return if word.first().is_some_and(|&b| b != b' ' && b != b'\t') {
                 Self::HotComment
             } else {
                 Self::Plain
@@ -145,10 +145,10 @@ impl LintDirective {
     ///
     /// Returns why a `luck:` comment is no directive, or what's malformed in
     /// one, at the part at fault.
-    pub fn parse(comment: &Comment, source: &str) -> Result<Option<Self>, DirectiveError> {
+    pub fn parse(comment: &Comment, source: &[u8]) -> Result<Option<Self>, DirectiveError> {
         let text = comment.span.text(source);
         let start = comment.span.start;
-        let error = |part: &str, kind| DirectiveError { span: span_in(text, start, part), kind };
+        let error = |part: &[u8], kind| DirectiveError { span: span_in(text, start, part), kind };
         let Some((command, is_file_wide)) = command(text, comment.kind) else {
             return Ok(None);
         };
@@ -164,10 +164,11 @@ impl LintDirective {
                     }));
             }
         };
-        let Some(inside) = trim_start(after_verb).strip_prefix('(') else {
+        let Some(inside) = trim_start(after_verb).strip_prefix(b"(") else {
             return Err(error(verb_word, DirectiveErrorKind::MissingList(verb)));
         };
-        let Some((list, after_list)) = inside.split_once(')') else {
+        let (list, from_close) = split_at(inside, |b| b == b')');
+        let Some(after_list) = from_close.get(1..) else {
             let open =
                 after_verb.get(..after_verb.len().saturating_sub(inside.len())).unwrap_or_default();
             return Err(error(trim_start(open), DirectiveErrorKind::UnclosedList));
@@ -182,11 +183,11 @@ impl LintDirective {
         }
         let tail = trim(after_list);
         let extent = match (tail, is_file_wide) {
-            ("", true) => LintExtent::File,
-            ("", false) => LintExtent::Statement,
-            ("start", false) => LintExtent::RegionStart,
-            ("end", false) => LintExtent::RegionEnd,
-            ("start" | "end", true) => {
+            (b"", true) => LintExtent::File,
+            (b"", false) => LintExtent::Statement,
+            (b"start", false) => LintExtent::RegionStart,
+            (b"end", false) => LintExtent::RegionEnd,
+            (b"start" | b"end", true) => {
                 return Err(error(tail, DirectiveErrorKind::RegionOnFileWide));
             }
             _ => return Err(error(tail, DirectiveErrorKind::UnknownExtent(verb))),
@@ -195,7 +196,7 @@ impl LintDirective {
     }
 
     /// The span of each rule name in the list, `*` included.
-    pub fn rules(self, source: &str) -> impl Iterator<Item = Span> {
+    pub fn rules(self, source: &[u8]) -> impl Iterator<Item = Span> {
         let list = self.list.text(source);
         names(list).map(move |name| span_in(list, self.list.start, name))
     }
@@ -208,8 +209,8 @@ enum Command<'text> {
     /// A lint verb, its word, and what follows it.
     Lint {
         verb: LintVerb,
-        word: &'text str,
-        rest: &'text str,
+        word: &'text [u8],
+        rest: &'text [u8],
     },
 }
 
@@ -218,15 +219,15 @@ enum Invalid<'text> {
     /// Nothing follows `luck:`.
     Empty,
     /// `#luck:` before a word other than a lint verb.
-    FileWide(&'text str),
-    Unknown(&'text str),
+    FileWide(&'text [u8]),
+    Unknown(&'text [u8]),
     /// `format` before a word other than `off`, `on`, or `ignore`, or before
     /// none, when it's `format` itself.
-    FormatSetting(&'text str),
+    FormatSetting(&'text [u8]),
 }
 
 impl<'text> Invalid<'text> {
-    const fn word(&self) -> Option<&'text str> {
+    const fn word(&self) -> Option<&'text [u8]> {
         match *self {
             Self::Empty => None,
             Self::FileWide(word) | Self::Unknown(word) | Self::FormatSetting(word) => Some(word),
@@ -245,41 +246,41 @@ impl<'text> Invalid<'text> {
 
 /// What follows the `luck:` or `#luck:` that opens a directive's text, past
 /// its delimiters and whitespace, and whether it's `#luck:`.
-fn command(text: &str, kind: CommentKind) -> Option<(&str, bool)> {
+fn command(text: &[u8], kind: CommentKind) -> Option<(&[u8], bool)> {
     let body = match kind {
-        CommentKind::Line => text.get(2..)?.trim_start_matches('-'),
+        CommentKind::Line => split_at(text.get(2..)?, |b| b != b'-').1,
         CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => block_body(text),
         CommentKind::Shebang => return None,
     };
     let after_whitespace = trim_start(body);
-    match after_whitespace.strip_prefix("#luck:") {
+    match after_whitespace.strip_prefix(b"#luck:") {
         Some(command) => Some((command, true)),
-        None => Some((after_whitespace.strip_prefix("luck:")?, false)),
+        None => Some((after_whitespace.strip_prefix(b"luck:")?, false)),
     }
 }
 
 /// A block comment's text between its brackets, or to its end when the
 /// source cut it off before its closer.
-fn block_body(text: &str) -> &str {
+fn block_body(text: &[u8]) -> &[u8] {
     let after_open = text.get(3..).unwrap_or_default();
-    let level = after_open.bytes().take_while(|&b| b == b'=').count();
+    let level = after_open.iter().take_while(|&&b| b == b'=').count();
     let body = after_open.get(level.saturating_add(1)..).unwrap_or_default();
-    body.strip_suffix(']')
+    body.strip_suffix(b"]")
         .and_then(|before| before.strip_suffix(after_open.get(..level)?))
-        .and_then(|before| before.strip_suffix(']'))
+        .and_then(|before| before.strip_suffix(b"]"))
         .unwrap_or(body)
 }
 
 /// # Errors
 ///
 /// Returns why `command` is no directive.
-fn read_command(command: &str, is_file_wide: bool) -> Result<Command<'_>, Invalid<'_>> {
+fn read_command(command: &[u8], is_file_wide: bool) -> Result<Command<'_>, Invalid<'_>> {
     let (word, rest) = split_at(trim_start(command), |b| b == b'(' || is_lua_whitespace(b));
     let verb = match word {
-        "allow" => LintVerb::Allow,
-        "deny" => LintVerb::Deny,
-        "warn" => LintVerb::Warn,
-        "" if rest.is_empty() => return Err(Invalid::Empty),
+        b"allow" => LintVerb::Allow,
+        b"deny" => LintVerb::Deny,
+        b"warn" => LintVerb::Warn,
+        b"" if rest.is_empty() => return Err(Invalid::Empty),
         _ => {
             let (whole_word, after_word) = split_at(trim_start(command), is_lua_whitespace);
             return if is_file_wide {
@@ -296,18 +297,18 @@ fn read_command(command: &str, is_file_wide: bool) -> Result<Command<'_>, Invali
 ///
 /// Returns why `word` and `rest` are no formatter directive.
 fn read_format_command<'text>(
-    word: &'text str,
-    rest: &'text str,
+    word: &'text [u8],
+    rest: &'text [u8],
 ) -> Result<Command<'text>, Invalid<'text>> {
     match word {
-        "ignore" => Ok(Command::FormatIgnore),
-        "format" => {
+        b"ignore" => Ok(Command::FormatIgnore),
+        b"format" => {
             let (setting, _) = split_at(trim_start(rest), is_lua_whitespace);
             match setting {
-                "off" => Ok(Command::FormatOff),
-                "on" => Ok(Command::FormatOn),
-                "ignore" => Ok(Command::FormatIgnore),
-                "" => Err(Invalid::FormatSetting(word)),
+                b"off" => Ok(Command::FormatOff),
+                b"on" => Ok(Command::FormatOn),
+                b"ignore" => Ok(Command::FormatIgnore),
+                b"" => Err(Invalid::FormatSetting(word)),
                 _ => Err(Invalid::FormatSetting(setting)),
             }
         }
@@ -317,31 +318,30 @@ fn read_format_command<'text>(
 
 /// Each name in a rule list, trimmed, skipping empty ones like the one in
 /// `allow(a,)`.
-fn names(list: &str) -> impl Iterator<Item = &str> {
-    list.split(',').map(trim).filter(|name| !name.is_empty())
+fn names(list: &[u8]) -> impl Iterator<Item = &[u8]> {
+    list.split(|&b| b == b',').map(trim).filter(|name| !name.is_empty())
 }
 
-/// `text` split before its first byte `ends` accepts. Every byte it accepts is
-/// ASCII, so the split falls between characters.
-fn split_at(text: &str, ends: impl Fn(u8) -> bool) -> (&str, &str) {
-    let length = text.bytes().take_while(|&b| !ends(b)).count();
-    text.split_at_checked(length).unwrap_or((text, ""))
+/// `text` split before its first byte `ends` accepts.
+fn split_at(text: &[u8], ends: impl Fn(u8) -> bool) -> (&[u8], &[u8]) {
+    let length = text.iter().take_while(|&&b| !ends(b)).count();
+    text.split_at_checked(length).unwrap_or((text, &[]))
 }
 
-fn trim_start(text: &str) -> &str {
+fn trim_start(text: &[u8]) -> &[u8] {
     split_at(text, |b| !is_lua_whitespace(b)).1
 }
 
-fn trim(text: &str) -> &str {
+fn trim(text: &[u8]) -> &[u8] {
     let start = trim_start(text);
     let length = start
         .len()
-        .saturating_sub(start.bytes().rev().take_while(|&b| is_lua_whitespace(b)).count());
+        .saturating_sub(start.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count());
     start.get(..length).unwrap_or_default()
 }
 
 /// The span of `part`, a slice of `text`, which starts at `start`.
-fn span_in(text: &str, start: u32, part: &str) -> Span {
+fn span_in(text: &[u8], start: u32, part: &[u8]) -> Span {
     let index = part.as_ptr().addr().saturating_sub(text.as_ptr().addr());
     Span::from_indices(index, index.saturating_add(part.len())).shifted(start)
 }

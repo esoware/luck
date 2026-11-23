@@ -58,7 +58,7 @@ pub(crate) fn extract_requires<'ast>(
     allocator: &'ast Allocator,
     chunk: &Chunk<'_>,
     counts: TreeCounts,
-    source: &'ast str,
+    source: &'ast [u8],
     dynamic_require: DynamicRequire,
 ) -> ExtractedRequires<'ast> {
     let (version, block) = (chunk.version, &chunk.block);
@@ -241,7 +241,7 @@ impl<'tree> NodeSink<'tree> for Uses<'tree> {
 /// What the module's requires make of it, decided in source order.
 struct RequireFinder<'tree, 'ast> {
     allocator: &'ast Allocator,
-    source: &'ast str,
+    source: &'ast [u8],
     version: LuaVersion,
     dynamic_require: DynamicRequire,
     tree: &'tree ScopeTree<'tree>,
@@ -256,7 +256,7 @@ struct RequireFinder<'tree, 'ast> {
 impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
     fn new(
         allocator: &'ast Allocator,
-        source: &'ast str,
+        source: &'ast [u8],
         version: LuaVersion,
         dynamic_require: DynamicRequire,
         tree: &'tree ScopeTree<'tree>,
@@ -515,9 +515,15 @@ mod tests {
         version: LuaVersion,
         dynamic_require: DynamicRequire,
     ) -> ExtractedRequires<'ast> {
-        let parsed = luck_parser::parse(allocator, source, version);
+        let parsed = luck_parser::parse(allocator, source.as_bytes(), version);
         assert!(parsed.errors.is_empty(), "parse failed: {:?}", parsed.errors);
-        extract_requires(allocator, &parsed.chunk, parsed.counts, source, dynamic_require)
+        extract_requires(
+            allocator,
+            &parsed.chunk,
+            parsed.counts,
+            source.as_bytes(),
+            dynamic_require,
+        )
     }
 
     fn extract<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ExtractedRequires<'ast> {
@@ -828,9 +834,9 @@ local b = require(\"utils\")
         let [warning] = with_code(&result, "W001")[..] else {
             panic!("{:?}", result.diags);
         };
-        let labeled: Vec<&str> =
-            warning.labels.iter().map(|label| label.span.text(source)).collect();
-        assert_eq!(labeled, ["require(\"utils\")"], "{warning:?}");
+        let labeled: Vec<&[u8]> =
+            warning.labels.iter().map(|label| label.span.text(source.as_bytes())).collect();
+        assert_eq!(labeled, [b"require(\"utils\")"], "{warning:?}");
     }
 
     #[test]
@@ -953,14 +959,15 @@ obj.require(\"x\")
         source: &'ast str,
         version: LuaVersion,
     ) -> Option<ExtractedRequires<'ast>> {
-        let parsed = luck_parser::parse(allocator, source, version);
+        let parsed = luck_parser::parse(allocator, source.as_bytes(), version);
         if !parsed.errors.is_empty() {
             return None;
         }
         let chunk = allocator.alloc(parsed.chunk);
         let mut uses = Uses::new(version);
         let tree = ScopeTree::build_with(chunk, parsed.counts, &mut uses);
-        let finder = RequireFinder::new(allocator, source, version, DynamicRequire::Warn, &tree);
+        let finder =
+            RequireFinder::new(allocator, source.as_bytes(), version, DynamicRequire::Warn, &tree);
         Some(finder.read(&chunk.block, uses))
     }
 

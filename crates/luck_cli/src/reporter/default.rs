@@ -1,3 +1,4 @@
+use core::iter;
 use core::ops::Range;
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
@@ -55,10 +56,10 @@ struct Snippet {
 }
 
 impl Snippet {
-    fn new(text: &str, version: LuaVersion) -> Self {
+    fn new(text: &[u8], version: LuaVersion) -> Self {
         let span_shift = chunk_start(text, version);
         let body = text.get(span_shift..).unwrap_or_default();
-        Self { source: Source::from(with_only_lua_line_breaks(body, version)), span_shift }
+        Self { source: Source::from(renderable(body, version)), span_shift }
     }
 
     fn shifted(&self, span: Span) -> Range<usize> {
@@ -67,36 +68,42 @@ impl Snippet {
     }
 }
 
-/// `text` with only `version`'s line breaks still ending a line for ariadne,
-/// whose own set adds VT, FF, NEL, LS, and PS and counts LFCR as two. Every
-/// byte offset stays the same.
-fn with_only_lua_line_breaks(text: &str, version: LuaVersion) -> String {
-    let bytes = text.as_bytes();
-    let mut rendered = String::with_capacity(text.len());
-    let mut copied_to = 0;
-    let mut index = 0;
-    while let Some(&b) = bytes.get(index) {
-        let next = |ahead: usize| bytes.get(index.saturating_add(ahead)).copied();
-        let replacement = match b {
-            0x0B | 0x0C => " ",
-            // NEL
-            0xC2 if next(1) == Some(0x85) => "  ",
-            // LS and PS
-            0xE2 if next(1) == Some(0x80) && matches!(next(2), Some(0xA8 | 0xA9)) => "   ",
-            // Luau
-            b'\r' if !version.has_lfcr_line_break() && next(1) != Some(b'\n') => " ",
-            b'\n' if version.has_lfcr_line_break() && next(1) == Some(b'\r') => "\r\n",
-            _ => {
-                index = index.saturating_add(1);
-                continue;
-            }
-        };
-        rendered.push_str(text.get(copied_to..index).unwrap_or_default());
-        rendered.push_str(replacement);
-        index = index.saturating_add(replacement.len());
-        copied_to = index;
+/// `bytes` as text ariadne renders at the same byte offsets.
+///
+/// Each byte that isn't UTF-8 is a `?`, one column as a one-byte encoding
+/// shows it, and only `version`'s line breaks still end a line, since
+/// ariadne's own set adds VT, FF, NEL, LS, and PS and counts LFCR as two.
+fn renderable(bytes: &[u8], version: LuaVersion) -> String {
+    let mut rendered = String::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        let text = chunk.valid();
+        let text_bytes = text.as_bytes();
+        let mut copied_to = 0;
+        let mut index = 0;
+        while let Some(&b) = text_bytes.get(index) {
+            let next = |ahead: usize| text_bytes.get(index.saturating_add(ahead)).copied();
+            let replacement = match b {
+                0x0B | 0x0C => " ",
+                // NEL
+                0xC2 if next(1) == Some(0x85) => "  ",
+                // LS and PS
+                0xE2 if next(1) == Some(0x80) && matches!(next(2), Some(0xA8 | 0xA9)) => "   ",
+                // Luau
+                b'\r' if !version.has_lfcr_line_break() && next(1) != Some(b'\n') => " ",
+                b'\n' if version.has_lfcr_line_break() && next(1) == Some(b'\r') => "\r\n",
+                _ => {
+                    index = index.saturating_add(1);
+                    continue;
+                }
+            };
+            rendered.push_str(text.get(copied_to..index).unwrap_or_default());
+            rendered.push_str(replacement);
+            index = index.saturating_add(replacement.len());
+            copied_to = index;
+        }
+        rendered.push_str(text.get(copied_to..).unwrap_or_default());
+        rendered.extend(iter::repeat_n('?', chunk.invalid().len()));
     }
-    rendered.push_str(text.get(copied_to..).unwrap_or_default());
     rendered
 }
 
@@ -155,7 +162,7 @@ fn write_compact(label: &str, diag: &Diagnostic, output: &mut Vec<u8>) {
 mod tests {
     use super::*;
 
-    fn rendered(label: &str, text: Option<&str>, diags: &[Diagnostic]) -> String {
+    fn rendered(label: &str, text: Option<&[u8]>, diags: &[Diagnostic]) -> String {
         let mut output = Vec::new();
         let file = SourceFile { label, text, version: LuaVersion::Lua54 };
         DefaultReporter.render(file, diags, &mut output);
@@ -169,7 +176,7 @@ mod tests {
             "expected `end` to close `function`, found end of file",
         )
         .with_label(Span::new(6, 14), "unclosed `function`");
-        let text = rendered("test.lua", Some("local function f()"), &[diag]);
+        let text = rendered("test.lua", Some(b"local function f()"), &[diag]);
         assert!(text.contains("E008"), "{text}");
         assert!(text.contains("expected `end` to close `function`"), "{text}");
         assert!(text.contains("unclosed `function`"), "{text}");
@@ -183,7 +190,7 @@ mod tests {
         let offset = huge.len() - 1;
         let diag = Diagnostic::e008(Span::from_indices(offset, offset + 1), "boom")
             .with_label(Span::new(0, 5), "here");
-        let text = rendered("big.lua", Some(&huge), &[diag]);
+        let text = rendered("big.lua", Some(huge.as_bytes()), &[diag]);
         assert_eq!(
             text,
             format!(
@@ -212,25 +219,31 @@ help: check that the file exists and is readable
 
     #[test]
     fn only_lua_line_breaks_still_end_a_line_at_the_same_offsets() {
+        let render = |text: &str, version| renderable(text.as_bytes(), version);
         assert_eq!(
-            with_only_lua_line_breaks("a\x0Bb\x0Cc\u{85}d\u{2028}e\u{2029}f", LuaVersion::Lua54),
+            render("a\x0Bb\x0Cc\u{85}d\u{2028}e\u{2029}f", LuaVersion::Lua54),
             "a b c  d   e   f"
         );
+        assert_eq!(render("a\n\rb\r\nc\rd", LuaVersion::Lua54), "a\r\nb\r\nc\rd");
+        assert_eq!(render("a\n\rb\r\nc\rd", LuaVersion::Luau), "a\n b\r\nc d");
+        assert_eq!(render("\u{e9}\u{2027}\u{c5}", LuaVersion::Lua54), "\u{e9}\u{2027}\u{c5}");
+    }
+
+    #[test]
+    fn a_byte_that_is_not_utf8_renders_as_one_mark_at_its_offset() {
         assert_eq!(
-            with_only_lua_line_breaks("a\n\rb\r\nc\rd", LuaVersion::Lua54),
-            "a\r\nb\r\nc\rd"
+            renderable(b"-- caf\xE9\x0B\xC2\n\xFF\xE2\x80", LuaVersion::Lua51),
+            "-- caf? ?\n???"
         );
-        assert_eq!(with_only_lua_line_breaks("a\n\rb\r\nc\rd", LuaVersion::Luau), "a\n b\r\nc d");
-        assert_eq!(
-            with_only_lua_line_breaks("\u{e9}\u{2027}\u{c5}", LuaVersion::Lua54),
-            "\u{e9}\u{2027}\u{c5}"
-        );
+        let diag = Diagnostic::e008(Span::new(17, 22), "boom");
+        let text = rendered("latin1.lua", Some(b"local s = 'caf\xE9' local"), &[diag]);
+        assert!(text.contains("latin1.lua:1:18"), "{text}");
     }
 
     #[test]
     fn a_short_line_renders_its_snippet() {
         let diag = Diagnostic::e008(Span::new(6, 7), "boom");
-        let text = rendered("small.lua", Some("local x = 1\n"), &[diag]);
+        let text = rendered("small.lua", Some(b"local x = 1\n"), &[diag]);
         assert!(text.contains("small.lua:1:7"), "{text}");
     }
 }

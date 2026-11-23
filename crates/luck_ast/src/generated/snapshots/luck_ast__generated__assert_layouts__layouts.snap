@@ -80,6 +80,7 @@ Option<Name>: size 24, align 4
 Option<List<Expression>>: size 16, align 8
 Option<NameIndex>: size 4, align 4
 Option<ThinStr>: size 12, align 4
+Option<ThinBytes>: size 12, align 4
 Option<ElseClause>: size 32, align 8
 Option<Expression>: size 16, align 8
 Option<Attribute>: size 32, align 4

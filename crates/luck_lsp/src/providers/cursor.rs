@@ -7,7 +7,7 @@ use luck_ast::{
 use luck_semantic::{ScopeTree, SymbolId, SymbolKind};
 use luck_token::{CommentKind, Span, Token, TokenKind, offset_to_index};
 
-use crate::document::DocumentState;
+use crate::document::{DocumentState, span_text};
 
 /// Whether `offset` falls inside `span`, either end included, so a cursor
 /// just past a name still counts as on it.
@@ -88,14 +88,14 @@ const fn is_inside(span: Span, offset: u32, is_cut_off: bool) -> bool {
 
 /// Whether a block comment lacks the closing bracket of its opening one's
 /// level, which leaves it open to the end of the source.
-fn is_unclosed_block_comment(comment: &str) -> bool {
-    let after_opening = comment.get("--[".len()..).unwrap_or_default();
-    let level = after_opening.bytes().take_while(|&b| b == b'=').count();
+fn is_unclosed_block_comment(comment: &[u8]) -> bool {
+    let after_opening = comment.get(b"--[".len()..).unwrap_or_default();
+    let level = after_opening.iter().take_while(|&&b| b == b'=').count();
     let body = after_opening.get(level.saturating_add(1)..).unwrap_or_default();
     let closer = body
         .len()
         .checked_sub(level.saturating_add(2))
-        .and_then(|start| body.as_bytes().get(start..))
+        .and_then(|start| body.get(start..))
         .unwrap_or_default();
     let Some((b']', [equals @ .., b']'])) = closer.split_first() else {
         return true;
@@ -154,7 +154,7 @@ pub(crate) fn dotted_chain_ending_tokens<'source>(
         if base.kind != TokenKind::Identifier {
             return None;
         }
-        segments.push(base.text(source));
+        segments.push(span_text(source, base.span));
         if let Some((Token { kind: TokenKind::Dot, .. }, before_dot)) = before_base.split_last() {
             remaining_tokens = before_dot;
         } else {

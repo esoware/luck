@@ -67,7 +67,7 @@ struct Place {
 }
 
 impl Place {
-    fn of(span: Option<Span>, lines: &LineIndex, text: &str) -> Self {
+    fn of(span: Option<Span>, lines: &LineIndex, text: &[u8]) -> Self {
         let Some(found) = span else {
             return Self::default();
         };
@@ -93,7 +93,11 @@ mod tests {
 
     fn rendered(text: &str, diags: &[Diagnostic]) -> Vec<Value> {
         let mut output = Vec::new();
-        let file = SourceFile { label: "src/a.lua", text: Some(text), version: LuaVersion::Lua54 };
+        let file = SourceFile {
+            label: "src/a.lua",
+            text: Some(text.as_bytes()),
+            version: LuaVersion::Lua54,
+        };
         JsonReporter.render(file, diags, &mut output);
         let lines = String::from_utf8(output).expect("JSON is UTF-8");
         lines.lines().map(|line| serde_json::from_str(line).expect("a JSON object")).collect()

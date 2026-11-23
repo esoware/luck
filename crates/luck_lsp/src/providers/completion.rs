@@ -11,7 +11,7 @@ use luck_semantic::{StdlibEntry, StdlibFunction};
 use luck_token::{Span, TokenKind, index_to_offset};
 use rustc_hash::FxHashSet;
 
-use crate::document::DocumentState;
+use crate::document::{DocumentState, span_text};
 use crate::providers::cursor::{
     TextKind, dotted_chain_ending_tokens, find_string_arg_at, is_unterminated, text_kind_at,
 };
@@ -43,7 +43,7 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
     for symbol in tree.symbols() {
         let span = symbol.definition_span;
         let name = tree.name(symbol.name);
-        if span.end <= offset && span.text(document.text()) == name {
+        if span.end <= offset && span_text(document.text(), span) == name {
             items.push(CompletionItem {
                 label: name.to_owned(),
                 kind: Some(CompletionItemKind::VARIABLE),
@@ -191,8 +191,8 @@ fn call_arg_count(call: Call<'_>) -> usize {
 /// unterminated literal has no closer.
 fn string_interior(literal: &StringLiteral<'_>, is_unterminated: bool) -> Span {
     let raw = literal.raw.as_deref().unwrap_or_default();
-    let delimiter_width = index_to_offset(raw.strip_prefix('[').map_or(1, |after_bracket| {
-        after_bracket.bytes().take_while(|&b| b == b'=').count().saturating_add(2)
+    let delimiter_width = index_to_offset(raw.strip_prefix(b"[").map_or(1, |after_bracket| {
+        after_bracket.iter().take_while(|&&b| b == b'=').count().saturating_add(2)
     }));
     let closer_width = if is_unterminated { 0 } else { delimiter_width };
     Span::new(
@@ -220,7 +220,7 @@ fn member_access_before(document: &DocumentState, offset: u32) -> Option<MemberA
     // The word in progress can lex as a keyword: `string.for` is on its way
     // to `format`.
     let is_partial_word =
-        offset <= last.span.end && TokenKind::is_identifier_shaped(last.span.text(source));
+        offset <= last.span.end && TokenKind::is_identifier_shaped(span_text(source, last.span));
     let (separator, before_separator) =
         if is_partial_word { before_last.split_last()? } else { (last, before_last) };
     let is_colon = separator.kind == TokenKind::Colon;

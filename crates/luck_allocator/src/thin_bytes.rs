@@ -105,8 +105,9 @@ impl Debug for ThinBytes<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_char('"')?;
         for chunk in self.as_bytes().utf8_chunks() {
+            // A `str` leaves its single quotes as they are, as `char` doesn't.
             for c in chunk.valid().chars() {
-                write!(f, "{}", c.escape_debug())?;
+                if c == '\'' { f.write_char(c)? } else { write!(f, "{}", c.escape_debug())? }
             }
             for byte in chunk.invalid() {
                 write!(f, "\\x{byte:02X}")?;

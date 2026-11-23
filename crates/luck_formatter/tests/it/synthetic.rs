@@ -23,7 +23,7 @@ fn assert_format_chunk_with(
 ) {
     let output = format_chunk(fixture.allocator(), chunk, comments, options)
         .expect("the block nests within the cap");
-    assert_eq!(output, expected, "format mismatch");
+    assert_eq!(output, expected.as_bytes(), "format mismatch");
     assert_format_with(expected, expected, chunk.version, options);
 }
 
@@ -62,13 +62,13 @@ fn long_string_delimiters_and_bytes_roundtrip() {
         for version in LuaVersion::ALL {
             let block = synth.block([synth.return_([synth.long_string(&content)])]);
             assert_format_block(&fixture, block, version, &expected);
-            let lexed = luck_lexer::lex(&expected, version);
+            let lexed = luck_lexer::lex(expected.as_bytes(), version);
             let literal = lexed
                 .tokens
                 .iter()
                 .find(|token| token.kind == TokenKind::StringLiteral)
                 .expect("string literal")
-                .text(&expected);
+                .text(expected.as_bytes());
             let mut decoded = Vec::new();
             let value = match decode_string(literal, version, &mut decoded) {
                 StringValue::Verbatim(bytes) => bytes.to_vec(),

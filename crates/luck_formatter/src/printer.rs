@@ -32,9 +32,8 @@ use core::ops::Range;
 
 use luck_allocator::{Allocator, List};
 use luck_token::{CodeBuffer, index_to_offset, offset_to_index};
-use unicode_width::UnicodeWidthStr as _;
 
-use crate::ir::{FormatElement, GroupId, LineMode, TextWidth};
+use crate::ir::{FormatElement, GroupId, LineMode, TextWidth, columns};
 use crate::{FormatOptions, IndentStyle, LineEndings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,17 +219,17 @@ pub(crate) fn print(
     elements: &[FormatElement<'_>],
     layout: Layout<'_>,
     options: &FormatOptions,
-    base_indent: &str,
+    base_indent: &[u8],
     capacity: usize,
-) -> String {
+) -> Vec<u8> {
     let columns_per_indent = usize::from(options.indent_width);
     let (indent_byte, bytes_per_indent) = match options.indent_style {
         IndentStyle::Tabs => (b'\t', 1),
         IndentStyle::Spaces => (b' ', columns_per_indent),
     };
     let base_indent_columns = base_indent
-        .bytes()
-        .map(|b| if b == b'\t' { columns_per_indent } else { 1 })
+        .iter()
+        .map(|&b| if b == b'\t' { columns_per_indent } else { 1 })
         .fold(0usize, usize::saturating_add);
     let mut printer = Printer {
         line_width: usize::from(options.line_width),
@@ -255,7 +254,7 @@ pub(crate) fn print(
     };
     printer.print_elements(elements);
     printer.flush_suffixes();
-    printer.output.into_string()
+    printer.output.into_bytes()
 }
 
 /// A line as a measurement has it so far.
@@ -307,7 +306,7 @@ struct Printer<'ast, 'layout> {
     bytes_per_indent: usize,
     columns_per_indent: usize,
     /// Written before the indent of every line.
-    base_indent: &'ast str,
+    base_indent: &'ast [u8],
     /// A tab in `base_indent` measures `columns_per_indent` too.
     base_indent_columns: usize,
     output: CodeBuffer,
@@ -328,7 +327,7 @@ struct Printer<'ast, 'layout> {
     /// Per open next-line group, whether it moved to the next line, so its
     /// end takes back the indent it added.
     next_line_moves: Vec<bool>,
-    suffixes: Vec<(&'ast str, TextWidth)>,
+    suffixes: Vec<(&'ast [u8], TextWidth)>,
     is_pending_space: bool,
     is_pending_indent: bool,
 }
@@ -497,7 +496,7 @@ impl<'ast> Printer<'ast, '_> {
     /// separator, which goes ahead of the comment as in `a, -- c`. Code moved
     /// past it would make the comment trail different code on the next
     /// format.
-    fn end_suffixed_line(&mut self, content: &str) {
+    fn end_suffixed_line(&mut self, content: &[u8]) {
         if !self.suffixes.is_empty() && !is_separator(content) {
             self.emit_newline(false);
         }
@@ -817,72 +816,71 @@ impl<'ast> Printer<'ast, '_> {
         Some(true)
     }
 
-    fn emit_text(&mut self, content: &str, width: TextWidth) {
+    fn emit_text(&mut self, content: &[u8], width: TextWidth) {
         if self.is_pending_indent {
             self.flush_indent();
         }
         if self.is_pending_space {
             self.is_pending_space = false;
-            self.output.print_ascii_byte(b' ');
+            self.output.print_byte(b' ');
             self.display_column = self.display_column.saturating_add(1);
         }
         if self.crlf_end == Some(self.output.len()) {
             self.keep_lf_before_cr(content);
         }
         if !width.is_multiline() {
-            self.output.print_str(content);
+            self.output.print_bytes(content);
             self.display_column = self.display_column.saturating_add(width.columns());
             return;
         }
         if self.is_crlf {
             self.print_crlf(content);
         } else {
-            self.output.print_str(content);
+            self.output.print_bytes(content);
         }
         // The column restarts from the last line.
-        let last_line = content.rsplit(['\n', '\r']).next().unwrap_or(content);
+        let last_line = content.rsplit(|&b| b == b'\n' || b == b'\r').next().unwrap_or(content);
         self.line_start = self.output.len().saturating_sub(last_line.len());
-        self.display_column = last_line.width();
+        self.display_column = columns(last_line);
     }
 
     /// Copy source text, which brings its own indentation and keeps any
     /// trailing whitespace. Text ending in a line break leaves the next line to
     /// the printer's indent.
-    fn emit_verbatim(&mut self, content: &str, width: TextWidth) {
+    fn emit_verbatim(&mut self, content: &[u8], width: TextWidth) {
         self.is_pending_indent = false;
         self.emit_text(content, width);
         self.line_start = self.output.len();
-        self.is_pending_indent = content.ends_with(['\n', '\r']);
+        self.is_pending_indent = matches!(content.last(), Some(b'\n' | b'\r'));
     }
 
     /// The CRLF the output ends in, made of an LF, goes back to an LF when
     /// `content` starts with a CR, as half of an LFCR.
-    fn keep_lf_before_cr(&mut self, content: &str) {
-        if content.starts_with('\r') {
+    fn keep_lf_before_cr(&mut self, content: &[u8]) {
+        if content.first() == Some(&b'\r') {
             self.crlf_end = None;
             self.output.truncate(self.output.len().saturating_sub(2));
-            self.output.print_ascii_byte(b'\n');
+            self.output.print_byte(b'\n');
             self.line_start = self.output.len();
         }
     }
 
     /// Writes `content`, which spans lines, with each LF that isn't half of
     /// a CRLF or an LFCR as CRLF.
-    fn print_crlf(&mut self, content: &str) {
-        let bytes = content.as_bytes();
+    fn print_crlf(&mut self, content: &[u8]) {
         let mut written = 0;
         let mut is_crlf_last = false;
-        for (i, _) in content.match_indices('\n') {
+        for i in memchr::memchr_iter(b'\n', content) {
             let previous =
-                i.checked_sub(1).map_or_else(|| self.output.as_bytes().last(), |j| bytes.get(j));
-            if previous != Some(&b'\r') && bytes.get(i.saturating_add(1)) != Some(&b'\r') {
-                self.output.print_str(content.get(written..i).unwrap_or_default());
-                self.output.print_ascii_byte(b'\r');
+                i.checked_sub(1).map_or_else(|| self.output.as_bytes().last(), |j| content.get(j));
+            if previous != Some(&b'\r') && content.get(i.saturating_add(1)) != Some(&b'\r') {
+                self.output.print_bytes(content.get(written..i).unwrap_or_default());
+                self.output.print_byte(b'\r');
                 written = i;
-                is_crlf_last = i.saturating_add(1) == bytes.len();
+                is_crlf_last = i.saturating_add(1) == content.len();
             }
         }
-        self.output.print_str(content.get(written..).unwrap_or_default());
+        self.output.print_bytes(content.get(written..).unwrap_or_default());
         if is_crlf_last {
             self.crlf_end = Some(self.output.len());
         }
@@ -904,7 +902,7 @@ impl<'ast> Printer<'ast, '_> {
                 // Blank lines never stack, so a break right after one adds
                 // nothing.
                 while !self.output.as_bytes().ends_with(b"\n\n") {
-                    self.output.print_ascii_byte(b'\n');
+                    self.output.print_byte(b'\n');
                     if !is_blank_line {
                         break;
                     }
@@ -923,9 +921,9 @@ impl<'ast> Printer<'ast, '_> {
             && self.output.as_bytes().ends_with(b"\n\r\n"))
         {
             if self.output.as_bytes().last() == Some(&b'\r') {
-                self.output.print_ascii_byte(b'\n');
+                self.output.print_byte(b'\n');
             } else {
-                self.output.print_str("\r\n");
+                self.output.print_bytes(b"\r\n");
                 self.crlf_end = Some(self.output.len());
             }
             if !is_blank_line {
@@ -962,16 +960,16 @@ impl<'ast> Printer<'ast, '_> {
 
     fn flush_indent(&mut self) {
         self.is_pending_indent = false;
-        self.output.print_str(self.base_indent);
+        self.output.print_bytes(self.base_indent);
         let indent_bytes = self.indent_level.saturating_mul(self.bytes_per_indent);
-        self.output.print_ascii_repeat(self.indent_byte, indent_bytes);
+        self.output.print_repeat(self.indent_byte, indent_bytes);
         self.display_column = self.display_column.saturating_add(self.indent_columns());
     }
 }
 
 /// Text that goes ahead of a pending line suffix rather than ending its line.
-fn is_separator(content: &str) -> bool {
-    matches!(content, "," | ";")
+const fn is_separator(content: &[u8]) -> bool {
+    matches!(content, b"," | b";")
 }
 
 fn skip_conditional<'elements, 'ast>(
@@ -1005,7 +1003,7 @@ mod tests {
         let allocator = Allocator::new();
         let mut f = Formatter::new(&allocator, LuaVersion::Lua54, options, Comments::none());
         build(&mut f);
-        f.print(base_indent)
+        String::from_utf8(f.print(base_indent.as_bytes())).unwrap()
     }
 
     fn print_document(build: impl Fn(&mut Formatter<'_>), line_width: u16) -> String {
@@ -1045,7 +1043,7 @@ mod tests {
                     grouped.token("{");
                     grouped.indent(|indented| {
                         indented.soft_line_or_space();
-                        indented.text(text);
+                        indented.text(text.as_bytes());
                     });
                     grouped.soft_line_or_space();
                     grouped.token("}");
@@ -1091,7 +1089,7 @@ b"
         f.group_with_id(id, |grouped| {
             grouped.token("[");
             grouped.soft_line();
-            grouped.text(text);
+            grouped.text(text.as_bytes());
             grouped.if_group_breaks(id, |broken| broken.token(","));
             grouped.soft_line();
             grouped.token("]");
@@ -1154,7 +1152,7 @@ b"
         let output = print_document(
             |f| {
                 f.token("local x = 1");
-                f.line_suffix("-- trailing", false);
+                f.line_suffix(b"-- trailing", false);
                 f.hard_line();
                 f.token("local y = 2");
             },
@@ -1272,7 +1270,7 @@ zzzzzzzzzz"
     fn a_group_measures_text_after_it_to_that_texts_first_line_break() {
         let write = |f: &mut Formatter<'_>| {
             write_bracketed(f);
-            f.text("x\nyyyyyyyyyyyy");
+            f.text(b"x\nyyyyyyyyyyyy");
         };
         assert_eq!(
             print_document(write, 10),

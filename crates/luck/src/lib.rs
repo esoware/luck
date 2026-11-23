@@ -51,7 +51,7 @@
 //! use luck::token::LuaVersion;
 //!
 //! let mut allocator = Allocator::new();
-//! for source in ["local x = 1", "return x"] {
+//! for source in [&b"local x = 1"[..], b"return x"] {
 //!     let parsed = luck::parser::parse(&allocator, source, LuaVersion::Lua54);
 //!     assert!(parsed.errors.is_empty());
 //!     // The parse borrows the arena, so it goes first.
@@ -70,7 +70,7 @@
 //!
 //! let pool = AllocatorPool::new(2);
 //! thread::scope(|scope| {
-//!     for source in ["local x = 1", "return 2"] {
+//!     for source in [&b"local x = 1"[..], b"return 2"] {
 //!         let pool = &pool;
 //!         scope.spawn(move || {
 //!             let allocator = pool.get();
@@ -92,8 +92,8 @@
 //!
 //! let allocator = Allocator::new();
 //! let formatted =
-//!     luck::formatter::format(&allocator, "local x=1", LuaVersion::Lua54, &FormatOptions::default());
-//! assert_eq!(formatted.output, "local x = 1\n");
+//!     luck::formatter::format(&allocator, b"local x=1", LuaVersion::Lua54, &FormatOptions::default());
+//! assert_eq!(formatted.output, b"local x = 1\n");
 //! # }
 //! ```
 //!
@@ -108,11 +108,11 @@
 //! let allocator = Allocator::new();
 //! let minified = luck::minifier::minify(
 //!     &allocator,
-//!     "return 1 + 2",
+//!     b"return 1 + 2",
 //!     LuaVersion::Lua54,
 //!     &TransformConfig::default(),
 //! );
-//! assert_eq!(minified.as_deref(), Ok("return 3"));
+//! assert_eq!(minified.as_deref(), Ok(&b"return 3"[..]));
 //! # }
 //! ```
 //!
@@ -128,12 +128,12 @@
 //!
 //! let allocator = Allocator::new();
 //! let config = LintConfig::default();
-//! let source = "print(undefined_name)";
+//! let source = b"print(undefined_name)";
 //! let diags = luck::linter::lint(&allocator, source, LuaTarget::Lua54, &config, FixKind::empty());
 //! assert_eq!(diags[0].code, "undefined_variable");
 //!
-//! let fixed = luck::linter::fix(&allocator, "unpack(t)", LuaTarget::Lua54, &config, FixKind::Fix);
-//! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok("table.unpack(t)"));
+//! let fixed = luck::linter::fix(&allocator, b"unpack(t)", LuaTarget::Lua54, &config, FixKind::Fix);
+//! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"table.unpack(t)"[..]));
 //! # }
 //! ```
 //!
@@ -145,8 +145,8 @@
 //! use luck::token::LuaVersion;
 //!
 //! let allocator = Allocator::new();
-//! let parsed = luck::parser::parse(&allocator, "local x = ( a + b ) * ( c )", LuaVersion::Lua54);
-//! assert_eq!(luck::codegen::compact(&parsed.chunk), "local x=(a+b)*c");
+//! let parsed = luck::parser::parse(&allocator, b"local x = ( a + b ) * ( c )", LuaVersion::Lua54);
+//! assert_eq!(luck::codegen::compact(&parsed.chunk), b"local x=(a+b)*c");
 //! # }
 //! ```
 //!
@@ -170,7 +170,7 @@
 //! };
 //! let arenas = ThreadAllocators::new();
 //! let bundle = luck::bundler::bundle(&arenas, Path::new("src/main.lua"), &options).unwrap();
-//! println!("{}", bundle.output);
+//! std::io::Write::write_all(&mut std::io::stdout(), &bundle.output).unwrap();
 //! # }
 //! ```
 

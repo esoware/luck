@@ -40,11 +40,10 @@ impl Span {
         Self::new(self.start.saturating_add(offset), self.end.saturating_add(offset))
     }
 
-    /// Empty if the span is out of range or splits a character, which a span lexed from `source`
-    /// never does.
+    /// Empty if the span is out of range, which a span lexed from `source` never is.
     #[inline]
     #[must_use]
-    pub fn text(self, source: &str) -> &str {
+    pub fn text(self, source: &[u8]) -> &[u8] {
         source.get(Range::<usize>::from(self)).unwrap_or_default()
     }
 }

@@ -15,7 +15,7 @@ fn analyzing_fits_the_smallest_stack() {
         .chain(broken_sources());
     on_the_smallest_stack(sources, |source, version| {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source, version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         let counts = parsed.counts;
         let chunk = allocator.alloc(parsed.chunk);
         let environments: &[StdlibEnvironment] = if version.is_luau() {

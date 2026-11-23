@@ -1,6 +1,4 @@
 codegen_lua55 Summary:
-AST Parsed     : 31/32 (96.88%)
-Positive Passed: 31/32 (96.88%)
-
-Not UTF-8: lua-5.5.1-tests/strings.lua
+AST Parsed     : 32/32 (100.00%)
+Positive Passed: 32/32 (100.00%)
 

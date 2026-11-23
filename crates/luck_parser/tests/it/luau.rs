@@ -514,7 +514,7 @@ local const = 2
 print(const)",
     ));
     // And non-Luau versions never treat it specially.
-    let result = luck_parser::parse(&allocator, "const x = 1", luck_token::LuaVersion::Lua54);
+    let result = luck_parser::parse(&allocator, b"const x = 1", luck_token::LuaVersion::Lua54);
     assert!(!result.errors.is_empty(), "const decl is Luau-only");
 }
 
@@ -577,8 +577,8 @@ fn empty_interpolation_rejected() {
             panic!("{source}: {:?}", result.errors);
         };
         assert_eq!(
-            (&*error.message, error.span.unwrap().text(source)),
-            ("malformed interpolated string: expected expression inside `{}`", hole),
+            (&*error.message, error.span.unwrap().text(source.as_bytes())),
+            ("malformed interpolated string: expected expression inside `{}`", hole.as_bytes()),
             "{source}"
         );
     }
@@ -748,7 +748,8 @@ return export",
 fn luau_only_features_are_errors_in_lua54() {
     let allocator = Allocator::new();
     for source in ["return 1i", "return f<<number>>()", "export local x = 1", "type T = ~nil"] {
-        let result = luck_parser::parse(&allocator, source, luck_token::LuaVersion::Lua54);
+        let result =
+            luck_parser::parse(&allocator, source.as_bytes(), luck_token::LuaVersion::Lua54);
         assert!(!result.errors.is_empty(), "{source} must be Luau-only");
     }
 }

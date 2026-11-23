@@ -71,8 +71,8 @@ impl CheckArgs {
 
 fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
     let file_path = file.path.as_path();
-    let source = match FileSystemOs.read_to_string(file_path) {
-        Ok(text) => text,
+    let source = match FileSystemOs.read(file_path) {
+        Ok(bytes) => bytes,
         Err(error) => {
             return Some(
                 format!("error: cannot read `{}`: {error}\n", file_path.display()).into_bytes(),

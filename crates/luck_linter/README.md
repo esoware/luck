@@ -18,6 +18,7 @@ A diagnostic may carry a `Fix`, a set of text edits applied together, of one `Fi
 
 - `lint(allocator, source, target, config, fixes)` parses and lints, building the fixes of the kinds `fixes` holds.
 - `lint_parsed` lints a parse the caller holds. A host that also keeps the analysis, as the language server does, calls `analyze` and then `lint_analyzed`, which asks the host between rules whether to stop, so a lint of a version the user has already edited stops early.
+- A source is bytes, as Lua reads it, and so is a fix's replacement, which keeps the bytes of the code it copies.
 - `fix` lints and applies the fixes of the kinds asked for, round after round, until none is left. Of two overlapping fixes a round applies one, and the next round lints the result again. It returns the fixed source's parse and diagnostics, or an error when a round's fixes break the syntax or fixes are still coming after 10 rounds, so a caller writes back every fix or none.
 - `non_overlapping_edits` picks the edits of one round, which the language server's fix-all sends.
 - `rules()` lists every rule as a `&dyn Rule` with its name, category, default severity, description, fix kinds, and docs link, the rule's source on GitHub at this release, and `rule_named` looks one up by name, with a message that suggests a close name when none matches.
@@ -29,7 +30,7 @@ use luck_linter::{FixKind, LintConfig};
 
 let allocator = Allocator::new();
 let config = LintConfig::default();
-let source = "print(undefined_name)";
+let source = b"print(undefined_name)";
 let diags = luck_linter::lint(&allocator, source, LuaTarget::Lua54, &config, FixKind::empty());
 assert_eq!(diags[0].code, "undefined_variable");
 ```

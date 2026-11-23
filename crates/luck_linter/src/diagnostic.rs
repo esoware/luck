@@ -3,6 +3,7 @@ use core::ops::Deref;
 
 use luck_diagnostics::{Diagnostic, Label, Severity, Tag};
 use luck_token::Span;
+use memchr::memmem;
 
 use crate::fix::{Fix, FixKind, RuleFixer};
 use crate::rule::{LintContext, Rule};
@@ -191,10 +192,10 @@ impl Finding {
 /// span it replaces.
 fn keeps_comments(fix: &Fix, context: &LintContext<'_>) -> bool {
     fix.edits.iter().all(|edit| {
-        let mut unmatched: &str = &edit.replacement;
+        let mut unmatched: &[u8] = &edit.replacement;
         for comment in context.comments_within(edit.span) {
             let text = comment.span.text(context.source);
-            let Some(at) = unmatched.find(text) else {
+            let Some(at) = memmem::find(unmatched, text) else {
                 return false;
             };
             unmatched = unmatched.get(at.saturating_add(text.len())..).unwrap_or_default();

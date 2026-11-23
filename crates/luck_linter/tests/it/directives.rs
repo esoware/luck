@@ -184,6 +184,30 @@ local _x = 1";
 }
 
 #[test]
+fn invalid_lint_filter_shows_a_word_that_is_not_utf8() {
+    let source = b"-- luck: allow(x) \xE9t\xE9\nlocal _x = 1";
+    let diags = luck_linter::lint(
+        &Allocator::new(),
+        source,
+        LuaTarget::Lua51,
+        &LintConfig::default(),
+        FixKind::empty(),
+    );
+    let found: Vec<(&str, &[u8])> = diags
+        .iter()
+        .filter(|diag| diag.code == "invalid_lint_filter")
+        .map(|diag| (&*diag.message, diag.span().text(source)))
+        .collect();
+    assert_eq!(
+        found,
+        [(
+            "expected `start` or `end` after `allow(...)`, found `\u{FFFD}t\u{FFFD}`",
+            &b"\xE9t\xE9"[..]
+        )]
+    );
+}
+
+#[test]
 fn wildcard_allow_covers_only_next_stmt() {
     let source = "\
 -- luck: allow(*)
@@ -321,7 +345,7 @@ print(a) -- luck: allow(unused_variable, undefined_variable)
     let allocator = Allocator::new();
     let fixed = luck_linter::fix(
         &allocator,
-        source,
+        source.as_bytes(),
         LuaTarget::Lua54,
         &LintConfig::default(),
         FixKind::Fix,
@@ -329,7 +353,7 @@ print(a) -- luck: allow(unused_variable, undefined_variable)
     .expect("fixes converge");
     assert_eq!(
         fixed.parse.source,
-        "\
+        b"\
 local a = 1
 print(a)
 "

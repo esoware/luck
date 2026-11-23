@@ -39,7 +39,7 @@ fn lint_distinguishes_luau_flavors() {
 #[test]
 fn analyze_defines_the_extra_globals_of_its_config() {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse(&allocator, "return vim", LuaVersion::Lua54);
+    let parse = luck_parser::parse(&allocator, b"return vim", LuaVersion::Lua54);
     let config = LintConfig::default();
     let without_vim = analyze(&parse, StdlibEnvironment::Standalone, &config);
     let flagged = lint_analyzed(&parse, &without_vim, &config, FixKind::empty(), &|| false)
@@ -57,7 +57,7 @@ fn analyze_defines_the_extra_globals_of_its_config() {
 #[test]
 fn lint_analyzed_reports_parse_errors_without_running_rules() {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse(&allocator, "local x =", LuaVersion::Lua54);
+    let parse = luck_parser::parse(&allocator, b"local x =", LuaVersion::Lua54);
     let config = LintConfig::default();
     let analysis = analyze(&parse, StdlibEnvironment::Standalone, &config);
     let diags = lint_analyzed(&parse, &analysis, &config, FixKind::empty(), &|| true)
@@ -69,7 +69,7 @@ fn lint_analyzed_reports_parse_errors_without_running_rules() {
 #[test]
 fn lint_parsed_reports_parse_errors_without_running_rules() {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse(&allocator, "local x =", LuaVersion::Lua54);
+    let parse = luck_parser::parse(&allocator, b"local x =", LuaVersion::Lua54);
     let diags = lint_parsed(
         &parse,
         StdlibEnvironment::Standalone,

@@ -4,11 +4,11 @@ Bundles a multi-file Lua or Luau project into one self-contained file.
 
 ## Overview
 
-Discovery starts at the entry file. The bundler reads and parses each module and finds its `require` calls with `luck_semantic`, so only a call that reaches the global `require` counts. It resolves each require string with `luck_resolver`. Each module is a task on rayon's pool, which reads it into the arena its thread gets from the caller's `ThreadAllocators` and resolves its requires. The calling thread alone keeps the graph, and starts a task for each new module a finished one reaches, as `oxc_linter`'s service does. It numbers the modules in require order in a `DependencyGraph`, so the result is the same however many threads read them, and reports a cycle as a warning.
+Discovery starts at the entry file. The bundler reads each module as bytes, as Lua does, parses it, and finds its `require` calls with `luck_semantic`, so only a call that reaches the global `require` counts. It resolves each require string with `luck_resolver`. Each module is a task on rayon's pool, which reads it into the arena its thread gets from the caller's `ThreadAllocators` and resolves its requires. The calling thread alone keeps the graph, and starts a task for each new module a finished one reaches, as `oxc_linter`'s service does. It numbers the modules in require order in a `DependencyGraph`, so the result is the same however many threads read them, and reports a cycle as a warning.
 
 The bundle opens with a small loader, and each module registers as a function that runs on its first `require`. The loader works like the target's own `require`. On Lua, `package.loaded` and `package.preload` work as they do there, and on Luau the loader caches a module by file, and the module must return exactly one value. Every name the bundler generates shares a prefix no module's source contains, and every path in the output is relative to the project root.
 
-`bundle` splices the loader into each module's text, so a line in the bundle maps back to a line of its module. `bundle_minified` instead builds the bundle as one tree from the modules' own parses and minifies it with `luck_minifier`, so no text is parsed twice.
+`bundle` splices the loader into each module's text, which it copies byte for byte, so a line in the bundle maps back to a line of its module. `bundle_minified` instead builds the bundle as one tree from the modules' own parses and minifies it with `luck_minifier`, so no text is parsed twice.
 
 ## Features
 

@@ -1,87 +1,44 @@
-use core::panic::AssertUnwindSafe;
-use std::panic;
-
 use luck_token::CodeBuffer;
 
 #[test]
-fn pushes_append_mixed_ascii_and_unicode_in_order() {
+fn pushes_append_text_and_bytes_that_are_not_utf8_in_order() {
     let mut buffer = CodeBuffer::with_capacity(0);
     assert!(buffer.is_empty());
-    buffer.print_ascii_byte(b'=');
-    buffer.print_str("local x");
-    buffer.print_str("\u{00e9}");
-    buffer.print_ascii_repeat(b' ', 3);
-    assert_eq!(buffer.len(), 13);
-    assert_eq!(buffer.into_string(), "=local x\u{00e9}   ");
+    buffer.print_byte(b'=');
+    buffer.print_bytes(b"local x");
+    buffer.print_bytes("\u{00e9}".as_bytes());
+    buffer.print_bytes(b"\xE9\xFF");
+    buffer.print_byte(0x80);
+    buffer.print_repeat(b' ', 3);
+    buffer.print_with(|bytes| bytes.extend_from_slice(b"--"));
+    assert_eq!(buffer.len(), 18);
+    let expected = ["=local x\u{00e9}".as_bytes(), b"\xE9\xFF\x80   --"].concat();
+    assert_eq!(buffer.into_bytes(), expected);
 }
 
 #[test]
-fn strings_of_every_short_length_append_whole_with_or_without_spare_capacity() {
-    let text = "abcdefghijklmnopq\u{e9}";
-    for end in (0..=text.len()).filter(|end| text.is_char_boundary(*end)) {
-        let piece = text.split_at(end).0;
+fn pieces_of_every_short_length_append_whole_with_or_without_spare_capacity() {
+    let bytes = b"abcdefghijklmnopq\xE9";
+    for end in 0..=bytes.len() {
+        let piece = bytes.split_at(end).0;
         for capacity in [0, 1, 4, 32] {
             let mut buffer = CodeBuffer::with_capacity(capacity);
-            buffer.print_str("x");
-            buffer.print_str(piece);
-            buffer.print_str("\u{e9}");
-            assert_eq!(buffer.into_string(), format!("x{piece}\u{e9}"), "capacity {capacity}");
+            buffer.print_bytes(b"x");
+            buffer.print_bytes(piece);
+            buffer.print_bytes(b"\xE9");
+            let expected = [&b"x"[..], piece, b"\xE9"].concat();
+            assert_eq!(buffer.into_bytes(), expected, "capacity {capacity}");
         }
     }
 }
 
 #[test]
-fn truncate_drops_trailing_bytes() {
-    let mut buffer = CodeBuffer::default();
-    buffer.print_str("abc  ");
-    assert_eq!(buffer.as_bytes(), b"abc  ");
-    buffer.truncate(3);
-    assert_eq!(buffer.into_string(), "abc");
-}
-
-#[test]
-fn truncate_accepts_every_character_boundary() {
-    let text = "a\u{e9}\u{6f22}\u{1f600}z";
-    for offset in (0..=text.len()).filter(|offset| text.is_char_boundary(*offset)) {
+fn truncate_drops_trailing_bytes_at_any_offset() {
+    let bytes = b"a\xE9\xC3\xA9z";
+    for offset in 0..=bytes.len() + 1 {
         let mut buffer = CodeBuffer::default();
-        buffer.print_str(text);
+        buffer.print_bytes(bytes);
         buffer.truncate(offset);
-        assert_eq!(buffer.into_string(), text.split_at(offset).0);
-    }
-    for offset in [text.len() + 1, usize::MAX] {
-        let mut buffer = CodeBuffer::default();
-        buffer.print_str(text);
-        buffer.truncate(offset);
-        assert_eq!(buffer.into_string(), text);
-    }
-}
-
-#[test]
-fn truncate_rejects_splitting_a_character_without_changing_output() {
-    let text = "a\u{e9}\u{6f22}\u{1f600}z";
-    for offset in (0..text.len()).filter(|offset| !text.is_char_boundary(*offset)) {
-        let mut buffer = CodeBuffer::default();
-        buffer.print_str(text);
-        let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            buffer.truncate(offset);
-        }));
-        assert!(result.is_err(), "offset {offset}");
-        assert_eq!(buffer.into_string(), text);
-    }
-}
-
-#[test]
-fn ascii_pushes_reject_non_ascii_bytes_without_changing_output() {
-    let rejects_as_not_ascii = |push: &mut dyn FnMut()| {
-        panic::catch_unwind(AssertUnwindSafe(push)).is_err_and(|payload| {
-            payload.downcast_ref::<String>().is_some_and(|message| message.contains("not ASCII"))
-        })
-    };
-    for b in [0x80, 0xC3, 0xFF] {
-        let mut buffer = CodeBuffer::default();
-        buffer.print_str("ok");
-        assert!(rejects_as_not_ascii(&mut || buffer.print_ascii_byte(b)), "byte {b}");
-        assert!(rejects_as_not_ascii(&mut || buffer.print_ascii_repeat(b, 2)), "byte {b}");
-        assert_eq!(buffer.into_string(), "ok");
+        assert_eq!(buffer.as_bytes(), bytes.get(..offset).unwrap_or(bytes), "{offset}");
     }
 }

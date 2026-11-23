@@ -31,10 +31,13 @@ use crate::{Groupings, ParseResult};
 /// The tree and every list in it go in `allocator`, and its names and
 /// literals borrow `source`, but for a string's value that decoding rewrote,
 /// which goes in `allocator` too.
+///
+/// `source` is bytes, as Lua reads it, so a string or a comment in it may
+/// hold any byte.
 #[must_use]
 pub fn parse<'ast>(
     allocator: &'ast Allocator,
-    source: &'ast str,
+    source: &'ast [u8],
     version: LuaVersion,
 ) -> ParseResult<'ast> {
     parse_recording(allocator, source, version, false).0
@@ -45,7 +48,7 @@ pub fn parse<'ast>(
 #[must_use]
 pub fn parse_with_tokens<'ast>(
     allocator: &'ast Allocator,
-    source: &'ast str,
+    source: &'ast [u8],
     version: LuaVersion,
 ) -> (ParseResult<'ast>, Vec<Token>) {
     let (parse, recorded) = parse_recording(allocator, source, version, true);
@@ -61,7 +64,7 @@ pub fn parse_with_tokens<'ast>(
 
 fn parse_recording<'ast>(
     allocator: &'ast Allocator,
-    source: &'ast str,
+    source: &'ast [u8],
     version: LuaVersion,
     is_recording: bool,
 ) -> (ParseResult<'ast>, Option<Vec<Token>>) {
@@ -130,7 +133,7 @@ fn parse_recording<'ast>(
 #[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the parse")]
 struct Parser<'ast> {
     allocator: &'ast Allocator,
-    source: &'ast str,
+    source: &'ast [u8],
     lexer: Lexer<'ast>,
     token: Token,
     next: Token,
@@ -356,19 +359,26 @@ impl<'ast> Parser<'ast> {
 
     /// The current token's text, for a contextual keyword.
     #[inline]
-    fn current_text(&self) -> &'ast str {
+    fn current_text(&self) -> &'ast [u8] {
         self.token.span.text(self.source)
     }
 
     /// The next token's text, for a contextual keyword.
-    fn next_text(&self) -> &'ast str {
+    fn next_text(&self) -> &'ast [u8] {
         self.next.span.text(self.source)
     }
 
     /// Whether the current token is the identifier `text`.
     #[inline]
     fn is_at_name(&self, text: &str) -> bool {
-        self.is_at_identifier() && self.current_text() == text
+        self.is_at_identifier() && self.current_text() == text.as_bytes()
+    }
+
+    /// The text of the name or numeral at `span`, which the lexer read as
+    /// ASCII.
+    #[inline]
+    fn ascii_text(&self, span: Span) -> ThinStr<'ast> {
+        ThinStr::from_ascii(span.text(self.source)).unwrap_or_else(|| ThinStr::new(""))
     }
 
     /// Consume the current token and return its span. Out of line, so the
@@ -401,10 +411,9 @@ impl<'ast> Parser<'ast> {
     #[inline]
     fn advance_number(&mut self) -> Box<'ast, NumberLiteral<'ast>> {
         let span = self.advance();
-        let raw = span.text(self.source);
-        let numeral = read_numeral(raw, self.version);
-        let literal =
-            NumberLiteral::new(numeral.value, Some(ThinStr::new(raw)), span, numeral.is_exact);
+        let raw = self.ascii_text(span);
+        let numeral = read_numeral(raw.as_str(), self.version);
+        let literal = NumberLiteral::new(numeral.value, Some(raw), span, numeral.is_exact);
         self.alloc(literal)
     }
 
@@ -412,9 +421,9 @@ impl<'ast> Parser<'ast> {
     /// which the lexer checked fits 64 bits.
     fn advance_integer(&mut self) -> Box<'ast, IntegerLiteral<'ast>> {
         let span = self.advance();
-        let raw = span.text(self.source);
-        let value = read_integer(raw).unwrap_or_default();
-        self.alloc(IntegerLiteral::new(value, Some(ThinStr::new(raw)), span))
+        let raw = self.ascii_text(span);
+        let value = read_integer(raw.as_str()).unwrap_or_default();
+        self.alloc(IntegerLiteral::new(value, Some(raw), span))
     }
 
     /// Consume the current string, whose kind the caller has matched, as a
@@ -428,7 +437,7 @@ impl<'ast> Parser<'ast> {
             StringValue::Verbatim(bytes) => bytes,
             StringValue::Decoded => self.allocator.alloc_slice_copy(&self.decoded),
         };
-        self.alloc(StringLiteral::new(ThinBytes::new(value), Some(ThinStr::new(raw)), span))
+        self.alloc(StringLiteral::new(ThinBytes::new(value), Some(ThinBytes::new(raw)), span))
     }
 
     /// An interpolated string's piece of text, between its delimiters, as a
@@ -441,7 +450,7 @@ impl<'ast> Parser<'ast> {
             StringValue::Verbatim(bytes) => bytes,
             StringValue::Decoded => self.allocator.alloc_slice_copy(&self.decoded),
         };
-        StringLiteral::new(ThinBytes::new(value), Some(ThinStr::new(raw)), span)
+        StringLiteral::new(ThinBytes::new(value), Some(ThinBytes::new(raw)), span)
     }
 
     /// Consume the current identifier as a name. The caller has already
@@ -451,7 +460,7 @@ impl<'ast> Parser<'ast> {
         let span = self.advance();
         let index = self.counts.names;
         self.counts.names = index.wrapping_add(1);
-        Name::new(ThinStr::new(span.text(self.source)), Some(NameIndex::new(index)), span)
+        Name::new(self.ascii_text(span), Some(NameIndex::new(index)), span)
     }
 
     #[inline]
@@ -529,7 +538,7 @@ impl<'ast> Parser<'ast> {
         let span = self.token.span;
         if !self.is_recovering() {
             self.has_syntax_error = true;
-            let opener_text = opener.text(self.source);
+            let opener_text = String::from_utf8_lossy(opener.text(self.source));
             let message = format!(
                 "expected {kind} to close `{opener_text}`, found {}",
                 self.token.display(self.source)
@@ -767,7 +776,7 @@ mod tests {
     /// The depth the parser counted and the depth of the tree it built.
     fn counted_and_built(source: &str, version: LuaVersion) -> (usize, usize) {
         let allocator = Allocator::new();
-        let result = parse(&allocator, source, version);
+        let result = parse(&allocator, source.as_bytes(), version);
         assert!(result.errors.is_empty(), "{:?}\n{source}", result.errors.first());
         (result.nesting_depth, block_nesting_depth(&result.chunk.block))
     }

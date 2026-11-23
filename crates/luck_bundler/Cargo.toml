@@ -31,6 +31,7 @@ luck_resolver    = { workspace = true }
 luck_semantic    = { workspace = true }
 luck_token       = { workspace = true }
 
+memchr     = { workspace = true }
 petgraph   = { workspace = true }
 rayon      = { workspace = true }
 rustc-hash = { workspace = true }

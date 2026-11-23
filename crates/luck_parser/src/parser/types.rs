@@ -272,7 +272,7 @@ impl<'ast> Parser<'ast> {
         match self.peek() {
             TokenKind::Identifier => {
                 // `typeof.Name` is a module-qualified type.
-                if self.current_text() == "typeof" && self.peek_next() != TokenKind::Dot {
+                if self.current_text() == b"typeof" && self.peek_next() != TokenKind::Dot {
                     return self.parse_typeof_type();
                 }
                 let name = self.advance_name();
@@ -538,8 +538,8 @@ impl<'ast> Parser<'ast> {
         // has a field named `read`.
         let access = if self.is_at_identifier() && self.peek_next() != TokenKind::Colon {
             match self.current_text() {
-                "read" => Some(TypeFieldAccess::Read),
-                "write" => Some(TypeFieldAccess::Write),
+                b"read" => Some(TypeFieldAccess::Read),
+                b"write" => Some(TypeFieldAccess::Write),
                 _ => None,
             }
         } else {

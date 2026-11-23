@@ -10,7 +10,7 @@ pub(crate) fn parse<'ast>(
     source: &'ast str,
     version: LuaVersion,
 ) -> &'ast Chunk<'ast> {
-    let parsed = luck_parser::parse(allocator, source, version);
+    let parsed = luck_parser::parse(allocator, source.as_bytes(), version);
     assert!(parsed.errors.is_empty(), "{source}: {:?}", parsed.errors);
     allocator.alloc(parsed.chunk)
 }

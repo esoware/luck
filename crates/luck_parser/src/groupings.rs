@@ -71,7 +71,7 @@ mod tests {
     fn finds_the_outermost_pair_around_each_grouped_expression() {
         let allocator = Allocator::new();
         let source = "return ((a)) + (b * (c))";
-        let parse = crate::parse(&allocator, source, LuaVersion::Lua54);
+        let parse = crate::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let at = |text: &str| {
             let start = source.find(text).expect("text is in the source");
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn keeps_no_record_of_parentheses_the_tree_keeps() {
         let allocator = Allocator::new();
-        let parse = crate::parse(&allocator, "return (f()), (...)", LuaVersion::Lua54);
+        let parse = crate::parse(&allocator, b"return (f()), (...)", LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         assert_eq!(parse.groupings.len(), 0);
     }

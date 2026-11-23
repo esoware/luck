@@ -28,6 +28,8 @@ fn compares_as_its_bytes_and_prints_them_quoted() {
     assert_ne!(thin, ThinBytes::new(b"ab"));
     assert_eq!(format!("{thin:?}"), r#""a\"b""#);
     assert_eq!(format!("{:?}", ThinBytes::new(b"\xFF\n\xE9t\xC3\xA9")), "\"\\xFF\\n\\xE9t\u{e9}\"");
+    let quoted = "'a\u{301}' \"\u{0}\"";
+    assert_eq!(format!("{:?}", ThinBytes::from(quoted)), format!("{quoted:?}"));
 }
 
 #[test]

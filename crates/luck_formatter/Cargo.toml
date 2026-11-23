@@ -28,6 +28,7 @@ luck_lexer       = { workspace = true }
 luck_parser      = { workspace = true }
 luck_token       = { workspace = true }
 
+memchr        = { workspace = true }
 rustc-hash    = { workspace = true }
 schemars      = { workspace = true, optional = true }
 serde         = { workspace = true, optional = true }

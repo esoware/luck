@@ -1,8 +1,4 @@
 codegen_luau Summary:
-AST Parsed     : 53/55 (96.36%)
-Positive Passed: 53/55 (96.36%)
-
-Not UTF-8: luau-0.740/literals.luau
-
-Not UTF-8: luau-0.740/pm.luau
+AST Parsed     : 55/55 (100.00%)
+Positive Passed: 55/55 (100.00%)
 

@@ -25,11 +25,25 @@ impl<'a> ThinStr<'a> {
         Self { bytes: ThinBytes::new(text.as_bytes()) }
     }
 
+    /// `bytes` as text, when they're ASCII, as a name or a numeral is. Checking for ASCII costs
+    /// less than validating UTF-8.
+    #[must_use]
+    #[inline]
+    pub fn from_ascii(bytes: &'a [u8]) -> Option<Self> {
+        bytes.is_ascii().then(|| Self { bytes: ThinBytes::new(bytes) })
+    }
+
     #[must_use]
     #[inline]
     pub const fn as_str(self) -> &'a str {
-        // SAFETY: `new` took the bytes from a `&'a str`.
+        // SAFETY: `new` took the bytes from a `&'a str`, and `from_ascii` checked they're ASCII.
         unsafe { str::from_utf8_unchecked(self.bytes.as_bytes()) }
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn as_bytes(self) -> &'a [u8] {
+        self.bytes.as_bytes()
     }
 }
 

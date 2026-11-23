@@ -32,7 +32,7 @@ impl WholeRule for InvalidLintFilter {
                 format!(
                     "no `{}({}) start` for this `end` to close",
                     verb.name(),
-                    name.text(context.source)
+                    String::from_utf8_lossy(name.text(context.source))
                 ),
                 name,
             ),
@@ -42,29 +42,30 @@ impl WholeRule for InvalidLintFilter {
             .iter()
             .filter(|entry| entry.target == Target::Unknown)
             .map(|entry| {
-                let name = entry.name.text(context.source);
-                let (message, help) = closest_rule_name(name, rules().map(Rule::name)).map_or_else(
-                    || {
-                        (
-                            format!("unknown lint rule `{name}`"),
-                            "no lint rule has this name".to_owned(),
-                        )
-                    },
-                    |suggestion| {
-                        (
-                            format!("unknown lint rule `{name}`, did you mean `{suggestion}`?"),
-                            format!("rename it to `{suggestion}`"),
-                        )
-                    },
-                );
+                let name = String::from_utf8_lossy(entry.name.text(context.source));
+                let (message, help) = closest_rule_name(&name, rules().map(Rule::name))
+                    .map_or_else(
+                        || {
+                            (
+                                format!("unknown lint rule `{name}`"),
+                                "no lint rule has this name".to_owned(),
+                            )
+                        },
+                        |suggestion| {
+                            (
+                                format!("unknown lint rule `{name}`, did you mean `{suggestion}`?"),
+                                format!("rename it to `{suggestion}`"),
+                            )
+                        },
+                    );
                 Finding::new(message, entry.name).with_help(help)
             });
         malformed.chain(unknown).collect()
     }
 }
 
-fn malformed_message(error: DirectiveError, source: &str) -> Cow<'static, str> {
-    let text = error.span.text(source);
+fn malformed_message(error: DirectiveError, source: &[u8]) -> Cow<'static, str> {
+    let text = String::from_utf8_lossy(error.span.text(source));
     match error.kind {
         DirectiveErrorKind::Empty => "expected a directive after `luck:`".into(),
         DirectiveErrorKind::NotLintVerb => "`#luck:` takes only `allow`, `deny`, or `warn`".into(),
@@ -126,7 +127,7 @@ local _x = 1");
 local _x = 1";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].span().text(source), "strat");
+        assert_eq!(diags[0].span().text(source.as_bytes()), b"strat");
     }
 
     #[test]

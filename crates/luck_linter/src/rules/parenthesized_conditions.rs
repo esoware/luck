@@ -97,7 +97,7 @@ fn check_condition(
         context.groupings.around(condition.span())?
     };
     Some(Finding::new(message, span).with_fix(context, FixKind::Fix, |fixer| {
-        let bytes = context.source.as_bytes();
+        let bytes = context.source;
         let before = offset_to_index(start).checked_sub(1).and_then(|i| bytes.get(i));
         let after = bytes.get(offset_to_index(end));
         fixer.fix(
@@ -118,9 +118,9 @@ fn check_condition(
 
 /// What a deleted parenthesis leaves: a space if the byte beside it would
 /// otherwise run into the condition.
-fn replacement_beside(neighbor: Option<&u8>) -> &'static str {
+fn replacement_beside(neighbor: Option<&u8>) -> &'static [u8] {
     let is_word_byte = neighbor.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
-    if is_word_byte { " " } else { "" }
+    if is_word_byte { b" " } else { b"" }
 }
 
 #[cfg(test)]

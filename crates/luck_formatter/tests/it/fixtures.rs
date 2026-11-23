@@ -31,7 +31,8 @@ fn every_fixture_formats_as_its_snapshot() {
         let mut layouts: Vec<(Vec<String>, String)> = Vec::new();
         for line_width in LINE_WIDTHS {
             let options = FormatOptions { line_width, ..FormatOptions::default() };
-            let output = formatted_with(&source, version, &options);
+            let output = String::from_utf8(formatted_with(source.as_bytes(), version, &options))
+                .expect("a fixture formats as UTF-8");
             if let Some((widths, _)) = layouts.iter_mut().find(|(_, layout)| *layout == output) {
                 widths.push(line_width.to_string());
             } else {

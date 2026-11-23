@@ -10,6 +10,7 @@ use luck_resolver::{
     FileSystem as _, FileSystemOs, Resolution, ResolveError, Resolver, to_slash_lossy,
 };
 use luck_token::{CommentKind, LuaVersion, leading_hot_comments};
+use memchr::memmem;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::dynamic_require::DynamicRequire;
@@ -88,7 +89,7 @@ pub(crate) fn parse_module<'ast>(
     allocator: &'ast Allocator,
     path: PathBuf,
     relative_path: String,
-    source: &'ast str,
+    source: &'ast [u8],
     version: LuaVersion,
     dynamic_require: DynamicRequire,
 ) -> ParsedModule<'ast> {
@@ -134,7 +135,7 @@ pub(crate) fn parse_module<'ast>(
         has_global_arg_read,
         has_env_rebinding,
         max_function_upvalues,
-        has_prefix_stem: source.contains(PREFIX_STEM),
+        has_prefix_stem: memmem::find(source, PREFIX_STEM.as_bytes()).is_some(),
         exports,
     };
     ParsedModule { info, sites, errors, warnings }
@@ -176,12 +177,12 @@ impl<'input> Reader<'input> {
         path: &Path,
     ) -> Result<ParsedModule<'ast>, Diagnostic> {
         let file = FileSystemOs
-            .read_to_string(path)
+            .read(path)
             .map_err(|io_error| Diagnostic::e010(&to_slash_lossy(path), &io_error.to_string()))?;
         if file.len() > MAX_FILE_SIZE {
             return Err(Diagnostic::e012(file.len(), MAX_FILE_SIZE));
         }
-        let source = allocator.alloc_str(&file);
+        let source = allocator.alloc_slice_copy(&file);
         drop(file);
         Ok(parse_module(
             allocator,

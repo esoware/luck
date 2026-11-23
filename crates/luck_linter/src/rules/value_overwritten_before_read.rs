@@ -147,7 +147,11 @@ x = 2
 return x";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].span().text(source), "x", "the span should cover `x`: {diags:?}");
+        assert_eq!(
+            diags[0].span().text(source.as_bytes()),
+            b"x",
+            "the span should cover `x`: {diags:?}"
+        );
     }
 
     #[test]

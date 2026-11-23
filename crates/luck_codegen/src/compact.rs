@@ -9,11 +9,11 @@ use luck_token::{
 
 use crate::separator::{DOT_DOT, LEFT_BRACKET, NUMBER, OTHER, WORD, class_of, merges_after};
 
-/// The chunk's version decides how a number is spelled. The output starts
-/// with no reserved capacity. Use [`compact_with_capacity`] when there's a
-/// useful size estimate.
+/// The chunk's version decides how a number is spelled. The output is bytes,
+/// as a source is, and starts with no reserved capacity. Use
+/// [`compact_with_capacity`] when there's a useful size estimate.
 #[must_use]
-pub fn compact(chunk: &Chunk<'_>) -> String {
+pub fn compact(chunk: &Chunk<'_>) -> Vec<u8> {
     compact_with_capacity(chunk, 0)
 }
 
@@ -21,14 +21,14 @@ pub fn compact(chunk: &Chunk<'_>) -> String {
 /// is dropped, so the output never depends on it. A parsed tree's source
 /// length makes a good hint: compact output is rarely longer.
 #[must_use]
-pub fn compact_with_capacity(chunk: &Chunk<'_>, capacity: usize) -> String {
+pub fn compact_with_capacity(chunk: &Chunk<'_>, capacity: usize) -> Vec<u8> {
     let mut printer = Printer {
         output: CodeBuffer::with_capacity(capacity),
         last: OTHER,
         version: chunk.version,
     };
     printer.print_block(&chunk.block);
-    printer.output.into_string()
+    printer.output.into_bytes()
 }
 
 struct Printer {
@@ -46,11 +46,11 @@ impl Printer {
         reason = "a spelling known at compile time folds its checks away only once inlined"
     )]
     #[inline(always)]
-    fn emit(&mut self, text: &str, merges: u8, class: u8) {
+    fn emit(&mut self, text: &[u8], merges: u8, class: u8) {
         if self.last & merges != OTHER {
-            self.output.print_ascii_byte(b' ');
+            self.output.print_byte(b' ');
         }
-        self.output.print_str(text);
+        self.output.print_bytes(text);
         self.last = class;
     }
 
@@ -59,8 +59,9 @@ impl Printer {
     #[expect(clippy::inline_always, reason = "see `emit`")]
     #[inline(always)]
     fn piece(&mut self, text: &str) {
-        if let (Some(&first), Some(&last)) = (text.as_bytes().first(), text.as_bytes().last()) {
-            self.emit(text, merges_after(first), class_of(last));
+        let bytes = text.as_bytes();
+        if let (Some(&first), Some(&last)) = (bytes.first(), bytes.last()) {
+            self.emit(bytes, merges_after(first), class_of(last));
         }
     }
 
@@ -68,7 +69,7 @@ impl Printer {
     #[expect(clippy::inline_always, reason = "see `emit`")]
     #[inline(always)]
     fn name(&mut self, text: &str) {
-        self.emit(text, WORD | NUMBER, WORD);
+        self.emit(text.as_bytes(), WORD | NUMBER, WORD);
     }
 
     /// Starts with a digit or a `.`.
@@ -76,15 +77,15 @@ impl Printer {
     #[inline(always)]
     fn number(&mut self, text: &str) {
         let merges = if text.starts_with('.') { NUMBER | DOT_DOT } else { WORD | NUMBER };
-        self.emit(text, merges, NUMBER);
+        self.emit(text.as_bytes(), merges, NUMBER);
     }
 
     /// Starts with a quote or a long bracket's `[`, and ends with nothing
     /// anything merges with.
     #[expect(clippy::inline_always, reason = "see `emit`")]
     #[inline(always)]
-    fn string(&mut self, text: &str) {
-        let merges = if text.starts_with('[') { LEFT_BRACKET } else { OTHER };
+    fn string(&mut self, text: &[u8]) {
+        let merges = if text.first() == Some(&b'[') { LEFT_BRACKET } else { OTHER };
         self.emit(text, merges, OTHER);
     }
 
@@ -111,21 +112,21 @@ impl Printer {
     /// escape is as short as its value can be spelled.
     fn print_string(&mut self, literal: &StringLiteral<'_>) {
         if let Some(raw) = literal.raw
-            && raw.starts_with(['"', '\''])
-            && !raw.contains('\\')
+            && matches!(raw.first(), Some(b'"' | b'\''))
+            && !raw.contains(&b'\\')
         {
-            self.string(raw.as_str());
+            self.string(raw.as_bytes());
             return;
         }
         let spelling = spell_string(&literal.value);
         if let Some(raw) = literal.raw
             && raw.len() <= spelling.length()
         {
-            self.string(raw.as_str());
+            self.string(raw.as_bytes());
             return;
         }
         if spelling.is_long_bracket() && self.last & LEFT_BRACKET != OTHER {
-            self.output.print_ascii_byte(b' ');
+            self.output.print_byte(b' ');
         }
         self.output.print_with(|output| spelling.write_to(output));
         self.last = OTHER;
@@ -135,9 +136,9 @@ impl Printer {
     /// with.
     fn print_interpolated_text(&mut self, text: &StringLiteral<'_>) {
         if let Some(raw) = text.raw
-            && !raw.contains('\\')
+            && !raw.contains(&b'\\')
         {
-            self.output.print_str(raw.as_str());
+            self.output.print_bytes(raw.as_bytes());
             return;
         }
         let start = self.output.len();
@@ -146,7 +147,7 @@ impl Printer {
             && raw.len() <= self.output.len().saturating_sub(start)
         {
             self.output.truncate(start);
-            self.output.print_str(raw.as_str());
+            self.output.print_bytes(raw.as_bytes());
         }
     }
 

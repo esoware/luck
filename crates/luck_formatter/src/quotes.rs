@@ -3,14 +3,15 @@ use crate::QuoteStyle;
 /// Writes `literal` requoted for `style` to `requoted` and returns true, or
 /// returns false when it stays as written.
 ///
-/// It works on the spelling, escapes as written, so a requoted string keeps
-/// every escape but the quotes'.
-pub(crate) fn requote(literal: &str, style: QuoteStyle, requoted: &mut String) -> bool {
+/// It works on the spelling, escapes as written and bytes as they are, so a
+/// requoted string keeps every escape but the quotes'.
+pub(crate) fn requote(literal: &[u8], style: QuoteStyle, requoted: &mut Vec<u8>) -> bool {
     // A long-bracket string has no quotes to swap.
-    let Some(current_quote) = literal.chars().next().filter(|&c| matches!(c, '"' | '\'')) else {
+    let Some(&current_quote) = literal.first().filter(|&&b| matches!(b, b'"' | b'\'')) else {
         return false;
     };
-    let Some(content) = literal.get(1..).and_then(|rest| rest.strip_suffix(current_quote)) else {
+    let Some(content) = literal.get(1..).and_then(|rest| rest.strip_suffix(&[current_quote]))
+    else {
         return false;
     };
     let target_quote = resolve_target_quote(style, content);
@@ -22,40 +23,37 @@ pub(crate) fn requote(literal: &str, style: QuoteStyle, requoted: &mut String) -
     requoted.reserve(literal.len());
     requoted.push(target_quote);
 
-    // Walk chars, not bytes, to keep UTF-8 intact. Each escape consumes both
-    // of its chars, or a `\\` followed by a quote would read as an escaped
-    // quote.
+    // Each escape consumes both of its bytes, or a `\\` followed by a quote
+    // would read as an escaped quote.
     let mut original_escapes = 0usize;
     let mut requoted_escapes = 0usize;
-    let mut chars = content.chars();
-    while let Some(character) = chars.next() {
-        if character == '\\' {
+    let mut bytes = content.iter().copied();
+    while let Some(byte) = bytes.next() {
+        if byte == b'\\' {
             original_escapes = original_escapes.saturating_add(1);
-            match chars.next() {
+            match bytes.next() {
                 // Unescape old delimiter: \' -> ' (or \" -> ")
                 Some(escaped) if escaped == current_quote => requoted.push(current_quote),
                 // Any other escape, including an already-escaped target
                 // delimiter, is copied as a pair.
                 Some(escaped) => {
-                    requoted.push('\\');
-                    requoted.push(escaped);
+                    requoted.extend_from_slice(&[b'\\', escaped]);
                     requoted_escapes = requoted_escapes.saturating_add(1);
-                    if escaped == '\\' {
+                    if escaped == b'\\' {
                         original_escapes = original_escapes.saturating_add(1);
                         requoted_escapes = requoted_escapes.saturating_add(1);
                     }
                 }
                 None => {
-                    requoted.push('\\');
+                    requoted.push(b'\\');
                     requoted_escapes = requoted_escapes.saturating_add(1);
                 }
             }
-        } else if character == target_quote {
-            requoted.push('\\');
-            requoted.push(target_quote);
+        } else if byte == target_quote {
+            requoted.extend_from_slice(&[b'\\', target_quote]);
             requoted_escapes = requoted_escapes.saturating_add(1);
         } else {
-            requoted.push(character);
+            requoted.push(byte);
         }
     }
 
@@ -68,16 +66,16 @@ pub(crate) fn requote(literal: &str, style: QuoteStyle, requoted: &mut String) -
 ///
 /// They leave the preferred quote only when the other needs strictly fewer escapes. The counts
 /// don't depend on the current delimiter, so the choice is stable across reformats.
-fn resolve_target_quote(style: QuoteStyle, content: &str) -> char {
+fn resolve_target_quote(style: QuoteStyle, content: &[u8]) -> u8 {
     let (preferred, other) = match style {
-        QuoteStyle::Double | QuoteStyle::AutoPreferDouble => ('"', '\''),
-        QuoteStyle::Single | QuoteStyle::AutoPreferSingle => ('\'', '"'),
+        QuoteStyle::Double | QuoteStyle::AutoPreferDouble => (b'"', b'\''),
+        QuoteStyle::Single | QuoteStyle::AutoPreferSingle => (b'\'', b'"'),
     };
     match style {
         QuoteStyle::Double | QuoteStyle::Single => preferred,
         QuoteStyle::AutoPreferDouble | QuoteStyle::AutoPreferSingle => {
-            let preferred_escapes = content.matches(preferred).count();
-            let other_escapes = content.matches(other).count();
+            let preferred_escapes = memchr::memchr_iter(preferred, content).count();
+            let other_escapes = memchr::memchr_iter(other, content).count();
             if other_escapes < preferred_escapes { other } else { preferred }
         }
     }
@@ -88,8 +86,19 @@ mod tests {
     use super::*;
 
     fn normalize_quote(literal: &str, style: QuoteStyle) -> String {
-        let mut requoted = String::new();
-        if requote(literal, style, &mut requoted) { requoted } else { literal.to_owned() }
+        let mut requoted = Vec::new();
+        if requote(literal.as_bytes(), style, &mut requoted) {
+            String::from_utf8(requoted).unwrap()
+        } else {
+            literal.to_owned()
+        }
+    }
+
+    #[test]
+    fn bytes_that_are_not_utf8_stay_as_written() {
+        let mut requoted = Vec::new();
+        assert!(requote(b"'caf\xE9 \\'\xFF'", QuoteStyle::Double, &mut requoted));
+        assert_eq!(requoted, b"\"caf\xE9 '\xFF\"");
     }
 
     #[test]

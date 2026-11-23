@@ -35,7 +35,7 @@ pub struct Exports<'ast> {
 impl<'ast> Exports<'ast> {
     /// The plan for `block`, whose names `source` holds and `tree` resolves,
     /// when it exports a value.
-    pub(crate) fn new(block: &Block<'_>, tree: &ScopeTree<'_>, source: &'ast str) -> Self {
+    pub(crate) fn new(block: &Block<'_>, tree: &ScopeTree<'_>, source: &'ast [u8]) -> Self {
         let exported: Vec<&Symbol> =
             tree.symbols().iter().filter(|symbol| symbol.is_exported).collect();
         let exported_symbol = |definition: Span| {
@@ -93,9 +93,9 @@ impl<'ast> Exports<'ast> {
                 exports.table_statements.push(span.start);
                 table_symbols.extend(statement_symbols);
             } else {
-                exports.local_names.extend(
-                    statement_symbols.iter().map(|symbol| symbol.definition_span.text(source)),
-                );
+                exports.local_names.extend(statement_symbols.iter().map(|symbol| {
+                    str::from_utf8(symbol.definition_span.text(source)).unwrap_or_default()
+                }));
             }
         }
         exports.field_references = table_symbols
@@ -155,7 +155,7 @@ impl<'ast> Exports<'ast> {
     pub(crate) fn text_edits(
         &self,
         block: &Block<'_>,
-        source: &str,
+        source: &[u8],
         version: LuaVersion,
         prefix: &str,
         edits: &mut Vec<(Span, Edit<'_>)>,
@@ -253,14 +253,15 @@ fn is_written_from_a_closure(tree: &ScopeTree<'_>, symbol: &Symbol) -> bool {
 }
 
 struct TextLowerer<'input> {
-    source: &'input str,
+    source: &'input [u8],
     version: LuaVersion,
     prefix: &'input str,
 }
 
 impl TextLowerer<'_> {
-    fn table_field(&self, name: &str) -> String {
-        format!("{}exports.{name}", self.prefix)
+    /// `name` is a name, which is ASCII.
+    fn table_field(&self, name: &[u8]) -> String {
+        format!("{}exports.{}", self.prefix, name.escape_ascii())
     }
 
     /// `export local` and `export const`.
@@ -294,7 +295,8 @@ impl TextLowerer<'_> {
             return (keyword, "local".to_owned());
         }
         let signature = Span::new(keyword.start, function.name.span.end);
-        let mut replacement = format!("function {}", self.table_field(function.name.text.as_str()));
+        let name = function.name.text.as_bytes();
+        let mut replacement = format!("function {}", self.table_field(name));
         self.push_line_breaks(signature, &mut replacement);
         (signature, replacement)
     }
@@ -314,7 +316,7 @@ impl TextLowerer<'_> {
         luck_lexer::lex(gap, self.version)
             .tokens
             .iter()
-            .find(|token| token.kind == TokenKind::Identifier && token.text(gap) == "export")
+            .find(|token| token.kind == TokenKind::Identifier && token.text(gap) == b"export")
             .map_or_else(
                 || export_keyword_span(function.span),
                 |token| {

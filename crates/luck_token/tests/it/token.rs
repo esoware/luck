@@ -55,7 +55,7 @@ fn token_display_shows_name_and_numeral_text_but_not_string_text() {
         (TokenKind::InterpolatedStringMiddle, 19, 27, "interpolated string middle"),
         (TokenKind::Eof, 27, 27, "end of file"),
     ] {
-        assert_eq!(token(kind, start, end).display(source).to_string(), expected);
+        assert_eq!(token(kind, start, end).display(source.as_bytes()).to_string(), expected);
     }
 }
 
@@ -89,7 +89,11 @@ fn text_is_the_whole_spelling_of_a_name_numeral_string_or_symbol() {
         (TokenKind::DotDotDot, 22, 25, "..."),
         (TokenKind::Eof, 25, 25, ""),
     ] {
-        assert_eq!(token(kind, start, end).text(source), expected, "{kind:?}");
+        assert_eq!(
+            token(kind, start, end).text(source.as_bytes()),
+            expected.as_bytes(),
+            "{kind:?}"
+        );
     }
 }
 
@@ -102,7 +106,11 @@ fn text_of_an_interpolated_string_piece_leaves_out_its_delimiters() {
         (TokenKind::InterpolatedStringEnd, 10, 13, "c"),
         (TokenKind::InterpolatedStringSimple, 14, 17, "d"),
     ] {
-        assert_eq!(token(kind, start, end).text(source), expected, "{kind:?}");
+        assert_eq!(
+            token(kind, start, end).text(source.as_bytes()),
+            expected.as_bytes(),
+            "{kind:?}"
+        );
     }
 }
 
@@ -117,7 +125,7 @@ fn text_of_an_unterminated_piece_keeps_its_last_byte() {
         (TokenKind::InterpolatedStringSimple, 10, 11, ""),
     ] {
         let unterminated = Token { is_unterminated: true, ..token(kind, start, end) };
-        assert_eq!(unterminated.text(source), expected, "{kind:?}");
+        assert_eq!(unterminated.text(source.as_bytes()), expected.as_bytes(), "{kind:?}");
     }
 }
 

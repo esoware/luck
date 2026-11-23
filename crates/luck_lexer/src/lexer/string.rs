@@ -139,11 +139,11 @@ impl Lexer<'_> {
                 let character_start = self.cursor.position();
                 let byte = self.cursor.peek().unwrap_or_default();
                 self.cursor.bump();
-                let character = self
-                    .cursor
-                    .eat_rest_of_char(character_start)
-                    .unwrap_or_else(|| char::from(byte));
-                self.reject(escape_start, format!("invalid escape sequence `\\{character}`"));
+                let message = self.cursor.eat_rest_of_char(character_start).map_or_else(
+                    || format!("invalid escape sequence, `\\` before byte 0x{byte:02X}"),
+                    |character| format!("invalid escape sequence `\\{character}`"),
+                );
+                self.reject(escape_start, message);
             }
             Err(error) => {
                 self.cursor.advance_by(length);
@@ -267,7 +267,7 @@ pub(super) fn advance_past_long_bracket_close(
             cursor.advance_by(level.saturating_add(1));
             if level == 0
                 && version.has_long_bracket_nesting_error()
-                && let Some(offset) = memmem::find(cursor.text_since(body_start).as_bytes(), b"[[")
+                && let Some(offset) = memmem::find(cursor.text_since(body_start), b"[[")
             {
                 let nested_open = body_start.saturating_add(offset);
                 errors.push(Diagnostic::e008(

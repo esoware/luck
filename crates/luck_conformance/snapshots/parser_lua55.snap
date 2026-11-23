@@ -1,11 +1,9 @@
 parser_lua55 Summary:
-AST Parsed     : 31/32 (96.88%)
-Positive Passed: 31/32 (96.88%)
+AST Parsed     : 32/32 (100.00%)
+Positive Passed: 32/32 (100.00%)
 Negative Passed: 0/2 (0.00%)
 
 Expect Syntax Error: lua-5.5.1-tests/all.lua
 
 Expect Syntax Error: lua-5.5.1-tests/main.lua
-
-Not UTF-8: lua-5.5.1-tests/strings.lua
 

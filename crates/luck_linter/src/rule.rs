@@ -25,7 +25,7 @@ pub(crate) struct LintContext<'ast> {
     pub nodes: &'ast Nodes<'ast>,
     pub semantic: &'ast SemanticAnalysis<'ast>,
     pub directives: &'ast Directives,
-    pub source: &'ast str,
+    pub source: &'ast [u8],
     pub comments: &'ast [Comment],
     pub groupings: &'ast Groupings,
     /// Where each escape Lua 5.1 and Luau read as the character it escapes

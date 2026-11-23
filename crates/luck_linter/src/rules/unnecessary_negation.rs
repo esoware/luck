@@ -58,7 +58,11 @@ impl NodeRule for UnnecessaryNegation {
         let is_equality = matches!(last.op, BinOp::Eq | BinOp::Ne);
         findings.push(
             Finding::new(
-                format!("negated comparison, consider `{lhs} {op_text} {rhs}`"),
+                format!(
+                    "negated comparison, consider `{} {op_text} {}`",
+                    String::from_utf8_lossy(lhs),
+                    String::from_utf8_lossy(rhs)
+                ),
                 unary.span,
             )
             .with_fix(context, FixKind::Fix, |fixer| {
@@ -66,10 +70,11 @@ impl NodeRule for UnnecessaryNegation {
                 // regroup with a neighboring `..`, arithmetic, or comparison
                 // operator, so it takes parentheses unless the `not` already
                 // sits in some.
+                let inverted = [lhs, b" ", op_text.as_bytes(), b" ", rhs].concat();
                 let replacement = if context.groupings.around(unary.span).is_some() {
-                    format!("{lhs} {op_text} {rhs}")
+                    inverted
                 } else {
-                    format!("({lhs} {op_text} {rhs})")
+                    [&b"("[..], &inverted, b")"].concat()
                 };
                 is_equality.then(|| {
                     fixer.replace("invert the comparison operator", unary.span, replacement)

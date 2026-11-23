@@ -30,7 +30,7 @@ pub(crate) fn parse<'ast>(
     source: &'ast str,
     version: LuaVersion,
 ) -> Chunk<'ast> {
-    let result = luck_parser::parse(allocator, source, version);
+    let result = luck_parser::parse(allocator, source.as_bytes(), version);
     assert!(result.errors.is_empty(), "parse failed: {:?}\n{source}", result.errors);
     result.chunk
 }
@@ -39,11 +39,12 @@ pub(crate) fn parse<'ast>(
 /// minifies to itself.
 pub(crate) fn minify_with(source: &str, version: LuaVersion, config: &TransformConfig) -> String {
     let allocator = Allocator::new();
-    let output = crate::minify(&allocator, source, version, config)
+    let minified = crate::minify(&allocator, source.as_bytes(), version, config)
         .unwrap_or_else(|errors| panic!("parse failed: {errors:?}\n{source}"));
-    let again = crate::minify(&allocator, &output, version, config)
+    let output = String::from_utf8(minified).expect("a source that's UTF-8 minifies as UTF-8");
+    let again = crate::minify(&allocator, output.as_bytes(), version, config)
         .unwrap_or_else(|errors| panic!("output must reparse: {errors:?}\n{output}"));
-    assert_eq!(again, output, "minifying the output again changed it\n{source}");
+    assert_eq!(again, output.as_bytes(), "minifying the output again changed it\n{source}");
     output
 }
 
@@ -75,7 +76,7 @@ pub(crate) fn walk_once(source: &str, config: TransformConfig) -> String {
     let names = &mut NameTable::default();
     bind(&mut chunk.block, chunk.version, &mut bindings, names);
     Compressor::new(&allocator, chunk.version, config, &mut bindings).walk(&mut chunk.block);
-    luck_codegen::compact(&chunk)
+    String::from_utf8(luck_codegen::compact(&chunk)).unwrap()
 }
 
 /// Binds and compresses `source` as a minify does, without renaming.

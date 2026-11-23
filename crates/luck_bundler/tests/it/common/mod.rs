@@ -13,6 +13,11 @@ use luck_minifier::TransformConfig;
 use luck_resolver::to_slash_lossy;
 use rayon::ThreadPoolBuilder;
 
+/// A bundle of sources that are UTF-8, which is UTF-8 too.
+pub(crate) fn text(output: &[u8]) -> &str {
+    str::from_utf8(output).expect("a bundle of UTF-8 sources is UTF-8")
+}
+
 /// What `work` returns on a pool of `thread_count` threads, each with the
 /// stack every stage needs, which it runs on as a caller inside a pool does.
 pub(crate) fn on_pool<T, Work>(thread_count: usize, work: Work) -> T
@@ -62,10 +67,11 @@ pub(crate) fn bundle_both(
     let minified_result =
         on_pool(3, || bundle_minified(&ThreadAllocators::new(), entry, options, &transforms));
     match (&text_result, minified_result) {
-        (Ok(text), Ok(minified)) => {
-            let output = &text.output;
+        (Ok(text_bundle), Ok(minified)) => {
+            let bytes = &text_bundle.output;
+            let output = String::from_utf8_lossy(bytes);
             let allocator = Allocator::new();
-            let expected = luck_minifier::minify(&allocator, output, options.version, &transforms)
+            let expected = luck_minifier::minify(&allocator, bytes, options.version, &transforms)
                 .unwrap_or_else(|errors| panic!("the bundle must parse: {errors:?}\n{output}"));
             assert_eq!(
                 minified.output, expected,

@@ -55,6 +55,11 @@ const NOT_RUNNABLE: &[Skip] = &[
         reason: "expects a string length overflow that only a 32-bit build reaches",
     },
     Skip {
+        suites: &["lua51"],
+        file: "files.lua",
+        reason: "renames a file its default input still holds open, which Windows refuses",
+    },
+    Skip {
         suites: &["lua55"],
         file: "files.lua",
         reason: "writes to `/dev/full` whatever `_port` says, which only Linux has",
@@ -132,7 +137,7 @@ const KNOWN_DIFFERENCES: &[KnownDifference] = &[
         variants: BOTH,
         reason: LINES,
     },
-    KnownDifference { suites: &["lua54", "lua55"], file: "db.lua", variants: BOTH, reason: LINES },
+    KnownDifference { suites: PUC_RIO, file: "db.lua", variants: BOTH, reason: LINES },
     KnownDifference {
         suites: &["lua51", "lua53", "lua54", "lua55"],
         file: "errors.lua",

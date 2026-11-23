@@ -103,9 +103,8 @@ fn check_attributes(
 fn removal_span(
     attribute: &FunctionAttribute<'_>,
     attributes: &[FunctionAttribute<'_>],
-    source: &str,
+    bytes: &[u8],
 ) -> Option<Span> {
-    let bytes = source.as_bytes();
     let after_at = offset_to_index(attribute.span.start).saturating_add(1);
     let mut edit_end = offset_to_index(attribute.name.span.end);
     if bytes.get(after_at) == Some(&b'[') {
@@ -142,7 +141,11 @@ fn removal_span(
 /// placed later.
 fn has_native_directive(context: &LintContext<'_>) -> bool {
     leading_hot_comments(context.comments, context.block.span.start).any(|comment| {
-        comment.span.text(context.source).get(3..).is_some_and(|word| word.trim_end() == "native")
+        comment
+            .span
+            .text(context.source)
+            .get(3..)
+            .is_some_and(|word| word.trim_ascii_end() == b"native")
     })
 }
 

@@ -33,8 +33,8 @@
 //!
 //! let allocator = Allocator::new();
 //! let config = TransformConfig::default();
-//! let output = luck_minifier::minify(&allocator, "return 1 + 2", LuaVersion::Lua54, &config);
-//! assert_eq!(output.as_deref(), Ok("return 3"));
+//! let output = luck_minifier::minify(&allocator, b"return 1 + 2", LuaVersion::Lua54, &config);
+//! assert_eq!(output.as_deref(), Ok(&b"return 3"[..]));
 //! ```
 
 #![cfg_attr(

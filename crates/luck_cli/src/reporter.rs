@@ -20,8 +20,9 @@ pub(crate) use json::JsonReporter;
 pub(crate) struct SourceFile<'text> {
     /// What the output calls it.
     pub label: &'text str,
-    /// `None` for a file that can't be read, which no snippet shows.
-    pub text: Option<&'text str>,
+    /// Bytes, as Lua reads a source, or `None` for a file that can't be
+    /// read, which no snippet shows.
+    pub text: Option<&'text [u8]>,
     pub version: LuaVersion,
 }
 
@@ -37,7 +38,7 @@ pub(crate) trait Reporter {
 pub(crate) fn print_files(files: &[FileDiagnostics], version: LuaVersion) {
     let mut output = Vec::new();
     for file in files {
-        let text = FileSystemOs.read_to_string(&file.path).ok();
+        let text = FileSystemOs.read(&file.path).ok();
         let label = to_slash_lossy(&file.path);
         let source = SourceFile { label: &label, text: text.as_deref(), version };
         DefaultReporter.render(source, &file.diags, &mut output);
@@ -48,19 +49,25 @@ pub(crate) fn print_files(files: &[FileDiagnostics], version: LuaVersion) {
 
 /// Writes the diagnostics in `text`, a document that isn't on disk, such as
 /// stdin or a bundle being minified, to stderr in the default format.
-pub(crate) fn print_document(label: &str, text: &str, diags: &[Diagnostic], version: LuaVersion) {
+pub(crate) fn print_document(label: &str, text: &[u8], diags: &[Diagnostic], version: LuaVersion) {
     let mut output = Vec::new();
     DefaultReporter.render(SourceFile { label, text: Some(text), version }, diags, &mut output);
     let _unused = io::stderr().write_all(&output);
 }
 
 /// The 1-based line and character column of the byte at `offset` in
-/// `text`, for the machine-readable formats.
-fn line_and_column(lines: &LineIndex, text: &str, offset: u32) -> (u32, usize) {
+/// `text`, for the machine-readable formats. A byte that isn't UTF-8 is a
+/// character of its own, as a one-byte encoding reads it.
+fn line_and_column(lines: &LineIndex, text: &[u8], offset: u32) -> (u32, usize) {
     let (line, byte_column) = lines.line_column(offset);
     let index = offset_to_index(offset);
     let line_start = index.saturating_sub(offset_to_index(byte_column.saturating_sub(1)));
-    let characters_before = text.get(line_start..index).map_or(0, |before| before.chars().count());
+    let characters_before = text.get(line_start..index).map_or(0, |before| {
+        before
+            .utf8_chunks()
+            .map(|chunk| chunk.valid().chars().count().saturating_add(chunk.invalid().len()))
+            .fold(0, usize::saturating_add)
+    });
     (line, characters_before.saturating_add(1))
 }
 
@@ -73,7 +80,8 @@ mod tests {
         let text = "\
 local a
 local \u{e9}b = 1
-";
+"
+        .as_bytes();
         let lines = LineIndex::new(text, LuaVersion::Lua54);
         assert_eq!(line_and_column(&lines, text, 0), (1, 1));
         assert_eq!(line_and_column(&lines, text, 6), (1, 7));
@@ -84,9 +92,16 @@ local \u{e9}b = 1
 
     #[test]
     fn line_and_column_starts_the_first_line_after_a_skipped_bom() {
-        let text = "\u{feff}local a";
+        let text = "\u{feff}local a".as_bytes();
         let lines = LineIndex::new(text, LuaVersion::Lua54);
         assert_eq!(line_and_column(&lines, text, 3), (1, 1));
         assert_eq!(line_and_column(&lines, text, 9), (1, 7));
+    }
+
+    #[test]
+    fn line_and_column_counts_a_byte_that_is_not_utf8_as_one_character() {
+        let text = b"local s = 'caf\xE9' local";
+        let lines = LineIndex::new(text, LuaVersion::Lua51);
+        assert_eq!(line_and_column(&lines, text, 17), (1, 18));
     }
 }

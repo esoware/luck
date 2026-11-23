@@ -53,9 +53,7 @@ impl FileReport {
 
 /// `root` is the suite's directory, which the programs run in.
 pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile) -> FileReport {
-    let Ok(source) = str::from_utf8(&file.bytes) else {
-        return FileReport::stopped(suite, file, &TestResult::NotUtf8);
-    };
+    let source = file.bytes.as_slice();
     let version = suite.target.lua_version();
     let allocator = Allocator::new();
     let parse = match guard(|| luck_parser::parse(&allocator, source, version)) {
@@ -148,16 +146,21 @@ fn codegen(allocator: &Allocator, parse: &ParseResult<'_>) -> TestResult {
     }
     let again = luck_codegen::compact(&reparsed.chunk);
     if again != output {
-        return TestResult::Mismatch("Idempotency", again, output);
+        return TestResult::Mismatch("Idempotency", lossy(&again), lossy(&output));
     }
     TestResult::Passed
+}
+
+/// A stage's output, which is bytes, as a snapshot shows it.
+fn lossy(output: &[u8]) -> String {
+    String::from_utf8_lossy(output).into_owned()
 }
 
 /// The output reparses, to the same tree, and formats as itself.
 fn formatter<'ast>(
     allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
-) -> (TestResult, Option<String>) {
+) -> (TestResult, Option<Vec<u8>>) {
     let version = parse.chunk.version;
     let options = FormatOptions::default();
     let first = luck_formatter::format_parsed(allocator, parse, &options);
@@ -175,7 +178,7 @@ fn formatter<'ast>(
                 if again.output == output {
                     TestResult::Passed
                 } else {
-                    TestResult::Mismatch("Idempotency", again.output, output.clone())
+                    TestResult::Mismatch("Idempotency", lossy(&again.output), lossy(&output))
                 }
             } else {
                 TestResult::Mismatch("Round trip", actual, expected)
@@ -191,9 +194,9 @@ fn formatter<'ast>(
 /// The output reparses and minifies as itself.
 fn minifier(
     allocator: &Allocator,
-    source: &str,
+    source: &[u8],
     version: LuaVersion,
-) -> (TestResult, Option<String>) {
+) -> (TestResult, Option<Vec<u8>>) {
     let config = TransformConfig::default();
     let output = match luck_minifier::minify(allocator, source, version, &config) {
         Ok(output) => output,
@@ -204,7 +207,7 @@ fn minifier(
     };
     let result = match luck_minifier::minify(allocator, &output, version, &config) {
         Ok(again) if again == output => TestResult::Passed,
-        Ok(again) => TestResult::Mismatch("Idempotency", again, output.clone()),
+        Ok(again) => TestResult::Mismatch("Idempotency", lossy(&again), lossy(&output)),
         Err(errors) => {
             let lines = LineIndex::new(&output, version);
             TestResult::GenericError("Reparse", render_errors(&errors, &lines))

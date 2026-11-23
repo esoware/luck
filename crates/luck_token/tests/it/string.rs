@@ -9,17 +9,20 @@ fn decode(raw: &str) -> Vec<u8> {
 
 fn decode_in(raw: &str, version: LuaVersion) -> Vec<u8> {
     let mut output = Vec::new();
-    match decode_string(raw, version, &mut output) {
+    match decode_string(raw.as_bytes(), version, &mut output) {
         StringValue::Verbatim(bytes) => bytes.to_vec(),
         StringValue::Decoded => output,
     }
 }
 
-/// The spelling of `bytes`, checked to be as long as it said it would be.
+/// The spelling of `bytes`, checked to be UTF-8 and as long as it said it
+/// would be.
 fn written(bytes: &[u8]) -> String {
     let spelling = spell_string(bytes);
-    let mut output = String::new();
-    spelling.write_to(&mut output);
+    let mut written_bytes = Vec::new();
+    spelling.write_to(&mut written_bytes);
+    assert!(str::from_utf8(&written_bytes).is_ok(), "{written_bytes:?} is UTF-8");
+    let output = String::from_utf8_lossy(&written_bytes).into_owned();
     assert_eq!(output.len(), spelling.length(), "{output:?}");
     assert_eq!(output.starts_with('['), spelling.is_long_bracket(), "{output:?}");
     output
@@ -32,7 +35,16 @@ fn escape_error(escape: &str, version: LuaVersion) -> (usize, Option<EscapeError
 
 #[test]
 fn a_body_with_nothing_to_rewrite_is_its_own_value() {
-    for raw in [r#""hello""#, "'a\u{e9}b'", "[[a\nb]]", "[==[\nhi]==]", "[[]]", "\"\""] {
+    for raw in [
+        br#""hello""#,
+        "'a\u{e9}b'".as_bytes(),
+        b"'a\xE9b'",
+        b"[[a\nb]]",
+        b"[==[\nhi]==]",
+        b"[[\xFF]]",
+        b"[[]]",
+        b"\"\"",
+    ] {
         for version in LuaVersion::ALL {
             let mut output = Vec::new();
             let value = decode_string(raw, version, &mut output);
@@ -40,7 +52,7 @@ fn a_body_with_nothing_to_rewrite_is_its_own_value() {
             assert!(output.is_empty(), "{raw:?} {version:?}");
         }
     }
-    for raw in [r#""a\n""#, "[[a\r\nb]]", "[[\r\na\r\n]]"] {
+    for raw in [&br#""a\n""#[..], b"[[a\r\nb]]", b"[[\r\na\r\n]]"] {
         let mut output = Vec::new();
         assert_eq!(decode_string(raw, LuaVersion::Lua54, &mut output), StringValue::Decoded);
     }
@@ -91,7 +103,7 @@ fn lua51_and_luau_read_an_undefined_escape_as_the_character() {
 #[test]
 fn an_interpolated_string_also_escapes_its_delimiters() {
     let mut output = Vec::new();
-    let value = decode_interpolated_text(r"a\{b\}c\`d\q", LuaVersion::Luau, &mut output);
+    let value = decode_interpolated_text(br"a\{b\}c\`d\q", LuaVersion::Luau, &mut output);
     assert_eq!(value, StringValue::Decoded);
     assert_eq!(output, b"a{b}c`dq");
     let (_, brace) = read_escape(b"{", true, LuaVersion::Luau);
@@ -225,17 +237,17 @@ fn long_strings_take_the_lowest_level_no_closer_in_the_text_takes() {
         ("[[ ]=]", "[==[[[ ]=]]==]"),
         ("\nline", "[[\n\nline]]"),
     ] {
-        let mut output = String::new();
+        let mut output = Vec::new();
         assert!(write_long_string(text, &mut output), "{text:?}");
-        assert_eq!(output, expected, "{text:?}");
+        assert_eq!(output, expected.as_bytes(), "{text:?}");
         for version in LuaVersion::ALL {
-            assert_eq!(decode_in(&output, version), text.as_bytes(), "{output:?} {version:?}");
+            assert_eq!(decode_in(expected, version), text.as_bytes(), "{expected:?} {version:?}");
         }
     }
-    let mut output = String::new();
+    let mut output = Vec::new();
     assert!(!write_long_string("a\r\nb", &mut output));
     assert!(!write_long_string("a\0b", &mut output));
-    assert_eq!(output, "");
+    assert_eq!(output, b"");
 }
 
 #[test]
@@ -247,17 +259,17 @@ fn a_long_string_takes_the_level_past_a_closer_at_every_level() {
         text.push_str(&"=".repeat(level));
         text.push(']');
     }
-    let mut output = String::new();
+    let mut output = Vec::new();
     assert!(write_long_string(&text, &mut output));
     let equals = "=".repeat(levels);
-    assert_eq!(output, format!("[{equals}[{text}]{equals}]"));
+    assert_eq!(output, format!("[{equals}[{text}]{equals}]").as_bytes());
 }
 
 #[test]
 fn interpolated_text_escapes_what_its_lexer_reads() {
-    let mut output = String::new();
+    let mut output = Vec::new();
     write_interpolated_text(b"a{b}`c\\d\"e\n\xFF\x017", &mut output);
-    assert_eq!(output, r#"a\{b}\`c\\d"e\n\255\0017"#);
+    assert_eq!(output, br#"a\{b}\`c\\d"e\n\255\0017"#);
     let mut decoded = Vec::new();
     let value = decode_interpolated_text(&output, LuaVersion::Luau, &mut decoded);
     assert_eq!(value, StringValue::Decoded);

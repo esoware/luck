@@ -240,8 +240,7 @@ impl<'ast> Formatter<'ast> {
                 // The region goes out as written, so it starts as its source
                 // does, and every node starts at a token.
                 if absorbed.is_none() {
-                    has_leading_paren =
-                        source.as_bytes().get(offset_to_index(span.start)) == Some(&b'(');
+                    has_leading_paren = source.get(offset_to_index(span.start)) == Some(&b'(');
                 }
                 run.start = run.start.min(own_line_start(source, span.start).unwrap_or(span.start));
                 run.end = run.end.max(span.end);
@@ -273,7 +272,7 @@ impl<'ast> Formatter<'ast> {
         match item {
             BlockItem::Stmt(stmt) => match self.comments().source_text() {
                 Some(source) if is_opted_out => {
-                    source.as_bytes().get(offset_to_index(stmt.span().start)) == Some(&b'(')
+                    source.get(offset_to_index(stmt.span().start)) == Some(&b'(')
                 }
                 Some(_) | None => {
                     leading_prefix(stmt).is_some_and(|prefix| self.starts_with_paren(prefix))
@@ -425,7 +424,7 @@ pub(crate) fn format_selection<'ast>(
     mut comments: Comments<'ast>,
     options: &FormatOptions,
     range: &Range<u32>,
-) -> Option<(Span, String)> {
+) -> Option<(Span, Vec<u8>)> {
     let groupings = Some(&parse.groupings);
     let block = &parse.chunk.block;
     let mut finder = InnermostBlock { range, groupings: &parse.groupings, found: block };
@@ -455,18 +454,18 @@ pub(crate) fn format_selection<'ast>(
 
 /// Whether the whitespace run immediately before `anchor` contains a blank
 /// line (the gap between a block opener and its first statement).
-pub(crate) fn has_leading_edge_blank(source: &str, anchor: u32, version: LuaVersion) -> bool {
+pub(crate) fn has_leading_edge_blank(source: &[u8], anchor: u32, version: LuaVersion) -> bool {
     let preceding = source.get(..offset_to_index(anchor)).unwrap_or(source);
-    let run_length = preceding.bytes().rev().take_while(|&b| is_lua_whitespace(b)).count();
+    let run_length = preceding.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count();
     let run_start = preceding.len().saturating_sub(run_length);
     run_has_blank(preceding.get(run_start..).unwrap_or_default(), version)
 }
 
 /// Whether the whitespace and `;` run immediately after `end` contains a blank
 /// line (the gap between the last statement and the block closer).
-fn has_trailing_edge_blank(source: &str, end: u32, version: LuaVersion) -> bool {
+fn has_trailing_edge_blank(source: &[u8], end: u32, version: LuaVersion) -> bool {
     let following = source.get(offset_to_index(end)..).unwrap_or_default();
-    let run_length = following.bytes().take_while(|&b| is_code_free_byte(b)).count();
+    let run_length = following.iter().take_while(|&&b| is_code_free_byte(b)).count();
     run_has_blank(following.get(..run_length).unwrap_or_default(), version)
 }
 
@@ -475,8 +474,8 @@ fn has_trailing_edge_blank(source: &str, end: u32, version: LuaVersion) -> bool 
 ///
 /// The text is a gap between tokens, a few bytes as a rule, so one walk beats
 /// searching it.
-const fn run_has_blank(text: &str, version: LuaVersion) -> bool {
-    let mut remaining = text.as_bytes();
+const fn run_has_blank(text: &[u8], version: LuaVersion) -> bool {
+    let mut remaining = text;
     let mut has_break = false;
     while let Some((&b, rest)) = remaining.split_first() {
         if let Some(after_break) = strip_line_break(remaining, version) {
@@ -493,7 +492,7 @@ const fn run_has_blank(text: &str, version: LuaVersion) -> bool {
     false
 }
 
-pub(crate) fn has_blank_line(source: &str, start: u32, end: u32, version: LuaVersion) -> bool {
+pub(crate) fn has_blank_line(source: &[u8], start: u32, end: u32, version: LuaVersion) -> bool {
     run_has_blank(Span::new(start, end).text(source), version)
 }
 
@@ -503,17 +502,22 @@ pub(crate) fn has_blank_line(source: &str, start: u32, end: u32, version: LuaVer
 ///
 /// Lines split only at newlines between tokens: a newline inside a long string or long comment is
 /// part of that token and goes out as written, since re-indenting would change it.
-fn reindented_lines(source: &str, start: u32, end: u32, version: LuaVersion) -> Vec<(&str, &str)> {
+fn reindented_lines(
+    source: &[u8],
+    start: u32,
+    end: u32,
+    version: LuaVersion,
+) -> Vec<(&[u8], &[u8])> {
     let text = Span::new(start, end).text(source);
     let base_indent = own_line_start(source, start)
-        .map_or("", |line_start| Span::new(line_start, start).text(source));
+        .map_or(&b""[..], |line_start| Span::new(line_start, start).text(source));
 
     let mut lines = Vec::new();
     let mut cursor = 0;
     let separators = separable_newlines(text, version);
     for offset in separators.into_iter().chain(iter::once(text.len())) {
         let written = text.get(cursor..offset).unwrap_or_default();
-        let rest = text.as_bytes().get(offset..).unwrap_or_default();
+        let rest = text.get(offset..).unwrap_or_default();
         let next_cursor =
             text.len().saturating_sub(strip_line_break(rest, version).unwrap_or(rest).len());
         let line = if lines.is_empty() {
@@ -533,7 +537,7 @@ fn reindented_lines(source: &str, start: u32, end: u32, version: LuaVersion) -> 
 /// A long string or long comment carries its line breaks as content, and a
 /// `\` continues a short string across one. Lexing tells them apart: a line
 /// break outside every token and comment span sits between two tokens.
-fn separable_newlines(text: &str, version: LuaVersion) -> Vec<usize> {
+fn separable_newlines(text: &[u8], version: LuaVersion) -> Vec<usize> {
     let lexed = luck_lexer::lex(text, version);
     // A parsed statement always lexes. If this text doesn't, leave it unsplit,
     // since whatever the lexer couldn't close may be a literal that
@@ -582,16 +586,21 @@ mod tests {
         }
         for version in [LuaVersion::Lua54, LuaVersion::Luau] {
             for gap in &gaps {
-                let expected =
-                    gap.split(';').any(|segment| line_breaks(segment, version).nth(1).is_some());
-                assert_eq!(super::run_has_blank(gap, version), expected, "{gap:?} in {version:?}");
+                let expected = gap
+                    .split(';')
+                    .any(|segment| line_breaks(segment.as_bytes(), version).nth(1).is_some());
+                assert_eq!(
+                    super::run_has_blank(gap.as_bytes(), version),
+                    expected,
+                    "{gap:?} in {version:?}"
+                );
             }
         }
     }
 
     #[test]
     fn newlines_inside_a_token_do_not_separate_lines() {
-        let separable = |text| super::separable_newlines(text, LuaVersion::Lua54);
+        let separable = |text: &str| super::separable_newlines(text.as_bytes(), LuaVersion::Lua54);
         assert_eq!(separable("a\nb\nc"), vec![1, 3]);
         // Long string, long comment, and level-2 bracket.
         assert_eq!(separable("a\n[[b\nc]]\nd"), vec![1, 9]);

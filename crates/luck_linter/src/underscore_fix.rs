@@ -23,6 +23,10 @@ pub(crate) fn prefix_underscore(
         return None;
     }
     tree.name_id(&renamed).is_none().then(|| {
-        fixer.replace(format!("prefix `{name}` with `_`"), symbol.definition_span, renamed)
+        fixer.replace(
+            format!("prefix `{name}` with `_`"),
+            symbol.definition_span,
+            renamed.into_bytes(),
+        )
     })
 }

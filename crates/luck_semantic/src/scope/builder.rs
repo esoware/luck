@@ -1305,7 +1305,8 @@ t[x], x = x, function(x) y = x.y end";
     #[test]
     fn a_parsed_tree_finds_a_name_s_reference_by_its_index() {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, NAMES_OF_EVERY_KIND, LuaVersion::Lua54);
+        let parsed =
+            luck_parser::parse(&allocator, NAMES_OF_EVERY_KIND.as_bytes(), LuaVersion::Lua54);
         let (by_index, by_search) = found_by_index_and_by_search(&parsed.chunk, parsed.counts);
         assert_eq!(by_index, by_search);
         assert_eq!(by_index.iter().flatten().count(), 9, "{by_index:?}");
@@ -1322,7 +1323,8 @@ t[x], x = x, function(x) y = x.y end";
         }
 
         let allocator = Allocator::new();
-        let mut parsed = luck_parser::parse(&allocator, NAMES_OF_EVERY_KIND, LuaVersion::Lua54);
+        let mut parsed =
+            luck_parser::parse(&allocator, NAMES_OF_EVERY_KIND.as_bytes(), LuaVersion::Lua54);
         Renumber.visit_block(&mut parsed.chunk.block);
         let (by_index, by_search) = found_by_index_and_by_search(&parsed.chunk, parsed.counts);
         assert_eq!(by_index, by_search);

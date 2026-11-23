@@ -61,7 +61,7 @@ impl<'ast> Formatter<'ast> {
 
     fn write_type_content(&mut self, ty: &Type<'ast>) {
         match ty {
-            Type::Name(name) => self.ascii(name.text.as_str()),
+            Type::Name(name) => self.ascii(name.text.as_bytes()),
             // Qualification and generics are tight against the name.
             Type::Named(named) => {
                 if let Some(module) = &named.prefix {

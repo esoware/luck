@@ -11,7 +11,7 @@ use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_token::LuaVersion;
 
 use crate::exit::{Exit, usage_error};
-use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
+use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source, write_output};
 use crate::project::{ProjectFile, for_each_outcome_in_order, one_shot_project, project_files};
 use crate::reporter::{DefaultReporter, Reporter as _, SourceFile};
 use crate::verbosity::Verbosity;
@@ -68,7 +68,7 @@ pub(crate) struct FmtArgs {
 
 enum FormatOutcome {
     Unchanged,
-    Changed(String),
+    Changed(Vec<u8>),
     /// The source didn't parse. Holds the errors ready for stderr, buffered
     /// so parallel workers never interleave them.
     Failed(Vec<u8>),
@@ -204,10 +204,7 @@ impl FmtArgs {
             FormatOutcome::Unchanged => {
                 // Editors expect the (already-formatted) source echoed back;
                 // report modes stay silent on an unchanged document.
-                if !self.is_report_only() {
-                    print!("{source}");
-                }
-                Ok(())
+                if self.is_report_only() { Ok(()) } else { write_output(None, &source) }
             }
             FormatOutcome::Changed(output) => {
                 if self.list_different {
@@ -217,8 +214,7 @@ impl FmtArgs {
                     // --check reports through the exit code alone.
                     Err(Exit::Failure)
                 } else {
-                    print!("{output}");
-                    Ok(())
+                    write_output(None, &output)
                 }
             }
         }
@@ -235,8 +231,8 @@ impl FmtArgs {
         file: &ProjectFile,
     ) -> FileOutcome {
         let file_path = file.path.as_path();
-        let source = match FileSystemOs.read_to_string(file_path) {
-            Ok(text) => text,
+        let source = match FileSystemOs.read(file_path) {
+            Ok(bytes) => bytes,
             Err(error) => {
                 return FileOutcome::Failed(
                     format!("error: cannot read `{}`: {error}\n", file_path.display()).into_bytes(),
@@ -304,7 +300,7 @@ impl FmtArgs {
 /// Writes nothing; callers decide whether the result goes to disk or stdout.
 fn format_document(
     allocator: &Allocator,
-    source: &str,
+    source: &[u8],
     file_path: &Path,
     version: LuaVersion,
     options: &FormatOptions,
@@ -464,7 +460,14 @@ end
             &Project::defaults(PathBuf::from(".")),
             file_path,
         );
-        format_document(&Allocator::new(), source, file_path, LuaVersion::Lua54, &options, None)
+        format_document(
+            &Allocator::new(),
+            source.as_bytes(),
+            file_path,
+            LuaVersion::Lua54,
+            &options,
+            None,
+        )
     }
 
     #[test]
@@ -492,9 +495,10 @@ end
         let FormatOutcome::Changed(formatted) = outcome else {
             panic!("unindented source should reformat to Changed");
         };
+        let text = String::from_utf8(formatted).unwrap();
         assert!(
-            formatted.contains("\n\treturn 1"),
-            "expected the default tab indent, not .editorconfig's, got:\n{formatted}"
+            text.contains("\n\treturn 1"),
+            "expected the default tab indent, not .editorconfig's, got:\n{text}"
         );
     }
 
@@ -511,7 +515,8 @@ end
         };
 
         // Re-running over already-formatted text yields Unchanged (idempotency).
-        assert!(matches!(format(&formatted), FormatOutcome::Unchanged));
+        let text = String::from_utf8(formatted).unwrap();
+        assert!(matches!(format(&text), FormatOutcome::Unchanged));
 
         assert!(matches!(format("local x ="), FormatOutcome::Failed(_)));
     }

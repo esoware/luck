@@ -30,6 +30,7 @@ luck_semantic    = { workspace = true }
 luck_token       = { workspace = true }
 
 bitflags   = { workspace = true }
+memchr     = { workspace = true }
 rayon      = { workspace = true }
 rustc-hash = { workspace = true }
 schemars   = { workspace = true, optional = true }

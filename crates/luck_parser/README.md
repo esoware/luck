@@ -4,7 +4,7 @@ The parser for Lua 5.1 to 5.5 and Luau, which builds a `luck_ast` tree in an are
 
 ## Overview
 
-The parser reads statements by recursive descent and expressions by Pratt parsing, covers the whole Luau type grammar, and gates every construct on the target `LuaVersion`. It pulls tokens from `luck_lexer` one at a time, with one token of lookahead, and puts every node in the arena. Names borrow their text from the source. It decodes each literal once, with the one numeral and escape reader in `luck_token`, so a literal holds its value beside its spelling, and a string borrows its value from the source too unless an escape or a line break had to be rewritten. As it goes, it numbers each name it reads and counts what the tree holds, for `luck_semantic`.
+The parser reads statements by recursive descent and expressions by Pratt parsing, covers the whole Luau type grammar, and gates every construct on the target `LuaVersion`. It pulls tokens from `luck_lexer` one at a time, with one token of lookahead, and puts every node in the arena. It reads a source as bytes, as Lua does, so a string or a comment may hold any byte. Names, which are ASCII, borrow their text from the source. It decodes each literal once, with the one numeral and escape reader in `luck_token`, so a literal holds its value beside its spelling, and a string borrows its value from the source too unless an escape or a line break had to be rewritten. As it goes, it numbers each name it reads and counts what the tree holds, for `luck_semantic`.
 
 The tree keeps only the parentheses that change what they hold: around a call or `...`, which they truncate to one value, and around a Luau integer literal, which a `-` before them then negates as a value. The parser reads every other pair as if it weren't there and records it in the result's `Groupings`, as the lexer keeps comments beside the tree, so a formatter or a lint can tell what the user grouped. Parentheses end a run of operators, so `(a - b) - c` holds a run in a run, while a parenthesized chain reads on, so `(a.b).c` is one. A node spans the tokens it was read from, the parentheses around its first or last operand included.
 
@@ -23,7 +23,7 @@ use luck_allocator::Allocator;
 use luck_token::LuaVersion;
 
 let allocator = Allocator::new();
-let result = luck_parser::parse(&allocator, "local x = 1 + 2", LuaVersion::Lua54);
+let result = luck_parser::parse(&allocator, b"local x = 1 + 2", LuaVersion::Lua54);
 assert!(result.errors.is_empty());
 assert_eq!(result.chunk.block.stmts.len(), 1);
 ```

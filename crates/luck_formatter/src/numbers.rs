@@ -8,8 +8,8 @@ use crate::HexCase;
 
 /// Writes `text` normalized to `normalized` and returns true, or returns
 /// false when it's already normal.
-pub(crate) fn normalize_number(text: &str, hex_case: HexCase, normalized: &mut String) -> bool {
-    let (is_hex, prefix, digits) = match text.as_bytes() {
+pub(crate) fn normalize_number(text: &[u8], hex_case: HexCase, normalized: &mut Vec<u8>) -> bool {
+    let (is_hex, prefix, digits) = match text {
         [b'0', prefix @ (b'x' | b'X'), digits @ ..] => (true, *prefix, digits),
         [b'0', prefix @ (b'b' | b'B'), digits @ ..] => (false, *prefix, digits),
         _ => return normalize_decimal(text, normalized),
@@ -24,20 +24,20 @@ pub(crate) fn normalize_number(text: &str, hex_case: HexCase, normalized: &mut S
     if prefix.is_ascii_lowercase() && digits.iter().all(|&b| normal_digit(b) == b) {
         return false;
     }
-    normalized.push_str(if is_hex { "0x" } else { "0b" });
-    normalized.extend(digits.iter().map(|&b| char::from(normal_digit(b))));
+    normalized.extend_from_slice(if is_hex { b"0x" } else { b"0b" });
+    normalized.extend(digits.iter().map(|&b| normal_digit(b)));
     true
 }
 
-fn normalize_decimal(text: &str, normalized: &mut String) -> bool {
-    let should_add_leading_zero = text.starts_with('.');
-    if !should_add_leading_zero && !text.bytes().any(|b| b == b'E') {
+fn normalize_decimal(text: &[u8], normalized: &mut Vec<u8>) -> bool {
+    let should_add_leading_zero = text.first() == Some(&b'.');
+    if !should_add_leading_zero && !text.contains(&b'E') {
         return false;
     }
     if should_add_leading_zero {
-        normalized.push('0');
+        normalized.push(b'0');
     }
-    normalized.extend(text.chars().map(|c| if c == 'E' { 'e' } else { c }));
+    normalized.extend(text.iter().map(|&b| if b == b'E' { b'e' } else { b }));
     true
 }
 
@@ -54,8 +54,12 @@ mod tests {
     use super::*;
 
     fn normal(text: &str, hex_case: HexCase) -> String {
-        let mut normalized = String::new();
-        if normalize_number(text, hex_case, &mut normalized) { normalized } else { text.to_owned() }
+        let mut normalized = Vec::new();
+        if normalize_number(text.as_bytes(), hex_case, &mut normalized) {
+            String::from_utf8(normalized).unwrap()
+        } else {
+            text.to_owned()
+        }
     }
 
     #[test]
@@ -104,11 +108,14 @@ mod tests {
 
     #[test]
     fn a_normal_number_is_left_as_written() {
-        let mut normalized = String::new();
+        let mut normalized = Vec::new();
         for text in ["0xff", "0xFF", "0b101", "1e5", "0x1p4", "12"] {
-            assert!(!normalize_number(text, HexCase::Preserve, &mut normalized), "{text}");
+            assert!(
+                !normalize_number(text.as_bytes(), HexCase::Preserve, &mut normalized),
+                "{text}"
+            );
         }
-        assert_eq!(normalized, "");
+        assert_eq!(normalized, b"");
     }
 
     #[test]

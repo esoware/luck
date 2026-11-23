@@ -111,7 +111,7 @@ fn run(is_rules: bool) -> io::Result<()> {
 /// Panics when `file` doesn't parse cleanly.
 fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()] {
     HEAP.reset();
-    let (source, target) = (file.source_text.as_str(), file.target);
+    let (source, target) = (file.source_text.as_slice(), file.target);
     let version = target.lua_version();
 
     let ((), lexer) = record_stats_in(allocator, || drop(luck_lexer::lex(source, version)));

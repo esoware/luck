@@ -21,18 +21,19 @@ fn every_fixture_compacts_to_output_that_compacts_to_itself() {
         let source = fs::read_to_string(&path).expect("a fixture is readable");
         let version = detect_version(relative);
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, &source, version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         if !parsed.errors.is_empty() {
             continue;
         }
         let output = luck_codegen::compact(&parsed.chunk);
         let reparsed = luck_parser::parse(&allocator, &output, version);
+        let text = String::from_utf8_lossy(&output);
         if let Some(error) = reparsed.errors.first() {
-            writeln!(report, "{}: {output}\n  {}", relative.display(), error.message).unwrap();
+            writeln!(report, "{}: {text}\n  {}", relative.display(), error.message).unwrap();
         } else if luck_codegen::compact(&reparsed.chunk) == output {
             round_trip_count += 1;
         } else {
-            writeln!(report, "{}: compacting again changed {output}", relative.display()).unwrap();
+            writeln!(report, "{}: compacting again changed {text}", relative.display()).unwrap();
         }
     }
     assert!(report.is_empty(), "{report}{round_trip_count} fixture(s) round-tripped");

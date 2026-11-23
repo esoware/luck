@@ -1,4 +1,4 @@
-use luck_allocator::{ThinBytes, ThinStr};
+use luck_allocator::ThinBytes;
 use luck_token::{BinOp, LuaNumber, UnOp, write_long_string};
 
 use crate::expr::{Expression, InterpolatedSegment};
@@ -93,10 +93,10 @@ impl<'ast> Synth<'ast> {
     /// is [`Synth::string`] instead.
     #[must_use]
     pub fn long_string(&self, content: &str) -> Expression<'ast> {
-        let mut spelling = String::new();
+        let mut spelling = Vec::new();
         let mut literal = self.string_literal(content.as_bytes());
         if write_long_string(content, &mut spelling) {
-            literal.raw = Some(ThinStr::new(self.allocator.alloc_str(&spelling)));
+            literal.raw = Some(ThinBytes::new(self.allocator.alloc_slice_copy(&spelling)));
         }
         Expression::StringLiteral(self.boxed(literal))
     }
@@ -255,11 +255,11 @@ mod tests {
     fn a_long_string_keeps_its_long_bracket_spelling() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        for (content, spelling) in [("plain", Some("[[plain]]")), ("a\r\nb", None)] {
+        for (content, spelling) in [("plain", Some(&b"[[plain]]"[..])), ("a\r\nb", None)] {
             let expr = synth.long_string(content);
             let literal = string_literal(&expr);
             assert_eq!(literal.value, content.as_bytes(), "{content:?}");
-            assert_eq!(literal.raw.map(ThinStr::as_str), spelling, "{content:?}");
+            assert_eq!(literal.raw.map(ThinBytes::as_bytes), spelling, "{content:?}");
         }
     }
 

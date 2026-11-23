@@ -49,7 +49,7 @@ fn check_index(suffix: &Suffix<'_>, context: &LintContext<'_>) -> Option<Finding
         return None;
     }
 
-    let key = literal.span.text(context.source);
+    let key = String::from_utf8_lossy(literal.span.text(context.source));
     Some(
         Finding::new(format!("`[{key}]` is equivalent to `.{name}`"), *brackets)
             .with_help("prefer dot access for identifier-safe keys")
@@ -57,7 +57,7 @@ fn check_index(suffix: &Suffix<'_>, context: &LintContext<'_>) -> Option<Finding
                 fixer.replace(
                     format!("rewrite `[{key}]` as `.{name}`"),
                     *brackets,
-                    format!(".{name}"),
+                    format!(".{name}").into_bytes(),
                 )
             }),
     )

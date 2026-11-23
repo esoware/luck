@@ -3,35 +3,18 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use simdutf8::basic::from_utf8;
-
 #[cfg(windows)]
 use crate::path::strip_verbatim_prefix;
 
 /// Everything a resolver reads goes through this, so a caller can resolve
 /// against files only it holds, such as an editor's unsaved buffers.
 pub trait FileSystem: Send + Sync {
+    /// Bytes, since a Lua source need not be UTF-8.
+    ///
     /// # Errors
     ///
     /// Returns what stopped `path` from being read, as [`fs::read`] does.
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
-
-    /// # Errors
-    ///
-    /// Returns what [`Self::read`] does, or `InvalidData` with
-    /// [`fs::read_to_string`]'s message when the file isn't UTF-8.
-    #[expect(unsafe_code, reason = "the safe conversion would validate every source file twice")]
-    fn read_to_string(&self, path: &Path) -> io::Result<String> {
-        let bytes = self.read(path)?;
-        if from_utf8(&bytes).is_err() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "stream did not contain valid UTF-8",
-            ));
-        }
-        // SAFETY: `bytes` was validated as UTF-8 above.
-        Ok(unsafe { String::from_utf8_unchecked(bytes) })
-    }
 
     /// What `path` is once every link is followed.
     ///
@@ -138,29 +121,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn read_to_string_reads_utf8() {
+    fn read_reads_bytes_that_are_not_utf8() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ok.lua");
-        fs::write(&path, "local x = 1 -- \u{00e9}\n").unwrap();
-        assert_eq!(FileSystemOs.read_to_string(&path).unwrap(), "local x = 1 -- \u{00e9}\n");
+        let path = directory.path().join("latin1.lua");
+        fs::write(&path, b"local x = 1 -- caf\xE9\n").unwrap();
+        assert_eq!(FileSystemOs.read(&path).unwrap(), b"local x = 1 -- caf\xE9\n");
     }
 
     #[test]
-    fn read_to_string_fails_on_invalid_utf8_as_std_does() {
+    fn read_of_a_missing_file_is_not_found() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("bad.lua");
-        fs::write(&path, [0x6c, 0xff, 0xfe]).unwrap();
-        let simd_error = FileSystemOs.read_to_string(&path).unwrap_err();
-        let std_error = fs::read_to_string(&path).unwrap_err();
-        assert_eq!(simd_error.kind(), std_error.kind());
-        assert_eq!(simd_error.to_string(), std_error.to_string());
-    }
-
-    #[test]
-    fn read_to_string_of_a_missing_file_is_not_found() {
-        let directory = tempfile::tempdir().unwrap();
-        let missing =
-            FileSystemOs.read_to_string(&directory.path().join("does_not_exist.lua")).unwrap_err();
+        let missing = FileSystemOs.read(&directory.path().join("does_not_exist.lua")).unwrap_err();
         assert_eq!(missing.kind(), io::ErrorKind::NotFound);
     }
 }

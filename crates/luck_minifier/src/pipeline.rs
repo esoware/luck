@@ -13,15 +13,19 @@ use crate::transform_config::TransformConfig;
 /// Parses `source` into `allocator` and minifies it, returning the compact
 /// output or the parse errors.
 ///
+/// The source and the output are bytes, as Lua reads them. A string spelled
+/// as written keeps its bytes, and the output is UTF-8 whenever the source
+/// is.
+///
 /// # Errors
 ///
 /// Returns the parse errors, each an E008, when `source` doesn't parse.
 pub fn minify<'ast>(
     allocator: &'ast Allocator,
-    source: &'ast str,
+    source: &'ast [u8],
     version: LuaVersion,
     config: &TransformConfig,
-) -> Result<String, Vec<Diagnostic>> {
+) -> Result<Vec<u8>, Vec<Diagnostic>> {
     let mut result = luck_parser::parse(allocator, source, version);
     if !result.errors.is_empty() {
         return Err(result.errors);
@@ -44,7 +48,7 @@ pub fn minify<'ast>(
     if output.is_empty() {
         return Ok(code);
     }
-    output.push_str(&code);
+    output.extend_from_slice(&code);
     Ok(output)
 }
 
@@ -63,7 +67,7 @@ pub fn minify_chunk<'ast>(
     allocator: &'ast Allocator,
     chunk: &mut Chunk<'ast>,
     config: &TransformConfig,
-) -> Result<String, Diagnostic> {
+) -> Result<Vec<u8>, Diagnostic> {
     if !minify_tree(allocator, chunk, config, true) {
         return Err(nesting_error(chunk));
     }

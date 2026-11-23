@@ -18,6 +18,10 @@
 //! tree or the source, never copied. An arena reused across files, as from an
 //! `AllocatorPool`, saves each one the heap's large allocations.
 //!
+//! A source is bytes, as Lua reads it, and so is the output, which keeps a
+//! comment or a string that isn't UTF-8 as written and is UTF-8 whenever the
+//! source is.
+//!
 //! # Usage
 //!
 //! ```
@@ -27,9 +31,9 @@
 //!
 //! let allocator = Allocator::new();
 //! let result =
-//!     luck_formatter::format(&allocator, "local x=1", LuaVersion::Lua54, &FormatOptions::default());
+//!     luck_formatter::format(&allocator, b"local x=1", LuaVersion::Lua54, &FormatOptions::default());
 //! assert!(result.errors.is_empty());
-//! assert_eq!(result.output, "local x = 1\n");
+//! assert_eq!(result.output, b"local x = 1\n");
 //! ```
 
 #![cfg_attr(

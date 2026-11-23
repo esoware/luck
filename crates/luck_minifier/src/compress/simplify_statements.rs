@@ -370,8 +370,9 @@ mod tests {
             let ifs = MAX_NESTING_DEPTH - 2;
             let source = format!("{}x(){}", "if a then ".repeat(ifs), " end".repeat(ifs));
             let allocator = Allocator::new();
-            let output = crate::minify(&allocator, &source, LuaVersion::Lua54, &STATEMENTS);
-            let expected = format!("if a{} then x()end", " and a".repeat(ifs - 1));
+            let output =
+                crate::minify(&allocator, source.as_bytes(), LuaVersion::Lua54, &STATEMENTS);
+            let expected = format!("if a{} then x()end", " and a".repeat(ifs - 1)).into_bytes();
             assert!(output.as_ref() == Ok(&expected), "{:?}", output.map(|text| text.len()));
             assert!(allocator.used_bytes() < 64 * source.len(), "{}", allocator.used_bytes());
         });

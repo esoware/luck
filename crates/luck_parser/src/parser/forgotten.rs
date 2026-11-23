@@ -13,7 +13,7 @@ use luck_token::{LuaVersion, Span, has_line_break, offset_to_index};
 /// suggests lost its `end`, if one does.
 pub(super) fn label_forgotten_ends(
     chunk: &Chunk<'_>,
-    source: &str,
+    source: &[u8],
     unclosed: &[(usize, Span)],
     errors: &mut [Diagnostic],
 ) {
@@ -46,7 +46,7 @@ struct Suspect {
 }
 
 struct Misindented<'source> {
-    source: &'source str,
+    source: &'source [u8],
     version: LuaVersion,
     found: Vec<Suspect>,
 }
@@ -74,14 +74,14 @@ impl Misindented<'_> {
     /// only a name, attributes, or whitespace come between.
     fn last_before(&self, word: &str, offset: u32) -> Option<Span> {
         let before = self.source.get(..offset_to_index(offset))?;
-        let start = before.rfind(word)?;
+        let start = before.windows(word.len()).rposition(|window| window == word.as_bytes())?;
         Some(Span::from_indices(start, start.saturating_add(word.len())))
     }
 
     /// The `end` that `span`, a construct's, ends with, if it ends with one.
     fn end_of(&self, span: Span) -> Option<Span> {
         let end = Span::new(span.end.saturating_sub(3), span.end);
-        (end.text(self.source) == "end").then_some(end)
+        (end.text(self.source) == b"end").then_some(end)
     }
 }
 
@@ -135,11 +135,12 @@ impl<'ast> Visit<'ast> for Misindented<'_> {
 }
 
 /// The spaces and tabs that open the line holding `offset`.
-fn indentation(source: &str, offset: u32) -> &str {
+fn indentation(source: &[u8], offset: u32) -> &[u8] {
     let index = offset_to_index(offset);
     let before = source.get(..index).unwrap_or_default();
-    let line_start = before.rfind(['\n', '\r']).map_or(0, |at| at.saturating_add(1));
+    let line_start =
+        before.iter().rposition(|&b| b == b'\n' || b == b'\r').map_or(0, |at| at.saturating_add(1));
     let line = source.get(line_start..).unwrap_or_default();
-    let width = line.bytes().take_while(|&b| b == b' ' || b == b'\t').count();
+    let width = line.iter().take_while(|&&b| b == b' ' || b == b'\t').count();
     line.get(..width).unwrap_or_default()
 }

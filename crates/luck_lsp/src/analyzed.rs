@@ -57,8 +57,11 @@ impl Analyzed {
         let owner = Source { text, arena: MutBorrow::new(arena) };
         let parsed = ParsedCell::new(owner, |source| {
             let lent: &Arena = source.arena.borrow_mut();
-            let (parse, read) =
-                luck_parser::parse_with_tokens(&lent.allocator, &source.text, target.lua_version());
+            let (parse, read) = luck_parser::parse_with_tokens(
+                &lent.allocator,
+                source.text.as_bytes(),
+                target.lua_version(),
+            );
             tokens = read;
             parse
         });
@@ -66,6 +69,12 @@ impl Analyzed {
             luck_linter::analyze(cell.borrow_dependent(), target.stdlib_environment(), config)
         });
         (Self(analyzed), tokens)
+    }
+
+    /// The text an editor sent, which is UTF-8, and which the parse reads as
+    /// bytes.
+    pub(crate) fn text(&self) -> &str {
+        &self.0.borrow_owner().borrow_owner().text
     }
 
     pub(crate) fn parse(&self) -> &ParseResult<'_> {
@@ -152,7 +161,8 @@ mod tests {
         assert!(!spare.is_empty(), "the first version left its arena");
         let second = analyzed("local two = 2\n", &spare);
         assert!(spare.is_empty(), "the second version took it");
-        assert_eq!(second.parse().source, "local two = 2\n");
+        assert_eq!(second.text(), "local two = 2\n");
+        assert_eq!(second.parse().source, b"local two = 2\n");
         drop(second);
         spare.clear();
         assert!(spare.is_empty(), "a clear frees the spare arena");

@@ -1,4 +1,4 @@
-use luck_token::{CommentContent, Span};
+use luck_token::{CommentContent, Span, is_lua_whitespace};
 
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -57,26 +57,26 @@ impl WholeRule for CommentDirective {
 }
 
 struct HotComment<'body> {
-    word: &'body str,
-    rest: &'body str,
+    word: &'body [u8],
+    rest: &'body [u8],
     word_span: Span,
 }
 
 impl<'body> HotComment<'body> {
-    fn split(body: &'body str, word_start: u32) -> Self {
-        let word_length = body.find(char::is_whitespace).unwrap_or(body.len());
-        let (word, rest) = body.split_at(word_length);
+    fn split(body: &'body [u8], word_start: u32) -> Self {
+        let word_length = body.iter().position(|&b| is_lua_whitespace(b)).unwrap_or(body.len());
+        let (word, rest) = body.split_at_checked(word_length).unwrap_or((body, &[]));
         Self { word, rest, word_span: Span::from_indices(0, word_length).shifted(word_start) }
     }
 
     fn trailing_symbols_span(&self) -> Option<Span> {
-        let trimmed = self.rest.trim_end();
-        let first = trimmed.find(|c: char| !c.is_whitespace())?;
-        Some(Span::from_indices(first, trimmed.len()).shifted(self.word_span.end))
+        let first = self.rest.iter().position(|&b| !is_lua_whitespace(b))?;
+        let last = self.rest.iter().rposition(|&b| !is_lua_whitespace(b))?;
+        Some(Span::from_indices(first, last.saturating_add(1)).shifted(self.word_span.end))
     }
 
-    fn is_mode(&self) -> bool {
-        matches!(self.word, "nocheck" | "nonstrict" | "strict")
+    const fn is_mode(&self) -> bool {
+        matches!(self.word, b"nocheck" | b"nonstrict" | b"strict")
     }
 
     fn sets_mode(&self) -> bool {
@@ -87,8 +87,8 @@ impl<'body> HotComment<'body> {
     fn problem(&self) -> Option<Finding> {
         let (message, span) = match self.word {
             // `nolint` arguments name Luau's lints, not luck's.
-            "nolint" => return None,
-            "native" => (
+            b"nolint" => return None,
+            b"native" => (
                 "`native` directive has extra symbols at the end of the line".to_owned(),
                 self.trailing_symbols_span()?,
             ),
@@ -96,29 +96,31 @@ impl<'body> HotComment<'body> {
                 "type checking mode directive has extra symbols at the end of the line".to_owned(),
                 self.trailing_symbols_span()?,
             ),
-            "optimize" => {
+            b"optimize" => {
                 let Some(level_span) = self.trailing_symbols_span() else {
                     return Some(Finding::new(
                         "`optimize` directive requires an optimization level",
                         self.word_span,
                     ));
                 };
-                let level = self.rest.trim();
-                if matches!(level, "0" | "1" | "2") {
+                let level = self.rest.trim_ascii();
+                if matches!(level, b"0" | b"1" | b"2") {
                     return None;
                 }
+                let shown = String::from_utf8_lossy(level);
                 (
-                    format!("unknown optimization level `{level}`, expected `0`, `1`, or `2`"),
+                    format!("unknown optimization level `{shown}`, expected `0`, `1`, or `2`"),
                     level_span,
                 )
             }
             unknown => {
+                let word = String::from_utf8_lossy(unknown);
                 let suggestion_hint =
-                    closest(unknown, KNOWN_DIRECTIVES.iter().copied(), |distance, _| distance <= 2)
+                    closest(&word, KNOWN_DIRECTIVES.iter().copied(), |distance, _| distance <= 2)
                         .map_or_else(String::new, |suggestion| {
                             format!(", did you mean `{suggestion}`?")
                         });
-                (format!("unknown comment directive `{unknown}`{suggestion_hint}"), self.word_span)
+                (format!("unknown comment directive `{word}`{suggestion_hint}"), self.word_span)
             }
         };
         Some(Finding::new(message, span))

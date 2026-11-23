@@ -47,7 +47,7 @@ impl<'ast> Expression<'ast> {
     #[inline]
     pub fn new_string_literal(
         value: ThinBytes<'ast>,
-        raw: Option<ThinStr<'ast>>,
+        raw: Option<ThinBytes<'ast>>,
         span: Span,
         allocator: &'ast Allocator,
     ) -> Self {
@@ -279,7 +279,7 @@ impl<'ast> FunctionArgs<'ast> {
     #[inline]
     pub fn new_string_literal(
         value: ThinBytes<'ast>,
-        raw: Option<ThinStr<'ast>>,
+        raw: Option<ThinBytes<'ast>>,
         span: Span,
         allocator: &'ast Allocator,
     ) -> Self {
@@ -624,7 +624,7 @@ impl<'ast> IntegerLiteral<'ast> {
 impl<'ast> StringLiteral<'ast> {
     #[must_use]
     #[inline]
-    pub const fn new(value: ThinBytes<'ast>, raw: Option<ThinStr<'ast>>, span: Span) -> Self {
+    pub const fn new(value: ThinBytes<'ast>, raw: Option<ThinBytes<'ast>>, span: Span) -> Self {
         Self { value, raw, span }
     }
 
@@ -632,7 +632,7 @@ impl<'ast> StringLiteral<'ast> {
     #[inline]
     pub fn boxed(
         value: ThinBytes<'ast>,
-        raw: Option<ThinStr<'ast>>,
+        raw: Option<ThinBytes<'ast>>,
         span: Span,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
@@ -1457,7 +1457,7 @@ impl<'ast> Type<'ast> {
     #[inline]
     pub fn new_string_literal(
         value: ThinBytes<'ast>,
-        raw: Option<ThinStr<'ast>>,
+        raw: Option<ThinBytes<'ast>>,
         span: Span,
         allocator: &'ast Allocator,
     ) -> Self {

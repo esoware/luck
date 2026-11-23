@@ -30,10 +30,10 @@ pub(crate) fn emit_chunk<'ast>(
     allocator: &'ast Allocator,
     mut graph: DependencyGraph<'ast>,
     version: LuaVersion,
-) -> Result<(Chunk<'ast>, String), Vec<FileDiagnostics>> {
+) -> Result<(Chunk<'ast>, Vec<u8>), Vec<FileDiagnostics>> {
     let Some(entry) = graph.modules.get(graph.entry_id.0) else {
         let empty = Block::new(Span::default(), List::new());
-        return Ok((Chunk::new(version, empty), String::new()));
+        return Ok((Chunk::new(version, empty), Vec::new()));
     };
     let header = chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied());
     if graph.modules.len() == 1 && entry.dependencies.is_empty() {
@@ -59,7 +59,7 @@ pub(crate) fn emit_chunk<'ast>(
         return Err(errors);
     }
 
-    let skeleton = allocator.alloc_str(&emitter::skeleton(&graph, &plan, version));
+    let skeleton = allocator.alloc_slice_copy(&emitter::skeleton(&graph, &plan, version));
     let mut chunk = luck_parser::parse(allocator, skeleton, version).chunk;
     let mut filler = Filler { allocator, prefix: &plan.prefix, bodies: bodies.into_iter() };
     filler.visit_chunk(&mut chunk);

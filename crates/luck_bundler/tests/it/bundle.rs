@@ -13,7 +13,7 @@ use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::LuaVersion;
 use tempfile::TempDir;
 
-use crate::common::{bundle_both, codes, located, off_pool, on_pool};
+use crate::common::{bundle_both, codes, located, off_pool, on_pool, text};
 
 fn fixture_directory(dialect: &str, name: &str) -> PathBuf {
     let manifest_directory = env!("CARGO_MANIFEST_DIR");
@@ -34,7 +34,7 @@ fn run_bundle(
     entry_name: &str,
 ) -> Result<String, Vec<FileDiagnostics>> {
     run_bundle_with(dialect, name, version, entry_name, DynamicRequire::default())
-        .map(|result| result.output)
+        .map(|result| String::from_utf8(result.output).unwrap())
 }
 
 /// # Errors
@@ -141,13 +141,13 @@ fn circular_dependency_bundles_with_w003() {
         "Expected W003 warning, got: {:?}",
         codes(&result.warnings)
     );
-    assert!(result.output.contains("__luck_require"));
+    assert!(text(&result.output).contains("__luck_require"));
     // The cycle runs through the entry: its function must register under
     // the require string so the bundle stays self-contained.
     assert!(
-        result.output.contains("__luck_modules[\"a\"]=__luck_entry"),
+        text(&result.output).contains("__luck_modules[\"a\"]=__luck_entry"),
         "entry must register when required:\n{}",
-        result.output
+        text(&result.output)
     );
 }
 
@@ -205,7 +205,7 @@ fn dynamic_require_bundles_through_the_loader() {
         "Expected W007, got: {:?}",
         codes(&result.warnings)
     );
-    insta::assert_snapshot!("dynamic_require", result.output);
+    insta::assert_snapshot!("dynamic_require", text(&result.output));
 }
 
 #[test]
@@ -219,7 +219,7 @@ fn dynamic_require_in_allow_mode_is_silent() {
     )
     .expect("bundle failed");
     assert!(result.warnings.is_empty(), "expected no warnings, got: {:?}", codes(&result.warnings));
-    assert!(result.output.contains("__luck_dynamic("), "{}", result.output);
+    assert!(text(&result.output).contains("__luck_dynamic("), "{}", text(&result.output));
 }
 
 #[test]
@@ -402,7 +402,7 @@ return util.value
 
     // Rooted at the entry's own directory, as `luck bundle src/main.lua` does,
     // so `shared/` lands above the root.
-    let output = bundle_both(
+    let bundled = bundle_both(
         &source_directory.join("main.lua"),
         &BundleOptions {
             version: LuaVersion::Lua54,
@@ -411,8 +411,8 @@ return util.value
             dynamic_require: DynamicRequire::default(),
         },
     )
-    .expect("bundle failed")
-    .output;
+    .expect("bundle failed");
+    let output = text(&bundled.output);
 
     let native_root = directory.path().to_string_lossy().to_string();
     let slash_root = native_root.replace('\\', "/");
@@ -478,7 +478,7 @@ const RETURN_ONE: &[u8] = b"return 1\n";
 
 fn assert_reparses(output: &str, version: LuaVersion) {
     let allocator = Allocator::new();
-    let parsed = luck_parser::parse(&allocator, output, version);
+    let parsed = luck_parser::parse(&allocator, output.as_bytes(), version);
     assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
 }
 
@@ -491,7 +491,9 @@ fn entry_shebang_moves_to_the_first_line_of_a_lua_bundle() {
     );
     let directory =
         temp_project(&[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)]).expect("project");
-    let output = bundle_lua_project(directory.path()).expect("bundle failed").output;
+    let output =
+        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
+            .unwrap();
     assert!(
         output.starts_with(
             "\
@@ -514,7 +516,9 @@ fn entry_shebang_moves_to_the_first_line_of_a_luau_bundle() {
     );
     let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
         .expect("project");
-    let output = bundle_luau_project(directory.path()).expect("bundle failed").output;
+    let output =
+        String::from_utf8(bundle_luau_project(directory.path()).expect("bundle failed").output)
+            .unwrap();
     assert!(
         output.starts_with(
             "\
@@ -537,7 +541,9 @@ fn first_line_comment_without_a_bang_moves_up_like_a_shebang() {
     );
     let directory =
         temp_project(&[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)]).expect("project");
-    let output = bundle_lua_project(directory.path()).expect("bundle failed").output;
+    let output =
+        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
+            .unwrap();
     assert!(
         output.starts_with(
             "\
@@ -563,7 +569,9 @@ return 1
         ),
     ])
     .expect("project");
-    let output = bundle_lua_project(directory.path()).expect("bundle failed").output;
+    let output =
+        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
+            .unwrap();
     assert!(output.starts_with("local __luck_modules={}\n"), "{output}");
     assert!(!output.contains("#!"), "{output}");
     assert_reparses(&output, LuaVersion::Lua54);
@@ -578,7 +586,9 @@ fn bom_before_an_entry_shebang_is_dropped() {
     );
     let directory =
         temp_project(&[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)]).expect("project");
-    let output = bundle_lua_project(directory.path()).expect("bundle failed").output;
+    let output =
+        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
+            .unwrap();
     assert!(
         output.starts_with(
             "\
@@ -600,7 +610,9 @@ fn bom_is_dropped_from_every_module_body() {
         ("util.lua", "\u{FEFF}return 1\n".as_bytes()),
     ])
     .expect("project");
-    let output = bundle_lua_project(directory.path()).expect("bundle failed").output;
+    let output =
+        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
+            .unwrap();
     assert!(!output.contains('\u{FEFF}'), "{output}");
     assert_reparses(&output, LuaVersion::Lua54);
 }
@@ -612,7 +624,9 @@ fn lone_module_with_a_shebang_stays_verbatim() {
 print(1)
 ";
     let directory = temp_project(&[("main.lua", main)]).expect("project");
-    let output = bundle_lua_project(directory.path()).expect("bundle failed").output;
+    let output =
+        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
+            .unwrap();
     assert_eq!(output.as_bytes(), main);
 }
 
@@ -653,7 +667,9 @@ local __luck_modules={}
         );
         let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
             .expect("project");
-        let output = bundle_luau_project(directory.path()).expect("bundle failed").output;
+        let output =
+            String::from_utf8(bundle_luau_project(directory.path()).expect("bundle failed").output)
+                .unwrap();
         assert!(output.starts_with(opening), "header {header:?}:\n{output}");
         assert_reparses(&output, LuaVersion::Luau);
     }
@@ -670,7 +686,9 @@ fn luau_hot_comment_line_inside_a_block_comment_is_not_hoisted() {
     );
     let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
         .expect("project");
-    let output = bundle_luau_project(directory.path()).expect("bundle failed").output;
+    let output =
+        String::from_utf8(bundle_luau_project(directory.path()).expect("bundle failed").output)
+            .unwrap();
     assert!(output.starts_with("local __luck_modules={}\n"), "{output}");
 }
 
@@ -684,7 +702,9 @@ fn luau_hot_comment_after_code_on_a_comment_line_is_not_hoisted() {
     );
     let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
         .expect("project");
-    let output = bundle_luau_project(directory.path()).expect("bundle failed").output;
+    let output =
+        String::from_utf8(bundle_luau_project(directory.path()).expect("bundle failed").output)
+            .unwrap();
     assert!(output.starts_with("local __luck_modules={}\n"), "{output}");
 }
 
@@ -693,7 +713,9 @@ fn luau_hoisted_hot_comment_drops_the_carriage_return() {
     let main = b"--!strict\r\nlocal util = require(\"./util\")\r\nprint(util)\r\n";
     let directory =
         temp_project(&[("main.luau", main), ("util.luau", RETURN_ONE)]).expect("project");
-    let output = bundle_luau_project(directory.path()).expect("bundle failed").output;
+    let output =
+        String::from_utf8(bundle_luau_project(directory.path()).expect("bundle failed").output)
+            .unwrap();
     assert!(output.starts_with("--!strict\nlocal __luck_modules={}\n"), "{output}");
 }
 
@@ -737,8 +759,10 @@ return 1
     }
 }
 
+/// A byte that isn't UTF-8 outside a string is one parse error, as Lua
+/// reads it, which the module reports once however many modules require it.
 #[test]
-fn unreadable_dependency_reports_e010_once_for_its_requirers() {
+fn broken_dependency_reports_its_error_once_for_its_requirers() {
     let directory = temp_project(&[
         (
             "main.lua",
@@ -749,15 +773,15 @@ require(\"b\")
         ),
         ("a.lua", b"require(\"bad\")\n"),
         ("b.lua", b"require(\"bad\")\n"),
-        ("bad.lua", &[0xFF, 0xFE]),
+        ("bad.lua", &[0xFF]),
     ])
     .expect("project");
-    let errors = bundle_lua_project(directory.path()).expect_err("invalid UTF-8 must not bundle");
-    assert_eq!(codes(&errors), ["E010"], "{errors:?}");
+    let errors = bundle_lua_project(directory.path()).expect_err("a parse error must not bundle");
+    assert_eq!(codes(&errors), ["E008"], "{errors:?}");
 }
 
 #[test]
-fn unreadable_dependency_required_twice_by_one_file_reports_e010_once() {
+fn broken_dependency_required_twice_by_one_file_reports_its_error_once() {
     let directory = temp_project(&[
         (
             "main.lua",
@@ -766,11 +790,26 @@ require(\"bad\")
 require(\"bad\")
 ",
         ),
-        ("bad.lua", &[0xFF, 0xFE]),
+        ("bad.lua", &[0xFF]),
     ])
     .expect("project");
-    let errors = bundle_lua_project(directory.path()).expect_err("invalid UTF-8 must not bundle");
-    assert_eq!(codes(&errors), ["E010"], "{errors:?}");
+    let errors = bundle_lua_project(directory.path()).expect_err("a parse error must not bundle");
+    assert_eq!(codes(&errors), ["E008"], "{errors:?}");
+}
+
+/// The modules' bytes reach the bundle as written, a string or a comment
+/// that isn't UTF-8 included.
+#[test]
+fn bytes_that_are_not_utf8_reach_the_bundle_as_written() {
+    let directory = temp_project(&[
+        ("main.lua", b"-- caf\xE9\nreturn require(\"util\")\n"),
+        ("util.lua", b"return '\xFF\xE9'\n"),
+    ])
+    .expect("project");
+    let output = bundle_lua_project(directory.path()).expect("bundle").output;
+    for written in [&b"-- caf\xE9\n"[..], b"return '\xFF\xE9'\n"] {
+        assert!(output.windows(written.len()).any(|window| window == written), "{written:?}");
+    }
 }
 
 #[test]

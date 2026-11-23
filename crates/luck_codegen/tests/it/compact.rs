@@ -15,7 +15,7 @@ local value = - -1; return value .. '\u{e9}'",
             "comment ".repeat(8192)
         );
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, &source, version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let expected = luck_codegen::compact(&parsed.chunk);
         for capacity in [0, 1, expected.len(), expected.len() + 1, source.len()] {
@@ -26,6 +26,21 @@ local value = - -1; return value .. '\u{e9}'",
     }
 }
 
+/// A string as written keeps the bytes that aren't UTF-8, and one built from
+/// its value is spelled in UTF-8.
+#[test]
+fn a_string_that_is_not_utf8_prints_as_written_or_escaped_from_its_value() {
+    let allocator = Allocator::new();
+    let parsed = luck_parser::parse(&allocator, b"return 'caf\xE9', [[\xFF]]", LuaVersion::Lua51);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    assert_eq!(luck_codegen::compact(&parsed.chunk), b"return'caf\xE9',[[\xFF]]");
+    assert_reprints(&parsed.chunk);
+    let spans = SpanCounter::new();
+    let synth = Synth::new(&allocator, &spans);
+    let built = synth.block([synth.return_([synth.string_bytes(b"caf\xE9")])]);
+    assert_eq!(luck_codegen::compact(&Chunk::new(LuaVersion::Lua51, built)), br#"return"caf\233""#);
+}
+
 #[test]
 fn a_capacity_hint_the_allocator_cannot_meet_is_dropped() {
     let allocator = Allocator::new();
@@ -34,7 +49,7 @@ fn a_capacity_hint_the_allocator_cannot_meet_is_dropped() {
     let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([synth.number_i64(1)])]));
     for capacity in [usize::MAX, isize::MAX.unsigned_abs()] {
         let output = luck_codegen::compact_with_capacity(&chunk, capacity);
-        assert_eq!(output, "return 1", "capacity {capacity}");
+        assert_eq!(output, b"return 1", "capacity {capacity}");
     }
 }
 
@@ -200,7 +215,7 @@ fn a_tree_prints_the_parentheses_its_grouping_needs() {
         let synth = Synth::new(&allocator, &spans).with_version(version);
         let names = ["a", "b", "c"].map(|name| synth.name_expr(name));
         let chunk = Chunk::new(version, synth.block([synth.return_([build(synth, names)])]));
-        let output = luck_codegen::compact(&chunk);
+        let output = String::from_utf8(luck_codegen::compact(&chunk)).unwrap();
         assert_eq!(output.strip_prefix("return").map(str::trim_start), Some(expected));
         assert_reprints(&chunk);
     }
@@ -214,7 +229,7 @@ fn a_statement_that_starts_with_a_parenthesis_takes_a_semicolon_where_it_would_g
     let call = synth.method_call(synth.string("s"), "f", []);
     let local = synth.local(&["x"], [synth.name_expr("y")]);
     let chunk = Chunk::new(LuaVersion::Lua54, synth.block([local, synth.call_stmt(call)]));
-    assert_eq!(luck_codegen::compact(&chunk), "local x=y;(\"s\"):f()");
+    assert_eq!(luck_codegen::compact(&chunk), b"local x=y;(\"s\"):f()");
     assert_reprints(&chunk);
 }
 
@@ -528,6 +543,6 @@ fn a_literal_built_in_code_prints_from_its_value() {
         let synth = Synth::new(&allocator, &spans).with_version(version);
         let values = [synth.number_f64(3.0), synth.number_i64(-1), synth.string_bytes(b"\xFF\"")];
         let chunk = Chunk::new(version, synth.block([synth.return_(values)]));
-        assert_eq!(luck_codegen::compact(&chunk), expected, "{version:?}");
+        assert_eq!(luck_codegen::compact(&chunk), expected.as_bytes(), "{version:?}");
     }
 }

@@ -33,8 +33,14 @@ fn linting_and_fixing_fit_the_smallest_stack() {
         for &target in targets(version) {
             pool.install(|| {
                 let allocator = Allocator::new();
-                let fixed = luck_linter::fix(&allocator, source, target, &config, FixKind::all())
-                    .expect("the fixes converge");
+                let fixed = luck_linter::fix(
+                    &allocator,
+                    source.as_bytes(),
+                    target,
+                    &config,
+                    FixKind::all(),
+                )
+                .expect("the fixes converge");
                 assert!(fixed.parse.errors.is_empty(), "{:?}", fixed.parse.errors.first());
             });
         }

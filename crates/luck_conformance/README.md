@@ -28,7 +28,7 @@ Trees compare with `luck_testgen::tree_shape`.
 
 mlua links one interpreter per build, so the crate builds once per dialect, picked by its `lua51` to `lua55` or `luau` feature. Each program runs in a child process of this binary, so a test that exits, loops, changes the locale, or crashes takes nothing else down, and one that runs past a minute is killed.
 
-The child sets up what the suite's own runner does: PUC-Rio's `all.lua` with `_soft`, `_port`, and `_nomsg` set, or Luau's `runConformance`, with its `loadstring`, its native-code helpers as they answer without native code, and globals of the test's own, resumed as a thread. Luau's flags for what luck reads ahead of the pinned release, integer literals and exported values, are on.
+The child sets up what the suite's own runner does: PUC-Rio's `all.lua` with `_soft`, `_port`, and `_nomsg` set, and Lua 5.2's `_noposix` and `_nolonglong`, or Luau's `runConformance`, with its `loadstring`, its native-code helpers as they answer without native code, and globals of the test's own, resumed as a thread. Luau's flags for what luck reads ahead of the pinned release, integer literals and exported values, are on.
 
 ## Status
 

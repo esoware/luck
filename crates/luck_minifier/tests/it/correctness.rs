@@ -6,7 +6,7 @@ use luck_minifier::TransformConfig;
 use luck_testgen::with_the_smallest_stack;
 use luck_token::{LuaVersion, UnOp};
 
-use crate::common::{minify_lua54, reparses};
+use crate::common::{minify_bytes, minify_lua54, reparses};
 
 const MODULE_SOURCE: &str = r#"
 local M = {}
@@ -22,6 +22,18 @@ end
 local unused = 42
 return M
 "#;
+
+/// A string as written keeps the bytes that aren't UTF-8, and a value the
+/// minifier spells escapes them, so the output is UTF-8 only where the source
+/// was.
+#[test]
+fn strings_keep_the_bytes_that_are_not_utf8_as_written() {
+    let source = b"#!/bin/lua \xE9\n-- caf\xE9\nprint('caf\xE9', 'd\xE9j' .. '\xE0')\n";
+    assert_eq!(
+        minify_bytes(source, LuaVersion::Lua51, &TransformConfig::default()),
+        b"#!/bin/lua \xE9\nprint('caf\xE9',\"d\\233j\\224\")"
+    );
+}
 
 #[test]
 fn module_preserves_semantics() {
@@ -222,7 +234,7 @@ fn assert_minifies_within_the_depth_cap(source: &str) -> String {
     let output = minify_lua54(source);
     assert!(reparses(&output), "output must reparse");
     let allocator = Allocator::new();
-    let input = luck_parser::parse(&allocator, source, LuaVersion::Lua54).chunk;
+    let input = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54).chunk;
     let compact_input = luck_codegen::compact(&input);
     assert!(output.len() <= compact_input.len(), "output must be no longer than the compact input");
     assert!(minify_lua54(&output) == output, "output must be a fixpoint");
@@ -349,7 +361,7 @@ fn a_tree_at_the_nesting_cap_minifies() {
         );
         let config = TransformConfig::default();
         let output = luck_minifier::minify_chunk(&allocator, &mut chunk, &config);
-        assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps))));
+        assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps)).into_bytes()));
     });
 }
 

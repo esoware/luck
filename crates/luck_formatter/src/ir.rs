@@ -3,7 +3,8 @@
 //!
 //! Printing and measuring walk plain slices, and rolling back to a checkpoint
 //! is a truncation. An element borrows its text from the tree, the source, the
-//! arena, or the binary, so building the stream copies none.
+//! arena, or the binary, so building the stream copies none. Text is bytes, as
+//! the source is, so a comment or a string that isn't UTF-8 prints as written.
 //!
 //! Emitters write through `Formatter`'s methods. Only this module pushes raw
 //! elements, and each region takes its content as a closure, which is what
@@ -16,6 +17,7 @@ use luck_allocator::{Allocator, List};
 use luck_ast::Name;
 use luck_parser::Groupings;
 use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
+use memchr::memchr2;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::FormatOptions;
@@ -55,10 +57,10 @@ pub(crate) enum LineMode {
 pub(crate) enum FormatElement<'ast> {
     /// May contain newlines (long strings); the printer measures from the
     /// last line.
-    Text(&'ast str, TextWidth),
+    Text(&'ast [u8], TextWidth),
     /// Source copied as written. Text ending in a line break leaves the next
     /// line to the printer's indent, and any other starts at its own column.
-    Verbatim(&'ast str, TextWidth),
+    Verbatim(&'ast [u8], TextWidth),
     /// A space and the text, held back to the end of its line, which is how a
     /// comment that ended its line in the source ends it in the output. The
     /// line ends at the next line break, or before the next text other than
@@ -69,7 +71,7 @@ pub(crate) enum FormatElement<'ast> {
     /// comes to follow it changes no layout on the next format. A line
     /// comment's doesn't, since it always ends its line and may run past the
     /// width, as in Prettier.
-    LineSuffix(&'ast str, TextWidth, bool),
+    LineSuffix(&'ast [u8], TextWidth, bool),
     Space,
     Line(LineMode),
     /// Force every enclosing group to expand without printing anything.
@@ -118,22 +120,22 @@ impl TextWidth {
     const MULTILINE: u32 = 1 << 30;
     const COLUMNS: u32 = Self::MULTILINE - 1;
 
-    fn of(text: &str) -> Self {
-        // Without a line break, `width` counts every ASCII character as one
-        // column. A short text, the usual kind, takes one pass to tell, and a
-        // long one goes to the vectorized scans. A lone CR breaks the line
-        // too, as it does in Lua 5.x and in most editors.
+    fn of(text: &[u8]) -> Self {
+        // Without a line break, every ASCII character is one column. A short
+        // text, the usual kind, takes one pass to tell, and a long one goes
+        // to the vectorized scans. A lone CR breaks the line too, as it does
+        // in Lua 5.x and in most editors.
         let is_one_ascii_line = if text.len() <= 64 {
-            text.bytes().all(|b| b.is_ascii() && b != b'\n' && b != b'\r')
+            text.iter().all(|&b| b.is_ascii() && b != b'\n' && b != b'\r')
         } else {
-            text.is_ascii() && !text.contains('\n') && !text.contains('\r')
+            text.is_ascii() && memchr2(b'\n', b'\r', text).is_none()
         };
         if is_one_ascii_line {
             return Self::of_columns(text.len());
         }
-        let first_line = text.split(['\n', '\r']).next().unwrap_or(text);
-        let width = Self::of_columns(first_line.width());
-        if first_line.len() == text.len() { width } else { Self(width.0 | Self::MULTILINE) }
+        let first_line_length = memchr2(b'\n', b'\r', text).unwrap_or(text.len());
+        let width = Self::of_columns(columns(text.get(..first_line_length).unwrap_or_default()));
+        if first_line_length == text.len() { width } else { Self(width.0 | Self::MULTILINE) }
     }
 
     /// Any width past the line's compares the same.
@@ -159,6 +161,15 @@ impl TextWidth {
     const fn with_space_after(self) -> Self {
         Self(self.0 | Self::SPACE_AFTER)
     }
+}
+
+/// How many columns an editor shows `line` in: a character of UTF-8 as wide
+/// as Unicode says, and any other byte as one, as a one-byte encoding such as
+/// Latin-1 shows it.
+pub(crate) fn columns(line: &[u8]) -> usize {
+    line.utf8_chunks()
+        .map(|chunk| chunk.valid().width().saturating_add(chunk.invalid().len()))
+        .fold(0, usize::saturating_add)
 }
 
 /// Restoring rewinds the element stream, the layout, and the comment cursor
@@ -199,7 +210,7 @@ pub(crate) struct Formatter<'ast> {
     sorts_requires: bool,
     /// Where text the formatter rewrites is built before it moves to the
     /// arena, so every rewrite shares one heap buffer.
-    scratch: String,
+    scratch: Vec<u8>,
 }
 
 impl<'ast> Formatter<'ast> {
@@ -226,7 +237,7 @@ impl<'ast> Formatter<'ast> {
             groupings: None,
             enclosing_end: u32::MAX,
             sorts_requires: false,
-            scratch: String::new(),
+            scratch: Vec::new(),
         }
     }
 
@@ -374,7 +385,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     /// The scratch buffer, emptied, and the arena its text moves to.
-    pub(crate) fn scratch(&mut self) -> (&mut String, &'ast Allocator) {
+    pub(crate) fn scratch(&mut self) -> (&mut Vec<u8>, &'ast Allocator) {
         self.scratch.clear();
         (&mut self.scratch, self.allocator)
     }
@@ -389,7 +400,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     #[inline]
-    fn push_text(&mut self, text: &'ast str, width: TextWidth) {
+    fn push_text(&mut self, text: &'ast [u8], width: TextWidth) {
         self.text_bytes = self.text_bytes.wrapping_add(text.len());
         if width.is_multiline() {
             self.layout.force_break(self.elements.len());
@@ -401,28 +412,28 @@ impl<'ast> Formatter<'ast> {
     #[inline]
     pub(crate) fn token(&mut self, text: &'static str) {
         debug_assert!(text.is_ascii() && !text.contains('\n'), "a token is measured by its length");
-        self.push_text(text, TextWidth::of_columns(text.len()));
+        self.push_text(text.as_bytes(), TextWidth::of_columns(text.len()));
     }
 
     #[inline]
-    pub(crate) fn text(&mut self, text: &'ast str) {
+    pub(crate) fn text(&mut self, text: &'ast [u8]) {
         self.push_text(text, TextWidth::of(text));
     }
 
     /// An identifier or a numeral, which the lexer and `Synth` only ever make
     /// of ASCII on one line, so it's measured by its length too.
     #[inline]
-    pub(crate) fn ascii(&mut self, text: &'ast str) {
+    pub(crate) fn ascii(&mut self, text: &'ast [u8]) {
         self.push_text(text, TextWidth::of_columns(text.len()));
     }
 
     /// A name is a node of its own, which comments can lead and trail.
     #[inline]
     pub(crate) fn name(&mut self, name: Name<'ast>) {
-        self.node(|| name.span, |f| f.ascii(name.text.as_str()));
+        self.node(|| name.span, |f| f.ascii(name.text.as_bytes()));
     }
 
-    pub(crate) fn verbatim(&mut self, text: &'ast str) {
+    pub(crate) fn verbatim(&mut self, text: &'ast [u8]) {
         let width = TextWidth::of(text);
         self.text_bytes = self.text_bytes.wrapping_add(text.len());
         if width.is_multiline() {
@@ -432,7 +443,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     /// See [`FormatElement::LineSuffix`]. A break in one forces nothing.
-    pub(crate) fn line_suffix(&mut self, text: &'ast str, is_measured: bool) {
+    pub(crate) fn line_suffix(&mut self, text: &'ast [u8], is_measured: bool) {
         self.text_bytes = self.text_bytes.wrapping_add(text.len()).wrapping_add(1);
         self.push(FormatElement::LineSuffix(text, TextWidth::of(text), is_measured));
     }
@@ -602,7 +613,7 @@ impl<'ast> Formatter<'ast> {
         self.comments.restore(checkpoint.comments);
     }
 
-    pub(crate) fn print(self, base_indent: &str) -> String {
+    pub(crate) fn print(self, base_indent: &[u8]) -> Vec<u8> {
         // Indentation comes on top of the text, and seldom reaches a quarter
         // of it.
         let capacity = self.text_bytes.saturating_add(self.text_bytes.div_ceil(4));

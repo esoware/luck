@@ -63,7 +63,7 @@ impl Printer {
             Expression::False(_) => self.piece("false"),
             Expression::True(_) => self.piece("true"),
             // `.....` reads as `...` `..`, so nothing merges with a vararg.
-            Expression::VarArg(_) => self.emit("...", merges_after(b'.'), OTHER),
+            Expression::VarArg(_) => self.emit(b"...", merges_after(b'.'), OTHER),
             Expression::FunctionDef(function) => {
                 self.print_function_attributes(&function.attributes);
                 self.piece("function");
@@ -124,16 +124,16 @@ impl Printer {
     }
 
     fn print_interpolated(&mut self, interpolated: &InterpolatedString<'_>) {
-        self.output.print_ascii_byte(b'`');
+        self.output.print_byte(b'`');
         for segment in &interpolated.segments {
             self.print_interpolated_text(&segment.text);
-            self.output.print_ascii_byte(b'{');
+            self.output.print_byte(b'{');
             self.last = INTERPOLATION_BRACE;
             self.print_free_expr(&segment.expr);
-            self.output.print_ascii_byte(b'}');
+            self.output.print_byte(b'}');
         }
         self.print_interpolated_text(&interpolated.tail);
-        self.output.print_ascii_byte(b'`');
+        self.output.print_byte(b'`');
         self.last = OTHER;
     }
 

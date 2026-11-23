@@ -191,7 +191,7 @@ fn flags_e013_at_the_construct_a_wrapper_pushes_past_the_cap() {
             let innermost = shape.prefix.len() + tables - 1;
             let span = error.span.unwrap_or_default();
             assert_eq!(offset_to_index(span.start), innermost, "{}: {error:?}", shape.name);
-            assert_eq!(span.text(&deep_source), "{1}", "{}: {error:?}", shape.name);
+            assert_eq!(span.text(deep_source.as_bytes()), b"{1}", "{}: {error:?}", shape.name);
             let help = error.help.as_deref().unwrap_or_default();
             assert!(
                 help.contains(&format!("{} levels deeper", shape.wrapper_levels)),
@@ -237,7 +237,7 @@ fn lone_module_at_the_cap_bundles_verbatim() {
     let output = bundle_files("main.lua", &[("main.lua", &source)], LuaVersion::Lua54)
         .expect("a lone module needs no wrapper")
         .output;
-    assert_eq!(output, source);
+    assert_eq!(output, source.as_bytes());
 }
 
 /// A module that exports `value` from the export table, since a closure
@@ -277,10 +277,13 @@ print(x)
     };
 
     let literal = luau_table_export_module(MAX_NESTING_DEPTH - 3, "1");
-    let output = bundle_export_module(&literal).expect("a literal at the cap fits").output;
+    let output = String::from_utf8(
+        bundle_export_module(&literal).expect("a literal at the cap fits").output,
+    )
+    .unwrap();
     assert!(output.contains("__luck_exports.value"), "{output}");
     let allocator = Allocator::new();
-    let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Luau);
+    let reparsed = luck_parser::parse(&allocator, output.as_bytes(), LuaVersion::Luau);
     assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
 
     // Lowering reads `value` as a field of the export table, one level deeper.
@@ -291,7 +294,11 @@ print(x)
         panic!("expected one error: {errors:?}");
     };
     assert_eq!(error.code, "E013", "{error:?}");
-    assert_eq!(error.span.map(|span| span.text(&export_read)), Some("value"), "{error:?}");
+    assert_eq!(
+        error.span.map(|span| span.text(export_read.as_bytes())),
+        Some(&b"value"[..]),
+        "{error:?}"
+    );
 
     let shallower_read = luau_table_export_module(MAX_NESTING_DEPTH - 4, "value");
     bundle_export_module(&shallower_read).expect("one level shallower fits");

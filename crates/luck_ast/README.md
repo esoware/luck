@@ -36,7 +36,7 @@ impl<'ast> Visit<'ast> for CallCounter {
 }
 
 let allocator = Allocator::new();
-let parsed = luck_parser::parse(&allocator, "f(g(1))", LuaVersion::Lua54);
+let parsed = luck_parser::parse(&allocator, b"f(g(1))", LuaVersion::Lua54);
 let mut counter = CallCounter(0);
 counter.visit_chunk(&parsed.chunk);
 assert_eq!(counter.0, 2);

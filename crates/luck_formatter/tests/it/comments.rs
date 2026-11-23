@@ -6,6 +6,17 @@ use luck_token::LuaVersion;
 
 use crate::common::{assert_format, assert_format_range, assert_format_with};
 
+/// A Latin-1 source, which Lua reads as bytes, keeps every byte of its
+/// comments and strings.
+#[test]
+fn comments_and_strings_that_are_not_utf8_keep_their_bytes() {
+    let source = b"--[[ caf\xE9\r\n\xE8 ]]\nlocal s = { 'na\xEFve', \"\xFF\" } -- d\xE9j\xE0\n";
+    let expected = b"--[[ caf\xE9\n\xE8 ]]\nlocal s = { \"na\xEFve\", \"\xFF\" } -- d\xE9j\xE0\n";
+    for version in [LuaVersion::Lua51, LuaVersion::Lua54] {
+        assert_format_with(source, expected, version, &FormatOptions::default());
+    }
+}
+
 /// Each source, its layout at width 1, and the one widths 60, 80, and 120
 /// share.
 const INTERIOR_COMMENT_CASES: [(&str, &str, &str); 24] = [

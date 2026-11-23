@@ -31,7 +31,7 @@ The `serde` feature derives `Deserialize` for `TransformConfig`, the shape of `l
 
 ## Usage
 
-- `minify(allocator, source, version, &config)` parses into the arena and returns the minified source, or the parse errors.
+- `minify(allocator, source, version, &config)` parses into the arena and returns the minified source, or the parse errors. The source and the output are bytes, as Lua reads them: a string spelled as written keeps its bytes, and the output is UTF-8 whenever the source is.
 - `minify_chunk(allocator, &mut chunk, &config)` minifies a tree the caller holds, in the version its `Chunk` records. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`, and leaves the shebang and hot comments to the caller.
 
 ```rust
@@ -41,6 +41,6 @@ use luck_token::LuaVersion;
 
 let allocator = Allocator::new();
 let config = TransformConfig::default();
-let output = luck_minifier::minify(&allocator, "return 1 + 2", LuaVersion::Lua54, &config);
-assert_eq!(output.as_deref(), Ok("return 3"));
+let output = luck_minifier::minify(&allocator, b"return 1 + 2", LuaVersion::Lua54, &config);
+assert_eq!(output.as_deref(), Ok(&b"return 3"[..]));
 ```

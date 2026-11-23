@@ -204,33 +204,32 @@ pub enum StringValue<'raw> {
 /// what it reached. A long bracket's value drops a line break right after the
 /// opener and turns every other one into a newline, but Luau keeps a lone CR.
 pub fn decode_string<'raw>(
-    raw: &'raw str,
+    raw: &'raw [u8],
     version: LuaVersion,
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
-    let bytes = raw.as_bytes();
-    match bytes.first() {
+    match raw.first() {
         Some(&quote @ (b'"' | b'\'')) => {
-            let after_quote = bytes.get(1..).unwrap_or_default();
+            let after_quote = raw.get(1..).unwrap_or_default();
             let body = match after_quote.split_last() {
                 Some((&last, before)) if last == quote => before,
                 _ => after_quote,
             };
             decode_escapes(body, false, version, output)
         }
-        Some(b'[') => decode_long_bracket(bytes, version, output),
-        _ => StringValue::Verbatim(bytes),
+        Some(b'[') => decode_long_bracket(raw, version, output),
+        _ => StringValue::Verbatim(raw),
     }
 }
 
 /// The value of a piece of a Luau interpolated string, the text between its
 /// delimiters, as [`decode_string`] gives a quoted string's.
 pub fn decode_interpolated_text<'raw>(
-    text: &'raw str,
+    text: &'raw [u8],
     version: LuaVersion,
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
-    decode_escapes(text.as_bytes(), true, version, output)
+    decode_escapes(text, true, version, output)
 }
 
 fn decode_escapes<'raw>(
@@ -306,7 +305,8 @@ fn decode_long_bracket<'raw>(
 /// backslashes, control bytes, and bytes that aren't UTF-8, with decimal
 /// escapes where nothing shorter is named, which no digit after them can
 /// extend. Long brackets hold only UTF-8 with no control byte but newlines
-/// and tabs.
+/// and tabs. So the literal is UTF-8 whatever its value, and a printer that
+/// spells values writes UTF-8 for a source that is.
 #[derive(Debug, Clone, Copy)]
 pub struct StringSpelling<'value> {
     bytes: &'value [u8],
@@ -331,11 +331,9 @@ impl StringSpelling<'_> {
     }
 
     /// Appends the literal to `output`.
-    pub fn write_to(&self, output: &mut String) {
+    pub fn write_to(&self, output: &mut Vec<u8>) {
         match self.long_bracket_level {
-            Some(level) => {
-                write_long_bracket(str::from_utf8(self.bytes).unwrap_or_default(), level, output);
-            }
+            Some(level) => write_long_bracket(self.bytes, level, output),
             None => write_quoted(self.bytes, self.quote, output),
         }
     }
@@ -376,27 +374,27 @@ pub fn spell_string(bytes: &[u8]) -> StringSpelling<'_> {
 /// when `text` holds a `[[`, which Lua 5.1 rejects at that level. Returns
 /// false and appends nothing for text with a CR, which a long bracket can't
 /// hold, or a NUL, which ends a Luau source.
-pub fn write_long_string(text: &str, output: &mut String) -> bool {
+pub fn write_long_string(text: &str, output: &mut Vec<u8>) -> bool {
     if text.contains(['\r', '\0']) {
         return false;
     }
-    write_long_bracket(text, long_bracket_level(text.as_bytes()), output);
+    write_long_bracket(text.as_bytes(), long_bracket_level(text.as_bytes()), output);
     true
 }
 
-fn write_long_bracket(text: &str, level: usize, output: &mut String) {
-    output.reserve(text.len().saturating_add(level.saturating_mul(2)).saturating_add(5));
-    output.push('[');
-    output.extend(iter::repeat_n('=', level));
-    output.push('[');
+fn write_long_bracket(bytes: &[u8], level: usize, output: &mut Vec<u8>) {
+    output.reserve(bytes.len().saturating_add(level.saturating_mul(2)).saturating_add(5));
+    output.push(b'[');
+    output.extend(iter::repeat_n(b'=', level));
+    output.push(b'[');
     // Lua drops a line break right after the opener.
-    if text.starts_with('\n') {
-        output.push('\n');
+    if bytes.first() == Some(&b'\n') {
+        output.push(b'\n');
     }
-    output.push_str(text);
-    output.push(']');
-    output.extend(iter::repeat_n('=', level));
-    output.push(']');
+    output.extend_from_slice(bytes);
+    output.push(b']');
+    output.extend(iter::repeat_n(b'=', level));
+    output.push(b']');
 }
 
 /// The lowest level a long bracket around `bytes` can take, as
@@ -538,8 +536,8 @@ impl EscapeText {
         Self { bytes, length }
     }
 
-    fn as_str(&self) -> &str {
-        str::from_utf8(self.bytes.get(..self.length).unwrap_or_default()).unwrap_or_default()
+    fn as_bytes(&self) -> &[u8] {
+        self.bytes.get(..self.length).unwrap_or_default()
     }
 
     const fn len(&self) -> usize {
@@ -548,18 +546,18 @@ impl EscapeText {
 }
 
 /// Appends `bytes` quoted with `quote`, every byte that needs it escaped.
-fn write_quoted(bytes: &[u8], quote: u8, output: &mut String) {
+fn write_quoted(bytes: &[u8], quote: u8, output: &mut Vec<u8>) {
     output.reserve(bytes.len().saturating_add(2));
-    output.push(char::from(quote));
+    output.push(quote);
     let needs_escape = |byte: u8| byte == quote || !matches!(byte, b'"' | b'\'');
     write_escaped(bytes, has_quoted_byte, is_quoted_byte, needs_escape, output);
-    output.push(char::from(quote));
+    output.push(quote);
 }
 
 /// Appends `bytes` as the text of a Luau interpolated string's piece,
 /// escaping backslashes, backticks, `{`, control bytes, and bytes that aren't
 /// UTF-8.
-pub fn write_interpolated_text(bytes: &[u8], output: &mut String) {
+pub fn write_interpolated_text(bytes: &[u8], output: &mut Vec<u8>) {
     write_escaped(bytes, has_interpolated_byte, is_interpolated_byte, |_| true, output);
 }
 
@@ -567,39 +565,37 @@ pub fn write_interpolated_text(bytes: &[u8], output: &mut String) {
 ///
 /// That's each byte that isn't UTF-8, and each that `is_candidate` picks out
 /// and `needs_escape` keeps. `word_has_candidate` finds candidates eight at
-/// a time. Every candidate is ASCII, so every split lands on a char boundary.
+/// a time.
 fn write_escaped(
     bytes: &[u8],
     word_has_candidate: impl Fn(u64) -> bool,
     is_candidate: impl Fn(u8) -> bool,
     needs_escape: impl Fn(u8) -> bool,
-    output: &mut String,
+    output: &mut Vec<u8>,
 ) {
     for chunk in bytes.utf8_chunks() {
-        let valid = chunk.valid();
-        let valid_bytes = valid.as_bytes();
+        let valid = chunk.valid().as_bytes();
         let mut run_start = 0usize;
         loop {
-            let rest = valid_bytes.get(run_start..).unwrap_or_default();
+            let rest = valid.get(run_start..).unwrap_or_default();
             let index =
                 run_start.saturating_add(run_before(rest, &word_has_candidate, &is_candidate));
-            output.push_str(valid.get(run_start..index).unwrap_or_default());
-            let Some(&byte) = valid_bytes.get(index) else {
+            output.extend_from_slice(valid.get(run_start..index).unwrap_or_default());
+            let Some(&byte) = valid.get(index) else {
                 break;
             };
             run_start = index.saturating_add(1);
             if needs_escape(byte) {
-                let is_followed_by_digit =
-                    valid_bytes.get(run_start).is_some_and(u8::is_ascii_digit);
-                output.push_str(escape(byte, is_followed_by_digit).as_str());
+                let is_followed_by_digit = valid.get(run_start).is_some_and(u8::is_ascii_digit);
+                output.extend_from_slice(escape(byte, is_followed_by_digit).as_bytes());
             } else {
-                output.push(char::from(byte));
+                output.push(byte);
             }
         }
         // Each byte that isn't UTF-8 is past 127, so its escape has three
         // digits already.
         for &byte in chunk.invalid() {
-            output.push_str(escape(byte, false).as_str());
+            output.extend_from_slice(escape(byte, false).as_bytes());
         }
     }
 }

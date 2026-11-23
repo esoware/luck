@@ -39,8 +39,8 @@ pub(crate) fn check(
     suite: &Suite,
     root: &Path,
     file: &SuiteFile,
-    formatted: Option<&str>,
-    minified: Option<&str>,
+    formatted: Option<&[u8]>,
+    minified: Option<&[u8]>,
 ) -> TestResult {
     let original = match execute(root, file, &file.bytes) {
         Ok(verdict) => verdict,
@@ -53,7 +53,7 @@ pub(crate) fn check(
         let Some(program) = written else {
             continue;
         };
-        let verdict = match execute(root, file, program.as_bytes()) {
+        let verdict = match execute(root, file, program) {
             Ok(verdict) => verdict,
             Err(error) => return TestResult::GenericError("Harness", error.to_string()),
         };

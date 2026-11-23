@@ -262,7 +262,7 @@ fn eat_digits(
     let digits_start = cursor.position();
     if version.has_underscore_separators() {
         cursor.eat_while(|b| is_digit(&b) || b == b'_');
-        cursor.text_since(digits_start).bytes().any(|b| b != b'_')
+        cursor.text_since(digits_start).iter().any(|&b| b != b'_')
     } else {
         cursor.eat_while(|b| is_digit(&b));
         cursor.position() > digits_start
@@ -297,7 +297,7 @@ fn eat_integer_suffix(
     if !(version.has_luau_integer_literals() && cursor.eat(b'i')) {
         return Ok(false);
     }
-    if read_integer(cursor.text_since(start)).is_none() {
+    if str::from_utf8(cursor.text_since(start)).ok().and_then(read_integer).is_none() {
         return Err(Diagnostic::e008(
             cursor.span_since(start),
             "integer literal is outside the 64-bit range",

@@ -2,19 +2,21 @@ use luck_lexer::{LexResult, lex};
 use luck_token::{LuaVersion, TokenKind};
 
 pub(crate) fn lex_lua51(source: &str) -> LexResult {
-    lex(source, LuaVersion::Lua51)
+    lex(source.as_bytes(), LuaVersion::Lua51)
 }
 
 /// Every token's kind and text but the closing `Eof`'s, after asserting
 /// `source` lexes clean under `version`.
 pub(crate) fn tokens_in(source: &str, version: LuaVersion) -> Vec<(TokenKind, &str)> {
-    let result = lex(source, version);
+    let result = lex(source.as_bytes(), version);
     assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
     result
         .tokens
         .into_iter()
         .filter(|token| token.kind != TokenKind::Eof)
-        .map(|token| (token.kind, token.text(source)))
+        .map(|token| {
+            (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap_or_default())
+        })
         .collect()
 }
 

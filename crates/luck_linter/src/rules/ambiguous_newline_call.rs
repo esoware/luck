@@ -26,7 +26,7 @@ impl NodeRule for AmbiguousNewlineCall {
     }
 }
 
-fn check_call(call: Call<'_>, source: &str, version: LuaVersion) -> Option<Finding> {
+fn check_call(call: Call<'_>, source: &[u8], version: LuaVersion) -> Option<Finding> {
     let FunctionArgs::Parenthesized { span: args_span, .. } = call.args else {
         return None;
     };

@@ -1,4 +1,4 @@
-use crate::{CommentContent, Span};
+use crate::{CommentContent, Span, is_lua_whitespace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Comment {
@@ -47,22 +47,30 @@ pub fn leading_hot_comments(
 /// ending in a line break: its shebang, then its Luau hot comments, which
 /// take effect only there.
 pub fn chunk_header<HotComments>(
-    source: &str,
+    source: &[u8],
     shebang: Option<Span>,
     hot_comments: HotComments,
-) -> String
+) -> Vec<u8>
 where
     HotComments: IntoIterator<Item = Span>,
 {
-    let mut header = String::new();
+    let mut header = Vec::new();
     if let Some(span) = shebang {
+        let line = span.text(source);
         // A trailing CR would pair with this line break into a CRLF.
-        header.push_str(span.text(source).trim_end_matches('\r'));
-        header.push('\n');
+        let length =
+            line.iter().rposition(|&b| b != b'\r').map_or(0, |last| last.saturating_add(1));
+        header.extend_from_slice(line.get(..length).unwrap_or_default());
+        header.push(b'\n');
     }
     for span in hot_comments {
-        header.push_str(span.text(source).trim_end());
-        header.push('\n');
+        let text = span.text(source);
+        let length = text
+            .iter()
+            .rposition(|&b| !is_lua_whitespace(b))
+            .map_or(0, |last| last.saturating_add(1));
+        header.extend_from_slice(text.get(..length).unwrap_or_default());
+        header.push(b'\n');
     }
     header
 }

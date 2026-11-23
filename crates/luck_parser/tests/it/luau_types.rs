@@ -456,7 +456,7 @@ fn annotation_not_confused_with_method_call() {
 #[test]
 fn type_annotations_rejected_outside_luau() {
     let allocator = Allocator::new();
-    let result = luck_parser::parse(&allocator, "local x: number = 1", LuaVersion::Lua54);
+    let result = luck_parser::parse(&allocator, b"local x: number = 1", LuaVersion::Lua54);
     assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
 }
 

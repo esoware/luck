@@ -118,10 +118,13 @@ fn bom_then_shebang_is_skipped() {
     let source = "\
 \u{FEFF}#!/usr/bin/lua
 print(1)";
-    let result = lex(source, LuaVersion::Lua54);
+    let result = lex(source.as_bytes(), LuaVersion::Lua54);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     let first = result.tokens[0];
-    assert_eq!((first.kind, first.text(source)), (TokenKind::Identifier, "print"));
+    assert_eq!(
+        (first.kind, str::from_utf8(first.text(source.as_bytes())).unwrap()),
+        (TokenKind::Identifier, "print")
+    );
 }
 
 #[test]
@@ -255,7 +258,7 @@ y",
 #[test]
 fn shebang_runs_past_a_carriage_return_to_the_line_feed() {
     for version in [LuaVersion::Lua54, LuaVersion::Luau] {
-        let result = lex("#!x\rprint(1)\n", version);
+        let result = lex(b"#!x\rprint(1)\n", version);
         assert_eq!(
             result.tokens.len(),
             1,
@@ -268,7 +271,7 @@ fn shebang_runs_past_a_carriage_return_to_the_line_feed() {
 #[test]
 fn luau_hash_first_line_without_bang_is_not_a_shebang() {
     let result = lex(
-        "\
+        b"\
 #x
 return 1",
         LuaVersion::Luau,
@@ -289,8 +292,11 @@ fn each_comment_carries_what_it_tells_a_tool() {
 -- luck: alow(x)
 -- prose
 local x";
-    let contents: Vec<CommentContent> =
-        lex(source, LuaVersion::Luau).comments.iter().map(|comment| comment.content).collect();
+    let contents: Vec<CommentContent> = lex(source.as_bytes(), LuaVersion::Luau)
+        .comments
+        .iter()
+        .map(|comment| comment.content)
+        .collect();
     assert_eq!(
         contents,
         [
@@ -301,4 +307,27 @@ local x";
             CommentContent::Plain,
         ]
     );
+}
+
+#[test]
+fn a_comment_or_a_shebang_holds_bytes_that_are_not_utf8_as_written() {
+    let source = b"#!/bin/lua \xE9\n-- caf\xE9\nx --[[ \xFF\n\xFE ]] y";
+    for version in [LuaVersion::Lua51, LuaVersion::Lua54] {
+        let result = lex(source, version);
+        assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors);
+        let comments: Vec<(&[u8], CommentKind)> = result
+            .comments
+            .iter()
+            .map(|comment| (comment.span.text(source), comment.kind))
+            .collect();
+        assert_eq!(
+            comments,
+            [
+                (&b"#!/bin/lua \xE9"[..], CommentKind::Shebang),
+                (b"-- caf\xE9", CommentKind::Line),
+                (b"--[[ \xFF\n\xFE ]]", CommentKind::MultiLineBlock),
+            ],
+            "{version:?}"
+        );
+    }
 }

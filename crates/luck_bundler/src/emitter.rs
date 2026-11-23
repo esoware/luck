@@ -1,6 +1,6 @@
 use core::fmt::Write as _;
-use core::iter;
 use core::ops::Range;
+use core::{iter, mem};
 use std::path::PathBuf;
 
 use luck_allocator::Allocator;
@@ -9,6 +9,7 @@ use luck_diagnostics::FileDiagnostics;
 use luck_token::{
     LuaVersion, Span, chunk_header, chunk_start, ends_with_line_break, line_breaks, spell_string,
 };
+use memchr::memmem;
 use rustc_hash::FxHashSet;
 
 use crate::block_emitter::{LoaderNames, overflow_errors, rewrite_module};
@@ -112,7 +113,12 @@ impl Key<'_> {
     pub(crate) fn write(self, output: &mut String) {
         match self {
             Self::Slot(slot) => push_number(output, slot),
-            Self::Name(name) => spell_string(name.as_bytes()).write_to(output),
+            Self::Name(name) => {
+                // A spelling is UTF-8, so the text takes it as it is.
+                let mut literal = Vec::new();
+                spell_string(name.as_bytes()).write_to(&mut literal);
+                output.push_str(&String::from_utf8_lossy(&literal));
+            }
         }
     }
 
@@ -181,7 +187,9 @@ impl Registration<'_> {
                 name.write(output);
                 output.push_str("]=");
                 let path = modules.get(module.0).map_or("", |info| info.relative_path.as_str());
-                spell_string(path.as_bytes()).write_to(output);
+                let mut literal = Vec::new();
+                spell_string(path.as_bytes()).write_to(&mut literal);
+                output.push_str(&String::from_utf8_lossy(&literal));
                 output.push('\n');
             }
         }
@@ -463,9 +471,9 @@ pub(crate) fn emit<'ast>(
     allocator: &'ast Allocator,
     graph: &mut DependencyGraph<'ast>,
     version: LuaVersion,
-) -> Result<(String, Vec<LineMapEntry>), Vec<FileDiagnostics>> {
+) -> Result<(Vec<u8>, Vec<LineMapEntry>), Vec<FileDiagnostics>> {
     let Some(entry) = graph.modules.get(graph.entry_id.0) else {
-        return Ok((String::new(), Vec::new()));
+        return Ok((Vec::new(), Vec::new()));
     };
 
     if graph.modules.len() == 1 && entry.dependencies.is_empty() {
@@ -529,7 +537,7 @@ pub(crate) fn skeleton(
     graph: &DependencyGraph<'_>,
     plan: &Plan<'_>,
     version: LuaVersion,
-) -> String {
+) -> Vec<u8> {
     let capacity = graph.modules.len().saturating_mul(128).saturating_add(4096);
     write(graph, plan, version, capacity, Bodies::Holes).output
 }
@@ -549,7 +557,8 @@ fn write<'plan, 'ast>(
     bodies: Bodies<'ast>,
 ) -> BundleWriter<'plan, 'ast> {
     let mut writer = BundleWriter {
-        output: String::with_capacity(capacity),
+        output: Vec::with_capacity(capacity),
+        text: String::new(),
         next_line: 1,
         line_map: Vec::with_capacity(graph.modules.len()),
         plan,
@@ -586,7 +595,11 @@ fn write<'plan, 'ast>(
 }
 
 struct BundleWriter<'plan, 'ast> {
-    output: String,
+    /// Bytes, as the modules' sources are, which it copies as written.
+    output: Vec<u8>,
+    /// Where [`Self::generate`] writes the text it adds, which the output
+    /// then takes, so every generated piece shares one buffer.
+    text: String,
     /// 1-based line the next pushed character lands on.
     next_line: usize,
     line_map: Vec<LineMapEntry>,
@@ -595,17 +608,18 @@ struct BundleWriter<'plan, 'ast> {
 }
 
 impl BundleWriter<'_, '_> {
-    fn push(&mut self, fragment: &str) {
-        self.output.push_str(fragment);
+    fn push(&mut self, fragment: &[u8]) {
+        self.output.extend_from_slice(fragment);
         self.next_line = self.next_line.saturating_add(line_breaks(fragment, self.version).count());
     }
 
     /// Writes generated text with `write`, counting its line breaks.
     fn generate(&mut self, write: impl FnOnce(&mut String)) {
-        let start = self.output.len();
-        write(&mut self.output);
-        let written = self.output.get(start..).unwrap_or_default();
-        self.next_line = self.next_line.saturating_add(line_breaks(written, self.version).count());
+        let mut text = mem::take(&mut self.text);
+        text.clear();
+        write(&mut text);
+        self.push(text.as_bytes());
+        self.text = text;
     }
 
     /// `edits` is `None` for a hole.
@@ -632,7 +646,7 @@ impl BundleWriter<'_, '_> {
                 module.exports.write_closing(prefix, output);
             });
         }
-        self.push(wrapper_closing(wrapped.wrapper));
+        self.push(wrapper_closing(wrapped.wrapper).as_bytes());
     }
 
     /// A loader call keeps the newline count of the call it replaces, so the
@@ -645,9 +659,11 @@ impl BundleWriter<'_, '_> {
         // A lone CR opening the body would join the generated LF above it into
         // one LFCR line break, losing the body's first line.
         let body = source.get(cursor..).unwrap_or_default();
-        if self.version.has_lfcr_line_break() && body.starts_with('\r') && !body.starts_with("\r\n")
+        if self.version.has_lfcr_line_break()
+            && body.starts_with(b"\r")
+            && !body.starts_with(b"\r\n")
         {
-            self.push(" ");
+            self.push(b" ");
         }
         for (span, edit) in edits {
             let range = Range::<usize>::from(*span);
@@ -660,13 +676,13 @@ impl BundleWriter<'_, '_> {
         if module.exports.has_values {
             if self.output.len() == body_start || !ends_with_line_break(&self.output, self.version)
             {
-                self.push("\n");
+                self.push(b"\n");
             }
             let prefix = self.plan.prefix.as_str();
             self.generate(|output| module.exports.write_closing(prefix, output));
         }
         if self.output.len() > body_start && !ends_with_line_break(&self.output, self.version) {
-            self.push("\n");
+            self.push(b"\n");
         }
 
         self.line_map.push(LineMapEntry {
@@ -685,8 +701,8 @@ impl BundleWriter<'_, '_> {
                 output.extend(iter::repeat_n('\n', line_breaks));
                 output.push(')');
             }),
-            Edit::Dynamic => self.output.extend([prefix, "dynamic"]),
-            Edit::Text(text) => self.push(text),
+            Edit::Dynamic => self.generate(|output| output.extend([prefix, "dynamic"])),
+            Edit::Text(text) => self.push(text.as_bytes()),
         }
     }
 }
@@ -766,8 +782,9 @@ fn non_entry_modules<'graph, 'ast>(
 fn choose_prefix(modules: &[ModuleInfo<'_>]) -> String {
     let mut candidate = format!("{PREFIX_STEM}_");
     let mut counter = 0usize;
-    while modules.iter().any(|module| module.has_prefix_stem && module.source.contains(&candidate))
-    {
+    while modules.iter().any(|module| {
+        module.has_prefix_stem && memmem::find(module.source, candidate.as_bytes()).is_some()
+    }) {
         counter = counter.saturating_add(1);
         candidate = format!("{PREFIX_STEM}{counter}_");
     }
@@ -800,7 +817,7 @@ mod tests {
             allocator,
             PathBuf::from(path),
             path.to_owned(),
-            allocator.alloc_str(source),
+            allocator.alloc_str(source).as_bytes(),
             version,
             DynamicRequire::default(),
         );
@@ -853,8 +870,9 @@ mod tests {
         fixtures: Vec<ModuleFixture<'_>>,
         version: LuaVersion,
     ) -> (String, Vec<LineMapEntry>) {
-        emit(allocator, &mut graph(fixtures), version)
-            .unwrap_or_else(|errors| panic!("bundle failed: {errors:?}"))
+        let (output, line_map) = emit(allocator, &mut graph(fixtures), version)
+            .unwrap_or_else(|errors| panic!("bundle failed: {errors:?}"));
+        (String::from_utf8(output).unwrap(), line_map)
     }
 
     fn bundle(
@@ -867,7 +885,7 @@ mod tests {
 
     fn assert_reparses(output: &str, version: LuaVersion) {
         let allocator = Allocator::new();
-        let result = luck_parser::parse(&allocator, output, version);
+        let result = luck_parser::parse(&allocator, output.as_bytes(), version);
         assert!(result.errors.is_empty(), "bundle must reparse: {:?}\n{output}", result.errors);
     }
 

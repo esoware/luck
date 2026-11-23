@@ -78,7 +78,7 @@ impl UnusedLintFilter {
                 let Some(found) = directives.entries().get(entry) else {
                     continue;
                 };
-                let name = found.name.text(context.source);
+                let name = String::from_utf8_lossy(found.name.text(context.source));
                 let help = if found.target == Target::Every {
                     "no rule reports anything where it applies"
                 } else {
@@ -137,18 +137,18 @@ fn removal(context: &LintContext<'_>, removed: &[usize]) -> Vec<TextEdit> {
 /// `directive`'s rule list without `taken`, as one edit, so removing two of
 /// its names at once never makes two edits that overlap.
 fn list_without(
-    source: &str,
+    source: &[u8],
     directives: &Directives,
     directive: &Directive,
     taken: &[usize],
 ) -> TextEdit {
-    let kept: Vec<&str> = directive
+    let kept: Vec<&[u8]> = directive
         .entries
         .clone()
         .filter(|entry| !taken.contains(entry))
         .filter_map(|entry| Some(directives.entries().get(entry)?.name.text(source)))
         .collect();
-    TextEdit { span: directive.list, replacement: kept.join(", ").into() }
+    TextEdit { span: directive.list, replacement: kept.join(&b", "[..]).into() }
 }
 
 /// The edit that removes the comment at `span`.
@@ -156,34 +156,34 @@ fn list_without(
 /// It takes the comment's whole line when nothing else is on it, the blanks
 /// before it when it ends a line of code, and else the blanks after it,
 /// leaving a space between code on both sides.
-fn comment_removal(source: &str, span: Span, version: LuaVersion) -> TextEdit {
+fn comment_removal(source: &[u8], span: Span, version: LuaVersion) -> TextEdit {
     let (start, end) = (offset_to_index(span.start), offset_to_index(span.end));
     let before = source.get(..start).unwrap_or_default();
     let after = source.get(end..).unwrap_or_default();
     let is_line_break = |b: u8| b == b'\n' || (b == b'\r' && version.has_lfcr_line_break());
-    let line_before_length = before.bytes().rev().take_while(|&b| !is_line_break(b)).count();
-    let line_after_length = after.bytes().take_while(|&b| !is_line_break(b)).count();
+    let line_before_length = before.iter().rev().take_while(|&&b| !is_line_break(b)).count();
+    let line_after_length = after.iter().take_while(|&&b| !is_line_break(b)).count();
     let line_before = before.get(start.saturating_sub(line_before_length)..).unwrap_or_default();
     let line_after = after.get(..line_after_length).unwrap_or_default();
-    let has_code_before = !line_before.bytes().all(is_lua_whitespace);
-    let has_code_after = !line_after.bytes().all(is_lua_whitespace);
+    let has_code_before = !line_before.iter().all(|&b| is_lua_whitespace(b));
+    let has_code_after = !line_after.iter().all(|&b| is_lua_whitespace(b));
     let (removed_start, removed_end, replacement) = match (has_code_before, has_code_after) {
         (false, false) => {
             let rest = after.get(line_after_length..).unwrap_or_default();
-            let line_break_length = strip_line_break(rest.as_bytes(), version)
+            let line_break_length = strip_line_break(rest, version)
                 .map_or(0, |after_break| rest.len().saturating_sub(after_break.len()));
             let line_end = end.saturating_add(line_after_length).saturating_add(line_break_length);
-            (start.saturating_sub(line_before_length), line_end, "")
+            (start.saturating_sub(line_before_length), line_end, &b""[..])
         }
         (true, false) => {
             let blanks_before =
-                line_before.bytes().rev().take_while(|&b| is_lua_whitespace(b)).count();
-            (start.saturating_sub(blanks_before), end, "")
+                line_before.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count();
+            (start.saturating_sub(blanks_before), end, &b""[..])
         }
         (_, true) => {
-            let blanks_after = after.bytes().take_while(|&b| is_lua_whitespace(b)).count();
-            let is_touching = line_before.bytes().last().is_some_and(|b| !is_lua_whitespace(b));
-            (start, end.saturating_add(blanks_after), if is_touching { " " } else { "" })
+            let blanks_after = after.iter().take_while(|&&b| is_lua_whitespace(b)).count();
+            let is_touching = line_before.last().is_some_and(|&b| !is_lua_whitespace(b));
+            (start, end.saturating_add(blanks_after), if is_touching { &b" "[..] } else { b"" })
         }
     };
     TextEdit {
@@ -231,7 +231,7 @@ x = 1";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].message, "unused `undefined_variable` in this `allow`");
-        assert_eq!(diags[0].span().text(source), "undefined_variable");
+        assert_eq!(diags[0].span().text(source.as_bytes()), b"undefined_variable");
         assert_eq!(
             fixed(source),
             "\

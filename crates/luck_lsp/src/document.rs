@@ -202,7 +202,7 @@ impl DocumentState {
     }
 
     pub(crate) fn text(&self) -> &str {
-        self.parse().source
+        self.analyzed.text()
     }
 
     pub(crate) fn parse(&self) -> &ParseResult<'_> {
@@ -294,6 +294,12 @@ impl DocumentState {
             |bytes| luck_formatter::format_range(&allocator, parse, options, bytes),
         )
     }
+}
+
+/// What `span` covers of `text`, a document, whose spans all start and end
+/// on a character, since an editor's text is UTF-8.
+pub(crate) fn span_text(text: &str, span: Span) -> &str {
+    text.get(ops::Range::<usize>::from(span)).unwrap_or_default()
 }
 
 /// The path a `file:` URI names. `Uri::to_file_path` ignores the scheme, so

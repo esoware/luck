@@ -54,7 +54,7 @@ impl MinifyArgs {
             (read_stdin_source()?, "<stdin>".to_owned())
         } else {
             let source = FileSystemOs
-                .read_to_string(existing_file(&self.input)?)
+                .read(existing_file(&self.input)?)
                 .map_err(|e| operation_error(format!("failed to read `{}`: {e}", self.input)))?;
             (source, self.input)
         };

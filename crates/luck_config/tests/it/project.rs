@@ -43,7 +43,7 @@ fn rejects_a_dialect_on_its_value() {
     let (_, diag) = load_error(&directory.path().join("luck.json"));
     assert_eq!(diag.code, "E014");
     assert!(diag.message.contains("unknown variant `lua99`, expected one of"), "{diag:?}");
-    assert_eq!(diag.span.map(|span| span.text(text)), Some(r#""lua99""#));
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""lua99""#[..]));
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn rejects_empty_entries_on_the_list() {
     let directory = project_with(&[("luck.json", text)]);
     let (_, diag) = load_error(&directory.path().join("luck.json"));
     assert!(diag.message.contains("`entries` is empty"), "{diag:?}");
-    assert_eq!(diag.span.map(|span| span.text(text)), Some("["));
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&b"["[..]));
 }
 
 #[test]

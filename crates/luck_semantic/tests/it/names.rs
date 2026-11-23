@@ -74,7 +74,7 @@ fn facts(tree: &ScopeTree<'_>, is_kept: impl Fn(&str) -> bool, is_every_name: bo
 /// agrees with the whole tree, and says whether it parses that way.
 fn check(source: &str, version: LuaVersion) -> bool {
     let allocator = Allocator::new();
-    let parsed = luck_parser::parse(&allocator, source, version);
+    let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
     if !parsed.errors.is_empty() {
         return false;
     }

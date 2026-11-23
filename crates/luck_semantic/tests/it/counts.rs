@@ -14,7 +14,7 @@ use luck_token::{LuaVersion, StdlibEnvironment};
 
 fn assert_counts_cover_the_tables(source: &str, version: LuaVersion) {
     let allocator = Allocator::new();
-    let parsed = luck_parser::parse(&allocator, source, version);
+    let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
     assert!(parsed.errors.is_empty(), "{:?}\n{source}", parsed.errors.first());
     let counts = parsed.counts;
     let chunk = allocator.alloc(parsed.chunk);

@@ -1492,6 +1492,12 @@ fn fix_template<'library>(
     Some(function_at(library, path).deprecated.as_ref()?.replacement?.template)
 }
 
+/// `template` expanded with `args`, which the tests spell as text.
+fn expand(template: &str, args: &[&str]) -> String {
+    let arg_bytes: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();
+    String::from_utf8_lossy(&expand_replace_template(template, &arg_bytes)).into_owned()
+}
+
 /// Whether `text`, read as a returned value, is what `is_expected` says.
 fn returns<F>(text: &str, version: LuaVersion, is_expected: F) -> bool
 where
@@ -1512,7 +1518,7 @@ fn math_pow_fix_groups_a_compound_base() {
     let Some(template) = fix_template(standalone_library(version), &["math", "pow"]) else {
         return;
     };
-    let replacement = expand_replace_template(template, &["a + 1", "2"]);
+    let replacement = expand(template, &["a + 1", "2"]);
     assert!(
         returns(&replacement, version, |expr| matches!(
             expr,
@@ -1529,7 +1535,7 @@ fn table_getn_fix_groups_a_compound_operand() {
     let Some(template) = fix_template(standalone_library(version), &["table", "getn"]) else {
         return;
     };
-    let replacement = expand_replace_template(template, &["a or b"]);
+    let replacement = expand(template, &["a or b"]);
     assert!(
         returns(&replacement, version, |expr| matches!(expr, Expression::UnaryOp(_))),
         "table.getn(a or b) takes the length of `a or b`, but `{replacement}` takes the length \
@@ -1542,7 +1548,7 @@ fn unpack_fix_keeps_the_range_arguments() {
     let Some(template) = fix_template(standalone_library(LuaVersion::Lua52), &["unpack"]) else {
         return;
     };
-    let replacement = expand_replace_template(template, &["list", "first_index", "last_index"]);
+    let replacement = expand(template, &["list", "first_index", "last_index"]);
     assert!(
         replacement.contains("first_index") && replacement.contains("last_index"),
         "unpack({{1, 2, 3}}, 2, 3) yields 2 3 and table.unpack({{1, 2, 3}}) yields 1 2 3, so \
@@ -1556,7 +1562,7 @@ fn loadstring_fix_keeps_the_chunk_name() {
     else {
         return;
     };
-    let replacement = expand_replace_template(template, &["code", "chunk_name"]);
+    let replacement = expand(template, &["code", "chunk_name"]);
     assert!(
         replacement.contains("chunk_name"),
         "loadstring(code, name) labels the chunk's errors with name, so the fix can't drop it: \
@@ -1569,7 +1575,7 @@ fn ypcall_fix_keeps_the_forwarded_arguments() {
     let Some(template) = fix_template(roblox(), &["ypcall"]) else {
         return;
     };
-    let replacement = expand_replace_template(template, &["callback", "forwarded"]);
+    let replacement = expand(template, &["callback", "forwarded"]);
     assert!(
         replacement.contains("forwarded"),
         "ypcall(f, x) calls f with x, so the fix can't drop x: `{replacement}`"

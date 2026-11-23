@@ -27,7 +27,7 @@ use crate::download::fetch_project_tarball;
 #[derive(Debug)]
 pub struct TestFile {
     pub file_name: &'static str,
-    pub source_text: String,
+    pub source_text: Vec<u8>,
     pub target: LuaTarget,
 }
 
@@ -44,7 +44,7 @@ impl TestFile {
 #[derive(Debug)]
 pub struct ProjectFile {
     pub relative_path: String,
-    pub source_text: String,
+    pub source_text: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ impl TestProject {
 fn parse_cleanly<'ast>(
     allocator: &'ast Allocator,
     name: &str,
-    source_text: &'ast str,
+    source_text: &'ast [u8],
     version: LuaVersion,
 ) -> ParseResult<'ast> {
     let parse_result = luck_parser::parse(allocator, source_text, version);
@@ -95,8 +95,8 @@ fn benchmark_files_root() -> PathBuf {
 /// Panics when the file can't be read.
 fn benchmark_file(root: &Path, file_name: &'static str, target: LuaTarget) -> TestFile {
     let path = root.join(file_name);
-    let source_text = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+    let source_text =
+        fs::read(&path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
     TestFile { file_name, source_text, target }
 }
 
@@ -123,7 +123,7 @@ fn collect_lua_files(root: &Path, filter: &str) -> Vec<ProjectFile> {
             if !relative_path.contains(filter) {
                 continue;
             }
-            let source_text = fs::read_to_string(&path)
+            let source_text = fs::read(&path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
             files.push(ProjectFile { relative_path, source_text });
         }

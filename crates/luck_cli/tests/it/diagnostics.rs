@@ -52,34 +52,34 @@ fn lint_json_help_is_null_for_a_rule_with_none() {
     assert!(finding["help"].is_null(), "{stdout}");
 }
 
+/// Lua reads a source as bytes, so a byte that isn't UTF-8 outside a string
+/// is a parse error, shown in the file as a one-byte encoding shows it.
 #[test]
-fn unreadable_dependency_reports_e010_without_a_debug_line() {
+fn a_dependency_that_is_not_utf8_reports_its_parse_error_in_place() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "return require(\"dep\")\n");
-    fs::write(directory.path().join("dep.lua"), [0xFFu8, 0xFE]).unwrap();
+    fs::write(directory.path().join("dep.lua"), b"return \xFF\n").unwrap();
 
     luck_in(directory.path())
         .args(["bundle", "main.lua", "-t", "54"])
         .assert()
         .code(1i32)
-        .stderr(predicate::str::contains("[E010] error: cannot read file"))
-        .stderr(predicate::str::contains("help: check that the file exists and is readable"))
+        .stderr(predicate::str::contains("unexpected byte 0xFF"))
+        .stderr(predicate::str::contains("dep.lua:1:8"))
         .stderr(predicate::str::contains("CacheMiss").not())
         .stderr(predicate::str::contains("Unable to fetch").not());
 }
 
 #[test]
-fn unreadable_entry_reports_e010_without_a_debug_line() {
+fn an_entry_that_is_not_utf8_bundles_its_bytes_as_written() {
     let directory = TempDir::new().unwrap();
-    fs::write(directory.path().join("main.lua"), [0xFFu8, 0xFE]).unwrap();
+    fs::write(directory.path().join("main.lua"), b"-- caf\xE9\nreturn '\xFF\xFE'\n").unwrap();
 
     luck_in(directory.path())
-        .args(["bundle", "main.lua", "-t", "54"])
+        .args(["bundle", "main.lua", "-t", "51"])
         .assert()
-        .code(1i32)
-        .stderr(predicate::str::contains("[E010] error: cannot read file"))
-        .stderr(predicate::str::contains("CacheMiss").not())
-        .stderr(predicate::str::contains("Unable to fetch").not());
+        .success()
+        .stdout(b"-- caf\xE9\nreturn '\xFF\xFE'\n".as_slice());
 }
 
 #[test]

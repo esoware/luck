@@ -10,7 +10,7 @@ use luck_ast::{
 };
 use luck_token::Span;
 
-use crate::document::DocumentState;
+use crate::document::{DocumentState, span_text};
 use crate::providers::cursor::identifier;
 
 pub(crate) fn document_symbols(document: &DocumentState) -> Vec<DocumentSymbol> {
@@ -124,7 +124,8 @@ impl SymbolEmitter<'_> {
                     let Suffix::Field(name) = chain.suffixes.last() else {
                         continue;
                     };
-                    (identifier(name).map(|_| chain.span.text(self.document.text())), chain.span)
+                    let label = span_text(self.document.text(), chain.span);
+                    (identifier(name).map(|_| label), chain.span)
                 }
             };
             if let Some(name) = label {

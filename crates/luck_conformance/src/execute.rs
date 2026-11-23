@@ -101,9 +101,11 @@ fn execute(suite: &Suite, chunk_name: &str, program: Vec<u8>) -> String {
             Runner::PucRio => {
                 // Skip the tests that take long or much memory, the ones
                 // whose results differ between platforms, and the messages
-                // about tests skipped.
+                // about tests skipped. Lua 5.2's suite keeps two kinds of
+                // the second apart: the POSIX ones, and those that need a
+                // build with `long long`.
                 let globals = lua.globals();
-                for global in ["_soft", "_port", "_nomsg"] {
+                for global in ["_soft", "_port", "_nomsg", "_noposix", "_nolonglong"] {
                     globals.set(global, true)?;
                 }
                 main.call::<MultiValue>(())

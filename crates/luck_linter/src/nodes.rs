@@ -222,7 +222,7 @@ mod tests {
         let allocator = Allocator::new();
         let parse = luck_parser::parse(
             &allocator,
-            "\
+            b"\
 local a = 1 + 2
 print(a)
 t.x = a",
@@ -267,7 +267,7 @@ local function f()
   if a then print(a) else end
 end";
         let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, source, LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let nodes = collect(&parse.chunk);
         assert_eq!(nodes.blocks().first().map(|first| first.span), Some(parse.chunk.block.span));

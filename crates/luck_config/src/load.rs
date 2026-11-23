@@ -260,7 +260,7 @@ mod tests {
             diag.message.starts_with("invalid config: unknown field `unknown_key`"),
             "{diag:?}"
         );
-        assert_eq!(diag.span.map(|span| span.text(text)), Some("unknown_key"));
+        assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&b"unknown_key"[..]));
     }
 
     #[test]
@@ -268,7 +268,7 @@ mod tests {
         let text = "{ \"lua\": 'lua99' }";
         let diag = parse(text).unwrap_err();
         assert!(diag.message.contains("unknown variant `lua99`"), "{diag:?}");
-        assert_eq!(diag.span.map(|span| span.text(text)), Some("'lua99'"));
+        assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&b"'lua99'"[..]));
     }
 
     #[test]
@@ -279,7 +279,7 @@ mod tests {
             diag.message,
             "invalid config: unknown lint rule `unsued_variable`, did you mean `unused_variable`?"
         );
-        assert_eq!(diag.span.map(|span| span.text(text)), Some("unsued_variable"));
+        assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&b"unsued_variable"[..]));
     }
 
     #[test]

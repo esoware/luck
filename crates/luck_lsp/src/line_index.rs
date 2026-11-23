@@ -343,6 +343,7 @@ impl Positions<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document::span_text;
 
     const ENCODINGS: [PositionEncoding; 3] =
         [PositionEncoding::Utf8, PositionEncoding::Utf16, PositionEncoding::Utf32];
@@ -453,7 +454,7 @@ zz";
             for (line_number, &line_start) in index.line_starts.iter().enumerate() {
                 let line = index_to_offset(line_number);
                 let (_, line_end) = index.line_bounds(line_number);
-                let terminated = Span::new(line_start, line_end).text(source);
+                let terminated = span_text(source, Span::new(line_start, line_end));
                 let line_text = terminated.trim_end_matches(['\n', '\r']);
                 for column in 0..units(line_text, encoding).saturating_add(3) {
                     let mut walked = line_start;

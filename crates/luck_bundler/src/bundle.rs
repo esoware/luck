@@ -11,8 +11,9 @@ use crate::graph::{BundleOptions, DependencyGraph};
 
 #[derive(Debug)]
 pub struct BundleResult {
-    /// Parses for the target, so every luck tool can read it back.
-    pub output: String,
+    /// Parses for the target, so every luck tool can read it back. Bytes,
+    /// as the modules' sources are, which it copies as written.
+    pub output: Vec<u8>,
     /// By module, in discovery order.
     pub warnings: Vec<FileDiagnostics>,
     /// Every bundled module's canonical path, in discovery order.
@@ -23,7 +24,7 @@ pub struct BundleResult {
 #[derive(Debug)]
 pub struct MinifiedBundle {
     /// Opens with the entry's shebang and its Luau hot comments.
-    pub output: String,
+    pub output: Vec<u8>,
     /// By module, in discovery order.
     pub warnings: Vec<FileDiagnostics>,
     /// Every bundled module's canonical path, in discovery order.
@@ -86,7 +87,7 @@ pub fn bundle_minified(
     if output.is_empty() {
         output = code;
     } else {
-        output.push_str(&code);
+        output.extend_from_slice(&code);
     }
     Ok(MinifiedBundle { output, warnings, source_files, source_byte_count })
 }

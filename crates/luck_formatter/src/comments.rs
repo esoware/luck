@@ -11,8 +11,9 @@
 //! - A container takes those before its closer, and a block those around its
 //!   statements.
 //!
-//! A parsed comment's text is sliced from the source as it's written, and only
-//! one whose line breaks need rewriting is copied, to the arena.
+//! A parsed comment's text is sliced from the source as it's written, bytes
+//! that need not be UTF-8, and only one whose line breaks need rewriting is
+//! copied, to the arena.
 //!
 //! The synthetic store is a map keyed by anchor: synthesis order needn't match
 //! document order, and a synthesizer may comment every statement. It also holds
@@ -39,7 +40,7 @@ use crate::ir::{Formatter, LineMode};
 #[derive(Debug)]
 struct Sourced<'ast> {
     comments: &'ast [Comment],
-    source: &'ast str,
+    source: &'ast [u8],
     printed_count: usize,
     /// The spans `-- luck: format off` / `on` regions copy as written,
     /// the directive comments and their own lines included. Sorted, and
@@ -85,7 +86,7 @@ impl<'ast> Comments<'ast> {
 
     pub(crate) fn from_source(
         comments: &'ast [Comment],
-        source: &'ast str,
+        source: &'ast [u8],
         version: LuaVersion,
     ) -> Self {
         let region_start = |off: &Comment| {
@@ -164,7 +165,7 @@ impl<'ast> Comments<'ast> {
         }
     }
 
-    pub(crate) const fn source_text(&self) -> Option<&'ast str> {
+    pub(crate) const fn source_text(&self) -> Option<&'ast [u8]> {
         match &self.store {
             Store::Sourced(sourced) => Some(sourced.source),
             Store::Synthetic { .. } | Store::Empty => None,
@@ -277,7 +278,7 @@ impl<'ast> Comments<'ast> {
         starts
             .zip(ends)
             .find_map(|(start, end)| {
-                let i = Span::new(start, end).text(source).bytes().position(|b| b == closer)?;
+                let i = Span::new(start, end).text(source).iter().position(|&b| b == closer)?;
                 Some(start.saturating_add(index_to_offset(i)))
             })
             .unwrap_or(source_end)
@@ -447,7 +448,7 @@ impl<'ast> Sourced<'ast> {
     /// The source from the first token at or after `offset`, past whitespace
     /// and the pending comments.
     fn next_token(&self, offset: u32) -> &'ast [u8] {
-        let bytes = self.source.as_bytes();
+        let bytes = self.source;
         let mut position = offset_to_index(offset);
         let mut comments = self.pending_from(offset);
         loop {
@@ -476,9 +477,9 @@ impl<'ast> Sourced<'ast> {
 impl<'ast> Formatter<'ast> {
     /// The text a parsed comment prints as, with its line breaks written as
     /// LF.
-    fn sourced_text(&mut self, comment: &Comment) -> &'ast str {
+    fn sourced_text(&mut self, comment: &Comment) -> &'ast [u8] {
         let Some(source) = self.comments().source_text() else {
-            return "";
+            return b"";
         };
         let version = self.version();
         let text = comment.span.text(source);
@@ -486,10 +487,14 @@ impl<'ast> Formatter<'ast> {
             // Loaders skip this line up to LF, so a CR in it is text, but one
             // the printer leaves at its end, past the spaces and tabs it
             // trims, would pair with the line break written after it.
-            return text.trim_end_matches(['\r', ' ', '\t']);
+            let length = text
+                .iter()
+                .rposition(|b| !matches!(b, b'\r' | b' ' | b'\t'))
+                .map_or(0, |last| last.saturating_add(1));
+            return text.get(..length).unwrap_or_default();
         }
         // Only a block comment the lexer saw a line break in holds one.
-        if comment.kind != CommentKind::MultiLineBlock || !text.contains('\r') {
+        if comment.kind != CommentKind::MultiLineBlock || !text.contains(&b'\r') {
             return text;
         }
         let (normalized, allocator) = self.scratch();
@@ -498,12 +503,14 @@ impl<'ast> Formatter<'ast> {
             // Luau reads a lone CR as a space, and one left before the LF
             // would make a CRLF of it.
             let line = text.get(cursor..line_break.start).unwrap_or_default();
-            normalized.push_str(line.trim_end_matches('\r'));
-            normalized.push('\n');
+            let length =
+                line.iter().rposition(|&b| b != b'\r').map_or(0, |last| last.saturating_add(1));
+            normalized.extend_from_slice(line.get(..length).unwrap_or_default());
+            normalized.push(b'\n');
             cursor = line_break.end;
         }
-        normalized.push_str(text.get(cursor..).unwrap_or_default());
-        allocator.alloc_str(normalized)
+        normalized.extend_from_slice(text.get(cursor..).unwrap_or_default());
+        allocator.alloc_slice_copy(normalized)
     }
 
     /// Writes the comments before `start`, which lead the node there.
@@ -593,10 +600,10 @@ impl<'ast> Formatter<'ast> {
                 return;
             }
             let gap = Span::new(gap_start, comment.span.start).text(source);
-            if !gap.bytes().all(is_separator_gap_byte) || has_line_break(gap, version) {
+            if !gap.iter().all(|&b| is_separator_gap_byte(b)) || has_line_break(gap, version) {
                 break;
             }
-            has_separator |= gap.bytes().any(|b| matches!(b, b',' | b';'));
+            has_separator |= gap.iter().any(|b| matches!(b, b',' | b';'));
             run_length = run_length.saturating_add(1);
             gap_start = comment.span.end;
             if ends_line(comment) {
@@ -738,7 +745,7 @@ impl<'ast> Formatter<'ast> {
         let lines =
             self.take_synthetic(anchor, |comment| comment.position == CommentPosition::Leading);
         for text in lines {
-            self.text(text);
+            self.text(text.as_bytes());
             self.hard_line();
         }
         false
@@ -755,7 +762,7 @@ impl<'ast> Formatter<'ast> {
             let texts = self
                 .take_synthetic(anchor, |comment| comment.position == CommentPosition::Trailing);
             for text in &texts {
-                self.line_suffix(text, is_long_comment(text));
+                self.line_suffix(text.as_bytes(), is_long_comment(text));
             }
             if !texts.is_empty() {
                 self.expand_parent();
@@ -869,7 +876,7 @@ impl<'ast> Formatter<'ast> {
             if i > 0 {
                 self.hard_line();
             }
-            self.text(text);
+            self.text(text.as_bytes());
         }
     }
 
@@ -926,7 +933,7 @@ impl<'ast> Formatter<'ast> {
             if i > 0 || has_stmts_before {
                 self.hard_line();
             }
-            self.text(text);
+            self.text(text.as_bytes());
         }
     }
 }
@@ -938,8 +945,8 @@ fn ends_line(comment: &Comment) -> bool {
 
 /// Whether only whitespace comes before `offset` on its line, as `version`
 /// breaks lines.
-fn starts_line(source: &str, offset: u32, version: LuaVersion) -> bool {
-    let before = source.as_bytes().get(..offset_to_index(offset)).unwrap_or_default();
+fn starts_line(source: &[u8], offset: u32, version: LuaVersion) -> bool {
+    let before = source.get(..offset_to_index(offset)).unwrap_or_default();
     let is_line_space = |b: &&u8| {
         matches!(b, b' ' | b'\t' | 0x0B | 0x0C) || (**b == b'\r' && !version.has_lfcr_line_break())
     };
@@ -977,7 +984,7 @@ fn region_ending_after(regions: &[Range<u32>], position: u32) -> Option<&Range<u
 /// from `start`. The run stops at `limit`.
 fn dangling_run<'comments>(
     pending: &'comments [Comment],
-    source: &str,
+    source: &[u8],
     start: u32,
     limit: u32,
 ) -> &'comments [Comment] {
@@ -1001,7 +1008,7 @@ fn dangling_run<'comments>(
 
 /// Whether every comment of `run` can reach the next one, and the last can
 /// reach `run_end`, crossing only what [`is_code_free`] allows.
-fn is_movable_run(run: &[Comment], source: &str, run_end: u32) -> bool {
+fn is_movable_run(run: &[Comment], source: &[u8], run_end: u32) -> bool {
     let followers = run.iter().skip(1).map(|c| c.span.start).chain(once(run_end));
     run.iter().zip(followers).all(|(comment, next_start)| {
         next_start >= comment.span.end
@@ -1014,8 +1021,8 @@ fn is_movable_run(run: &[Comment], source: &str, run_end: u32) -> bool {
 ///
 /// `;` doesn't count, since the formatter writes statement separators as it
 /// sees fit.
-pub(crate) fn is_code_free(text: &str) -> bool {
-    text.bytes().all(is_code_free_byte)
+pub(crate) fn is_code_free(text: &[u8]) -> bool {
+    text.iter().all(|&b| is_code_free_byte(b))
 }
 
 pub(crate) const fn is_code_free_byte(byte: u8) -> bool {
@@ -1024,9 +1031,9 @@ pub(crate) const fn is_code_free_byte(byte: u8) -> bool {
 
 /// `offset`'s line's start, when only spaces and tabs come before `offset` on
 /// it.
-pub(crate) fn own_line_start(source: &str, offset: u32) -> Option<u32> {
+pub(crate) fn own_line_start(source: &[u8], offset: u32) -> Option<u32> {
     let i = offset_to_index(offset);
-    let before = source.as_bytes().get(..i).unwrap_or_default();
+    let before = source.get(..i).unwrap_or_default();
     let indent_length = before.iter().rev().take_while(|b| matches!(b, b' ' | b'\t')).count();
     let line_start = i.saturating_sub(indent_length);
     let is_line_start =
@@ -1034,8 +1041,8 @@ pub(crate) fn own_line_start(source: &str, offset: u32) -> Option<u32> {
     is_line_start.then(|| index_to_offset(line_start))
 }
 
-fn after_line_break(source: &str, offset: u32, version: LuaVersion) -> u32 {
-    let rest = source.as_bytes().get(offset_to_index(offset)..).unwrap_or_default();
+fn after_line_break(source: &[u8], offset: u32, version: LuaVersion) -> u32 {
+    let rest = source.get(offset_to_index(offset)..).unwrap_or_default();
     let remaining = strip_line_break(rest, version).map_or(rest.len(), <[u8]>::len);
     index_to_offset(source.len().saturating_sub(remaining))
 }
@@ -1090,11 +1097,13 @@ mod tests {
     fn texts<'ast>(f: &Formatter<'ast>) -> Vec<&'ast str> {
         f.elements()
             .iter()
-            .filter_map(
-                |element| {
-                    if let FormatElement::Text(text, _) = element { Some(*text) } else { None }
-                },
-            )
+            .filter_map(|element| {
+                if let FormatElement::Text(text, _) = element {
+                    Some(str::from_utf8(text).unwrap())
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
@@ -1113,7 +1122,7 @@ mod tests {
 -- leading
 local x = 1";
         let comments = [make_comment(0, 10, CommentKind::Line)];
-        let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
+        let store = Comments::from_source(&comments, source.as_bytes(), LuaVersion::Lua54);
         let mut f = Formatter::new(&allocator, LuaVersion::Lua54, FormatOptions::default(), store);
 
         assert!(!f.write_stmt_leading_comments(11));
@@ -1128,8 +1137,8 @@ local x = 1";
         let source = "\
 -- luck: ignore
 local x = 1";
-        let comments = luck_lexer::lex(source, LuaVersion::Lua54).comments;
-        let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
+        let comments = luck_lexer::lex(source.as_bytes(), LuaVersion::Lua54).comments;
+        let store = Comments::from_source(&comments, source.as_bytes(), LuaVersion::Lua54);
         let mut f = Formatter::new(&allocator, LuaVersion::Lua54, FormatOptions::default(), store);
         assert!(f.write_stmt_leading_comments(16));
     }
@@ -1139,7 +1148,7 @@ local x = 1";
         let allocator = Allocator::new();
         let source = "--[[a\r\nb]]";
         let comments = [make_comment(0, 10, CommentKind::MultiLineBlock)];
-        let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
+        let store = Comments::from_source(&comments, source.as_bytes(), LuaVersion::Lua54);
         let mut f = Formatter::new(&allocator, LuaVersion::Lua54, FormatOptions::default(), store);
         f.write_leading_comments(10);
         assert_eq!(texts(&f), ["--[[a\nb]]"]);
@@ -1156,7 +1165,11 @@ local x = 1";
             ("x\r--", 2, LuaVersion::Luau, false),
             ("x\r\n--", 3, LuaVersion::Luau, true),
         ] {
-            assert_eq!(starts_line(source, offset, version), expected, "{source:?} in {version:?}");
+            assert_eq!(
+                starts_line(source.as_bytes(), offset, version),
+                expected,
+                "{source:?} in {version:?}"
+            );
         }
     }
 
@@ -1168,7 +1181,7 @@ local x = 1";
             make_comment(10, 14, CommentKind::Line),
         ];
         let Comments { store: Store::Sourced(sourced), .. } =
-            Comments::from_source(&comments, source, LuaVersion::Lua54)
+            Comments::from_source(&comments, source.as_bytes(), LuaVersion::Lua54)
         else {
             panic!("a parsed store");
         };
@@ -1196,7 +1209,7 @@ local x = 1";
             make_comment(2, 9, CommentKind::SingleLineBlock),
             make_comment(10, 14, CommentKind::Line),
         ];
-        let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
+        let store = Comments::from_source(&comments, source.as_bytes(), LuaVersion::Lua54);
         assert_eq!(store.closer_offset(1, b')'), 15);
         assert_eq!(Comments::none().closer_offset(1, b')'), 1);
     }
@@ -1212,7 +1225,7 @@ local x = 1";
             },
             make_comment(24, 31, CommentKind::SingleLineBlock),
         ];
-        let store = Comments::from_source(&comments, source, LuaVersion::Lua54);
+        let store = Comments::from_source(&comments, source.as_bytes(), LuaVersion::Lua54);
         let call = Span::new(0, 23);
         let has_outside =
             |items: &[Span]| store.has_line_ending_comment_outside(call, items.iter().copied());
@@ -1235,7 +1248,7 @@ local x = 1";
 
         assert!(!f.write_stmt_trailing_comments(5, 0));
         let is_suffix = |element: &FormatElement<'_>| {
-            matches!(element, FormatElement::LineSuffix("-- explicit marker", _, false))
+            matches!(element, FormatElement::LineSuffix(b"-- explicit marker", _, false))
         };
         assert!(f.elements().iter().any(is_suffix));
     }
@@ -1295,8 +1308,9 @@ local x = 1";
 local x=1
 -- luck: format on
 local y = 2";
-        let source_comments = luck_lexer::lex(source, LuaVersion::Lua54).comments;
-        let comments = Comments::from_source(&source_comments, source, LuaVersion::Lua54);
+        let source_comments = luck_lexer::lex(source.as_bytes(), LuaVersion::Lua54).comments;
+        let comments =
+            Comments::from_source(&source_comments, source.as_bytes(), LuaVersion::Lua54);
         assert!(comments.overlaps_disabled_region(Span::new(25, 26)));
         assert!(!comments.overlaps_disabled_region(Span::new(55, 56)));
     }

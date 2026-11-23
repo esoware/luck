@@ -48,7 +48,8 @@ impl NodeRule for DuplicateConditions {
                 continue;
             };
             let span = condition.span();
-            let text = span.text(context.source).trim();
+            let source_text = String::from_utf8_lossy(span.text(context.source));
+            let text = source_text.trim();
             findings.push(
                 Finding::new(format!("duplicate condition `{text}` in `if`/`elseif` chain"), span)
                     .with_label(first.span(), "first checked here")

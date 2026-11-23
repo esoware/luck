@@ -48,10 +48,12 @@ pub struct Fix {
     pub edits: Box<[TextEdit]>,
 }
 
+/// The replacement is bytes, as the source is, since a fix that moves code
+/// copies a string or a comment that need not be UTF-8.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
     pub span: Span,
-    pub replacement: Cow<'static, str>,
+    pub replacement: Cow<'static, [u8]>,
 }
 
 /// Builds a finding's fix, of the kind the rule reports it as. A rule gets
@@ -82,7 +84,7 @@ impl RuleFixer {
     ) -> Fix
     where
         Message: Into<Cow<'static, str>>,
-        Replacement: Into<Cow<'static, str>>,
+        Replacement: Into<Cow<'static, [u8]>>,
     {
         self.fix(message, [TextEdit { span, replacement: replacement.into() }])
     }
@@ -91,7 +93,7 @@ impl RuleFixer {
     where
         Message: Into<Cow<'static, str>>,
     {
-        self.replace(message, span, "")
+        self.replace(message, span, &b""[..])
     }
 }
 
@@ -149,7 +151,7 @@ impl Error for FixError {}
 /// In debug builds, as [`lint_parsed`] does.
 pub fn fix<'ast>(
     allocator: &'ast Allocator,
-    source: &'ast str,
+    source: &'ast [u8],
     target: LuaTarget,
     config: &LintConfig,
     fixes: FixKind,
@@ -162,7 +164,7 @@ pub fn fix<'ast>(
 /// As for [`fix`], with `budget` as the limit.
 fn fix_within<'ast>(
     allocator: &'ast Allocator,
-    source: &'ast str,
+    source: &'ast [u8],
     target: LuaTarget,
     config: &LintConfig,
     fixes: FixKind,
@@ -175,7 +177,7 @@ fn fix_within<'ast>(
         let Some(text) = apply(parse.source, &messages, fixes) else {
             return Ok(Fixed { parse, messages });
         };
-        let mut reparse = luck_parser::parse(allocator, allocator.alloc_str(&text), version);
+        let mut reparse = luck_parser::parse(allocator, allocator.alloc_slice_copy(&text), version);
         if !reparse.errors.is_empty() {
             return Err(FixError::ReparseFailed { round, error: reparse.errors.swap_remove(0) });
         }
@@ -186,20 +188,20 @@ fn fix_within<'ast>(
 
 /// `source` with the fixes of `messages` of the kinds `fixes` holds that
 /// [`non_overlapping_edits`] keeps, or `None` when they change nothing.
-pub(crate) fn apply(source: &str, messages: &[Message], fixes: FixKind) -> Option<String> {
+pub(crate) fn apply(source: &[u8], messages: &[Message], fixes: FixKind) -> Option<Vec<u8>> {
     let edits = non_overlapping_edits(messages, fixes);
     if edits.is_empty() {
         return None;
     }
-    let mut text = String::with_capacity(source.len());
+    let mut text = Vec::with_capacity(source.len());
     let mut copied_to = 0;
     for edit in edits {
         let Range { start, end } = Range::<usize>::from(edit.span);
-        text.push_str(source.get(copied_to..start).unwrap_or_default());
-        text.push_str(&edit.replacement);
+        text.extend_from_slice(source.get(copied_to..start).unwrap_or_default());
+        text.extend_from_slice(&edit.replacement);
         copied_to = end;
     }
-    text.push_str(source.get(copied_to..).unwrap_or_default());
+    text.extend_from_slice(source.get(copied_to..).unwrap_or_default());
     (text != source).then_some(text)
 }
 
@@ -263,7 +265,7 @@ mod tests {
             .iter()
             .map(|&(start, end, replacement)| TextEdit {
                 span: Span::new(start, end),
-                replacement: replacement.into(),
+                replacement: replacement.as_bytes().into(),
             })
             .collect();
         Message {
@@ -289,8 +291,8 @@ mod tests {
     /// As for [`fix_within`].
     fn fixed_within(source: &str, config: &LintConfig, budget: usize) -> Result<String, FixError> {
         let allocator = Allocator::new();
-        fix_within(&allocator, source, LuaTarget::Lua54, config, FixKind::Fix, budget)
-            .map(|fixed| fixed.parse.source.to_owned())
+        fix_within(&allocator, source.as_bytes(), LuaTarget::Lua54, config, FixKind::Fix, budget)
+            .map(|fixed| String::from_utf8(fixed.parse.source.to_owned()).unwrap())
     }
 
     /// Every finding and diagnostic holds one, built or not.
@@ -307,11 +309,11 @@ local foo = 1
 local bar = 2";
         let diags = [diag_with_edit(6, 9, "_foo"), diag_with_edit(20, 23, "_bar")];
         assert_eq!(
-            apply(source, &diags, FixKind::Fix).as_deref(),
+            apply(source.as_bytes(), &diags, FixKind::Fix).as_deref(),
             Some(
-                "\
+                &b"\
 local _foo = 1
-local _bar = 2"
+local _bar = 2"[..]
             )
         );
     }
@@ -319,14 +321,14 @@ local _bar = 2"
     #[test]
     fn overlapping_edit_that_starts_later_wins() {
         let diags = [diag_with_edit(2, 6, "XX"), diag_with_edit(4, 8, "YY")];
-        assert_eq!(apply("abcdefghij", &diags, FixKind::Fix).as_deref(), Some("abcdYYij"));
+        assert_eq!(apply(b"abcdefghij", &diags, FixKind::Fix).as_deref(), Some(&b"abcdYYij"[..]));
     }
 
     #[test]
     fn a_fix_overlapped_by_a_later_one_drops_whole() {
         let diags =
             [diag_with_fix(FixKind::Fix, &[(0, 1, "X"), (2, 6, "Y")]), diag_with_edit(5, 8, "Z")];
-        assert_eq!(apply("abcdefghij", &diags, FixKind::Fix).as_deref(), Some("abcdeZij"));
+        assert_eq!(apply(b"abcdefghij", &diags, FixKind::Fix).as_deref(), Some(&b"abcdeZij"[..]));
     }
 
     #[test]
@@ -335,17 +337,17 @@ local _bar = 2"
             diag_with_fix(FixKind::Fix, &[(0, 1, "F")]),
             diag_with_fix(FixKind::Suggestion, &[(2, 3, "S")]),
         ];
-        assert_eq!(apply("abcd", &diags, FixKind::Fix).as_deref(), Some("Fbcd"));
-        assert_eq!(apply("abcd", &diags, FixKind::Suggestion).as_deref(), Some("abSd"));
-        assert_eq!(apply("abcd", &diags, FixKind::all()).as_deref(), Some("FbSd"));
-        assert_eq!(apply("abcd", &diags, FixKind::empty()), None);
+        assert_eq!(apply(b"abcd", &diags, FixKind::Fix).as_deref(), Some(&b"Fbcd"[..]));
+        assert_eq!(apply(b"abcd", &diags, FixKind::Suggestion).as_deref(), Some(&b"abSd"[..]));
+        assert_eq!(apply(b"abcd", &diags, FixKind::all()).as_deref(), Some(&b"FbSd"[..]));
+        assert_eq!(apply(b"abcd", &diags, FixKind::empty()), None);
     }
 
     #[test]
     fn edits_that_change_nothing_apply_nothing() {
         let diags = [diag_with_edit(0, 1, "a")];
-        assert_eq!(apply("abcd", &diags, FixKind::Fix), None);
-        assert_eq!(apply("abcd", &[message(Span::new(0, 1))], FixKind::Fix), None);
+        assert_eq!(apply(b"abcd", &diags, FixKind::Fix), None);
+        assert_eq!(apply(b"abcd", &[message(Span::new(0, 1))], FixKind::Fix), None);
     }
 
     #[test]

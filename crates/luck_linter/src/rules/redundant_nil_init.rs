@@ -102,7 +102,7 @@ fn whole_initializer_span(
         .comments_within(gap)
         .iter()
         .take_while(|comment| {
-            !Span::new(binding_end, comment.span.start).text(context.source).contains('=')
+            !Span::new(binding_end, comment.span.start).text(context.source).contains(&b'=')
         })
         .last()
         .map_or(binding_end, |comment| comment.span.end);

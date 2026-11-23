@@ -162,7 +162,8 @@ fn warn_inert_hot_comments(
             continue;
         }
         if let Some(span) = module.hot_comments.first() {
-            module_warnings.push(Diagnostic::w006(*span, span.text(module.source)));
+            module_warnings
+                .push(Diagnostic::w006(*span, &String::from_utf8_lossy(span.text(module.source))));
         }
     }
 }

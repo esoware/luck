@@ -324,7 +324,7 @@ string.format(\"%d %d\", f())");
         let source = "string.format([==[\n%z]==], 1)";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert_eq!(diags[0].span().text(source), "z");
+        assert_eq!(diags[0].span().text(source.as_bytes()), b"z");
     }
 
     #[test]
@@ -332,7 +332,7 @@ string.format(\"%d %d\", f())");
         let source = "string.format(\"\\37z\", 1)";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert_eq!(diags[0].span().text(source), "\"\\37z\"");
+        assert_eq!(diags[0].span().text(source.as_bytes()), b"\"\\37z\"");
     }
 
     #[test]
@@ -514,8 +514,8 @@ os.date(\"%Q\")");
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(
-            diags[0].span().text(source),
-            "\u{e9}",
+            diags[0].span().text(source.as_bytes()),
+            "\u{e9}".as_bytes(),
             "the span should cover the whole character: {diags:?}"
         );
     }
