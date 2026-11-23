@@ -22,7 +22,7 @@ use luck_token::{
 use rustc_hash::FxHashSet;
 
 use crate::validate::check_type_functions;
-use crate::{ParseError, ParseResult};
+use crate::{Groupings, ParseError, ParseResult};
 
 /// The tree and every list in it go in `allocator`, and its names and
 /// literals borrow `source`, but for a string's value that decoding rewrote,
@@ -69,6 +69,7 @@ fn parse_recording<'ast>(
                 source,
                 chunk: Chunk::new(version, block),
                 comments: Vec::new(),
+                groupings: Groupings::default(),
                 errors: vec![error],
                 lenient_escapes: Vec::new(),
                 // The empty block's own level.
@@ -95,6 +96,8 @@ fn parse_recording<'ast>(
         version,
         nesting_depth: 0,
         deepest_level: 0,
+        grouping_depth: 0,
+        groupings: Groupings::default(),
         block_depth: 0,
         scratch: Scratch::default(),
         decoded: Vec::new(),
@@ -134,6 +137,10 @@ struct Parser<'ast> {
     /// that wraps a finished operand nests all of it one level deeper, so the
     /// wrapper counts from here.
     deepest_level: usize,
+    /// Parentheses open where the parser is, which open no level, though the
+    /// parser recurses through each.
+    grouping_depth: usize,
+    groupings: Groupings,
     /// The chunk's own block is 1.
     block_depth: u32,
     scratch: Scratch<'ast>,
@@ -296,10 +303,12 @@ impl<'ast> Parser<'ast> {
             errors = check_type_functions(&chunk);
         }
         errors.sort_by_key(|e| e.span.start);
+        self.groupings.sort();
         let parse = ParseResult {
             source: self.source,
             chunk,
             comments: lexed.comments,
+            groupings: self.groupings,
             errors,
             lenient_escapes: lexed.lenient_escapes,
             nesting_depth: self.deepest_level,
@@ -591,6 +600,23 @@ impl<'ast> Parser<'ast> {
         true
     }
 
+    /// Count one more pair of parentheses open, or at [`MAX_NESTING_DEPTH`]
+    /// of them, stop the parse as [`Self::enter_depth`] does.
+    ///
+    /// The tree leaves them out, so they have a cap of their own: a tree
+    /// within its cap prints with at most a pair at each of its levels, and
+    /// reads back.
+    #[must_use]
+    #[inline]
+    fn enter_grouping(&mut self) -> bool {
+        if self.grouping_depth >= MAX_NESTING_DEPTH {
+            self.stop_at_depth_limit();
+            return false;
+        }
+        self.grouping_depth = self.grouping_depth.wrapping_add(1);
+        true
+    }
+
     #[inline]
     const fn exit_depth(&mut self) {
         self.nesting_depth = self.nesting_depth.wrapping_sub(1);
@@ -629,9 +655,10 @@ impl<'ast> Parser<'ast> {
     }
 
     /// Count a node that wraps the operand parsed so far at `level`: a run of
-    /// binary operators or suffixes, a cast, or a type operator. Everything in
-    /// the operand moves one level down, so the cap applies to its deepest
-    /// level, and stops the parse as [`Self::enter_depth`] does.
+    /// binary operators or suffixes, a cast, parentheses the tree keeps, or a
+    /// type operator. Everything in the operand moves one level down, so the
+    /// cap applies to its deepest level, and stops the parse as
+    /// [`Self::enter_depth`] does.
     ///
     /// On success the parser stands one level in, where the wrapper's other
     /// children go, and the caller steps back to `level` after them.

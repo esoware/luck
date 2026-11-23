@@ -290,10 +290,10 @@ fn skipping_a_level_skips_what_it_holds() {
         }
     }
 
-    // return (x): the block is a level, so nothing in it is reached.
+    // return (...): the block is a level, so nothing in it is reached.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let block = synth.block([synth.return_([synth.parenthesized(synth.name_expr("x"))])]);
+    let block = synth.block([synth.return_([synth.single_value(synth.vararg())])]);
     let mut shallow = Shallow(0);
     shallow.visit_block(&block);
     assert_eq!(shallow.0, 0);

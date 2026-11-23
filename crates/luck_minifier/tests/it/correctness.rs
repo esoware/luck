@@ -268,7 +268,7 @@ fn an_if_return_run_stops_at_a_guard_whose_value_would_nest_past_the_cap() {
         for guard in 0..30u32 {
             writeln!(source, "if a{guard} then return {{}} end").unwrap();
         }
-        let deep = nested("{", MAX_NESTING_DEPTH - 3, "1", "}");
+        let deep = nested("{", MAX_NESTING_DEPTH - 2, "1", "}");
         writeln!(source, "if deep then return {deep} end").unwrap();
         for guard in 30..60u32 {
             writeln!(source, "if a{guard} then return {{}} end").unwrap();

@@ -22,7 +22,7 @@ Then `luck_codegen::compact` prints the tree once, every literal in the shortest
 - `inline_locals`: replaces a local read once with its value, when that's a literal expression that can't raise an error.
 - `merge_locals`: joins neighboring `local`s, and neighboring assignments to locals, into one statement.
 - `simplify_indexes`: `t["x"]` to `t.x`, and `{[1] = a, [2] = b}` to `{a, b}`, however the key is spelled.
-- `simplify_parens`: drops parentheses that change neither grouping nor how many values an expression yields.
+- `simplify_parens`: drops parentheses that change nothing: around a call or `...` where only its first value counts, as in `(f()) + 1`, around a lone string or table argument, and around a run in a run at its level where they group the same, as in `(a + b) + c`.
 - `lift_locals`: hoists a function's declarations to one `local` at its top.
 - `rename_locals`: gives locals the shortest names.
 - `rename_globals`: renames globals the file defines too. It's off by default, because other chunks and `_G["name"]` lookups still use the old names, and it needs `rename_locals`.

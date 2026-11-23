@@ -24,7 +24,7 @@ impl NodeRule for ConstantTableComparison {
     fn on_expr(
         &self,
         expr: &Expression<'_>,
-        _context: &LintContext<'_>,
+        context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         let Expression::BinaryOp(run) = expr else {
@@ -43,7 +43,7 @@ impl NodeRule for ConstantTableComparison {
                 findings.push(
                     Finding::new(
                         "tables compare by identity, so a table literal never equals another value",
-                        pair.span(),
+                        pair.span(context),
                     )
                     .with_help("compare table contents instead"),
                 );

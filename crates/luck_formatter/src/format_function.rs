@@ -1,7 +1,8 @@
 use core::iter;
 
 use luck_ast::{
-    Expression, FunctionArgs, FunctionAttribute, FunctionBody, GetSpan as _, Parameter, VarArgParam,
+    Expression, FunctionArgs, FunctionAttribute, FunctionBody, GetSpan as _, Parameter, Slot,
+    VarArgParam,
 };
 use luck_token::Span;
 
@@ -318,8 +319,12 @@ impl<'ast> Formatter<'ast> {
                         f.soft_line_or_space();
                     }
                     let is_hugged = can_hug && is_block_arg(arg);
-                    if is_hugged && let Expression::TableConstructor(table) = arg {
-                        f.node(|| table.span, |inner| inner.write_table(table, true));
+                    if is_hugged
+                        && let Expression::TableConstructor(table) = arg
+                        && !f.is_wrapped(arg, Slot::FREE)
+                    {
+                        let extent = f.extent(arg);
+                        f.node(|| extent, |inner| inner.write_table(table, true));
                     } else if is_hugged {
                         let function_group = f.group_id();
                         f.hugged_group_with_id(function_group, |hugged| hugged.write_expr(arg));

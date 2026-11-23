@@ -14,6 +14,7 @@ use core::ops::Range;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::Name;
+use luck_parser::Groupings;
 use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
 use unicode_width::UnicodeWidthStr as _;
 
@@ -179,11 +180,15 @@ pub(crate) struct Formatter<'ast> {
     /// No space joins an element before this one, which starts a run of
     /// elements an emitter moves or takes back as a unit.
     space_fence: usize,
-    /// The dialect a literal the tree doesn't spell is spelled for.
+    /// The chunk's dialect, which spells a literal the tree doesn't, and reads
+    /// the source's line breaks.
     version: LuaVersion,
     options: FormatOptions,
     allocator: &'ast Allocator,
     comments: Comments<'ast>,
+    /// The parentheses a parse leaves out of its tree, which a tree built in
+    /// code has none of.
+    groupings: Option<&'ast Groupings>,
     /// Where the node being written ends, past which no node inside it may
     /// take a comment as its trailing one: a comment after the last child
     /// trails the node itself, or one around it.
@@ -218,6 +223,7 @@ impl<'ast> Formatter<'ast> {
             options,
             allocator,
             comments,
+            groupings: None,
             enclosing_end: u32::MAX,
             sorts_requires: false,
             scratch: String::new(),
@@ -227,6 +233,21 @@ impl<'ast> Formatter<'ast> {
     pub(crate) const fn sorting_requires(mut self) -> Self {
         self.sorts_requires = true;
         self
+    }
+
+    /// Formats a parse, whose `groupings` are the parentheses its user wrote.
+    pub(crate) const fn with_groupings(mut self, groupings: &'ast Groupings) -> Self {
+        self.groupings = Some(groupings);
+        self
+    }
+
+    pub(crate) const fn groupings(&self) -> Option<&'ast Groupings> {
+        self.groupings
+    }
+
+    /// Where the node being written ends.
+    pub(crate) const fn enclosing_end(&self) -> u32 {
+        self.enclosing_end
     }
 
     pub(crate) const fn sorts_requires(&self) -> bool {

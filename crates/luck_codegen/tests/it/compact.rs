@@ -56,7 +56,9 @@ fn nested_return(synth: Synth<'_>, depth: usize, wrap: Wrap) -> Chunk<'_> {
 fn a_tree_at_the_nesting_cap_prints_and_reparses() {
     with_the_smallest_stack(|| {
         let wraps: [(&str, Wrap); 6] = [
-            ("parentheses", |synth, expr| synth.parenthesized(expr)),
+            ("grouped operand", |synth, expr| {
+                synth.binary_op(synth.number_i64(1), BinOp::Sub, expr)
+            }),
             ("unary operator", |synth, expr| synth.unary_op(UnOp::Not, expr)),
             ("call argument", |synth, expr| synth.call(synth.name_expr("f"), [expr])),
             ("method argument", |synth, expr| synth.method_call(synth.name_expr("o"), "m", [expr])),
@@ -73,6 +75,147 @@ fn a_tree_at_the_nesting_cap_prints_and_reparses() {
             assert_eq!(block_nesting_depth(&reparsed.chunk.block), MAX_NESTING_DEPTH, "{label}");
         }
     });
+}
+
+/// A tree holds no parentheses for grouping, so the printer writes the ones
+/// each expression needs where it goes, and no others.
+#[test]
+#[expect(clippy::too_many_lines, reason = "one entry per case")]
+fn a_tree_prints_the_parentheses_its_grouping_needs() {
+    type Build = for<'ast> fn(Synth<'ast>, [Expression<'ast>; 3]) -> Expression<'ast>;
+    let (lua, luau) = (LuaVersion::Lua54, LuaVersion::Luau);
+    let cases: [(Build, &str, LuaVersion); 19] = [
+        (
+            |synth, [a, b, c]| synth.binary_op(synth.binary_op(a, BinOp::Add, b), BinOp::Mul, c),
+            "(a+b)*c",
+            lua,
+        ),
+        (
+            |synth, [a, b, c]| synth.binary_op(a, BinOp::Sub, synth.binary_op(b, BinOp::Sub, c)),
+            "a-(b-c)",
+            lua,
+        ),
+        (
+            |synth, [a, b, c]| synth.binary_op(synth.binary_op(a, BinOp::Sub, b), BinOp::Sub, c),
+            "a-b-c",
+            lua,
+        ),
+        (
+            |synth, [a, b, c]| {
+                synth.binary_op(synth.binary_op(a, BinOp::Concat, b), BinOp::Concat, c)
+            },
+            "(a..b)..c",
+            lua,
+        ),
+        (
+            |synth, [a, b, _]| synth.binary_op(synth.unary_op(UnOp::Neg, a), BinOp::Pow, b),
+            "(-a)^b",
+            lua,
+        ),
+        (
+            |synth, [a, b, _]| synth.binary_op(a, BinOp::Pow, synth.unary_op(UnOp::Neg, b)),
+            "a^-b",
+            lua,
+        ),
+        (
+            |synth, [a, b, _]| synth.unary_op(UnOp::Neg, synth.binary_op(a, BinOp::Add, b)),
+            "-(a+b)",
+            lua,
+        ),
+        (
+            |synth, [a, b, _]| synth.unary_op(UnOp::Neg, synth.binary_op(a, BinOp::Pow, b)),
+            "-a^b",
+            lua,
+        ),
+        (
+            |synth, _| synth.method_call(synth.string("s"), "rep", [synth.number_i64(2)]),
+            "(\"s\"):rep(2)",
+            lua,
+        ),
+        (|synth, _| synth.field(synth.table([]), "x"), "({}).x", lua),
+        (
+            |synth, _| synth.call(synth.function_def(&[], synth.block([])), []),
+            "(function()end)()",
+            lua,
+        ),
+        (
+            |synth, _| synth.unary_op(UnOp::Neg, synth.number_f64(f64::NAN)),
+            "-(0/0)",
+            LuaVersion::Lua51,
+        ),
+        (
+            |synth, [a, b, _]| {
+                synth.binary_op(synth.type_cast(a, synth.ty_named("T")), BinOp::Lt, b)
+            },
+            "(a::T)<b",
+            luau,
+        ),
+        (
+            |synth, [a, b, _]| {
+                synth.binary_op(a, BinOp::Lt, synth.type_cast(b, synth.ty_named("T")))
+            },
+            "a<b::T",
+            luau,
+        ),
+        (
+            |synth, [a, b, _]| {
+                synth.type_cast(synth.binary_op(a, BinOp::Add, b), synth.ty_named("T"))
+            },
+            "(a+b)::T",
+            luau,
+        ),
+        (
+            |synth, [a, _, _]| {
+                synth.type_cast(synth.type_cast(a, synth.ty_named("T")), synth.ty_named("U"))
+            },
+            "(a::T)::U",
+            luau,
+        ),
+        (
+            |synth, [a, b, c]| {
+                synth.binary_op(synth.if_expr(a, b, [], c), BinOp::Add, synth.number_i64(1))
+            },
+            "(if a then b else c)+1",
+            luau,
+        ),
+        (
+            |synth, [a, b, c]| {
+                synth.binary_op(synth.number_i64(1), BinOp::Add, synth.if_expr(a, b, [], c))
+            },
+            "1+if a then b else c",
+            luau,
+        ),
+        (
+            |synth, [a, b, c]| {
+                let negation = synth.unary_op(UnOp::Neg, synth.if_expr(a, b, [], c));
+                synth.binary_op(negation, BinOp::Add, synth.number_i64(1))
+            },
+            "-(if a then b else c)+1",
+            luau,
+        ),
+    ];
+    for (build, expected, version) in cases {
+        let allocator = Allocator::new();
+        let spans = SpanCounter::new();
+        let synth = Synth::new(&allocator, &spans).with_version(version);
+        let names = ["a", "b", "c"].map(|name| synth.name_expr(name));
+        let chunk = Chunk::new(version, synth.block([synth.return_([build(synth, names)])]));
+        let output = luck_codegen::compact(&chunk);
+        assert_eq!(output.strip_prefix("return").map(str::trim_start), Some(expected));
+        assert_reprints(&chunk);
+    }
+}
+
+#[test]
+fn a_statement_that_starts_with_a_parenthesis_takes_a_semicolon_where_it_would_glue_on() {
+    let allocator = Allocator::new();
+    let spans = SpanCounter::new();
+    let synth = Synth::new(&allocator, &spans);
+    let call = synth.method_call(synth.string("s"), "f", []);
+    let local = synth.local(&["x"], [synth.name_expr("y")]);
+    let chunk = Chunk::new(LuaVersion::Lua54, synth.block([local, synth.call_stmt(call)]));
+    assert_eq!(luck_codegen::compact(&chunk), "local x=y;(\"s\"):f()");
+    assert_reprints(&chunk);
 }
 
 #[test]
@@ -161,7 +304,9 @@ fn functions_compact_to_minimal_whitespace() {
 fn exprs_compact_to_minimal_whitespace() {
     for (source, expected) in [
         ("x  =  a  +  b  *  ( c  -  d )  /  e", "x=a+b*(c-d)/e"),
-        ("x  =  ( a  +  b )", "x=(a+b)"),
+        ("x  =  ( a  +  b )", "x=a+b"),
+        ("x  =  ( a  +  b )  -  ( c  -  d )", "x=(a+b)-(c-d)"),
+        ("x  =  ( f ( ) )", "x=(f())"),
         ("x  =  not  y", "x=not y"),
         ("x  =  # t", "x=#t"),
         ("return  \"a\"  ..  \"b\"  ..  \"c\"", "return\"a\"..\"b\"..\"c\""),

@@ -19,15 +19,11 @@ use luck_ast::{
 use luck_token::{BinOp, LuaNumber, LuaVersion, UnOp};
 
 use super::Compressor;
-use super::simplify_parens;
 use super::simplify_statements::{has_no_else, holds_nested_if};
 use crate::binding::{
     has_attributed_or_env_name, has_fixed_binding, is_droppable_function, local_of,
 };
-use crate::expr::{
-    binds_looser_than_unary, constant_truthiness, is_nil, is_pure_expr, parenthesize,
-    truncate_multi_value,
-};
+use crate::expr::{constant_truthiness, is_nil, is_pure_expr, truncate_multi_value};
 
 pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
     block.stmts.is_empty()
@@ -95,11 +91,8 @@ fn do_block<'ast>(allocator: &'ast Allocator, block: Block<'ast>) -> Statement<'
 /// Only wraps in `not`. Inverting a comparison operator would change which
 /// metamethod is called, `__lt` instead of `__le` and so on.
 fn negate<'ast>(allocator: &'ast Allocator, expr: Expression<'ast>) -> Expression<'ast> {
-    let needs_parens =
-        matches!(&expr, Expression::BinaryOp(binary_op) if binds_looser_than_unary(binary_op));
     let span = expr.span();
-    let operand = if needs_parens { parenthesize(allocator, expr) } else { expr };
-    Expression::new_unary_op(span, UnOp::Not, operand, allocator)
+    Expression::new_unary_op(span, UnOp::Not, expr, allocator)
 }
 
 /// `cond and X or X`, which a run of `or`s starts with when its first two
@@ -334,13 +327,13 @@ impl<'ast> Compressor<'_, 'ast> {
         let Some(alternative) = (*outer.links).first_mut() else {
             return false;
         };
-        let kept = truncate_multi_value(allocator, alternative.operand.take());
+        let kept = alternative.operand.take();
         match OneOrMore::from_list(outer.links.split_off_rest()) {
             Some(rest) => {
                 outer.first = kept;
                 outer.links = rest;
             }
-            None => *expr = kept,
+            None => *expr = truncate_multi_value(allocator, kept),
         }
         true
     }
@@ -509,26 +502,20 @@ impl<'ast> Compressor<'_, 'ast> {
             self.has_changed = true;
             return;
         }
-        // The `not` and its parentheses nest the condition two levels
-        // deeper.
-        if is_empty_block(&if_stmt.block) && self.fits(self.depth, 2, &if_stmt.condition) {
+        // The `not` nests the condition a level deeper.
+        if is_empty_block(&if_stmt.block) && self.fits(self.depth, 1, &if_stmt.condition) {
             if_stmt.condition = negate(self.allocator, if_stmt.condition.take());
             if_stmt.block = else_clause.block.take();
             if_stmt.else_clause = None;
             self.has_changed = true;
             return;
         }
-        // `if not c then A else B end` becomes `if c then B else A end`, and
-        // `c` stands alone there, so parentheses it needed under `not` can
-        // go.
+        // `if not c then A else B end` becomes `if c then B else A end`.
         while let Expression::UnaryOp(negation) = &mut if_stmt.condition
             && negation.op == UnOp::Not
         {
             if_stmt.condition = negation.operand.take();
             mem::swap(&mut if_stmt.block, &mut else_clause.block);
-            if self.config.simplify_parens {
-                simplify_parens::strip_standalone(&mut if_stmt.condition);
-            }
             self.has_changed = true;
         }
     }

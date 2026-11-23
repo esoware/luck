@@ -1,19 +1,20 @@
 //! Inlining a local read once: its value, a literal expression that can't
-//! raise, moves to the read, in parentheses only where it would regroup.
+//! raise, moves to the read, which the printer parenthesizes as it needs.
 
 use core::mem;
 
 use luck_allocator::List;
 use luck_ast::{
-    BinaryOp, Block, Expression, LocalAssignment, MAX_NESTING_DEPTH, Statement, Visit,
-    VisitMut as _, expr_nesting_depth,
+    Block, Expression, LocalAssignment, MAX_NESTING_DEPTH, Statement, Visit, VisitMut as _,
+    expr_nesting_depth,
 };
-use luck_token::{BinOp, MAX_ACTIVE_LOCALS, OperandSide, UnOp};
+use luck_token::MAX_ACTIVE_LOCALS;
 
 use super::Compressor;
 use super::remove_dead_code::is_nil_initialized;
+use super::simplify_parens::Place;
 use crate::binding::{Bindings, NONE, Reference, has_fixed_binding, local_of};
-use crate::expr::{MAX_ADDED_DEPTH, binds_looser_than_unary, literal_kind, parenthesize};
+use crate::expr::{MAX_ADDED_DEPTH, literal_kind, parenthesize};
 
 /// An inlined local's initializer, waiting for the local's one read.
 pub(super) struct Value<'ast> {
@@ -23,92 +24,6 @@ pub(super) struct Value<'ast> {
     /// [`MAX_ACTIVE_LOCALS`] of them is longer than one function can hold,
     /// and it stops there.
     locals: usize,
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum OperandPosition {
-    Left(BinOp),
-    Right(BinOp),
-    Unary(UnOp),
-    Cast,
-}
-
-impl OperandPosition {
-    pub(super) const fn of_side(op: BinOp, side: OperandSide) -> Self {
-        match side {
-            OperandSide::Left => Self::Left(op),
-            OperandSide::Right => Self::Right(op),
-        }
-    }
-}
-
-/// Grouping lives in `Parenthesized` nodes and codegen prints the tree flat,
-/// so a value that binds looser than its position would regroup on reparse.
-///
-/// A value is a closed literal expression, so none prints a Luau
-/// if-expression last.
-fn keeps_grouping(value: &Expression<'_>, position: OperandPosition) -> bool {
-    match value {
-        Expression::BinaryOp(run) => match position {
-            OperandPosition::Left(op) => run.can_nest_bare(op, OperandSide::Left),
-            OperandPosition::Right(op) => run.can_nest_bare(op, OperandSide::Right),
-            OperandPosition::Unary(_) => !binds_looser_than_unary(run),
-            OperandPosition::Cast => false,
-        },
-        Expression::UnaryOp(_) => match position {
-            // Unary ops bind looser than ^, so (-a)^b needs its parens.
-            OperandPosition::Left(op) => op != BinOp::Pow,
-            OperandPosition::Right(_) | OperandPosition::Unary(_) => true,
-            OperandPosition::Cast => false,
-        },
-        // Luau: `::` takes a simple expression, and `x :: A :: B` doesn't
-        // parse.
-        Expression::TypeCast(_) => !matches!(position, OperandPosition::Cast),
-        // Luau: `-1i` is a negative integer literal, while `-x` negates the
-        // integer `x` holds, which raises.
-        Expression::Integer(_) => !matches!(position, OperandPosition::Unary(UnOp::Neg)),
-        Expression::Number(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::Error(_) => true,
-    }
-}
-
-/// The operand `expr` prints last, which is what a following token lands on.
-fn last_operand<'tree, 'ast>(expr: &'tree mut Expression<'ast>) -> &'tree mut Expression<'ast> {
-    let mut current = expr;
-    loop {
-        current = match current {
-            Expression::BinaryOp(binary_op) => &mut binary_op.links.last_mut().operand,
-            Expression::UnaryOp(unop) => &mut unop.operand,
-            Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::Nil(_)
-            | Expression::True(_)
-            | Expression::False(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => return current,
-        };
-    }
 }
 
 /// Why a local read once keeps its value.
@@ -127,10 +42,9 @@ fn refusal(value: &Expression<'_>, landed_locals: usize, read_depth: usize) -> O
         return Some(Refusal::Chain);
     }
     let depth = expr_nesting_depth(value);
-    // The value can gain parentheses where it lands, and a cast inside it
-    // a second pair.
+    // A Luau integer the value is lands in parentheses under `-`.
     let fits = depth <= MAX_ADDED_DEPTH
-        && read_depth.saturating_add(2).saturating_add(depth) <= MAX_NESTING_DEPTH;
+        && read_depth.saturating_add(1).saturating_add(depth) <= MAX_NESTING_DEPTH;
     (!fits).then_some(Refusal::Depth)
 }
 
@@ -423,50 +337,24 @@ impl<'ast> Compressor<'_, 'ast> {
         Some(value.expr)
     }
 
-    /// Only in an operand position can a value regroup, so only there does
-    /// it gain parens. Anywhere else it stays bare, since `return (1+2)` is
-    /// longer than `return 1+2`.
-    pub(super) fn visit_operand(
-        &mut self,
-        operand: &mut Expression<'ast>,
-        position: OperandPosition,
-    ) {
+    /// Walks an operand at `place`, where a value that lands takes no
+    /// parentheses but the ones that keep its meaning.
+    pub(super) fn visit_operand(&mut self, operand: &mut Expression<'ast>, place: Place) {
         if let Expression::Name(name) = operand
             && self.held_count > 0
             && let Some(value) = local_of(name).and_then(|id| self.take_value(id))
         {
-            if keeps_grouping(&value, position) {
-                self.has_bare_operand = true;
-                *operand = value;
+            self.has_landed_run |= matches!(value, Expression::BinaryOp(_));
+            // Luau: `-1i` is a negative integer literal, while `-x` negates
+            // the integer `x` holds, which raises.
+            *operand = if place == Place::Negated && matches!(value, Expression::Integer(_)) {
+                parenthesize(self.allocator, value)
             } else {
-                *operand = parenthesize(self.allocator, value);
-            }
+                value
+            };
             return;
         }
-        self.visit_expr_in(operand, true);
-    }
-
-    /// Luau: a cast has no closing token and `T<` opens generic arguments, so
-    /// a cast inlined just before `<` needs parens of its own. A cast that was
-    /// already there parsed fine, so only inlining can cause this.
-    pub(super) fn close_casts_before_less_than(&mut self, run: &mut BinaryOp<'ast>) {
-        let allocator = self.allocator;
-        let mut before = &mut run.first;
-        for link in &mut *run.links {
-            if link.op == BinOp::Lt
-                && let Expression::Name(name) = last_operand(before)
-                && let Some(index) = local_of(name)
-                    .and_then(|id| self.bindings.get(id))
-                    .and_then(|binding| usize::try_from(binding.held_value).ok())
-                && let Some(Some(value)) = self.values.get_mut(index)
-            {
-                let cast = last_operand(&mut value.expr);
-                if matches!(cast, Expression::TypeCast(_)) {
-                    *cast = parenthesize(allocator, cast.take());
-                }
-            }
-            before = &mut link.operand;
-        }
+        self.visit_expr_in(operand, place);
     }
 }
 
@@ -627,7 +515,7 @@ mod tests {
                 ("local s = \"a\" .. \"b\" return #s", "return#(\"a\"..\"b\")"),
                 ("local s = 1 + 2 return -s ^ 2", "return-(1+2)^2"),
                 ("local s = -1 return -s ^ 2", "return-(-1)^2"),
-                ("local s = 1 + 2 return (s * 3)", "return((1+2)*3)"),
+                ("local s = 1 + 2 return (s * 3)", "return(1+2)*3"),
                 ("local s = 1 + 2 print(s * 3, 4)", "print((1+2)*3,4)"),
                 ("local a = 1 + 2 local b = a * 3 return b ^ 2", "return((1+2)*3)^2"),
                 ("local x = 37.5 return x[\"k\"]", "return(37.5)[\"k\"]"),
@@ -677,7 +565,8 @@ mod tests {
                 ("local s = 1 :: number return 1 < s < 3", "return 1<(1::number)<3"),
                 ("local s = 2 + 1 :: number return s < 3", "return 2+(1::number)<3"),
                 ("local s = -1 :: number return s < 3", "return-(1::number)<3"),
-                ("local s = 2 + 1 :: number return 2 * s < 3", "return 2*(2+(1::number))<3"),
+                // The cast ends inside the sum's parentheses, before `)`.
+                ("local s = 2 + 1 :: number return 2 * s < 3", "return 2*(2+1::number)<3"),
                 ("local s = 1 :: number return s", "return 1::number"),
                 ("local s = 1 :: number return s + 1", "return 1::number+1"),
                 ("local s = 1 :: number return 1 + s", "return 1+1::number"),

@@ -1,4 +1,4 @@
-use luck_ast::{Call, Expression, StringLiteral, unwrap_parentheses};
+use luck_ast::{Call, Expression, StringLiteral};
 use luck_token::{LuaVersion, Span, index_to_offset};
 
 use crate::call::{CallArg, CallArgs, dotted_callee};
@@ -103,9 +103,7 @@ fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&StringLiteral<'_>, Call
     let is_method = call.method.is_some();
     let mut args = CallArgs::new(call.args);
     if is_method && !dsl.is_pattern() {
-        let Some(Expression::StringLiteral(receiver)) =
-            call.callee.as_expr().map(unwrap_parentheses)
-        else {
+        let Some(Expression::StringLiteral(receiver)) = call.callee.as_expr() else {
             return None;
         };
         return Some((receiver, args));

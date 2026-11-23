@@ -64,8 +64,8 @@ fn mergeable<'ast>(
     second_local: &'ast LocalAssignment<'ast>,
     context: &LintContext<'_>,
 ) -> Option<(SimpleBinding<'ast>, SimpleBinding<'ast>)> {
-    let first = simple_binding(first_local)?;
-    let second = simple_binding(second_local)?;
+    let first = simple_binding(first_local, context)?;
+    let second = simple_binding(second_local, context)?;
     let pair_span = Span::new(first_local.span.start, second_local.span.end);
     if !context.comments_within(pair_span).is_empty() {
         return None;
@@ -96,7 +96,10 @@ struct SimpleBinding<'ast> {
     initializer: Span,
 }
 
-fn simple_binding<'ast>(local: &'ast LocalAssignment<'ast>) -> Option<SimpleBinding<'ast>> {
+fn simple_binding<'ast>(
+    local: &'ast LocalAssignment<'ast>,
+    context: &LintContext<'_>,
+) -> Option<SimpleBinding<'ast>> {
     // `const` and `export` belong to the statement this rule rebuilds.
     if local.kind != LocalAssignmentKind::Local {
         return None;
@@ -115,7 +118,7 @@ fn simple_binding<'ast>(local: &'ast LocalAssignment<'ast>) -> Option<SimpleBind
         name: attributed.name.span,
         declaration: Span::new(attributed.name.span.start, declaration_end),
         attribute: attributed.attribute.as_deref(),
-        initializer: initializer.span(),
+        initializer: context.extent(initializer),
     })
 }
 
@@ -160,6 +163,17 @@ local b = 2";
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert_eq!(fixed, "local a, b = 1, 2");
+    }
+
+    #[test]
+    fn flags_and_fixes_keeping_the_parentheses_a_value_is_in() {
+        let source = "\
+local a = (x)
+local b = (y)";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local a, b = (x), (y)");
     }
 
     #[test]

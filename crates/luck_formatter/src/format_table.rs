@@ -31,9 +31,10 @@ impl<'ast> Formatter<'ast> {
     /// fields sharing one of them. A synthetic table has no source and never
     /// does.
     fn is_packed_in_source(&self, table: &TableConstructor<'_>) -> bool {
-        let Some((source, version)) = self.comments().source() else {
+        let Some(source) = self.comments().source_text() else {
             return false;
         };
+        let version = self.version();
         let fields = &table.fields;
         let (Some(first), Some(last)) = (fields.first(), fields.last()) else {
             return false;
@@ -128,24 +129,31 @@ impl<'ast> Formatter<'ast> {
         }
     }
 
+    /// A named or positional field spans from its name or value, and the
+    /// parentheses the source grouped its value in.
     fn write_field(&mut self, field: &Field<'ast>) {
+        let span = match field {
+            Field::Named { name, value } => Span::new(name.span.start, self.extent(value).end),
+            Field::Positional(value) => self.extent(value),
+            Field::Bracketed { span, .. } => *span,
+        };
         self.node(
-            || field.span(),
+            || span,
             |f| match field {
                 Field::Named { name, value } => {
                     f.name(*name);
                     f.space();
                     f.token("=");
                     f.space();
-                    f.write_after_operator(value.span().start, |inner| inner.write_expr(value));
+                    f.write_after_operator(f.extent(value).start, |inner| inner.write_expr(value));
                 }
                 Field::Bracketed { key, value, .. } => {
-                    let closer = f.comments().closer_offset(key.span().end, b']');
+                    let closer = f.comments().closer_offset(f.extent(key).end, b']');
                     f.write_bracketed_key(key, closer);
                     f.space();
                     f.token("=");
                     f.space();
-                    f.write_after_operator(value.span().start, |inner| inner.write_expr(value));
+                    f.write_after_operator(f.extent(value).start, |inner| inner.write_expr(value));
                 }
                 Field::Positional(value) => f.write_expr(value),
             },

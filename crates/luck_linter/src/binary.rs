@@ -1,5 +1,7 @@
-use luck_ast::{BinaryLink, BinaryOp, Expression, GetSpan as _};
+use luck_ast::{BinaryLink, BinaryOp, Expression};
 use luck_token::{Associativity, BinOp, Span};
+
+use crate::rule::LintContext;
 
 /// One operator of a run, with what it applies to in the pairs the run
 /// groups into.
@@ -17,9 +19,10 @@ pub(crate) struct OperatorPair<'ast> {
 }
 
 impl OperatorPair<'_> {
-    /// From the start of the left side to the end of the right.
-    pub(crate) fn span(&self) -> Span {
-        Span::new(self.first_operand.span().start, self.last_operand.span().end)
+    /// From the start of the left side to the end of the right, with the
+    /// parentheses they're in.
+    pub(crate) fn span(&self, context: &LintContext<'_>) -> Span {
+        Span::new(context.extent(self.first_operand).start, context.extent(self.last_operand).end)
     }
 }
 

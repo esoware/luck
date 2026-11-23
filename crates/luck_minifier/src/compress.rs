@@ -10,9 +10,10 @@
 //!
 //! Each rewrite lives in the module named after the flag that turns it on.
 //! Rewrites build their nodes in the shape the parser gives the text they
-//! print, which is what makes the fixpoint's own output a fixpoint. A
-//! literal is a value, which `luck_codegen` spells the shortest way, so no
-//! rewrite respells one.
+//! print, which is what makes the fixpoint's own output a fixpoint. The
+//! printer writes whatever parentheses grouping needs, so a rewrite adds only
+//! those that change what they hold. A literal is a value, which
+//! `luck_codegen` spells the shortest way, so no rewrite respells one.
 
 mod fold_constants;
 mod inline_locals;
@@ -29,15 +30,16 @@ use core::mem;
 use luck_allocator::{Allocator, List};
 use luck_ast::{
     AttributedName, BinaryOp, Block, Expression, FunctionArgs, FunctionBody, Statement, Suffix,
-    SuffixedExpression, TableConstructor, Type, Visit as _, VisitMut, is_prefix_expr,
+    SuffixedExpression, TableConstructor, Type, Visit as _, VisitMut,
 };
-use luck_token::LuaVersion;
+use luck_token::{LuaVersion, UnOp};
 
-use self::inline_locals::{OperandPosition, Value};
+use self::inline_locals::Value;
 use self::lift_locals::Lifter;
 use self::remove_dead_code::{UnusedLocalAction, unused_local_action};
+use self::simplify_parens::Place;
 use crate::binding::{Bindings, Counter, NONE, is_droppable_function, local_of};
-use crate::expr::{constant_truthiness, fits_at_depth, inner_operand_side, parenthesize};
+use crate::expr::{constant_truthiness, fits_at_depth};
 use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
 use crate::transform_config::TransformConfig;
 
@@ -87,9 +89,10 @@ pub(crate) struct Compressor<'walk, 'ast> {
     /// Whether a rewrite stayed undone for want of depth, which it may have
     /// once the tree around it flattens.
     has_depth_refusal: Cell<bool>,
-    /// Whether a value has landed bare as an operand since the run being
-    /// walked began, so the run may hold one to splice.
-    has_bare_operand: bool,
+    /// Whether a value has landed as a run among the operands of the run
+    /// being walked, which then joins it where it groups the same, so a
+    /// chain of inlined values nests no deeper than one.
+    has_landed_run: bool,
     /// The inlined locals taken in by the values landed since the
     /// initializer being walked began.
     landed_locals: usize,
@@ -133,7 +136,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             values: Vec::new(),
             held_count: 0,
             has_depth_refusal: Cell::new(false),
-            has_bare_operand: false,
+            has_landed_run: false,
             landed_locals: 0,
             landed_counts: Vec::new(),
             live_registers: 0,
@@ -371,34 +374,8 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         self.live_registers = outer_registers;
     }
 
-    /// Walks a run's operands, landing an inlined value bare wherever it
-    /// keeps its grouping, and splices a run that lands bare at the run's
-    /// own level.
-    fn walk_run(&mut self, run: &mut BinaryOp<'ast>) {
-        if self.descend() {
-            if self.held_count > 0 {
-                self.close_casts_before_less_than(run);
-            }
-            let op = run.links.first().op;
-            let inner_position = OperandPosition::of_side(op, inner_operand_side(run));
-            let outer_has_bare_operand = mem::replace(&mut self.has_bare_operand, false);
-            self.visit_operand(&mut run.first, OperandPosition::Left(op));
-            let last_index = run.links.len().saturating_sub(1);
-            for (i, link) in run.links.iter_mut().enumerate() {
-                let position =
-                    if i == last_index { OperandPosition::Right(op) } else { inner_position };
-                self.visit_operand(&mut link.operand, position);
-            }
-            if mem::replace(&mut self.has_bare_operand, outer_has_bare_operand) {
-                run.splice_operands(self.allocator);
-            }
-        }
-        self.ascend();
-    }
-
-    /// Walks an expression and rewrites it, as an operand of an operator or
-    /// a cast, or standing alone, where it groups with nothing around it.
-    fn visit_expr_in(&mut self, expr: &mut Expression<'ast>, is_operand: bool) {
+    /// Walks an expression and rewrites it at `place`.
+    fn visit_expr_in(&mut self, expr: &mut Expression<'ast>, place: Place) {
         match expr {
             Expression::Name(name) => {
                 if self.held_count > 0
@@ -411,15 +388,16 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Expression::BinaryOp(run) => self.walk_run(run),
             Expression::UnaryOp(unary_op) => {
                 if self.descend() {
-                    let position = OperandPosition::Unary(unary_op.op);
-                    self.visit_operand(&mut unary_op.operand, position);
+                    let operand_place =
+                        if unary_op.op == UnOp::Neg { Place::Negated } else { Place::Operand };
+                    self.visit_operand(&mut unary_op.operand, operand_place);
                 }
                 self.ascend();
             }
             // Luau
             Expression::TypeCast(cast) => {
                 if self.descend() {
-                    self.visit_operand(&mut cast.expr, OperandPosition::Cast);
+                    self.visit_operand(&mut cast.expr, Place::Operand);
                     self.visit_type(&mut cast.ty);
                 }
                 self.ascend();
@@ -439,49 +417,61 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Expression::InterpolatedString(_)
             | Expression::Error(_) => self.walk_expr(expr),
         }
-        self.leave_expr(expr, is_operand);
+        self.leave_expr(expr, place);
     }
 
-    /// The rewrites an expression takes once its operands have theirs.
-    fn leave_expr(&mut self, expr: &mut Expression<'ast>, is_operand: bool) {
+    /// Its own frame, so the locals it needs stay out of the one every level
+    /// of nesting takes.
+    fn walk_run(&mut self, run: &mut BinaryOp<'ast>) {
+        if self.descend() {
+            let outer_has_landed_run = mem::replace(&mut self.has_landed_run, false);
+            self.visit_operand(&mut run.first, Place::Operand);
+            for link in &mut *run.links {
+                self.visit_operand(&mut link.operand, Place::Operand);
+            }
+            if mem::replace(&mut self.has_landed_run, outer_has_landed_run) {
+                run.splice_operands(self.allocator);
+            }
+        }
+        self.ascend();
+    }
+
+    /// The rewrites an expression at `place` takes once its operands have
+    /// theirs.
+    fn leave_expr(&mut self, expr: &mut Expression<'ast>, place: Place) {
         let allocator = self.allocator;
         match expr {
             Expression::BinaryOp(_) => {
                 if self.config.remove_dead_code && self.fold_redundant_ternary(expr) {
                     self.has_changed = true;
-                    return self.leave_expr(expr, is_operand);
+                    return self.leave_expr(expr, place);
                 }
                 if self.config.fold_constants && self.fold(expr) {
                     self.has_changed = true;
-                    return self.leave_expr(expr, is_operand);
+                    return self.leave_expr(expr, place);
                 }
-                if self.config.simplify_parens && simplify_parens::strip(allocator, expr) {
-                    self.has_changed = true;
+                // A run a rewrite built has operands no walk left, and an
+                // operand takes one value.
+                if self.config.simplify_parens
+                    && let Expression::BinaryOp(run) = expr
+                {
+                    let mut has_stripped = simplify_parens::strip(&mut run.first, Place::Operand);
+                    for link in &mut *run.links {
+                        has_stripped |= simplify_parens::strip(&mut link.operand, Place::Operand);
+                    }
+                    if has_stripped | run.splice_operands(allocator) {
+                        self.has_changed = true;
+                    }
                 }
             }
             Expression::UnaryOp(_) => {
                 if self.config.fold_constants && self.fold(expr) {
                     self.has_changed = true;
-                    return self.leave_expr(expr, is_operand);
-                }
-                if self.config.simplify_parens && simplify_parens::strip(allocator, expr) {
-                    self.has_changed = true;
+                    self.leave_expr(expr, place);
                 }
             }
             Expression::Parenthesized(_) => {
-                if self.config.simplify_parens
-                    && if is_operand {
-                        simplify_parens::strip(allocator, expr)
-                    } else {
-                        simplify_parens::strip_standalone(expr)
-                    }
-                {
-                    self.has_changed = true;
-                }
-            }
-            // Luau
-            Expression::TypeCast(_) => {
-                if self.config.simplify_parens && simplify_parens::strip(allocator, expr) {
+                if self.config.simplify_parens && simplify_parens::strip(expr, place) {
                     self.has_changed = true;
                 }
             }
@@ -498,6 +488,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
             | Expression::Error(_) => {}
         }
     }
@@ -530,30 +521,17 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
         self.ascend();
     }
 
-    /// Every place the default walks reach an expression from is one where
-    /// it stands alone. Operands and chain prefixes have walks of their own.
+    /// The default walks don't say how many of an expression's values count
+    /// where they reach it, so it keeps every truncation. Operands have walks
+    /// of their own, and a chain's prefix strips its parentheses with the
+    /// chain.
     fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
-        self.visit_expr_in(expr, false);
+        self.visit_expr_in(expr, Place::Free);
     }
 
-    /// The prefix's own parentheses aren't the walk's to strip, since a
-    /// literal such as `("s"):rep(2)` needs them.
     fn visit_suffixed_expr(&mut self, suffixed_expr: &mut SuffixedExpression<'ast>) {
         if self.descend() {
-            if let Expression::Parenthesized(parenthesized) = &mut suffixed_expr.prefix {
-                if self.descend() {
-                    self.visit_expr(&mut parenthesized.expr);
-                }
-                self.ascend();
-            } else {
-                self.visit_expr(&mut suffixed_expr.prefix);
-                // Only an inlined value can leave a prefix that can't stand
-                // bare, as `x["k"]` with `x = 37.5` becomes `(37.5)["k"]`.
-                if !is_prefix_expr(&suffixed_expr.prefix) {
-                    suffixed_expr.prefix =
-                        parenthesize(self.allocator, suffixed_expr.prefix.take());
-                }
-            }
+            self.visit_expr(&mut suffixed_expr.prefix);
             for suffix in &mut *suffixed_expr.suffixes {
                 match suffix {
                     Suffix::Field(_) => {}

@@ -29,5 +29,8 @@ pub(crate) fn render_expr(source: &str, options: FormatOptions) -> String {
     let [expr] = &*return_stmt.exprs else {
         panic!("expected one returned expression");
     };
-    render(&allocator, options, |f| f.write_expr(expr))
+    let mut f = Formatter::new(&allocator, LuaVersion::Luau, options, Comments::none())
+        .with_groupings(&parsed.groupings);
+    f.write_expr(expr);
+    f.print("")
 }

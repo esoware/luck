@@ -36,6 +36,12 @@
 //! run of binary operators at one precedence level (`a + b - c`) is one
 //! [`BinaryOp`], so however long a run gets, it nests one level.
 //!
+//! The tree keeps parentheses only where they change what they hold, as a
+//! [`ParenthesizedExpression`]. A printer derives every other pair from
+//! where it writes an expression, its [`Slot`], with
+//! [`Expression::needs_parens`], so no code that builds a tree has to
+//! predict how its output reads back.
+//!
 //! Every traversal recurses on the plain stack, once per level of nesting.
 //! `luck_parser` builds no tree deeper than [`MAX_NESTING_DEPTH`], which any
 //! stage walks on a thread with [`MIN_STACK_BYTES`]. Nothing checks a tree
@@ -77,6 +83,7 @@ mod function;
 mod generated;
 mod leaf;
 mod one_or_more;
+mod parens;
 mod query;
 mod span;
 mod stmt;
@@ -100,10 +107,8 @@ pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
 pub use generated::{AstKind, AstType, Visit, VisitMut};
 pub use leaf::{IntegerLiteral, Name, NameIndex, NumberLiteral, StringLiteral};
 pub use one_or_more::OneOrMore;
-pub use query::{
-    expr_starts_with_brace, is_multi_value, is_prefix_expr, stmt_starts_with_paren,
-    unwrap_parentheses,
-};
+pub use parens::{Follower, Slot};
+pub use query::{is_multi_value, leading_prefix, unwrap_parentheses};
 pub use span::GetSpan;
 pub use stmt::{
     Assignment, Attribute, AttributedName, Block, Chunk, CompoundAssignment, DoBlock, ElseClause,

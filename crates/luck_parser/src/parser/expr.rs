@@ -1,7 +1,8 @@
 use luck_allocator::{Box, List, ThinBytes};
 use luck_ast::{
     BinaryLink, ElseIfExprClause, Expression, Field, FunctionArgs, GetSpan as _,
-    InterpolatedSegment, OneOrMore, StringLiteral, Suffix, TableConstructor, TypeArgs,
+    InterpolatedSegment, OneOrMore, StringLiteral, Suffix, SuffixedExpression, TableConstructor,
+    TypeArgs, is_multi_value,
 };
 use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
@@ -14,6 +15,7 @@ impl<'ast> Parser<'ast> {
     pub(super) fn parse_expr(&mut self, min_precedence: u8) -> Expression<'ast> {
         let level = self.nesting_depth;
         let outer = self.begin_operand();
+        let start = self.token.span.start;
         let mut lhs = self.parse_prefix();
         while let Some(op) = self.peek_binary_op() {
             let precedence = op.precedence().0;
@@ -24,7 +26,7 @@ impl<'ast> Parser<'ast> {
                 lhs = Expression::Error(lhs.span());
                 break;
             }
-            lhs = self.parse_binary_run(lhs, op, precedence);
+            lhs = self.parse_binary_run(lhs, op, precedence, start);
             self.nesting_depth = level;
         }
         self.end_operand(outer);
@@ -33,15 +35,18 @@ impl<'ast> Parser<'ast> {
 
     /// The run's operands bind tighter, so a right-associative run loops like
     /// a left-associative one and only the grouping differs.
+    ///
+    /// Parentheses end a run, so an operand in them stays a run of its own.
     fn parse_binary_run(
         &mut self,
         first: Expression<'ast>,
         op: BinOp,
         precedence: u8,
+        start: u32,
     ) -> Expression<'ast> {
         self.advance();
         let operand_precedence = precedence.saturating_add(1);
-        let start = self.scratch.binary_links.len();
+        let links_start = self.scratch.binary_links.len();
         let operand = self.parse_expr(operand_precedence);
         self.scratch.binary_links.push(BinaryLink::new(op, operand));
         while let Some(next_op) =
@@ -51,8 +56,9 @@ impl<'ast> Parser<'ast> {
             let next_operand = self.parse_expr(operand_precedence);
             self.scratch.binary_links.push(BinaryLink::new(next_op, next_operand));
         }
-        let links = OneOrMore::split_off_in(&mut self.scratch.binary_links, start, self.allocator);
-        let span = first.span().merge(links.last().operand.span());
+        let links =
+            OneOrMore::split_off_in(&mut self.scratch.binary_links, links_start, self.allocator);
+        let span = Span::new(start, self.previous_span.end);
         Expression::new_binary_op(span, first, links, self.allocator)
     }
 
@@ -84,11 +90,12 @@ impl<'ast> Parser<'ast> {
             return self.parse_unary(op);
         }
         let level = self.nesting_depth;
+        let start = self.token.span.start;
         let primary = self.parse_primary_expr();
         // Casts apply to any simpleexp (`1 :: number`, `{} :: Foo`), not just
         // suffix chains, so they're parsed here.
         if self.is_at(TokenKind::DoubleColon) && self.version.has_type_syntax() {
-            return self.parse_type_cast(primary, level);
+            return self.parse_type_cast(primary, level, start);
         }
         primary
     }
@@ -103,21 +110,26 @@ impl<'ast> Parser<'ast> {
         self.advance();
         let operand = self.parse_expr(UnOp::PRECEDENCE);
         self.exit_depth();
-        let span = op_span.merge(operand.span());
+        let span = Span::new(op_span.start, self.previous_span.end);
         Expression::new_unary_op(span, op, operand, self.allocator)
     }
 
     /// Luau's grammar is `asexp ::= simpleexp ['::' Type]`, so `x :: A :: B`
     /// is a parse error there. A second `::` is left in place to fail as an
     /// unexpected token.
-    fn parse_type_cast(&mut self, expr: Expression<'ast>, level: usize) -> Expression<'ast> {
+    fn parse_type_cast(
+        &mut self,
+        expr: Expression<'ast>,
+        level: usize,
+        start: u32,
+    ) -> Expression<'ast> {
         if !self.enter_wrapper(level) {
             return Expression::Error(expr.span());
         }
         self.advance();
         let ty = self.parse_type();
         self.nesting_depth = level;
-        let span = expr.span().merge(ty.span());
+        let span = Span::new(start, self.previous_span.end);
         Expression::new_type_cast(span, expr, ty, self.allocator)
     }
 
@@ -128,8 +140,9 @@ impl<'ast> Parser<'ast> {
             TokenKind::Identifier => {
                 let name = self.advance_name();
                 self.counts.name_uses = self.counts.name_uses.wrapping_add(1);
+                let start = name.span.start;
                 let prefix = Expression::Name(self.alloc(name));
-                self.parse_suffixes(prefix)
+                self.parse_suffixes(prefix, start)
             }
             TokenKind::Number => Expression::Number(self.advance_number()),
             TokenKind::StringLiteral => Expression::StringLiteral(self.advance_string()),
@@ -166,19 +179,34 @@ impl<'ast> Parser<'ast> {
         Expression::VarArg(span)
     }
 
+    /// The tree keeps the parentheses around a call or `...`, which they
+    /// truncate to one value, and around a Luau integer literal, whose
+    /// negation they keep from reading as a negative literal. It records the
+    /// rest and reads what they hold as if they weren't there, so they open
+    /// no level.
     fn parse_parenthesized(&mut self) -> Expression<'ast> {
         let open = self.token.span;
-        if !self.enter_depth() {
+        if !self.enter_grouping() {
             return Expression::Error(open);
         }
+        let level = self.nesting_depth;
         self.advance();
         self.open(Closer::Paren);
         let expr = self.parse_expr(0);
-        self.exit_depth();
+        self.grouping_depth = self.grouping_depth.wrapping_sub(1);
         let close = self.expect_closer(TokenKind::RightParen, Closer::Paren);
-        let span = open.merge(close);
-        let parenthesized = Expression::new_parenthesized(span, expr, self.allocator);
-        self.parse_suffixes(parenthesized)
+        let parens = open.merge(close);
+        let grouped = if is_multi_value(&expr) || matches!(expr, Expression::Integer(_)) {
+            if !self.enter_wrapper(level) {
+                return Expression::Error(parens);
+            }
+            self.nesting_depth = level;
+            Expression::new_parenthesized(parens, expr, self.allocator)
+        } else {
+            self.groupings.record(expr.span(), parens);
+            expr
+        };
+        self.parse_suffixes(grouped, open.start)
     }
 
     #[cold]
@@ -202,23 +230,26 @@ impl<'ast> Parser<'ast> {
         Expression::Error(span)
     }
 
-    /// The suffixes after `prefix` loop into one node, so a run of any
-    /// length is one level of nesting, counted toward the depth cap from the
-    /// prefix's deepest level.
+    /// The suffixes after `prefix`, whose first token is at `start`, loop
+    /// into one node, so a run of any length is one level of nesting, counted
+    /// toward the depth cap from the prefix's deepest level.
     ///
     /// Inlined apart from the run, so a prefix with no suffix makes no call,
     /// which measured 1% faster.
     #[inline]
-    fn parse_suffixes(&mut self, prefix: Expression<'ast>) -> Expression<'ast> {
-        if self.is_at_suffix() { self.parse_suffix_run(prefix) } else { prefix }
+    fn parse_suffixes(&mut self, prefix: Expression<'ast>, start: u32) -> Expression<'ast> {
+        if self.is_at_suffix() { self.parse_suffix_run(prefix, start) } else { prefix }
     }
 
-    fn parse_suffix_run(&mut self, prefix: Expression<'ast>) -> Expression<'ast> {
+    /// A prefix that's a run already, which only parentheses can make, takes
+    /// these suffixes into it, as `(a.b).c` is `a.b.c`.
+    fn parse_suffix_run(&mut self, prefix: Expression<'ast>, start: u32) -> Expression<'ast> {
         let level = self.nesting_depth;
-        if !self.enter_wrapper(level) {
+        if !matches!(prefix, Expression::Suffixed(_)) && !self.enter_wrapper(level) {
             return Expression::Error(prefix.span());
         }
-        let start = self.scratch.suffixes.len();
+        self.nesting_depth = level.wrapping_add(1);
+        let suffixes_start = self.scratch.suffixes.len();
         loop {
             self.parse_suffix();
             if !self.is_at_suffix() {
@@ -226,9 +257,30 @@ impl<'ast> Parser<'ast> {
             }
         }
         self.nesting_depth = level;
-        let suffixes = OneOrMore::split_off_in(&mut self.scratch.suffixes, start, self.allocator);
-        let span = prefix.span().merge(suffixes.last().span());
+        let span = Span::new(start, self.previous_span.end);
+        if let Expression::Suffixed(chain) = prefix {
+            return self.join_suffixes(chain, suffixes_start, span);
+        }
+        let suffixes =
+            OneOrMore::split_off_in(&mut self.scratch.suffixes, suffixes_start, self.allocator);
         Expression::new_suffixed(span, prefix, suffixes, self.allocator)
+    }
+
+    /// Apart from the run, so its loop stays out of the frame that every
+    /// level of nesting in a chain takes.
+    #[cold]
+    fn join_suffixes(
+        &mut self,
+        mut chain: Box<'ast, SuffixedExpression<'ast>>,
+        suffixes_start: usize,
+        span: Span,
+    ) -> Expression<'ast> {
+        let allocator = self.allocator;
+        for suffix in self.scratch.suffixes.drain(suffixes_start..) {
+            chain.suffixes.push(suffix, allocator);
+        }
+        chain.span = span;
+        Expression::Suffixed(chain)
     }
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token ends the run")]
@@ -320,7 +372,7 @@ impl<'ast> Parser<'ast> {
             let clause_condition = self.parse_expr(0);
             self.expect(TokenKind::Then);
             let expr = self.parse_expr(0);
-            let span = elseif_span.merge(expr.span());
+            let span = Span::new(elseif_span.start, self.previous_span.end);
             let clause = ElseIfExprClause::new(span, clause_condition, expr);
             self.scratch.elseif_exprs.push(clause);
         }
@@ -328,7 +380,7 @@ impl<'ast> Parser<'ast> {
         self.expect(TokenKind::Else);
         let else_expr = self.parse_expr(0);
         self.exit_depth();
-        let span = if_span.merge(else_expr.span());
+        let span = Span::new(if_span.start, self.previous_span.end);
         let elseif_clauses =
             List::split_off_in(&mut self.scratch.elseif_exprs, start, self.allocator);
         Expression::new_if_expr(
@@ -543,7 +595,7 @@ impl<'ast> Parser<'ast> {
             self.expect_closer(TokenKind::RightBracket, Closer::Bracket);
             self.expect(TokenKind::Equal);
             let value = self.parse_expr(0);
-            let span = open.merge(value.span());
+            let span = Span::new(open.start, self.previous_span.end);
             Field::Bracketed { span, key, value }
         } else if self.is_at_identifier() && self.peek_next() == TokenKind::Equal {
             // `Name = expr`, which needs one token of lookahead for the `=`.

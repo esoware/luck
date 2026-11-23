@@ -131,7 +131,7 @@ fn the_default_walk_leaves_the_tree_as_it_was() {
 
 #[test]
 fn a_rewrite_can_restructure_through_take() {
-    // return ((x)), with the parentheses removed in place: return x.
+    // return (f()), with the parentheses removed in place: return f().
     struct Unparenthesize;
 
     impl<'ast> VisitMut<'ast> for Unparenthesize {
@@ -146,13 +146,13 @@ fn a_rewrite_can_restructure_through_take() {
 
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let grouped = synth.parenthesized(synth.parenthesized(synth.name_expr("x")));
-    let mut block = synth.block([synth.return_([grouped])]);
+    let truncated = synth.single_value(synth.call(synth.name_expr("f"), []));
+    let mut block = synth.block([synth.return_([truncated])]);
     Unparenthesize.visit_block(&mut block);
     let [Statement::Return(returned)] = &*block.stmts else {
         panic!("expected a return");
     };
-    assert!(matches!(*returned.exprs, [Expression::Name(_)]));
+    assert!(matches!(*returned.exprs, [Expression::Suffixed(_)]));
 }
 
 #[test]

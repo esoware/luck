@@ -413,12 +413,19 @@ fn precedence_parens_roundtrip() {
 fn if_expr_operand_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    // a or (if c then 1 else 2): unparenthesized, the if-expression's else
-    // branch would swallow everything after it.
-    let if_expr = synth.if_expr(synth.name_expr("c"), synth.number_i64(1), [], synth.number_i64(2));
-    let guarded = synth.binary_op(synth.name_expr("a"), BinOp::Or, if_expr);
-    let block = synth.block([synth.return_([guarded])]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "return a or (if c then 1 else 2)\n");
+    // An if-expression's else branch takes in all that follows it, so it
+    // needs parentheses before an operator, and none at the end.
+    let if_expr =
+        || synth.if_expr(synth.name_expr("c"), synth.number_i64(1), [], synth.number_i64(2));
+    let guarded = synth.binary_op(synth.name_expr("a"), BinOp::Or, if_expr());
+    let leading = synth.binary_op(if_expr(), BinOp::Or, synth.name_expr("a"));
+    let block = synth.block([synth.return_([guarded, leading])]);
+    assert_format_block(
+        &fixture,
+        block,
+        LuaVersion::Luau,
+        "return a or if c then 1 else 2, (if c then 1 else 2) or a\n",
+    );
 }
 
 #[test]
@@ -1028,7 +1035,7 @@ fn a_tree_far_past_the_nesting_cap_is_refused_without_walking_down_it() {
     let synth = fixture.synth();
     let mut nested = synth.name_expr("x");
     for _ in 0..200_000u32 {
-        nested = synth.parenthesized(nested);
+        nested = synth.unary_op(UnOp::Not, nested);
     }
     let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([nested])]));
     assert_eq!(block_nesting_depth(&chunk.block), MAX_NESTING_DEPTH + 1, "measuring stops there");

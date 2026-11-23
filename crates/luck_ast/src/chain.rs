@@ -1,10 +1,10 @@
 use core::iter::once;
 use core::{fmt, mem};
 
-use luck_allocator::{Allocator, Box, ListIntoIter};
-use luck_token::{Associativity, BinOp, OperandSide, Span};
+use luck_allocator::{Allocator, Box};
+use luck_token::{Associativity, Span};
 
-use crate::expr::{BinaryLink, BinaryOp, Expression, FunctionArgs, Suffix, SuffixedExpression};
+use crate::expr::{BinaryOp, Expression, FunctionArgs, Suffix, SuffixedExpression};
 use crate::leaf::Name;
 use crate::span::GetSpan;
 use crate::types::TypeArgs;
@@ -15,6 +15,9 @@ use crate::types::TypeArgs;
 pub struct ChainHead<'ast> {
     pub prefix: &'ast Expression<'ast>,
     pub suffixes: &'ast [Suffix<'ast>],
+    /// Where the chain starts, which is before the prefix when the prefix is
+    /// in parentheses the tree doesn't keep.
+    pub start: u32,
 }
 
 impl<'ast> ChainHead<'ast> {
@@ -44,14 +47,18 @@ impl<'ast> ChainHead<'ast> {
     #[must_use]
     pub fn split_last(self) -> Option<(Self, &'ast Suffix<'ast>)> {
         let (last, before) = self.suffixes.split_last()?;
-        Some((Self { prefix: self.prefix, suffixes: before }, last))
+        Some((Self { suffixes: before, ..self }, last))
     }
 }
 
+/// A head with a suffix spans from where the chain starts, so it holds the
+/// parentheses its prefix is in, and a head with none is its prefix.
 impl GetSpan for ChainHead<'_> {
     fn span(&self) -> Span {
         let prefix_span = self.prefix.span();
-        self.suffixes.last().map_or(prefix_span, |last| prefix_span.merge(last.span()))
+        self.suffixes.last().map_or(prefix_span, |last| {
+            prefix_span.merge(last.span()).merge(Span::new(self.start, self.start))
+        })
     }
 }
 
@@ -60,9 +67,9 @@ impl GetSpan for ChainHead<'_> {
 impl<'ast> From<&'ast Expression<'ast>> for ChainHead<'ast> {
     fn from(expr: &'ast Expression<'ast>) -> Self {
         if let Expression::Suffixed(chain) = expr {
-            Self { prefix: &chain.prefix, suffixes: &chain.suffixes }
+            chain.head(chain.suffixes.len())
         } else {
-            Self { prefix: expr, suffixes: &[] }
+            Self { prefix: expr, suffixes: &[], start: expr.span().start }
         }
     }
 }
@@ -136,9 +143,13 @@ impl<'ast> Call<'ast> {
     }
 }
 
+/// From where the chain starts, as a head with a suffix.
 impl GetSpan for Call<'_> {
     fn span(&self) -> Span {
-        self.callee.span().merge(self.args.span())
+        self.callee
+            .span()
+            .merge(self.args.span())
+            .merge(Span::new(self.callee.start, self.callee.start))
     }
 }
 
@@ -148,7 +159,11 @@ impl<'ast> SuffixedExpression<'ast> {
     #[must_use]
     pub fn head(&self, count: usize) -> ChainHead<'_> {
         let suffixes: &[Suffix<'_>] = &self.suffixes;
-        ChainHead { prefix: &self.prefix, suffixes: suffixes.get(..count).unwrap_or(suffixes) }
+        ChainHead {
+            prefix: &self.prefix,
+            suffixes: suffixes.get(..count).unwrap_or(suffixes),
+            start: self.span.start,
+        }
     }
 
     /// Every call in the chain, first to last.
@@ -160,7 +175,7 @@ impl<'ast> SuffixedExpression<'ast> {
     #[must_use]
     pub fn last_call(&self) -> Option<Call<'_>> {
         let (last, before) = self.suffixes.split_last()?;
-        Call::new(ChainHead { prefix: &self.prefix, suffixes: before }, last)
+        Call::new(self.head(before.len()), last)
     }
 
     /// Whether the chain ends in a call, which makes it one too.
@@ -209,76 +224,64 @@ impl<'ast> BinaryOp<'ast> {
         self.links.first().op.precedence()
     }
 
-    /// See [`BinOp::can_nest_bare`].
-    #[must_use]
-    pub fn can_nest_bare(&self, outer: BinOp, side: OperandSide) -> bool {
-        self.links.first().op.can_nest_bare(outer, side)
-    }
-
-    /// Merges each operand that a rewrite left as a bare run at this level
-    /// into this run, as printing and reading it back would, so the tree
-    /// nests no deeper than the parser would read it.
+    /// Joins in the operand that's a run at this level where it groups as
+    /// this run would without it: the first of a left-associative run, or
+    /// the last of a right-associative one. Says whether it joined any.
     ///
-    /// A bare run among a merged run's own operands merges too, however many
-    /// runs deep, in one pass over the operands that move.
-    pub fn splice_operands(&mut self, allocator: &'ast Allocator) {
-        let level = self.precedence().0;
-        let is_bare_run = |operand: &Expression<'_>| matches!(operand, Expression::BinaryOp(inner) if inner.precedence().0 == level);
-        if !is_bare_run(&self.first) && !self.links.iter().any(|link| is_bare_run(&link.operand)) {
-            return;
-        }
-        // The links still to place, the innermost run's on top. A bare first
-        // operand's links swap in for the ones after them, which wait here.
-        let mut pending = Vec::new();
-        let mut first = self.first.take();
-        while let Expression::BinaryOp(inner) = first {
-            if inner.precedence().0 != level {
-                first = Expression::BinaryOp(inner);
-                break;
+    /// The printers write such an operand in parentheses, so this drops them,
+    /// and the tree nests no deeper than reading it back without them would.
+    /// One run deep or any number, it's one pass over the links that move.
+    pub fn splice_operands(&mut self, allocator: &'ast Allocator) -> bool {
+        let (level, associativity) = self.precedence();
+        let is_spliced = |operand: &Expression<'_>| matches!(operand, Expression::BinaryOp(inner) if inner.precedence().0 == level);
+        match associativity {
+            Associativity::Left => {
+                if !is_spliced(&self.first) {
+                    return false;
+                }
+                // Each run's links follow those of the run it starts with,
+                // and wait here outermost first.
+                let mut later = Vec::new();
+                let mut first = self.first.take();
+                while is_spliced(&first)
+                    && let Expression::BinaryOp(inner) = first
+                {
+                    let Self { first: inner_first, links, .. } = Box::unbox(inner);
+                    later.push(mem::replace(&mut self.links, links));
+                    first = inner_first;
+                }
+                self.first = first;
+                for links in later.into_iter().rev() {
+                    for link in links {
+                        self.links.push(link, allocator);
+                    }
+                }
             }
-            let Self { first: inner_first, links, .. } = Box::unbox(inner);
-            pending.push(mem::replace(&mut self.links, links).into_iter());
-            first = inner_first;
+            Associativity::Right => {
+                if !is_spliced(&self.links.last().operand) {
+                    return false;
+                }
+                while is_spliced(&self.links.last().operand)
+                    && let Expression::BinaryOp(inner) = self.links.last_mut().operand.take()
+                {
+                    let Self { first, links, .. } = Box::unbox(inner);
+                    self.links.last_mut().operand = first;
+                    for link in links {
+                        self.links.push(link, allocator);
+                    }
+                }
+            }
         }
-        self.first = first;
-        pending.push(self.links.split_off_rest().into_iter());
-        // The one link left.
-        let head = self.links.last_mut();
-        head.operand = leftmost_operand(head.operand.take(), level, &mut pending);
-        while let Some(links) = pending.last_mut() {
-            let Some(link) = links.next() else {
-                pending.pop();
-                continue;
-            };
-            let operand = leftmost_operand(link.operand, level, &mut pending);
-            self.links.push(BinaryLink::new(link.op, operand), allocator);
-        }
-    }
-}
-
-/// `operand` out of the bare runs at `level` it opens, whose links go on top
-/// of `pending`, to follow it.
-fn leftmost_operand<'ast>(
-    mut operand: Expression<'ast>,
-    level: u8,
-    pending: &mut Vec<ListIntoIter<'ast, BinaryLink<'ast>>>,
-) -> Expression<'ast> {
-    loop {
-        let Expression::BinaryOp(inner) = operand else {
-            return operand;
-        };
-        if inner.precedence().0 != level {
-            return Expression::BinaryOp(inner);
-        }
-        let BinaryOp { first, links, .. } = Box::unbox(inner);
-        pending.push(links.into_iter());
-        operand = first;
+        true
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use luck_token::BinOp;
+
     use super::*;
+    use crate::expr::BinaryLink;
     use crate::fixtures::Fixture;
     use crate::one_or_more::OneOrMore;
 
@@ -339,13 +342,20 @@ mod tests {
         assert!(matches!(*chain.suffixes, [Suffix::Call(_), Suffix::Field(_), Suffix::Field(_)]));
     }
 
+    fn ops(expr: &Expression<'_>) -> Vec<BinOp> {
+        let Expression::BinaryOp(run) = expr else {
+            panic!("expected a binary run, got {expr:?}");
+        };
+        run.links.iter().map(|link| link.op).collect()
+    }
+
     #[test]
-    fn splice_operands_joins_bare_runs_at_its_level_in_order() {
+    fn splice_operands_joins_only_an_operand_that_groups_as_the_run_would() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let allocator = fixture.allocator();
         let name = |name: &str| synth.name_expr(name);
-        // (a + b) - (c * d + e), with no parentheses: a + b - c * d + e.
+        // (a + b) - (c * d + e) is a + b - (c * d + e).
         let left = unspliced_run(name("a"), BinOp::Add, name("b"), allocator);
         let product = unspliced_run(name("c"), BinOp::Mul, name("d"), allocator);
         let right = unspliced_run(product, BinOp::Add, name("e"), allocator);
@@ -353,11 +363,32 @@ mod tests {
         else {
             panic!("expected a binary run");
         };
-        run.splice_operands(allocator);
-        let ops: Vec<BinOp> = run.links.iter().map(|link| link.op).collect();
-        assert_eq!(ops, [BinOp::Add, BinOp::Sub, BinOp::Add]);
+        assert!(run.splice_operands(allocator));
+        assert_eq!(
+            run.links.iter().map(|link| link.op).collect::<Vec<_>>(),
+            [BinOp::Add, BinOp::Sub]
+        );
         assert!(matches!(run.first, Expression::Name(_)));
-        assert!(matches!(run.links[1].operand, Expression::BinaryOp(_)), "`c * d` stays a run");
+        assert_eq!(ops(&run.links[1].operand), [BinOp::Add], "`c * d + e` keeps its grouping");
+        assert!(!run.splice_operands(allocator));
+
+        // a .. (b .. c) is a .. b .. c, but (a .. b) .. c isn't.
+        let tail = unspliced_run(name("b"), BinOp::Concat, name("c"), allocator);
+        let Expression::BinaryOp(mut concat) =
+            unspliced_run(name("a"), BinOp::Concat, tail, allocator)
+        else {
+            panic!("expected a binary run");
+        };
+        assert!(concat.splice_operands(allocator));
+        assert_eq!(concat.links.len(), 2);
+        let head = unspliced_run(name("a"), BinOp::Concat, name("b"), allocator);
+        let Expression::BinaryOp(mut grouped) =
+            unspliced_run(head, BinOp::Concat, name("c"), allocator)
+        else {
+            panic!("expected a binary run");
+        };
+        assert!(!grouped.splice_operands(allocator));
+        assert_eq!(ops(&grouped.first), [BinOp::Concat]);
     }
 
     #[test]

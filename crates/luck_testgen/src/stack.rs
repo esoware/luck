@@ -16,11 +16,14 @@ fn wrapped(open: &str, count: usize, innermost: &str, close: &str) -> String {
 #[must_use]
 pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
     // How many times a construct that nests one, two, three, or four levels
-    // fits under the chunk's own.
+    // fits under the chunk's own. Parentheses the tree leaves out open none,
+    // and as many as the cap may be open at once over a tree at it.
     let one = MAX_NESTING_DEPTH - 1;
     let (two, three, four) = (one.div_euclid(2), one.div_euclid(3), one.div_euclid(4));
+    let groups = MAX_NESTING_DEPTH;
     let lua = [
-        format!("return {}", wrapped("(", one, "x", ")")),
+        format!("return {}", wrapped("(", groups, "x", ")")),
+        format!("return {}", wrapped("(", groups, &wrapped("{", one, "1", "}"), ")")),
         format!("return {}", wrapped("f(", one, "x", ")")),
         format!("return {}", wrapped("a:m(", one, "x", ")")),
         format!("return {}", wrapped("a[", one, "x", "]")),
@@ -29,10 +32,10 @@ pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         format!("return {}", wrapped("{[1]=", one, "1", "}")),
         format!("return {}", wrapped("f{", two, "", "}")),
         format!("return {}x", "not ".repeat(one)),
-        format!("return {}x{}", "(".repeat(two), "+x)".repeat(two)),
-        format!("return {}", wrapped("x..(", two, "x", ")")),
+        format!("return {}x{}", "(".repeat(one), "+x)".repeat(one)),
+        format!("return {}", wrapped("x..(", one, "x", ")")),
         format!("return {}", wrapped("x^-", two, "x", "")),
-        format!("return {}a{}", "(".repeat(two), ").b".repeat(two)),
+        format!("return {}a{}", "(".repeat(groups), ").b".repeat(groups)),
         format!("return {}f{}", "(".repeat(two), ")()".repeat(two)),
         format!("return {}", wrapped("function() return ", two, "1", " end")),
         wrapped("x = function() ", two, "x = 1", " end"),
@@ -40,7 +43,7 @@ pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         wrapped("f(function() ", three, "x = 1", " end)"),
         wrapped("a:m(function() ", three, "x = 1", " end)"),
         wrapped("f{function() ", four, "x = 1", " end}"),
-        wrapped("(function() ", four, "x = 1", " end)()"),
+        wrapped("(function() ", three, "x = 1", " end)()"),
         wrapped("do ", one, "x = 1", " end"),
         wrapped("if a then ", one, "x = 1", " end"),
         wrapped("if a then else ", one, "x = 1", " end"),
@@ -53,7 +56,7 @@ pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
     let luau = [
         format!("return {}x", "if a then b else ".repeat(one)),
         format!("return {}", wrapped("`{", one, "x", "}`")),
-        format!("return {}", wrapped("(", two, "x", " :: T)")),
+        format!("return {}", wrapped("(", one, "x", " :: T)")),
         format!("type X = {}", wrapped("{", one, "T", "}")),
         format!("type X = {}", wrapped("(", one, "T", ")")),
         format!("type X = {}", wrapped("A<", one, "T", " >")),

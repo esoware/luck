@@ -143,8 +143,8 @@
 //! use luck::token::LuaVersion;
 //!
 //! let allocator = Allocator::new();
-//! let parsed = luck::parser::parse(&allocator, "local x = ( 1 )", LuaVersion::Lua54);
-//! assert_eq!(luck::codegen::compact(&parsed.chunk), "local x=(1)");
+//! let parsed = luck::parser::parse(&allocator, "local x = ( a + b ) * ( c )", LuaVersion::Lua54);
+//! assert_eq!(luck::codegen::compact(&parsed.chunk), "local x=(a+b)*c");
 //! # }
 //! ```
 //!

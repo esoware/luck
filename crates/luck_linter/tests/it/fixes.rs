@@ -122,6 +122,6 @@ fn fixes_overlapping_ones_in_later_rounds() {
     let source = "return not (a == (not (b == c)))";
     assert_eq!(
         fixed(source, &enable("unnecessary_negation"), FixKind::Fix),
-        "return (a ~= ((b ~= c)))"
+        "return (a ~= (b ~= c))"
     );
 }

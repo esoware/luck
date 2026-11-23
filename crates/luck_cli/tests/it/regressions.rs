@@ -214,7 +214,7 @@ return not (a == (not (b == c)))
         fs::read_to_string(&path).expect("main.lua reads"),
         "\
 local a, b, c = 1, 2, 3
-return (a ~= ((b ~= c)))
+return (a ~= (b ~= c))
 "
     );
 }
@@ -339,12 +339,12 @@ fn bundle_survives_long_runs() {
     );
 }
 
-/// A project whose `deep.lua` holds `1` in `groups` parenthesized groups.
+/// A project whose `deep.lua` holds `1` inside `tables` table constructors.
 /// Its own block is a level, and its wrapper in a bundle adds two more.
-fn deep_module_project(groups: usize) -> TempDir {
+fn deep_module_project(tables: usize) -> TempDir {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "return require(\"deep\")\n");
-    let deep = format!("return {}1{}\n", "(".repeat(groups), ")".repeat(groups));
+    let deep = format!("return {}1{}\n", "{".repeat(tables), "}".repeat(tables));
     write_file(directory.path(), "deep.lua", &deep);
     directory
 }
@@ -375,8 +375,8 @@ fn bundle_at_the_nesting_cap_reads_back() {
 #[test]
 fn bundle_reports_a_module_too_deep_to_wrap_in_that_module() {
     let directory = deep_module_project(MAX_NESTING_DEPTH - 1);
-    // The first group the wrapper pushes past the cap follows `return ` and
-    // the groups before it.
+    // The first table the wrapper pushes past the cap follows `return ` and
+    // the tables before it.
     let first_too_deep = format!("deep.lua:1:{} ", "return ".len() + MAX_NESTING_DEPTH - 2);
 
     for args in [&["bundle", "main.lua"][..], &["bundle", "main.lua", "--minify"]] {

@@ -884,7 +884,7 @@ return longname
             ),
             (
                 "return (function(a, b) return a, b end) :: typeof(function(c) return c end)\n",
-                "return(function(l,u)return l,u end)::typeof(function(l)return l end)",
+                "return function(l,u)return l,u end::typeof(function(l)return l end)",
             ),
             (
                 "type T<U = typeof(function(a, b) return a, b end)> = typeof(function(c) return c end)\n",

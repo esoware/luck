@@ -6,12 +6,6 @@ pub enum Associativity {
     Right,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperandSide {
-    Left,
-    Right,
-}
-
 /// The spelling is fixed per variant, so a node holds this one-byte enum instead of a 12-byte
 /// `Token`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -128,8 +122,8 @@ impl BinOp {
     }
 
     /// `(precedence, associativity)`, from the precedence table that the
-    /// parser, the minifier, and the AST synthesizer all share, with
-    /// [`UnOp::PRECEDENCE`] as its unary level.
+    /// parser and the printers share, with [`UnOp::PRECEDENCE`] as its unary
+    /// level.
     #[must_use]
     pub const fn precedence(self) -> (u8, Associativity) {
         match self {
@@ -147,23 +141,6 @@ impl BinOp {
             Self::Mul | Self::Div | Self::Mod | Self::FloorDiv => (10, Associativity::Left),
             Self::Pow => (12, Associativity::Right),
         }
-    }
-
-    /// Whether a binary expression on this operator, printed without
-    /// parentheses as `outer`'s `side` operand, parses back as that operand:
-    /// it binds tighter than `outer`, or as tight with `outer` associating
-    /// toward `side`.
-    #[must_use]
-    pub const fn can_nest_bare(self, outer: Self, side: OperandSide) -> bool {
-        let (precedence, _) = self.precedence();
-        let (outer_precedence, outer_associativity) = outer.precedence();
-        precedence > outer_precedence
-            || (precedence == outer_precedence
-                && matches!(
-                    (side, outer_associativity),
-                    (OperandSide::Left, Associativity::Left)
-                        | (OperandSide::Right, Associativity::Right)
-                ))
     }
 
     #[must_use]

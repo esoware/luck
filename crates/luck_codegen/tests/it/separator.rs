@@ -31,12 +31,12 @@ fn words_glue_to_pieces_that_cannot_extend_them() {
     for (source, expected) in [
         ("function f() return 'hello' end", "function f()return'hello'end"),
         ("function f() return {} end", "function f()return{}end"),
-        ("function f() return (1) end", "function f()return(1)end"),
+        ("function f() return (g()) end", "function f()return(g())end"),
         ("function f() return -1 end", "function f()return-1 end"),
         ("function f() return #t end", "function f()return#t end"),
         // A name never reads on through `.`, so `return.5` is `return` `.5`.
         ("function f() return .5 end", "function f()return.5 end"),
-        ("x = not(y)", "x=not(y)"),
+        ("x = not(y or z)", "x=not(y or z)"),
         ("x = not 'hello'", "x=not'hello'"),
         ("x = a and .5 or b", "x=a and.5 or b"),
     ] {
@@ -131,7 +131,7 @@ fn symbols_that_cannot_merge_stay_glued() {
         ("x = ##t", "x=##t", LuaVersion::Lua51),
         ("x = #{1,2,3}", "x=#{1,2,3}", LuaVersion::Lua51),
         ("x = a / (1/b)", "x=a/(1/b)", LuaVersion::Lua51),
-        ("x = ~(~y)", "x=~(~y)", LuaVersion::Lua53),
+        ("x = ~(~y)", "x=~~y", LuaVersion::Lua53),
         ("::a:: ::b::", "::a::::b::", LuaVersion::Lua52),
         ("::lbl:: x = 1", "::lbl::x=1", LuaVersion::Lua52),
     ] {
@@ -142,27 +142,33 @@ fn symbols_that_cannot_merge_stay_glued() {
 #[test]
 fn semicolon_separates_a_stmt_that_starts_with_a_paren_from_one_it_would_call() {
     for (source, expected, version) in [
-        // Without the `;`, `1(f)` reads as a call.
+        // Without the `;`, `1(f or g)` reads as a call.
         (
             "\
 x = 1
-(f)()",
-            "x=1;(f)()",
+(f or g)()",
+            "x=1;(f or g)()",
             LuaVersion::Lua51,
         ),
-        // Without the `;`, `f(x)(g)(y)` is one chained call.
-        ("f(x);(g)(y)", "f(x);(g)(y)", LuaVersion::Lua51),
-        ("f(x)(g)(y)", "f(x)(g)(y)", LuaVersion::Lua51),
-        ("repeat until x;(f)()", "repeat until x;(f)()", LuaVersion::Lua51),
-        ("local x;(f).y = 1", "local x;(f).y=1", LuaVersion::Lua51),
+        // Without the `;`, `f(x)(g or h)(y)` is one chained call.
+        ("f(x);(g or h)(y)", "f(x);(g or h)(y)", LuaVersion::Lua51),
+        ("f(x)(g or h)(y)", "f(x)(g or h)(y)", LuaVersion::Lua51),
+        ("repeat until x;(f or g)()", "repeat until x;(f or g)()", LuaVersion::Lua51),
+        ("local x;(f or g).y = 1", "local x;(f or g).y=1", LuaVersion::Lua51),
+        ("local x;('s'):f()", "local x;('s'):f()", LuaVersion::Lua51),
+        ("local x;(f()).y = 1", "local x;(f()).y=1", LuaVersion::Lua51),
+        // Parentheses around a name or a chain change nothing, so they go,
+        // and the `;` with them.
+        ("local x;(f)()", "local x f()", LuaVersion::Lua51),
+        ("local x;(f.g).y = 1", "local x f.g.y=1", LuaVersion::Lua51),
         // Lua 5.2+: the tree holds no `;`, so a run prints as the one a `(` needs.
-        ("f(x);(g)(y)", "f(x);(g)(y)", LuaVersion::Lua52),
-        ("f(x);;(g)(y)", "f(x);(g)(y)", LuaVersion::Lua52),
+        ("f(x);(g or h)(y)", "f(x);(g or h)(y)", LuaVersion::Lua52),
+        ("f(x);;(g or h)(y)", "f(x);(g or h)(y)", LuaVersion::Lua52),
         // Dropping the `;` would still parse, as `f()(g or h)<<T>>()`.
         ("f();(g or h)<<T>>()", "f();(g or h)<<T>>()", LuaVersion::Luau),
         ("f();(g or h)<<T>>.x = 1", "f();(g or h)<<T>>.x=1", LuaVersion::Luau),
         ("f();(g or h)<<T>>[1] += 1", "f();(g or h)<<T>>[1]+=1", LuaVersion::Luau),
-        ("type T = U;(f)()", "type T=U;(f)()", LuaVersion::Luau),
+        ("type T = U;(f or g)()", "type T=U;(f or g)()", LuaVersion::Luau),
     ] {
         assert_compacts_to(source, expected, version);
     }
@@ -171,19 +177,27 @@ x = 1
 #[test]
 fn no_semicolon_follows_a_stmt_that_a_paren_cannot_continue() {
     for (source, expected, version) in [
-        ("do end (f)()", "do end(f)()", LuaVersion::Lua51),
-        ("while x do end (f)()", "while x do end(f)()", LuaVersion::Lua51),
-        ("if x then end (f)()", "if x then end(f)()", LuaVersion::Lua51),
-        ("for i = 1, 2 do end (f)()", "for i=1,2 do end(f)()", LuaVersion::Lua51),
-        ("for k in p do end (f)()", "for k in p do end(f)()", LuaVersion::Lua51),
-        ("function f() end (f)()", "function f()end(f)()", LuaVersion::Lua51),
-        ("local function f() end (f)()", "local function f()end(f)()", LuaVersion::Lua51),
-        ("goto l ::l:: (f)()", "goto l::l::(f)()", LuaVersion::Lua52),
-        ("while x do goto l (f)() ::l:: end", "while x do goto l(f)()::l::end", LuaVersion::Lua52),
-        ("while x do break (f)() end", "while x do break(f)()end", LuaVersion::Lua52),
-        ("global function f() end (f)()", "global function f()end(f)()", LuaVersion::Lua55),
-        ("global * (f)()", "global*(f)()", LuaVersion::Lua55),
-        ("type function F() end (f)()", "type function F()end(f)()", LuaVersion::Luau),
+        ("do end (f or g)()", "do end(f or g)()", LuaVersion::Lua51),
+        ("while x do end (f or g)()", "while x do end(f or g)()", LuaVersion::Lua51),
+        ("if x then end (f or g)()", "if x then end(f or g)()", LuaVersion::Lua51),
+        ("for i = 1, 2 do end (f or g)()", "for i=1,2 do end(f or g)()", LuaVersion::Lua51),
+        ("for k in p do end (f or g)()", "for k in p do end(f or g)()", LuaVersion::Lua51),
+        ("function f() end (f or g)()", "function f()end(f or g)()", LuaVersion::Lua51),
+        ("local function f() end (f or g)()", "local function f()end(f or g)()", LuaVersion::Lua51),
+        ("goto l ::l:: (f or g)()", "goto l::l::(f or g)()", LuaVersion::Lua52),
+        (
+            "while x do goto l (f or g)() ::l:: end",
+            "while x do goto l(f or g)()::l::end",
+            LuaVersion::Lua52,
+        ),
+        ("while x do break (f or g)() end", "while x do break(f or g)()end", LuaVersion::Lua52),
+        (
+            "global function f() end (f or g)()",
+            "global function f()end(f or g)()",
+            LuaVersion::Lua55,
+        ),
+        ("global * (f or g)()", "global*(f or g)()", LuaVersion::Lua55),
+        ("type function F() end (f or g)()", "type function F()end(f or g)()", LuaVersion::Luau),
     ] {
         assert_compacts_to(source, expected, version);
     }

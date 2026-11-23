@@ -1,6 +1,6 @@
 use luck_ast::{
     Attribute, AttributedName, Block, Expression, FunctionAttribute, FunctionBody,
-    LocalFunctionKind, Parameter, Statement, TypeDeclarationValue, stmt_starts_with_paren,
+    LocalFunctionKind, Parameter, Slot, Statement, TypeDeclarationValue, leading_prefix,
 };
 
 use super::Printer;
@@ -9,7 +9,7 @@ impl Printer {
     pub(super) fn print_block(&mut self, block: &Block<'_>) {
         let mut previous = None;
         for stmt in &block.stmts {
-            if stmt_starts_with_paren(stmt) && previous.is_some_and(is_open) {
+            if starts_with_paren(stmt) && previous.is_some_and(is_open) {
                 self.piece(";");
             }
             self.print_stmt(stmt);
@@ -28,7 +28,7 @@ impl Printer {
             Statement::Assignment(assignment) => {
                 self.list(&assignment.targets, ",", Self::print_var);
                 self.piece("=");
-                self.list(&assignment.values, ",", Self::print_expr);
+                self.list(&assignment.values, ",", Self::print_free_expr);
             }
             Statement::FunctionCall(call) => self.print_suffixed(call),
             Statement::DoBlock(do_block) => {
@@ -38,7 +38,7 @@ impl Printer {
             }
             Statement::WhileLoop(while_loop) => {
                 self.piece("while");
-                self.print_expr(&while_loop.condition);
+                self.print_free_expr(&while_loop.condition);
                 self.piece("do");
                 self.print_block(&while_loop.block);
                 self.piece("end");
@@ -47,16 +47,16 @@ impl Printer {
                 self.piece("repeat");
                 self.print_block(&repeat_loop.block);
                 self.piece("until");
-                self.print_expr(&repeat_loop.condition);
+                self.print_free_expr(&repeat_loop.condition);
             }
             Statement::IfStatement(if_stmt) => {
                 self.piece("if");
-                self.print_expr(&if_stmt.condition);
+                self.print_free_expr(&if_stmt.condition);
                 self.piece("then");
                 self.print_block(&if_stmt.block);
                 for clause in &if_stmt.elseif_clauses {
                     self.piece("elseif");
-                    self.print_expr(&clause.condition);
+                    self.print_free_expr(&clause.condition);
                     self.piece("then");
                     self.print_block(&clause.block);
                 }
@@ -74,12 +74,12 @@ impl Printer {
                     self.print_type(ty);
                 }
                 self.piece("=");
-                self.print_expr(&numeric_for.start);
+                self.print_free_expr(&numeric_for.start);
                 self.piece(",");
-                self.print_expr(&numeric_for.limit);
+                self.print_free_expr(&numeric_for.limit);
                 if let Some(step) = &numeric_for.step {
                     self.piece(",");
-                    self.print_expr(step);
+                    self.print_free_expr(step);
                 }
                 self.piece("do");
                 self.print_block(&numeric_for.block);
@@ -89,7 +89,7 @@ impl Printer {
                 self.piece("for");
                 self.list(&generic_for.names, ",", Self::print_param);
                 self.piece("in");
-                self.list(&generic_for.exprs, ",", Self::print_expr);
+                self.list(&generic_for.exprs, ",", Self::print_free_expr);
                 self.piece("do");
                 self.print_block(&generic_for.block);
                 self.piece("end");
@@ -130,7 +130,7 @@ impl Printer {
             }
             Statement::Return(return_stmt) => {
                 self.piece("return");
-                self.list(&return_stmt.exprs, ",", Self::print_expr);
+                self.list(&return_stmt.exprs, ",", Self::print_free_expr);
             }
             Statement::Break(_) => self.piece("break"),
             // Luau
@@ -170,7 +170,7 @@ impl Printer {
             Statement::CompoundAssignment(compound) => {
                 self.print_var(&compound.var);
                 self.piece(compound.op.static_text());
-                self.print_expr(&compound.expr);
+                self.print_free_expr(&compound.expr);
             }
             // Luau
             Statement::TypeDeclaration(declaration) => {
@@ -200,7 +200,7 @@ impl Printer {
     fn print_values(&mut self, exprs: &[Expression<'_>]) {
         if !exprs.is_empty() {
             self.piece("=");
-            self.list(exprs, ",", Self::print_expr);
+            self.list(exprs, ",", Self::print_free_expr);
         }
     }
 
@@ -231,10 +231,10 @@ impl Printer {
                 if let [arg @ (Expression::TableConstructor(_) | Expression::StringLiteral(_))] =
                     &**args
                 {
-                    self.print_expr(arg);
+                    self.print_free_expr(arg);
                 } else {
                     self.piece("(");
-                    self.list(args, ",", Self::print_expr);
+                    self.list(args, ",", Self::print_free_expr);
                     self.piece(")");
                 }
                 self.piece("]");
@@ -280,6 +280,12 @@ impl Printer {
             self.print_type(ty);
         }
     }
+}
+
+fn starts_with_paren(stmt: &Statement<'_>) -> bool {
+    leading_prefix(stmt).is_some_and(|prefix| {
+        matches!(prefix, Expression::Parenthesized(_)) || prefix.needs_parens(Slot::PREFIX)
+    })
 }
 
 /// Whether `stmt` can end in an expression or a type, which a `(` printed

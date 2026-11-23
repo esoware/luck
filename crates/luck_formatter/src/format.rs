@@ -2,7 +2,7 @@ use core::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
-use luck_parser::ParseResult;
+use luck_parser::{Groupings, ParseResult};
 use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 
 use crate::comments::Comments;
@@ -24,9 +24,13 @@ fn print_chunk<'ast>(
     allocator: &'ast Allocator,
     chunk: &'ast Chunk<'ast>,
     comments: Comments<'ast>,
+    groupings: Option<&'ast Groupings>,
     options: &FormatOptions,
 ) -> String {
     let mut f = Formatter::new(allocator, chunk.version, *options, comments);
+    if let Some(parse_groupings) = groupings {
+        f = f.with_groupings(parse_groupings);
+    }
     if options.sort_requires {
         f = f.sorting_requires();
     }
@@ -73,7 +77,7 @@ pub fn format_chunk<'ast>(
             ),
         });
     }
-    Ok(print_chunk(allocator, chunk, comments, options))
+    Ok(print_chunk(allocator, chunk, comments, None, options))
 }
 
 /// Parses `source` into `allocator` and formats it. Input that fails to parse
@@ -104,7 +108,7 @@ pub fn format_parsed<'ast>(
         return FormatResult { output: String::new(), errors: parse.errors.clone() };
     }
     let comments = Comments::from_source(&parse.comments, parse.source, parse.chunk.version);
-    let output = print_chunk(allocator, &parse.chunk, comments, options);
+    let output = print_chunk(allocator, &parse.chunk, comments, Some(&parse.groupings), options);
     FormatResult { output, errors: Vec::new() }
 }
 
@@ -128,18 +132,17 @@ pub fn format_range<'ast>(
     let source = parse.source;
     let offsets = index_to_offset(range.start)..index_to_offset(range.end);
     let comments = Comments::from_source(&parse.comments, source, parse.chunk.version);
-    let output = format_selection(allocator, &parse.chunk, comments, options, &offsets)
-        .map_or_else(
-            || source.to_owned(),
-            |(span, selected)| {
-                let before = source.get(..offset_to_index(span.start)).unwrap_or_default();
-                let after = source.get(offset_to_index(span.end)..).unwrap_or_default();
-                let mut spliced = String::with_capacity(source.len());
-                spliced.push_str(before);
-                spliced.push_str(&selected);
-                spliced.push_str(after);
-                spliced
-            },
-        );
+    let output = format_selection(allocator, parse, comments, options, &offsets).map_or_else(
+        || source.to_owned(),
+        |(span, selected)| {
+            let before = source.get(..offset_to_index(span.start)).unwrap_or_default();
+            let after = source.get(offset_to_index(span.end)..).unwrap_or_default();
+            let mut spliced = String::with_capacity(source.len());
+            spliced.push_str(before);
+            spliced.push_str(&selected);
+            spliced.push_str(after);
+            spliced
+        },
+    );
     FormatResult { output, errors: Vec::new() }
 }

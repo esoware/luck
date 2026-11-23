@@ -10,12 +10,12 @@ use luck_token::LuaVersion;
 fn depth_cap_is_the_same_in_every_dialect() {
     with_the_smallest_stack(|| {
         for version in LuaVersion::ALL {
-            // The chunk's block is a level, and each group another.
-            for groups in [MAX_NESTING_DEPTH - 1, MAX_NESTING_DEPTH] {
+            // The chunk's block is a level, and each negation another.
+            for negations in [MAX_NESTING_DEPTH - 1, MAX_NESTING_DEPTH] {
                 let allocator = Allocator::new();
-                let source = format!("return {}1{}", "(".repeat(groups), ")".repeat(groups));
+                let source = format!("return {}1", "not ".repeat(negations));
                 let result = parse(&allocator, &source, version);
-                if groups < MAX_NESTING_DEPTH {
+                if negations < MAX_NESTING_DEPTH {
                     assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors);
                 } else {
                     assert!(
@@ -36,8 +36,8 @@ fn depth_cap_is_the_same_in_every_dialect() {
 fn parens_past_the_depth_cap_are_an_error() {
     with_the_smallest_stack(|| {
         let allocator = Allocator::new();
-        let open = "(".repeat(MAX_NESTING_DEPTH);
-        let close = ")".repeat(MAX_NESTING_DEPTH);
+        let open = "(".repeat(MAX_NESTING_DEPTH + 1);
+        let close = ")".repeat(MAX_NESTING_DEPTH + 1);
         let source = format!("{open}1{close}");
         let result = parse(&allocator, &source, LuaVersion::Lua54);
         assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
@@ -168,6 +168,9 @@ struct Shape {
     version: LuaVersion,
     fixed_levels: usize,
     levels_per_wrap: usize,
+    /// Whether each wrap opens parentheses the tree leaves out, which open no
+    /// level and have a cap of their own.
+    is_grouped: bool,
     build: fn(usize) -> String,
 }
 
@@ -177,7 +180,8 @@ const fn lua(
     levels_per_wrap: usize,
     build: fn(usize) -> String,
 ) -> Shape {
-    Shape { name, version: LuaVersion::Lua54, fixed_levels, levels_per_wrap, build }
+    let version = LuaVersion::Lua54;
+    Shape { name, version, fixed_levels, levels_per_wrap, is_grouped: false, build }
 }
 
 const fn luau(
@@ -186,13 +190,26 @@ const fn luau(
     levels_per_wrap: usize,
     build: fn(usize) -> String,
 ) -> Shape {
-    Shape { name, version: LuaVersion::Luau, fixed_levels, levels_per_wrap, build }
+    let version = LuaVersion::Luau;
+    Shape { name, version, fixed_levels, levels_per_wrap, is_grouped: false, build }
+}
+
+const fn grouped(
+    name: &'static str,
+    version: LuaVersion,
+    fixed_levels: usize,
+    build: fn(usize) -> String,
+) -> Shape {
+    Shape { name, version, fixed_levels, levels_per_wrap: 0, is_grouped: true, build }
 }
 
 /// The chunk's block is the first level of every shape.
+#[expect(clippy::too_many_lines, reason = "one entry per shape")]
 fn shapes() -> Vec<Shape> {
+    let (lua54, luau_version) = (LuaVersion::Lua54, LuaVersion::Luau);
     vec![
-        lua("parentheses", 1, 1, |n| format!("return {}x{}", "(".repeat(n), ")".repeat(n))),
+        grouped("parentheses", lua54, 1, |n| format!("return {}x{}", "(".repeat(n), ")".repeat(n))),
+        lua("truncated calls", 1, 2, |n| format!("return {}x{}", "(f(".repeat(n), "))".repeat(n))),
         lua("tables", 1, 1, |n| format!("return {}{}", "{".repeat(n), "}".repeat(n))),
         lua("calls", 1, 1, |n| format!("return {}x{}", "f(".repeat(n), ")".repeat(n))),
         lua("bare table calls", 1, 2, |n| format!("return {}{}", "f{".repeat(n), "}".repeat(n))),
@@ -201,10 +218,10 @@ fn shapes() -> Vec<Shape> {
         }),
         lua("indexes", 1, 1, |n| format!("return {}x{}", "a[".repeat(n), "]".repeat(n))),
         lua("unary operators", 1, 1, |n| format!("return {}x", "not ".repeat(n))),
-        lua("runs in parentheses", 1, 2, |n| {
+        lua("runs in parentheses", 1, 1, |n| {
             format!("return {}x{}", "(".repeat(n), "+x)".repeat(n))
         }),
-        lua("chains in parentheses", 1, 2, |n| {
+        grouped("chains in parentheses", lua54, 2, |n| {
             format!("return {}x{}", "(".repeat(n), ").b".repeat(n))
         }),
         lua("functions", 1, 2, |n| {
@@ -216,33 +233,42 @@ fn shapes() -> Vec<Shape> {
             format!("{}{}", "if a then else ".repeat(n), "end ".repeat(n))
         }),
         lua("loops", 1, 1, |n| format!("{}{}", "while a do ".repeat(n), "end ".repeat(n))),
-        lua("operators over parentheses", 2, 1, |n| {
+        grouped("operators over parentheses", lua54, 2, |n| {
             format!("return {}x{}{}", "(".repeat(n), ")".repeat(n), "+x".repeat(300))
         }),
-        lua("fields over parentheses", 2, 1, |n| {
+        lua("operators over negations", 2, 1, |n| {
+            format!("return {}x{}", "not ".repeat(n), "+x".repeat(300))
+        }),
+        grouped("fields over parentheses", lua54, 2, |n| {
             format!("return {}x{}{}", "(".repeat(n), ")".repeat(n), ".b".repeat(300))
         }),
-        lua("fields over a call's arguments", 2, 1, |n| {
+        lua("fields over a truncated call", 4, 1, |n| {
+            format!("return (f({}x)){}", "not ".repeat(n), ".b".repeat(300))
+        }),
+        grouped("fields over a call's arguments", lua54, 2, |n| {
             format!("return f({}x{}){}", "(".repeat(n), ")".repeat(n), ".b".repeat(300))
         }),
-        lua("operators over a later operand", 2, 1, |n| {
+        grouped("operators over a later operand", lua54, 2, |n| {
             format!("return x+{}x{}{}", "(".repeat(n), ")".repeat(n), "+x".repeat(300))
         }),
-        lua("assignment target over parentheses", 2, 1, |n| {
+        lua("operators over a later negation", 2, 1, |n| {
+            format!("return x+{}x{}", "not ".repeat(n), "+x".repeat(300))
+        }),
+        grouped("assignment target over parentheses", lua54, 2, |n| {
             format!("{}x{}{} = 1", "(".repeat(n), ")".repeat(n), ".b".repeat(300))
         }),
         luau("if expressions", 1, 1, |n| format!("return {}x", "if a then b else ".repeat(n))),
         luau("interpolated strings", 1, 1, |n| {
             format!("return {}x{}", "`{".repeat(n), "}`".repeat(n))
         }),
-        luau("plain interpolated string", 2, 1, |n| {
+        grouped("plain interpolated string", luau_version, 2, |n| {
             format!("return {}`s`{}", "(".repeat(n), ")".repeat(n))
         }),
-        luau("casts", 1, 2, |n| format!("return {}x{}", "(".repeat(n), " :: T)".repeat(n))),
-        luau("cast over parentheses", 2, 1, |n| {
+        luau("casts", 1, 1, |n| format!("return {}x{}", "(".repeat(n), " :: T)".repeat(n))),
+        grouped("cast over parentheses", luau_version, 2, |n| {
             format!("return {}x{} :: T", "(".repeat(n), ")".repeat(n))
         }),
-        luau("instantiations over parentheses", 2, 1, |n| {
+        grouped("instantiations over parentheses", luau_version, 2, |n| {
             format!("return {}f{}{}", "(".repeat(n), ")".repeat(n), "<<T>>".repeat(300))
         }),
         luau("table types", 1, 1, |n| format!("type X = {}T{}", "{".repeat(n), "}".repeat(n))),
@@ -293,14 +319,17 @@ fn shapes() -> Vec<Shape> {
 fn the_cap_bounds_the_depth_of_the_tree_exactly() {
     with_the_smallest_stack(|| {
         for shape in shapes() {
-            let wraps_at_cap =
-                (MAX_NESTING_DEPTH - shape.fixed_levels).div_euclid(shape.levels_per_wrap);
+            let wraps_at_cap = if shape.is_grouped {
+                MAX_NESTING_DEPTH
+            } else {
+                (MAX_NESTING_DEPTH - shape.fixed_levels).div_euclid(shape.levels_per_wrap)
+            };
             for wraps in wraps_at_cap - 1..=wraps_at_cap + 2 {
                 let depth = shape.fixed_levels + shape.levels_per_wrap * wraps;
                 let allocator = Allocator::new();
                 let source = (shape.build)(wraps);
                 let result = parse(&allocator, &source, shape.version);
-                if depth <= MAX_NESTING_DEPTH {
+                if wraps <= wraps_at_cap {
                     assert!(
                         result.errors.is_empty(),
                         "{} at depth {depth}: {:?}",
@@ -371,24 +400,20 @@ fn a_run_counts_once_from_its_first_operand() {
         let allocator = Allocator::new();
         // Under the chunk's block, each operand alone sits at the cap.
         let (groups, tables) = (MAX_NESTING_DEPTH - 1, MAX_NESTING_DEPTH - 2);
+        let truncated = |suffixes: &str| {
+            let call_tables = MAX_NESTING_DEPTH - 3;
+            format!("return (f{}{}){suffixes}", "{".repeat(call_tables), "}".repeat(call_tables))
+        };
+        let source_at_the_cap = truncated("");
+        let at_the_cap = parse(&allocator, &source_at_the_cap, LuaVersion::Lua54);
+        assert!(at_the_cap.errors.is_empty(), "{:?}", at_the_cap.errors.first());
+        assert_eq!(block_nesting_depth(&at_the_cap.chunk.block), MAX_NESTING_DEPTH);
         for (label, source) in [
             (
-                "operators over parentheses",
-                format!("return {}x{}{}", "(".repeat(groups), ")".repeat(groups), "+1".repeat(300)),
+                "operators over negations",
+                format!("return {}x{}", "not ".repeat(groups), "+1".repeat(300)),
             ),
-            (
-                "fields over parentheses",
-                format!("return {}x{}{}", "(".repeat(groups), ")".repeat(groups), ".b".repeat(300)),
-            ),
-            (
-                "calls over a table",
-                format!(
-                    "return ({}{}){}",
-                    "{".repeat(tables),
-                    "}".repeat(tables),
-                    "()".repeat(300)
-                ),
-            ),
+            ("fields over a truncated call", truncated(&".b".repeat(300))),
         ] {
             let result = parse(&allocator, &source, LuaVersion::Lua54);
             assert!(has_depth_limit_error(&result), "{label}: {:?}", result.errors.first());
@@ -401,8 +426,7 @@ fn a_run_counts_once_from_its_first_operand() {
         assert!(optional_run.errors.is_empty(), "{:?}", optional_run.errors.first());
         assert_eq!(block_nesting_depth(&optional_run.chunk.block), 2);
 
-        let later_operand =
-            format!("return 1+{}x{}{}", "(".repeat(tables), ")".repeat(tables), "+1".repeat(300));
+        let later_operand = format!("return 1+{}x{}", "not ".repeat(tables), "+1".repeat(300));
         let result = parse(&allocator, &later_operand, LuaVersion::Lua54);
         assert!(result.errors.is_empty(), "{:?}", result.errors.first());
         assert_eq!(block_nesting_depth(&result.chunk.block), MAX_NESTING_DEPTH);
@@ -498,9 +522,7 @@ fn a_misplaced_last_statement_nests_where_it_was_written() {
         let in_blocks = |blocks: usize, statement: &str| {
             format!("{}{statement} x(){}", "while a do ".repeat(blocks), " end".repeat(blocks))
         };
-        let returning = |parentheses: usize| {
-            format!("return {}a{}", "(".repeat(parentheses), ")".repeat(parentheses))
-        };
+        let returning = |negations: usize| format!("return {}a", "not ".repeat(negations));
         for (version, source) in [
             (LuaVersion::Lua54, in_blocks(MAX_NESTING_DEPTH - 6, &returning(5))),
             (LuaVersion::Lua51, in_blocks(MAX_NESTING_DEPTH - 1, "break")),
@@ -517,10 +539,10 @@ fn a_misplaced_last_statement_nests_where_it_was_written() {
 }
 
 /// `construct` as an expression nested at the cap, so anything but a name or
-/// a literal there is too deep.
+/// a literal there, in parentheses or not, is too deep.
 fn at_the_cap_in_an_expression(construct: &str) -> String {
     let depth = MAX_NESTING_DEPTH - 1;
-    format!("local v = {}{construct}{}", "(".repeat(depth), ")".repeat(depth))
+    format!("local v = {}{construct}{}", "{".repeat(depth), "}".repeat(depth))
 }
 
 /// The cap ends the parse, so what follows reports nothing more, however
@@ -534,7 +556,7 @@ fn nesting_past_the_cap_ends_the_parse() {
     local after = 1
     x = = 1
     ",
-            at_the_cap_in_an_expression("(x)")
+            at_the_cap_in_an_expression("{x}")
         );
         let result = parse(&allocator, source.as_str(), LuaVersion::Lua54);
         let [error] = result.errors.as_slice() else {
@@ -573,13 +595,14 @@ fn a_construct_past_the_cap_is_one_error_however_many_wrap_it() {
 fn an_operand_cut_off_at_the_cap_is_one_error_where_it_was_cut() {
     with_the_smallest_stack(|| {
         let allocator = Allocator::new();
-        let deep = format!("{}x{}", "(".repeat(MAX_NESTING_DEPTH), ")".repeat(MAX_NESTING_DEPTH));
+        let groups = MAX_NESTING_DEPTH + 1;
+        let deep = format!("{}x{}", "(".repeat(groups), ")".repeat(groups));
         let source = format!("local v = {deep}.b + 1 :: T .. 2");
         let result = parse(&allocator, source.as_str(), LuaVersion::Luau);
         let [error] = result.errors.as_slice() else {
             panic!("{:?}", result.errors);
         };
-        let innermost = "local v = ".len() + MAX_NESTING_DEPTH - 1;
+        let innermost = "local v = ".len() + MAX_NESTING_DEPTH;
         assert_eq!(Range::<usize>::from(error.span).start, innermost);
     });
 }

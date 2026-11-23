@@ -10,65 +10,73 @@ use luck_token::{Span, TokenKind};
 
 use super::{Closer, Parser};
 
-/// Whether `expr` is a constant string, which a backtick string with no holes
-/// also is in Luau.
-fn is_constant_string(expr: &Expression<'_>) -> bool {
-    match expr {
-        Expression::StringLiteral(_) => true,
-        // Luau
-        Expression::InterpolatedString(interpolated) => interpolated.segments.is_empty(),
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
-    }
-}
-
-/// Whether `expr` fits the grammar's `literal` production for attribute
-/// arguments: nil, booleans, numbers, strings, and tables of literals with
-/// plain-name or positional fields.
-///
-/// An error passes, since it has been reported already.
-fn is_attribute_literal(expr: &Expression<'_>) -> bool {
-    match expr {
-        Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::Error(_) => true,
-        // Luau
-        Expression::InterpolatedString(_) => is_constant_string(expr),
-        Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
-            Field::Named { value, .. } | Field::Positional(value) => is_attribute_literal(value),
-            Field::Bracketed { .. } => false,
-        }),
-        Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::TypeCast(_) => false,
-    }
-}
-
 impl<'ast> Parser<'ast> {
+    /// Whether `expr` is a constant string, which a backtick string with no
+    /// holes also is in Luau, and the parentheses recorded from
+    /// `groupings_start` on don't hold it.
+    fn is_constant_string(&self, expr: &Expression<'_>, groupings_start: usize) -> bool {
+        let is_constant = match expr {
+            Expression::StringLiteral(_) => true,
+            // Luau
+            Expression::InterpolatedString(interpolated) => interpolated.segments.is_empty(),
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::TypeCast(_)
+            | Expression::Error(_) => false,
+        };
+        is_constant && self.groupings.around_since(groupings_start, expr.span()).is_none()
+    }
+
+    /// Whether `expr` fits the grammar's `literal` production for attribute
+    /// arguments: nil, booleans, numbers, strings, and tables of literals with
+    /// plain-name or positional fields, none of them in the parentheses
+    /// recorded from `groupings_start` on.
+    ///
+    /// An error passes, since it has been reported already.
+    fn is_attribute_literal(&self, expr: &Expression<'_>, groupings_start: usize) -> bool {
+        if self.groupings.around_since(groupings_start, expr.span()).is_some() {
+            return false;
+        }
+        match expr {
+            Expression::Nil(_)
+            | Expression::True(_)
+            | Expression::False(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::Error(_) => true,
+            // Luau
+            Expression::InterpolatedString(_) => self.is_constant_string(expr, groupings_start),
+            Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
+                Field::Named { value, .. } | Field::Positional(value) => {
+                    self.is_attribute_literal(value, groupings_start)
+                }
+                Field::Bracketed { .. } => false,
+            }),
+            Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
+            | Expression::Parenthesized(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::TypeCast(_) => false,
+        }
+    }
+
     pub(super) fn try_parse_attribute(&mut self) -> Option<Attribute<'ast>> {
         (self.is_at(TokenKind::Less) && self.version.has_attributes())
             .then(|| self.parse_attribute())
@@ -103,13 +111,11 @@ impl<'ast> Parser<'ast> {
                 self.open(Closer::Bracket);
                 loop {
                     let name = self.expect_identifier_recover();
-                    let args = self.parse_attribute_args();
-                    self.validate_function_attribute(name, args.as_deref(), start);
-                    let end_span = args
-                        .as_ref()
-                        .and_then(|list| list.last())
-                        .map_or(name.span, Expression::span);
-                    let attribute = FunctionAttribute::new(at_span.merge(end_span), name, args);
+                    let groupings_start = self.groupings.len();
+                    let args = self.parse_attribute_args(groupings_start);
+                    self.validate_function_attribute(name, args.as_deref(), start, groupings_start);
+                    let span = Span::new(at_span.start, self.previous_span.end);
+                    let attribute = FunctionAttribute::new(span, name, args);
                     self.scratch.attributes.push(attribute);
                     if !self.eat(TokenKind::Comma) {
                         break;
@@ -118,7 +124,7 @@ impl<'ast> Parser<'ast> {
                 self.expect_closer(TokenKind::RightBracket, Closer::Bracket);
             } else {
                 let name = self.expect_identifier_recover();
-                self.validate_function_attribute(name, None, start);
+                self.validate_function_attribute(name, None, start, self.groupings.len());
                 let attribute = FunctionAttribute::new(at_span.merge(name.span), name, None);
                 self.scratch.attributes.push(attribute);
             }
@@ -129,8 +135,14 @@ impl<'ast> Parser<'ast> {
     /// Grammar: `pars ::= '(' [litlist] ')' | littable | STRING`. A string or
     /// table argument becomes a one-element argument list, so every form
     /// nests its arguments one level, as the list it prints back as does.
+    ///
+    /// Parentheses make a literal a value, so one the parentheses recorded
+    /// from `groupings_start` on hold is no literal.
     #[expect(clippy::wildcard_enum_match_arm, reason = "the guard leaves only a string")]
-    fn parse_attribute_args(&mut self) -> Option<List<'ast, Expression<'ast>>> {
+    fn parse_attribute_args(
+        &mut self,
+        groupings_start: usize,
+    ) -> Option<List<'ast, Expression<'ast>>> {
         if !matches!(
             self.peek(),
             TokenKind::LeftParen | TokenKind::StringLiteral | TokenKind::LeftBrace
@@ -149,7 +161,7 @@ impl<'ast> Parser<'ast> {
                 };
                 self.expect_closer(TokenKind::RightParen, Closer::Paren);
                 for expr in &args {
-                    if !is_attribute_literal(expr) {
+                    if !self.is_attribute_literal(expr, groupings_start) {
                         self.error(expr.span(), "attribute arguments must be literals");
                     }
                 }
@@ -160,7 +172,7 @@ impl<'ast> Parser<'ast> {
                 let expr = self
                     .parse_table_constructor()
                     .map_or(Expression::Error(open), Expression::TableConstructor);
-                if !is_attribute_literal(&expr) {
+                if !self.is_attribute_literal(&expr, groupings_start) {
                     self.error(expr.span(), "attribute arguments must be literals");
                 }
                 List::from_array_in([expr], self.allocator)
@@ -183,6 +195,7 @@ impl<'ast> Parser<'ast> {
         name: Name<'ast>,
         args: Option<&[Expression<'ast>]>,
         list_start: usize,
+        groupings_start: usize,
     ) {
         if name.text.is_empty() {
             return;
@@ -207,27 +220,51 @@ impl<'ast> Parser<'ast> {
         if name.text == "deprecated"
             && let Some(deprecated_args) = args
         {
-            self.validate_deprecated_args(name.span, deprecated_args);
+            self.validate_deprecated_args(name.span, deprecated_args, groupings_start);
         }
     }
 
     /// Luau's `deprecatedArgsValidator`: at most one argument, a table whose
     /// only keys are `use` and `reason`, each holding a constant string.
-    fn validate_deprecated_args(&mut self, name_span: Span, args: &[Expression<'ast>]) {
+    fn validate_deprecated_args(
+        &mut self,
+        name_span: Span,
+        args: &[Expression<'ast>],
+        groupings_start: usize,
+    ) {
         let [arg] = args else {
             if !args.is_empty() {
                 self.error(name_span, "`@deprecated` takes at most one argument");
             }
             return;
         };
-        let Expression::TableConstructor(table) = arg else {
-            if !matches!(arg, Expression::Error(_)) {
+        let is_grouped = self.groupings.around_since(groupings_start, arg.span()).is_some();
+        let table = match arg {
+            Expression::TableConstructor(table) if !is_grouped => table,
+            Expression::Error(_) => return,
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_) => {
                 self.error(
                     arg.span(),
                     "`@deprecated` takes a table with `use` and `reason` fields",
                 );
+                return;
             }
-            return;
         };
         for field in &table.fields {
             match field {
@@ -239,7 +276,9 @@ impl<'ast> Parser<'ast> {
                         );
                         continue;
                     }
-                    if !is_constant_string(value) && !matches!(value, Expression::Error(_)) {
+                    if !self.is_constant_string(value, groupings_start)
+                        && !matches!(value, Expression::Error(_))
+                    {
                         self.error(value.span(), "`@deprecated` fields take constant strings");
                     }
                 }

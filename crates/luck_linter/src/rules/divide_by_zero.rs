@@ -28,7 +28,7 @@ impl NodeRule for DivideByZero {
     fn on_expr(
         &self,
         expr: &Expression<'_>,
-        _context: &LintContext<'_>,
+        context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         let Expression::BinaryOp(run) = expr else {
@@ -42,7 +42,7 @@ impl NodeRule for DivideByZero {
                 && let Some(divisor) = pair.rhs
                 && is_number_literal(divisor, 0.0)
             {
-                findings.push(zero_divisor_finding(op_name, pair.span()));
+                findings.push(zero_divisor_finding(op_name, pair.span(context)));
             }
         }
     }

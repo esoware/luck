@@ -370,13 +370,8 @@ impl<'ast> Parser<'ast> {
         } else {
             self.parse_expr_list()
         };
-
-        let semicolon = self.is_at(TokenKind::Semicolon).then(|| self.advance());
-
-        let end_span =
-            semicolon.or_else(|| exprs.last().map(Expression::span)).unwrap_or(return_span);
-
-        let span = return_span.merge(end_span);
+        self.eat(TokenKind::Semicolon);
+        let span = Span::new(return_span.start, self.previous_span.end);
         Statement::new_return(span, exprs, self.allocator)
     }
 
@@ -522,7 +517,7 @@ impl<'ast> Parser<'ast> {
         self.close(Closer::BlockEnd);
         self.expect_keyword(TokenKind::Until, Construct::RepeatLoop);
         let condition = self.parse_expr(0);
-        let span = repeat_span.merge(condition.span());
+        let span = Span::new(repeat_span.start, self.previous_span.end);
         Statement::new_repeat_loop(span, block, condition, self.allocator)
     }
 
@@ -542,24 +537,34 @@ impl<'ast> Parser<'ast> {
     }
 
     fn parse_assignment_or_call(&mut self) -> Statement<'ast> {
+        let start = self.token.span.start;
+        let groupings_start = self.groupings.len();
         let expr = self.parse_expr(0);
+        let grouping = self.groupings.around_since(groupings_start, expr.span());
 
         // Luau compound assignment: `var op= expr`.
         if let Some(op) = CompoundOp::from_token_kind(self.peek())
             && self.version.has_compound_assignment()
         {
             self.advance();
+            let target = self.ungrouped_target(expr, grouping);
             let value = self.parse_expr(0);
-            let var = self.assignment_target(expr);
-            let span = var.span().merge(value.span());
+            let var = self.assignment_target(target);
+            let span = Span::new(start, self.previous_span.end);
             return Statement::new_compound_assignment(span, var, op, value, self.allocator);
         }
 
         // Assignment: `varlist = explist`.
         if matches!(self.peek(), TokenKind::Comma | TokenKind::Equal) {
-            return self.parse_assignment(expr);
+            let first = self.ungrouped_target(expr, grouping);
+            return self.parse_assignment(first, start);
         }
 
+        // Parentheses make a call a value, and the tree keeps the ones
+        // around a call, so none here grouped one.
+        if let Some(parens) = grouping {
+            return self.report_expression_stmt(parens);
+        }
         match expr {
             Expression::Suffixed(chain) if chain.is_call() => Statement::FunctionCall(chain),
             // Reported already.
@@ -584,31 +589,46 @@ impl<'ast> Parser<'ast> {
         }
     }
 
-    fn parse_assignment(&mut self, first: Expression<'ast>) -> Statement<'ast> {
-        let start = self.scratch.exprs.len();
+    fn parse_assignment(&mut self, first: Expression<'ast>, start: u32) -> Statement<'ast> {
+        let targets_start = self.scratch.exprs.len();
         self.scratch.exprs.push(first);
         while self.eat(TokenKind::Comma) {
-            let target = self.parse_expr(0);
+            let groupings_start = self.groupings.len();
+            let expr = self.parse_expr(0);
+            let grouping = self.groupings.around_since(groupings_start, expr.span());
+            let target = self.ungrouped_target(expr, grouping);
             self.scratch.exprs.push(target);
         }
-        let equal = self.expect(TokenKind::Equal);
+        self.expect(TokenKind::Equal);
         let values = self.parse_expr_list();
 
         // Targets convert after the values parse, which decides how an
         // invalid target's error sorts among others at the same position.
         let mut exprs = mem::take(&mut self.scratch.exprs);
         let vars_start = self.scratch.vars.len();
-        for target in exprs.drain(start..) {
+        for target in exprs.drain(targets_start..) {
             let var = self.assignment_target(target);
             self.scratch.vars.push(var);
         }
         self.scratch.exprs = exprs;
         let targets = List::split_off_in(&mut self.scratch.vars, vars_start, self.allocator);
-
-        let end_span = values.last().map_or(equal, Expression::span);
-        let start_span = targets.first().map_or(equal, Var::span);
-        let span = start_span.merge(end_span);
+        let span = Span::new(start, self.previous_span.end);
         Statement::new_assignment(span, targets, values, self.allocator)
+    }
+
+    /// `target`, or an error where the source wrote it in the `grouping`
+    /// parentheses, which make a variable a value, and so no target. The tree
+    /// keeps no other trace of them.
+    fn ungrouped_target(
+        &mut self,
+        target: Expression<'ast>,
+        grouping: Option<Span>,
+    ) -> Expression<'ast> {
+        let Some(parens) = grouping else {
+            return target;
+        };
+        self.error(parens, "invalid assignment target");
+        Expression::Error(parens)
     }
 
     #[cold]

@@ -1,5 +1,6 @@
 use ls_types::{Position, SelectionRange};
 use luck_ast::{Block, Expression, GetSpan as _, Statement, SuffixedExpression, Visit};
+use luck_parser::Groupings;
 use luck_token::{Associativity, Span};
 
 use crate::document::DocumentState;
@@ -19,8 +20,9 @@ pub(crate) fn selection_ranges(
 
 fn selection_for(document: &DocumentState, position: Position) -> SelectionRange {
     let offset = document.offset(position);
-    let mut collector = SpanStack { offset, stack: Vec::new() };
-    collector.visit_block(&document.parse().chunk.block);
+    let parse = document.parse();
+    let mut collector = SpanStack { offset, groupings: &parse.groupings, stack: Vec::new() };
+    collector.visit_block(&parse.chunk.block);
     let first_kept = collector.stack.len().saturating_sub(MAX_SELECTION_DEPTH);
     collector.stack.drain(..first_kept);
 
@@ -36,12 +38,26 @@ fn selection_for(document: &DocumentState, position: Position) -> SelectionRange
     })
 }
 
-struct SpanStack {
+struct SpanStack<'ast> {
     offset: u32,
+    groupings: &'ast Groupings,
     stack: Vec<Span>,
 }
 
-impl SpanStack {
+impl SpanStack<'_> {
+    /// `span` with the parentheses the expression it's the span of is in.
+    fn extent(&self, span: Span) -> Span {
+        self.groupings.around(span).unwrap_or(span)
+    }
+
+    /// Records an expression's span, inside the parentheses it's in, if any.
+    fn record_grouped(&mut self, span: Span) {
+        if let Some(parens) = self.groupings.around(span) {
+            self.record(parens);
+        }
+        self.record(span);
+    }
+
     fn record(&mut self, span: Span) {
         if !touches(span, self.offset) {
             return;
@@ -55,7 +71,7 @@ impl SpanStack {
     }
 }
 
-impl<'ast> Visit<'ast> for SpanStack {
+impl<'ast> Visit<'ast> for SpanStack<'_> {
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
         for stmt in statements_touching(block, self.offset) {
             self.visit_stmt(stmt);
@@ -69,31 +85,44 @@ impl<'ast> Visit<'ast> for SpanStack {
 
     /// A run steps out through each pair it groups into, as if it nested.
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
-        if !touches(expr.span(), self.offset) {
+        if !touches(self.extent(expr.span()), self.offset) {
             return;
         }
-        self.record(expr.span());
+        self.record_grouped(expr.span());
         if let Expression::BinaryOp(run) = expr {
             let operands = || run.links.iter().map(|link| &link.operand);
             let inner_count = run.links.len().saturating_sub(1);
             if run.precedence().1 == Associativity::Left {
-                let start = run.first.span().start;
+                let start = self.extent(run.first.span()).start;
                 for operand in operands().take(inner_count).rev() {
-                    self.record(Span::new(start, operand.span().end));
+                    self.record(Span::new(start, self.extent(operand.span()).end));
                 }
             } else {
-                let end = run.links.last().operand.span().end;
+                let end = self.extent(run.links.last().operand.span()).end;
                 for operand in operands().take(inner_count) {
-                    self.record(Span::new(operand.span().start, end));
+                    self.record(Span::new(self.extent(operand.span()).start, end));
                 }
             }
         }
         self.walk_expr(expr);
     }
 
+    /// Each head is the chain it was before the next suffix joined it, in the
+    /// parentheses it was in.
     fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
-        for count in (1..suffixed_expr.suffixes.len()).rev() {
-            self.record(suffixed_expr.head(count).span());
+        let mut heads = Vec::new();
+        let mut start = self.extent(suffixed_expr.prefix.span()).start;
+        let inner_count = suffixed_expr.suffixes.len().saturating_sub(1);
+        for suffix in suffixed_expr.suffixes.iter().take(inner_count) {
+            let head = Span::new(start, suffix.span().end);
+            heads.push(head);
+            if let Some(parens) = self.groupings.around(head) {
+                heads.push(parens);
+                start = parens.start;
+            }
+        }
+        for &head in heads.iter().rev() {
+            self.record(head);
         }
         self.walk_suffixed_expr(suffixed_expr);
     }
@@ -159,6 +188,20 @@ mod tests {
         assert_eq!(
             columns(&ranges_at("x = a.b:c(d).e\n", 4)),
             [(4, 5), (4, 7), (4, 12), (4, 14), (0, 14)]
+        );
+    }
+
+    #[test]
+    fn parentheses_step_out_around_what_they_hold() {
+        // `x = (a + b) * c`, at `a`: `a`, `a + b`, `(a + b)`, the product.
+        assert_eq!(
+            columns(&ranges_at("x = (a + b) * c\n", 5)),
+            [(5, 6), (5, 10), (4, 11), (4, 15), (0, 15)]
+        );
+        // `x = ((a).b).c`, at `a`: `a`, `(a)`, `(a).b`, `((a).b)`, the chain.
+        assert_eq!(
+            columns(&ranges_at("x = ((a).b).c\n", 6)),
+            [(6, 7), (5, 8), (5, 10), (4, 11), (4, 13), (0, 13)]
         );
     }
 

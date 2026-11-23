@@ -1,7 +1,9 @@
 use std::sync::OnceLock;
 
-use luck_ast::{Block, Call, Expression, Statement, SuffixedExpression, TableConstructor};
-use luck_parser::ParseResult;
+use luck_ast::{
+    Block, Call, Expression, GetSpan as _, Statement, SuffixedExpression, TableConstructor,
+};
+use luck_parser::{Groupings, ParseResult};
 use luck_semantic::{ResolvedCallee, SemanticAnalysis};
 use luck_token::{Comment, LineIndex, Span};
 
@@ -24,6 +26,7 @@ pub(crate) struct LintContext<'ast> {
     pub directives: &'ast Directives,
     pub source: &'ast str,
     pub comments: &'ast [Comment],
+    pub groupings: &'ast Groupings,
     /// Where each escape Lua 5.1 and Luau read as the character it escapes
     /// is, as the lexer found them.
     pub lenient_escapes: &'ast [Span],
@@ -49,6 +52,7 @@ impl<'ast> LintContext<'ast> {
             directives: analysis.directives(),
             source: parse.source,
             comments: &parse.comments,
+            groupings: &parse.groupings,
             lenient_escapes: &parse.lenient_escapes,
             config,
             fixes,
@@ -63,6 +67,13 @@ impl<'ast> LintContext<'ast> {
 
     pub(crate) fn line_index(&self) -> &LineIndex {
         self.line_index.get_or_init(|| LineIndex::new(self.source, self.semantic.version()))
+    }
+
+    /// What `expr` spans with the parentheses it's written in, which the
+    /// tree keeps only where they change what they hold.
+    pub(crate) fn extent(&self, expr: &Expression<'_>) -> Span {
+        let span = expr.span();
+        self.groupings.around(span).unwrap_or(span)
     }
 
     /// The comments that sit inside `span`, in source order.

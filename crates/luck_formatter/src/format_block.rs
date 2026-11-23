@@ -10,7 +10,8 @@
 use core::iter::{self, Peekable};
 use core::ops::Range;
 
-use luck_ast::{Block, Chunk, GetSpan as _, Statement, Visit, stmt_starts_with_paren};
+use luck_ast::{Block, GetSpan as _, Statement, Visit, leading_prefix};
+use luck_parser::{Groupings, ParseResult};
 use luck_token::{
     LuaVersion, Span, is_lua_whitespace, line_breaks, offset_to_index, strip_line_break,
 };
@@ -27,13 +28,24 @@ enum BlockItem<'block, 'ast> {
 }
 
 impl BlockItem<'_, '_> {
+    fn start(self) -> u32 {
+        match self {
+            Self::Stmt(stmt) => stmt.span().start,
+            Self::Verbatim { span, .. } => span.start,
+        }
+    }
+
     /// A `return`'s span takes the `;` after it, which the formatter drops,
-    /// so it ends at its last value here: a comment there trails the values.
-    fn span(self) -> Span {
+    /// so it ends at its last value here, and the parentheses the source
+    /// grouped that in, from `groupings`: a comment there trails the values.
+    fn span(self, groupings: Option<&Groupings>) -> Span {
         match self {
             Self::Stmt(Statement::Return(return_stmt)) => {
                 let span = return_stmt.span;
-                return_stmt.exprs.last().map_or(span, |last| Span::new(span.start, last.span().end))
+                return_stmt.exprs.last().map_or(span, |last| {
+                    let grouping = groupings.and_then(|parse| parse.around(last.span()));
+                    Span::new(span.start, grouping.unwrap_or_else(|| last.span()).end)
+                })
             }
             Self::Stmt(stmt) => stmt.span(),
             Self::Verbatim { span, .. } => span,
@@ -54,13 +66,6 @@ impl BlockItem<'_, '_> {
             Self::Verbatim { .. } => false,
         }
     }
-
-    fn starts_with_paren(self) -> bool {
-        match self {
-            Self::Stmt(stmt) => stmt_starts_with_paren(stmt),
-            Self::Verbatim { has_leading_paren, .. } => has_leading_paren,
-        }
-    }
 }
 
 /// A parse-error placeholder prints nothing, so it gets no separator either.
@@ -71,11 +76,7 @@ fn printed_items<'block, 'ast>(
 }
 
 pub(crate) fn first_item_start(block: &Block<'_>) -> Option<u32> {
-    first_item_span(block).map(|span| span.start)
-}
-
-pub(crate) fn first_item_span(block: &Block<'_>) -> Option<Span> {
-    printed_items(block).next().map(BlockItem::span)
+    printed_items(block).next().map(BlockItem::start)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,7 +100,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn has_printable_content(&self, block: &Block<'_>) -> bool {
-        first_item_span(block).is_some() || self.comments().has_dangling_comments(block.span.start)
+        first_item_start(block).is_some() || self.comments().has_dangling_comments(block.span.start)
     }
 
     pub(crate) fn write_block(&mut self, block: &Block<'ast>) {
@@ -121,9 +122,11 @@ impl<'ast> Formatter<'ast> {
         if should_preserve_edge_blanks {
             let printed_end =
                 self.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
-            let has_blank = self.comments().source().is_some_and(|(source, version)| {
-                has_trailing_edge_blank(source, printed_end, version)
-            });
+            let version = self.version();
+            let has_blank = self
+                .comments()
+                .source_text()
+                .is_some_and(|source| has_trailing_edge_blank(source, printed_end, version));
             if has_blank {
                 self.empty_line();
             }
@@ -145,7 +148,7 @@ impl<'ast> Formatter<'ast> {
         while let Some(item) =
             self.next_item(&mut remaining, previous.map_or(0, |last_item| last_item.end))
         {
-            let Span { start, end } = item.span();
+            let Span { start, end } = item.span(self.groupings());
             let should_surround_with_blank = item.should_surround_with_blank();
 
             let is_blank_before = previous.is_some_and(|previous_item| {
@@ -160,7 +163,7 @@ impl<'ast> Formatter<'ast> {
             // one before it (`f()` then `(g)()` reads as `f()(g)()`), so it
             // gets a `;` prefix, as in the compact printer. A `format off`
             // region can't gain one, so its guard goes on a line above it.
-            if previous.is_some() && item.starts_with_paren() {
+            if previous.is_some() && self.item_starts_with_paren(item, is_opted_out) {
                 self.token(";");
                 if matches!(item, BlockItem::Verbatim { .. }) {
                     self.hard_line();
@@ -217,7 +220,7 @@ impl<'ast> Formatter<'ast> {
         let Some(region) = comments.next_disabled_region(position) else {
             return items.next();
         };
-        if let Some(span) = items.peek().map(|item| item.span()) {
+        if let Some(span) = items.peek().map(|item| item.span(self.groupings())) {
             let is_past = region.start >= span.end;
             // A region inside a statement starts past the statement's first token.
             let is_inside = span.start < region.start && region.end <= span.end;
@@ -232,10 +235,13 @@ impl<'ast> Formatter<'ast> {
         let mut absorbed: Option<Range<u32>> = None;
         let mut has_leading_paren = false;
         loop {
-            while let Some(item) = lookahead.next_if(|item| item.span().start < run.end) {
-                let span = item.span();
+            while let Some(item) = lookahead.next_if(|item| item.start() < run.end) {
+                let span = item.span(self.groupings());
+                // The region goes out as written, so it starts as its source
+                // does, and every node starts at a token.
                 if absorbed.is_none() {
-                    has_leading_paren = item.starts_with_paren();
+                    has_leading_paren =
+                        source.as_bytes().get(offset_to_index(span.start)) == Some(&b'(');
                 }
                 run.start = run.start.min(own_line_start(source, span.start).unwrap_or(span.start));
                 run.end = run.end.max(span.end);
@@ -261,6 +267,22 @@ impl<'ast> Formatter<'ast> {
         Some(BlockItem::Verbatim { span: Span::new(run.start, run.end), has_leading_paren })
     }
 
+    /// A statement that opted out goes out as its source has it, wherever
+    /// there's a source.
+    fn item_starts_with_paren(&self, item: BlockItem<'_, 'ast>, is_opted_out: bool) -> bool {
+        match item {
+            BlockItem::Stmt(stmt) => match self.comments().source_text() {
+                Some(source) if is_opted_out => {
+                    source.as_bytes().get(offset_to_index(stmt.span().start)) == Some(&b'(')
+                }
+                Some(_) | None => {
+                    leading_prefix(stmt).is_some_and(|prefix| self.starts_with_paren(prefix))
+                }
+            },
+            BlockItem::Verbatim { has_leading_paren, .. } => has_leading_paren,
+        }
+    }
+
     /// Whether the source has a blank line right above the node at `start`,
     /// or above the first comment leading it. Synthetic input has no source
     /// and never does.
@@ -268,8 +290,8 @@ impl<'ast> Formatter<'ast> {
         let comments = self.comments();
         let anchor = comments.peek_next_start().filter(|comment| *comment < start).unwrap_or(start);
         comments
-            .source()
-            .is_some_and(|(source, version)| has_leading_edge_blank(source, anchor, version))
+            .source_text()
+            .is_some_and(|source| has_leading_edge_blank(source, anchor, self.version()))
     }
 
     /// Write the line break between two adjacent items, and return whether
@@ -285,13 +307,14 @@ impl<'ast> Formatter<'ast> {
         should_surround_next_with_blank: bool,
     ) -> bool {
         let comments = self.comments();
-        let is_blank = comments.source().map_or_else(
+        let version = self.version();
+        let is_blank = comments.source_text().map_or_else(
             || {
                 previous.should_surround_with_blank
                     || should_surround_next_with_blank
                     || comments.has_synthetic_blank_before(next_start)
             },
-            |(source, version)| {
+            |source| {
                 // Stop at an intervening comment, so a blank line after it isn't
                 // counted as part of this gap.
                 let gap_end = comments.peek_next_start().unwrap_or(next_start).min(next_start);
@@ -307,7 +330,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     fn write_item(&mut self, item: BlockItem<'_, 'ast>) {
-        let end = item.span().end;
+        let end = item.span(self.groupings()).end;
         match item {
             BlockItem::Stmt(stmt) => self.inside(end, |f| f.write_stmt(stmt)),
             BlockItem::Verbatim { span, .. } => self.write_exact(span),
@@ -355,10 +378,10 @@ impl<'ast> Formatter<'ast> {
     ///
     /// Returns false when there's no source to copy.
     fn write_reindented(&mut self, start: u32, end: u32) -> bool {
-        let Some((source, version)) = self.comments().source() else {
+        let Some(source) = self.comments().source_text() else {
             return false;
         };
-        for (line, line_break) in reindented_lines(source, start, end, version) {
+        for (line, line_break) in reindented_lines(source, start, end, self.version()) {
             if !line.is_empty() {
                 self.text(line);
             }
@@ -373,13 +396,14 @@ impl<'ast> Formatter<'ast> {
 
 struct InnermostBlock<'tree, 'range> {
     range: &'range Range<u32>,
+    groupings: &'tree Groupings,
     found: &'tree Block<'tree>,
 }
 
 impl<'tree> Visit<'tree> for InnermostBlock<'tree, '_> {
     fn visit_block(&mut self, block: &'tree Block<'tree>) {
         let first_start = first_item_start(block);
-        let last_end = printed_items(block).last().map(|item| item.span().end);
+        let last_end = printed_items(block).last().map(|item| item.span(Some(self.groupings)).end);
         if first_start.is_some_and(|start| start <= self.range.start)
             && last_end.is_some_and(|end| self.range.end <= end)
         {
@@ -389,7 +413,7 @@ impl<'tree> Visit<'tree> for InnermostBlock<'tree, '_> {
     }
 }
 
-/// Format the statements of `chunk`, or of its innermost nested block that
+/// Format the statements of `parse`, or of its innermost nested block that
 /// holds the whole of `range`, that overlap `range`.
 ///
 /// Returns the source span they replace, from the start of the first one's
@@ -397,30 +421,33 @@ impl<'tree> Visit<'tree> for InnermostBlock<'tree, '_> {
 /// there. `None` when no statement overlaps `range`.
 pub(crate) fn format_selection<'ast>(
     allocator: &'ast luck_allocator::Allocator,
-    chunk: &'ast Chunk<'ast>,
+    parse: &'ast ParseResult<'ast>,
     mut comments: Comments<'ast>,
     options: &FormatOptions,
     range: &Range<u32>,
 ) -> Option<(Span, String)> {
-    let mut finder = InnermostBlock { range, found: &chunk.block };
-    finder.visit_block(&chunk.block);
+    let groupings = Some(&parse.groupings);
+    let block = &parse.chunk.block;
+    let mut finder = InnermostBlock { range, groupings: &parse.groupings, found: block };
+    finder.visit_block(block);
 
     let is_selected = |item: &BlockItem<'_, '_>| {
-        let Span { start, end } = item.span();
+        let Span { start, end } = item.span(groupings);
         end > range.start && start < range.end
     };
     let items = printed_items(finder.found)
         .skip_while(|item| !is_selected(item))
         .take_while(|item| is_selected(item));
-    let first_start = items.clone().next()?.span().start;
-    let last_end = items.clone().last()?.span().end;
+    let first_start = items.clone().next()?.start();
+    let last_end = items.clone().last()?.span(groupings).end;
 
     let source = comments.source_text()?;
     let line_start = own_line_start(source, first_start).unwrap_or(first_start);
     let base_indent = Span::new(line_start, first_start).text(source);
     comments.restrict_to(Span::new(line_start, last_end));
 
-    let mut f = Formatter::new(allocator, chunk.version, *options, comments);
+    let mut f = Formatter::new(allocator, parse.chunk.version, *options, comments)
+        .with_groupings(&parse.groupings);
     f.write_items(items, false);
     let end = f.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
     Some((Span::new(line_start, end), f.print(base_indent)))

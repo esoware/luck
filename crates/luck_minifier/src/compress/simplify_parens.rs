@@ -1,110 +1,53 @@
-//! Dropping parentheses that change neither grouping nor how many values an
-//! expression yields.
+//! Dropping parentheses that change nothing.
+//!
+//! The tree keeps only those that truncate a call or `...` to one value or
+//! stop a `-` before a Luau integer literal from reading as a negative one,
+//! and the printer writes whatever grouping needs. So what's left to drop
+//! is a truncation where only the first value counts anyway, the
+//! parentheses around a lone string or table argument, and the ones a run
+//! held in a run at its level prints with where it groups the same without.
 
 use luck_allocator::Allocator;
-use luck_ast::{
-    Expression, FunctionArgs, Suffix, SuffixedExpression, is_multi_value, is_prefix_expr,
-};
-use luck_token::{BinOp, OperandSide, UnOp};
+use luck_ast::{Expression, FunctionArgs, Slot, Suffix, SuffixedExpression, is_multi_value};
 
-use crate::expr::{
-    binds_looser_than_unary, can_unwrap_in_binop, ends_in_if_expr, inner_operand_side,
-};
-
-/// Strips the parentheses around `expr`, its operands, or a unary
-/// operator's or a cast's operand, wherever printing them bare reparses as
-/// the same tree. Says whether it did.
-pub(super) fn strip<'ast>(allocator: &'ast Allocator, expr: &mut Expression<'ast>) -> bool {
-    match expr {
-        Expression::Parenthesized(paren) if can_remove_parens(&paren.expr) => {
-            *expr = paren.expr.take();
-            true
-        }
-        Expression::BinaryOp(binary_op) => {
-            let op = binary_op.links.first().op;
-            let inner_side = inner_operand_side(binary_op);
-            let run = &mut **binary_op;
-            let mut stripped = strip_operand(&mut run.first, op, OperandSide::Left);
-            if let Some((last, inner)) = run.links.split_last_mut() {
-                for link in inner {
-                    stripped = stripped.max(strip_operand(&mut link.operand, op, inner_side));
-                }
-                stripped = stripped.max(strip_operand(&mut last.operand, op, OperandSide::Right));
-            }
-            // A run the parens held at this level now prints as part of it.
-            if stripped == Stripped::RunAtLevel {
-                run.splice_operands(allocator);
-            }
-            stripped != Stripped::Nothing
-        }
-        Expression::UnaryOp(unop) => {
-            let op = unop.op;
-            if let Expression::Parenthesized(paren) = &mut unop.operand
-                && can_unwrap_in_unary(op, &paren.expr)
-            {
-                unop.operand = paren.expr.take();
-                return true;
-            }
-            false
-        }
-        // Luau
-        Expression::TypeCast(cast) => {
-            if let Expression::Parenthesized(paren) = &mut cast.expr
-                && matches!(paren.expr, Expression::Integer(_))
-            {
-                cast.expr = paren.expr.take();
-                return true;
-            }
-            false
-        }
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::Error(_) => false,
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Stripped {
-    Nothing,
+/// Where an expression the walk leaves stands, as far as its parentheses
+/// go.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Place {
+    /// Where every value it yields may count, as the last of a list, or a
+    /// place that doesn't say.
+    Free,
+    /// An operand of a binary or unary operator or a cast, which takes one
+    /// value.
     Operand,
-    /// The parens held a run at the operator's own level, which the run
-    /// around it has to splice.
-    RunAtLevel,
+    /// The operand of a `-`, under which a Luau integer literal reads as a
+    /// negative one.
+    Negated,
 }
 
-fn strip_operand(operand: &mut Expression<'_>, op: BinOp, side: OperandSide) -> Stripped {
-    let Expression::Parenthesized(paren) = operand else {
-        return Stripped::Nothing;
+/// Strips the parentheses around `expr` where they change nothing at
+/// `place`, and says whether it did.
+pub(super) fn strip(expr: &mut Expression<'_>, place: Place) -> bool {
+    let Expression::Parenthesized(paren) = expr else {
+        return false;
     };
-    if !can_unwrap_in_binop(&paren.expr, op, side) {
-        return Stripped::Nothing;
+    let is_kept = match place {
+        Place::Free => is_multi_value(&paren.expr),
+        Place::Operand => false,
+        Place::Negated => matches!(paren.expr, Expression::Integer(_)),
+    };
+    if is_kept || matches!(paren.expr, Expression::Error(_)) {
+        return false;
     }
-    *operand = paren.expr.take();
-    if matches!(operand, Expression::BinaryOp(run) if run.precedence().0 == op.precedence().0) {
-        Stripped::RunAtLevel
-    } else {
-        Stripped::Operand
-    }
+    *expr = paren.expr.take();
+    true
 }
 
-/// Strips a chain's parenthesized prefix wherever what it holds can stand
-/// bare there, and says whether it did.
+/// Strips a chain's parenthesized prefix where what it holds stands bare
+/// there, which a chain does, and says whether it did.
 ///
-/// That's a name, a chain, or nested parentheses, and not a literal, as in
-/// `("s"):rep(2)`. In front of a Luau instantiation the parentheses also
-/// stay around a call or `...`, whose values they truncate.
+/// In front of a Luau instantiation the parentheses stay around a call,
+/// whose values they truncate.
 pub(super) fn strip_prefix<'ast>(
     allocator: &'ast Allocator,
     chain: &mut SuffixedExpression<'ast>,
@@ -113,29 +56,11 @@ pub(super) fn strip_prefix<'ast>(
         return false;
     };
     let is_instantiated = matches!(chain.suffixes.first(), Suffix::TypeInstantiation { .. });
-    let can_strip =
-        is_prefix_expr(&paren.expr) && (!is_instantiated || can_remove_parens(&paren.expr));
-    if !can_strip {
+    if paren.expr.needs_parens(Slot::PREFIX) || (is_instantiated && is_multi_value(&paren.expr)) {
         return false;
     }
     chain.prefix = paren.expr.take();
     chain.splice_prefix(allocator);
-    true
-}
-
-/// Strips parentheses where nothing groups with what they hold, and says
-/// whether it did.
-///
-/// That's anywhere but an operand or a chain's prefix. They stay only around
-/// a call or `...`, whose values they truncate.
-pub(super) fn strip_standalone(expr: &mut Expression<'_>) -> bool {
-    let Expression::Parenthesized(paren) = expr else {
-        return false;
-    };
-    if is_multi_value(&paren.expr) || matches!(paren.expr, Expression::Error(_)) {
-        return false;
-    }
-    *expr = paren.expr.take();
     true
 }
 
@@ -161,61 +86,6 @@ pub(super) fn strip_call_args(args: &mut FunctionArgs<'_>) -> bool {
         return true;
     }
     false
-}
-
-fn can_remove_parens(inner: &Expression<'_>) -> bool {
-    match inner {
-        Expression::Number(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::Name(_)
-        | Expression::TableConstructor(_)
-        | Expression::Parenthesized(_)
-        | Expression::FunctionDef(_) => true,
-        // Calls and `...` aren't safe: dropping the parens restores multiple
-        // values.
-        Expression::Suffixed(chain) => !chain.is_call(),
-        // Luau: under `-` the parens decide whether it's a literal, so only
-        // its operator's own check, which knows the operator, drops them.
-        Expression::Integer(_)
-        | Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::VarArg(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
-    }
-}
-
-fn can_unwrap_in_unary(op: UnOp, inner: &Expression<'_>) -> bool {
-    match inner {
-        // Luau: `-1i` is a negative integer literal, while `-(1i)` negates
-        // an integer, which raises.
-        Expression::Integer(_) => op != UnOp::Neg,
-        Expression::Number(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::Name(_)
-        | Expression::TableConstructor(_)
-        | Expression::FunctionDef(_) => true,
-        Expression::Suffixed(chain) => chain.is_var(),
-        Expression::UnaryOp(_) => !ends_in_if_expr(inner),
-        // Not safe: `-(a+b)` isn't `-a+b`.
-        Expression::BinaryOp(binary_op) => {
-            !binds_looser_than_unary(binary_op) && !ends_in_if_expr(inner)
-        }
-        Expression::VarArg(_)
-        | Expression::Parenthesized(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
-    }
 }
 
 #[cfg(test)]
@@ -245,10 +115,12 @@ mod tests {
                 ("return (a * b) + c", "return a*b+c"),
                 ("return (x) * 3", "return x*3"),
                 ("return a .. (b .. c)", "return a..b..c"),
+                ("return (a + b) - c", "return a+b-c"),
                 ("print(\"hello\")", "print\"hello\""),
                 ("foo({1, 2})", "foo{1,2}"),
                 ("return -(x)", "return-x"),
                 ("return not (a.b)", "return not a.b"),
+                ("return (f()) + 1, -(...), #(f())", "return f()+1,-...,#f()"),
             ],
         );
     }
@@ -304,10 +176,10 @@ mod tests {
                 // Parens around a call truncate its values.
                 ("local x = (foo())", "local x=(foo())"),
                 ("return (f())", "return(f())"),
-                ("return (f()) + 1", "return(f())+1"),
                 ("return a * (b + c)", "return a*(b+c)"),
                 ("return (1 + 2) * 3", "return(1+2)*3"),
                 ("return (-a) ^ b", "return(-a)^b"),
+                ("return a - (b - c)", "return a-(b-c)"),
                 // Concat is right-associative, so (a .. b) .. c isn't a .. b .. c.
                 ("return (a .. b) .. c", "return(a..b)..c"),
                 ("return -(a + b)", "return-(a+b)"),

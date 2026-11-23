@@ -1,4 +1,4 @@
-use luck_ast::{Expression, GetSpan as _};
+use luck_ast::Expression;
 use luck_token::{BinOp, Span, UnOp};
 
 use crate::diagnostic::Finding;
@@ -34,10 +34,9 @@ impl NodeRule for UnnecessaryNegation {
         if unary.op != UnOp::Not {
             return;
         }
-        let Expression::Parenthesized(parenthesized) = &unary.operand else {
-            return;
-        };
-        let Expression::BinaryOp(comparison) = &parenthesized.expr else {
+        // A comparison binds looser than `not`, so one that's its operand is
+        // in parentheses.
+        let Expression::BinaryOp(comparison) = &unary.operand else {
             return;
         };
         // A run of comparisons groups from the left, so its last one applies
@@ -48,9 +47,10 @@ impl NodeRule for UnnecessaryNegation {
         let Some(opposite_op) = opposite_comparison(last.op) else {
             return;
         };
-        let lhs_end = before_last.last().map_or(&comparison.first, |link| &link.operand).span().end;
-        let lhs = Span::new(comparison.first.span().start, lhs_end).text(context.source);
-        let rhs = last.operand.span().text(context.source);
+        let lhs_operand = before_last.last().map_or(&comparison.first, |link| &link.operand);
+        let lhs =
+            Span::new(comparison.span.start, context.extent(lhs_operand).end).text(context.source);
+        let rhs = context.extent(&last.operand).text(context.source);
         let op_text = opposite_op.static_text();
         // Only `==` and `~=` get a fix, since `a ~= b` is defined as
         // `not (a == b)`. Flipping `<` or `<=` changes the result for NaN
@@ -62,15 +62,17 @@ impl NodeRule for UnnecessaryNegation {
                 unary.span,
             )
             .with_fix(context, FixKind::Fix, |fixer| {
-                // Keep the parens. This node can't see its parent, and a bare
-                // comparison could regroup with a neighboring `..`,
-                // arithmetic, or comparison operator.
+                // This node can't see its parent, and a bare comparison could
+                // regroup with a neighboring `..`, arithmetic, or comparison
+                // operator, so it takes parentheses unless the `not` already
+                // sits in some.
+                let replacement = if context.groupings.around(unary.span).is_some() {
+                    format!("{lhs} {op_text} {rhs}")
+                } else {
+                    format!("({lhs} {op_text} {rhs})")
+                };
                 is_equality.then(|| {
-                    fixer.replace(
-                        "invert the comparison operator",
-                        unary.span,
-                        format!("({lhs} {op_text} {rhs})"),
-                    )
+                    fixer.replace("invert the comparison operator", unary.span, replacement)
                 })
             }),
         );
@@ -183,6 +185,20 @@ mod tests {
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert_eq!(fixed, "local r = (x.y == f(1))");
+    }
+
+    #[test]
+    fn flags_and_fixes_keeping_one_pair_of_parentheses() {
+        for (source, expected) in [
+            ("local r = (not (a == b))", "local r = (a ~= b)"),
+            ("local r = not (not (a == b))", "local r = not (a ~= b)"),
+            ("local r = not (a == (b == c))", "local r = (a ~= (b == c))"),
+            ("local r = not ((a == b) == c)", "local r = ((a == b) ~= c)"),
+        ] {
+            let diags = run(source);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+            assert_eq!(fix_and_reparse(source, &diags, LuaVersion::Lua54), expected, "{source}");
+        }
     }
 
     #[test]

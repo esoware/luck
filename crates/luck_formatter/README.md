@@ -8,6 +8,8 @@ The formatter writes the tree into one flat stream of layout elements in the cal
 
 For a parse, the formatter takes comments from the parse's comment list and places each at the nearest node boundary: before the node it leads, after the node it trails on its line, or before a container's closer, as `oxc_formatter` does. A comment that ends its line in the source ends it in the output. It keeps blank lines between statements, and copies `-- luck: format off` to `-- luck: format on` regions and statements after `-- luck: ignore` as written. A tree built in code takes its comments from `SyntheticComment`s instead. The output parses, and formatting it again changes nothing.
 
+It writes the parentheses precedence needs. Of those in the source, it keeps the ones the tree keeps, any a comment sits in, and any around an operator expression, which group it for a reader, and drops the rest, which the parse records beside the tree. Around a whole condition, it keeps only those a comment sits in.
+
 ## Features
 
 - `FormatOptions` sets the line width, indent style and width, quote style, hex digit case, call parentheses, collapsing of simple `if` statements, line endings, blank lines at the edges of blocks, opt-in `require` sorting, a space after function names, and the magic trailing comma.

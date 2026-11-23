@@ -1,7 +1,7 @@
 use core::ptr;
 
 use luck_allocator::Allocator;
-use luck_ast::{Call, Expression, Statement, TreeCounts, unwrap_parentheses};
+use luck_ast::{Call, Expression, Statement, TreeCounts};
 use luck_semantic::{
     StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, analyze,
     expand_replace_template, library_for,
@@ -1492,8 +1492,7 @@ fn fix_template<'library>(
     Some(function_at(library, path).deprecated.as_ref()?.replacement?.template)
 }
 
-/// Whether `text`, read as a returned value, is out of its parentheses what
-/// `is_expected` says.
+/// Whether `text`, read as a returned value, is what `is_expected` says.
 fn returns<F>(text: &str, version: LuaVersion, is_expected: F) -> bool
 where
     F: FnOnce(&Expression<'_>) -> bool,
@@ -1504,7 +1503,7 @@ where
     let [Statement::Return(return_stmt)] = &*chunk.block.stmts else {
         panic!("{text} must parse as a return");
     };
-    is_expected(unwrap_parentheses(return_stmt.exprs.first().expect("one returned value")))
+    is_expected(return_stmt.exprs.first().expect("one returned value"))
 }
 
 #[test]

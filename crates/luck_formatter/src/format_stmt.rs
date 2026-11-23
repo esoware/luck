@@ -9,12 +9,12 @@ use core::{iter, slice};
 use luck_ast::{
     Assignment, AttributedName, Block, CompoundAssignment, Expression, FunctionAttribute,
     FunctionName, GenericFor, GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind,
-    NumericFor, ReturnStatement, Statement, Type, TypeDeclaration, TypeDeclarationValue,
+    NumericFor, ReturnStatement, Slot, Statement, Type, TypeDeclaration, TypeDeclarationValue,
     unwrap_parentheses,
 };
 
 use crate::CollapseSimpleStatement;
-use crate::format_block::first_item_span;
+use crate::format_block::first_item_start;
 use crate::ir::Formatter;
 
 /// What follows `=`.
@@ -188,23 +188,27 @@ impl<'ast> Formatter<'ast> {
         });
     }
 
-    /// Statement conditions are boolean contexts, so redundant parentheses
-    /// come off: `(f())` truncating values to one changes nothing observable.
-    /// They stay around a comment, which needs the line breaks they hold.
+    /// Statement conditions are boolean contexts, so the parentheses around a
+    /// whole one come off, even the ones the tree keeps: `(f())` truncating
+    /// values to one changes nothing observable. They stay around a comment,
+    /// which needs the line breaks they hold.
     ///
     /// An operator chain breaks level with its first operand unless
     /// `is_indented`, for a condition that sits on an indented line of its own.
     fn write_condition(&mut self, condition: &Expression<'ast>, is_indented: bool) {
         let unwrapped = unwrap_parentheses(condition);
-        let span = unwrapped.span();
-        if self.comments().has_comment_outside(condition.span(), iter::once(span)) {
+        let outer = self
+            .groupings()
+            .and_then(|groupings| groupings.around(condition.span()))
+            .unwrap_or_else(|| condition.span());
+        if self.comments().has_comment_outside(outer, iter::once(unwrapped.span())) {
             self.write_expr(condition);
         } else if let Expression::BinaryOp(chain) = unwrapped
             && !is_indented
         {
-            self.node(|| chain.span, |f| f.write_binary_chain(chain, false));
+            self.node(|| outer, |f| f.write_binary_chain(chain, false, Slot::FREE));
         } else {
-            self.write_expr(unwrapped);
+            self.node(|| outer, |f| f.write_bare_expr(unwrapped, Slot::FREE));
         }
     }
 
@@ -245,8 +249,11 @@ impl<'ast> Formatter<'ast> {
     /// A value a statement assigns. Only a function written here keeps the
     /// require sorting of the block around it.
     fn write_assigned_value(&mut self, value: &Expression<'ast>) {
-        if let Expression::FunctionDef(function_def) = value {
-            self.node(|| function_def.span, |f| f.write_function_definition(function_def));
+        if let Expression::FunctionDef(function_def) = value
+            && !self.is_wrapped(value, Slot::FREE)
+        {
+            let span = self.extent(value);
+            self.node(|| span, |f| f.write_function_definition(function_def));
         } else {
             self.write_expr(value);
         }
@@ -273,7 +280,7 @@ impl<'ast> Formatter<'ast> {
                 write(f);
             }
         };
-        self.write_after_operator(first.span().start, |f| {
+        self.write_after_operator(self.extent(first).start, |f| {
             if is_bracketed(values) {
                 write_list(f);
             } else {
@@ -380,7 +387,7 @@ impl<'ast> Formatter<'ast> {
             && if_stmt.elseif_clauses.is_empty()
             && if_stmt.else_clause.is_none()
             && is_simple_block(&if_stmt.block)
-            && first_item_span(&if_stmt.block).is_some();
+            && first_item_start(&if_stmt.block).is_some();
 
         if can_collapse {
             // The group stays flat only if the whole `if` fits, and a body

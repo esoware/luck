@@ -1,4 +1,4 @@
-use luck_ast::Expression;
+use luck_ast::{Expression, GetSpan as _};
 use luck_token::{BinOp, UnOp};
 
 use crate::binary::{OperatorPair, operator_pairs};
@@ -27,7 +27,7 @@ impl NodeRule for ComparisonPrecedence {
     fn on_expr(
         &self,
         expr: &Expression<'_>,
-        _context: &LintContext<'_>,
+        context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         let Expression::BinaryOp(run) = expr else {
@@ -37,14 +37,14 @@ impl NodeRule for ComparisonPrecedence {
             return;
         }
         for pair in operator_pairs(run) {
-            check_pair(pair, findings);
+            check_pair(pair, context, findings);
         }
     }
 }
 
 /// A comparison's operand that is itself a comparison is the run's
 /// operators on that side, since a bare one would have joined the run.
-fn check_pair(pair: OperatorPair<'_>, findings: &mut Vec<Finding>) {
+fn check_pair(pair: OperatorPair<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
     let chained_side = if pair.lhs.is_none() {
         Some("left")
     } else if pair.rhs.is_none() {
@@ -58,7 +58,7 @@ fn check_pair(pair: OperatorPair<'_>, findings: &mut Vec<Finding>) {
                 format!(
                     "chained comparison on the {side} side parses as `(a op b) op c`, not as a math-style chain"
                 ),
-                pair.span(),
+                pair.span(context),
             )
             .with_help(
                 "split into two boolean expressions joined with `and`, or parenthesize to make intent explicit",
@@ -66,6 +66,11 @@ fn check_pair(pair: OperatorPair<'_>, findings: &mut Vec<Finding>) {
         );
     }
 
+    // The author of `(not x) == y` was explicit.
+    let is_unparenthesized_not = |operand: &Expression<'_>| {
+        matches!(operand, Expression::UnaryOp(unary) if unary.op == UnOp::Not)
+            && context.groupings.around(operand.span()).is_none()
+    };
     if pair.lhs.is_some_and(is_unparenthesized_not) && !pair.rhs.is_some_and(is_unparenthesized_not)
     {
         let help = match pair.op {
@@ -95,16 +100,11 @@ fn check_pair(pair: OperatorPair<'_>, findings: &mut Vec<Finding>) {
                     "`not` applies only to the left operand, so this parses as `(not x) {} y`",
                     pair.op.static_text()
                 ),
-                pair.span(),
+                pair.span(context),
             )
             .with_help(help),
         );
     }
-}
-
-/// The author of `(not x) == y` was explicit.
-fn is_unparenthesized_not(expr: &Expression<'_>) -> bool {
-    matches!(expr, Expression::UnaryOp(unary) if unary.op == UnOp::Not)
 }
 
 #[cfg(test)]

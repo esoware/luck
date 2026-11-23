@@ -4,7 +4,7 @@
 
 use core::{iter, mem};
 
-use luck_allocator::{Allocator, List};
+use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
     BinaryLink, BinaryOp, Block, Expression, GetSpan as _, IfStatement, OneOrMore, Statement,
     is_multi_value,
@@ -12,7 +12,8 @@ use luck_ast::{
 use luck_token::{BinOp, LuaVersion};
 
 use super::Compressor;
-use crate::expr::{ends_in_if_expr, is_always_truthy, parenthesize};
+use super::simplify_parens::Place;
+use crate::expr::is_always_truthy;
 
 /// Whether a statement declares something its block scopes: a local, a
 /// label, a Luau type, or a Lua 5.5 global.
@@ -73,39 +74,35 @@ pub(super) fn holds_nested_if(if_stmt: &IfStatement<'_>) -> bool {
 
 /// `first` and each of `rest` joined by `op`, which is `and` or `or`.
 ///
-/// Both are associative, so an operand that is a bare run of `op` joins the
-/// run. Only an if-expression printed last can't swallow an operator, so one
-/// anywhere else gets parentheses.
+/// Both are associative and no metamethod intercepts either, so an operand
+/// that is a run of `op` joins the run wherever it stands.
 fn logical<'ast>(
     allocator: &'ast Allocator,
     op: BinOp,
     first: Expression<'ast>,
     rest: Vec<Expression<'ast>>,
 ) -> Expression<'ast> {
-    let wrap = |operand: Expression<'ast>, is_last: bool| {
-        let binds_looser = matches!(
-            &operand,
-            Expression::BinaryOp(inner) if inner.precedence().0 < op.precedence().0
-        );
-        if binds_looser || (!is_last && ends_in_if_expr(&operand)) {
-            parenthesize(allocator, operand)
-        } else {
-            operand
+    let span = rest.last().map_or_else(|| first.span(), |last| first.span().merge(last.span()));
+    // An operand's own first operand and the links after it.
+    let split = |operand: Expression<'ast>| {
+        let is_joined = matches!(&operand, Expression::BinaryOp(run) if run.links.first().op == op);
+        if is_joined && let Expression::BinaryOp(run) = operand {
+            let BinaryOp { first: head, links: tail, .. } = Box::unbox(run);
+            return (head, Some(tail));
         }
+        (operand, None)
     };
-    let last_index = rest.len().saturating_sub(1);
-    let first_operand = wrap(first, rest.is_empty());
-    let wrapped = rest
-        .into_iter()
-        .enumerate()
-        .map(|(i, operand)| BinaryLink { op, operand: wrap(operand, i == last_index) });
-    let Some(links) = OneOrMore::from_list(List::from_iter_in(wrapped, allocator)) else {
+    let (first_operand, first_tail) = split(first);
+    let mut joined: Vec<BinaryLink<'ast>> = first_tail.into_iter().flatten().collect();
+    for operand in rest {
+        let (head, tail) = split(operand);
+        joined.push(BinaryLink { op, operand: head });
+        joined.extend(tail.into_iter().flatten());
+    }
+    let Some(links) = OneOrMore::from_list(List::from_iter_in(joined, allocator)) else {
         return first_operand;
     };
-    let span = first_operand.span().merge(links.last().operand.span());
-    let mut run = BinaryOp::boxed(span, first_operand, links, allocator);
-    run.splice_operands(allocator);
-    Expression::BinaryOp(run)
+    Expression::new_binary_op(span, first_operand, links, allocator)
 }
 
 /// The condition and value of `if c then return v end`.
@@ -131,9 +128,9 @@ impl<'ast> Compressor<'_, 'ast> {
     /// `if a then if b then X end end` becomes `if a and b then X end`, for
     /// every level of the run at once, so an `if` inside the run leaves its
     /// own merge to this one, which builds the run of `and`s once. The run is
-    /// one level, so each condition is measured once, for the `and` and a pair
-    /// of parentheses it can gain. An `if` whose condition doesn't fit `depth`
-    /// levels down, where this one is, starts a run of its own.
+    /// one level, so each condition is measured once, for the `and`. An `if`
+    /// whose condition doesn't fit `depth` levels down, where this one is,
+    /// starts a run of its own.
     pub(super) fn merge_nested_ifs(&mut self, outer_if: &mut IfStatement<'ast>, depth: usize) {
         if !self.config.simplify_statements {
             return;
@@ -145,8 +142,8 @@ impl<'ast> Compressor<'_, 'ast> {
             while matches!(
                 &*head.block.stmts,
                 [Statement::IfStatement(inner_if)]
-                    if has_no_else(inner_if) && self.fits(head_depth, 2, &inner_if.condition)
-            ) && (!inner_conditions.is_empty() || self.fits(head_depth, 2, &head.condition))
+                    if has_no_else(inner_if) && self.fits(head_depth, 1, &inner_if.condition)
+            ) && (!inner_conditions.is_empty() || self.fits(head_depth, 1, &head.condition))
                 && let Some(Statement::IfStatement(inner_if)) =
                     head.block.stmts.first_mut().map(Statement::take)
             {
@@ -157,7 +154,7 @@ impl<'ast> Compressor<'_, 'ast> {
             if !inner_conditions.is_empty() {
                 head.condition =
                     logical(self.allocator, BinOp::And, head.condition.take(), inner_conditions);
-                self.leave_expr(&mut head.condition, false);
+                self.leave_expr(&mut head.condition, Place::Free);
                 self.has_changed = true;
             }
             if !holds_nested_if(head) {
@@ -215,15 +212,15 @@ impl<'ast> Compressor<'_, 'ast> {
         }
         // The guards and the fallback make one run of `or`s whatever its
         // length, and each guard's condition and value sit in a run of `and`s
-        // under it, each maybe in parentheses.
+        // under it.
         let link_count = stmts
             .iter()
             .rev()
             .take_while(|stmt| {
                 if_return_guard(stmt).is_some_and(|(condition, return_expr)| {
                     is_always_truthy(return_expr)
-                        && self.fits(level, 3, condition)
-                        && self.fits(level, 3, return_expr)
+                        && self.fits(level, 2, condition)
+                        && self.fits(level, 2, return_expr)
                 })
             })
             .count();
@@ -245,7 +242,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 continue;
             };
             let mut guard = logical(allocator, BinOp::And, if_stmt.condition.take(), vec![value]);
-            self.leave_expr(&mut guard, true);
+            self.leave_expr(&mut guard, Place::Operand);
             guards.push(guard);
         }
         let mut chain_values = guards.into_iter();
@@ -259,7 +256,7 @@ impl<'ast> Compressor<'_, 'ast> {
             ),
             None => fallback_expr,
         };
-        self.leave_expr(fallback, false);
+        self.leave_expr(fallback, Place::Free);
         // The return takes the place of the first guard, and the guards go.
         block.stmts.swap(chain_start, return_index);
         block.stmts.truncate(chain_start.saturating_add(1));
@@ -423,6 +420,17 @@ mod tests {
     }
 
     #[test]
+    fn drops_a_truncation_that_lands_in_an_operator_run_in_the_same_pass() {
+        let both = TransformConfig { simplify_parens: true, ..STATEMENTS };
+        for (source, expected) in [
+            ("if not x then return 3 end return (f())", "return not x and 3 or f()"),
+            ("if a then if (f()) then g() end end", "if a and f()then g()end"),
+        ] {
+            assert_eq!(minify_with(source, LuaVersion::Lua54, &both), expected, "{source}");
+        }
+    }
+
+    #[test]
     fn merged_if_exprs_end_before_the_next_operator() {
         for (source, expected) in [
             (
@@ -439,11 +447,11 @@ mod tests {
             ),
             (
                 "if a then if if b then c else d then return 1 end end return 0",
-                "return(a and if b then c else d)and 1 or 0",
+                "return a and(if b then c else d)and 1 or 0",
             ),
             (
                 "if not if a then b else c then return 1 end return 0",
-                "return(not if a then b else c)and 1 or 0",
+                "return not(if a then b else c)and 1 or 0",
             ),
             (
                 "if a then return 1 end return if b then c else d",

@@ -50,7 +50,7 @@ pub use directive::{CommentContent, LintDirective, LintExtent, LintVerb};
 pub use number::{
     LuaNumber, NumberSpelling, Numeral, read_integer, read_numeral, spell_integer, spell_number,
 };
-pub use op::{Associativity, BinOp, CompoundOp, OperandSide, UnOp};
+pub use op::{Associativity, BinOp, CompoundOp, UnOp};
 pub use source_error::SourceError;
 pub use span::{Span, index_to_offset, offset_to_index};
 pub use string::{

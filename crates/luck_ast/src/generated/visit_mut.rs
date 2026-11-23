@@ -26,9 +26,11 @@ use crate::{
 /// A rewrite edits the node it's handed. One that restructures it moves
 /// the parts it keeps out with `take`, whose placeholder costs no
 /// allocation, and builds the new nodes in the tree's arena, which the
-/// pass holds. A rewrite that leaves a bare run where it would merge into
-/// the one around it splices them with
-/// [`SuffixedExpression::splice_prefix`] or [`BinaryOp::splice_operands`].
+/// pass holds. A rewrite needs no parentheses for grouping, since the
+/// printers write those. One that leaves a chain as a chain's prefix joins
+/// them with [`SuffixedExpression::splice_prefix`], and one that leaves a
+/// run where it groups as the run around it would can drop the parentheses
+/// that prints with [`BinaryOp::splice_operands`].
 pub trait VisitMut<'ast> {
     /// Called on entering each node, with its type, before what it holds, and
     /// always paired with [`VisitMut::leave_node`].

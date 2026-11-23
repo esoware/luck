@@ -5,10 +5,12 @@
 //!
 //! [`compact()`] writes no comments, a space only where two pieces would
 //! otherwise lex as one token, and a `;` only before a statement that starts
-//! with `(` and would otherwise call the one before. It spells each literal
-//! the shortest way its value reads back in the chunk's version, or as the
-//! tree spells it when that's no longer, unchecked. It never reads source
-//! text, so a tree built in code prints too.
+//! with `(` and would otherwise call the one before. It writes the
+//! parentheses the tree keeps, and derives the rest from where each
+//! expression goes, the fewest that read back as the same tree. It spells
+//! each literal the shortest way its value reads back in the chunk's
+//! version, or as the tree spells it when that's no longer, unchecked. It
+//! never reads source text, so a tree built in code prints too.
 //!
 //! It recurses once per level of nesting, so it takes a tree within
 //! `luck_ast::MAX_NESTING_DEPTH`, as `luck_parser` builds. Measure a tree

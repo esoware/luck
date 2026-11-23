@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
-use luck_ast::{Expression, Field, FunctionArgs, Statement, Suffix};
+use luck_ast::{Expression, Field, FunctionArgs, GetSpan as _, Statement, Suffix};
 use luck_parser::ParseResult;
-use luck_token::{BinOp, LuaVersion, UnOp};
+use luck_token::{BinOp, LuaVersion, Span, UnOp};
 
 use crate::common::{
     assert_no_errors, chain, chain_shape, local_value, run_operands, run_ops, target_chain,
@@ -537,7 +537,40 @@ fn parenthesized() {
     assert_no_errors(&result);
     let expr = local_value(&result);
     assert_eq!(run_ops(expr), [BinOp::Mul]);
-    assert!(matches!(run_operands(expr)[0], Expression::Parenthesized(_)));
+    let sum = run_operands(expr)[0];
+    assert_eq!(run_ops(sum), [BinOp::Add], "parentheses group without a node of their own");
+    assert_eq!(result.groupings.around(sum.span()), Some(Span::new(10, 17)));
+    assert_eq!(expr.span(), Span::new(10, 21), "a node spans the parentheses it starts with");
+}
+
+#[test]
+fn parentheses_change_only_what_a_call_or_vararg_yields() {
+    let allocator = Allocator::new();
+    let result = parse_lua51(&allocator, "local function f(...) return (f()), (...), ((x)) end");
+    assert_no_errors(&result);
+    let Some(Statement::LocalFunction(function)) = result.chunk.block.stmts.first() else {
+        panic!("expected a local function, got {:?}", result.chunk.block.stmts);
+    };
+    let Some(Statement::Return(return_stmt)) = function.body.block.stmts.last() else {
+        panic!("expected a return");
+    };
+    assert!(matches!(
+        *return_stmt.exprs,
+        [Expression::Parenthesized(_), Expression::Parenthesized(_), Expression::Name(_)]
+    ));
+}
+
+#[test]
+fn a_parenthesized_variable_is_no_assignment_target() {
+    let allocator = Allocator::new();
+    for source in ["(a) = 1", "a, (b) = 1, 2", "(a.b) = 1", "((a)) = 1"] {
+        let result = parse_lua51(&allocator, source);
+        let [error] = result.errors.as_slice() else {
+            panic!("{source}: {:?}", result.errors);
+        };
+        assert_eq!(error.message, "invalid assignment target", "{source}");
+    }
+    assert_no_errors(&parse_lua51(&allocator, "(a).b = 1 (a)[1] = 2 (f)()"));
 }
 
 #[test]
@@ -729,10 +762,42 @@ fn consecutive_method_calls_four_deep() {
 #[test]
 fn call_on_parenthesized_expr() {
     let allocator = Allocator::new();
-    let result = parse_lua51(&allocator, "(f)(x)");
+    let result = parse_lua51(&allocator, "(f)(x); ((g).y).z(w); (h())()");
     assert_no_errors(&result);
-    let Statement::FunctionCall(call) = &result.chunk.block.stmts[0] else {
-        panic!("expected FunctionCall");
+    let [
+        Statement::FunctionCall(call),
+        Statement::FunctionCall(joined),
+        Statement::FunctionCall(truncated),
+    ] = &*result.chunk.block.stmts
+    else {
+        panic!("expected three calls, got {:?}", result.chunk.block.stmts);
     };
-    assert_eq!(chain_shape(call), "()()");
+    assert_eq!(chain_shape(call), "f()");
+    assert_eq!(chain_shape(joined), "g.y.z()", "a parenthesized chain reads on");
+    assert_eq!(joined.span, Span::new(8, 20));
+    assert_eq!(chain_shape(truncated), "()()", "a parenthesized call takes one value");
+}
+
+#[test]
+fn a_call_spans_the_parentheses_its_callee_is_in() {
+    let allocator = Allocator::new();
+    let source = "(f)(x); (\"s\"):rep(2); (a).b.c()";
+    let result = parse_lua51(&allocator, source);
+    assert_no_errors(&result);
+    let calls: Vec<&str> = result
+        .chunk
+        .block
+        .stmts
+        .iter()
+        .filter_map(|stmt| {
+            if let Statement::FunctionCall(chain) = stmt { chain.last_call() } else { None }
+        })
+        .map(|call| call.span().text(source))
+        .collect();
+    assert_eq!(calls, ["(f)(x)", "(\"s\"):rep(2)", "(a).b.c()"]);
+    let Some(Statement::FunctionCall(fields)) = result.chunk.block.stmts.last() else {
+        panic!("expected a call last");
+    };
+    assert_eq!(fields.head(1).span().text(source), "(a).b");
+    assert_eq!(fields.head(0).span().text(source), "a", "a prefix alone is itself");
 }

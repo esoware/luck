@@ -23,7 +23,7 @@ impl Printer {
             }
             Type::Typeof(typeof_type) => {
                 self.piece("typeof(");
-                self.print_expr(&typeof_type.expr);
+                self.print_free_expr(&typeof_type.expr);
                 self.piece(")");
             }
             Type::Table(table) => {

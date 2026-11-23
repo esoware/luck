@@ -72,9 +72,9 @@ fn check_local(local: &LocalAssignment<'_>, context: &LintContext<'_>) -> Option
     }
 
     // Delete from the end of the last kept value, comma included, through
-    // the end of the list.
-    let delete_start = last_kept_expr.span().end;
-    let delete_end = exprs.last().map_or(delete_start, |last_expr| last_expr.span().end);
+    // the end of the list, each with the parentheses it's in.
+    let delete_start = context.extent(last_kept_expr).end;
+    let delete_end = exprs.last().map_or(delete_start, |last_expr| context.extent(last_expr).end);
     Some(
         Finding::new(
             format!(
@@ -97,7 +97,7 @@ fn whole_initializer_span(
     context: &LintContext<'_>,
 ) -> Span {
     let binding_end = last_binding_end(local);
-    let gap = Span::new(binding_end, first_expr.span().start);
+    let gap = Span::new(binding_end, context.extent(first_expr).start);
     let delete_start = context
         .comments_within(gap)
         .iter()
@@ -164,6 +164,17 @@ mod tests {
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
         assert_eq!(fixed, "local a, b = 1");
+    }
+
+    #[test]
+    fn flags_and_fixes_values_in_parentheses() {
+        for (source, expected) in
+            [("local a, b = (x), (nil)", "local a, b = (x)"), ("local c = (nil)", "local c")]
+        {
+            let diags = run(source);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+            assert_eq!(fix_and_reparse(source, &diags, LuaVersion::Lua54), expected, "{source}");
+        }
     }
 
     #[test]

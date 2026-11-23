@@ -1,6 +1,8 @@
 use luck_ast::{Chunk, TreeCounts};
 use luck_token::{Comment, Span};
 
+use crate::groupings::Groupings;
+
 pub type ParseError = luck_token::SourceError;
 
 /// Everything one parse found. The tree lives in the arena the parse was
@@ -12,6 +14,8 @@ pub struct ParseResult<'ast> {
     /// The tree, in the version the source was parsed as.
     pub chunk: Chunk<'ast>,
     pub comments: Vec<Comment>,
+    /// The parentheses `chunk` leaves out, which only grouped what they hold.
+    pub groupings: Groupings,
     /// Every lex and parse error, sorted by start offset.
     pub errors: Vec<ParseError>,
     /// What the lexer's [`luck_lexer::LexResult::lenient_escapes`] holds.

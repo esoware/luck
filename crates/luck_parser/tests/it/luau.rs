@@ -537,6 +537,21 @@ fn bracketed_and_parameterized_attributes() {
 }
 
 #[test]
+fn a_literal_in_parentheses_is_no_attribute_argument() {
+    let allocator = Allocator::new();
+    for source in [
+        "@[deprecated(({use = \"g\"}))] function f() end",
+        "@[deprecated({use = (\"g\")})] function f() end",
+    ] {
+        let errors = parse_luau(&allocator, source).errors;
+        assert!(
+            errors.iter().any(|error| error.message == "attribute arguments must be literals"),
+            "{source}: {errors:?}"
+        );
+    }
+}
+
+#[test]
 fn attributes_on_function_exprs() {
     let allocator = Allocator::new();
     // simpleexp ::= attributes 'function' funcbody

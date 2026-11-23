@@ -1,6 +1,9 @@
 use crate::expr::{Expression, Var};
 use crate::stmt::Statement;
 
+/// `expr` inside every [`Expression::Parenthesized`] around it, for a place
+/// where taking one value, or reading a Luau integer as a value, changes
+/// nothing.
 #[must_use]
 pub fn unwrap_parentheses<'tree, 'ast>(expr: &'tree Expression<'ast>) -> &'tree Expression<'ast> {
     let mut current = expr;
@@ -39,44 +42,27 @@ pub fn is_multi_value(expr: &Expression<'_>) -> bool {
     }
 }
 
-/// Whether `expr` may stand bare in a prefix position: before a field, an
-/// index, a call, or a Luau instantiation.
+/// The prefix a call or an assignment starts with, inside any chain it
+/// starts.
 ///
-/// Anything else needs parentheses there, as in `("s"):rep(2)` or `({}).x`.
+/// A printer that writes it in parentheses starts the statement with `(`,
+/// which glues onto a statement before it that ends in an expression and
+/// reads back as a call, so it puts a `;` between them.
 #[must_use]
-pub const fn is_prefix_expr(expr: &Expression<'_>) -> bool {
-    match expr {
-        Expression::Name(_) | Expression::Suffixed(_) | Expression::Parenthesized(_) => true,
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::TableConstructor(_)
-        | Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
-    }
-}
-
-/// Both printers must guard a statement starting with `(`. Printed after a statement that
-/// ends in an expression, `(...)` glues onto that expression and re-parses
-/// as a call, silently changing the meaning.
-#[must_use]
-pub fn stmt_starts_with_paren(stmt: &Statement<'_>) -> bool {
-    match stmt {
-        Statement::FunctionCall(chain) => expr_starts_with_paren(&chain.prefix),
-        Statement::Assignment(assignment) => {
-            assignment.targets.first().is_some_and(var_starts_with_paren)
-        }
+pub fn leading_prefix<'tree, 'ast>(
+    stmt: &'tree Statement<'ast>,
+) -> Option<&'tree Expression<'ast>> {
+    let mut current = match stmt {
+        Statement::FunctionCall(chain) => &chain.prefix,
+        Statement::Assignment(assignment) => match assignment.targets.first()? {
+            Var::Name(_) => return None,
+            Var::Suffixed(chain) => &chain.prefix,
+        },
         // Luau
-        Statement::CompoundAssignment(compound) => var_starts_with_paren(&compound.var),
+        Statement::CompoundAssignment(compound) => match &compound.var {
+            Var::Name(_) => return None,
+            Var::Suffixed(chain) => &chain.prefix,
+        },
         Statement::DoBlock(_)
         | Statement::WhileLoop(_)
         | Statement::RepeatLoop(_)
@@ -95,70 +81,10 @@ pub fn stmt_starts_with_paren(stmt: &Statement<'_>) -> bool {
         | Statement::GlobalFunction(_)
         | Statement::GlobalStar(_)
         | Statement::TypeDeclaration(_)
-        | Statement::Error(_) => false,
+        | Statement::Error(_) => return None,
+    };
+    while let Expression::Suffixed(chain) = current {
+        current = &chain.prefix;
     }
-}
-
-fn expr_starts_with_paren(expr: &Expression<'_>) -> bool {
-    let mut current = expr;
-    loop {
-        current = match current {
-            Expression::Parenthesized(_) => return true,
-            Expression::Suffixed(chain) => &chain.prefix,
-            Expression::BinaryOp(binary_op) => &binary_op.first,
-            // Luau
-            Expression::TypeCast(cast) => &cast.expr,
-            Expression::Name(_)
-            | Expression::UnaryOp(_)
-            | Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::TableConstructor(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::Error(_) => return false,
-        };
-    }
-}
-
-fn var_starts_with_paren(var: &Var<'_>) -> bool {
-    match var {
-        Var::Name(_) => false,
-        Var::Suffixed(chain) => expr_starts_with_paren(&chain.prefix),
-    }
-}
-
-/// Inside an interpolated string, `{` directly after the interpolation
-/// opener forms `{{`, which Luau rejects, so printers must separate them.
-#[must_use]
-pub fn expr_starts_with_brace(expr: &Expression<'_>) -> bool {
-    let mut current = expr;
-    loop {
-        current = match current {
-            Expression::TableConstructor(_) => return true,
-            Expression::Suffixed(chain) => &chain.prefix,
-            Expression::BinaryOp(binary_op) => &binary_op.first,
-            // Luau
-            Expression::TypeCast(cast) => &cast.expr,
-            Expression::Name(_)
-            | Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Parenthesized(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::Error(_) => return false,
-        };
-    }
+    Some(current)
 }

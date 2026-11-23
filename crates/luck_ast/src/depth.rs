@@ -170,7 +170,7 @@ mod tests {
         let synth = fixture.synth();
         let leaf = || synth.name_expr("x");
         for (label, expr) in [
-            ("parentheses", synth.parenthesized(leaf())),
+            ("parentheses", synth.single_value(synth.vararg())),
             ("unary operator", synth.unary_op(UnOp::Not, leaf())),
             ("binary operator", synth.binary_op(leaf(), BinOp::Add, leaf())),
             ("call", synth.call(leaf(), [leaf()])),
@@ -207,8 +207,8 @@ mod tests {
     fn siblings_count_the_deepest_one_only() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let deep = synth.parenthesized(synth.parenthesized(synth.name_expr("x")));
-        let shallow = synth.parenthesized(synth.name_expr("y"));
+        let deep = synth.unary_op(UnOp::Not, synth.unary_op(UnOp::Not, synth.name_expr("x")));
+        let shallow = synth.unary_op(UnOp::Not, synth.name_expr("y"));
         assert_eq!(expr_nesting_depth(&synth.binary_op(shallow, BinOp::Add, deep)), 3);
     }
 
@@ -239,10 +239,8 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_run_nested_in_a_run_counts_its_own_level() {
-        // `(a .. b) .. c` built with no parentheses prints `a .. b .. c`,
-        // which reads back as one run, so the tree is never shallower than
-        // what it prints.
+    fn a_run_in_a_run_at_its_level_counts_its_own_level() {
+        // `(a .. b) .. c`, which prints with its parentheses.
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let allocator = fixture.allocator();
@@ -269,28 +267,28 @@ mod tests {
     fn spans_past_the_cap_name_each_construct_it_refuses() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let groups = |count: usize| {
+        let negations = |count: usize| {
             let mut expr = synth.name_expr("x");
             for _ in 0..count {
-                expr = synth.parenthesized(expr);
+                expr = synth.unary_op(UnOp::Not, expr);
             }
             expr
         };
-        // The `level`th group from the outside.
-        let group_span = |expr: &Expression<'_>, level: usize| {
+        // The `level`th negation from the outside.
+        let negation_span = |expr: &Expression<'_>, level: usize| {
             let mut current = expr;
             for _ in 1..level {
-                if let Expression::Parenthesized(parenthesized) = current {
-                    current = &parenthesized.expr;
+                if let Expression::UnaryOp(negation) = current {
+                    current = &negation.operand;
                 }
             }
             current.span()
         };
-        let (deep, deeper) = (groups(10), groups(12));
-        let expected = [group_span(&deep, 8), group_span(&deeper, 8)];
+        let (deep, deeper) = (negations(10), negations(12));
+        let expected = [negation_span(&deep, 8), negation_span(&deeper, 8)];
         let pair = synth.call(synth.name_expr("f"), [deep, deeper]);
         let block = synth.block([synth.call_stmt(pair)]);
-        // The block and the call take two levels, so seven groups of each
+        // The block and the call take two levels, so seven negations of each
         // argument fit under the cap from nine levels below it.
         assert_eq!(spans_past_nesting_cap(&block, MAX_NESTING_DEPTH - 9), expected);
         assert_eq!(spans_past_nesting_cap(&block, MAX_NESTING_DEPTH - 14), []);

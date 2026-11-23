@@ -1,39 +1,12 @@
 use luck_allocator::List;
 use luck_ast::{
-    Attribute, AttributedName, Expression, FunctionAttribute, FunctionName, GetSpan as _,
-    LocalAssignmentKind, LocalFunctionKind, Name, Statement, TypeDeclarationValue, is_multi_value,
+    Attribute, AttributedName, FunctionAttribute, FunctionName, GetSpan as _, LocalAssignmentKind,
+    LocalFunctionKind, Name, Statement, TypeDeclarationValue, is_multi_value,
 };
 use luck_token::{Span, TokenKind};
 
 use super::Parser;
 use super::types::GenericsOwner;
-
-/// The span of a `local` or `global` declaration, from `start_span` through
-/// its last value, or through its last name and that name's annotation and
-/// attribute when it has no values.
-fn declaration_span(
-    start_span: Span,
-    names: &[AttributedName<'_>],
-    exprs: &[Expression<'_>],
-) -> Span {
-    let end_span = exprs
-        .last()
-        .map(Expression::span)
-        .or_else(|| {
-            names.last().map(|attributed| {
-                let mut span = attributed.name.span;
-                if let Some(annotation) = &attributed.type_annotation {
-                    span = span.merge(annotation.span());
-                }
-                if let Some(attribute) = &attributed.attribute {
-                    span = span.merge(attribute.span);
-                }
-                span
-            })
-        })
-        .unwrap_or(start_span);
-    start_span.merge(end_span)
-}
 
 impl<'ast> Parser<'ast> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
@@ -164,7 +137,7 @@ impl<'ast> Parser<'ast> {
         let has_values = self.eat(TokenKind::Equal);
         let exprs = if has_values { self.parse_expr_list() } else { List::new() };
 
-        let span = declaration_span(local_span, &names, &exprs);
+        let span = Span::new(local_span.start, self.previous_span.end);
 
         // Grammar: `const bindinglist '=' explist`, one value per name, except
         // that a last call or `...` may supply the rest.
@@ -283,7 +256,7 @@ impl<'ast> Parser<'ast> {
         }
 
         let exprs = if self.eat(TokenKind::Equal) { self.parse_expr_list() } else { List::new() };
-        let span = declaration_span(global_span, &names, &exprs);
+        let span = Span::new(global_span.start, self.previous_span.end);
         Statement::new_global_declaration(span, names, exprs, self.allocator)
     }
 

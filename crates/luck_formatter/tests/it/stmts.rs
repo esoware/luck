@@ -168,10 +168,18 @@ fn paren_stmt_after_a_call_keeps_its_semicolon_guard() {
     // The `;` in the input is what makes these parse as two statements;
     // without it the parser reads one chained call.
     assert_format(
+        "f();(g or h)()",
+        "\
+f()
+;(g or h)()
+",
+    );
+    // Parentheses around a name group nothing, so they and the guard go.
+    assert_format(
         "f();(g)()",
         "\
 f()
-;(g)()
+g()
 ",
     );
 }

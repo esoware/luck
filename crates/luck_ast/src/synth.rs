@@ -54,21 +54,14 @@ use crate::leaf::Name;
 ///
 /// # What the constructors guarantee
 ///
-/// - **Operator precedence.** [`Synth::binary_op`], [`Synth::unary_op`], and
-///   [`Synth::type_cast`] parenthesize their operands whenever the printed
-///   form would re-parse differently: precedence and associativity for
-///   nested binary operators, `(-a)^b`, greedy Luau if-expressions,
-///   `(a + b) :: T`, chained casts (`(a :: T) :: U`), and casts printed
-///   before `<`, `&`, or `|`, which the type grammar would otherwise
-///   swallow (`(a :: T) < b`).
+/// The printers write the parentheses an expression needs where it goes, so
+/// no constructor adds any: `(a + b) * c`, `(-a)^b`, `("s"):rep(2)`, and
+/// `(a :: T) < b` print right from a tree built any way.
+///
 /// - **Type composition.** [`Synth::ty_optional`], [`Synth::ty_union`], and
 ///   [`Synth::ty_intersection`] parenthesize union, intersection, and
 ///   function members. That keeps their meaning and respects Luau's ban on
 ///   mixing `|` and `&` (or `?` and `&`) without parentheses.
-/// - **Prefix positions.** Call callees, method receivers, and index and
-///   field prefixes are wrapped unless they're already a var, call,
-///   parenthesized expression, or type instantiation: `("s"):rep(2)`,
-///   `({}).x`, `(function() end)()`.
 /// - **Literals from values.** A string literal holds its value, any bytes,
 ///   and a number literal its [`LuaNumber`](luck_token::LuaNumber), and the
 ///   printers spell each, escaping what needs it and keeping a float a float
@@ -87,10 +80,10 @@ use crate::leaf::Name;
 ///   name goes through it and says so under `# Panics`.
 /// - **Runs.** A run of suffixes, or of binary operators at one level, is one
 ///   level of nesting however long it gets, and the constructors join a run
-///   they extend rather than nest it. Extending a run at its end takes
-///   amortized constant time and arena space, and extending a
-///   right-associative one (`..` or `^`) at its start shifts every link it
-///   holds.
+///   they extend where it groups the same, rather than nest it. Extending a
+///   run at its end takes amortized constant time and arena space, and
+///   extending a right-associative one (`..` or `^`) at its start shifts
+///   every link it holds.
 /// - **Block ends.** [`Synth::block`] puts a `return`, a `continue`, or a
 ///   `break` that the dialect takes only at the end of a block, but that has
 ///   statements after it, in a `do ... end` of its own.
@@ -149,7 +142,6 @@ use crate::leaf::Name;
 /// let allocator = Allocator::new();
 /// let spans = SpanCounter::new();
 /// let synth = Synth::new(&allocator, &spans);
-/// // total = a + b * 2 -- precedence handled, no manual parens.
 /// let sum = synth.binary_op(
 ///     synth.name_expr("a"),
 ///     BinOp::Add,

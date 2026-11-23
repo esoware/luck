@@ -353,7 +353,7 @@ print(g)
 g = 1
 print(g)
 ",
-                "(g).x=1 g=1 print(g)",
+                "g.x=1 g=1 print(g)",
             ),
             (
                 "\

@@ -1,4 +1,4 @@
-use luck_ast::{Expression, Statement};
+use luck_ast::{Expression, GetSpan as _, Statement};
 use luck_token::{Span, offset_to_index};
 
 use crate::diagnostic::Finding;
@@ -82,17 +82,20 @@ impl NodeRule for ParenthesizedConditions {
     }
 }
 
-/// The fix deletes just those two tokens, so anything between them stays.
+/// The fix deletes just the outermost pair, so anything between them stays.
+/// A condition takes one value, so the parentheses that truncate a call to
+/// one change nothing there either.
 fn check_condition(
     condition: &Expression<'_>,
     message: &'static str,
     span: Span,
     context: &LintContext<'_>,
 ) -> Option<Finding> {
-    let Expression::Parenthesized(parenthesized) = condition else {
-        return None;
+    let Span { start, end } = if matches!(condition, Expression::Parenthesized(_)) {
+        context.extent(condition)
+    } else {
+        context.groupings.around(condition.span())?
     };
-    let Span { start, end } = parenthesized.span;
     Some(Finding::new(message, span).with_fix(context, FixKind::Fix, |fixer| {
         let bytes = context.source.as_bytes();
         let before = offset_to_index(start).checked_sub(1).and_then(|i| bytes.get(i));
@@ -155,8 +158,26 @@ while (c) do break end");
         let diags = run("\
 local a, b = 1, 2
 if a then end
-while (a) == b do break end");
+while (a) == b do break end
+if (a).b then end
+if (f)() then end");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_and_fixes_a_truncated_call_and_the_outer_pair() {
+        let source = "\
+if (f()) then end
+while ((c)) do break end";
+        let diags = run(source);
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(
+            fixed,
+            "\
+if f() then end
+while (c) do break end"
+        );
     }
 
     #[test]

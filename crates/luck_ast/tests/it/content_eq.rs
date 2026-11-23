@@ -66,7 +66,7 @@ fn trees_that_differ_anywhere_else_differ() {
         (synth.string("a"), synth.string("b")),
         (
             synth.call(synth.name_expr("f"), []),
-            synth.parenthesized(synth.call(synth.name_expr("f"), [])),
+            synth.single_value(synth.call(synth.name_expr("f"), [])),
         ),
     ];
     for (lhs, rhs) in &pairs {

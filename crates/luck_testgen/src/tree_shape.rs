@@ -2,11 +2,11 @@
 //!
 //! That's spans, trailing separators in tables, a union's or intersection's
 //! leading operator, a literal's spelling, whether a lone string or table
-//! argument has parentheses, and every parenthesis that changes nothing.
-//! Precedence and associativity are in the tree, so the only parentheses that
-//! change something keep a call or `...` at the end of a list to one value,
-//! or keep a Luau integer literal under `-` from reading as a negative
-//! literal.
+//! argument has parentheses, where a run of operators that group the same
+//! either way splits, and the parentheses the tree keeps where they change
+//! nothing. It keeps them only to truncate a call or `...` to one value,
+//! which changes something only at the end of a list, or to keep a Luau
+//! integer literal under `-` from reading as a negative literal.
 
 use luck_ast::{
     Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, Expression, Field, FunctionArgs,

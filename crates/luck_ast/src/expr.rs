@@ -52,8 +52,9 @@ pub enum Var<'ast> {
 /// be assigned to.
 ///
 /// `prefix` is never itself a suffixed expression, so a run adds one level of
-/// nesting whatever its length. The parser and `Synth` keep it that way, and
-/// [`SuffixedExpression::splice_prefix`] restores it after a rewrite.
+/// nesting whatever its length, and `(a.b).c` reads as `a.b.c`. The parser
+/// and `Synth` keep it that way, and [`SuffixedExpression::splice_prefix`]
+/// restores it after a rewrite.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[visit(level)]
 pub struct SuffixedExpression<'ast> {
@@ -106,10 +107,13 @@ pub enum FunctionArgs<'ast> {
 /// `(a + b) - c`. The right-associative `..` and `^` group from the right, so
 /// `a .. b .. c` is `a .. (b .. c)`.
 ///
-/// An operand is never a bare run at the same level where it would merge
-/// into this one when printed, since that is what reading the printed run
-/// back gives. The parser and `Synth` keep it that way, and
-/// [`BinaryOp::splice_operands`] restores it after a rewrite.
+/// A run holds the operators read in a row, and parentheses end one, so an
+/// operand is a run at the same level only where the source wrote one in
+/// parentheses, and the printers write them back: `(a - b) - c` and
+/// `a - (b - c)` each hold a run in a run. Where that operand groups as the
+/// run around it would anyway, first in a left-associative run or last in a
+/// right-associative one, [`BinaryOp::splice_operands`] joins it in, as
+/// `Synth` does.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[visit(level)]
 pub struct BinaryOp<'ast> {
@@ -133,6 +137,13 @@ pub struct UnaryOp<'ast> {
     pub operand: Expression<'ast>,
 }
 
+/// Parentheses that change what they hold, the only ones the tree keeps.
+///
+/// They truncate a call or `...` to one value, and stop a `-` before a Luau
+/// integer literal from reading with it as a negative literal, so it negates
+/// the value instead. The parser leaves every other pair out of the tree, and
+/// the printers write the ones an expression needs where it goes, as
+/// [`Expression::needs_parens`] says.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[visit(level)]
 pub struct ParenthesizedExpression<'ast> {

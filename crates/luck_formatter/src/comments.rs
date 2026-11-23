@@ -40,7 +40,6 @@ use crate::ir::{Formatter, LineMode};
 struct Sourced<'ast> {
     comments: &'ast [Comment],
     source: &'ast str,
-    version: LuaVersion,
     printed_count: usize,
     /// The spans `-- luck: format off` / `on` regions copy as written,
     /// the directive comments and their own lines included. Sorted, and
@@ -116,7 +115,7 @@ impl<'ast> Comments<'ast> {
         if let Some(off) = open_off {
             disabled_ranges.push(region_start(off)..index_to_offset(source.len()));
         }
-        let sourced = Sourced { comments, source, version, printed_count: 0, disabled_ranges };
+        let sourced = Sourced { comments, source, printed_count: 0, disabled_ranges };
         let next_start = sourced.next_start();
         Self { store: Store::Sourced(sourced), next_start }
     }
@@ -162,14 +161,6 @@ impl<'ast> Comments<'ast> {
         match &self.store {
             Store::Synthetic { blank_before_anchors, .. } => blank_before_anchors.contains(&anchor),
             Store::Sourced(_) | Store::Empty => false,
-        }
-    }
-
-    /// The source and its dialect, on the parsed path.
-    pub(crate) const fn source(&self) -> Option<(&'ast str, LuaVersion)> {
-        match &self.store {
-            Store::Sourced(sourced) => Some((sourced.source, sourced.version)),
-            Store::Synthetic { .. } | Store::Empty => None,
         }
     }
 
@@ -486,9 +477,10 @@ impl<'ast> Formatter<'ast> {
     /// The text a parsed comment prints as, with its line breaks written as
     /// LF.
     fn sourced_text(&mut self, comment: &Comment) -> &'ast str {
-        let Some((source, version)) = self.comments().source() else {
+        let Some(source) = self.comments().source_text() else {
             return "";
         };
+        let version = self.version();
         let text = comment.span.text(source);
         if comment.kind == CommentKind::Shebang {
             // Loaders skip this line up to LF, so a CR in it is text, but one
@@ -533,7 +525,8 @@ impl<'ast> Formatter<'ast> {
         if count == 0 {
             return false;
         }
-        let (source, version) = (sourced.source, sourced.version);
+        let source = sourced.source;
+        let version = self.version();
         let taken = self.comments_mut().take(count);
         let mut has_ignore = false;
         let followers = taken.iter().skip(1).map(|c| c.span.start).chain(once(start));
@@ -584,10 +577,11 @@ impl<'ast> Formatter<'ast> {
     }
 
     fn write_trailing_run(&mut self, end: u32, enclosing_end: u32) {
+        let version = self.version();
         let Some(sourced) = self.comments_mut().sourced_mut() else {
             return;
         };
-        let (source, version) = (sourced.source, sourced.version);
+        let source = sourced.source;
         let mut gap_start = end;
         let mut in_place_count = 0usize;
         let mut run_length = 0usize;
@@ -652,18 +646,24 @@ impl<'ast> Formatter<'ast> {
         if count == 0 {
             return;
         }
-        let (source, version) = (sourced.source, sourced.version);
+        let source = sourced.source;
+        let version = self.version();
+        let mut has_ended_line = false;
         for comment in self.comments_mut().take(count) {
-            if starts_line(source, comment.span.start, version) {
-                let is_blank = keeps_blank_lines
-                    && has_leading_edge_blank(source, comment.span.start, version);
-                self.line_break(is_blank);
-            } else {
-                self.space();
+            match (starts_line(source, comment.span.start, version), has_ended_line) {
+                (true, _) => {
+                    let is_blank = keeps_blank_lines
+                        && has_leading_edge_blank(source, comment.span.start, version);
+                    self.line_break(is_blank);
+                }
+                (false, false) => self.space(),
+                // The line comment before it ended the line it was on.
+                (false, true) => {}
             }
             let text = self.sourced_text(comment);
             self.text(text);
-            if comment.kind == CommentKind::Line {
+            has_ended_line = comment.kind == CommentKind::Line;
+            if has_ended_line {
                 self.hard_line();
             }
         }
@@ -686,11 +686,12 @@ impl<'ast> Formatter<'ast> {
         } else {
             &[]
         };
-        let Some((source, version)) = self.comments().source().filter(|_| !taken.is_empty()) else {
+        let Some(source) = self.comments().source_text().filter(|_| !taken.is_empty()) else {
             self.token(open);
             self.token(close);
             return;
         };
+        let version = self.version();
         self.group(|grouped| {
             grouped.token(open);
             grouped.indent(|f| {
@@ -731,7 +732,7 @@ impl<'ast> Formatter<'ast> {
     /// a parsed comment can be, since a tree built in code has no source to
     /// keep a statement as written from.
     pub(crate) fn write_stmt_leading_comments(&mut self, anchor: u32) -> bool {
-        if self.comments().source().is_some() {
+        if self.comments().source_text().is_some() {
             return self.write_leading_comments(anchor);
         }
         let lines =
@@ -749,6 +750,7 @@ impl<'ast> Formatter<'ast> {
     /// Returns true when one of them is a block comment spanning lines, which
     /// ends its line somewhere other than where the statement's does.
     pub(crate) fn write_stmt_trailing_comments(&mut self, anchor: u32, stmt_end: u32) -> bool {
+        let version = self.version();
         let Some(sourced) = self.comments_mut().sourced_mut() else {
             let texts = self
                 .take_synthetic(anchor, |comment| comment.position == CommentPosition::Trailing);
@@ -760,7 +762,7 @@ impl<'ast> Formatter<'ast> {
             }
             return false;
         };
-        let (source, version) = (sourced.source, sourced.version);
+        let source = sourced.source;
         let mut gap_start = stmt_end;
         // Luau ends a line comment at a lone CR but reads no line break
         // there, so a comment after one is on the same line, where it can't
@@ -793,9 +795,10 @@ impl<'ast> Formatter<'ast> {
     /// Writes `comments` a line each with the line breaks between them, but
     /// none after the last.
     fn write_comment_run_from(&mut self, comments: &[Comment]) {
-        let Some((source, version)) = self.comments().source() else {
+        let Some(source) = self.comments().source_text() else {
             return;
         };
+        let version = self.version();
         let mut previous_end = None;
         for comment in comments {
             if let Some(end) = previous_end {
@@ -877,10 +880,11 @@ impl<'ast> Formatter<'ast> {
     /// past whitespace and `;`. Parsed input only: a synthetic comment names
     /// its anchor.
     pub(crate) fn write_tail_comments(&mut self, last_end: u32) {
+        let version = self.version();
         let Some(sourced) = self.comments_mut().sourced_mut() else {
             return;
         };
-        let (source, version) = (sourced.source, sourced.version);
+        let source = sourced.source;
         let limit = sourced.disabled_region_limit();
         let gap_start = sourced.printed_end().map_or(last_end, |end| end.max(last_end));
         let count = dangling_run(sourced.pending(), source, gap_start, limit).len();

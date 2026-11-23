@@ -1,5 +1,5 @@
-use luck_ast::{ChainHead, Expression, GetSpan as _, Suffix, SuffixedExpression};
-use luck_token::{Span, TokenKind};
+use luck_ast::{Expression, Suffix, SuffixedExpression};
+use luck_token::TokenKind;
 
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
@@ -29,19 +29,16 @@ impl NodeRule for StringIndexToField {
         context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        for (position, suffix) in chain.suffixes.iter().enumerate() {
-            findings.extend(check_index(chain.head(position), suffix, context));
+        for suffix in &chain.suffixes {
+            findings.extend(check_index(suffix, context));
         }
     }
 }
 
-fn check_index(
-    head: ChainHead<'_>,
-    suffix: &Suffix<'_>,
-    context: &LintContext<'_>,
-) -> Option<Finding> {
-    let Suffix::Index { span: index_span, index: Expression::StringLiteral(literal) } = suffix
-    else {
+/// The fix replaces just the brackets, since parentheses the tree leaves
+/// out can close between the head and them.
+fn check_index(suffix: &Suffix<'_>, context: &LintContext<'_>) -> Option<Finding> {
+    let Suffix::Index { span: brackets, index: Expression::StringLiteral(literal) } = suffix else {
         return None;
     };
     // The key is its value, however it's spelled.
@@ -52,14 +49,16 @@ fn check_index(
         return None;
     }
 
-    // Replace everything after the head, brackets included.
-    let span = Span::new(head.span().end, index_span.end);
     let key = literal.span.text(context.source);
     Some(
-        Finding::new(format!("`[{key}]` is equivalent to `.{name}`"), span)
+        Finding::new(format!("`[{key}]` is equivalent to `.{name}`"), *brackets)
             .with_help("prefer dot access for identifier-safe keys")
             .with_fix(context, FixKind::Fix, |fixer| {
-                fixer.replace(format!("rewrite `[{key}]` as `.{name}`"), span, format!(".{name}"))
+                fixer.replace(
+                    format!("rewrite `[{key}]` as `.{name}`"),
+                    *brackets,
+                    format!(".{name}"),
+                )
             }),
     )
 }
@@ -121,6 +120,15 @@ mod tests {
     fn ignores_numeric_start() {
         let diags = run("local x = t[\"1bad\"]");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_and_fixes_an_index_after_parentheses() {
+        let source = "local x = (t)['a'] .. (t.u)['b']";
+        let diags = run(source);
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
+        assert_eq!(fixed, "local x = (t).a .. (t.u).b");
     }
 
     #[test]

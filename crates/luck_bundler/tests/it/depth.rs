@@ -16,9 +16,9 @@ use tempfile::TempDir;
 
 use crate::common::bundle_both;
 
-/// `1` inside `count` pairs of parentheses.
-fn parenthesized(count: usize) -> String {
-    format!("{}1{}", "(".repeat(count), ")".repeat(count))
+/// `1` inside `count` table constructors.
+fn in_tables(count: usize) -> String {
+    format!("{}1{}", "{".repeat(count), "}".repeat(count))
 }
 
 fn write_project(files: &[(&str, &str)]) -> TempDir {
@@ -61,7 +61,7 @@ fn bundle_files(
     bundle_project(write_project(files).path(), entry, version)
 }
 
-/// A project whose deepest construct is a run of parenthesized groups after
+/// A project whose deepest construct is a run of nested tables after
 /// `prefix` in `deep_file`.
 struct Shape {
     name: &'static str,
@@ -142,8 +142,8 @@ return ",
 
 impl Shape {
     /// The deep file's source and the bundle's result.
-    fn bundle(&self, parentheses: usize) -> (String, Result<BundleResult, Vec<Diagnostic>>) {
-        let deep_source = format!("{}{}\n", self.prefix, parenthesized(parentheses));
+    fn bundle(&self, tables: usize) -> (String, Result<BundleResult, Vec<Diagnostic>>) {
+        let deep_source = format!("{}{}\n", self.prefix, in_tables(tables));
         let mut files = self.other_files.to_vec();
         files.push((self.deep_file, &deep_source));
         let result = bundle_files(self.entry, &files, self.version);
@@ -155,9 +155,9 @@ impl Shape {
 fn deepest_module_that_fits_bundles_to_the_cap_for_every_wrapper() {
     with_the_smallest_stack(|| {
         for shape in SHAPES {
-            // The module's own block is a level, and its groups stand on it.
-            let parentheses = MAX_NESTING_DEPTH - shape.wrapper_levels - 1;
-            let (_, result) = shape.bundle(parentheses);
+            // The module's own block is a level, and its tables stand on it.
+            let tables = MAX_NESTING_DEPTH - shape.wrapper_levels - 1;
+            let (_, result) = shape.bundle(tables);
             let output =
                 result.unwrap_or_else(|errors| panic!("{}: {errors:?}", shape.name)).output;
             let allocator = Allocator::new();
@@ -178,18 +178,18 @@ fn deepest_module_that_fits_bundles_to_the_cap_for_every_wrapper() {
 fn flags_e013_at_the_construct_a_wrapper_pushes_past_the_cap() {
     with_the_smallest_stack(|| {
         for shape in SHAPES {
-            let parentheses = MAX_NESTING_DEPTH - shape.wrapper_levels;
-            let (deep_source, result) = shape.bundle(parentheses);
+            let tables = MAX_NESTING_DEPTH - shape.wrapper_levels;
+            let (deep_source, result) = shape.bundle(tables);
             let errors = result.err().unwrap_or_else(|| panic!("{}: must not bundle", shape.name));
             let [error] = errors.as_slice() else {
                 panic!("{}: expected one error: {errors:?}", shape.name);
             };
             assert_eq!(error.code, "E013", "{}: {error:?}", shape.name);
             assert!(error.file_path.ends_with(shape.deep_file), "{}: {error:?}", shape.name);
-            // The innermost group is the one past the cap.
-            let innermost = shape.prefix.len() + parentheses - 1;
+            // The innermost table is the one past the cap.
+            let innermost = shape.prefix.len() + tables - 1;
             assert_eq!(offset_to_index(error.span.start), innermost, "{}: {error:?}", shape.name);
-            assert_eq!(error.span.text(&deep_source), "(1)", "{}: {error:?}", shape.name);
+            assert_eq!(error.span.text(&deep_source), "{1}", "{}: {error:?}", shape.name);
             let help = error.help.as_deref().unwrap_or_default();
             assert!(
                 help.contains(&format!("{} levels deeper", shape.wrapper_levels)),
@@ -202,7 +202,7 @@ fn flags_e013_at_the_construct_a_wrapper_pushes_past_the_cap() {
 
 #[test]
 fn flags_e013_in_every_module_past_the_cap() {
-    let deep = format!("return {}\n", parenthesized(MAX_NESTING_DEPTH - 1));
+    let deep = format!("return {}\n", in_tables(MAX_NESTING_DEPTH - 1));
     let errors = bundle_files(
         "main.lua",
         &[
@@ -230,7 +230,7 @@ require(\"b\")
 
 #[test]
 fn lone_module_at_the_cap_bundles_verbatim() {
-    let source = format!("return {}\n", parenthesized(MAX_NESTING_DEPTH - 1));
+    let source = format!("return {}\n", in_tables(MAX_NESTING_DEPTH - 1));
     let output = bundle_files("main.lua", &[("main.lua", &source)], LuaVersion::Lua54)
         .expect("a lone module needs no wrapper")
         .output;
@@ -238,8 +238,9 @@ fn lone_module_at_the_cap_bundles_verbatim() {
 }
 
 /// A module that exports `value` from the export table, since a closure
-/// writes it, and whose deepest construct is `deep` in `parentheses` groups.
-fn luau_table_export_module(parentheses: usize, deep: &str) -> String {
+/// writes it, and whose deepest construct is `deep` inside `tables` table
+/// constructors.
+fn luau_table_export_module(tables: usize, deep: &str) -> String {
     format!(
         "\
 export local value = 0
@@ -248,8 +249,8 @@ bump()
 local deep = {}{deep}{}
 print(deep)
 ",
-        "(".repeat(parentheses),
-        ")".repeat(parentheses),
+        "{".repeat(tables),
+        "}".repeat(tables),
     )
 }
 

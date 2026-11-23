@@ -5,11 +5,12 @@
 //! [`format_chunk()`] formats a tree directly, including one built in code
 //! with no source text. It prints each literal as the tree spells it,
 //! unchecked, or spells one built in code from its value, and returns an
-//! error only for a tree nested past
-//! `luck_ast::MAX_NESTING_DEPTH`. [`format()`] parses source text first, and
-//! [`format_parsed`] and [`format_range`] take an existing parse. The parse
-//! gets them blank-line preservation, `-- luck: format off` regions, and
-//! comments, each placed at the nearest node boundary.
+//! error only for a tree nested past `luck_ast::MAX_NESTING_DEPTH`.
+//! [`format()`] parses source text first, and [`format_parsed`] and
+//! [`format_range`] take an existing parse. The parse gets them blank-line
+//! preservation, `-- luck: format off` regions, the parentheses the source
+//! grouped an expression in, and comments, each placed at the nearest node
+//! boundary.
 //!
 //! Every entry point takes an arena the caller owns, and `format` parses into
 //! it. All of them build their element stream there, with the few texts they

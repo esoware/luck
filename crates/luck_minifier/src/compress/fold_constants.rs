@@ -1,7 +1,7 @@
 use core::cmp::Ordering;
 
 use luck_allocator::{Allocator, Box, ThinBytes};
-use luck_ast::{Expression, GetSpan as _, NumberLiteral, OneOrMore, unwrap_parentheses};
+use luck_ast::{Expression, GetSpan as _, NumberLiteral, OneOrMore};
 use luck_token::{Associativity, BinOp, LuaNumber, LuaVersion, Span, UnOp};
 
 use crate::expr::{boolean, extract_boolean, is_nil, truncate_multi_value};
@@ -152,9 +152,9 @@ fn negate_number(number: LuaNumber) -> LuaNumber {
     }
 }
 
-/// The value of a number literal, possibly negated or parenthesized.
+/// The value of a number literal, possibly negated.
 fn extract_lua_number(expr: &Expression<'_>) -> Option<LuaNumber> {
-    match unwrap_parentheses(expr) {
+    match expr {
         Expression::Number(literal) => Some(literal.value),
         Expression::UnaryOp(unop) if unop.op == UnOp::Neg => {
             extract_lua_number(&unop.operand).map(negate_number)
@@ -407,13 +407,9 @@ fn compare_numbers(lhs: LuaNumber, op: BinOp, rhs: LuaNumber) -> Option<bool> {
     })
 }
 
-/// The value of a string literal, possibly parenthesized.
+/// The value of a string literal.
 fn extract_string<'ast>(expr: &Expression<'ast>) -> Option<ThinBytes<'ast>> {
-    if let Expression::StringLiteral(literal) = unwrap_parentheses(expr) {
-        Some(literal.value)
-    } else {
-        None
-    }
+    if let Expression::StringLiteral(literal) = expr { Some(literal.value) } else { None }
 }
 
 /// Strings compare by value, so `"\65"` and `"A"` are the same string.
@@ -541,7 +537,7 @@ fn fold_unary<'ast>(
             }
             if let Some(number) = extract_lua_number(&unop.operand) {
                 make_lua_number_expr(allocator, negate_number(number), span)
-            } else if let Expression::UnaryOp(inner) = unwrap_parentheses(&unop.operand)
+            } else if let Expression::UnaryOp(inner) = &unop.operand
                 && inner.op == UnOp::Neg
                 && let Expression::Number(literal) = &inner.operand
             {

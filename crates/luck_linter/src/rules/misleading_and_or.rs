@@ -26,7 +26,7 @@ impl NodeRule for MisleadingAndOr {
     fn on_expr(
         &self,
         expr: &Expression<'_>,
-        _context: &LintContext<'_>,
+        context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         let Expression::BinaryOp(run) = expr else {
@@ -38,30 +38,24 @@ impl NodeRule for MisleadingAndOr {
         for pair in operator_pairs(run) {
             if pair.op == BinOp::Or
                 && let Some(lhs) = pair.lhs
-                && let Expression::BinaryOp(inner) = unparenthesize(lhs)
+                && let Expression::BinaryOp(inner) = lhs
                 && inner.links.first().op == BinOp::And
                 && is_falsy_literal(&inner.links.last().operand)
             {
                 findings.push(
-                    Finding::new("`(x and FALSY) or y` always evaluates to `y`", pair.span())
-                        .with_help("use an `if` statement, or an if-then-else expression in Luau"),
+                    Finding::new(
+                        "`(x and FALSY) or y` always evaluates to `y`",
+                        pair.span(context),
+                    )
+                    .with_help("use an `if` statement, or an if-then-else expression in Luau"),
                 );
             }
         }
     }
 }
 
-/// Strips one layer of parentheses, since people write the idiom both with
-/// and without them.
-fn unparenthesize<'ast>(expr: &'ast Expression<'ast>) -> &'ast Expression<'ast> {
-    if let Expression::Parenthesized(parenthesized) = expr {
-        return &parenthesized.expr;
-    }
-    expr
-}
-
-fn is_falsy_literal(expr: &Expression<'_>) -> bool {
-    matches!(unparenthesize(expr), Expression::Nil(_) | Expression::False(_))
+const fn is_falsy_literal(expr: &Expression<'_>) -> bool {
+    matches!(expr, Expression::Nil(_) | Expression::False(_))
 }
 
 #[cfg(test)]

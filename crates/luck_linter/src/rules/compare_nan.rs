@@ -1,4 +1,4 @@
-use luck_ast::{Expression, unwrap_parentheses};
+use luck_ast::Expression;
 use luck_token::BinOp;
 
 use crate::binary::operator_pairs;
@@ -25,7 +25,7 @@ impl NodeRule for CompareNan {
     fn on_expr(
         &self,
         expr: &Expression<'_>,
-        _context: &LintContext<'_>,
+        context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         let Expression::BinaryOp(run) = expr else {
@@ -40,7 +40,7 @@ impl NodeRule for CompareNan {
                 findings.push(
                     Finding::new(
                         "NaN (`0/0`) equals nothing, so this comparison always has the same result",
-                        pair.span(),
+                        pair.span(context),
                     )
                     .with_help("use `x ~= x` to check for NaN"),
                 );
@@ -50,9 +50,9 @@ impl NodeRule for CompareNan {
 }
 
 /// Whether `expr` divides a zero literal by a zero literal, each in any
-/// spelling, parentheses aside.
+/// spelling.
 fn is_nan_expr(expr: &Expression<'_>) -> bool {
-    let Expression::BinaryOp(run) = unwrap_parentheses(expr) else {
+    let Expression::BinaryOp(run) = expr else {
         return false;
     };
     let [division] = &*run.links else {

@@ -3,12 +3,12 @@ use core::iter;
 use luck_allocator::Allocator;
 use luck_ast::{
     BinaryOp, Expression, Field, GetSpan as _, MAX_NESTING_DEPTH, Suffix, expr_nesting_depth,
-    is_multi_value, unwrap_parentheses,
+    is_multi_value,
 };
-use luck_token::{Associativity, BinOp, LuaNumber, OperandSide, Span, UnOp};
+use luck_token::{Associativity, BinOp, LuaNumber, Span, UnOp};
 
-pub(crate) fn extract_boolean(expr: &Expression<'_>) -> Option<bool> {
-    match unwrap_parentheses(expr) {
+pub(crate) const fn extract_boolean(expr: &Expression<'_>) -> Option<bool> {
+    match expr {
         Expression::True(_) => Some(true),
         Expression::False(_) => Some(false),
         Expression::Parenthesized(_)
@@ -30,15 +30,15 @@ pub(crate) fn extract_boolean(expr: &Expression<'_>) -> Option<bool> {
     }
 }
 
-pub(crate) fn is_nil(expr: &Expression<'_>) -> bool {
-    matches!(unwrap_parentheses(expr), Expression::Nil(_))
+pub(crate) const fn is_nil(expr: &Expression<'_>) -> bool {
+    matches!(expr, Expression::Nil(_))
 }
 
 /// `Some(false)` for `nil` and `false`, `Some(true)` for `true` and a
 /// number or string literal, the opposite for `not` of one, and `None` for
 /// anything else.
 pub(crate) fn constant_truthiness(expr: &Expression<'_>) -> Option<bool> {
-    match unwrap_parentheses(expr) {
+    match expr {
         Expression::True(_)
         | Expression::Number(_)
         | Expression::Integer(_)
@@ -47,8 +47,9 @@ pub(crate) fn constant_truthiness(expr: &Expression<'_>) -> Option<bool> {
         Expression::UnaryOp(unop) if unop.op == UnOp::Not => {
             constant_truthiness(&unop.operand).map(|is_truthy| !is_truthy)
         }
-        Expression::Parenthesized(_)
-        | Expression::VarArg(_)
+        // Truncating to the first value keeps that value's truth.
+        Expression::Parenthesized(paren) => constant_truthiness(&paren.expr),
+        Expression::VarArg(_)
         | Expression::FunctionDef(_)
         | Expression::Name(_)
         | Expression::Suffixed(_)
@@ -100,7 +101,7 @@ pub(crate) fn literal_kind(expr: &Expression<'_>) -> Option<LiteralKind> {
         | Expression::True(_)
         | Expression::False(_)
         | Expression::Integer(_) => Some(LiteralKind::Other),
-        Expression::Parenthesized(paren) => literal_kind(unwrap_parentheses(&paren.expr)),
+        Expression::Parenthesized(paren) => literal_kind(&paren.expr),
         Expression::UnaryOp(unop) => {
             let operand = literal_kind(&unop.operand)?;
             unary_literal_kind(unop.op, operand)
@@ -205,7 +206,7 @@ fn binary_literal_kind(
 }
 
 fn is_nonzero_number_literal(expr: &Expression<'_>) -> bool {
-    let Expression::Number(literal) = unwrap_parentheses(expr) else {
+    let Expression::Number(literal) = expr else {
         return false;
     };
     literal.value.to_f64() != 0.0f64
@@ -236,9 +237,7 @@ fn is_effect_free(expr: &Expression<'_>, can_read_names: bool) -> bool {
         // `...` can't be reassigned, so its value is fixed for the whole
         // function body.
         | Expression::VarArg(_) => true,
-        Expression::Parenthesized(paren) => {
-            is_effect_free(unwrap_parentheses(&paren.expr), can_read_names)
-        }
+        Expression::Parenthesized(paren) => is_effect_free(&paren.expr, can_read_names),
         Expression::UnaryOp(_) => literal_kind(expr).is_some(),
         Expression::BinaryOp(binary_op) => {
             if is_logical(binary_op) {
@@ -281,18 +280,17 @@ fn is_effect_free(expr: &Expression<'_>, can_read_names: bool) -> bool {
 /// Whether `key` is a table constructor `[key]` that can't raise: `nil` and
 /// NaN raise, and only a key spelled out as a literal is known to be neither.
 fn is_valid_table_key(key: &Expression<'_>) -> bool {
-    match unwrap_parentheses(key) {
+    match key {
         Expression::Number(_)
         | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::True(_)
         | Expression::False(_) => true,
         Expression::UnaryOp(unop) => {
-            unop.op == UnOp::Neg
-                && matches!(unwrap_parentheses(&unop.operand), Expression::Number(_))
+            unop.op == UnOp::Neg && matches!(unop.operand, Expression::Number(_))
         }
-        Expression::Parenthesized(_)
-        | Expression::Nil(_)
+        Expression::Parenthesized(paren) => is_valid_table_key(&paren.expr),
+        Expression::Nil(_)
         | Expression::VarArg(_)
         | Expression::FunctionDef(_)
         | Expression::Name(_)
@@ -353,7 +351,7 @@ pub(crate) fn is_always_truthy(expr: &Expression<'_>) -> bool {
         | Expression::FunctionDef(_)
         | Expression::TableConstructor(_)
         | Expression::True(_) => true,
-        Expression::Parenthesized(paren) => is_always_truthy(unwrap_parentheses(&paren.expr)),
+        Expression::Parenthesized(paren) => is_always_truthy(&paren.expr),
         Expression::UnaryOp(_) | Expression::BinaryOp(_) => {
             literal_kind(expr).is_some_and(|kind| kind.is_number() || kind == LiteralKind::String)
         }
@@ -390,82 +388,7 @@ pub(crate) const fn boolean<'ast>(value: bool, span: Span) -> Expression<'ast> {
     if value { Expression::True(span) } else { Expression::False(span) }
 }
 
-/// Whether `run`, printed bare under a unary operator, regroups. Every
-/// binary operator but `^` binds looser than a unary one.
-pub(crate) fn binds_looser_than_unary(run: &BinaryOp<'_>) -> bool {
-    run.precedence().0 < UnOp::PRECEDENCE
-}
-
-/// The side of its operator that an operand between two of `run`'s
-/// operators sits on, in the pairs the run groups into. The first operand is
-/// always a left operand and the last always a right one.
-pub(crate) fn inner_operand_side(run: &BinaryOp<'_>) -> OperandSide {
-    match run.precedence().1 {
-        Associativity::Left => OperandSide::Right,
-        Associativity::Right => OperandSide::Left,
-    }
-}
-
 /// Whether `run` is `and` or `or`, which no metamethod can intercept.
 pub(crate) fn is_logical(run: &BinaryOp<'_>) -> bool {
     matches!(run.links.first().op, BinOp::And | BinOp::Or)
-}
-
-/// Whether `expr` prints a Luau if-expression last, whose `else` branch would
-/// take in an operator printed after it.
-pub(crate) fn ends_in_if_expr(expr: &Expression<'_>) -> bool {
-    let mut current = expr;
-    loop {
-        current = match current {
-            Expression::IfExpression(_) => return true,
-            Expression::BinaryOp(binary_op) => &binary_op.links.last().operand,
-            Expression::UnaryOp(unop) => &unop.operand,
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => return false,
-        };
-    }
-}
-
-/// Whether `inner` printed bare as the `side` operand of `outer` reparses as
-/// that same operand.
-pub(crate) fn can_unwrap_in_binop(inner: &Expression<'_>, outer: BinOp, side: OperandSide) -> bool {
-    match inner {
-        Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::Name(_)
-        | Expression::TableConstructor(_)
-        | Expression::FunctionDef(_) => true,
-        // A call keeps its parens, though `+` truncates it anyway.
-        Expression::Suffixed(chain) => chain.is_var(),
-        // Unary ops bind looser than ^, so (-a)^b needs its parens.
-        Expression::UnaryOp(_) => {
-            (side == OperandSide::Right || outer != BinOp::Pow) && !ends_in_if_expr(inner)
-        }
-        Expression::BinaryOp(binary_op) => {
-            binary_op.can_nest_bare(outer, side) && !ends_in_if_expr(inner)
-        }
-        Expression::VarArg(_)
-        | Expression::Parenthesized(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
-    }
 }
