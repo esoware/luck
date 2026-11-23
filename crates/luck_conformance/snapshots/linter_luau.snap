@@ -1,6 +1,6 @@
 linter_luau Summary:
 Files Linted   : 55/55
-Diagnostics    : 16599
+Diagnostics    : 16663
  12790 no_implicit_globals
    765 multiple_statements_per_line
    513 shadowing
@@ -14,6 +14,7 @@ Diagnostics    : 16599
    110 unused_argument
    101 value_overwritten_before_read
     97 unused_variable
+    86 unnecessary_assert
     61 divide_by_zero
     54 unnecessary_negation
     43 empty_block
@@ -21,7 +22,6 @@ Diagnostics    : 16599
     36 global_usage
     31 deprecated
     28 mixed_table
-    22 unnecessary_assert
     21 string_index_to_field
     20 duplicate_function
     19 incorrect_stdlib_use
@@ -212,34 +212,51 @@ luau-0.740/attrib.luau
 42:25 no_implicit_globals: global variable `a` used
 42:27 no_implicit_globals: global variable `b` used
 43:1 no_implicit_globals: global variable `assert` used
+43:1 unnecessary_assert: `assert` on a constant value always passes
 44:1 no_implicit_globals: global variable `assert` used
+44:1 unnecessary_assert: `assert` on a constant value always passes
 45:1 no_implicit_globals: global variable `assert` used
+45:1 unnecessary_assert: `assert` on a constant value always passes
 45:15 no_implicit_globals: global variable `assert` used
 45:15 unnecessary_assert: `assert` on a constant falsy value always errors
 46:1 no_implicit_globals: global variable `assert` used
+46:1 unnecessary_assert: `assert` on a constant value always passes
 46:21 no_implicit_globals: global variable `assert` used
 46:21 unnecessary_assert: `assert` on a constant falsy value always errors
 47:1 no_implicit_globals: global variable `assert` used
+47:1 unnecessary_assert: `assert` on a constant value always passes
 48:1 no_implicit_globals: global variable `assert` used
+48:1 unnecessary_assert: `assert` on a constant value always passes
 49:1 no_implicit_globals: global variable `assert` used
+49:1 unnecessary_assert: `assert` on a constant value always passes
 50:1 no_implicit_globals: global variable `assert` used
+50:1 unnecessary_assert: `assert` on a constant value always passes
 51:1 no_implicit_globals: global variable `assert` used
+51:1 unnecessary_assert: `assert` on a constant value always passes
 52:1 no_implicit_globals: global variable `assert` used
+52:1 unnecessary_assert: `assert` on a constant value always passes
 53:1 no_implicit_globals: global variable `assert` used
+53:1 unnecessary_assert: `assert` on a constant value always passes
 54:1 no_implicit_globals: global variable `assert` used
+54:1 unnecessary_assert: `assert` on a constant value always passes
 54:8 comparison_precedence: `not` applies only to the left operand, so this parses as `(not x) == y`
 55:1 no_implicit_globals: global variable `assert` used
+55:1 unnecessary_assert: `assert` on a constant value always passes
 55:8 comparison_precedence: `not` applies only to the left operand, so this parses as `(not x) == y`
 56:1 no_implicit_globals: global variable `assert` used
+56:1 unnecessary_assert: `assert` on a constant value always passes
 56:8 comparison_precedence: `not` applies only to the left operand, so this parses as `(not x) == y`
 57:1 no_implicit_globals: global variable `assert` used
 57:8 comparison_precedence: `not` applies only to the left operand, so this parses as `(not x) == y`
 57:16 no_implicit_globals: global variable `a` used
 58:1 no_implicit_globals: global variable `assert` used
+58:1 unnecessary_assert: `assert` on a constant value always passes
 58:8 comparison_precedence: `not` applies only to the left operand, so this parses as `(not x) == y`
 59:1 no_implicit_globals: global variable `assert` used
+59:1 unnecessary_assert: `assert` on a constant value always passes
 59:8 comparison_precedence: `not` applies only to the left operand, so this parses as `(not x) == y`
 60:1 no_implicit_globals: global variable `assert` used
+60:1 unnecessary_assert: `assert` on a constant value always passes
 60:8 comparison_precedence: `not` applies only to the left operand, so this parses as `(not x) == y`
 61:1 no_implicit_globals: global variable `print` used
 63:1 setting_global: setting global variable `a` (missing `local`?)
@@ -497,10 +514,10 @@ luau-0.740/basic.luau
 99:28 no_implicit_globals: global variable `tostring` used
 100:1 no_implicit_globals: global variable `assert` used
 100:28 no_implicit_globals: global variable `tostring` used
-100:49 divide_by_zero: division by literal zero
+100:49 divide_by_zero: division by zero
 101:1 no_implicit_globals: global variable `assert` used
 101:28 no_implicit_globals: global variable `tostring` used
-101:49 divide_by_zero: division by literal zero
+101:49 divide_by_zero: division by zero
 102:1 no_implicit_globals: global variable `assert` used
 102:28 no_implicit_globals: global variable `tostring` used
 103:1 no_implicit_globals: global variable `assert` used
@@ -736,12 +753,12 @@ luau-0.740/basic.luau
 202:1 no_implicit_globals: global variable `assert` used
 202:32 multiple_statements_per_line: statement starts on the same line as the previous statement
 202:36 unused_loop_variable: unused loop variable `i`
-202:40 divide_by_zero: division by literal zero
+202:40 divide_by_zero: division by zero
 202:58 multiple_statements_per_line: statement starts on the same line as the previous statement
 203:1 no_implicit_globals: global variable `assert` used
 203:32 multiple_statements_per_line: statement starts on the same line as the previous statement
 203:36 unused_loop_variable: unused loop variable `i`
-203:40 divide_by_zero: division by literal zero
+203:40 divide_by_zero: division by zero
 203:61 multiple_statements_per_line: statement starts on the same line as the previous statement
 204:1 no_implicit_globals: global variable `assert` used
 204:32 multiple_statements_per_line: statement starts on the same line as the previous statement
@@ -754,12 +771,12 @@ luau-0.740/basic.luau
 208:1 no_implicit_globals: global variable `assert` used
 208:32 multiple_statements_per_line: statement starts on the same line as the previous statement
 208:36 unused_loop_variable: unused loop variable `i`
-208:43 divide_by_zero: division by literal zero
+208:43 divide_by_zero: division by zero
 208:61 multiple_statements_per_line: statement starts on the same line as the previous statement
 209:1 no_implicit_globals: global variable `assert` used
 209:32 multiple_statements_per_line: statement starts on the same line as the previous statement
 209:36 unused_loop_variable: unused loop variable `i`
-209:43 divide_by_zero: division by literal zero
+209:43 divide_by_zero: division by zero
 209:61 multiple_statements_per_line: statement starts on the same line as the previous statement
 210:1 no_implicit_globals: global variable `assert` used
 210:32 multiple_statements_per_line: statement starts on the same line as the previous statement
@@ -1769,7 +1786,7 @@ luau-0.740/basic.luau
 774:38 no_implicit_globals: global variable `math` used
 775:1 no_implicit_globals: global variable `assert` used
 775:8 no_implicit_globals: global variable `tostring` used
-775:17 divide_by_zero: division by literal zero
+775:17 divide_by_zero: division by zero
 776:1 no_implicit_globals: global variable `assert` used
 776:8 no_implicit_globals: global variable `tostring` used
 779:1 no_implicit_globals: global variable `assert` used
@@ -4335,18 +4352,26 @@ luau-0.740/closure.luau
 luau-0.740/constructs.luau
 3:1 no_implicit_globals: global variable `print` used
 7:1 no_implicit_globals: global variable `assert` used
+7:1 unnecessary_assert: `assert` on a constant value always passes
 8:1 no_implicit_globals: global variable `assert` used
+8:1 unnecessary_assert: `assert` on a constant value always passes
 9:1 no_implicit_globals: global variable `assert` used
 10:1 no_implicit_globals: global variable `assert` used
+10:1 unnecessary_assert: `assert` on a constant value always passes
 11:1 no_implicit_globals: global variable `assert` used
+11:1 unnecessary_assert: `assert` on a constant value always passes
 12:1 no_implicit_globals: global variable `assert` used
+12:1 unnecessary_assert: `assert` on a constant value always passes
 13:1 no_implicit_globals: global variable `assert` used
 14:1 no_implicit_globals: global variable `assert` used
 14:8 unnecessary_negation: negated comparison, consider `2+1 <= 3*1`
 16:1 no_implicit_globals: global variable `assert` used
+16:1 unnecessary_assert: `assert` on a constant value always passes
 17:1 no_implicit_globals: global variable `assert` used
+17:1 unnecessary_assert: `assert` on a constant value always passes
 19:1 redundant_nil_init: 1 trailing `nil` value in local initializer
 20:1 no_implicit_globals: global variable `assert` used
+20:1 unnecessary_assert: `assert` on a constant value always passes
 21:1 setting_global: setting global variable `x` (missing `local`?)
 21:1 no_implicit_globals: global variable `x` used
 21:46 multiple_statements_per_line: statement starts on the same line as the previous statement
@@ -5873,7 +5898,7 @@ luau-0.740/debug.luau
 35:13 no_implicit_globals: global variable `coroutine` used
 35:30 no_implicit_globals: global variable `halp` used
 36:1 no_implicit_globals: global variable `coroutine` used
-36:23 divide_by_zero: division by literal zero
+36:23 divide_by_zero: division by zero
 38:1 no_implicit_globals: global variable `assert` used
 38:8 no_implicit_globals: global variable `debug` used
 39:1 no_implicit_globals: global variable `assert` used
@@ -6419,7 +6444,7 @@ luau-0.740/errors.luau
 410:1 no_implicit_globals: global variable `assert` used
 410:8 no_implicit_globals: global variable `ecall` used
 410:38 multiple_statements_per_line: statement starts on the same line as the previous statement
-410:40 divide_by_zero: division by literal zero
+410:40 divide_by_zero: division by zero
 412:1 no_implicit_globals: global variable `assert` used
 412:8 no_implicit_globals: global variable `ecall` used
 412:38 multiple_statements_per_line: statement starts on the same line as the previous statement
@@ -6428,14 +6453,14 @@ luau-0.740/errors.luau
 413:8 no_implicit_globals: global variable `ecall` used
 413:38 multiple_statements_per_line: statement starts on the same line as the previous statement
 413:38 no_implicit_globals: global variable `rawset` used
-413:48 divide_by_zero: division by literal zero
+413:48 divide_by_zero: division by zero
 415:1 no_implicit_globals: global variable `assert` used
 415:8 no_implicit_globals: global variable `ecall` used
 415:38 multiple_statements_per_line: statement starts on the same line as the previous statement
 416:1 no_implicit_globals: global variable `assert` used
 416:8 no_implicit_globals: global variable `ecall` used
 416:38 multiple_statements_per_line: statement starts on the same line as the previous statement
-416:40 divide_by_zero: division by literal zero
+416:40 divide_by_zero: division by zero
 418:1 no_implicit_globals: global variable `assert` used
 418:8 no_implicit_globals: global variable `ecall` used
 418:38 multiple_statements_per_line: statement starts on the same line as the previous statement
@@ -6444,7 +6469,7 @@ luau-0.740/errors.luau
 419:8 no_implicit_globals: global variable `ecall` used
 419:38 multiple_statements_per_line: statement starts on the same line as the previous statement
 419:38 no_implicit_globals: global variable `rawset` used
-419:48 divide_by_zero: division by literal zero
+419:48 divide_by_zero: division by zero
 422:1 no_implicit_globals: global variable `assert` used
 422:8 no_implicit_globals: global variable `ecall` used
 422:25 empty_block: empty numeric `for` loop body
@@ -6672,14 +6697,14 @@ luau-0.740/events.luau
 129:44 no_implicit_globals: global variable `cap` used
 129:60 no_implicit_globals: global variable `cap` used
 130:1 no_implicit_globals: global variable `assert` used
-130:8 divide_by_zero: division by literal zero
+130:8 divide_by_zero: division by zero
 131:1 no_implicit_globals: global variable `assert` used
 131:8 no_implicit_globals: global variable `cap` used
 131:28 no_implicit_globals: global variable `cap` used
 131:44 no_implicit_globals: global variable `cap` used
 131:60 no_implicit_globals: global variable `cap` used
 132:1 no_implicit_globals: global variable `assert` used
-132:8 divide_by_zero: floor division by literal zero
+132:8 divide_by_zero: floor division by zero
 133:1 no_implicit_globals: global variable `assert` used
 133:8 no_implicit_globals: global variable `cap` used
 133:29 no_implicit_globals: global variable `cap` used
@@ -6996,21 +7021,21 @@ luau-0.740/events.luau
 424:10 no_implicit_globals: global variable `pcall` used
 424:33 shadowing: variable `t` shadows outer variable
 424:40 multiple_statements_per_line: statement starts on the same line as the previous statement
-424:42 divide_by_zero: division by literal zero
+424:42 divide_by_zero: division by zero
 425:3 no_implicit_globals: global variable `assert` used
 425:10 no_implicit_globals: global variable `pcall` used
 425:33 shadowing: variable `t` shadows outer variable
 425:40 multiple_statements_per_line: statement starts on the same line as the previous statement
 425:40 no_implicit_globals: global variable `setmetatable` used
 425:77 multiple_statements_per_line: statement starts on the same line as the previous statement
-425:79 divide_by_zero: division by literal zero
+425:79 divide_by_zero: division by zero
 426:3 no_implicit_globals: global variable `assert` used
 426:10 no_implicit_globals: global variable `pcall` used
 426:33 shadowing: variable `t` shadows outer variable
 426:40 multiple_statements_per_line: statement starts on the same line as the previous statement
 426:40 no_implicit_globals: global variable `setmetatable` used
 426:89 multiple_statements_per_line: statement starts on the same line as the previous statement
-426:91 divide_by_zero: division by literal zero
+426:91 divide_by_zero: division by zero
 431:3 merge_adjacent_locals: adjacent `local` declarations can be merged
 432:9 shadowing: variable `t` shadows outer variable
 432:13 no_implicit_globals: global variable `table` used
@@ -7589,9 +7614,13 @@ luau-0.740/ifelseexpr.luau
 33:7 no_implicit_globals: global variable `assert` used
 36:5 no_implicit_globals: global variable `assert` used
 40:1 no_implicit_globals: global variable `assert` used
+40:1 unnecessary_assert: `assert` on a constant value always passes
 41:1 no_implicit_globals: global variable `assert` used
+41:1 unnecessary_assert: `assert` on a constant value always passes
 42:1 no_implicit_globals: global variable `assert` used
+42:1 unnecessary_assert: `assert` on a constant value always passes
 43:1 no_implicit_globals: global variable `assert` used
+43:1 unnecessary_assert: `assert` on a constant value always passes
 46:1 no_implicit_globals: global variable `assert` used
 46:11 no_implicit_globals: global variable `True` used
 47:1 no_implicit_globals: global variable `assert` used
@@ -7645,15 +7674,23 @@ luau-0.740/integers.luau
 10:1 no_implicit_globals: global variable `assert` used
 10:16 no_implicit_globals: global variable `integer` used
 11:1 no_implicit_globals: global variable `assert` used
+11:1 unnecessary_assert: `assert` on a constant value always passes
 12:1 no_implicit_globals: global variable `assert` used
+12:1 unnecessary_assert: `assert` on a constant value always passes
 13:1 no_implicit_globals: global variable `assert` used
+13:1 unnecessary_assert: `assert` on a constant value always passes
 14:1 no_implicit_globals: global variable `assert` used
+14:1 unnecessary_assert: `assert` on a constant value always passes
 15:1 no_implicit_globals: global variable `assert` used
+15:1 unnecessary_assert: `assert` on a constant value always passes
 16:1 no_implicit_globals: global variable `assert` used
+16:1 unnecessary_assert: `assert` on a constant value always passes
 17:1 no_implicit_globals: global variable `assert` used
 18:1 no_implicit_globals: global variable `assert` used
 21:1 no_implicit_globals: global variable `assert` used
+21:1 unnecessary_assert: `assert` on a constant value always passes
 22:1 no_implicit_globals: global variable `assert` used
+22:1 unnecessary_assert: `assert` on a constant value always passes
 23:1 no_implicit_globals: global variable `assert` used
 23:8 no_implicit_globals: global variable `rawequal` used
 24:1 no_implicit_globals: global variable `assert` used
@@ -7679,7 +7716,7 @@ luau-0.740/integers.luau
 37:12 no_implicit_globals: global variable `integer` used
 38:5 no_implicit_globals: global variable `assert` used
 38:12 no_implicit_globals: global variable `integer` used
-38:27 divide_by_zero: division by literal zero
+38:27 divide_by_zero: division by zero
 39:5 no_implicit_globals: global variable `assert` used
 39:12 no_implicit_globals: global variable `integer` used
 39:27 no_implicit_globals: global variable `math` used
@@ -9552,12 +9589,17 @@ luau-0.740/literals.luau
 5:36 no_implicit_globals: global variable `assert` used
 5:43 no_implicit_globals: global variable `loadstring` used
 12:1 no_implicit_globals: global variable `assert` used
+12:1 unnecessary_assert: `assert` on a constant value always passes
 16:1 no_implicit_globals: global variable `assert` used
 16:8 no_implicit_globals: global variable `string` used
 19:1 no_implicit_globals: global variable `assert` used
+19:1 unnecessary_assert: `assert` on a constant value always passes
 20:1 no_implicit_globals: global variable `assert` used
+20:1 unnecessary_assert: `assert` on a constant value always passes
 21:1 no_implicit_globals: global variable `assert` used
+21:1 unnecessary_assert: `assert` on a constant value always passes
 22:1 no_implicit_globals: global variable `assert` used
+22:1 unnecessary_assert: `assert` on a constant value always passes
 23:1 no_implicit_globals: global variable `assert` used
 25:1 no_implicit_globals: global variable `assert` used
 29:1 setting_global: setting global variable `var` (missing `local`?)
@@ -9574,8 +9616,11 @@ luau-0.740/literals.luau
 33:1 no_implicit_globals: global variable `var` used
 34:1 no_implicit_globals: global variable `print` used
 37:1 no_implicit_globals: global variable `assert` used
+37:1 unnecessary_assert: `assert` on a constant value always passes
 40:1 no_implicit_globals: global variable `assert` used
+40:1 unnecessary_assert: `assert` on a constant value always passes
 43:1 no_implicit_globals: global variable `assert` used
+43:1 unnecessary_assert: `assert` on a constant value always passes
 45:1 setting_global: setting global variable `b` (missing `local`?)
 45:1 no_implicit_globals: global variable `b` used
 46:1 no_implicit_globals: global variable `assert` used
@@ -9822,37 +9867,47 @@ luau-0.740/math.luau
 56:1 no_implicit_globals: global variable `assert` used
 56:8 no_implicit_globals: global variable `tonumber` used
 58:1 no_implicit_globals: global variable `assert` used
+58:1 unnecessary_assert: `assert` on a constant value always passes
 59:1 no_implicit_globals: global variable `assert` used
+59:1 unnecessary_assert: `assert` on a constant value always passes
 60:1 no_implicit_globals: global variable `assert` used
+60:1 unnecessary_assert: `assert` on a constant value always passes
 62:1 no_implicit_globals: global variable `assert` used
 63:1 no_implicit_globals: global variable `assert` used
 63:49 no_implicit_globals: global variable `tonumber` used
 64:1 no_implicit_globals: global variable `assert` used
+64:1 unnecessary_assert: `assert` on a constant value always passes
 64:8 integer_parsing: integer literal `10000000000000001` exceeds 2^53, so it loses precision when stored as a double
 66:10 setting_global: setting global variable `eq` (missing `local`?)
 66:10 no_implicit_globals: global variable `eq` used
 68:10 no_implicit_globals: global variable `math` used
 71:1 no_implicit_globals: global variable `assert` used
+71:1 unnecessary_assert: `assert` on a constant value always passes
 73:1 no_implicit_globals: global variable `assert` used
+73:1 unnecessary_assert: `assert` on a constant value always passes
 75:1 no_implicit_globals: global variable `assert` used
 75:8 no_implicit_globals: global variable `tonumber` used
 78:1 no_implicit_globals: global variable `assert` used
+78:1 unnecessary_assert: `assert` on a constant value always passes
 78:8 unnecessary_negation: negated comparison, consider `1 >= 1`
 78:31 unnecessary_negation: negated comparison, consider `2 >= 1`
 79:1 no_implicit_globals: global variable `assert` used
 79:8 unnecessary_negation: negated comparison, consider `'a' >= 'a'`
 79:39 unnecessary_negation: negated comparison, consider `'b' >= 'a'`
 80:1 no_implicit_globals: global variable `assert` used
+80:1 unnecessary_assert: `assert` on a constant value always passes
 80:30 unnecessary_negation: negated comparison, consider `2 > 1`
 81:1 no_implicit_globals: global variable `assert` used
 81:38 unnecessary_negation: negated comparison, consider `'b' > 'a'`
 82:1 no_implicit_globals: global variable `assert` used
+82:1 unnecessary_assert: `assert` on a constant value always passes
 82:8 unnecessary_negation: negated comparison, consider `1 <= 1`
 82:21 unnecessary_negation: negated comparison, consider `1 <= 2`
 83:1 no_implicit_globals: global variable `assert` used
 83:8 unnecessary_negation: negated comparison, consider `'a' <= 'a'`
 83:25 unnecessary_negation: negated comparison, consider `'a' <= 'b'`
 84:1 no_implicit_globals: global variable `assert` used
+84:1 unnecessary_assert: `assert` on a constant value always passes
 84:19 unnecessary_negation: negated comparison, consider `1 < 2`
 85:1 no_implicit_globals: global variable `assert` used
 85:23 unnecessary_negation: negated comparison, consider `'a' < 'b'`
@@ -9862,14 +9917,16 @@ luau-0.740/math.luau
 86:17 undefined_variable: undefined variable `unk`
 86:17 no_implicit_globals: global variable `unk` used
 89:1 no_implicit_globals: global variable `assert` used
+89:1 unnecessary_assert: `assert` on a constant value always passes
 90:1 no_implicit_globals: global variable `assert` used
+90:1 unnecessary_assert: `assert` on a constant value always passes
 91:1 no_implicit_globals: global variable `assert` used
 91:8 no_implicit_globals: global variable `math` used
 91:18 no_implicit_globals: global variable `math` used
 92:1 no_implicit_globals: global variable `assert` used
 92:8 no_implicit_globals: global variable `math` used
 92:18 no_implicit_globals: global variable `math` used
-95:13 divide_by_zero: modulo by literal zero
+95:13 divide_by_zero: modulo by zero
 96:3 no_implicit_globals: global variable `assert` used
 97:3 no_implicit_globals: global variable `assert` used
 98:3 no_implicit_globals: global variable `assert` used
@@ -9917,6 +9974,7 @@ luau-0.740/math.luau
 114:1 no_implicit_globals: global variable `assert` used
 114:8 no_implicit_globals: global variable `math` used
 115:1 no_implicit_globals: global variable `assert` used
+115:1 unnecessary_assert: `assert` on a constant value always passes
 116:1 no_implicit_globals: global variable `assert` used
 116:8 no_implicit_globals: global variable `eq` used
 116:11 no_implicit_globals: global variable `math` used
@@ -9958,8 +10016,11 @@ luau-0.740/math.luau
 129:1 no_implicit_globals: global variable `assert` used
 129:8 no_implicit_globals: global variable `tonumber` used
 133:1 no_implicit_globals: global variable `assert` used
+133:1 unnecessary_assert: `assert` on a constant value always passes
 134:1 no_implicit_globals: global variable `assert` used
+134:1 unnecessary_assert: `assert` on a constant value always passes
 135:1 no_implicit_globals: global variable `assert` used
+135:1 unnecessary_assert: `assert` on a constant value always passes
 137:4 no_implicit_globals: global variable `rawget` used
 137:11 global_usage: global environment `_G` used
 137:11 no_implicit_globals: global variable `_G` used
@@ -10160,7 +10221,7 @@ luau-0.740/math.luau
 297:8 no_implicit_globals: global variable `math` used
 299:1 merge_adjacent_locals: adjacent `local` declarations can be merged
 299:13 no_implicit_globals: global variable `math` used
-300:13 divide_by_zero: division by literal zero
+300:13 divide_by_zero: division by zero
 302:1 no_implicit_globals: global variable `assert` used
 302:8 no_implicit_globals: global variable `math` used
 302:28 no_implicit_globals: global variable `math` used
@@ -10399,7 +10460,7 @@ luau-0.740/math.luau
 436:19 no_implicit_globals: global variable `math` used
 439:1 no_implicit_globals: global variable `assert` used
 439:8 no_implicit_globals: global variable `math` used
-439:19 divide_by_zero: division by literal zero
+439:19 divide_by_zero: division by zero
 440:1 no_implicit_globals: global variable `assert` used
 440:8 no_implicit_globals: global variable `math` used
 441:1 no_implicit_globals: global variable `assert` used
@@ -10407,7 +10468,7 @@ luau-0.740/math.luau
 441:19 no_implicit_globals: global variable `math` used
 442:1 no_implicit_globals: global variable `assert` used
 442:8 no_implicit_globals: global variable `math` used
-442:28 divide_by_zero: division by literal zero
+442:28 divide_by_zero: division by zero
 443:1 no_implicit_globals: global variable `assert` used
 443:8 no_implicit_globals: global variable `math` used
 444:1 no_implicit_globals: global variable `assert` used
@@ -10423,7 +10484,7 @@ luau-0.740/math.luau
 448:8 no_implicit_globals: global variable `math` used
 449:1 no_implicit_globals: global variable `assert` used
 449:8 no_implicit_globals: global variable `math` used
-449:19 divide_by_zero: division by literal zero
+449:19 divide_by_zero: division by zero
 450:1 no_implicit_globals: global variable `assert` used
 450:8 no_implicit_globals: global variable `math` used
 450:28 no_implicit_globals: global variable `math` used
@@ -10434,7 +10495,7 @@ luau-0.740/math.luau
 452:8 no_implicit_globals: global variable `math` used
 453:1 no_implicit_globals: global variable `assert` used
 453:8 no_implicit_globals: global variable `math` used
-453:28 divide_by_zero: division by literal zero
+453:28 divide_by_zero: division by zero
 455:1 no_implicit_globals: global variable `assert` used
 455:8 no_implicit_globals: global variable `math` used
 455:22 no_implicit_globals: global variable `math` used
@@ -10443,7 +10504,7 @@ luau-0.740/math.luau
 456:23 no_implicit_globals: global variable `math` used
 457:1 no_implicit_globals: global variable `assert` used
 457:8 no_implicit_globals: global variable `math` used
-457:22 divide_by_zero: division by literal zero
+457:22 divide_by_zero: division by zero
 458:1 no_implicit_globals: global variable `assert` used
 458:8 no_implicit_globals: global variable `math` used
 459:1 no_implicit_globals: global variable `assert` used
@@ -10454,7 +10515,7 @@ luau-0.740/math.luau
 460:32 no_implicit_globals: global variable `math` used
 461:1 no_implicit_globals: global variable `assert` used
 461:8 no_implicit_globals: global variable `math` used
-461:31 divide_by_zero: division by literal zero
+461:31 divide_by_zero: division by zero
 462:1 no_implicit_globals: global variable `assert` used
 462:8 no_implicit_globals: global variable `math` used
 465:1 no_implicit_globals: global variable `assert` used
@@ -13674,13 +13735,13 @@ luau-0.740/strconv.luau
 7:8 no_implicit_globals: global variable `tostring` used
 10:1 no_implicit_globals: global variable `assert` used
 10:8 no_implicit_globals: global variable `tostring` used
-10:17 divide_by_zero: division by literal zero
+10:17 divide_by_zero: division by zero
 11:1 no_implicit_globals: global variable `assert` used
 11:8 no_implicit_globals: global variable `tostring` used
-11:17 divide_by_zero: division by literal zero
+11:17 divide_by_zero: division by zero
 12:1 no_implicit_globals: global variable `assert` used
 12:8 no_implicit_globals: global variable `tostring` used
-12:17 divide_by_zero: division by literal zero
+12:17 divide_by_zero: division by zero
 15:1 no_implicit_globals: global variable `assert` used
 15:8 no_implicit_globals: global variable `tostring` used
 16:1 no_implicit_globals: global variable `assert` used
@@ -13854,8 +13915,11 @@ luau-0.740/strings.luau
 57:1 no_implicit_globals: global variable `assert` used
 57:8 no_implicit_globals: global variable `string` used
 59:1 no_implicit_globals: global variable `assert` used
+59:1 unnecessary_assert: `assert` on a constant value always passes
 60:1 no_implicit_globals: global variable `assert` used
+60:1 unnecessary_assert: `assert` on a constant value always passes
 61:1 no_implicit_globals: global variable `assert` used
+61:1 unnecessary_assert: `assert` on a constant value always passes
 63:1 no_implicit_globals: global variable `assert` used
 63:8 no_implicit_globals: global variable `string` used
 64:1 no_implicit_globals: global variable `assert` used
@@ -14455,7 +14519,7 @@ luau-0.740/tables.luau
 387:22 no_implicit_globals: global variable `table` used
 387:51 no_implicit_globals: global variable `table` used
 388:1 no_implicit_globals: global variable `table` used
-388:17 divide_by_zero: division by literal zero
+388:17 divide_by_zero: division by zero
 392:13 multiple_statements_per_line: statement starts on the same line as the previous statement
 394:1 no_implicit_globals: global variable `assert` used
 394:8 no_implicit_globals: global variable `next` used
@@ -15028,16 +15092,16 @@ luau-0.740/tpack.luau
 170:3 no_implicit_globals: global variable `assert` used
 173:1 no_implicit_globals: global variable `print` used
 175:13 no_implicit_globals: global variable `ipairs` used
-175:34 divide_by_zero: division by literal zero
-175:39 divide_by_zero: division by literal zero
+175:34 divide_by_zero: division by zero
+175:39 divide_by_zero: division by zero
 176:5 no_implicit_globals: global variable `assert` used
 177:5 no_implicit_globals: global variable `assert` used
 178:5 no_implicit_globals: global variable `assert` used
 179:5 no_implicit_globals: global variable `assert` used
 180:5 no_implicit_globals: global variable `assert` used
 184:13 no_implicit_globals: global variable `ipairs` used
-184:29 divide_by_zero: division by literal zero
-184:34 divide_by_zero: division by literal zero
+184:29 divide_by_zero: division by zero
+184:34 divide_by_zero: division by zero
 185:3 no_implicit_globals: global variable `assert` used
 186:3 no_implicit_globals: global variable `assert` used
 187:3 no_implicit_globals: global variable `assert` used
@@ -15996,9 +16060,9 @@ luau-0.740/vector.luau
 100:36 no_implicit_globals: global variable `vector` used
 100:62 no_implicit_globals: global variable `vector` used
 104:14 no_implicit_globals: global variable `vector` used
-104:28 divide_by_zero: division by literal zero
-104:33 divide_by_zero: division by literal zero
-104:38 divide_by_zero: division by literal zero
+104:28 divide_by_zero: division by zero
+104:33 divide_by_zero: division by zero
+104:38 divide_by_zero: division by zero
 105:1 no_implicit_globals: global variable `assert` used
 108:1 no_implicit_globals: global variable `assert` used
 108:8 no_implicit_globals: global variable `vector` used
@@ -16039,26 +16103,26 @@ luau-0.740/vector.luau
 135:31 shadowing: variable `t` shadows outer variable
 135:38 multiple_statements_per_line: statement starts on the same line as the previous statement
 135:40 no_implicit_globals: global variable `vector` used
-135:54 divide_by_zero: division by literal zero
+135:54 divide_by_zero: division by zero
 136:1 no_implicit_globals: global variable `assert` used
 136:8 no_implicit_globals: global variable `pcall` used
 136:31 shadowing: variable `t` shadows outer variable
 136:38 multiple_statements_per_line: statement starts on the same line as the previous statement
 136:40 no_implicit_globals: global variable `vector` used
-136:57 divide_by_zero: division by literal zero
+136:57 divide_by_zero: division by zero
 137:1 no_implicit_globals: global variable `assert` used
 137:8 no_implicit_globals: global variable `pcall` used
 137:31 shadowing: variable `t` shadows outer variable
 137:38 multiple_statements_per_line: statement starts on the same line as the previous statement
 137:40 no_implicit_globals: global variable `vector` used
-137:60 divide_by_zero: division by literal zero
+137:60 divide_by_zero: division by zero
 138:1 no_implicit_globals: global variable `assert` used
 138:8 no_implicit_globals: global variable `pcall` used
 138:31 shadowing: variable `t` shadows outer variable
 138:38 multiple_statements_per_line: statement starts on the same line as the previous statement
 138:38 no_implicit_globals: global variable `rawset` used
 138:48 no_implicit_globals: global variable `vector` used
-138:62 divide_by_zero: division by literal zero
+138:62 divide_by_zero: division by zero
 140:1 no_implicit_globals: global variable `assert` used
 140:8 no_implicit_globals: global variable `vector` used
 140:37 no_implicit_globals: global variable `vector` used
@@ -16218,8 +16282,8 @@ luau-0.740/vector_library.luau
 72:8 compare_nan: NaN (`0/0`) equals nothing, so this comparison always has the same result
 72:8 no_implicit_globals: global variable `vector` used
 72:19 no_implicit_globals: global variable `vector` used
-72:33 divide_by_zero: division by literal zero
-72:50 divide_by_zero: division by literal zero
+72:33 divide_by_zero: division by zero
+72:50 divide_by_zero: division by zero
 73:1 no_implicit_globals: global variable `assert` used
 73:8 no_implicit_globals: global variable `vector` used
 73:29 no_implicit_globals: global variable `vector` used
@@ -16232,8 +16296,8 @@ luau-0.740/vector_library.luau
 75:1 no_implicit_globals: global variable `assert` used
 75:8 compare_nan: NaN (`0/0`) equals nothing, so this comparison always has the same result
 75:8 no_implicit_globals: global variable `vector` used
-75:34 divide_by_zero: division by literal zero
-75:51 divide_by_zero: division by literal zero
+75:34 divide_by_zero: division by zero
+75:51 divide_by_zero: division by zero
 76:1 no_implicit_globals: global variable `assert` used
 76:8 no_implicit_globals: global variable `select` used
 76:20 no_implicit_globals: global variable `vector` used
@@ -16329,17 +16393,17 @@ luau-0.740/vector_library.luau
 107:1 no_implicit_globals: global variable `assert` used
 107:8 no_implicit_globals: global variable `vector` used
 107:20 no_implicit_globals: global variable `vector` used
-107:34 divide_by_zero: division by literal zero
+107:34 divide_by_zero: division by zero
 107:51 no_implicit_globals: global variable `math` used
-107:61 divide_by_zero: division by literal zero
+107:61 divide_by_zero: division by zero
 108:1 no_implicit_globals: global variable `assert` used
 108:8 no_implicit_globals: global variable `vector` used
 108:51 no_implicit_globals: global variable `math` used
 109:1 no_implicit_globals: global variable `assert` used
 109:8 no_implicit_globals: global variable `vector` used
-109:35 divide_by_zero: division by literal zero
+109:35 divide_by_zero: division by zero
 109:52 no_implicit_globals: global variable `math` used
-109:62 divide_by_zero: division by literal zero
+109:62 divide_by_zero: division by zero
 110:1 no_implicit_globals: global variable `assert` used
 110:8 no_implicit_globals: global variable `select` used
 110:20 no_implicit_globals: global variable `vector` used
@@ -16520,46 +16584,46 @@ luau-0.740/vector_library.luau
 198:8 compare_nan: NaN (`0/0`) equals nothing, so this comparison always has the same result
 198:8 no_implicit_globals: global variable `vector` used
 198:19 no_implicit_globals: global variable `vector` used
-198:33 divide_by_zero: division by literal zero
+198:33 divide_by_zero: division by zero
 198:45 no_implicit_globals: global variable `vector` used
-198:74 divide_by_zero: division by literal zero
+198:74 divide_by_zero: division by zero
 199:1 no_implicit_globals: global variable `assert` used
 199:8 no_implicit_globals: global variable `vector` used
 199:19 no_implicit_globals: global variable `vector` used
 199:43 no_implicit_globals: global variable `vector` used
-199:57 divide_by_zero: division by literal zero
+199:57 divide_by_zero: division by zero
 200:1 no_implicit_globals: global variable `assert` used
 200:8 compare_nan: NaN (`0/0`) equals nothing, so this comparison always has the same result
 200:8 no_implicit_globals: global variable `vector` used
 200:19 no_implicit_globals: global variable `vector` used
-200:33 divide_by_zero: division by literal zero
+200:33 divide_by_zero: division by zero
 200:45 no_implicit_globals: global variable `vector` used
-200:74 divide_by_zero: division by literal zero
+200:74 divide_by_zero: division by zero
 201:1 no_implicit_globals: global variable `assert` used
 201:8 no_implicit_globals: global variable `vector` used
 201:19 no_implicit_globals: global variable `vector` used
 201:43 no_implicit_globals: global variable `vector` used
-201:57 divide_by_zero: division by literal zero
+201:57 divide_by_zero: division by zero
 203:1 no_implicit_globals: global variable `assert` used
 203:8 compare_nan: NaN (`0/0`) equals nothing, so this comparison always has the same result
 203:8 no_implicit_globals: global variable `vector` used
-203:34 divide_by_zero: division by literal zero
+203:34 divide_by_zero: division by zero
 203:46 no_implicit_globals: global variable `vector` used
-203:75 divide_by_zero: division by literal zero
+203:75 divide_by_zero: division by zero
 204:1 no_implicit_globals: global variable `assert` used
 204:8 no_implicit_globals: global variable `vector` used
 204:44 no_implicit_globals: global variable `vector` used
-204:58 divide_by_zero: division by literal zero
+204:58 divide_by_zero: division by zero
 205:1 no_implicit_globals: global variable `assert` used
 205:8 compare_nan: NaN (`0/0`) equals nothing, so this comparison always has the same result
 205:8 no_implicit_globals: global variable `vector` used
-205:34 divide_by_zero: division by literal zero
+205:34 divide_by_zero: division by zero
 205:46 no_implicit_globals: global variable `vector` used
-205:75 divide_by_zero: division by literal zero
+205:75 divide_by_zero: division by zero
 206:1 no_implicit_globals: global variable `assert` used
 206:8 no_implicit_globals: global variable `vector` used
 206:44 no_implicit_globals: global variable `vector` used
-206:58 divide_by_zero: division by literal zero
+206:58 divide_by_zero: division by zero
 209:1 no_implicit_globals: global variable `assert` used
 209:8 no_implicit_globals: global variable `vector` used
 209:21 no_implicit_globals: global variable `vector` used

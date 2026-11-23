@@ -250,8 +250,8 @@ fn nested(open: &str, count: usize, innermost: &str, close: &str) -> String {
 fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
     with_the_smallest_stack(|| {
         // The initializer is 31 levels deep, and its one use sits 15 levels
-        // short of the cap.
-        let initializer = format!("{}1/0{}", "1/0+(".repeat(15), ")".repeat(15));
+        // short of the cap. An inexact power has no value to fold to.
+        let initializer = format!("{}.3^3{}", ".3^3+(".repeat(15), ")".repeat(15));
         let source = format!(
             "\
     local x = {initializer}

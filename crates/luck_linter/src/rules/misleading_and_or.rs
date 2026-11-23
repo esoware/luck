@@ -1,5 +1,6 @@
 use luck_ast::Expression;
 use luck_token::BinOp;
+use luck_value::ToBoolean as _;
 
 use crate::binary::operator_pairs;
 use crate::diagnostic::Finding;
@@ -35,12 +36,13 @@ impl NodeRule for MisleadingAndOr {
         if run.links.first().op != BinOp::Or {
             return;
         }
+        let version = context.semantic.version();
         for pair in operator_pairs(run) {
             if pair.op == BinOp::Or
                 && let Some(lhs) = pair.lhs
                 && let Expression::BinaryOp(inner) = lhs
                 && inner.links.first().op == BinOp::And
-                && is_falsy_literal(&inner.links.last().operand)
+                && inner.links.last().operand.to_boolean(&version) == Some(false)
             {
                 findings.push(
                     Finding::new(
@@ -52,10 +54,6 @@ impl NodeRule for MisleadingAndOr {
             }
         }
     }
-}
-
-const fn is_falsy_literal(expr: &Expression<'_>) -> bool {
-    matches!(expr, Expression::Nil(_) | Expression::False(_))
 }
 
 #[cfg(test)]
@@ -79,6 +77,12 @@ mod tests {
     #[test]
     fn flags_false_middle() {
         let diags = run("local r = (x and false) or y");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_a_middle_operand_that_is_always_falsy() {
+        let diags = run("local r = (x and not 1) or y");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 

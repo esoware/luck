@@ -1074,6 +1074,7 @@ dependencies = [
  "luck_stdlib",
  "luck_testgen",
  "luck_token",
+ "luck_value",
  "memchr",
  "rayon",
  "rustc-hash",
@@ -1142,6 +1143,7 @@ dependencies = [
  "luck_parser",
  "luck_testgen",
  "luck_token",
+ "luck_value",
  "rustc-hash",
  "schemars",
  "serde",
@@ -1221,6 +1223,16 @@ dependencies = [
  "memchr",
  "schemars",
  "serde",
+]
+
+[[package]]
+name = "luck_value"
+version = "0.6.0"
+dependencies = [
+ "luck_allocator",
+ "luck_ast",
+ "luck_parser",
+ "luck_token",
 ]
 
 [[package]]

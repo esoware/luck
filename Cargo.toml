@@ -35,6 +35,7 @@ luck_semantic        = { version = "0.6.0", path = "crates/luck_semantic" }
 luck_stdlib          = { version = "0.6.0", path = "crates/luck_stdlib" }
 luck_testgen         = { path = "crates/luck_testgen" }
 luck_token           = { version = "0.6.0", path = "crates/luck_token" }
+luck_value           = { version = "0.6.0", path = "crates/luck_value" }
 
 ariadne               = "0.6"
 assert_cmd            = "2"

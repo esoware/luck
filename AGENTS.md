@@ -36,8 +36,8 @@ Closes #24
 
 ### Output keeps the input's meaning
 
-- Purity analysis assumes metamethods. A variable read, an index, arithmetic, a comparison, or a concatenation can each call one, so only literal arithmetic is pure.
-- Constant folding reproduces the target's float arithmetic exactly, so it never fuses or reorders an operation, as `mul_add` would.
+- Purity analysis assumes metamethods. Reading a local or an upvalue runs nothing, but reading a global indexes the environment, which can call `__index` as any index can, and an operator can call one or raise unless its operands' types rule that out, as two numbers do for `+` and a `nil` does for `==`. `luck_value` holds these rules.
+- Constant evaluation reproduces the target's arithmetic exactly, so it never fuses or reorders an operation, as `mul_add` would.
 - `minify(minify(x)) == minify(x)` and `format(format(x)) == format(x)`, and both outputs reparse with no errors. Tests check both.
 - Emitters never read source text. Codegen and the formatter read it only for trivia and verbatim regions, and work without it, because a synthetic AST must still print.
 - A bundle names no host path. Every path the bundle carries comes from `ModuleInfo::relative_path`. `ModuleInfo::path`, `source_files`, and the line map stay canonical. They're local build data and never reach the output.
@@ -90,7 +90,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 
 ### Crates and modules
 
-- `luck_allocator`, `luck_token`, `luck_data_structures`, `luck_ast_macros`, and `luck_ast_tools` depend on nothing in the workspace. `luck_diagnostics` and `luck_resolver` depend on `luck_token` only, `luck_lexer` on `luck_token` and `luck_diagnostics`, `luck_ast` on `luck_token`, `luck_allocator`, and `luck_ast_macros`, `luck_testgen` on `luck_token` and `luck_ast`, `luck_parser` on `luck_token`, `luck_diagnostics`, `luck_lexer`, `luck_ast`, and `luck_allocator`, `luck_codegen` on `luck_token`, `luck_ast`, and `luck_data_structures`, `luck_semantic` on `luck_token`, `luck_diagnostics`, and `luck_ast`, and `luck_stdlib` on `luck_token`, `luck_diagnostics`, `luck_ast`, and `luck_semantic`.
+- `luck_allocator`, `luck_token`, `luck_data_structures`, `luck_ast_macros`, and `luck_ast_tools` depend on nothing in the workspace. `luck_diagnostics` and `luck_resolver` depend on `luck_token` only, `luck_lexer` on `luck_token` and `luck_diagnostics`, `luck_ast` on `luck_token`, `luck_allocator`, and `luck_ast_macros`, `luck_testgen` on `luck_token` and `luck_ast`, `luck_parser` on `luck_token`, `luck_diagnostics`, `luck_lexer`, `luck_ast`, and `luck_allocator`, `luck_codegen` on `luck_token`, `luck_ast`, and `luck_data_structures`, `luck_semantic` on `luck_token`, `luck_diagnostics`, and `luck_ast`, `luck_value` on `luck_token` and `luck_ast`, and `luck_stdlib` on `luck_token`, `luck_diagnostics`, `luck_ast`, and `luck_semantic`.
 - `luck_codegen` and `luck_formatter` never depend on `luck_semantic`, and neither they nor `luck_minifier` depend on `luck_stdlib`, `luck_resolver`, `luck_linter`, `luck_bundler`, or `luck_config`.
 - `luck_cli` is the only crate that depends on `luck_lsp`, only `luck_cli`, `luck_lsp`, and the `luck` facade's opt-in `config` feature depend on `luck_config`, nothing depends on `luck_cli` or on the `luck` facade, and only `luck_allocs` turns on `luck_allocator`'s `track_allocations` feature.
 - Only `luck_allocator`, `luck_data_structures`'s `code_buffer.rs`, `luck_lexer`'s `cursor.rs`, `luck_benchmark`, `luck_allocs`'s `heap.rs`, and `luck_conformance`'s `execute.rs` may use `unsafe`.

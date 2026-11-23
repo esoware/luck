@@ -4,7 +4,7 @@
 use luck_ast::{
     Expression, Field, Name, Suffix, TableConstructor, is_multi_value, is_valid_identifier_in,
 };
-use luck_token::{LuaNumber, LuaVersion};
+use luck_token::LuaVersion;
 
 /// The name a `["name"]` key's value is, when it's an identifier, however
 /// the key is spelled.
@@ -56,8 +56,7 @@ fn is_sequential_from_one(fields: &[Field<'_>]) -> bool {
         matches!(
             field,
             Field::Bracketed { key: Expression::Number(literal), .. }
-                if literal.value == LuaNumber::Int(expected)
-                    || literal.value == LuaNumber::Float(LuaNumber::Int(expected).to_f64())
+                if literal.value.to_integer() == Some(expected)
         )
     });
     // `{[1] = f()}` truncates f() to one value, while `{f()}` in final

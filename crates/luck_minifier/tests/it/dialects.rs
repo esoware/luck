@@ -136,12 +136,13 @@ print(s<<T>>)
 
 #[test]
 fn inlined_cast_before_less_than_survives_minification() {
+    // Strings compare through the locale, so the comparison stays.
     let source = "\
-local s = 1 :: number
-return s < 2
+local s = 'a' :: string
+return s < 'b'
 ";
     let result = minify_luau(source);
-    assert_eq!(result, "return(1::number)<2");
+    assert_eq!(result, "return('a'::string)<'b'");
     assert_eq!(minify_luau(&result), result, "must be idempotent");
 }
 

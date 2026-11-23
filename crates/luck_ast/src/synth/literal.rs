@@ -23,15 +23,7 @@ impl<'ast> Synth<'ast> {
     /// runtime construction can rebuild a bit-exact NaN.
     #[must_use]
     pub fn number_f64(&self, value: f64) -> Expression<'ast> {
-        if value.is_nan() {
-            let zero = || self.number(LuaNumber::Float(0.0));
-            return self.binary_op(zero(), BinOp::Div, zero());
-        }
-        if value.is_sign_negative() {
-            // Lua has no negative literals; this also keeps -0.0's sign bit.
-            return self.unary_op(UnOp::Neg, self.number_f64(value.abs()));
-        }
-        self.number(LuaNumber::Float(value))
+        self.number_value(LuaNumber::Float(value))
     }
 
     /// An integer on Lua 5.3+, which is also what an unpinned synthesizer
@@ -48,12 +40,18 @@ impl<'ast> Synth<'ast> {
         if self.version.is_some_and(|version| !version.has_integer_subtype()) {
             return self.number_f64(LuaNumber::Int(value).to_f64());
         }
-        match value.checked_neg() {
-            Some(magnitude) if value < 0 => {
-                self.unary_op(UnOp::Neg, self.number(LuaNumber::Int(magnitude)))
-            }
-            Some(_) | None => self.number(LuaNumber::Int(value)),
-        }
+        self.number_value(LuaNumber::Int(value))
+    }
+
+    /// The literal of `value`, under a `-` when it's negative, or `0/0` for
+    /// NaN.
+    fn number_value(&self, value: LuaNumber) -> Expression<'ast> {
+        let Some((is_negative, magnitude)) = value.literal_magnitude() else {
+            let zero = || self.number(LuaNumber::Float(0.0));
+            return self.binary_op(zero(), BinOp::Div, zero());
+        };
+        let literal = self.number(magnitude);
+        if is_negative { self.unary_op(UnOp::Neg, literal) } else { literal }
     }
 
     /// Luau: an exact 64-bit integer literal, which prints as hex when it's

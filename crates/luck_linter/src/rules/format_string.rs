@@ -116,7 +116,7 @@ fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&StringLiteral<'_>, Call
 fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Option<Finding> {
     let (literal, trailing_args) = dsl_literal(call, dsl)?;
     let body = literal.as_str()?;
-    if dsl == DslKind::Find && is_plain_find(body, trailing_args.clone()) {
+    if dsl == DslKind::Find && is_plain_find(body, trailing_args.clone(), version) {
         return None;
     }
     // The argument count each specifier or value option asks for. Pattern
@@ -144,14 +144,12 @@ fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Optio
 ///
 /// `str_find_aux` also searches plainly when the pattern has no character
 /// from `SPECIALS`, which is what lets a lone `)` through.
-fn is_plain_find(pattern: &str, mut after_pattern: CallArgs<'_>) -> bool {
+fn is_plain_find(pattern: &str, mut after_pattern: CallArgs<'_>, version: LuaVersion) -> bool {
     let is_maybe_plain = match (after_pattern.next(), after_pattern.next()) {
         (None, _) => false,
         // A call or `...` here can expand over `init` and `plain`.
         (Some(init), None) => init.is_multi_value(),
-        (Some(_), Some(plain)) => {
-            !matches!(plain, CallArg::Expr(Expression::Nil(_) | Expression::False(_)))
-        }
+        (Some(_), Some(plain)) => plain.to_boolean(version) != Some(false),
     };
     is_maybe_plain || !pattern.contains(['^', '$', '*', '+', '?', '.', '(', '[', '%', '-'])
 }

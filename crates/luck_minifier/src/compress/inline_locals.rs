@@ -1,5 +1,5 @@
-//! Inlining a local read once: its value, a literal expression that can't
-//! raise, moves to the read, which the printer parenthesizes as it needs.
+//! Inlining a local read once: its value, when it's the same wherever it
+//! runs, moves to the read, which the printer parenthesizes as it needs.
 
 use core::mem;
 
@@ -9,12 +9,13 @@ use luck_ast::{
     expr_nesting_depth,
 };
 use luck_token::MAX_ACTIVE_LOCALS;
+use luck_value::IsLiteralValue as _;
 
 use super::Compressor;
 use super::remove_dead_code::is_nil_initialized;
 use super::simplify_parens::Place;
 use crate::binding::{Bindings, NONE, Reference, has_fixed_binding, local_of};
-use crate::expr::{MAX_ADDED_DEPTH, literal_kind, parenthesize};
+use crate::expr::{MAX_ADDED_DEPTH, parenthesize};
 
 /// An inlined local's initializer, waiting for the local's one read.
 pub(super) struct Value<'ast> {
@@ -272,7 +273,7 @@ impl<'ast> Compressor<'_, 'ast> {
                     (binding.reads == 1
                         && binding.writes == 0
                         && binding.held_value != REFUSED
-                        && literal_kind(value).is_some())
+                        && value.is_literal_value(&self.version))
                     .then_some((index, name_index, id))
                 },
             )
@@ -291,7 +292,7 @@ impl<'ast> Compressor<'_, 'ast> {
         let Some(facts) = self.bindings.get(id) else {
             return false;
         };
-        if facts.reads != 1 || facts.writes != 0 || literal_kind(value).is_none() {
+        if facts.reads != 1 || facts.writes != 0 || !value.is_literal_value(&self.version) {
             return false;
         }
         let read_depth = usize::try_from(facts.read_depth).unwrap_or(usize::MAX);
@@ -580,7 +581,7 @@ mod tests {
                 // `-1i` is a literal, while negating an integer raises.
                 ("local s = 1i return -s", "return-(1i)"),
                 ("local s = 1i return not s", "return not 1i"),
-                ("local s = (\"x\")<<T>> return s .. \"y\"", "local s=(\"x\")<<T>>return s..\"y\""),
+                ("local s = (\"x\")<<T>> return s .. \"y\"", "return(\"x\")<<T>>..\"y\""),
             ],
         );
     }

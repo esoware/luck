@@ -1,9 +1,9 @@
 use luck_ast::{Expression, NumericFor, Statement};
-use luck_token::UnOp;
+use luck_token::{LuaVersion, UnOp};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::signed_number_value;
+use crate::number::number_value;
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Flags numeric `for` ranges that can't iterate or are likely off by one.
@@ -29,21 +29,24 @@ impl NodeRule for ForRange {
     fn on_stmt(
         &self,
         stmt: &Statement<'_>,
-        _context: &LintContext<'_>,
+        context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         if let Statement::NumericFor(numeric_for) = stmt
-            && let Some((message, help)) = range_problem(numeric_for)
+            && let Some((message, help)) = range_problem(numeric_for, context.semantic.version())
         {
             findings.push(Finding::new(message, numeric_for.span).with_help(help));
         }
     }
 }
 
-fn range_problem(numeric_for: &NumericFor<'_>) -> Option<(String, &'static str)> {
-    let start = signed_number_value(&numeric_for.start);
-    let limit = signed_number_value(&numeric_for.limit);
-    let step = numeric_for.step.as_ref().and_then(signed_number_value);
+fn range_problem(
+    numeric_for: &NumericFor<'_>,
+    version: LuaVersion,
+) -> Option<(String, &'static str)> {
+    let start = number_value(&numeric_for.start, version);
+    let limit = number_value(&numeric_for.limit, version);
+    let step = numeric_for.step.as_ref().and_then(|step| number_value(step, version));
 
     // A zero step loops forever before Lua 5.4 and raises an error from 5.4
     // on.
@@ -93,7 +96,8 @@ fn range_problem(numeric_for: &NumericFor<'_>) -> Option<(String, &'static str)>
 /// Flags `#t, 0` and `#t, 1` with no `-1` step. Counting down from a length
 /// needs one, and a 0 limit also visits `t[0]`.
 ///
-/// `reversed_for_loop` needs a literal start, so it never fires here.
+/// `reversed_for_loop` needs a start that evaluates to a number, so it never
+/// fires here.
 fn length_start_problem(
     numeric_for: &NumericFor<'_>,
     limit_value: f64,
@@ -169,8 +173,6 @@ fn is_length_of_identifier(expr: &Expression<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;

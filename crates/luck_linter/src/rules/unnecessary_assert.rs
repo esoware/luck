@@ -1,8 +1,8 @@
-use luck_ast::{Call, Expression, GetSpan as _};
+use luck_ast::{Call, GetSpan as _};
 use luck_diagnostics::Tag;
 use luck_stdlib::SemanticAnalysis;
 
-use crate::call::{CallArg, CallArgs, is_global_call};
+use crate::call::{CallArgs, is_global_call};
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
 use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
@@ -32,29 +32,7 @@ fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding
     if !is_global_call(call, "assert", semantic) {
         return None;
     }
-    let is_truthy = match CallArgs::new(call.args).next()? {
-        CallArg::String(_) | CallArg::Table(_) => true,
-        CallArg::Expr(expr) => match expr {
-            // 0 and "" are truthy in Lua, so every number and string passes.
-            Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TableConstructor(_)
-            | Expression::FunctionDef(_) => true,
-            Expression::False(_) | Expression::Nil(_) => false,
-            Expression::VarArg(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => return None,
-        },
-    };
+    let is_truthy = CallArgs::new(call.args).next()?.to_boolean(semantic.version())?;
     let finding = if is_truthy {
         Finding::new("`assert` on a constant value always passes", call.span())
             .with_tag(Tag::Unnecessary)
@@ -115,6 +93,27 @@ mod tests {
     fn flags_assert_nil() {
         let diags = run("assert(nil)");
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_an_argument_whose_truthiness_is_known() {
+        for (source, message) in [
+            ("assert(1 + 1 == 2)", "always passes"),
+            ("assert(x or true)", "always passes"),
+            ("assert(not 1)", "always errors"),
+        ] {
+            let diags = run(source);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+            assert!(diags[0].message.contains(message), "{source}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn ignores_an_interpolated_string_with_an_expression_on_luau() {
+        // Its `format` comes through the string metatable, which a program
+        // can change.
+        let diags = run_rule(&UnnecessaryAssert, "assert(`a{x}`)", LuaVersion::Luau);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]

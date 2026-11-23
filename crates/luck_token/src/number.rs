@@ -37,6 +37,47 @@ impl LuaNumber {
             Self::Float(value) => value,
         }
     }
+
+    /// The integer the number equals, which a float does when it has no
+    /// fraction and lies in `[-2^63, 2^63)`, as Lua 5.3+ converts a float
+    /// for a bitwise operator, a table key, or a comparison with an integer.
+    #[must_use]
+    pub fn to_integer(self) -> Option<i64> {
+        match self {
+            Self::Int(value) => Some(value),
+            Self::Float(value) => float_to_integer(value),
+        }
+    }
+
+    /// The magnitude a literal of the number holds, and whether a `-` goes
+    /// before it, or `None` for NaN, which no literal holds.
+    ///
+    /// No numeral spells a negative number, so -1 is `-` before 1, and a
+    /// negative zero keeps its sign that way. `i64::MIN` has no magnitude to
+    /// negate, so it's a literal of its own, which prints as the hex that
+    /// wraps to it on Lua 5.3+.
+    #[must_use]
+    pub const fn literal_magnitude(self) -> Option<(bool, Self)> {
+        match self {
+            Self::Int(value) => Some(match value.checked_neg() {
+                Some(magnitude) if value < 0 => (true, Self::Int(magnitude)),
+                Some(_) | None => (false, self),
+            }),
+            Self::Float(value) if value.is_nan() => None,
+            Self::Float(value) => Some((value.is_sign_negative(), Self::Float(value.abs()))),
+        }
+    }
+}
+
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "every float the range and the fraction check let through is an integer's exact value"
+)]
+fn float_to_integer(value: f64) -> Option<i64> {
+    // -2^63 and 2^63.
+    let range = f64::from_bits(0xC3E0_0000_0000_0000)..f64::from_bits(0x43E0_0000_0000_0000);
+    (value.fract() == 0.0f64 && range.contains(&value)).then_some(value as i64)
 }
 
 #[expect(

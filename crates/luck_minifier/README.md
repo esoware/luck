@@ -10,7 +10,7 @@ The work runs in three phases, each once:
 2. **Compression.** One in-place walk runs every rewrite as it leaves each node. Each rewrite keeps the counts accurate, so one walk reaches the fixpoint. It walks again only when it exposes a rewrite too late in the walk to make it.
 3. **Renaming.** Every local gets the shortest name its scopes allow.
 
-Then `luck_codegen::compact` prints the tree once, with `LiteralSpelling::Shortest`, every literal in the shortest spelling of its value. Every rewrite assumes a metamethod can run wherever Lua allows one, so only literal arithmetic folds, and folding works on the values the parser decoded and reproduces the target's float arithmetic exactly. The output parses, and minifying it again changes nothing. The minifier keeps a shebang and Luau `--!` hot comments on top and drops every other comment.
+Then `luck_codegen::compact` prints the tree once, with `LiteralSpelling::Shortest`, every literal in the shortest spelling of its value. A rewrite asks `luck_value` what an expression evaluates to, whether it's truthy, and whether evaluating it can do anything, which assumes a metamethod can run wherever Lua allows one and a global read can run `__index`, and evaluates in the target's exact arithmetic. The output parses, and minifying it again changes nothing. The minifier keeps a shebang and Luau `--!` hot comments on top and drops every other comment.
 
 ## Features
 
@@ -18,8 +18,8 @@ Then `luck_codegen::compact` prints the tree once, with `LiteralSpelling::Shorte
 
 - `remove_dead_code`: constant branches, loops that never run or run once, unused locals, and statements that do nothing.
 - `simplify_statements`: unwraps `do` blocks that scope nothing, merges nested `if`s, and turns `if ... return` runs into `and`/`or`.
-- `fold_constants`: evaluates operators over literals, a string's length included.
-- `inline_locals`: replaces a local read once with its value, when that's a literal expression that can't raise an error.
+- `fold_constants`: evaluates operators whose operands evaluate, a string's length and bitwise operators included, and drops the operands of an `and` or `or` that never run. A number folds only to a literal no longer than what it replaces, so `1/3` and `1/0` stay.
+- `inline_locals`: replaces a local read once with its value, when that's the same wherever it runs: it reads no variable, builds no table or closure, and can't raise an error.
 - `merge_locals`: joins neighboring `local`s, and neighboring assignments to locals, into one statement.
 - `simplify_indexes`: `t["x"]` to `t.x`, and `{[1] = a, [2] = b}` to `{a, b}`, however the key is spelled.
 - `simplify_parens`: drops parentheses that change nothing: around a call or `...` where only its first value counts, as in `(f()) + 1`, around a lone string or table argument, and around a run in a run at its level where they group the same, as in `(a + b) + c`.

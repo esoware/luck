@@ -10,10 +10,10 @@ use luck_ast::{
     is_multi_value,
 };
 use luck_token::{BinOp, LuaVersion};
+use luck_value::ToBoolean as _;
 
 use super::Compressor;
 use super::simplify_parens::Place;
-use crate::expr::is_always_truthy;
 
 /// Whether a statement declares something its block scopes: a local, a
 /// label, a Luau type, or a Lua 5.5 global.
@@ -218,7 +218,7 @@ impl<'ast> Compressor<'_, 'ast> {
             .rev()
             .take_while(|stmt| {
                 if_return_guard(stmt).is_some_and(|(condition, return_expr)| {
-                    is_always_truthy(return_expr)
+                    return_expr.to_boolean(&self.version) == Some(true)
                         && self.fits(level, 2, condition)
                         && self.fits(level, 2, return_expr)
                 })
@@ -356,7 +356,7 @@ mod tests {
         for (source, expected) in [
             ("if true then if x then f() end end", "if x then f()end"),
             ("if (false) then if (true) then f() end end", "if false then f()end"),
-            ("if true then return 1 end return 0", "return 1 or 0"),
+            ("if true then return 1 end return 0", "return 1"),
         ] {
             assert_eq!(minify_with(source, LuaVersion::Lua54, &folding), expected, "{source}");
         }

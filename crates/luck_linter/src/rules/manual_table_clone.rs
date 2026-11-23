@@ -9,7 +9,7 @@ use luck_token::{Span, UnOp};
 use crate::call::is_global_call;
 use crate::diagnostic::Finding;
 use crate::nodes::adjacent_stmts;
-use crate::number::is_number_literal;
+use crate::number::has_number_value;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
 /// The help suggests `table.clone(src)` where the target's stdlib has it, and
@@ -154,8 +154,9 @@ fn is_numeric_clone(loop_node: &NumericFor<'_>, destination: &Name<'_>, tree: &S
     let Some(source_table) = length_of_name(&loop_node.limit) else {
         return false;
     };
-    let has_unit_step = loop_node.step.as_ref().is_none_or(|step| is_number_literal(step, 1.0));
-    is_number_literal(&loop_node.start, 1.0)
+    let is_one = |expr: &Expression<'_>| has_number_value(expr, tree.version(), 1.0);
+    let has_unit_step = loop_node.step.as_ref().is_none_or(is_one);
+    is_one(&loop_node.start)
         && has_unit_step
         && copied_value(&loop_node.block, destination, &loop_node.name, tree).is_some_and(
             |copied| {

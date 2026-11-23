@@ -1,6 +1,6 @@
 linter_lua54 Summary:
 Files Linted   : 31/31
-Diagnostics    : 10812
+Diagnostics    : 10898
   6942 no_implicit_globals
   1239 shadowing
    562 multiple_statements_per_line
@@ -10,6 +10,7 @@ Diagnostics    : 10812
    145 global_usage
    135 merge_adjacent_locals
    109 unused_argument
+    92 unnecessary_assert
     91 value_overwritten_before_read
     85 unnecessary_negation
     71 setting_global
@@ -30,7 +31,6 @@ Diagnostics    : 10812
     11 deprecated
      8 parenthesized_conditions
      6 string_index_to_field
-     6 unnecessary_assert
      5 ambiguous_newline_call
      4 incorrect_stdlib_use
      4 integer_parsing
@@ -220,7 +220,7 @@ lua-5.4.9-tests/api.lua
 190:1 no_implicit_globals: global variable `assert` used
 190:8 undefined_variable: undefined variable `T`
 190:8 no_implicit_globals: global variable `T` used
-190:46 divide_by_zero: division by literal zero
+190:46 divide_by_zero: division by zero
 191:5 undefined_variable: undefined variable `T`
 191:5 no_implicit_globals: global variable `T` used
 192:1 no_implicit_globals: global variable `assert` used
@@ -1656,6 +1656,7 @@ lua-5.4.9-tests/bitwise.lua
 6:1 no_implicit_globals: global variable `require` used
 8:17 no_implicit_globals: global variable `string` used
 10:1 no_implicit_globals: global variable `assert` used
+10:1 unnecessary_assert: `assert` on a constant value always passes
 12:1 no_implicit_globals: global variable `assert` used
 12:32 no_implicit_globals: global variable `math` used
 18:1 no_implicit_globals: global variable `assert` used
@@ -1710,8 +1711,11 @@ lua-5.4.9-tests/bitwise.lua
 63:1 no_implicit_globals: global variable `assert` used
 63:13 no_implicit_globals: global variable `math` used
 65:1 no_implicit_globals: global variable `assert` used
+65:1 unnecessary_assert: `assert` on a constant value always passes
 66:1 no_implicit_globals: global variable `assert` used
+66:1 unnecessary_assert: `assert` on a constant value always passes
 68:1 no_implicit_globals: global variable `assert` used
+68:1 unnecessary_assert: `assert` on a constant value always passes
 72:1 no_implicit_globals: global variable `assert` used
 73:1 no_implicit_globals: global variable `assert` used
 74:1 no_implicit_globals: global variable `assert` used
@@ -1807,15 +1811,25 @@ lua-5.4.9-tests/bitwise.lua
 261:1 no_implicit_globals: global variable `assert` used
 262:1 no_implicit_globals: global variable `assert` used
 264:1 no_implicit_globals: global variable `assert` used
+264:1 unnecessary_assert: `assert` on a constant value always passes
 265:1 no_implicit_globals: global variable `assert` used
+265:1 unnecessary_assert: `assert` on a constant value always passes
 266:1 no_implicit_globals: global variable `assert` used
+266:1 unnecessary_assert: `assert` on a constant value always passes
 267:1 no_implicit_globals: global variable `assert` used
+267:1 unnecessary_assert: `assert` on a constant value always passes
 268:1 no_implicit_globals: global variable `assert` used
+268:1 unnecessary_assert: `assert` on a constant value always passes
 269:1 no_implicit_globals: global variable `assert` used
+269:1 unnecessary_assert: `assert` on a constant value always passes
 270:1 no_implicit_globals: global variable `assert` used
+270:1 unnecessary_assert: `assert` on a constant value always passes
 271:1 no_implicit_globals: global variable `assert` used
+271:1 unnecessary_assert: `assert` on a constant value always passes
 272:1 no_implicit_globals: global variable `assert` used
+272:1 unnecessary_assert: `assert` on a constant value always passes
 273:1 no_implicit_globals: global variable `assert` used
+273:1 unnecessary_assert: `assert` on a constant value always passes
 275:1 no_implicit_globals: global variable `print` used
 277:7 shadowing: variable `c` shadows outer variable
 277:7 redefining_local: local `c` is redeclared in the same block
@@ -2611,9 +2625,9 @@ lua-5.4.9-tests/code.lua
 352:18 shadowing: variable `x` shadows outer variable
 353:18 shadowing: variable `x` shadows outer variable
 355:18 shadowing: variable `x` shadows outer variable
-360:26 divide_by_zero: division by literal zero
-361:26 divide_by_zero: modulo by literal zero
-362:26 divide_by_zero: floor division by literal zero
+360:26 divide_by_zero: division by zero
+361:26 divide_by_zero: modulo by zero
+362:26 divide_by_zero: floor division by zero
 363:17 shadowing: variable `x` shadows outer variable
 364:17 shadowing: variable `x` shadows outer variable
 365:17 shadowing: variable `x` shadows outer variable
@@ -2670,32 +2684,48 @@ lua-5.4.9-tests/constructs.lua
 16:15 multiple_statements_per_line: statement starts on the same line as the previous statement
 16:15 no_implicit_globals: global variable `assert` used
 21:15 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
-21:19 divide_by_zero: floor division by literal zero
+21:19 divide_by_zero: floor division by zero
 21:27 multiple_statements_per_line: statement starts on the same line as the previous statement
-21:31 divide_by_zero: modulo by literal zero
+21:31 divide_by_zero: modulo by zero
 26:1 no_implicit_globals: global variable `assert` used
+26:1 unnecessary_assert: `assert` on a constant value always passes
 27:1 no_implicit_globals: global variable `assert` used
+27:1 unnecessary_assert: `assert` on a constant value always passes
 28:1 no_implicit_globals: global variable `assert` used
 29:1 no_implicit_globals: global variable `assert` used
+29:1 unnecessary_assert: `assert` on a constant value always passes
 30:1 no_implicit_globals: global variable `assert` used
+30:1 unnecessary_assert: `assert` on a constant value always passes
 31:1 no_implicit_globals: global variable `assert` used
+31:1 unnecessary_assert: `assert` on a constant value always passes
 32:1 no_implicit_globals: global variable `assert` used
+32:1 unnecessary_assert: `assert` on a constant value always passes
 33:1 no_implicit_globals: global variable `assert` used
 34:1 no_implicit_globals: global variable `assert` used
 34:8 unnecessary_negation: negated comparison, consider `2+1 <= 3*1`
 36:1 no_implicit_globals: global variable `assert` used
+36:1 unnecessary_assert: `assert` on a constant value always passes
 37:1 no_implicit_globals: global variable `assert` used
+37:1 unnecessary_assert: `assert` on a constant value always passes
 38:1 no_implicit_globals: global variable `assert` used
+38:1 unnecessary_assert: `assert` on a constant value always passes
 40:1 no_implicit_globals: global variable `assert` used
+40:1 unnecessary_assert: `assert` on a constant value always passes
 42:1 no_implicit_globals: global variable `assert` used
+42:1 unnecessary_assert: `assert` on a constant value always passes
 44:1 no_implicit_globals: global variable `assert` used
+44:1 unnecessary_assert: `assert` on a constant value always passes
 45:1 no_implicit_globals: global variable `assert` used
+45:1 unnecessary_assert: `assert` on a constant value always passes
 48:1 no_implicit_globals: global variable `assert` used
+48:1 unnecessary_assert: `assert` on a constant value always passes
 49:1 no_implicit_globals: global variable `assert` used
+49:1 unnecessary_assert: `assert` on a constant value always passes
 51:1 redundant_nil_init: 1 trailing `nil` value in local initializer
 51:7 shadowing: variable `a` shadows outer variable
 51:7 redefining_local: local `a` is redeclared in the same block
 52:1 no_implicit_globals: global variable `assert` used
+52:1 unnecessary_assert: `assert` on a constant value always passes
 53:52 multiple_statements_per_line: statement starts on the same line as the previous statement
 53:52 no_implicit_globals: global variable `assert` used
 54:50 multiple_statements_per_line: statement starts on the same line as the previous statement
@@ -5008,14 +5038,14 @@ lua-5.4.9-tests/events.lua
 162:19 multiple_statements_per_line: statement starts on the same line as the previous statement
 163:23 multiple_statements_per_line: statement starts on the same line as the previous statement
 164:19 multiple_statements_per_line: statement starts on the same line as the previous statement
-165:8 divide_by_zero: division by literal zero
+165:8 divide_by_zero: division by zero
 165:19 multiple_statements_per_line: statement starts on the same line as the previous statement
-166:8 divide_by_zero: division by literal zero
+166:8 divide_by_zero: division by zero
 166:21 multiple_statements_per_line: statement starts on the same line as the previous statement
 167:19 multiple_statements_per_line: statement starts on the same line as the previous statement
-168:14 divide_by_zero: division by literal zero
+168:14 divide_by_zero: division by zero
 168:26 multiple_statements_per_line: statement starts on the same line as the previous statement
-168:46 divide_by_zero: division by literal zero
+168:46 divide_by_zero: division by zero
 169:45 multiple_statements_per_line: statement starts on the same line as the previous statement
 170:45 multiple_statements_per_line: statement starts on the same line as the previous statement
 171:44 multiple_statements_per_line: statement starts on the same line as the previous statement
@@ -7101,27 +7131,40 @@ lua-5.4.9-tests/literals.lua
 13:1 global_usage: global environment `_G` used
 13:1 no_implicit_globals: global variable `_G` used
 16:1 no_implicit_globals: global variable `assert` used
+16:1 unnecessary_assert: `assert` on a constant value always passes
 20:1 no_implicit_globals: global variable `assert` used
 20:8 no_implicit_globals: global variable `string` used
 23:1 no_implicit_globals: global variable `assert` used
+23:1 unnecessary_assert: `assert` on a constant value always passes
 24:1 no_implicit_globals: global variable `assert` used
+24:1 unnecessary_assert: `assert` on a constant value always passes
 25:1 no_implicit_globals: global variable `assert` used
+25:1 unnecessary_assert: `assert` on a constant value always passes
 26:1 no_implicit_globals: global variable `assert` used
+26:1 unnecessary_assert: `assert` on a constant value always passes
 27:1 no_implicit_globals: global variable `assert` used
 29:1 no_implicit_globals: global variable `assert` used
 32:1 no_implicit_globals: global variable `assert` used
+32:1 unnecessary_assert: `assert` on a constant value always passes
 35:13 no_implicit_globals: global variable `assert` used
 35:20 no_implicit_globals: global variable `load` used
 38:3 no_implicit_globals: global variable `assert` used
 50:1 no_implicit_globals: global variable `assert` used
+50:1 unnecessary_assert: `assert` on a constant value always passes
 57:1 no_implicit_globals: global variable `assert` used
 57:37 no_implicit_globals: global variable `string` used
 60:1 no_implicit_globals: global variable `assert` used
+60:1 unnecessary_assert: `assert` on a constant value always passes
 63:1 no_implicit_globals: global variable `assert` used
+63:1 unnecessary_assert: `assert` on a constant value always passes
 66:1 no_implicit_globals: global variable `assert` used
+66:1 unnecessary_assert: `assert` on a constant value always passes
 69:1 no_implicit_globals: global variable `assert` used
+69:1 unnecessary_assert: `assert` on a constant value always passes
 72:1 no_implicit_globals: global variable `assert` used
+72:1 unnecessary_assert: `assert` on a constant value always passes
 75:1 no_implicit_globals: global variable `assert` used
+75:1 unnecessary_assert: `assert` on a constant value always passes
 81:19 no_implicit_globals: global variable `load` used
 83:3 no_implicit_globals: global variable `assert` used
 83:21 no_implicit_globals: global variable `string` used
@@ -7148,8 +7191,11 @@ lua-5.4.9-tests/literals.lua
 142:11 no_implicit_globals: global variable `_G` used
 143:1 no_implicit_globals: global variable `print` used
 146:1 no_implicit_globals: global variable `assert` used
+146:1 unnecessary_assert: `assert` on a constant value always passes
 149:1 no_implicit_globals: global variable `assert` used
+149:1 unnecessary_assert: `assert` on a constant value always passes
 152:1 no_implicit_globals: global variable `assert` used
+152:1 unnecessary_assert: `assert` on a constant value always passes
 155:1 no_implicit_globals: global variable `assert` used
 155:8 no_implicit_globals: global variable `string` used
 203:1 no_implicit_globals: global variable `print` used
@@ -7617,9 +7663,9 @@ lua-5.4.9-tests/math.lua
 12:1 no_implicit_globals: global variable `assert` used
 13:1 no_implicit_globals: global variable `assert` used
 29:1 no_implicit_globals: global variable `assert` used
-29:14 divide_by_zero: division by literal zero
+29:14 divide_by_zero: division by zero
 30:1 no_implicit_globals: global variable `assert` used
-30:18 divide_by_zero: division by literal zero
+30:18 divide_by_zero: division by zero
 35:3 no_implicit_globals: global variable `assert` used
 37:3 no_implicit_globals: global variable `print` used
 37:9 no_implicit_globals: global variable `string` used
@@ -7634,6 +7680,7 @@ lua-5.4.9-tests/math.lua
 66:21 no_implicit_globals: global variable `math` used
 66:37 no_implicit_globals: global variable `math` used
 71:1 no_implicit_globals: global variable `assert` used
+71:1 unnecessary_assert: `assert` on a constant value always passes
 75:3 no_implicit_globals: global variable `assert` used
 76:3 no_implicit_globals: global variable `assert` used
 76:10 no_implicit_globals: global variable `type` used
@@ -7652,15 +7699,15 @@ lua-5.4.9-tests/math.lua
 97:9 no_implicit_globals: global variable `math` used
 98:3 no_implicit_globals: global variable `assert` used
 99:9 no_implicit_globals: global variable `math` used
-99:19 divide_by_zero: division by literal zero
+99:19 divide_by_zero: division by zero
 100:3 no_implicit_globals: global variable `assert` used
-100:15 divide_by_zero: division by literal zero
+100:15 divide_by_zero: division by zero
 101:9 no_implicit_globals: global variable `math` used
-101:19 divide_by_zero: division by literal zero
+101:19 divide_by_zero: division by zero
 102:3 no_implicit_globals: global variable `assert` used
-102:15 divide_by_zero: division by literal zero
+102:15 divide_by_zero: division by zero
 103:9 no_implicit_globals: global variable `math` used
-103:19 divide_by_zero: division by literal zero
+103:19 divide_by_zero: division by zero
 104:3 no_implicit_globals: global variable `assert` used
 105:9 no_implicit_globals: global variable `math` used
 106:3 no_implicit_globals: global variable `assert` used
@@ -7685,21 +7732,23 @@ lua-5.4.9-tests/math.lua
 131:11 no_implicit_globals: global variable `assert` used
 131:26 no_implicit_globals: global variable `math` used
 137:1 no_implicit_globals: global variable `assert` used
-137:8 divide_by_zero: floor division by literal zero
-137:18 divide_by_zero: division by literal zero
+137:1 unnecessary_assert: `assert` on a constant value always passes
+137:8 divide_by_zero: floor division by zero
+137:18 divide_by_zero: division by zero
 138:1 no_implicit_globals: global variable `assert` used
-138:8 divide_by_zero: floor division by literal zero
-138:21 divide_by_zero: division by literal zero
+138:1 unnecessary_assert: `assert` on a constant value always passes
+138:8 divide_by_zero: floor division by zero
+138:21 divide_by_zero: division by zero
 139:1 no_implicit_globals: global variable `assert` used
 140:1 no_implicit_globals: global variable `assert` used
 144:10 multiple_statements_per_line: statement starts on the same line as the previous statement
 144:10 no_implicit_globals: global variable `assert` used
-144:17 divide_by_zero: floor division by literal zero
-144:29 divide_by_zero: division by literal zero
+144:17 divide_by_zero: floor division by zero
+144:29 divide_by_zero: division by zero
 145:12 multiple_statements_per_line: statement starts on the same line as the previous statement
 145:12 no_implicit_globals: global variable `assert` used
-145:19 divide_by_zero: floor division by literal zero
-145:29 divide_by_zero: division by literal zero
+145:19 divide_by_zero: floor division by zero
+145:29 divide_by_zero: division by zero
 146:12 multiple_statements_per_line: statement starts on the same line as the previous statement
 146:12 no_implicit_globals: global variable `assert` used
 147:3 no_implicit_globals: global variable `assert` used
@@ -7738,28 +7787,40 @@ lua-5.4.9-tests/math.lua
 196:1 no_implicit_globals: global variable `assert` used
 197:1 no_implicit_globals: global variable `assert` used
 201:1 no_implicit_globals: global variable `assert` used
+201:1 unnecessary_assert: `assert` on a constant value always passes
 201:18 multiple_statements_per_line: statement starts on the same line as the previous statement
 201:18 no_implicit_globals: global variable `assert` used
+201:18 unnecessary_assert: `assert` on a constant value always passes
 201:25 unnecessary_negation: negated comparison, consider `1 >= 0.9`
 202:1 no_implicit_globals: global variable `assert` used
+202:1 unnecessary_assert: `assert` on a constant value always passes
 202:19 multiple_statements_per_line: statement starts on the same line as the previous statement
 202:19 no_implicit_globals: global variable `assert` used
+202:19 unnecessary_assert: `assert` on a constant value always passes
 202:26 unnecessary_negation: negated comparison, consider `1 > 0.9`
 203:1 no_implicit_globals: global variable `assert` used
+203:1 unnecessary_assert: `assert` on a constant value always passes
 203:20 multiple_statements_per_line: statement starts on the same line as the previous statement
 203:20 no_implicit_globals: global variable `assert` used
+203:20 unnecessary_assert: `assert` on a constant value always passes
 203:27 unnecessary_negation: negated comparison, consider `-1 >= -1.1`
 204:1 no_implicit_globals: global variable `assert` used
+204:1 unnecessary_assert: `assert` on a constant value always passes
 204:19 multiple_statements_per_line: statement starts on the same line as the previous statement
 204:19 no_implicit_globals: global variable `assert` used
+204:19 unnecessary_assert: `assert` on a constant value always passes
 204:26 unnecessary_negation: negated comparison, consider `-1 > -1.1`
 205:1 no_implicit_globals: global variable `assert` used
+205:1 unnecessary_assert: `assert` on a constant value always passes
 205:20 multiple_statements_per_line: statement starts on the same line as the previous statement
 205:20 no_implicit_globals: global variable `assert` used
+205:20 unnecessary_assert: `assert` on a constant value always passes
 205:27 unnecessary_negation: negated comparison, consider `-1 >= -1.1`
 206:1 no_implicit_globals: global variable `assert` used
+206:1 unnecessary_assert: `assert` on a constant value always passes
 206:21 multiple_statements_per_line: statement starts on the same line as the previous statement
 206:21 no_implicit_globals: global variable `assert` used
+206:21 unnecessary_assert: `assert` on a constant value always passes
 206:28 unnecessary_negation: negated comparison, consider `-1 > -1.1`
 207:1 no_implicit_globals: global variable `assert` used
 208:1 no_implicit_globals: global variable `assert` used
@@ -7829,7 +7890,7 @@ lua-5.4.9-tests/math.lua
 268:10 unnecessary_negation: negated comparison, consider `minint + 0.5 > minint`
 269:3 no_implicit_globals: global variable `assert` used
 269:10 unnecessary_negation: negated comparison, consider `minint > minint - 1.0`
-273:23 divide_by_zero: division by literal zero
+273:23 divide_by_zero: division by zero
 274:3 no_implicit_globals: global variable `assert` used
 274:10 unnecessary_negation: negated comparison, consider `NaN >= 0`
 275:3 no_implicit_globals: global variable `assert` used
@@ -7852,7 +7913,7 @@ lua-5.4.9-tests/math.lua
 288:26 no_implicit_globals: global variable `load` used
 300:25 no_implicit_globals: global variable `math` used
 301:26 no_implicit_globals: global variable `math` used
-302:25 divide_by_zero: division by literal zero
+302:25 divide_by_zero: division by zero
 306:3 no_implicit_globals: global variable `assert` used
 307:3 no_implicit_globals: global variable `assert` used
 309:3 no_implicit_globals: global variable `assert` used
@@ -7909,8 +7970,8 @@ lua-5.4.9-tests/math.lua
 379:46 no_implicit_globals: global variable `tonumber` used
 380:1 no_implicit_globals: global variable `assert` used
 380:8 no_implicit_globals: global variable `tonumber` used
-380:17 divide_by_zero: division by literal zero
-380:25 divide_by_zero: division by literal zero
+380:17 divide_by_zero: division by zero
+380:25 divide_by_zero: division by zero
 383:1 no_implicit_globals: global variable `assert` used
 383:8 no_implicit_globals: global variable `tonumber` used
 384:1 no_implicit_globals: global variable `assert` used
@@ -8080,8 +8141,11 @@ lua-5.4.9-tests/math.lua
 486:1 no_implicit_globals: global variable `assert` used
 486:12 no_implicit_globals: global variable `tonumber` used
 491:1 no_implicit_globals: global variable `assert` used
+491:1 unnecessary_assert: `assert` on a constant value always passes
 492:1 no_implicit_globals: global variable `assert` used
+492:1 unnecessary_assert: `assert` on a constant value always passes
 493:1 no_implicit_globals: global variable `assert` used
+493:1 unnecessary_assert: `assert` on a constant value always passes
 494:1 no_implicit_globals: global variable `assert` used
 494:8 no_implicit_globals: global variable `tonumber` used
 495:1 no_implicit_globals: global variable `assert` used
@@ -8089,6 +8153,7 @@ lua-5.4.9-tests/math.lua
 496:1 no_implicit_globals: global variable `assert` used
 496:8 no_implicit_globals: global variable `tonumber` used
 499:1 no_implicit_globals: global variable `assert` used
+499:1 unnecessary_assert: `assert` on a constant value always passes
 504:1 no_implicit_globals: global variable `assert` used
 504:8 no_implicit_globals: global variable `tonumber` used
 505:1 no_implicit_globals: global variable `assert` used
@@ -8098,42 +8163,55 @@ lua-5.4.9-tests/math.lua
 507:1 no_implicit_globals: global variable `assert` used
 508:1 no_implicit_globals: global variable `assert` used
 509:1 no_implicit_globals: global variable `assert` used
+509:1 unnecessary_assert: `assert` on a constant value always passes
 510:1 no_implicit_globals: global variable `assert` used
+510:1 unnecessary_assert: `assert` on a constant value always passes
 511:1 no_implicit_globals: global variable `assert` used
 512:1 no_implicit_globals: global variable `assert` used
+512:1 unnecessary_assert: `assert` on a constant value always passes
 515:1 no_implicit_globals: global variable `assert` used
+515:1 unnecessary_assert: `assert` on a constant value always passes
 516:1 no_implicit_globals: global variable `assert` used
+516:1 unnecessary_assert: `assert` on a constant value always passes
 517:1 no_implicit_globals: global variable `assert` used
+517:1 unnecessary_assert: `assert` on a constant value always passes
 518:1 no_implicit_globals: global variable `assert` used
 519:1 no_implicit_globals: global variable `assert` used
 519:8 no_implicit_globals: global variable `tonumber` used
 519:31 no_implicit_globals: global variable `tonumber` used
 520:8 no_implicit_globals: global variable `tonumber` used
 522:1 no_implicit_globals: global variable `assert` used
+522:1 unnecessary_assert: `assert` on a constant value always passes
 524:1 no_implicit_globals: global variable `assert` used
+524:1 unnecessary_assert: `assert` on a constant value always passes
 526:1 no_implicit_globals: global variable `assert` used
 526:8 no_implicit_globals: global variable `tonumber` used
 529:1 no_implicit_globals: global variable `assert` used
+529:1 unnecessary_assert: `assert` on a constant value always passes
 529:8 unnecessary_negation: negated comparison, consider `1 >= 1`
 529:31 unnecessary_negation: negated comparison, consider `2 >= 1`
 530:1 no_implicit_globals: global variable `assert` used
 530:8 unnecessary_negation: negated comparison, consider `'a' >= 'a'`
 530:39 unnecessary_negation: negated comparison, consider `'b' >= 'a'`
 531:1 no_implicit_globals: global variable `assert` used
+531:1 unnecessary_assert: `assert` on a constant value always passes
 531:30 unnecessary_negation: negated comparison, consider `2 > 1`
 532:1 no_implicit_globals: global variable `assert` used
 532:38 unnecessary_negation: negated comparison, consider `'b' > 'a'`
 533:1 no_implicit_globals: global variable `assert` used
+533:1 unnecessary_assert: `assert` on a constant value always passes
 533:8 unnecessary_negation: negated comparison, consider `1 <= 1`
 533:21 unnecessary_negation: negated comparison, consider `1 <= 2`
 534:1 no_implicit_globals: global variable `assert` used
 534:8 unnecessary_negation: negated comparison, consider `'a' <= 'a'`
 534:25 unnecessary_negation: negated comparison, consider `'a' <= 'b'`
 535:1 no_implicit_globals: global variable `assert` used
+535:1 unnecessary_assert: `assert` on a constant value always passes
 535:19 unnecessary_negation: negated comparison, consider `1 < 2`
 536:1 no_implicit_globals: global variable `assert` used
 536:23 unnecessary_negation: negated comparison, consider `'a' < 'b'`
 537:1 no_implicit_globals: global variable `assert` used
+537:1 unnecessary_assert: `assert` on a constant value always passes
 537:37 unnecessary_negation: negated comparison, consider `1.3 >= 1.3`
 540:1 no_implicit_globals: global variable `assert` used
 541:1 no_implicit_globals: global variable `assert` used
@@ -8178,8 +8256,8 @@ lua-5.4.9-tests/math.lua
 623:8 undefined_variable: undefined variable `_port`
 623:8 no_implicit_globals: global variable `_port` used
 624:27 no_implicit_globals: global variable `assert` used
-625:8 divide_by_zero: modulo by literal zero
-626:8 divide_by_zero: modulo by literal zero
+625:8 divide_by_zero: modulo by zero
+626:8 divide_by_zero: modulo by zero
 627:8 no_implicit_globals: global variable `math` used
 628:8 no_implicit_globals: global variable `math` used
 629:9 no_implicit_globals: global variable `math` used
@@ -8267,8 +8345,11 @@ lua-5.4.9-tests/math.lua
 670:1 no_implicit_globals: global variable `assert` used
 670:8 no_implicit_globals: global variable `tonumber` used
 674:1 no_implicit_globals: global variable `assert` used
+674:1 unnecessary_assert: `assert` on a constant value always passes
 675:1 no_implicit_globals: global variable `assert` used
+675:1 unnecessary_assert: `assert` on a constant value always passes
 676:1 no_implicit_globals: global variable `assert` used
+676:1 unnecessary_assert: `assert` on a constant value always passes
 681:3 no_implicit_globals: global variable `assert` used
 681:14 no_implicit_globals: global variable `math` used
 682:3 no_implicit_globals: global variable `assert` used
@@ -8357,7 +8438,7 @@ lua-5.4.9-tests/math.lua
 719:14 no_implicit_globals: global variable `math` used
 720:3 no_implicit_globals: global variable `assert` used
 720:14 no_implicit_globals: global variable `math` used
-720:29 divide_by_zero: division by literal zero
+720:29 divide_by_zero: division by zero
 728:7 merge_adjacent_locals: adjacent `local` declarations can be merged
 728:18 no_implicit_globals: global variable `math` used
 729:18 no_implicit_globals: global variable `math` used
@@ -8428,7 +8509,7 @@ lua-5.4.9-tests/math.lua
 789:3 no_implicit_globals: global variable `assert` used
 789:10 unnecessary_negation: negated comparison, consider `0 >= NaN`
 789:28 unnecessary_negation: negated comparison, consider `NaN >= 0`
-790:24 divide_by_zero: division by literal zero
+790:24 divide_by_zero: division by zero
 791:3 no_implicit_globals: global variable `assert` used
 791:26 unnecessary_negation: negated comparison, consider `NaN > NaN1`
 791:48 unnecessary_negation: negated comparison, consider `NaN1 > NaN`
@@ -9926,8 +10007,11 @@ lua-5.4.9-tests/strings.lua
 73:1 no_implicit_globals: global variable `assert` used
 73:8 no_implicit_globals: global variable `string` used
 75:1 no_implicit_globals: global variable `assert` used
+75:1 unnecessary_assert: `assert` on a constant value always passes
 76:1 no_implicit_globals: global variable `assert` used
+76:1 unnecessary_assert: `assert` on a constant value always passes
 77:1 no_implicit_globals: global variable `assert` used
+77:1 unnecessary_assert: `assert` on a constant value always passes
 80:1 no_implicit_globals: global variable `assert` used
 80:8 no_implicit_globals: global variable `string` used
 81:1 no_implicit_globals: global variable `assert` used
@@ -10175,7 +10259,7 @@ lua-5.4.9-tests/strings.lua
 234:11 no_implicit_globals: global variable `math` used
 235:3 no_implicit_globals: global variable `assert` used
 235:10 no_implicit_globals: global variable `string` used
-235:30 divide_by_zero: division by literal zero
+235:30 divide_by_zero: division by zero
 236:28 no_implicit_globals: global variable `string` used
 239:1 no_implicit_globals: global variable `assert` used
 239:8 no_implicit_globals: global variable `string` used
@@ -10283,15 +10367,15 @@ lua-5.4.9-tests/strings.lua
 329:5 no_implicit_globals: global variable `assert` used
 329:12 no_implicit_globals: global variable `string` used
 329:24 no_implicit_globals: global variable `string` used
-329:44 divide_by_zero: division by literal zero
+329:44 divide_by_zero: division by zero
 330:5 no_implicit_globals: global variable `assert` used
 330:12 no_implicit_globals: global variable `string` used
 330:24 no_implicit_globals: global variable `string` used
-330:44 divide_by_zero: division by literal zero
+330:44 divide_by_zero: division by zero
 331:5 no_implicit_globals: global variable `assert` used
 331:12 no_implicit_globals: global variable `string` used
 331:24 no_implicit_globals: global variable `string` used
-331:44 divide_by_zero: division by literal zero
+331:44 divide_by_zero: division by zero
 332:5 no_implicit_globals: global variable `assert` used
 332:12 no_implicit_globals: global variable `string` used
 332:24 no_implicit_globals: global variable `string` used
@@ -10520,16 +10604,16 @@ lua-5.4.9-tests/tpack.lua
 173:3 no_implicit_globals: global variable `assert` used
 176:1 no_implicit_globals: global variable `print` used
 178:13 no_implicit_globals: global variable `ipairs` used
-178:34 divide_by_zero: division by literal zero
-178:39 divide_by_zero: division by literal zero
+178:34 divide_by_zero: division by zero
+178:39 divide_by_zero: division by zero
 179:5 no_implicit_globals: global variable `assert` used
 180:5 no_implicit_globals: global variable `assert` used
 181:5 no_implicit_globals: global variable `assert` used
 182:5 no_implicit_globals: global variable `assert` used
 183:5 no_implicit_globals: global variable `assert` used
 187:13 no_implicit_globals: global variable `ipairs` used
-187:29 divide_by_zero: division by literal zero
-187:34 divide_by_zero: division by literal zero
+187:29 divide_by_zero: division by zero
+187:34 divide_by_zero: division by zero
 188:3 no_implicit_globals: global variable `assert` used
 189:3 no_implicit_globals: global variable `assert` used
 190:3 no_implicit_globals: global variable `assert` used
@@ -10896,9 +10980,11 @@ lua-5.4.9-tests/verybig.lua
 4:1 no_implicit_globals: global variable `print` used
 8:9 unused_variable: unused variable `dummy`
 37:3 no_implicit_globals: global variable `assert` used
+37:3 unnecessary_assert: `assert` on a constant value always passes
 40:3 no_implicit_globals: global variable `assert` used
 41:3 no_implicit_globals: global variable `assert` used
 42:3 no_implicit_globals: global variable `assert` used
+42:3 unnecessary_assert: `assert` on a constant value always passes
 43:3 no_implicit_globals: global variable `assert` used
 50:4 undefined_variable: undefined variable `_soft`
 50:4 no_implicit_globals: global variable `_soft` used

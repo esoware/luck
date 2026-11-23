@@ -2,7 +2,7 @@ use luck_ast::Statement;
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::signed_number_value;
+use crate::number::number_value;
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -23,12 +23,13 @@ impl NodeRule for ReversedForLoop {
     fn on_stmt(
         &self,
         stmt: &Statement<'_>,
-        _context: &LintContext<'_>,
+        context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
+        let version = context.semantic.version();
         if let Statement::NumericFor(numeric_for) = stmt
-            && let Some(start) = signed_number_value(&numeric_for.start)
-            && let Some(limit) = signed_number_value(&numeric_for.limit)
+            && let Some(start) = number_value(&numeric_for.start, version)
+            && let Some(limit) = number_value(&numeric_for.limit, version)
             && start > limit
             && numeric_for.step.is_none()
         {

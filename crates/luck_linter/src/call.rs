@@ -5,7 +5,8 @@ use luck_ast::{
     is_multi_value,
 };
 use luck_stdlib::SemanticAnalysis;
-use luck_token::Span;
+use luck_token::{LuaVersion, Span};
+use luck_value::ToBoolean as _;
 
 /// Whether `call` is a plain `name(...)` call to the host's global `name`. A
 /// method call, or a `name` the chunk shadows or rebinds, is user code.
@@ -60,6 +61,14 @@ impl<'ast> CallArg<'ast> {
     /// to any number of values, none included.
     pub(crate) fn is_multi_value(self) -> bool {
         matches!(self, Self::Expr(expr) if is_multi_value(expr))
+    }
+
+    /// Whether the argument's value is truthy, when that's known.
+    pub(crate) fn to_boolean(self, version: LuaVersion) -> Option<bool> {
+        match self {
+            Self::Expr(expr) => expr.to_boolean(&version),
+            Self::String(_) | Self::Table(_) => Some(true),
+        }
     }
 }
 

@@ -1,8 +1,8 @@
 use core::fmt;
-use core::ops::Neg as _;
 
 use luck_ast::{Expression, Field, GetSpan as _, TableConstructor};
-use luck_token::{LuaNumber, Span, UnOp};
+use luck_token::{LuaVersion, Span};
+use luck_value::{ConstantEvaluation as _, ConstantValue};
 use rustc_hash::FxHashMap;
 
 use crate::diagnostic::Finding;
@@ -27,20 +27,15 @@ impl NodeRule for DuplicateKeys {
     fn on_table(
         &self,
         table: &TableConstructor<'_>,
-        _context: &LintContext<'_>,
+        context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
+        let version = context.semantic.version();
         let mut first_spans: FxHashMap<Key<'_>, Span> = FxHashMap::default();
         for field in &table.fields {
             let keyed = match field {
                 Field::Named { name, .. } => Some((Key::String(name.text.as_bytes()), name.span)),
-                // Values compare, so `["\97"]` and `["a"]` are the same key.
-                Field::Bracketed { key: Expression::StringLiteral(literal), .. } => {
-                    Some((Key::String(literal.value.as_bytes()), literal.span))
-                }
-                Field::Bracketed { key: key_expr, .. } => {
-                    number_key(key_expr).map(|k| (k, key_expr.span()))
-                }
+                Field::Bracketed { key, .. } => table_key(key, version).map(|k| (k, key.span())),
                 Field::Positional(_) => None,
             };
             let Some((key, span)) = keyed else {
@@ -78,70 +73,25 @@ impl fmt::Display for Key<'_> {
     }
 }
 
-/// The key a number literal sets, possibly negated, so `1`, `1.0`, and
-/// `0x1` match, and so do `0` and `-0`.
-fn number_key(expr: &Expression<'_>) -> Option<Key<'static>> {
-    let value = signed_number(expr)?;
-    let float = match value {
-        LuaNumber::Int(integer) => return Some(Key::Integer(integer)),
-        LuaNumber::Float(float) => float,
-    };
-    if float.fract() == 0.0f64
-        && let Some(integer) = integral_float(float)
-    {
-        return Some(Key::Integer(integer));
-    }
-    Some(Key::Float(float.to_bits()))
-}
-
-/// A number literal's value under any number of unary minuses, negated as
-/// Lua negates it.
-fn signed_number(expr: &Expression<'_>) -> Option<LuaNumber> {
-    match expr {
-        Expression::Number(literal) => Some(literal.value),
-        Expression::UnaryOp(unary) if unary.op == UnOp::Neg => {
-            Some(match signed_number(&unary.operand)? {
-                LuaNumber::Int(integer) => LuaNumber::Int(integer.wrapping_neg()),
-                LuaNumber::Float(float) => LuaNumber::Float(float.neg()),
-            })
+/// The string or number key `expr` evaluates to. Values compare, so
+/// `["\97"]` and `["a"]` set one key, and so do `[1]`, `[1.0]`, and `[0x1]`,
+/// and `[0]` and `[-0]`. NaN is no key: setting it raises.
+fn table_key<'ast>(expr: &Expression<'ast>, version: LuaVersion) -> Option<Key<'ast>> {
+    match expr.evaluate_value(&version)? {
+        ConstantValue::String(bytes) => Some(Key::String(bytes)),
+        ConstantValue::Number(number) => {
+            let float = number.to_f64();
+            if float.is_nan() {
+                return None;
+            }
+            Some(number.to_integer().map_or_else(|| Key::Float(float.to_bits()), Key::Integer))
         }
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => None,
+        ConstantValue::Nil | ConstantValue::Boolean(_) | ConstantValue::Integer(_) => None,
     }
-}
-
-/// `float`, which has no fraction, as the integer it equals, when one does:
-/// one in `[-2^63, 2^63)`.
-#[expect(
-    clippy::as_conversions,
-    clippy::cast_possible_truncation,
-    reason = "every float in the range checked is an integer's exact value"
-)]
-fn integral_float(float: f64) -> Option<i64> {
-    // -2^63 and 2^63.
-    let range = f64::from_bits(0xC3E0_0000_0000_0000)..f64::from_bits(0x43E0_0000_0000_0000);
-    range.contains(&float).then_some(float as i64)
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
@@ -204,6 +154,13 @@ mod tests {
         let diags = run("local t = { [1] = \"a\", [1.0] = \"b\", [-2] = \"c\", [-2.0] = \"d\" }");
         assert_eq!(diags.len(), 2, "{diags:?}");
         assert!(diags[0].message.contains("`1`"), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_keys_that_evaluate_alike() {
+        let diags =
+            run("local t = { [2] = 1, [1 + 1] = 2, [0] = 3, [-0.0] = 4, [0/0] = 5, [0/0] = 6 }");
+        assert_eq!(diags.len(), 2, "NaN is no key: {diags:?}");
     }
 
     #[test]

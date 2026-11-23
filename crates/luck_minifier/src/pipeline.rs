@@ -105,6 +105,7 @@ fn minify_tree<'ast>(
         || config.simplify_parens
         || config.lift_locals;
     let needs_bindings = config.remove_dead_code
+        || config.fold_constants
         || config.inline_locals
         || config.merge_locals
         || config.lift_locals

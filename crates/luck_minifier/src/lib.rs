@@ -21,6 +21,10 @@
 //!   again only for a rewrite it exposed too late to make.
 //! - **Renaming**, which gives locals the shortest names their scopes allow.
 //!
+//! A rewrite asks `luck_value` what an expression evaluates to, whether it's
+//! truthy, and whether evaluating it can do anything, with the binding walk
+//! telling a local's read from a global's.
+//!
 //! [`TransformConfig`] turns each rewrite on or off. `luck_codegen` prints
 //! every literal in the shortest spelling of its value, as
 //! `LiteralSpelling::Shortest` asks.

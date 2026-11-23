@@ -4,12 +4,12 @@ use luck_token::{BinOp, CompoundOp, Span};
 use crate::binary::operator_pairs;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::is_number_literal;
+use crate::number::has_number_value;
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
 /// Float division by zero gives `inf` or `nan`, and from Lua 5.3 integer
-/// `%` and `//` by zero raise an error. Either way a literal zero divisor is
-/// a mistake.
+/// `%` and `//` by zero raise an error. Either way a divisor that's always
+/// zero is a mistake.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DivideByZero;
 
@@ -18,7 +18,7 @@ impl_rule!(
     "divide_by_zero",
     Correctness,
     Warning,
-    "literal division or modulo by zero"
+    "division or modulo by a constant zero"
 );
 
 impl NodeRule for DivideByZero {
@@ -37,10 +37,11 @@ impl NodeRule for DivideByZero {
         if run.precedence() != BinOp::Div.precedence() {
             return;
         }
+        let version = context.semantic.version();
         for pair in operator_pairs(run) {
             if let Some(op_name) = divisive_op_name(pair.op)
                 && let Some(divisor) = pair.rhs
-                && is_number_literal(divisor, 0.0)
+                && has_number_value(divisor, version, 0.0)
             {
                 findings.push(zero_divisor_finding(op_name, pair.span(context)));
             }
@@ -49,13 +50,13 @@ impl NodeRule for DivideByZero {
     fn on_stmt(
         &self,
         stmt: &Statement<'_>,
-        _context: &LintContext<'_>,
+        context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         // Luau
         if let Statement::CompoundAssignment(compound) = stmt
             && let Some(op_name) = compound_divisive_op_name(compound.op)
-            && is_number_literal(&compound.expr, 0.0)
+            && has_number_value(&compound.expr, context.semantic.version(), 0.0)
         {
             findings.push(zero_divisor_finding(op_name, compound.span));
         }
@@ -63,7 +64,7 @@ impl NodeRule for DivideByZero {
 }
 
 fn zero_divisor_finding(op_name: &str, span: Span) -> Finding {
-    Finding::new(format!("{op_name} by literal zero"), span)
+    Finding::new(format!("{op_name} by zero"), span)
         .with_help("guard with an `if divisor ~= 0 then` check or use a nonzero constant")
 }
 
@@ -145,6 +146,14 @@ mod tests {
     }
 
     #[test]
+    fn flags_a_divisor_that_evaluates_to_zero() {
+        for divisor in ["-0", "-0.0", "(1 - 1)", "(0 * 5)"] {
+            let diags = run(&format!("local r = x / {divisor}"), LuaVersion::Lua54);
+            assert_eq!(diags.len(), 1, "{divisor}: {diags:?}");
+        }
+    }
+
+    #[test]
     fn ignores_nonzero_divisor() {
         let diags = run("local r = x / y", LuaVersion::Lua54);
         assert!(diags.is_empty(), "{diags:?}");
@@ -170,7 +179,7 @@ local x = 1
 x /= 0",
             LuaVersion::Luau,
         );
-        assert_eq!(diags.len(), 1, "`x /= 0` divides by a literal zero: {diags:?}");
+        assert_eq!(diags.len(), 1, "`x /= 0` divides by zero: {diags:?}");
     }
 
     #[test]

@@ -9,11 +9,27 @@ use luck_ast::{
     Var, Visit,
 };
 use luck_token::LuaVersion;
+use luck_value::{MayHaveSideEffects as _, ValueContext};
 
 use super::Compressor;
 use crate::binding::{Bindings, has_fixed_binding, is_env_binding, local_of};
-use crate::expr::{is_pure_modulo_name_reads, is_single_register_value};
+use crate::expr::is_single_register_value;
 use crate::limits::assignment_target_limit;
+
+/// A dialect in which no name's read counts as an effect, since a group
+/// evaluates its values in the order its statements did, so a global's
+/// `__index` sees the same reads in the same order.
+struct ReadsInOrder(LuaVersion);
+
+impl ValueContext for ReadsInOrder {
+    fn version(&self) -> LuaVersion {
+        self.0
+    }
+
+    fn is_global_reference(&self, _name: &Name<'_>) -> bool {
+        false
+    }
+}
 
 /// The binding of a lone `local name = value` whose value a group may
 /// evaluate beside its neighbors, the only kind of `local` an initialized
@@ -28,7 +44,7 @@ fn single_local(stmt: &Statement<'_>, version: LuaVersion) -> Option<usize> {
         return None;
     }
     if let ([attributed], [expr]) = (&*local.names, &*local.exprs)
-        && is_pure_modulo_name_reads(expr)
+        && !expr.may_have_side_effects(&ReadsInOrder(version))
     {
         return local_of(&attributed.name);
     }

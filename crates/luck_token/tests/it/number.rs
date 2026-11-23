@@ -53,6 +53,37 @@ fn equality_is_identity() {
 }
 
 #[test]
+fn a_float_is_an_integer_only_without_a_fraction_and_in_range() {
+    let two_to_63 = f64::from_bits(0x43E0_0000_0000_0000);
+    for (number, expected) in [
+        (LuaNumber::Int(i64::MIN), Some(i64::MIN)),
+        (LuaNumber::Float(3.0), Some(3)),
+        (LuaNumber::Float(-0.0), Some(0)),
+        (LuaNumber::Float(-two_to_63), Some(i64::MIN)),
+        (LuaNumber::Float(two_to_63), None),
+        (LuaNumber::Float(1.5), None),
+        (LuaNumber::Float(f64::INFINITY), None),
+        (LuaNumber::Float(f64::NAN), None),
+    ] {
+        assert_eq!(number.to_integer(), expected, "{number:?}");
+    }
+}
+
+#[test]
+fn a_literal_holds_a_magnitude_under_a_minus() {
+    for (number, expected) in [
+        (LuaNumber::Int(-3), Some((true, LuaNumber::Int(3)))),
+        (LuaNumber::Int(3), Some((false, LuaNumber::Int(3)))),
+        (LuaNumber::Int(i64::MIN), Some((false, LuaNumber::Int(i64::MIN)))),
+        (LuaNumber::Float(-0.0), Some((true, LuaNumber::Float(0.0)))),
+        (LuaNumber::Float(f64::NEG_INFINITY), Some((true, LuaNumber::Float(f64::INFINITY)))),
+        (LuaNumber::Float(f64::NAN), None),
+    ] {
+        assert_eq!(number.literal_magnitude(), expected, "{number:?}");
+    }
+}
+
+#[test]
 fn decimals_read_every_spelling_the_lexer_takes() {
     for (text, expected) in [
         ("0.5", 0.5f64),

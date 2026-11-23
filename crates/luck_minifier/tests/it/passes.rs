@@ -63,11 +63,11 @@ return x
 fn folds_exponentiation() {
     let result = minify_lua54(
         "\
-local x = 2 ^ 10
+local x = 2 ^ 5
 return x
 ",
     );
-    assert!(result.contains("1024"), "2^10 should be folded to 1024, got: {result}");
+    assert!(result.contains("32"), "2^5 should be folded to 32, got: {result}");
 }
 
 #[test]
@@ -101,10 +101,10 @@ fn inlining_keeps_operand_grouping_through_the_pipeline() {
     let cases = [
         (
             "\
-local s = 1 / 0
+local s = 2 ^ 0.5 / 2
 return 3 % s
 ",
-            "return 3%(1/0)",
+            "return 3%(2^.5/2)",
         ),
         (
             "\

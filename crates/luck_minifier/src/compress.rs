@@ -33,13 +33,14 @@ use luck_ast::{
     SuffixedExpression, TableConstructor, Type, Visit as _, VisitMut,
 };
 use luck_token::{LuaVersion, UnOp};
+use luck_value::ConstantEvaluation as _;
 
 use self::inline_locals::Value;
 use self::lift_locals::Lifter;
 use self::remove_dead_code::{UnusedLocalAction, unused_local_action};
 use self::simplify_parens::Place;
-use crate::binding::{Bindings, Counter, NONE, is_droppable_function, local_of};
-use crate::expr::{constant_truthiness, fits_at_depth};
+use crate::binding::{Bindings, BoundNames, Counter, NONE, is_droppable_function, local_of};
+use crate::expr::fits_at_depth;
 use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
 use crate::transform_config::TransformConfig;
 
@@ -262,7 +263,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Statement::LocalAssignment(local) => {
                 if should_remove_dead_code
                     && local.names.iter().all(|attributed| !self.is_used(&attributed.name))
-                    && unused_local_action(local, self.version) == UnusedLocalAction::Remove
+                    && unused_local_action(local, self.names()) == UnusedLocalAction::Remove
                 {
                     self.retract_stmt(stmt);
                     return false;
@@ -287,8 +288,10 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Statement::WhileLoop(while_loop) => {
                 self.visit_expr(&mut while_loop.condition);
                 if should_remove_dead_code
-                    && constant_truthiness(&while_loop.condition) == Some(false)
+                    && while_loop.condition.get_side_free_boolean_value(&self.names())
+                        == Some(false)
                 {
+                    self.retract_expr(&while_loop.condition);
                     self.retract_block(&while_loop.block);
                     return false;
                 }
@@ -303,9 +306,10 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             }
             Statement::NumericFor(numeric_for) => {
                 if should_remove_dead_code
-                    && remove_dead_code::has_default_step(numeric_for, self.version)
+                    && remove_dead_code::has_default_step(numeric_for, self.names())
+                    && let Some(step) = numeric_for.step.take()
                 {
-                    numeric_for.step = None;
+                    self.retract_expr(&step);
                     self.has_changed = true;
                 }
                 let outer_registers = self.live_registers;
@@ -467,7 +471,17 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Expression::UnaryOp(_) => {
                 if self.config.fold_constants && self.fold(expr) {
                     self.has_changed = true;
-                    self.leave_expr(expr, place);
+                    return self.leave_expr(expr, place);
+                }
+                // So does an operator a rewrite built.
+                if self.config.simplify_parens
+                    && let Expression::UnaryOp(unary_op) = expr
+                {
+                    let operand_place =
+                        if unary_op.op == UnOp::Neg { Place::Negated } else { Place::Operand };
+                    if simplify_parens::strip(&mut unary_op.operand, operand_place) {
+                        self.has_changed = true;
+                    }
                 }
             }
             Expression::Parenthesized(_) => {
@@ -495,11 +509,17 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
 
     /// Folds `expr` and uncounts the operands the fold drops.
     fn fold(&mut self, expr: &mut Expression<'ast>) -> bool {
-        let (allocator, version) = (self.allocator, self.version);
+        let (allocator, names) = (self.allocator, self.names());
         let mut counter = self.counter();
-        fold_constants::fold(allocator, version, expr, &mut |dropped| {
+        fold_constants::fold(allocator, names, expr, &mut |dropped| {
             counter.visit_expr(dropped);
         })
+    }
+
+    /// The dialect and the names as the bind walk bound them, for what
+    /// `luck_value` tells of an expression.
+    const fn names(&self) -> BoundNames {
+        BoundNames(self.version)
     }
 }
 

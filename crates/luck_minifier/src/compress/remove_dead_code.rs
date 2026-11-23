@@ -16,14 +16,16 @@ use luck_ast::{
     BinaryOp, Block, ContentEq as _, ElseClause, ElseIfClause, Expression, GetSpan as _,
     IfStatement, LocalAssignment, Name, NumericFor, OneOrMore, Statement, VisitMut as _,
 };
-use luck_token::{BinOp, LuaNumber, LuaVersion, UnOp};
+use luck_token::{BinOp, LuaNumber, UnOp};
+use luck_value::{ConstantEvaluation as _, ConstantValue, MayHaveSideEffects as _};
 
 use super::Compressor;
+use super::simplify_parens::Place;
 use super::simplify_statements::{has_no_else, holds_nested_if};
 use crate::binding::{
-    has_attributed_or_env_name, has_fixed_binding, is_droppable_function, local_of,
+    BoundNames, has_attributed_or_env_name, has_fixed_binding, is_droppable_function, local_of,
 };
-use crate::expr::{constant_truthiness, is_nil, is_pure_expr, truncate_multi_value};
+use crate::expr::truncate_multi_value;
 
 pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
     block.stmts.is_empty()
@@ -31,10 +33,11 @@ pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
 
 /// A step of integer 1 is the default. On Lua 5.3+ a float step makes the
 /// loop a float one, so `1.0` isn't, but where every number is a float, it is.
-pub(super) fn has_default_step(numeric_for: &NumericFor<'_>, version: LuaVersion) -> bool {
+pub(super) fn has_default_step(numeric_for: &NumericFor<'_>, names: BoundNames) -> bool {
     let default =
-        if version.has_integer_subtype() { LuaNumber::Int(1) } else { LuaNumber::Float(1.0) };
-    matches!(&numeric_for.step, Some(Expression::Number(literal)) if literal.value == default)
+        if names.0.has_integer_subtype() { LuaNumber::Int(1) } else { LuaNumber::Float(1.0) };
+    numeric_for.step.as_ref().and_then(|step| step.evaluate_value(&names))
+        == Some(ConstantValue::Number(default))
 }
 
 /// Drops the `return` that ends `block`, a function's or the chunk's, when
@@ -97,7 +100,7 @@ fn negate<'ast>(allocator: &'ast Allocator, expr: Expression<'ast>) -> Expressio
 
 /// `cond and X or X`, which a run of `or`s starts with when its first two
 /// operands are that.
-fn is_redundant_ternary(outer: &BinaryOp<'_>) -> bool {
+fn is_redundant_ternary(outer: &BinaryOp<'_>, names: BoundNames) -> bool {
     let Expression::BinaryOp(inner) = &outer.first else {
         return false;
     };
@@ -106,11 +109,11 @@ fn is_redundant_ternary(outer: &BinaryOp<'_>) -> bool {
     outer.links.first().op == BinOp::Or
         && inner.links.first().op == BinOp::And
         && inner.links.last().operand.content_eq(alternative)
-        && is_pure_expr(&inner.first)
-        && conditions.iter().all(|link| is_pure_expr(&link.operand))
+        && !inner.first.may_have_side_effects(&names)
+        && conditions.iter().all(|link| !link.operand.may_have_side_effects(&names))
         // X must be pure too: a call that returns a falsy value runs twice in
         // the original but once here.
-        && is_pure_expr(alternative)
+        && !alternative.may_have_side_effects(&names)
 }
 
 /// What becomes of a `local` when none of its names is used.
@@ -126,15 +129,16 @@ pub(super) enum UnusedLocalAction {
 /// droppable before a walk is droppable after it.
 pub(super) fn unused_local_action(
     local: &LocalAssignment<'_>,
-    version: LuaVersion,
+    names: BoundNames,
 ) -> UnusedLocalAction {
     // Exports, attributed names, and a 5.2+ `_ENV` are never dead.
-    if local.kind.is_exported() || has_attributed_or_env_name(local, version) {
+    if local.kind.is_exported() || has_attributed_or_env_name(local, names.0) {
         return UnusedLocalAction::Keep;
     }
-    if local.exprs.iter().all(is_pure_expr) {
+    let is_pure = |expr: &Expression<'_>| !expr.may_have_side_effects(&names);
+    if local.exprs.iter().all(is_pure) {
         UnusedLocalAction::Remove
-    } else if local.exprs.iter().all(|expr| is_pure_expr(expr) || is_call(expr)) {
+    } else if local.exprs.iter().all(|expr| is_pure(expr) || is_call(expr)) {
         UnusedLocalAction::ExtractCalls
     } else {
         UnusedLocalAction::Keep
@@ -157,7 +161,7 @@ enum Dropped {
 pub(super) fn is_nil_initialized(local: &LocalAssignment<'_>) -> bool {
     !local.kind.is_const()
         && local.names.len() == 1
-        && matches!(&*local.exprs, [value] if is_nil(value))
+        && matches!(&*local.exprs, [Expression::Nil(_)])
 }
 
 impl<'ast> Compressor<'_, 'ast> {
@@ -214,7 +218,7 @@ impl<'ast> Compressor<'_, 'ast> {
             }
             Statement::LocalAssignment(local) => {
                 if local.names.iter().all(|attributed| !self.is_used(&attributed.name)) {
-                    match unused_local_action(local, self.version) {
+                    match unused_local_action(local, self.names()) {
                         UnusedLocalAction::Keep => {}
                         UnusedLocalAction::Remove => {
                             self.retract_stmt(stmt);
@@ -238,7 +242,9 @@ impl<'ast> Compressor<'_, 'ast> {
                     else {
                         break;
                     };
-                    if !self.is_used(&attributed.name) && is_pure_expr(value) {
+                    if !self.is_used(&attributed.name)
+                        && !value.may_have_side_effects(&self.names())
+                    {
                         self.retract_annotation(attributed);
                         self.retract_expr(value);
                     } else {
@@ -319,7 +325,7 @@ impl<'ast> Compressor<'_, 'ast> {
         let Expression::BinaryOp(outer) = expr else {
             return false;
         };
-        if !is_redundant_ternary(outer) {
+        if !is_redundant_ternary(outer, self.names()) {
             return false;
         }
         self.retract_expr(&outer.first);
@@ -336,6 +342,18 @@ impl<'ast> Compressor<'_, 'ast> {
             None => *expr = truncate_multi_value(allocator, kept),
         }
         true
+    }
+
+    /// Walks the condition of an `if`'s arm, and says whether it's truthy
+    /// when that's known and it can go, which it then does, uncounted: the
+    /// arm runs whenever the `if` reaches it, or never.
+    fn visit_arm_condition(&mut self, condition: &mut Expression<'ast>) -> Option<bool> {
+        self.visit_expr(condition);
+        let truthiness = condition.get_side_free_boolean_value(&self.names());
+        if truthiness.is_some() {
+            self.retract_expr(condition);
+        }
+        truthiness
     }
 
     /// Uncounts the arms of an `if` the walk drops unwalked.
@@ -357,9 +375,9 @@ impl<'ast> Compressor<'_, 'ast> {
     /// those, then trades branches, merges a nested `if`, or drops what's
     /// left. Says whether anything of it stays.
     ///
-    /// An arm under a falsy literal never runs. The first under a truthy
-    /// literal runs whenever it's reached, so it becomes the `else` and every
-    /// arm after it goes.
+    /// An arm under a falsy condition that can go never runs. The first under
+    /// a truthy one runs whenever it's reached, so it becomes the `else` and
+    /// every arm after it goes.
     pub(super) fn visit_if(&mut self, stmt: &mut Statement<'ast>) -> bool {
         let Statement::IfStatement(if_stmt) = stmt else {
             return true;
@@ -374,8 +392,7 @@ impl<'ast> Compressor<'_, 'ast> {
             return true;
         }
         let IfStatement { condition, block, elseif_clauses, else_clause, .. } = &mut **if_stmt;
-        self.visit_expr(condition);
-        let mut has_head = match constant_truthiness(condition) {
+        let mut has_head = match self.visit_arm_condition(condition) {
             Some(true) => {
                 self.visit_run_block(block, holds_run);
                 // The `if`s under it left their merge to this one, which goes.
@@ -404,8 +421,7 @@ impl<'ast> Compressor<'_, 'ast> {
             let Some(clause) = elseif_clauses.get_mut(index) else {
                 break;
             };
-            self.visit_expr(&mut clause.condition);
-            let truthiness = constant_truthiness(&clause.condition);
+            let truthiness = self.visit_arm_condition(&mut clause.condition);
             has_dropped_arm |= truthiness.is_some();
             match truthiness {
                 Some(false) => self.retract_block(&clause.block),
@@ -460,7 +476,7 @@ impl<'ast> Compressor<'_, 'ast> {
         // side-effect free: `if f() then end` calls f.
         let is_dead = has_no_else(if_stmt)
             && is_empty_block(&if_stmt.block)
-            && is_pure_expr(&if_stmt.condition);
+            && !if_stmt.condition.may_have_side_effects(&self.names());
         if is_dead {
             self.retract_stmt(stmt);
         }
@@ -507,6 +523,7 @@ impl<'ast> Compressor<'_, 'ast> {
             if_stmt.condition = negate(self.allocator, if_stmt.condition.take());
             if_stmt.block = else_clause.block.take();
             if_stmt.else_clause = None;
+            self.leave_expr(&mut if_stmt.condition, Place::Free);
             self.has_changed = true;
             return;
         }
@@ -540,11 +557,12 @@ impl<'ast> Compressor<'_, 'ast> {
         self.finish_block(&mut repeat_loop.block, outer_registers);
         self.ascend();
         if !self.config.remove_dead_code
-            || constant_truthiness(&repeat_loop.condition) != Some(true)
+            || repeat_loop.condition.get_side_free_boolean_value(&self.names()) != Some(true)
             || has_loop_exit(&repeat_loop.block)
         {
             return true;
         }
+        self.retract_expr(&repeat_loop.condition);
         let block = repeat_loop.block.take();
         self.has_changed = true;
         let is_empty = is_empty_block(&block);
@@ -697,6 +715,18 @@ mod tests {
     }
 
     #[test]
+    fn negating_a_condition_drops_the_truncation_it_no_longer_needs() {
+        let config = TransformConfig { fold_constants: true, simplify_parens: true, ..DEAD_CODE };
+        for source in ["if (f()) then else g() end", "if {} and (f()) then else g() end"] {
+            assert_eq!(
+                minify_with(source, LuaVersion::Lua54, &config),
+                "if not f()then g()end",
+                "source: {source}"
+            );
+        }
+    }
+
+    #[test]
     fn negated_empty_then_condition_keeps_its_grouping() {
         for (condition, expected) in [
             ("a == b", "if not(a==b)then print(1)end"),
@@ -845,6 +875,30 @@ mod tests {
             "g()"
         );
         assert_eq!(walk_once("local y = 1 local x = g(y)", DEAD_CODE), "local y=1 g(y)");
+    }
+
+    #[test]
+    fn removes_an_unused_local_whose_initializer_reads_only_locals() {
+        for source in [
+            "local a = ... local b = a return 1",
+            "local a = ... local b = {a, not a, a == nil, a and 1} return 1",
+            "local a = ... local b = function() return g end return 1",
+        ] {
+            assert_eq!(remove_dead(source), "return 1", "source: {source}");
+        }
+    }
+
+    #[test]
+    fn drops_a_branch_whose_condition_is_constant_and_reads_only_locals() {
+        for (source, expected) in [
+            ("local a = ... if a or true then f() end", "do f()end"),
+            ("local a = ... if a and nil then f() elseif {a} then g() end", "do g()end"),
+            ("local a = ... while a and false do f() end", ""),
+            ("local a = ... repeat f() until {a}", "do f()end"),
+            ("if g or true then f() end", "if g or true then f()end"),
+        ] {
+            assert_eq!(remove_dead(source), expected, "source: {source}");
+        }
     }
 
     #[test]

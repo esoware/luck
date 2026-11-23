@@ -1,9 +1,10 @@
+use luck_ast::GetSpan as _;
+
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::signed_number_value;
+use crate::number::number_value;
 use crate::roblox::global_new_call;
 use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
-use luck_ast::GetSpan as _;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxSuspiciousUdim2New;
@@ -31,7 +32,8 @@ impl NodeRule for RobloxSuspiciousUdim2New {
         if args.is_empty() || args.len() >= 4 {
             return;
         }
-        let values: Vec<f64> = args.iter().filter_map(signed_number_value).collect();
+        let version = context.semantic.version();
+        let values: Vec<f64> = args.iter().filter_map(|arg| number_value(arg, version)).collect();
         if values.len() != args.len() {
             return;
         }

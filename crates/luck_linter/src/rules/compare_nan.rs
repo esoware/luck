@@ -4,7 +4,7 @@ use luck_token::BinOp;
 use crate::binary::operator_pairs;
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::is_number_literal;
+use crate::number::number_value;
 use crate::rule::{LintContext, NodeRule, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
@@ -34,8 +34,11 @@ impl NodeRule for CompareNan {
         if !run.links.first().op.is_comparison() {
             return;
         }
+        let version = context.semantic.version();
+        let is_nan = |side: Option<&Expression<'_>>| {
+            side.and_then(|operand| number_value(operand, version)).is_some_and(f64::is_nan)
+        };
         for pair in operator_pairs(run) {
-            let is_nan = |side: Option<&Expression<'_>>| side.is_some_and(is_nan_expr);
             if matches!(pair.op, BinOp::Eq | BinOp::Ne) && (is_nan(pair.lhs) || is_nan(pair.rhs)) {
                 findings.push(
                     Finding::new(
@@ -47,20 +50,6 @@ impl NodeRule for CompareNan {
             }
         }
     }
-}
-
-/// Whether `expr` divides a zero literal by a zero literal, each in any
-/// spelling.
-fn is_nan_expr(expr: &Expression<'_>) -> bool {
-    let Expression::BinaryOp(run) = expr else {
-        return false;
-    };
-    let [division] = &*run.links else {
-        return false;
-    };
-    division.op == BinOp::Div
-        && is_number_literal(&run.first, 0.0)
-        && is_number_literal(&division.operand, 0.0)
 }
 
 #[cfg(test)]
@@ -90,6 +79,14 @@ mod tests {
     #[test]
     fn flags_every_spelling_of_zero() {
         for nan in ["0.0/0", "0/0.0", "0x0/0", "0e0/0"] {
+            let diags = run(&format!("local same = x == {nan}"));
+            assert_eq!(diags.len(), 1, "{nan}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn flags_any_constant_that_evaluates_to_nan() {
+        for nan in ["-(0/0)", "1e999 - 1e999", "0/0 + 1"] {
             let diags = run(&format!("local same = x == {nan}"));
             assert_eq!(diags.len(), 1, "{nan}: {diags:?}");
         }

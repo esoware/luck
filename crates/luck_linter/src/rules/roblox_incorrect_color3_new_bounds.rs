@@ -1,9 +1,10 @@
+use luck_ast::GetSpan as _;
+
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::signed_number_value;
+use crate::number::number_value;
 use crate::roblox::global_new_call;
 use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
-use luck_ast::GetSpan as _;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxIncorrectColor3NewBounds;
@@ -28,8 +29,11 @@ impl NodeRule for RobloxIncorrectColor3NewBounds {
         let Some(args) = global_new_call(call, "Color3", context.semantic) else {
             return;
         };
-        let has_out_of_bounds =
-            args.iter().filter_map(signed_number_value).any(|v| !(0.0f64..=1.0f64).contains(&v));
+        let version = context.semantic.version();
+        let has_out_of_bounds = args
+            .iter()
+            .filter_map(|arg| number_value(arg, version))
+            .any(|v| !(0.0f64..=1.0f64).contains(&v));
         if has_out_of_bounds {
             findings.push(
                 Finding::new("`Color3.new` components are on a 0 to 1 scale", call.span())

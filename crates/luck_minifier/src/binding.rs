@@ -13,6 +13,7 @@ use luck_ast::{
     Statement, Type, Var, Visit,
 };
 use luck_token::{LuaVersion, index_to_offset, offset_to_index};
+use luck_value::ValueContext;
 
 pub(crate) const METHOD_RECEIVER_NAME: &str = "self";
 
@@ -50,6 +51,21 @@ pub(crate) fn local_index(id: usize) -> NameIndex {
 /// The index of a name that refers to the global with name id `name_id`.
 pub(crate) fn global_index(name_id: usize) -> NameIndex {
     NameIndex::new(GLOBAL_INDEX.saturating_add(index_to_offset(name_id)))
+}
+
+/// A dialect whose names hold what the bind walk found them, for
+/// `luck_value`: a name it gave no local's id reads a global.
+#[derive(Clone, Copy)]
+pub(crate) struct BoundNames(pub LuaVersion);
+
+impl ValueContext for BoundNames {
+    fn version(&self) -> LuaVersion {
+        self.0
+    }
+
+    fn is_global_reference(&self, name: &Name<'_>) -> bool {
+        local_of(name).is_none()
+    }
 }
 
 pub(crate) const fn has_implicit_arg(body: &FunctionBody<'_>, version: LuaVersion) -> bool {

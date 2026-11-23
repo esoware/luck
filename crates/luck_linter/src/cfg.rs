@@ -5,11 +5,12 @@ use core::mem;
 use core::num::Saturating;
 
 use luck_ast::{
-    BinaryOp, Block, Expression, FunctionBody, GenericFor, GetSpan as _, IfExpression, IfStatement,
-    Name, NumericFor, RepeatLoop, Statement, Type, Visit, WhileLoop, unwrap_parentheses,
+    BinaryOp, Block, FunctionBody, GenericFor, GetSpan as _, IfExpression, IfStatement, Name,
+    NumericFor, RepeatLoop, Statement, Type, Visit, WhileLoop,
 };
 use luck_stdlib::SemanticAnalysis;
 use luck_token::{BinOp, Span};
+use luck_value::ToBoolean as _;
 use rustc_hash::FxHashMap;
 
 use crate::call::is_global_call;
@@ -434,7 +435,7 @@ impl<'ast> GraphBuilder<'ast> {
     fn while_loop(&mut self, node: &'ast WhileLoop<'ast>) {
         let head = self.code(Span::new(node.span.start, node.block.span.start));
         let after = self.new_node();
-        let truth = literal_truth(&node.condition);
+        let truth = node.condition.to_boolean(&self.semantic.version());
         if truth == Some(false) {
             self.cursor = None;
         }
@@ -452,7 +453,7 @@ impl<'ast> GraphBuilder<'ast> {
         let scope_end = node.condition.span().end;
         let body = self.loop_body(node.span.start, &node.block, scope_end, after, condition);
         self.graph.code.push((node.condition.span(), condition));
-        let truth = literal_truth(&node.condition);
+        let truth = node.condition.to_boolean(&self.semantic.version());
         if truth != Some(true) {
             self.connect(condition, body);
         }
@@ -490,28 +491,6 @@ impl<'ast> GraphBuilder<'ast> {
         }
         self.close_into(join);
         self.cursor = Some(join);
-    }
-}
-
-fn literal_truth(condition: &Expression<'_>) -> Option<bool> {
-    match unwrap_parentheses(condition) {
-        Expression::Nil(_) | Expression::False(_) => Some(false),
-        Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TableConstructor(_)
-        | Expression::FunctionDef(_) => Some(true),
-        Expression::VarArg(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => None,
     }
 }
 
@@ -718,7 +697,7 @@ while true do if c then break end end",
 
     #[test]
     fn while_with_truthy_literal_condition_never_falls_through() {
-        for condition in ["1", "'s'", "{}", "(true)"] {
+        for condition in ["1", "'s'", "{}", "(true)", "x or true", "1 < 2"] {
             let graph = flow(&format!("while {condition} do print(1) end"));
             assert!(!graph.reaches(Exit::End), "{condition}");
         }
