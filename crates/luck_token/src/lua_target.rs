@@ -1,12 +1,14 @@
 use core::fmt;
 use core::str::FromStr;
 
-use luck_token::{LuaVersion, StdlibEnvironment};
+use crate::LuaVersion;
 
-/// The user-facing Lua dialect.
+/// The dialect a user names: a [`LuaVersion`], and for Luau, whether it runs
+/// on Roblox.
 ///
-/// [`Self::lua_version`] and [`Self::stdlib_environment`] project it onto the
-/// syntax and stdlib axes the rest of the workspace keys off.
+/// These are the only valid pairs of a syntax and a host, so whatever needs
+/// both, such as the stdlib a name resolves against, takes one of these.
+/// Whatever reads only the syntax takes its [`Self::version`].
 // `luck.json` spells it only as its lowercase name, as it spells every other
 // enum, and `FromStr` takes the shorter forms a command line wants too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -26,6 +28,50 @@ pub enum LuaTarget {
     /// Luau on Roblox: the same syntax as `Luau`, with the Roblox stdlib.
     #[cfg_attr(feature = "serde", serde(rename = "roblox"))]
     LuauRoblox,
+}
+
+impl LuaTarget {
+    /// Every dialect, in release order, each version's standalone one first.
+    pub const ALL: [Self; 7] = [
+        Self::Lua51,
+        Self::Lua52,
+        Self::Lua53,
+        Self::Lua54,
+        Self::Lua55,
+        Self::Luau,
+        Self::LuauRoblox,
+    ];
+
+    #[must_use]
+    pub const fn version(self) -> LuaVersion {
+        match self {
+            Self::Lua51 => LuaVersion::Lua51,
+            Self::Lua52 => LuaVersion::Lua52,
+            Self::Lua53 => LuaVersion::Lua53,
+            Self::Lua54 => LuaVersion::Lua54,
+            Self::Lua55 => LuaVersion::Lua55,
+            Self::Luau | Self::LuauRoblox => LuaVersion::Luau,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_roblox(self) -> bool {
+        matches!(self, Self::LuauRoblox)
+    }
+}
+
+/// Each version runs standalone, outside any host's own stdlib.
+impl From<LuaVersion> for LuaTarget {
+    fn from(version: LuaVersion) -> Self {
+        match version {
+            LuaVersion::Lua51 => Self::Lua51,
+            LuaVersion::Lua52 => Self::Lua52,
+            LuaVersion::Lua53 => Self::Lua53,
+            LuaVersion::Lua54 => Self::Lua54,
+            LuaVersion::Lua55 => Self::Lua55,
+            LuaVersion::Luau => Self::Luau,
+        }
+    }
 }
 
 impl FromStr for LuaTarget {
@@ -59,30 +105,6 @@ impl fmt::Display for LuaTarget {
             Self::Luau => "Luau",
             Self::LuauRoblox => "Roblox",
         })
-    }
-}
-
-impl LuaTarget {
-    #[must_use]
-    pub const fn lua_version(self) -> LuaVersion {
-        match self {
-            Self::Lua51 => LuaVersion::Lua51,
-            Self::Lua52 => LuaVersion::Lua52,
-            Self::Lua53 => LuaVersion::Lua53,
-            Self::Lua54 => LuaVersion::Lua54,
-            Self::Lua55 => LuaVersion::Lua55,
-            Self::Luau | Self::LuauRoblox => LuaVersion::Luau,
-        }
-    }
-
-    #[must_use]
-    pub const fn stdlib_environment(self) -> StdlibEnvironment {
-        match self {
-            Self::LuauRoblox => StdlibEnvironment::Roblox,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => {
-                StdlibEnvironment::Standalone
-            }
-        }
     }
 }
 
@@ -145,9 +167,19 @@ mod tests {
     }
 
     #[test]
-    fn luau_roblox_projects_onto_luau_syntax_and_roblox_stdlib() {
-        assert_eq!(LuaTarget::LuauRoblox.lua_version(), LuaVersion::Luau);
-        assert_eq!(LuaTarget::LuauRoblox.stdlib_environment(), StdlibEnvironment::Roblox);
-        assert_eq!(LuaTarget::Luau.stdlib_environment(), StdlibEnvironment::Standalone);
+    fn only_luau_on_roblox_is_roblox() {
+        let roblox: Vec<LuaTarget> =
+            LuaTarget::ALL.into_iter().filter(|target| target.is_roblox()).collect();
+        assert_eq!(roblox, [LuaTarget::LuauRoblox]);
+        assert_eq!(LuaTarget::LuauRoblox.version(), LuaVersion::Luau);
+    }
+
+    #[test]
+    fn a_version_names_its_standalone_target() {
+        for version in LuaVersion::ALL {
+            let target = LuaTarget::from(version);
+            assert_eq!(target.version(), version);
+            assert!(!target.is_roblox(), "{target}");
+        }
     }
 }

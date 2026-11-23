@@ -881,7 +881,6 @@ dependencies = [
  "luck_benchmark_files",
  "luck_bundler",
  "luck_codegen",
- "luck_core",
  "luck_formatter",
  "luck_lexer",
  "luck_linter",
@@ -899,7 +898,6 @@ version = "0.6.0"
 dependencies = [
  "flate2",
  "luck_allocator",
- "luck_core",
  "luck_parser",
  "luck_token",
  "tar",
@@ -944,7 +942,6 @@ dependencies = [
  "luck_ast",
  "luck_bundler",
  "luck_config",
- "luck_core",
  "luck_diagnostics",
  "luck_formatter",
  "luck_linter",
@@ -969,6 +966,7 @@ version = "0.6.0"
 dependencies = [
  "luck_allocator",
  "luck_ast",
+ "luck_data_structures",
  "luck_parser",
  "luck_testgen",
  "luck_token",
@@ -981,7 +979,6 @@ dependencies = [
  "globset",
  "json5",
  "luck_bundler",
- "luck_core",
  "luck_diagnostics",
  "luck_formatter",
  "luck_linter",
@@ -1004,7 +1001,6 @@ dependencies = [
  "luck_allocator",
  "luck_ast",
  "luck_codegen",
- "luck_core",
  "luck_diagnostics",
  "luck_formatter",
  "luck_linter",
@@ -1021,14 +1017,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "luck_core"
+name = "luck_data_structures"
 version = "0.6.0"
-dependencies = [
- "luck_core",
- "luck_token",
- "schemars",
- "serde",
-]
 
 [[package]]
 name = "luck_diagnostics"
@@ -1044,6 +1034,7 @@ dependencies = [
  "insta",
  "luck_allocator",
  "luck_ast",
+ "luck_data_structures",
  "luck_diagnostics",
  "luck_lexer",
  "luck_parser",
@@ -1073,7 +1064,6 @@ dependencies = [
  "bitflags",
  "luck_allocator",
  "luck_ast",
- "luck_core",
  "luck_diagnostics",
  "luck_linter",
  "luck_parser",
@@ -1098,7 +1088,6 @@ dependencies = [
  "luck_allocator",
  "luck_ast",
  "luck_config",
- "luck_core",
  "luck_diagnostics",
  "luck_formatter",
  "luck_linter",
@@ -1124,7 +1113,6 @@ dependencies = [
  "luck_bundler",
  "luck_codegen",
  "luck_config",
- "luck_core",
  "luck_diagnostics",
  "luck_formatter",
  "luck_lexer",
@@ -1209,7 +1197,10 @@ dependencies = [
 name = "luck_token"
 version = "0.6.0"
 dependencies = [
+ "luck_token",
  "memchr",
+ "schemars",
+ "serde",
 ]
 
 [[package]]

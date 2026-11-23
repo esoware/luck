@@ -43,7 +43,7 @@ mod tests {
         PartialResultParams, Position, ReferenceContext, TextDocumentIdentifier,
         TextDocumentPositionParams, WorkDoneProgressParams,
     };
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;

@@ -2,13 +2,6 @@ use alloc::borrow::Cow;
 
 use luck_token::{LuaVersion, TokenKind};
 
-/// Whether generated code must not use `name` as an identifier under
-/// `version`: a keyword, or Lua 5.5's `global`, which builds without
-/// `LUA_COMPAT_GLOBAL` reserve.
-fn is_unavailable(name: &str, version: LuaVersion) -> bool {
-    TokenKind::keyword(name, version).is_some() || (version.has_global() && name == "global")
-}
-
 /// Whether `name` lexes as an identifier in at least one supported dialect.
 ///
 /// That means an ASCII identifier that isn't one of the 21 keywords every
@@ -18,14 +11,14 @@ fn is_unavailable(name: &str, version: LuaVersion) -> bool {
 #[must_use]
 pub fn is_valid_identifier(name: &str) -> bool {
     TokenKind::is_identifier_shaped(name)
-        && LuaVersion::ALL.iter().any(|&version| !is_unavailable(name, version))
+        && LuaVersion::ALL.iter().any(|&version| !TokenKind::is_reserved(name, version))
 }
 
 /// `goto` is reserved on Lua 5.2-5.5 but is an identifier on 5.1 and Luau;
 /// `global` is refused only on 5.5, where some builds reserve it.
 #[must_use]
 pub fn is_valid_identifier_in(name: &str, version: LuaVersion) -> bool {
-    TokenKind::is_identifier_shaped(name) && !is_unavailable(name, version)
+    TokenKind::is_identifier_shaped(name) && !TokenKind::is_reserved(name, version)
 }
 
 /// Deterministic valid-identifier form of `name`, safe in every supported
@@ -40,7 +33,7 @@ pub fn is_valid_identifier_in(name: &str, version: LuaVersion) -> bool {
 #[must_use]
 pub fn sanitize_identifier(name: &str) -> Cow<'_, str> {
     sanitize_with(name, |candidate| {
-        LuaVersion::ALL.iter().any(|&version| is_unavailable(candidate, version))
+        LuaVersion::ALL.iter().any(|&version| TokenKind::is_reserved(candidate, version))
     })
 }
 
@@ -50,7 +43,7 @@ pub fn sanitize_identifier(name: &str) -> Cow<'_, str> {
 /// Words the dialect treats as identifiers pass through (`goto` on Luau).
 #[must_use]
 pub fn sanitize_identifier_in(name: &str, version: LuaVersion) -> Cow<'_, str> {
-    sanitize_with(name, |candidate| is_unavailable(candidate, version))
+    sanitize_with(name, |candidate| TokenKind::is_reserved(candidate, version))
 }
 
 fn sanitize_with(name: &str, is_reserved: impl Fn(&str) -> bool) -> Cow<'_, str> {

@@ -9,8 +9,9 @@
 //! any byte, and a byte that isn't UTF-8 anywhere else is one error.
 //!
 //! Version-gated tokens, such as floor division (5.3+ and Luau), hex floats
-//! (5.2+), and Luau's binary literals and interpolated strings, are recognized
-//! only for the versions that have them.
+//! (5.2+), Luau's binary literals and interpolated strings, and contextual
+//! keywords such as Luau's `type`, are recognized only for the versions that
+//! have them.
 //!
 //! # Usage
 //!

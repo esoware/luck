@@ -24,9 +24,9 @@ pub(crate) fn run(allocator: &mut Allocator, files: &[TestFile]) -> io::Result<(
     let mut report = String::new();
     for file in files {
         allocator.reset();
-        let version = file.target.lua_version();
+        let version = file.target.version();
         let parse = luck_parser::parse(allocator, &file.source_text, version);
-        let analysis = luck_linter::analyze(&parse, file.target.stdlib_environment(), &every_rule);
+        let analysis = luck_linter::analyze(&parse, file.target, &every_rule);
         let mut entries: Vec<(&str, StageStats)> = luck_linter::rules()
             .map(|rule| {
                 let config = only(rule.name());

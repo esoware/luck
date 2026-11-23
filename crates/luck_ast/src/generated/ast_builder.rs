@@ -494,7 +494,7 @@ impl<'ast> FunctionBody<'ast> {
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
         params: List<'ast, Parameter<'ast>>,
         vararg: Option<Box<'ast, VarArgParam<'ast>>>,
-        return_type: Option<Type<'ast>>,
+        return_type: Option<Box<'ast, Type<'ast>>>,
         block: Block<'ast>,
     ) -> Self {
         Self { span, generics, params, vararg, return_type, block }
@@ -507,7 +507,7 @@ impl<'ast> FunctionBody<'ast> {
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
         params: List<'ast, Parameter<'ast>>,
         vararg: Option<Box<'ast, VarArgParam<'ast>>>,
-        return_type: Option<Type<'ast>>,
+        return_type: Option<Box<'ast, Type<'ast>>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
@@ -518,7 +518,7 @@ impl<'ast> FunctionBody<'ast> {
 impl<'ast> Parameter<'ast> {
     #[must_use]
     #[inline]
-    pub const fn new(name: Name<'ast>, type_annotation: Option<Type<'ast>>) -> Self {
+    pub const fn new(name: Name<'ast>, type_annotation: Option<Box<'ast, Type<'ast>>>) -> Self {
         Self { name, type_annotation }
     }
 }
@@ -529,7 +529,7 @@ impl<'ast> VarArgParam<'ast> {
     pub const fn new(
         span: Span,
         name: Option<Name<'ast>>,
-        type_annotation: Option<Type<'ast>>,
+        type_annotation: Option<Box<'ast, Type<'ast>>>,
     ) -> Self {
         Self { span, name, type_annotation }
     }
@@ -539,7 +539,7 @@ impl<'ast> VarArgParam<'ast> {
     pub fn boxed(
         span: Span,
         name: Option<Name<'ast>>,
-        type_annotation: Option<Type<'ast>>,
+        type_annotation: Option<Box<'ast, Type<'ast>>>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, name, type_annotation), allocator)
@@ -714,7 +714,7 @@ impl<'ast> Statement<'ast> {
         condition: Expression<'ast>,
         block: Block<'ast>,
         elseif_clauses: List<'ast, ElseIfClause<'ast>>,
-        else_clause: Option<ElseClause<'ast>>,
+        else_clause: Option<Box<'ast, ElseClause<'ast>>>,
         allocator: &'ast Allocator,
     ) -> Self {
         Self::IfStatement(IfStatement::boxed(
@@ -733,7 +733,7 @@ impl<'ast> Statement<'ast> {
     pub fn new_numeric_for(
         span: Span,
         name: Name<'ast>,
-        type_annotation: Option<Type<'ast>>,
+        type_annotation: Option<Box<'ast, Type<'ast>>>,
         start: Expression<'ast>,
         limit: Expression<'ast>,
         step: Option<Expression<'ast>>,
@@ -971,7 +971,7 @@ impl<'ast> IfStatement<'ast> {
         condition: Expression<'ast>,
         block: Block<'ast>,
         elseif_clauses: List<'ast, ElseIfClause<'ast>>,
-        else_clause: Option<ElseClause<'ast>>,
+        else_clause: Option<Box<'ast, ElseClause<'ast>>>,
     ) -> Self {
         Self { span, condition, block, elseif_clauses, else_clause }
     }
@@ -983,7 +983,7 @@ impl<'ast> IfStatement<'ast> {
         condition: Expression<'ast>,
         block: Block<'ast>,
         elseif_clauses: List<'ast, ElseIfClause<'ast>>,
-        else_clause: Option<ElseClause<'ast>>,
+        else_clause: Option<Box<'ast, ElseClause<'ast>>>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, condition, block, elseif_clauses, else_clause), allocator)
@@ -1004,6 +1004,12 @@ impl<'ast> ElseClause<'ast> {
     pub const fn new(span: Span, block: Block<'ast>) -> Self {
         Self { span, block }
     }
+
+    #[must_use]
+    #[inline]
+    pub fn boxed(span: Span, block: Block<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
+        Box::new_in(Self::new(span, block), allocator)
+    }
 }
 
 impl<'ast> NumericFor<'ast> {
@@ -1012,7 +1018,7 @@ impl<'ast> NumericFor<'ast> {
     pub const fn new(
         span: Span,
         name: Name<'ast>,
-        type_annotation: Option<Type<'ast>>,
+        type_annotation: Option<Box<'ast, Type<'ast>>>,
         start: Expression<'ast>,
         limit: Expression<'ast>,
         step: Option<Expression<'ast>>,
@@ -1027,7 +1033,7 @@ impl<'ast> NumericFor<'ast> {
     pub fn boxed(
         span: Span,
         name: Name<'ast>,
-        type_annotation: Option<Type<'ast>>,
+        type_annotation: Option<Box<'ast, Type<'ast>>>,
         start: Expression<'ast>,
         limit: Expression<'ast>,
         step: Option<Expression<'ast>>,
@@ -1146,7 +1152,7 @@ impl<'ast> AttributedName<'ast> {
     #[inline]
     pub const fn new(
         name: Name<'ast>,
-        type_annotation: Option<Type<'ast>>,
+        type_annotation: Option<Box<'ast, Type<'ast>>>,
         attribute: Option<Box<'ast, Attribute<'ast>>>,
     ) -> Self {
         Self { name, type_annotation, attribute }
@@ -1279,7 +1285,7 @@ impl<'ast> TypeDeclarationValue<'ast> {
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
         params: List<'ast, Parameter<'ast>>,
         vararg: Option<Box<'ast, VarArgParam<'ast>>>,
-        return_type: Option<Type<'ast>>,
+        return_type: Option<Box<'ast, Type<'ast>>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
     ) -> Self {
@@ -1740,7 +1746,7 @@ impl<'ast> GenericTypeParam<'ast> {
         span: Span,
         name: Name<'ast>,
         is_pack: bool,
-        default: Option<Type<'ast>>,
+        default: Option<Box<'ast, Type<'ast>>>,
     ) -> Self {
         Self { span, name, is_pack, default }
     }

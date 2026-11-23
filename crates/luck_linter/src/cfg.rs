@@ -584,7 +584,7 @@ mod tests {
 
     use luck_allocator::Allocator;
     use luck_ast::{Chunk, TreeCounts};
-    use luck_token::{LuaVersion, StdlibEnvironment};
+    use luck_token::LuaVersion;
 
     use super::*;
 
@@ -599,7 +599,7 @@ mod tests {
     }
 
     fn analyze<'ast>(chunk: &'ast Chunk<'ast>) -> SemanticAnalysis<'ast> {
-        luck_semantic::analyze(chunk, TreeCounts::default(), StdlibEnvironment::Standalone)
+        luck_semantic::analyze(chunk, TreeCounts::default(), chunk.version.into())
     }
 
     fn flow_of(source: &str, version: LuaVersion) -> FlowGraph {

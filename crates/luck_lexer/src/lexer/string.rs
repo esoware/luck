@@ -107,13 +107,12 @@ impl Lexer<'_> {
     }
 
     /// The token of a string from `start` that ends at the cursor without its
-    /// closing delimiter, whose span also goes to `unterminated`.
+    /// closing delimiter.
     #[cold]
     #[inline(never)]
     fn unterminated_token(&mut self, kind: TokenKind, start: usize) -> Token {
         let mut token = self.token(kind, start);
         token.is_unterminated = true;
-        self.unterminated.push(token.span);
         token
     }
 
@@ -239,7 +238,7 @@ pub(super) fn eat_long_bracket_level(cursor: &mut Cursor<'_>) -> Option<usize> {
 /// closer, and return whether the closer came.
 ///
 /// Long-bracket strings and block comments share it, and name themselves in
-/// `unterminated`.
+/// the error a missing closer reports, `unterminated`.
 ///
 /// A missing closer leaves the cursor at the end of the source and goes to
 /// `errors`, spanning from `start`. A level-0 body holding a `[[` that

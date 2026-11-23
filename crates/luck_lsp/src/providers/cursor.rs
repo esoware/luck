@@ -51,20 +51,21 @@ pub(crate) enum TextKind {
 pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
     let parse = document.parse();
     let comments = &parse.comments;
-    let at_offset = comments.get(comments.partition_point(|comment| comment.span.end < offset));
-    let is_in_comment = at_offset.is_some_and(|comment| match comment.kind {
+    let tokens = document.tokens();
+    let index = comments.partition_point(|comment| comment.span.end < offset);
+    let is_in_comment = comments.get(index).is_some_and(|comment| match comment.kind {
         CommentKind::Line | CommentKind::Shebang => {
             comment.span.start < offset && offset <= comment.span.end
         }
         CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => {
-            let is_unclosed = is_unclosed_block_comment(comment.span.text(parse.source));
-            is_inside(comment.span, offset, is_unclosed)
+            let is_last = index.saturating_add(1) == comments.len();
+            let is_cut_off = is_last && tokens.last().is_some_and(|eof| eof.is_unterminated);
+            is_inside(comment.span, offset, is_cut_off)
         }
     });
     if is_in_comment {
         return TextKind::Comment;
     }
-    let tokens = document.tokens();
     let enclosing = tokens.get(tokens.partition_point(|token| token.span.end < offset));
     let is_in_string = enclosing.is_some_and(|token| {
         matches!(
@@ -84,23 +85,6 @@ pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
 /// the text cut it off there.
 const fn is_inside(span: Span, offset: u32, is_cut_off: bool) -> bool {
     span.start < offset && (offset < span.end || (offset == span.end && is_cut_off))
-}
-
-/// Whether a block comment lacks the closing bracket of its opening one's
-/// level, which leaves it open to the end of the source.
-fn is_unclosed_block_comment(comment: &[u8]) -> bool {
-    let after_opening = comment.get(b"--[".len()..).unwrap_or_default();
-    let level = after_opening.iter().take_while(|&&b| b == b'=').count();
-    let body = after_opening.get(level.saturating_add(1)..).unwrap_or_default();
-    let closer = body
-        .len()
-        .checked_sub(level.saturating_add(2))
-        .and_then(|start| body.get(start..))
-        .unwrap_or_default();
-    let Some((b']', [equals @ .., b']'])) = closer.split_first() else {
-        return true;
-    };
-    !equals.iter().all(|&b| b == b'=')
 }
 
 /// Whether the string token starting where `literal` does runs to the end of
@@ -151,7 +135,7 @@ pub(crate) fn dotted_chain_ending_tokens<'source>(
     let mut remaining_tokens = tokens;
     loop {
         let (base, before_base) = remaining_tokens.split_last()?;
-        if base.kind != TokenKind::Identifier {
+        if !base.kind.is_name() {
             return None;
         }
         segments.push(span_text(source, base.span));
@@ -486,7 +470,7 @@ pub(crate) fn local_at(tree: &ScopeTree<'_>, offset: u32) -> Option<(SymbolId, S
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;

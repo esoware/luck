@@ -182,8 +182,8 @@ impl<'document> Disabler<'document> {
         let rest = self.document.text().get(offset_to_index(statement_end)..).unwrap_or_default();
         let blank_length = rest.bytes().take_while(|&b| is_lua_whitespace(b)).count();
         let blank = rest.get(..blank_length).unwrap_or_default();
-        let is_line_end = blank_length == rest.len()
-            || has_line_break(blank.as_bytes(), self.document.lua_version());
+        let is_line_end =
+            blank_length == rest.len() || has_line_break(blank.as_bytes(), self.document.version());
         let new_text = if is_line_end {
             format!(" -- luck: allow({rule})")
         } else {
@@ -295,9 +295,9 @@ where
 #[cfg(test)]
 mod tests {
     use ls_types::{PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams};
-    use luck_core::LuaTarget;
     use luck_diagnostics::{Diagnostic as LuckDiagnostic, Severity};
     use luck_linter::{Category, LintConfig, RuleLevel, TextEdit as LinterTextEdit};
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document_linted_by;

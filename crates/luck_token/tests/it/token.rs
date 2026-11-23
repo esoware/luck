@@ -46,9 +46,10 @@ fn display_quotes_symbols_and_keywords() {
 
 #[test]
 fn token_display_shows_name_and_numeral_text_but_not_string_text() {
-    let source = "foo 42 1i \"secret\" }secret{";
+    let source = "foo 42 1i \"secret\" }secret{ type";
     for (kind, start, end, expected) in [
         (TokenKind::Identifier, 0, 3, "identifier `foo`"),
+        (TokenKind::Type, 28, 32, "identifier `type`"),
         (TokenKind::Number, 4, 6, "number `42`"),
         (TokenKind::Integer, 7, 9, "integer `1i`"),
         (TokenKind::StringLiteral, 10, 18, "string"),
@@ -161,8 +162,28 @@ fn keyword_reads_back_each_keyword_spelling_under_its_versions() {
         }
         let goto = version.has_goto().then_some(TokenKind::Goto);
         assert_eq!(TokenKind::keyword("goto", version), goto, "{version:?}");
-        for name in ["", "x", "End", "functions", "continue", "type", "global"] {
+        for name in ["", "x", "End", "functions", "types", "Global"] {
             assert_eq!(TokenKind::keyword(name, version), None, "{name:?}");
+        }
+    }
+}
+
+#[test]
+fn keyword_reads_each_contextual_keyword_only_where_its_version_has_it() {
+    for version in LuaVersion::ALL {
+        for (text, kind, has_it) in [
+            ("continue", TokenKind::Continue, version.has_continue()),
+            ("export", TokenKind::Export, version.has_type_syntax()),
+            ("const", TokenKind::Const, version.has_const_stmt()),
+            ("type", TokenKind::Type, version.has_type_syntax()),
+            ("typeof", TokenKind::Typeof, version.has_type_syntax()),
+            ("read", TokenKind::Read, version.has_type_syntax()),
+            ("write", TokenKind::Write, version.has_type_syntax()),
+            ("global", TokenKind::Global, version.has_global()),
+        ] {
+            assert_eq!(kind.static_text(), Some(text));
+            assert!(kind.is_name(), "{kind:?}");
+            assert_eq!(TokenKind::keyword(text, version), has_it.then_some(kind), "{version:?}");
         }
     }
 }
@@ -174,6 +195,7 @@ fn keyword_rejects_every_near_spelling_of_a_keyword() {
     let keywords = [
         "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
         "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+        "continue", "export", "const", "type", "typeof", "read", "write", "global",
     ];
     for keyword in keywords {
         let (_, tail) = keyword.split_at(1);
@@ -191,23 +213,20 @@ fn keyword_rejects_every_near_spelling_of_a_keyword() {
             near.push(String::from_utf8(bytes).expect("ASCII stays UTF-8"));
         }
         for name in near.iter().filter(|name| !keywords.contains(&name.as_str())) {
-            assert_eq!(TokenKind::keyword(name, LuaVersion::Lua54), None, "{name:?}");
+            for version in LuaVersion::ALL {
+                assert_eq!(TokenKind::keyword(name, version), None, "{name:?}");
+            }
         }
     }
 }
 
 #[test]
-fn is_reserved_adds_luau_continue_to_each_version_keywords() {
+fn is_reserved_holds_for_keywords_and_lua55_global_only() {
     for version in LuaVersion::ALL {
         assert!(TokenKind::is_reserved("while", version), "{version:?}");
         assert_eq!(TokenKind::is_reserved("goto", version), version.has_goto(), "{version:?}");
         assert_eq!(TokenKind::is_reserved("global", version), version.has_global(), "{version:?}");
-        assert_eq!(
-            TokenKind::is_reserved("continue", version),
-            version.has_continue(),
-            "{version:?}"
-        );
-        for name in ["", "x", "type", "export", "While"] {
+        for name in ["", "x", "continue", "type", "export", "const", "typeof", "While"] {
             assert!(!TokenKind::is_reserved(name, version), "{name:?} {version:?}");
         }
     }
@@ -225,9 +244,8 @@ fn is_identifier_shaped_holds_for_ascii_names_keywords_included() {
 
 #[test]
 fn global_is_a_name_on_default_lua55_builds() {
-    assert_eq!(
-        TokenKind::keyword("global", LuaVersion::Lua55),
-        None,
+    assert!(
+        TokenKind::keyword("global", LuaVersion::Lua55).is_some_and(TokenKind::is_name),
         "stock Lua 5.5 defines LUA_COMPAT_GLOBAL, so `global` is a regular name and `local global = 1` compiles"
     );
 }

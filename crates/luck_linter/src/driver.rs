@@ -1,9 +1,8 @@
 use luck_allocator::Allocator;
-use luck_core::LuaTarget;
 use luck_diagnostics::Severity;
 use luck_parser::ParseResult;
 use luck_semantic::SemanticAnalysis;
-use luck_token::{LintVerb, StdlibEnvironment};
+use luck_token::{LintVerb, LuaTarget};
 use rayon::prelude::*;
 
 use crate::bus;
@@ -16,8 +15,8 @@ use crate::rule::{LintContext, NodeRule, Rule, WholeRule};
 use crate::rules::{RULES, RuleEntry};
 
 /// Parses `source` into `allocator` and lints it for `target`, whose stdlib
-/// environment decides which globals exist. A diagnostic carries a fix only
-/// of the kinds `fixes` holds, so an empty set builds none.
+/// decides which globals exist. A diagnostic carries a fix only of the kinds
+/// `fixes` holds, so an empty set builds none.
 ///
 /// # Panics
 ///
@@ -30,11 +29,11 @@ pub fn lint(
     config: &LintConfig,
     fixes: FixKind,
 ) -> Vec<Message> {
-    let parse = luck_parser::parse(allocator, source, target.lua_version());
-    lint_parsed(&parse, target.stdlib_environment(), config, fixes)
+    let parse = luck_parser::parse(allocator, source, target.version());
+    lint_parsed(&parse, target, config, fixes)
 }
 
-/// [`analyze`]s `parse` in `environment` and lints it, building the fixes of
+/// [`analyze`]s `parse` for `target` and lints it, building the fixes of
 /// the kinds `fixes` holds.
 ///
 /// A parse with errors yields its errors, each an E008, and no rules run, so
@@ -46,14 +45,14 @@ pub fn lint(
 #[must_use]
 pub fn lint_parsed(
     parse: &ParseResult<'_>,
-    environment: StdlibEnvironment,
+    target: LuaTarget,
     config: &LintConfig,
     fixes: FixKind,
 ) -> Vec<Message> {
     if !parse.errors.is_empty() {
         return parse_error_messages(parse);
     }
-    lint_analyzed(parse, &analyze(parse, environment, config), config, fixes, &|| false)
+    lint_analyzed(parse, &analyze(parse, target, config), config, fixes, &|| false)
         .unwrap_or_default()
 }
 
@@ -109,8 +108,8 @@ impl<'ast> Analysis<'ast> {
     }
 }
 
-/// `parse`'s analysis in `environment`, with `config`'s extra globals
-/// defined.
+/// `parse`'s analysis for `target`, the dialect it was parsed as, with
+/// `config`'s extra globals defined.
 ///
 /// Every rule reads the node table, so a file where neither config nor a
 /// `deny` or `warn` runs a rule, as under the language server's default
@@ -118,7 +117,7 @@ impl<'ast> Analysis<'ast> {
 #[must_use]
 pub fn analyze<'ast>(
     parse: &'ast ParseResult<'_>,
-    environment: StdlibEnvironment,
+    target: LuaTarget,
     config: &LintConfig,
 ) -> Analysis<'ast> {
     let chunk = &parse.chunk;
@@ -127,11 +126,10 @@ pub fn analyze<'ast>(
         rule_severity(entry.rule(), config).is_some() || directives.enables(slot)
     }) {
         let mut collector = NodeCollector::new(chunk);
-        let semantic =
-            luck_semantic::analyze_with(chunk, parse.counts, environment, &mut collector);
+        let semantic = luck_semantic::analyze_with(chunk, parse.counts, target, &mut collector);
         (semantic, collector.finish())
     } else {
-        (luck_semantic::analyze(chunk, parse.counts, environment), Nodes::default())
+        (luck_semantic::analyze(chunk, parse.counts, target), Nodes::default())
     };
     directives.cover_statements(&nodes, parse.source, chunk.version);
     semantic.add_extra_globals(config.extra_globals.iter().map(String::as_str));
@@ -322,7 +320,7 @@ mod tests {
         let allocator = Allocator::new();
         let parse = luck_parser::parse(&allocator, b"local x = nil print(x)", LuaVersion::Lua54);
         let silent = silent();
-        let unlinted = analyze(&parse, StdlibEnvironment::Standalone, &silent);
+        let unlinted = analyze(&parse, LuaTarget::Lua54, &silent);
         assert!(unlinted.nodes().as_slice().is_empty());
         assert_eq!(
             lint_analyzed(&parse, &unlinted, &silent, FixKind::all(), &|| false),
@@ -330,7 +328,7 @@ mod tests {
         );
         let mut one_rule = silent;
         one_rule.rules.set_level("redundant_nil_init", RuleLevel::Warn);
-        let linted = analyze(&parse, StdlibEnvironment::Standalone, &one_rule);
+        let linted = analyze(&parse, LuaTarget::Lua54, &one_rule);
         assert!(!linted.nodes().as_slice().is_empty());
         let diags = lint_analyzed(&parse, &linted, &one_rule, FixKind::all(), &|| false)
             .expect("nothing cancels it");
@@ -346,7 +344,7 @@ local y = nil
 print(x, y)";
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let silent = silent();
-        let analysis = analyze(&parse, StdlibEnvironment::Standalone, &silent);
+        let analysis = analyze(&parse, LuaTarget::Lua54, &silent);
         assert!(!analysis.nodes().as_slice().is_empty());
         let diags = lint_analyzed(&parse, &analysis, &silent, FixKind::empty(), &|| false)
             .expect("nothing cancels it");
@@ -361,7 +359,7 @@ print(x, y)";
         let source = "local x = nil -- luck: deny(redundant_nil_init)";
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let silent = silent();
-        let analysis = analyze(&parse, StdlibEnvironment::Standalone, &silent);
+        let analysis = analyze(&parse, LuaTarget::Lua54, &silent);
         let cancelled = lint_analyzed(&parse, &analysis, &silent, FixKind::empty(), &|| true);
         assert_eq!(cancelled, None, "a rule only a directive runs stops too");
     }
@@ -375,7 +373,7 @@ local x = 1
 print(x)";
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let questions = |config: &LintConfig| {
-            let analysis = analyze(&parse, StdlibEnvironment::Standalone, config);
+            let analysis = analyze(&parse, LuaTarget::Lua54, config);
             let asked = AtomicUsize::new(0);
             let counted = || asked.fetch_add(1, Ordering::Relaxed) == usize::MAX;
             let whole = lint_analyzed(&parse, &analysis, config, FixKind::empty(), &counted)
@@ -390,7 +388,7 @@ print(x)";
         let (asked_without, _) = questions(&without_filter);
         assert_eq!(asked, asked_without.saturating_add(1), "one more, just before the filter");
 
-        let analysis = analyze(&parse, StdlibEnvironment::Standalone, &config);
+        let analysis = analyze(&parse, LuaTarget::Lua54, &config);
         let answered = AtomicUsize::new(0);
         let cancels_last = || answered.fetch_add(1, Ordering::Relaxed).saturating_add(1) == asked;
         let stopped = lint_analyzed(&parse, &analysis, &config, FixKind::empty(), &cancels_last);

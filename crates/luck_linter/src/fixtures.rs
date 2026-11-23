@@ -1,7 +1,6 @@
 use luck_allocator::Allocator;
-use luck_core::LuaTarget;
 use luck_diagnostics::{Diagnostic, Severity};
-use luck_token::{LuaVersion, Span};
+use luck_token::{LuaTarget, LuaVersion, Span};
 
 use crate::config::LintConfig;
 use crate::diagnostic::Message;
@@ -24,7 +23,7 @@ pub(crate) fn run_rule_with_config(
     version: LuaVersion,
     config: &LintConfig,
 ) -> Vec<Message> {
-    check(rule, source, standalone(version), config)
+    check(rule, source, version.into(), config)
 }
 
 /// Applies one round of the messages' fixes, whatever their kind, as
@@ -45,22 +44,11 @@ pub(crate) fn applied(source: &str, diags: &[Message]) -> String {
         .map_or_else(|| source.to_owned(), |fixed| String::from_utf8(fixed).unwrap())
 }
 
-const fn standalone(version: LuaVersion) -> LuaTarget {
-    match version {
-        LuaVersion::Lua51 => LuaTarget::Lua51,
-        LuaVersion::Lua52 => LuaTarget::Lua52,
-        LuaVersion::Lua53 => LuaTarget::Lua53,
-        LuaVersion::Lua54 => LuaTarget::Lua54,
-        LuaVersion::Lua55 => LuaTarget::Lua55,
-        LuaVersion::Luau => LuaTarget::Luau,
-    }
-}
-
 fn check(rule: &dyn Rule, source: &str, target: LuaTarget, config: &LintConfig) -> Vec<Message> {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse(&allocator, source.as_bytes(), target.lua_version());
+    let parse = luck_parser::parse(&allocator, source.as_bytes(), target.version());
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
-    let analysis = driver::analyze(&parse, target.stdlib_environment(), config);
+    let analysis = driver::analyze(&parse, target, config);
     let context = LintContext::new(&parse, &analysis, config, FixKind::all());
     let slot = RULES
         .iter()

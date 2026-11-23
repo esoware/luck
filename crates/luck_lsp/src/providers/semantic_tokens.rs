@@ -277,7 +277,7 @@ impl Classifier<'_> {
         let mut classification = base;
         if classification.token_type == TYPE_VARIABLE
             && let Key::Token(index) = key
-            && self.tokens.get(index).is_some_and(|token| token.kind == TokenKind::Identifier)
+            && self.tokens.get(index).is_some_and(|token| token.kind.is_name())
         {
             match value_shape(self.tokens, index) {
                 ValueShape::Called | ValueShape::AssignedFunction => {
@@ -363,7 +363,7 @@ impl Classifier<'_> {
         for (index, token) in tokens.iter().enumerate() {
             let link_before = link_two_back;
             link_two_back = link_one_back;
-            if token.kind != TokenKind::Identifier {
+            if !token.kind.is_name() {
                 link_one_back = None;
                 continue;
             }
@@ -689,8 +689,7 @@ const fn member_classify(entry: &StdlibEntry) -> Classification {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
-    use luck_token::offset_to_index;
+    use luck_token::{LuaTarget, offset_to_index};
 
     use super::*;
     use crate::fixtures::document;

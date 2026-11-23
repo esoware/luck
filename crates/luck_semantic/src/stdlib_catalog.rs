@@ -1,10 +1,10 @@
-//! The built-in stdlib catalog, one static library per environment.
+//! The built-in stdlib catalog, one static library per target.
 //!
 //! Each is an expression `just stdlib` generates from `stdlib_data/`, which
 //! also checks the data, so nothing is parsed or validated at runtime. It
 //! names what it uses from this module.
 
-use luck_token::{LuaVersion, StdlibEnvironment};
+use luck_token::LuaTarget;
 
 use crate::stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
@@ -20,20 +20,16 @@ static LUA55: StdlibLibrary = include!("stdlib_catalog/lua55.rs");
 static LUAU: StdlibLibrary = include!("stdlib_catalog/luau.rs");
 static LUAU_ROBLOX: StdlibLibrary = include!("stdlib_catalog/luau_roblox.rs");
 
-/// The environment only matters for Luau; each numbered Lua version has
-/// one library.
 #[must_use]
-pub fn library_for(version: LuaVersion, environment: StdlibEnvironment) -> &'static StdlibLibrary {
-    match version {
-        LuaVersion::Lua51 => &LUA51,
-        LuaVersion::Lua52 => &LUA52,
-        LuaVersion::Lua53 => &LUA53,
-        LuaVersion::Lua54 => &LUA54,
-        LuaVersion::Lua55 => &LUA55,
-        LuaVersion::Luau => match environment {
-            StdlibEnvironment::Standalone => &LUAU,
-            StdlibEnvironment::Roblox => &LUAU_ROBLOX,
-        },
+pub const fn library_for(target: LuaTarget) -> &'static StdlibLibrary {
+    match target {
+        LuaTarget::Lua51 => &LUA51,
+        LuaTarget::Lua52 => &LUA52,
+        LuaTarget::Lua53 => &LUA53,
+        LuaTarget::Lua54 => &LUA54,
+        LuaTarget::Lua55 => &LUA55,
+        LuaTarget::Luau => &LUAU,
+        LuaTarget::LuauRoblox => &LUAU_ROBLOX,
     }
 }
 

@@ -1,6 +1,6 @@
 use luck_ast::{
-    BinaryOp, Expression, Field, FunctionArgs, IfExpression, InterpolatedString, Slot, Suffix,
-    SuffixedExpression, TableConstructor, Var,
+    BinaryOp, Expression, Field, FunctionArgs, FunctionDef, IfExpression, InterpolatedString,
+    MethodCall, Slot, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 
 use super::Printer;
@@ -42,9 +42,6 @@ impl Printer {
     /// An expression in a slot it can't stand in bare prints in parentheses,
     /// and what's in them prints as if nothing were around it. Its operands
     /// take the slots that one gives them.
-    ///
-    /// Every level of nesting takes this frame, and each `print_expr` inlines
-    /// into it, so a run and the Luau constructs print in frames of their own.
     fn print_other_expr(&mut self, expr: &Expression<'_>, outer: Slot) {
         let is_wrapped = expr.needs_parens(outer);
         let slot = if is_wrapped {
@@ -64,38 +61,37 @@ impl Printer {
             Expression::True(_) => self.piece("true"),
             // `.....` reads as `...` `..`, so nothing merges with a vararg.
             Expression::VarArg(_) => self.emit(b"...", merges_after(b'.'), OTHER),
-            Expression::FunctionDef(function) => {
-                self.print_function_attributes(&function.attributes);
-                self.piece("function");
-                self.print_function_body(&function.body);
-            }
+            Expression::FunctionDef(function) => self.print_function_def(function),
             Expression::Suffixed(chain) => self.print_suffixed(chain),
             Expression::Parenthesized(parenthesized) => {
-                self.piece("(");
-                self.print_free_expr(&parenthesized.expr);
-                self.piece(")");
+                self.print_parenthesized(&parenthesized.expr);
             }
             Expression::TableConstructor(table) => self.print_table(table),
             Expression::BinaryOp(binary_op) => self.print_run(binary_op, slot),
-            Expression::UnaryOp(unary_op) => {
-                self.piece(unary_op.op.static_text());
-                self.print_expr(&unary_op.operand, slot.unary_operand());
-            }
+            Expression::UnaryOp(unary_op) => self.print_unary_op(unary_op, slot),
             // Luau
             Expression::IfExpression(if_expr) => self.print_if_expr(if_expr),
             // Luau
             Expression::InterpolatedString(interpolated) => self.print_interpolated(interpolated),
             // Luau
-            Expression::TypeCast(cast) => {
-                self.print_expr(&cast.expr, Slot::CAST_OPERAND);
-                self.piece("::");
-                self.print_type(&cast.ty);
-            }
+            Expression::TypeCast(cast) => self.print_type_cast(cast),
             Expression::Error(_) => {}
         }
         if is_wrapped {
             self.piece(")");
         }
+    }
+
+    fn print_function_def(&mut self, function: &FunctionDef<'_>) {
+        self.print_function_attributes(&function.attributes);
+        self.piece("function");
+        self.print_function_body(&function.body);
+    }
+
+    fn print_parenthesized(&mut self, expr: &Expression<'_>) {
+        self.piece("(");
+        self.print_free_expr(expr);
+        self.piece(")");
     }
 
     fn print_run(&mut self, binary_op: &BinaryOp<'_>, slot: Slot) {
@@ -104,6 +100,11 @@ impl Printer {
             self.piece(link.op.static_text());
             self.print_expr(&link.operand, slot.operand(binary_op, index));
         }
+    }
+
+    fn print_unary_op(&mut self, unary_op: &UnaryOp<'_>, slot: Slot) {
+        self.piece(unary_op.op.static_text());
+        self.print_expr(&unary_op.operand, slot.unary_operand());
     }
 
     /// Luau: a slot with anything after it takes parentheses, so nothing
@@ -135,6 +136,12 @@ impl Printer {
         self.print_interpolated_text(&interpolated.tail);
         self.output.print_byte(b'`');
         self.last = OTHER;
+    }
+
+    fn print_type_cast(&mut self, cast: &TypeCast<'_>) {
+        self.print_expr(&cast.expr, Slot::CAST_OPERAND);
+        self.piece("::");
+        self.print_type(&cast.ty);
     }
 
     /// An expression where nothing groups with it, as a list's items are,
@@ -171,11 +178,7 @@ impl Printer {
         }
     }
 
-    #[expect(
-        clippy::inline_always,
-        reason = "measured: inlined into each caller, it prints up to 3% faster"
-    )]
-    #[inline(always)]
+    #[inline]
     pub(super) fn print_suffixed(&mut self, chain: &SuffixedExpression<'_>) {
         self.print_expr(&chain.prefix, Slot::PREFIX);
         for suffix in &chain.suffixes {
@@ -184,26 +187,30 @@ impl Printer {
                     self.piece(".");
                     self.name(name.text.as_str());
                 }
-                Suffix::Index { index, .. } => {
-                    self.piece("[");
-                    self.print_free_expr(index);
-                    self.piece("]");
-                }
+                Suffix::Index { index, .. } => self.print_index(index),
                 Suffix::Call(args) => self.print_args(args),
-                Suffix::MethodCall(call) => {
-                    self.piece(":");
-                    self.name(call.name.text.as_str());
-                    if let Some(type_args) = &call.type_args {
-                        self.print_type_instantiation(type_args);
-                    }
-                    self.print_args(&call.args);
-                }
+                Suffix::MethodCall(call) => self.print_method_call(call),
                 // Luau
                 Suffix::TypeInstantiation { type_args, .. } => {
                     self.print_type_instantiation(type_args);
                 }
             }
         }
+    }
+
+    fn print_index(&mut self, index: &Expression<'_>) {
+        self.piece("[");
+        self.print_free_expr(index);
+        self.piece("]");
+    }
+
+    fn print_method_call(&mut self, call: &MethodCall<'_>) {
+        self.piece(":");
+        self.name(call.name.text.as_str());
+        if let Some(type_args) = &call.type_args {
+            self.print_type_instantiation(type_args);
+        }
+        self.print_args(&call.args);
     }
 
     fn print_args(&mut self, function_args: &FunctionArgs<'_>) {
@@ -228,18 +235,22 @@ impl Printer {
 
     fn print_field(&mut self, field: &Field<'_>) {
         match field {
-            Field::Bracketed { key, value, .. } => {
-                self.piece("[");
-                self.print_free_expr(key);
-                self.piece("]=");
-                self.print_free_expr(value);
-            }
-            Field::Named { name, value } => {
-                self.name(name.text.as_str());
-                self.piece("=");
-                self.print_free_expr(value);
-            }
+            Field::Bracketed { key, value, .. } => self.print_bracketed_field(key, value),
+            Field::Named { name, value } => self.print_named_field(name.text.as_str(), value),
             Field::Positional(value) => self.print_free_expr(value),
         }
+    }
+
+    fn print_bracketed_field(&mut self, key: &Expression<'_>, value: &Expression<'_>) {
+        self.piece("[");
+        self.print_free_expr(key);
+        self.piece("]=");
+        self.print_free_expr(value);
+    }
+
+    fn print_named_field(&mut self, name: &str, value: &Expression<'_>) {
+        self.name(name);
+        self.piece("=");
+        self.print_free_expr(value);
     }
 }

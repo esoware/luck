@@ -9,12 +9,12 @@
 //!
 //! - `allocator` - The arena syntax trees live in, and arenas for threads
 //!   (always on)
-//! - `token` - Spans, `LuaVersion`, tokens, literal value semantics (always on)
+//! - `token` - Spans, `LuaVersion` and `LuaTarget`, tokens, literal value
+//!   semantics (always on)
 //! - `lexer` - Tokenizer (always on)
 //! - `ast` - AST nodes and their builder, `Visit`, `VisitMut`, `AstKind`,
 //!   `GetSpan`, `ContentEq` (always on)
 //! - `parser` - Pratt + recursive-descent parser (always on)
-//! - `core` - Dialect targets (always on)
 //! - `diagnostics` - The diagnostic every stage reports problems with, and
 //!   its numbered constructors (always on)
 //! - `codegen` - Compact printer (feature `codegen`)
@@ -123,8 +123,8 @@
 //! ```
 //! # #[cfg(feature = "linter")] {
 //! use luck::allocator::Allocator;
-//! use luck::core::LuaTarget;
 //! use luck::linter::{FixKind, LintConfig};
+//! use luck::token::LuaTarget;
 //!
 //! let allocator = Allocator::new();
 //! let config = LintConfig::default();
@@ -184,7 +184,6 @@ pub use luck_bundler as bundler;
 pub use luck_codegen as codegen;
 #[cfg(feature = "config")]
 pub use luck_config as config;
-pub use luck_core as core;
 pub use luck_diagnostics as diagnostics;
 #[cfg(feature = "formatter")]
 pub use luck_formatter as formatter;

@@ -10,7 +10,7 @@ pub(crate) fn global_new_call<'ast>(
     global: &str,
     semantic: &SemanticAnalysis<'_>,
 ) -> Option<&'ast [Expression<'ast>]> {
-    if !semantic.environment().is_roblox() {
+    if !semantic.target().is_roblox() {
         return None;
     }
     let (root, field) = dotted_callee(call)?;

@@ -187,7 +187,7 @@ y",
 }
 
 #[test]
-fn an_unterminated_string_lists_and_flags_the_piece_it_cut_off() {
+fn an_unterminated_string_flags_the_piece_it_cut_off() {
     for (source, cut_off) in [
         (
             "\
@@ -205,12 +205,6 @@ y",
         ("`{x}a{y}b`", vec![]),
     ] {
         let result = lex(source.as_bytes(), LuaVersion::Luau);
-        let texts: Vec<&str> = result
-            .unterminated
-            .iter()
-            .map(|span| str::from_utf8(span.text(source.as_bytes())).unwrap())
-            .collect();
-        assert_eq!(texts, cut_off, "{source:?}");
         let flagged: Vec<&str> = result
             .tokens
             .iter()

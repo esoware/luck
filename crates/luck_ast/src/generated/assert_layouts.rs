@@ -18,7 +18,7 @@ use crate::{
     TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
-const LAYOUTS: [(&str, usize, usize); 84] = [
+const LAYOUTS: [(&str, usize, usize); 82] = [
     ("Expression", size_of::<Expression<'_>>(), align_of::<Expression<'_>>()),
     ("Var", size_of::<Var<'_>>(), align_of::<Var<'_>>()),
     (
@@ -116,7 +116,6 @@ const LAYOUTS: [(&str, usize, usize); 84] = [
     ("GenericPackType", size_of::<GenericPackType<'_>>(), align_of::<GenericPackType<'_>>()),
     ("GenericTypeList", size_of::<GenericTypeList<'_>>(), align_of::<GenericTypeList<'_>>()),
     ("GenericTypeParam", size_of::<GenericTypeParam<'_>>(), align_of::<GenericTypeParam<'_>>()),
-    ("Option<Type>", size_of::<Option<Type<'_>>>(), align_of::<Option<Type<'_>>>()),
     ("Option<Name>", size_of::<Option<Name<'_>>>(), align_of::<Option<Name<'_>>>()),
     (
         "Option<List<Expression>>",
@@ -126,11 +125,6 @@ const LAYOUTS: [(&str, usize, usize); 84] = [
     ("Option<NameIndex>", size_of::<Option<NameIndex>>(), align_of::<Option<NameIndex>>()),
     ("Option<ThinStr>", size_of::<Option<ThinStr<'_>>>(), align_of::<Option<ThinStr<'_>>>()),
     ("Option<ThinBytes>", size_of::<Option<ThinBytes<'_>>>(), align_of::<Option<ThinBytes<'_>>>()),
-    (
-        "Option<ElseClause>",
-        size_of::<Option<ElseClause<'_>>>(),
-        align_of::<Option<ElseClause<'_>>>(),
-    ),
     (
         "Option<Expression>",
         size_of::<Option<Expression<'_>>>(),

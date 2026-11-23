@@ -1,7 +1,6 @@
 use luck_allocator::Allocator;
-use luck_core::LuaTarget;
 use luck_linter::{FixKind, LintConfig};
-use luck_token::Span;
+use luck_token::{LuaTarget, Span};
 
 use crate::common::{enable, lint};
 

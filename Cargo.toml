@@ -22,7 +22,7 @@ luck_benchmark_files = { path = "crates/luck_benchmark_files" }
 luck_bundler         = { version = "0.6.0", path = "crates/luck_bundler" }
 luck_codegen         = { version = "0.6.0", path = "crates/luck_codegen" }
 luck_config          = { version = "0.6.0", path = "crates/luck_config" }
-luck_core            = { version = "0.6.0", path = "crates/luck_core" }
+luck_data_structures = { version = "0.6.0", path = "crates/luck_data_structures" }
 luck_diagnostics     = { version = "0.6.0", path = "crates/luck_diagnostics" }
 luck_formatter       = { version = "0.6.0", path = "crates/luck_formatter" }
 luck_lexer           = { version = "0.6.0", path = "crates/luck_lexer" }
@@ -153,8 +153,9 @@ trivial_numeric_casts = "deny"
 unit_bindings = "deny"
 unnameable_types = "deny"
 unreachable_pub = "deny"
-# Deny, not forbid, so the justified sites in luck_token, luck_lexer,
-# luck_benchmark, luck_allocs, and luck_conformance can #[expect] it.
+# Deny, not forbid, so the justified sites in luck_data_structures,
+# luck_lexer, luck_benchmark, luck_allocs, and luck_conformance can #[expect]
+# it.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 unused_extern_crates = "deny"

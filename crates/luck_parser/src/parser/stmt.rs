@@ -42,6 +42,14 @@ pub(super) const fn is_stmt_start(kind: TokenKind) -> bool {
         | TokenKind::Return
         | TokenKind::Break
         | TokenKind::Identifier
+        | TokenKind::Continue
+        | TokenKind::Export
+        | TokenKind::Const
+        | TokenKind::Type
+        | TokenKind::Typeof
+        | TokenKind::Read
+        | TokenKind::Write
+        | TokenKind::Global
         | TokenKind::LeftParen
         | TokenKind::At => true,
         TokenKind::Number
@@ -271,10 +279,14 @@ impl<'ast> Parser<'ast> {
 
     /// Parse a single statement, or a [`Statement::Error`] after recovering
     /// from malformed input.
+    ///
+    /// A contextual keyword starts its statement only when the next token
+    /// continues one, so in `const = 1`, `const()`, and `const.x`, `const` is
+    /// an ordinary name.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_stmt(&mut self) -> Statement<'ast> {
+        let next = self.peek_next();
         match self.peek() {
-            TokenKind::Identifier => self.parse_identifier_stmt(),
             TokenKind::Local => self.parse_local_stmt(List::new()),
             TokenKind::If => self.parse_if_stmt(),
             TokenKind::Function => self.parse_function_decl(List::new()),
@@ -282,69 +294,55 @@ impl<'ast> Parser<'ast> {
             TokenKind::While => self.parse_while_loop(),
             TokenKind::Do => self.parse_do_block(),
             TokenKind::Repeat => self.parse_repeat_loop(),
-            TokenKind::LeftParen => self.parse_assignment_or_call(),
             TokenKind::Return => self.parse_return_stmt(),
             TokenKind::Break => Statement::Break(self.advance_loop_exit("`break` outside a loop")),
             // Lua 5.2+
-            TokenKind::Goto if self.version.has_goto() => self.parse_goto_stmt(),
+            TokenKind::Goto => self.parse_goto_stmt(),
             // Lua 5.2+
             TokenKind::DoubleColon if self.version.has_goto() => self.parse_label_stmt(),
             // Luau `@` attribute on function declarations.
             TokenKind::At if self.version.has_function_attributes() => {
                 self.parse_attributed_function()
             }
-            _ => self.report_unexpected_in_block(),
-        }
-    }
-
-    /// Luau's `continue`, `type`, `export`, and `const`, and Lua 5.5's
-    /// `global`, are contextual keywords: each starts its statement only when
-    /// the next token continues one, so in `const = 1`, `const()`, and
-    /// `const.x`, `const` is an ordinary name.
-    fn parse_identifier_stmt(&mut self) -> Statement<'ast> {
-        let next = self.peek_next();
-        match self.current_text() {
             // Luau
-            b"continue" if self.version.has_continue() && !continues_a_name(next) => {
+            TokenKind::Continue if !continues_a_name(next) => {
                 Statement::Continue(self.advance_loop_exit("`continue` outside a loop"))
             }
             // Luau
-            b"type"
-                if self.version.has_type_syntax()
-                    && matches!(next, TokenKind::Identifier | TokenKind::Function) =>
-            {
+            TokenKind::Type if next.is_name() || next == TokenKind::Function => {
                 self.parse_type_declaration(None)
             }
             // Luau
-            b"export"
-                if self.version.has_type_syntax()
-                    && (matches!(next, TokenKind::Local | TokenKind::Function)
-                        || (next == TokenKind::Identifier
-                            && matches!(self.next_text(), b"type" | b"const"))) =>
+            TokenKind::Export
+                if matches!(
+                    next,
+                    TokenKind::Local | TokenKind::Function | TokenKind::Type | TokenKind::Const
+                ) =>
             {
                 self.parse_export_stmt(List::new())
             }
             // Luau
-            b"const"
-                if self.version.has_const_stmt()
-                    && matches!(next, TokenKind::Identifier | TokenKind::Function) =>
-            {
+            TokenKind::Const if next.is_name() || next == TokenKind::Function => {
                 self.parse_const_stmt(List::new())
             }
             // Lua 5.5
-            b"global"
-                if self.version.has_global()
-                    && matches!(
-                        next,
-                        TokenKind::Less
-                            | TokenKind::Identifier
-                            | TokenKind::Star
-                            | TokenKind::Function
-                    ) =>
+            TokenKind::Global
+                if next.is_name()
+                    || matches!(next, TokenKind::Less | TokenKind::Star | TokenKind::Function) =>
             {
                 self.parse_global_stmt()
             }
-            _ => self.parse_assignment_or_call(),
+            TokenKind::Identifier
+            | TokenKind::LeftParen
+            | TokenKind::Continue
+            | TokenKind::Export
+            | TokenKind::Const
+            | TokenKind::Type
+            | TokenKind::Typeof
+            | TokenKind::Read
+            | TokenKind::Write
+            | TokenKind::Global => self.parse_assignment_or_call(),
+            _ => self.report_unexpected_in_block(),
         }
     }
 
@@ -403,7 +401,7 @@ impl<'ast> Parser<'ast> {
                 return Statement::Error(if_span);
             };
             let span = else_span.merge(else_block.span);
-            Some(ElseClause::new(span, else_block))
+            Some(ElseClause::boxed(span, else_block, self.allocator))
         } else {
             None
         };

@@ -137,25 +137,13 @@ mod tests {
     use std::path::Path;
 
     use luck_ast::MAX_NESTING_DEPTH;
-    use luck_core::LuaTarget;
     use luck_testgen::{
         collect_fixture_files, detect_version, generate_full, on_the_smallest_stack,
     };
-    use luck_token::LuaVersion;
+    use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
     use crate::fixtures::document;
-
-    const fn target(version: LuaVersion) -> LuaTarget {
-        match version {
-            LuaVersion::Lua51 => LuaTarget::Lua51,
-            LuaVersion::Lua52 => LuaTarget::Lua52,
-            LuaVersion::Lua53 => LuaTarget::Lua53,
-            LuaVersion::Lua54 => LuaTarget::Lua54,
-            LuaVersion::Lua55 => LuaTarget::Lua55,
-            LuaVersion::Luau => LuaTarget::Luau,
-        }
-    }
 
     #[test]
     fn a_dump_lays_the_tree_out_as_pretty_debug_does() {
@@ -173,7 +161,7 @@ mod tests {
             sources.extend((0..20).map(|seed| (version, generate_full(seed, version, 25))));
         }
         for (version, text) in sources {
-            let document = document(&text, target(version));
+            let document = document(&text, version.into());
             let expected = format!("{:#?}", document.parse().chunk);
             if expected.len() <= MAX_DUMP_BYTES {
                 assert_eq!(syntax_tree(&document), expected, "{version:?}\n{text}");

@@ -7,10 +7,9 @@ use core::ops::Range;
 
 use bitflags::bitflags;
 use luck_allocator::Allocator;
-use luck_core::LuaTarget;
 use luck_diagnostics::Diagnostic;
 use luck_parser::ParseResult;
-use luck_token::Span;
+use luck_token::{LuaTarget, Span};
 
 use crate::config::LintConfig;
 use crate::diagnostic::Message;
@@ -170,10 +169,10 @@ fn fix_within<'ast>(
     fixes: FixKind,
     budget: usize,
 ) -> Result<Fixed<'ast>, FixError> {
-    let version = target.lua_version();
+    let version = target.version();
     let mut parse = luck_parser::parse(allocator, source, version);
     for round in 1..=budget {
-        let messages = lint_parsed(&parse, target.stdlib_environment(), config, fixes);
+        let messages = lint_parsed(&parse, target, config, fixes);
         let Some(text) = apply(parse.source, &messages, fixes) else {
             return Ok(Fixed { parse, messages });
         };

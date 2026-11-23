@@ -43,52 +43,20 @@ use serde::Deserialize;
 struct LibrarySpec {
     module: &'static str,
     sources: &'static [&'static str],
-    version: &'static str,
-    environment: &'static str,
+    target: &'static str,
 }
 
 const LIBRARIES: [LibrarySpec; 7] = [
-    LibrarySpec {
-        module: "lua51",
-        sources: &["lua51.toml"],
-        version: "Lua51",
-        environment: "Standalone",
-    },
-    LibrarySpec {
-        module: "lua52",
-        sources: &["lua52.toml"],
-        version: "Lua52",
-        environment: "Standalone",
-    },
-    LibrarySpec {
-        module: "lua53",
-        sources: &["lua53.toml"],
-        version: "Lua53",
-        environment: "Standalone",
-    },
-    LibrarySpec {
-        module: "lua54",
-        sources: &["lua54.toml"],
-        version: "Lua54",
-        environment: "Standalone",
-    },
-    LibrarySpec {
-        module: "lua55",
-        sources: &["lua55.toml"],
-        version: "Lua55",
-        environment: "Standalone",
-    },
-    LibrarySpec {
-        module: "luau",
-        sources: &["luau.toml"],
-        version: "Luau",
-        environment: "Standalone",
-    },
+    LibrarySpec { module: "lua51", sources: &["lua51.toml"], target: "Lua51" },
+    LibrarySpec { module: "lua52", sources: &["lua52.toml"], target: "Lua52" },
+    LibrarySpec { module: "lua53", sources: &["lua53.toml"], target: "Lua53" },
+    LibrarySpec { module: "lua54", sources: &["lua54.toml"], target: "Lua54" },
+    LibrarySpec { module: "lua55", sources: &["lua55.toml"], target: "Lua55" },
+    LibrarySpec { module: "luau", sources: &["luau.toml"], target: "Luau" },
     LibrarySpec {
         module: "luau_roblox",
         sources: &["luau_roblox.toml", "roblox_api.toml", "roblox_enums.toml"],
-        version: "Luau",
-        environment: "Roblox",
+        target: "LuauRoblox",
     },
 ];
 
@@ -816,13 +784,11 @@ fn emit(spec: &LibrarySpec, library: &Library) -> String {
     let catalog = format!(
         "\
 StdlibLibrary {{
-{INDENT}version: LuaVersion::{},
-{INDENT}environment: StdlibEnvironment::{},
+{INDENT}target: LuaTarget::{},
 {INDENT}globals: {},
 {INDENT}shapes: {},
 }}",
-        spec.version,
-        spec.environment,
+        spec.target,
         map(&library.globals, 1),
         shapes(&library.shapes),
     );

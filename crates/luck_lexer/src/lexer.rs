@@ -58,7 +58,9 @@ pub struct Lexer<'source> {
     /// last (Luau). A `}` at depth 0 closes the expression and resumes the
     /// string.
     interpolation_brace_depths: Vec<u32>,
-    unterminated: Vec<Span>,
+    /// Whether a block comment ran to the end of the source without its
+    /// closer, which the `Eof` token after it says.
+    is_in_block_comment: bool,
     lenient_escapes: Vec<Span>,
 }
 
@@ -96,7 +98,7 @@ impl<'source> Lexer<'source> {
             attached_comment_count: 0,
             errors: Vec::new(),
             interpolation_brace_depths: Vec::new(),
-            unterminated: Vec::new(),
+            is_in_block_comment: false,
             lenient_escapes: Vec::new(),
         };
 
@@ -130,7 +132,8 @@ impl<'source> Lexer<'source> {
             self.skip_whitespace();
             let start = self.cursor.position();
             let Some(byte) = self.cursor.peek() else {
-                let eof = self.token(TokenKind::Eof, start);
+                let mut eof = self.token(TokenKind::Eof, start);
+                eof.is_unterminated = self.is_in_block_comment;
                 self.has_line_break = eof.has_line_break_before;
                 return eof;
             };
@@ -229,17 +232,8 @@ impl<'source> Lexer<'source> {
             tokens: Vec::new(),
             comments: self.comments,
             errors: self.errors,
-            unterminated: self.unterminated,
             lenient_escapes: self.lenient_escapes,
         }
-    }
-
-    /// The spans of the string tokens and block comments lexed so far that a
-    /// line break or the end of the source cut off before their closing
-    /// delimiter, in source order.
-    #[must_use]
-    pub fn unterminated(&self) -> &[Span] {
-        &self.unterminated
     }
 
     #[inline]
@@ -323,9 +317,7 @@ impl<'source> Lexer<'source> {
                 "unterminated block comment",
                 &mut self.errors,
             );
-            if !is_terminated {
-                self.unterminated.push(self.cursor.span_since(start));
-            }
+            self.is_in_block_comment = !is_terminated;
             // The delimiters (`--[=*[` and `]=*]`) never hold a line break,
             // so scanning the whole comment is equivalent to scanning only
             // the body.

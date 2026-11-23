@@ -5,7 +5,7 @@ use luck_ast::{
 };
 use luck_diagnostics::Diagnostic;
 use luck_semantic::{NodeSink, ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
-use luck_token::{LuaVersion, Span, StdlibEnvironment};
+use luck_token::{LuaVersion, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::dynamic_require::DynamicRequire;
@@ -439,9 +439,7 @@ fn is_standard_library(name: &str, version: LuaVersion) -> bool {
     !version.is_luau()
         && (name == "_G"
             || matches!(
-                luck_semantic::library_for(version, StdlibEnvironment::Standalone)
-                    .globals
-                    .get(name),
+                luck_semantic::library_for(version.into()).globals.get(name),
                 Some(StdlibEntry::Namespace(_))
             ))
 }

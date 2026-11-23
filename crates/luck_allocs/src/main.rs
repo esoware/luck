@@ -112,19 +112,18 @@ fn run(is_rules: bool) -> io::Result<()> {
 fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()] {
     HEAP.reset();
     let (source, target) = (file.source_text.as_slice(), file.target);
-    let version = target.lua_version();
+    let version = target.version();
 
     let ((), lexer) = record_stats_in(allocator, || drop(luck_lexer::lex(source, version)));
     let (mut parse, parser) =
         record_stats_in(allocator, || luck_parser::parse(allocator, source, version));
     assert!(parse.errors.is_empty(), "{}: {:?}", file.file_name, parse.errors);
-    let environment = target.stdlib_environment();
     let ((), semantic) = record_stats_in(allocator, || {
-        drop(luck_semantic::analyze(&parse.chunk, parse.counts, environment));
+        drop(luck_semantic::analyze(&parse.chunk, parse.counts, target));
     });
     let config = every_rule();
     let ((), linter) = record_stats_in(allocator, || {
-        drop(luck_linter::lint_parsed(&parse, environment, &config, FixKind::empty()));
+        drop(luck_linter::lint_parsed(&parse, target, &config, FixKind::empty()));
     });
     let ((), codegen) = record_stats_in(allocator, || drop(luck_codegen::compact(&parse.chunk)));
     let options = FormatOptions::default();

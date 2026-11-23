@@ -618,7 +618,7 @@ where
 mod tests {
     use std::fs;
 
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::*;
 

@@ -136,7 +136,7 @@ fn question_marks_folded_into_a_return_pack_join_its_first_elements_run() {
     let Statement::LocalFunction(function) = &result.chunk.block.stmts[0] else {
         panic!("expected a local function");
     };
-    let Some(Type::Pack(pack)) = &function.body.return_type else {
+    let Some(Type::Pack(pack)) = function.body.return_type.as_deref() else {
         panic!("expected a pack");
     };
     let Some(Type::Optional(optional)) = pack.types.first() else {

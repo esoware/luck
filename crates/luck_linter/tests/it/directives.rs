@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
-use luck_core::LuaTarget;
 use luck_diagnostics::Severity;
 use luck_linter::{FixKind, LintConfig, Message, RuleLevel};
+use luck_token::LuaTarget;
 
 use crate::common::{lint, with_level};
 

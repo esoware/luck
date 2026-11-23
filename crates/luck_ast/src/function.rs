@@ -14,7 +14,7 @@ pub struct FunctionBody<'ast> {
     pub generics: Option<Box<'ast, GenericTypeList<'ast>>>,
     pub params: List<'ast, Parameter<'ast>>,
     pub vararg: Option<Box<'ast, VarArgParam<'ast>>>,
-    pub return_type: Option<Type<'ast>>,
+    pub return_type: Option<Box<'ast, Type<'ast>>>,
     pub block: Block<'ast>,
 }
 
@@ -36,7 +36,7 @@ impl FunctionBody<'_> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct Parameter<'ast> {
     pub name: Name<'ast>,
-    pub type_annotation: Option<Type<'ast>>,
+    pub type_annotation: Option<Box<'ast, Type<'ast>>>,
 }
 
 /// `...`, where `span` starts at the dots.
@@ -46,7 +46,7 @@ pub struct VarArgParam<'ast> {
     /// Lua 5.5: `...name`.
     pub name: Option<Name<'ast>>,
     /// Luau: `: T`, which may be a generic pack (`T...`).
-    pub type_annotation: Option<Type<'ast>>,
+    pub type_annotation: Option<Box<'ast, Type<'ast>>>,
 }
 
 /// Output must keep these, since some change runtime behavior (`@native`

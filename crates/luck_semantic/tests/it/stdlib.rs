@@ -6,7 +6,7 @@ use luck_semantic::{
     StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, analyze,
     expand_replace_template, library_for,
 };
-use luck_token::{BinOp, LuaVersion, StdlibEnvironment};
+use luck_token::{BinOp, LuaTarget, LuaVersion};
 
 use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, parse, roblox, standalone_library};
 
@@ -21,7 +21,7 @@ fn function_at<'library>(
     path: &[&str],
 ) -> &'library StdlibFunction {
     let Some(StdlibEntry::Function(function)) = library.lookup(path) else {
-        panic!("{:?}/{:?}: {path:?} should be a function", library.version, library.environment);
+        panic!("{}: {path:?} should be a function", library.target);
     };
     function
 }
@@ -35,12 +35,13 @@ fn every_library_loads() {
 }
 
 #[test]
-fn numbered_lua_environment_is_ignored() {
-    // Only Luau distinguishes environments; a Roblox request for a
-    // numbered version returns that version's single library.
-    let standalone = library_for(LuaVersion::Lua54, StdlibEnvironment::Standalone);
-    let roblox_environment = library_for(LuaVersion::Lua54, StdlibEnvironment::Roblox);
-    assert!(ptr::eq(standalone, roblox_environment));
+fn every_target_has_its_own_library() {
+    for target in LuaTarget::ALL {
+        let library = library_for(target);
+        assert_eq!(library.target, target);
+        let others = LuaTarget::ALL.into_iter().filter(|&other| other != target);
+        assert!(others.map(library_for).all(|other| !ptr::eq(library, other)), "{target}");
+    }
 }
 
 #[test]
@@ -438,9 +439,8 @@ fn core_luau_entries_in_both_environments() {
         for library in [luau(), roblox()] {
             assert!(
                 library.lookup(*segments).is_some(),
-                "{segments:?} missing from {:?}/{:?}",
-                library.version,
-                library.environment
+                "{segments:?} missing from {}",
+                library.target
             );
         }
     }
@@ -851,10 +851,7 @@ fn shape_function<'library>(
     name: &str,
 ) -> &'library StdlibFunction {
     let Some(StdlibEntry::Function(function)) = library.shape_member(shape, name) else {
-        panic!(
-            "{:?}/{:?}: shape {shape} should have function member {name}",
-            library.version, library.environment
-        );
+        panic!("{}: shape {shape} should have function member {name}", library.target);
     };
     function
 }
@@ -1064,7 +1061,7 @@ fn settings_provider_shapes() {
 fn resolve_last_call(source: &str) -> Option<String> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source, LuaVersion::Luau);
-    let analysis = analyze(chunk, TreeCounts::default(), StdlibEnvironment::Roblox);
+    let analysis = analyze(chunk, TreeCounts::default(), LuaTarget::LuauRoblox);
     let last_stmt = chunk.block.stmts.last()?;
     let chain = if let Statement::FunctionCall(chain) = last_stmt {
         chain
@@ -1084,7 +1081,7 @@ fn resolve_last_call(source: &str) -> Option<String> {
 fn chain_callee_names(source: &str) -> Vec<Option<String>> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source, LuaVersion::Lua54);
-    let analysis = analyze(chunk, TreeCounts::default(), StdlibEnvironment::Standalone);
+    let analysis = analyze(chunk, TreeCounts::default(), LuaTarget::Lua54);
     let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
         panic!("the last statement must be a call");
     };
@@ -1377,8 +1374,8 @@ fn luau_vector_lerp_is_cataloged() {
     for library in [luau(), roblox()] {
         assert!(
             matches!(library.lookup(&["vector", "lerp"]), Some(StdlibEntry::Function(_))),
-            "{:?}: vector.lerp is an implemented RFC and in the Roblox docs",
-            library.environment
+            "{}: vector.lerp is an implemented RFC and in the Roblox docs",
+            library.target
         );
     }
 }
@@ -1388,8 +1385,8 @@ fn luau_coroutine_finally_is_cataloged() {
     for library in [luau(), roblox()] {
         assert!(
             matches!(library.lookup(&["coroutine", "finally"]), Some(StdlibEntry::Function(_))),
-            "{:?}: coroutine.finally is in the Luau VM and the Roblox docs",
-            library.environment
+            "{}: coroutine.finally is in the Luau VM and the Roblox docs",
+            library.target
         );
     }
 }
@@ -1478,9 +1475,9 @@ fn luau_unpack_is_not_deprecated() {
     for library in [luau(), roblox()] {
         assert!(
             function_at(library, &["unpack"]).deprecated.is_none(),
-            "{:?}: luau.org documents unpack as equivalent to table.unpack, and neither it nor \
+            "{}: luau.org documents unpack as equivalent to table.unpack, and neither it nor \
              the Roblox globals page marks it deprecated",
-            library.environment
+            library.target
         );
     }
 }

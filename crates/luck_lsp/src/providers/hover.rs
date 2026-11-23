@@ -33,7 +33,7 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: render_entry(path, entry, document.lua_version()),
+            value: render_entry(path, entry, document.version()),
         }),
         range: Some(document.range(node.span())),
     })
@@ -134,8 +134,7 @@ const fn version_label(version: LuaVersion) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
-    use luck_token::index_to_offset;
+    use luck_token::{LuaTarget, index_to_offset};
 
     use super::*;
     use crate::fixtures::document;

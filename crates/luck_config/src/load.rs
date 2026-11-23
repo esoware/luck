@@ -379,7 +379,7 @@ mod tests {
             ("project/luck.json", r#"{ "extends": ["../shared.json"] }"#),
         ]);
         let loaded = load(&project.path().join("project/luck.json")).expect("loads");
-        assert_eq!(loaded.config.lua, Some(luck_core::LuaTarget::Lua52));
+        assert_eq!(loaded.config.lua, Some(luck_token::LuaTarget::Lua52));
     }
 
     #[test]

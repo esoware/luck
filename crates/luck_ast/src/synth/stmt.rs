@@ -293,7 +293,7 @@ impl<'ast> Synth<'ast> {
     ) -> AttributedName<'ast> {
         AttributedName::new(
             self.name(name),
-            ty,
+            ty.map(|annotation| self.boxed(annotation)),
             attribute.map(|attribute_name| self.boxed(self.attribute(attribute_name))),
         )
     }
@@ -409,7 +409,8 @@ impl<'ast> Synth<'ast> {
         let elseif_clauses = self.list(elseifs.into_iter().map(|(elseif_condition, block)| {
             ElseIfClause::new(self.next_span(), elseif_condition, block)
         }));
-        let else_clause = else_block.map(|block| ElseClause::new(self.next_span(), block));
+        let else_clause =
+            else_block.map(|block| ElseClause::boxed(self.next_span(), block, self.allocator));
         Statement::new_if_stmt(
             span,
             condition,
@@ -619,7 +620,7 @@ mod tests {
         let [first] = &*local.names else {
             panic!("expected one name");
         };
-        assert!(matches!(first.type_annotation, Some(Type::Optional(_))));
+        assert!(matches!(first.type_annotation.as_deref(), Some(Type::Optional(_))));
     }
 
     #[test]

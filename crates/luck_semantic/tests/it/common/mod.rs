@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
 use luck_ast::Chunk;
 use luck_semantic::{StdlibLibrary, library_for};
-use luck_token::{LuaVersion, StdlibEnvironment};
+use luck_token::{LuaTarget, LuaVersion};
 
 /// `source`'s tree, which must parse cleanly, kept in `allocator` so it
 /// lives as long as the names it lends an analysis.
@@ -19,7 +19,7 @@ pub(crate) const NUMBERED_VERSIONS: [LuaVersion; 5] =
     [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55];
 
 pub(crate) fn standalone_library(version: LuaVersion) -> &'static StdlibLibrary {
-    library_for(version, StdlibEnvironment::Standalone)
+    library_for(version.into())
 }
 
 pub(crate) fn luau() -> &'static StdlibLibrary {
@@ -27,7 +27,7 @@ pub(crate) fn luau() -> &'static StdlibLibrary {
 }
 
 pub(crate) fn roblox() -> &'static StdlibLibrary {
-    library_for(LuaVersion::Luau, StdlibEnvironment::Roblox)
+    library_for(LuaTarget::LuauRoblox)
 }
 
 pub(crate) fn all_libraries() -> [(&'static str, &'static StdlibLibrary); 7] {

@@ -1,7 +1,7 @@
 use core::iter::Map;
 use core::slice;
 
-use luck_token::{LuaVersion, StdlibEnvironment, offset_to_index};
+use luck_token::{LuaTarget, offset_to_index};
 
 /// Catalog entries by name, in name order, with a hash table over them built
 /// at compile time.
@@ -385,8 +385,7 @@ pub struct StdlibShape {
 
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibLibrary {
-    pub version: LuaVersion,
-    pub environment: StdlibEnvironment,
+    pub target: LuaTarget,
     pub globals: StdlibMap<StdlibEntry>,
     pub shapes: StdlibMap<StdlibShape>,
 }

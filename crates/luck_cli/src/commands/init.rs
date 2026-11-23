@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use clap::Args;
-use luck_core::LuaTarget;
+use luck_token::LuaTarget;
 
 use crate::exit::{Exit, operation_error};
 use crate::verbosity::Verbosity;
@@ -51,7 +51,7 @@ impl InitArgs {
 }
 
 const fn entry_extension(target: LuaTarget) -> &'static str {
-    if target.lua_version().is_luau() { "luau" } else { "lua" }
+    if target.version().is_luau() { "luau" } else { "lua" }
 }
 
 /// Both the `lua` and `luau` keys are set.
@@ -61,7 +61,7 @@ const fn entry_extension(target: LuaTarget) -> &'static str {
 /// `.luau` entry and no `search_paths`.
 fn init_config_content(target: LuaTarget) -> String {
     let target_name = target.to_string().to_lowercase();
-    let is_luau = target.lua_version().is_luau();
+    let is_luau = target.version().is_luau();
     let (axis_lua, axis_luau) =
         if is_luau { ("lua54", target_name.as_str()) } else { (target_name.as_str(), "luau") };
 

@@ -156,8 +156,6 @@ y",
             (message, Some(text.as_bytes())),
             "{source:?}"
         );
-        let unterminated = if is_unterminated { vec![result.tokens[0].span] } else { Vec::new() };
-        assert_eq!(result.unterminated, unterminated, "{source:?}");
     }
 }
 

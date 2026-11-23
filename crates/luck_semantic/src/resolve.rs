@@ -289,7 +289,7 @@ impl<'chain> ChainCallees<'chain> {
 mod tests {
     use luck_allocator::Allocator;
     use luck_ast::TreeCounts;
-    use luck_token::{LuaVersion, StdlibEnvironment};
+    use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
     use crate::fixtures::parse;
@@ -300,8 +300,7 @@ mod tests {
     };
 
     static SHAPED_LIBRARY: StdlibLibrary = StdlibLibrary {
-        version: LuaVersion::Lua54,
-        environment: StdlibEnvironment::Standalone,
+        target: LuaTarget::Lua54,
         globals: stdlib_map!(
             StdlibEntry,
             [

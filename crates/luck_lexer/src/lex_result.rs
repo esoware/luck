@@ -8,9 +8,6 @@ pub struct LexResult {
     pub comments: Vec<Comment>,
     /// Each an E008.
     pub errors: Vec<Diagnostic>,
-    /// What [`Lexer::unterminated`](crate::Lexer::unterminated) gives once
-    /// the source is lexed.
-    pub unterminated: Vec<Span>,
     /// The span of each escape of a character Lua 5.1 and Luau define no
     /// escape for, which they read as the character, from its `\`, in source
     /// order.

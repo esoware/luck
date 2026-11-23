@@ -52,7 +52,7 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
         }
     }
     for keyword in KEYWORD_COMPLETIONS {
-        if TokenKind::is_reserved(keyword, document.lua_version()) {
+        if TokenKind::keyword(keyword, document.version()).is_some() {
             items.push(CompletionItem {
                 label: (*keyword).to_owned(),
                 kind: Some(CompletionItemKind::KEYWORD),
@@ -295,7 +295,8 @@ fn function_documentation(name: &str, function: &StdlibFunction) -> String {
     )
 }
 
-/// Every target's keywords. A target offers only those `is_reserved` admits.
+/// Every target's keywords. A target offers only those its lexer reads as
+/// keywords.
 const KEYWORD_COMPLETIONS: &[&str] = &[
     "and", "break", "continue", "do", "else", "elseif", "end", "false", "for", "function",
     "global", "goto", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true",
@@ -305,7 +306,7 @@ const KEYWORD_COMPLETIONS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use ls_types::Range as LspRange;
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document as document_for;

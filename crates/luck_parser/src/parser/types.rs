@@ -4,7 +4,7 @@
 
 use core::mem;
 
-use luck_allocator::List;
+use luck_allocator::{Box, List};
 use luck_ast::{
     FunctionTypeParam, GenericTypeList, GenericTypeParam, GetSpan as _, Name, OptionalType, Type,
     TypeArgs, TypeField, TypeFieldAccess,
@@ -28,8 +28,11 @@ pub(super) enum GenericsOwner {
 impl<'ast> Parser<'ast> {
     /// Parse `: T` if present, on a binding that takes a single type.
     #[inline]
-    pub(super) fn try_parse_type_annotation(&mut self) -> Option<Type<'ast>> {
-        (self.version.has_type_syntax() && self.eat(TokenKind::Colon)).then(|| self.parse_type())
+    pub(super) fn try_parse_type_annotation(&mut self) -> Option<Box<'ast, Type<'ast>>> {
+        (self.version.has_type_syntax() && self.eat(TokenKind::Colon)).then(|| {
+            let ty = self.parse_type();
+            self.alloc(ty)
+        })
     }
 
     fn is_at_type_pack(&self) -> bool {
@@ -37,7 +40,7 @@ impl<'ast> Parser<'ast> {
     }
 
     fn is_at_generic_pack(&self) -> bool {
-        self.is_at_identifier() && self.peek_next() == TokenKind::DotDotDot
+        self.is_at_name() && self.peek_next() == TokenKind::DotDotDot
     }
 
     fn parse_type_pack(&mut self) -> Type<'ast> {
@@ -270,11 +273,17 @@ impl<'ast> Parser<'ast> {
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_primary_type(&mut self) -> Type<'ast> {
         match self.peek() {
-            TokenKind::Identifier => {
-                // `typeof.Name` is a module-qualified type.
-                if self.current_text() == b"typeof" && self.peek_next() != TokenKind::Dot {
-                    return self.parse_typeof_type();
-                }
+            // `typeof.Name` is a module-qualified type.
+            TokenKind::Typeof if self.peek_next() != TokenKind::Dot => self.parse_typeof_type(),
+            TokenKind::Identifier
+            | TokenKind::Continue
+            | TokenKind::Export
+            | TokenKind::Const
+            | TokenKind::Type
+            | TokenKind::Typeof
+            | TokenKind::Read
+            | TokenKind::Write
+            | TokenKind::Global => {
                 let name = self.advance_name();
                 self.parse_named_type(name)
             }
@@ -425,8 +434,9 @@ impl<'ast> Parser<'ast> {
             }
 
             let end_span = default.as_ref().map(Type::span).or(dots).unwrap_or(name.span);
-            let param =
-                GenericTypeParam::new(name.span.merge(end_span), name, dots.is_some(), default);
+            let span = name.span.merge(end_span);
+            let boxed_default = default.map(|ty| self.alloc(ty));
+            let param = GenericTypeParam::new(span, name, dots.is_some(), boxed_default);
             self.scratch.generic_params.push(param);
 
             if !self.eat(TokenKind::Comma) {
@@ -536,12 +546,12 @@ impl<'ast> Parser<'ast> {
     fn parse_type_field(&mut self) {
         // `read`/`write` is a modifier unless `:` follows it; `{ read: number }`
         // has a field named `read`.
-        let access = if self.is_at_identifier() && self.peek_next() != TokenKind::Colon {
-            match self.current_text() {
-                b"read" => Some(TypeFieldAccess::Read),
-                b"write" => Some(TypeFieldAccess::Write),
-                _ => None,
-            }
+        let access = if self.peek_next() == TokenKind::Colon {
+            None
+        } else if self.is_at(TokenKind::Read) {
+            Some(TypeFieldAccess::Read)
+        } else if self.is_at(TokenKind::Write) {
+            Some(TypeFieldAccess::Write)
         } else {
             None
         };
@@ -556,7 +566,7 @@ impl<'ast> Parser<'ast> {
             let value = self.parse_type();
             let span = access_span.unwrap_or(open).merge(value.span());
             TypeField::Indexer { span, access, key, value }
-        } else if self.is_at_identifier() && self.peek_next() == TokenKind::Colon {
+        } else if self.is_at_name() && self.peek_next() == TokenKind::Colon {
             let name = self.advance_name();
             self.advance();
             let value = self.parse_type();
@@ -598,12 +608,11 @@ impl<'ast> Parser<'ast> {
                     self.scratch.function_type_params.push(FunctionTypeParam::new(None, ty));
                     break;
                 }
-                let name =
-                    (self.is_at_identifier() && self.peek_next() == TokenKind::Colon).then(|| {
-                        let name = self.advance_name();
-                        self.advance(); // `:`
-                        name
-                    });
+                let name = (self.is_at_name() && self.peek_next() == TokenKind::Colon).then(|| {
+                    let name = self.advance_name();
+                    self.advance(); // `:`
+                    name
+                });
                 let ty = self.parse_type();
                 let is_error = matches!(ty, Type::Error(_));
                 self.scratch.function_type_params.push(FunctionTypeParam::new(name, ty));

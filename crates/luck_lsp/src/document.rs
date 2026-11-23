@@ -221,7 +221,7 @@ impl DocumentState {
         self.semantic().scope_tree()
     }
 
-    pub(crate) fn lua_version(&self) -> LuaVersion {
+    pub(crate) fn version(&self) -> LuaVersion {
         self.parse().chunk.version
     }
 

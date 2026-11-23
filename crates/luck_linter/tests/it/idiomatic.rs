@@ -3,8 +3,8 @@
 
 use std::fs::{read_dir, read_to_string};
 
-use luck_core::LuaTarget;
 use luck_linter::LintConfig;
+use luck_token::LuaTarget;
 
 use crate::common::lint;
 

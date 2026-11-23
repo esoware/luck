@@ -1,6 +1,6 @@
 use luck_ast::{
-    FunctionTypeParam, GenericTypeList, GenericTypeParam, Type, TypeArgs, TypeField,
-    TypeFieldAccess,
+    Expression, FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, NamedType,
+    Type, TypeArgs, TypeField, TypeFieldAccess,
 };
 
 use super::Printer;
@@ -9,37 +9,10 @@ impl Printer {
     pub(super) fn print_type(&mut self, ty: &Type<'_>) {
         match ty {
             Type::Name(name) => self.name(name.text.as_str()),
-            Type::Named(named) => {
-                if let Some(prefix) = &named.prefix {
-                    self.name(prefix.text.as_str());
-                    self.piece(".");
-                }
-                self.name(named.name.text.as_str());
-                if let Some(generics) = &named.generics {
-                    self.piece("<");
-                    self.list(&generics.args, ",", Self::print_type);
-                    self.piece(">");
-                }
-            }
-            Type::Typeof(typeof_type) => {
-                self.piece("typeof(");
-                self.print_free_expr(&typeof_type.expr);
-                self.piece(")");
-            }
-            Type::Table(table) => {
-                self.piece("{");
-                self.list(&table.fields, ",", Self::print_type_field);
-                self.piece("}");
-            }
-            Type::Function(function) => {
-                if let Some(generics) = &function.generics {
-                    self.print_generic_type_list(generics);
-                }
-                self.piece("(");
-                self.list(&function.params, ",", Self::print_function_type_param);
-                self.piece(")->");
-                self.print_type(&function.return_type);
-            }
+            Type::Named(named) => self.print_named_type(named),
+            Type::Typeof(typeof_type) => self.print_typeof(&typeof_type.expr),
+            Type::Table(table) => self.print_table_type(&table.fields),
+            Type::Function(function) => self.print_function_type(function),
             Type::Optional(optional) => {
                 self.print_type(&optional.ty);
                 for _ in 0..optional.question_count {
@@ -47,27 +20,13 @@ impl Printer {
                 }
             }
             Type::Union(union) => {
-                if union.has_leading_pipe {
-                    self.piece("|");
-                }
-                self.list(&union.types, "|", Self::print_type);
+                self.print_type_run(union.has_leading_pipe, &union.types, "|");
             }
             Type::Intersection(intersection) => {
-                if intersection.has_leading_ampersand {
-                    self.piece("&");
-                }
-                self.list(&intersection.types, "&", Self::print_type);
+                self.print_type_run(intersection.has_leading_ampersand, &intersection.types, "&");
             }
-            Type::Parenthesized(parenthesized) => {
-                self.piece("(");
-                self.print_type(&parenthesized.ty);
-                self.piece(")");
-            }
-            Type::Pack(pack) => {
-                self.piece("(");
-                self.list(&pack.types, ",", Self::print_type);
-                self.piece(")");
-            }
+            Type::Parenthesized(parenthesized) => self.print_parenthesized_type(&parenthesized.ty),
+            Type::Pack(pack) => self.print_type_pack(&pack.types),
             Type::Nil(_) => self.piece("nil"),
             Type::True(_) => self.piece("true"),
             Type::False(_) => self.piece("false"),
@@ -82,6 +41,65 @@ impl Printer {
             }
             Type::Error(_) => {}
         }
+    }
+
+    fn print_named_type(&mut self, named: &NamedType<'_>) {
+        if let Some(prefix) = &named.prefix {
+            self.name(prefix.text.as_str());
+            self.piece(".");
+        }
+        self.name(named.name.text.as_str());
+        if let Some(generics) = &named.generics {
+            self.piece("<");
+            self.list(&generics.args, ",", Self::print_type);
+            self.piece(">");
+        }
+    }
+
+    fn print_typeof(&mut self, expr: &Expression<'_>) {
+        self.piece("typeof(");
+        self.print_free_expr(expr);
+        self.piece(")");
+    }
+
+    fn print_table_type(&mut self, fields: &[TypeField<'_>]) {
+        self.piece("{");
+        self.list(fields, ",", Self::print_type_field);
+        self.piece("}");
+    }
+
+    fn print_function_type(&mut self, function: &FunctionType<'_>) {
+        if let Some(generics) = &function.generics {
+            self.print_generic_type_list(generics);
+        }
+        self.piece("(");
+        self.list(&function.params, ",", Self::print_function_type_param);
+        self.piece(")->");
+        self.print_type(&function.return_type);
+    }
+
+    fn print_type_run(
+        &mut self,
+        has_leading_operator: bool,
+        types: &[Type<'_>],
+        operator: &'static str,
+    ) {
+        if has_leading_operator {
+            self.piece(operator);
+        }
+        self.list(types, operator, Self::print_type);
+    }
+
+    fn print_parenthesized_type(&mut self, ty: &Type<'_>) {
+        self.piece("(");
+        self.print_type(ty);
+        self.piece(")");
+    }
+
+    fn print_type_pack(&mut self, types: &[Type<'_>]) {
+        self.piece("(");
+        self.list(types, ",", Self::print_type);
+        self.piece(")");
     }
 
     fn print_type_field(&mut self, field: &TypeField<'_>) {
@@ -106,7 +124,7 @@ impl Printer {
         }
     }
 
-    /// `read` and `write` lex as names.
+    /// `read` and `write` are words, which merge as names do.
     fn print_access(&mut self, access: Option<TypeFieldAccess>) {
         match access {
             Some(TypeFieldAccess::Read) => self.name("read"),

@@ -1,0 +1,15 @@
+[package]
+name                   = "luck_data_structures"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Data structures the luck toolchain's crates share"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

@@ -1,4 +1,4 @@
-use luck_allocator::Allocator;
+use luck_allocator::{Allocator, Box};
 use luck_ast::{Expression, Field, GetSpan as _, Name, Parameter, Type};
 use luck_token::Span;
 
@@ -12,7 +12,7 @@ fn a_node_without_a_span_spans_its_fields() {
     let allocator = Allocator::new();
     // x: T, then x alone
     let annotation = Type::new_name("T".into(), None, Span::new(3, 4), &allocator);
-    let typed = Parameter::new(name("x", 0), Some(annotation));
+    let typed = Parameter::new(name("x", 0), Some(Box::new_in(annotation, &allocator)));
     assert_eq!(typed.span(), Span::new(0, 4));
     assert_eq!(Parameter::new(name("x", 0), None).span(), Span::new(0, 1));
     // k = nil

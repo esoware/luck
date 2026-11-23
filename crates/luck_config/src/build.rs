@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use luck_core::LuaTarget;
 use luck_minifier::TransformConfig;
+use luck_token::LuaTarget;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::{EntryConfig, ProfileOverrides};

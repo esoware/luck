@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use luck_allocator::Allocator;
-use luck_core::LuaTarget;
 use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_token::LuaTarget;
 
 use crate::exit::{Exit, fail_with_document_errors, operation_error};
 use crate::minify_flags::MinifyFlags;
@@ -61,7 +61,7 @@ impl MinifyArgs {
 
         let original_size = source.len();
 
-        let version = target.lua_version();
+        let version = target.version();
         let minified = luck_minifier::minify(&Allocator::new(), &source, version, &transforms)
             .map_err(|errors| fail_with_document_errors(&file_path, &source, &errors, version))?;
 

@@ -25,7 +25,6 @@ luck_allocator   = { workspace = true }
 luck_ast         = { workspace = true }
 luck_bundler     = { workspace = true }
 luck_config      = { workspace = true }
-luck_core        = { workspace = true }
 luck_diagnostics = { workspace = true }
 luck_formatter   = { workspace = true }
 luck_linter      = { workspace = true, features = ["serde"] }

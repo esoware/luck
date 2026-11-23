@@ -3,9 +3,8 @@ mod stmt;
 mod types;
 
 use luck_ast::{Chunk, IntegerLiteral, NumberLiteral, StringLiteral};
-use luck_token::{
-    CodeBuffer, LuaVersion, spell_integer, spell_number, spell_string, write_interpolated_text,
-};
+use luck_data_structures::CodeBuffer;
+use luck_token::{LuaVersion, spell_integer, spell_number, spell_string, write_interpolated_text};
 
 use crate::separator::{DOT_DOT, LEFT_BRACKET, NUMBER, OTHER, WORD, class_of, merges_after};
 
@@ -31,6 +30,12 @@ pub fn compact_with_capacity(chunk: &Chunk<'_>, capacity: usize) -> Vec<u8> {
     printer.output.into_bytes()
 }
 
+/// Each node prints in a method of its own, called from a `match` arm.
+///
+/// An unoptimized build inlines nothing but what's forced and keeps every
+/// local of a function in a slot of its own, so a method that printed
+/// several kinds of node would take all their slots at every level of
+/// nesting. An optimized build inlines each method back into its one caller.
 struct Printer {
     output: CodeBuffer,
     /// The class of the last piece written, from `separator`.

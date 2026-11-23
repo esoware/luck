@@ -11,7 +11,9 @@
 //! A tree lives in a `luck_allocator` arena: every node is in a `Box` or a
 //! `List` there, and none needs dropping, so a tree is freed with its arena
 //! all at once. [`Expression`], [`Statement`], and [`Type`] are two words
-//! each. A [`Name`] holds its text, and a literal, a [`NumberLiteral`],
+//! each, and a part most nodes of a kind lack, an `if`'s `else` or a type
+//! annotation, is boxed, so a node without one doesn't hold its space. A
+//! [`Name`] holds its text, and a literal, a [`NumberLiteral`],
 //! [`IntegerLiteral`], or [`StringLiteral`], its value, which the parser
 //! decodes once, and its spelling as written, which a tree built in code
 //! leaves out. A parsed tree's leaves borrow the source, and a built tree's

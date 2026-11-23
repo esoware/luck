@@ -36,7 +36,7 @@ pub(crate) fn document_highlights(
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;

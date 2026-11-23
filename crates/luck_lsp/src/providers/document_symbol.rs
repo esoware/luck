@@ -202,7 +202,7 @@ fn format_params(body: &FunctionBody<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;

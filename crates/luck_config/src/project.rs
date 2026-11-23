@@ -4,12 +4,11 @@ use std::path::{Path, PathBuf};
 
 use globset::{Candidate, GlobSet};
 use luck_bundler::{BundleOptions, DynamicRequire};
-use luck_core::LuaTarget;
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
 use luck_minifier::TransformConfig;
-use luck_token::LuaVersion;
+use luck_token::{LuaTarget, LuaVersion};
 
 use crate::build::{BuildConfig, BuildKeys};
 use crate::config::{Entries, LuckConfig, OverrideConfig};

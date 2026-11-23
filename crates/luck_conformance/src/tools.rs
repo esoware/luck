@@ -54,7 +54,7 @@ impl FileReport {
 /// `root` is the suite's directory, which the programs run in.
 pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile) -> FileReport {
     let source = file.bytes.as_slice();
-    let version = suite.target.lua_version();
+    let version = suite.target.version();
     let allocator = Allocator::new();
     let parse = match guard(|| luck_parser::parse(&allocator, source, version)) {
         Ok(parse) => parse,
@@ -227,19 +227,14 @@ fn lint(suite: &Suite, parse: &ParseResult<'_>, lines: &LineIndex) -> Vec<LintLi
         },
         ..LintConfig::default()
     };
-    luck_linter::lint_parsed(
-        parse,
-        suite.target.stdlib_environment(),
-        &every_rule,
-        FixKind::empty(),
-    )
-    .iter()
-    .map(|message| {
-        let (line, column) = lines.line_column(message.span().start);
-        LintLine {
-            rule: message.code,
-            text: format!("{line}:{column} {}: {}", message.code, message.message),
-        }
-    })
-    .collect()
+    luck_linter::lint_parsed(parse, suite.target, &every_rule, FixKind::empty())
+        .iter()
+        .map(|message| {
+            let (line, column) = lines.line_column(message.span().start);
+            LintLine {
+                rule: message.code,
+                text: format!("{line}:{column} {}: {}", message.code, message.message),
+            }
+        })
+        .collect()
 }

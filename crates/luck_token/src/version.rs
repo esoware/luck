@@ -548,18 +548,3 @@ impl LuaVersion {
         }
     }
 }
-
-/// Only meaningful for Luau; vanilla Lua versions always use `Standalone`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum StdlibEnvironment {
-    #[default]
-    Standalone,
-    Roblox,
-}
-
-impl StdlibEnvironment {
-    #[must_use]
-    pub const fn is_roblox(self) -> bool {
-        matches!(self, Self::Roblox)
-    }
-}

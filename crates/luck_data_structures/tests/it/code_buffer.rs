@@ -1,4 +1,4 @@
-use luck_token::CodeBuffer;
+use luck_data_structures::CodeBuffer;
 
 #[test]
 fn pushes_append_text_and_bytes_that_are_not_utf8_in_order() {

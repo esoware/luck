@@ -33,8 +33,11 @@ impl<'ast> Parser<'ast> {
         self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
 
         // Luau: optional return type annotation after `)`.
-        let return_type = (self.version.has_type_syntax() && self.eat(TokenKind::Colon))
-            .then(|| self.parse_return_type());
+        let return_type =
+            (self.version.has_type_syntax() && self.eat(TokenKind::Colon)).then(|| {
+                let ty = self.parse_return_type();
+                self.alloc(ty)
+            });
 
         // A loop around the function doesn't make `break` or `continue` valid
         // inside it, and `...` needs this function's own vararg parameter.
@@ -60,7 +63,7 @@ impl<'ast> Parser<'ast> {
         if self.is_at(TokenKind::DotDotDot) {
             return (List::new(), Some(self.parse_vararg_param()));
         }
-        if !self.is_at_identifier() {
+        if !self.is_at_name() {
             return (List::new(), None);
         }
         let start = self.scratch.params.len();
@@ -92,15 +95,18 @@ impl<'ast> Parser<'ast> {
     fn parse_vararg_param(&mut self) -> Box<'ast, VarArgParam<'ast>> {
         let dots = self.advance();
         // Lua 5.5: named varargs `...name`.
-        let name = (self.version.has_named_varargs() && self.is_at_identifier()).then(|| {
+        let name = (self.version.has_named_varargs() && self.is_at_name()).then(|| {
             self.counts.declarations = self.counts.declarations.wrapping_add(1);
             self.advance_name()
         });
         // Luau: vararg type annotation `...: type` or `...: T...`.
-        let type_annotation = (self.version.has_type_syntax() && self.eat(TokenKind::Colon))
-            .then(|| self.parse_vararg_type());
+        let type_annotation =
+            (self.version.has_type_syntax() && self.eat(TokenKind::Colon)).then(|| {
+                let ty = self.parse_vararg_type();
+                self.alloc(ty)
+            });
         let end_span = type_annotation
-            .as_ref()
+            .as_deref()
             .map(Type::span)
             .or_else(|| name.map(|vararg_name| vararg_name.span))
             .unwrap_or(dots);

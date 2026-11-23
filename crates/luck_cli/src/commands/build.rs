@@ -218,7 +218,7 @@ impl BuildArgs {
         let start = Instant::now();
         // The arenas outlive each build, so a rebuild reuses their memory.
         arenas.reset();
-        let version = config.target.lua_version();
+        let version = config.target.version();
         let options = project.bundle_options(version);
         let bundle_failure = |errors: Vec<FileDiagnostics>| {
             print_files(&errors, version);

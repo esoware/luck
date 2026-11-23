@@ -1777,8 +1777,7 @@ static ROBLOX_SERVICES: [StdlibConstant; 314] = [
 ];
 
 StdlibLibrary {
-    version: LuaVersion::Luau,
-    environment: StdlibEnvironment::Roblox,
+    target: LuaTarget::LuauRoblox,
     globals: stdlib_map!(StdlibEntry, [
         ("Axes", StdlibEntry::Namespace(&StdlibNamespace { members: stdlib_map!(StdlibEntry, [
             ("new", StdlibEntry::Function(&StdlibFunction { signatures: &[signature(&[optional(StdlibArgKind::Vararg)], 0, None)], is_pure: true, is_must_use: true, ..FUNCTION })),

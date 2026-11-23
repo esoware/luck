@@ -1,5 +1,5 @@
 use LuaVersion::{Lua51, Lua52, Lua53, Lua54, Lua55, Luau};
-use luck_token::{LuaVersion, StdlibEnvironment};
+use luck_token::LuaVersion;
 
 fn versions_with(predicate: fn(LuaVersion) -> bool) -> Vec<LuaVersion> {
     LuaVersion::ALL.into_iter().filter(|version| predicate(*version)).collect()
@@ -82,13 +82,6 @@ fn require_predicates_match_their_versions() {
         [Lua52, Lua53, Lua54, Lua55, Luau]
     );
     assert_eq!(versions_with(LuaVersion::has_require_loaderdata), [Lua54, Lua55]);
-}
-
-#[test]
-fn stdlib_environment_defaults_to_standalone_and_flags_only_roblox() {
-    assert_eq!(StdlibEnvironment::default(), StdlibEnvironment::Standalone);
-    assert!(!StdlibEnvironment::Standalone.is_roblox());
-    assert!(StdlibEnvironment::Roblox.is_roblox());
 }
 
 #[test]

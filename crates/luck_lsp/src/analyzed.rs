@@ -7,10 +7,9 @@ use alloc::sync::Arc;
 use core::{fmt, mem};
 
 use luck_allocator::Allocator;
-use luck_core::LuaTarget;
 use luck_linter::{Analysis, LintConfig};
 use luck_parser::ParseResult;
-use luck_token::Token;
+use luck_token::{LuaTarget, Token};
 use parking_lot::Mutex;
 use self_cell::{MutBorrow, self_cell};
 
@@ -60,13 +59,13 @@ impl Analyzed {
             let (parse, read) = luck_parser::parse_with_tokens(
                 &lent.allocator,
                 source.text.as_bytes(),
-                target.lua_version(),
+                target.version(),
             );
             tokens = read;
             parse
         });
         let analyzed = AnalyzedCell::new(parsed, |cell| {
-            luck_linter::analyze(cell.borrow_dependent(), target.stdlib_environment(), config)
+            luck_linter::analyze(cell.borrow_dependent(), target, config)
         });
         (Self(analyzed), tokens)
     }

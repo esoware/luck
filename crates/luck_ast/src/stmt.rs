@@ -133,7 +133,7 @@ pub struct IfStatement<'ast> {
     pub condition: Expression<'ast>,
     pub block: Block<'ast>,
     pub elseif_clauses: List<'ast, ElseIfClause<'ast>>,
-    pub else_clause: Option<ElseClause<'ast>>,
+    pub else_clause: Option<Box<'ast, ElseClause<'ast>>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Ast)]
@@ -153,7 +153,7 @@ pub struct ElseClause<'ast> {
 pub struct NumericFor<'ast> {
     pub span: Span,
     pub name: Name<'ast>,
-    pub type_annotation: Option<Type<'ast>>,
+    pub type_annotation: Option<Box<'ast, Type<'ast>>>,
     pub start: Expression<'ast>,
     pub limit: Expression<'ast>,
     pub step: Option<Expression<'ast>>,
@@ -237,7 +237,7 @@ pub struct AttributedName<'ast> {
     pub name: Name<'ast>,
     /// Luau: `: T` annotation. The parser never sets both this and
     /// `attribute`, since attributes are Lua 5.4+ only.
-    pub type_annotation: Option<Type<'ast>>,
+    pub type_annotation: Option<Box<'ast, Type<'ast>>>,
     pub attribute: Option<Box<'ast, Attribute<'ast>>>,
 }
 

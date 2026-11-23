@@ -55,7 +55,7 @@ impl<'ast> Synth<'ast> {
             signature.generics.map(|generics| self.boxed(generics)),
             List::from_iter_in(signature.params, self.allocator),
             signature.vararg.map(|vararg| self.boxed(vararg)),
-            signature.return_type,
+            signature.return_type.map(|ty| self.boxed(ty)),
             block,
         )
     }
@@ -73,13 +73,13 @@ impl<'ast> Synth<'ast> {
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
     #[must_use]
     pub fn param_typed(&self, name: &str, ty: Type<'ast>) -> Parameter<'ast> {
-        Parameter::new(self.name(name), Some(ty))
+        Parameter::new(self.name(name), Some(self.boxed(ty)))
     }
 
     /// Lua 5.5's named `...name` form isn't supported, so `name` is `None`.
     #[must_use]
     pub fn vararg_param(&self, type_annotation: Option<Type<'ast>>) -> VarArgParam<'ast> {
-        VarArgParam::new(self.next_span(), None, type_annotation)
+        VarArgParam::new(self.next_span(), None, type_annotation.map(|ty| self.boxed(ty)))
     }
 
     pub(super) fn params(&self, names: &[&str]) -> Vec<Parameter<'ast>> {

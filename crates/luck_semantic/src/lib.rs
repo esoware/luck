@@ -10,7 +10,7 @@
 //! [`Reference::resolved`], and a symbol its references with
 //! [`ScopeTree::resolved_references`].
 //!
-//! [`analyze`] reads that tree against one environment's [`StdlibLibrary`],
+//! [`analyze`] reads that tree against one target's [`StdlibLibrary`],
 //! a static catalog, so rules can ask [`SemanticAnalysis::is_known_global`]
 //! whether a name is a stdlib or configured global and resolve calls to
 //! stdlib entries.
@@ -19,12 +19,14 @@
 //!
 //! ```
 //! use luck_allocator::Allocator;
-//! use luck_token::{LuaVersion, StdlibEnvironment};
+//! use luck_token::LuaTarget;
 //!
 //! let allocator = Allocator::new();
-//! let parsed = luck_parser::parse(&allocator, b"local greeting = 1 print(greeting)", LuaVersion::Lua54);
+//! let target = LuaTarget::Lua54;
+//! let source = b"local greeting = 1 print(greeting)";
+//! let parsed = luck_parser::parse(&allocator, source, target.version());
 //! let chunk = allocator.alloc(parsed.chunk);
-//! let analysis = luck_semantic::analyze(chunk, parsed.counts, StdlibEnvironment::Standalone);
+//! let analysis = luck_semantic::analyze(chunk, parsed.counts, target);
 //! let tree = analysis.scope_tree();
 //! let greeting = tree.symbols()[0].id;
 //! assert_eq!(tree.resolved_references(greeting).len(), 1);

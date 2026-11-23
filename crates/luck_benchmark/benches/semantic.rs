@@ -9,7 +9,6 @@ fn bench_semantic(criterion: &mut Criterion) {
 
     for file in test_files() {
         let id = BenchmarkId::from_parameter(file.file_name);
-        let environment = file.target.stdlib_environment();
         let allocator = Allocator::new();
         let parse_result = file.parse(&allocator);
         group.bench_function(id, |bencher| {
@@ -17,7 +16,7 @@ fn bench_semantic(criterion: &mut Criterion) {
                 luck_semantic::analyze(
                     black_box(&parse_result.chunk),
                     parse_result.counts,
-                    environment,
+                    file.target,
                 )
             });
         });
@@ -25,7 +24,6 @@ fn bench_semantic(criterion: &mut Criterion) {
 
     for project in test_projects() {
         let id = BenchmarkId::from_parameter(project.name);
-        let environment = project.target.stdlib_environment();
         let allocator = Allocator::new();
         let parse_results = project.parse_files(&allocator);
         group.bench_function(id, |bencher| {
@@ -34,7 +32,7 @@ fn bench_semantic(criterion: &mut Criterion) {
                     black_box(luck_semantic::analyze(
                         black_box(&parse_result.chunk),
                         parse_result.counts,
-                        environment,
+                        project.target,
                     ));
                 }
             });

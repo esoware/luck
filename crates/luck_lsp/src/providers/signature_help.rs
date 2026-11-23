@@ -113,8 +113,7 @@ fn param_documentation(param: &StdlibParam) -> Option<Documentation> {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
-    use luck_token::offset_to_index;
+    use luck_token::{LuaTarget, offset_to_index};
 
     use super::*;
     use crate::fixtures::document;

@@ -16,13 +16,12 @@ workspace = true
 
 [dependencies]
 luck_bundler     = { workspace = true, features = ["serde"] }
-luck_core        = { workspace = true, features = ["serde"] }
 luck_diagnostics = { workspace = true }
 luck_formatter   = { workspace = true, features = ["serde"] }
 luck_linter      = { workspace = true, features = ["serde"] }
 luck_minifier    = { workspace = true, features = ["serde"] }
 luck_resolver    = { workspace = true }
-luck_token       = { workspace = true }
+luck_token       = { workspace = true, features = ["serde"] }
 
 globset     = { workspace = true }
 json5       = { workspace = true }
@@ -33,10 +32,10 @@ serde       = { workspace = true }
 # Only the tests that generate and check the VS Code schema derive JsonSchema.
 [dev-dependencies]
 luck_bundler   = { workspace = true, features = ["schemars"] }
-luck_core      = { workspace = true, features = ["schemars"] }
 luck_formatter = { workspace = true, features = ["schemars"] }
 luck_linter    = { workspace = true, features = ["schemars"] }
 luck_minifier  = { workspace = true, features = ["schemars"] }
+luck_token     = { workspace = true, features = ["schemars"] }
 
 schemars   = { workspace = true }
 serde_json = { workspace = true }

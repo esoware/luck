@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, ValueEnum};
 use luck_bundler::{DependencyGraph, DynamicRequire, ModuleId};
-use luck_core::LuaTarget;
 use luck_resolver::to_slash_lossy;
+use luck_token::LuaTarget;
 
 use crate::exit::{Exit, fail_with_diags};
 use crate::project::{bundle_arenas, bundle_options, existing_file, one_shot_project};
@@ -52,7 +52,7 @@ impl GraphArgs {
         let entry_path = existing_file(&self.entry)?;
         let project = one_shot_project(self.config.as_deref(), entry_path)?;
         let target = self.target.unwrap_or_else(|| project.target_for(Some(entry_path)));
-        let version = target.lua_version();
+        let version = target.version();
         let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
 
         let arenas = bundle_arenas();
@@ -123,7 +123,7 @@ fn print_graph_dot(dependency_graph: &DependencyGraph<'_>) {
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::{GraphArgs, GraphFormat};
     use crate::cli::{Cli, Command};

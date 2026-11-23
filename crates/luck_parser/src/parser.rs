@@ -115,7 +115,6 @@ fn parse_recording<'ast>(
         has_type_function: false,
         open: OpenConstructs::default(),
         has_syntax_error: false,
-        settled_unterminated: 0,
         errors: Vec::new(),
         unclosed_blocks: Vec::new(),
         tokens,
@@ -164,12 +163,10 @@ struct Parser<'ast> {
     /// the parser can't do without tracking locals.
     has_type_function: bool,
     open: OpenConstructs,
-    /// Whether a syntax error has been reported since the last statement
-    /// began where one reliably does.
+    /// Whether a syntax error has been reported, or a string cut off before
+    /// its closer read, since the last statement began where one reliably
+    /// does.
     has_syntax_error: bool,
-    /// How many of the lexer's unterminated strings and block comments come
-    /// before that statement.
-    settled_unterminated: usize,
     errors: Vec<Diagnostic>,
     /// Each error that a block is missing its `end` or `until`, as its index
     /// in `errors` and the span of the token that opened the block.
@@ -352,26 +349,11 @@ impl<'ast> Parser<'ast> {
         self.is_at(TokenKind::Eof)
     }
 
+    /// Whether the current token can be a name: an identifier, or a
+    /// contextual keyword.
     #[inline]
-    fn is_at_identifier(&self) -> bool {
-        self.is_at(TokenKind::Identifier)
-    }
-
-    /// The current token's text, for a contextual keyword.
-    #[inline]
-    fn current_text(&self) -> &'ast [u8] {
-        self.token.span.text(self.source)
-    }
-
-    /// The next token's text, for a contextual keyword.
-    fn next_text(&self) -> &'ast [u8] {
-        self.next.span.text(self.source)
-    }
-
-    /// Whether the current token is the identifier `text`.
-    #[inline]
-    fn is_at_name(&self, text: &str) -> bool {
-        self.is_at_identifier() && self.current_text() == text.as_bytes()
+    const fn is_at_name(&self) -> bool {
+        self.token.kind.is_name()
     }
 
     /// The text of the name or numeral at `span`, which the lexer read as
@@ -428,8 +410,15 @@ impl<'ast> Parser<'ast> {
 
     /// Consume the current string, whose kind the caller has matched, as a
     /// literal holding its value.
+    ///
+    /// Every string the parser reads as one comes through here or
+    /// [`Self::interpolated_text`], so they mark a string cut off before its
+    /// closer, rather than [`Self::advance`] checking every token.
     #[inline]
     fn advance_string(&mut self) -> Box<'ast, StringLiteral<'ast>> {
+        if self.token.is_unterminated {
+            self.has_syntax_error = true;
+        }
         let span = self.advance();
         let raw = span.text(self.source);
         self.decoded.clear();
@@ -443,6 +432,9 @@ impl<'ast> Parser<'ast> {
     /// An interpolated string's piece of text, between its delimiters, as a
     /// literal holding its value.
     fn interpolated_text(&mut self, token: Token) -> StringLiteral<'ast> {
+        if token.is_unterminated {
+            self.has_syntax_error = true;
+        }
         let span = token.text_span();
         let raw = span.text(self.source);
         self.decoded.clear();
@@ -453,8 +445,8 @@ impl<'ast> Parser<'ast> {
         StringLiteral::new(ThinBytes::new(value), Some(ThinBytes::new(raw)), span)
     }
 
-    /// Consume the current identifier as a name. The caller has already
-    /// matched its kind.
+    /// Consume the current identifier or contextual keyword as a name. The
+    /// caller has already matched its kind.
     #[inline]
     fn advance_name(&mut self) -> Name<'ast> {
         let span = self.advance();
@@ -473,15 +465,10 @@ impl<'ast> Parser<'ast> {
     /// one reliably does. Errors that follow either in the statement would
     /// only echo it: a cut-off string took the rest of its line, and a
     /// cut-off comment the rest of the source, often with the closer of what
-    /// holds it.
+    /// holds it, so only `Eof` follows that.
     #[inline]
     fn is_recovering(&self) -> bool {
-        self.has_syntax_error
-            || self
-                .lexer
-                .unterminated()
-                .get(self.settled_unterminated)
-                .is_some_and(|span| span.start < self.token.span.start)
+        self.has_syntax_error || (self.token.is_unterminated && self.is_at_eof())
     }
 
     /// Consume a token of `kind` and return its span. On a mismatch, record
@@ -563,11 +550,11 @@ impl<'ast> Parser<'ast> {
         self.is_at_eof() || self.is_at_expected_closer()
     }
 
-    /// Consume the current token if it's an identifier. Otherwise record an
+    /// Consume the current token if it can be a name. Otherwise record an
     /// "expected identifier" error and leave the token in place.
     #[inline]
     fn expect_identifier(&mut self) -> Option<Name<'ast>> {
-        if self.is_at_identifier() {
+        if self.is_at_name() {
             Some(self.advance_name())
         } else {
             self.report_expected_identifier();
@@ -579,7 +566,7 @@ impl<'ast> Parser<'ast> {
     /// at the current token.
     #[inline]
     fn expect_identifier_recover(&mut self) -> Name<'ast> {
-        if self.is_at_identifier() {
+        if self.is_at_name() {
             self.advance_name()
         } else {
             self.report_expected_identifier();
@@ -734,10 +721,7 @@ impl<'ast> Parser<'ast> {
             self.skip_to_statement();
             return false;
         }
-        let start = self.token.span.start;
         self.has_syntax_error = false;
-        self.settled_unterminated =
-            self.lexer.unterminated().partition_point(|span| span.start < start);
         true
     }
 
@@ -754,7 +738,7 @@ impl<'ast> Parser<'ast> {
     const fn is_at_reliable_stmt_start(&self) -> bool {
         let kind = self.peek();
         stmt::is_stmt_start(kind)
-            && (!matches!(kind, TokenKind::Identifier | TokenKind::LeftParen)
+            && (!(kind.is_name() || matches!(kind, TokenKind::LeftParen))
                 || self.token.has_line_break_before)
     }
 }

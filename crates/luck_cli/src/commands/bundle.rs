@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use luck_bundler::{DynamicRequire, LineMapEntry, bundle, bundle_minified};
 use luck_config::check_output_paths;
-use luck_core::LuaTarget;
 use luck_resolver::to_slash_lossy;
+use luck_token::LuaTarget;
 
 use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
@@ -62,7 +62,7 @@ impl BundleArgs {
         let entry_path = existing_file(&self.entry)?;
         let project = one_shot_project(self.config.as_deref(), entry_path)?;
         let target = self.target.unwrap_or_else(|| project.target_for(Some(entry_path)));
-        let version = target.lua_version();
+        let version = target.version();
         let transforms = self.minify_flags.apply_to(project.transforms());
         let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
 
@@ -118,7 +118,7 @@ fn write_line_map(map_path: &Path, line_map: &[LineMapEntry]) -> Result<(), Exit
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::BundleArgs;
     use crate::cli::{Cli, Command};

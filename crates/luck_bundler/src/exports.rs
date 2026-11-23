@@ -270,7 +270,7 @@ impl TextLowerer<'_> {
             return (export_keyword_span(local.span), String::new());
         }
         let names_end = local.names.last().map_or(local.span, |last_name| {
-            last_name.type_annotation.as_ref().map_or(last_name.name.span, luck_ast::Type::span)
+            last_name.type_annotation.as_deref().map_or(last_name.name.span, luck_ast::Type::span)
         });
         let declaration = Span::new(local.span.start, names_end.end);
         let mut targets = String::new();
@@ -316,7 +316,7 @@ impl TextLowerer<'_> {
         luck_lexer::lex(gap, self.version)
             .tokens
             .iter()
-            .find(|token| token.kind == TokenKind::Identifier && token.text(gap) == b"export")
+            .find(|token| token.kind == TokenKind::Export)
             .map_or_else(
                 || export_keyword_span(function.span),
                 |token| {

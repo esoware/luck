@@ -16,12 +16,8 @@ impl<'ast> Parser<'ast> {
         match self.peek() {
             TokenKind::Local => self.parse_local_stmt(attributes),
             TokenKind::Function => self.parse_function_decl(attributes),
-            TokenKind::Identifier if self.current_text() == b"export" => {
-                self.parse_export_stmt(attributes)
-            }
-            TokenKind::Identifier if self.current_text() == b"const" => {
-                self.parse_const_stmt(attributes)
-            }
+            TokenKind::Export => self.parse_export_stmt(attributes),
+            TokenKind::Const => self.parse_const_stmt(attributes),
             _ => {
                 let span = self.token.span;
                 self.syntax_error(
@@ -89,7 +85,7 @@ impl<'ast> Parser<'ast> {
         &mut self,
         attributes: List<'ast, FunctionAttribute<'ast>>,
     ) -> Statement<'ast> {
-        let const_span = self.advance(); // contextual `const`
+        let const_span = self.advance(); // `const`
         if self.is_at(TokenKind::Function) {
             return self.parse_local_function(const_span, attributes, LocalFunctionKind::Const);
         }
@@ -270,7 +266,7 @@ impl<'ast> Parser<'ast> {
     }
 
     pub(super) fn parse_type_declaration(&mut self, export_span: Option<Span>) -> Statement<'ast> {
-        let type_span = self.advance(); // `type` identifier
+        let type_span = self.advance(); // `type`
         let start_span = export_span.unwrap_or(type_span);
         let is_exported = export_span.is_some();
 
@@ -318,9 +314,9 @@ impl<'ast> Parser<'ast> {
         &mut self,
         attributes: List<'ast, FunctionAttribute<'ast>>,
     ) -> Statement<'ast> {
-        let export_span = self.advance(); // contextual `export`
+        let export_span = self.advance(); // `export`
 
-        if self.is_at_name("type") {
+        if self.is_at(TokenKind::Type) {
             if !attributes.is_empty() {
                 self.error(export_span, "attributes are only allowed on exported functions");
             }
@@ -365,7 +361,7 @@ impl<'ast> Parser<'ast> {
             TokenKind::Function => {
                 self.parse_local_function(export_span, attributes, LocalFunctionKind::Export)
             }
-            TokenKind::Identifier if self.current_text() == b"const" => {
+            TokenKind::Const => {
                 self.advance();
                 if !attributes.is_empty() {
                     self.error(export_span, "attributes are only allowed on exported functions");

@@ -23,8 +23,8 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use luck_allocator::Allocator;
 use luck_benchmark_files::{test_files, test_projects};
-use luck_core::LuaTarget;
 use luck_minifier::TransformConfig;
+use luck_token::LuaTarget;
 
 const SNAPSHOT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/minsize.snap");
 const REGENERATE_COMMAND: &str =
@@ -65,7 +65,7 @@ fn measure(
         .collect();
     let config = TransformConfig::default();
     allocator.reset();
-    let version = target.lua_version();
+    let version = target.version();
     let minified = luck_minifier::minify(allocator, &normalized, version, &config)
         .map_err(|errors| format!("{name} failed to minify: {errors:?}"))?;
     let again = luck_minifier::minify(allocator, &minified, version, &config)

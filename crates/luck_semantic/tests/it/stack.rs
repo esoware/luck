@@ -5,7 +5,7 @@ use luck_allocator::Allocator;
 use luck_testgen::{
     broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
 };
-use luck_token::StdlibEnvironment;
+use luck_token::LuaTarget;
 
 #[test]
 fn analyzing_fits_the_smallest_stack() {
@@ -18,13 +18,8 @@ fn analyzing_fits_the_smallest_stack() {
         let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         let counts = parsed.counts;
         let chunk = allocator.alloc(parsed.chunk);
-        let environments: &[StdlibEnvironment] = if version.is_luau() {
-            &[StdlibEnvironment::Standalone, StdlibEnvironment::Roblox]
-        } else {
-            &[StdlibEnvironment::Standalone]
-        };
-        for &environment in environments {
-            let analysis = luck_semantic::analyze(chunk, counts, environment);
+        for target in LuaTarget::ALL.into_iter().filter(|target| target.version() == version) {
+            let analysis = luck_semantic::analyze(chunk, counts, target);
             assert!(!analysis.scope_tree().scopes().is_empty(), "the chunk has a scope");
         }
     });

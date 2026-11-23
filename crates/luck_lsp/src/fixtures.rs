@@ -2,9 +2,9 @@ use alloc::sync::Arc;
 use std::path::PathBuf;
 
 use luck_config::Project;
-use luck_core::LuaTarget;
 use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
+use luck_token::LuaTarget;
 
 use crate::analyzed::Arena;
 use crate::document::DocumentState;

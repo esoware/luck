@@ -366,7 +366,7 @@ impl Cover<'_> {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_token::StdlibEnvironment;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::config::LintConfig;
@@ -378,7 +378,7 @@ mod tests {
         let allocator = Allocator::new();
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
-        let analysis = analyze(&parse, StdlibEnvironment::Standalone, &LintConfig::default());
+        let analysis = analyze(&parse, LuaTarget::Lua54, &LintConfig::default());
         let slot = RULES.iter().position(|entry| entry.rule().name() == rule).expect("a rule");
         let mut cover = analysis.directives().cover_of(slot);
         let mut offsets: Vec<u32> = needles

@@ -183,5 +183,5 @@ pub struct GenericTypeParam<'ast> {
     pub name: Name<'ast>,
     pub is_pack: bool,
     /// Only legal in type alias declarations.
-    pub default: Option<Type<'ast>>,
+    pub default: Option<Box<'ast, Type<'ast>>>,
 }

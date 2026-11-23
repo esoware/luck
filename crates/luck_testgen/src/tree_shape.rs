@@ -104,7 +104,7 @@ impl Printer {
             Statement::IfStatement(if_statement) => self.if_statement(if_statement),
             Statement::NumericFor(numeric_for) => {
                 self.open(&format!("NumericFor {}", numeric_for.name.text));
-                self.optional_type(numeric_for.type_annotation.as_ref());
+                self.optional_type(numeric_for.type_annotation.as_deref());
                 self.expr(&numeric_for.start);
                 self.expr(&numeric_for.limit);
                 if let Some(step) = &numeric_for.step {
@@ -446,7 +446,7 @@ impl Printer {
         if let Some(vararg) = &body.vararg {
             let name = vararg.name.map_or_else(String::new, |name| format!(" {}", name.text));
             self.open(&format!("VarArgParam{name}"));
-            self.optional_type(vararg.type_annotation.as_ref());
+            self.optional_type(vararg.type_annotation.as_deref());
             self.close();
         }
         if let Some(return_type) = &body.return_type {
@@ -460,14 +460,14 @@ impl Printer {
 
     fn parameter(&mut self, param: &Parameter<'_>) {
         self.open(&format!("Parameter {}", param.name.text));
-        self.optional_type(param.type_annotation.as_ref());
+        self.optional_type(param.type_annotation.as_deref());
         self.close();
     }
 
     fn attributed_names(&mut self, names: &[AttributedName<'_>]) {
         for name in names {
             self.open(&format!("name {}", name.name.text));
-            self.optional_type(name.type_annotation.as_ref());
+            self.optional_type(name.type_annotation.as_deref());
             self.attribute(name.attribute.as_deref());
             self.close();
         }
@@ -517,7 +517,7 @@ impl Printer {
         for GenericTypeParam { name, is_pack, default, .. } in params {
             let pack = if *is_pack { "..." } else { "" };
             self.open(&format!("GenericTypeParam {}{pack}", name.text));
-            self.optional_type(default.as_ref());
+            self.optional_type(default.as_deref());
             self.close();
         }
         self.close();

@@ -10,7 +10,7 @@ use luck_allocator::Allocator;
 use luck_testgen::{
     collect_fixture_files, detect_version, generate_full, generate_runtime_safe, is_error_fixture,
 };
-use luck_token::{LuaVersion, StdlibEnvironment};
+use luck_token::LuaVersion;
 
 fn assert_counts_cover_the_tables(source: &str, version: LuaVersion) {
     let allocator = Allocator::new();
@@ -18,7 +18,7 @@ fn assert_counts_cover_the_tables(source: &str, version: LuaVersion) {
     assert!(parsed.errors.is_empty(), "{:?}\n{source}", parsed.errors.first());
     let counts = parsed.counts;
     let chunk = allocator.alloc(parsed.chunk);
-    let analysis = luck_semantic::analyze(chunk, counts, StdlibEnvironment::Standalone);
+    let analysis = luck_semantic::analyze(chunk, counts, version.into());
     let tree = analysis.scope_tree();
     let declarations = usize::try_from(counts.declarations).unwrap();
     let name_uses = usize::try_from(counts.name_uses).unwrap();

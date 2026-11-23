@@ -3,10 +3,9 @@ use std::path::{Path, PathBuf};
 
 use luck_bundler::DynamicRequire;
 use luck_config::{Editorconfigs, Project};
-use luck_core::LuaTarget;
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_linter::{Category, LintConfig, RuleLevel};
-use luck_token::LuaVersion;
+use luck_token::{LuaTarget, LuaVersion};
 
 use crate::common::{load_error, loaded, project_with};
 

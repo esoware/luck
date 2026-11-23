@@ -382,7 +382,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 if holds_run && let [Statement::IfStatement(inner)] = &mut *block.stmts {
                     self.merge_nested_ifs(inner, self.depth.saturating_add(1));
                 }
-                self.retract_arms(elseif_clauses, else_clause.as_ref());
+                self.retract_arms(elseif_clauses, else_clause.as_deref());
                 *stmt = do_block(self.allocator, block.take());
                 self.has_changed = true;
                 return !matches!(stmt, Statement::DoBlock(do_block) if is_empty_block(&do_block.block));
@@ -430,11 +430,11 @@ impl<'ast> Compressor<'_, 'ast> {
         }
         if let Some(index) = taken_index {
             let rest = elseif_clauses.get(index.saturating_add(1)..).unwrap_or_default();
-            self.retract_arms(rest, else_clause.as_ref());
+            self.retract_arms(rest, else_clause.as_deref());
         }
         elseif_clauses.truncate(kept);
         if let Some(taken) = taken_block {
-            *else_clause = Some(ElseClause::new(taken.span, taken));
+            *else_clause = Some(ElseClause::boxed(taken.span, taken, self.allocator));
         }
         if let Some(clause) = else_clause {
             self.visit_block(&mut clause.block);
@@ -445,7 +445,7 @@ impl<'ast> Compressor<'_, 'ast> {
         if !has_head {
             return match else_clause.take() {
                 Some(clause) => {
-                    *stmt = do_block(self.allocator, clause.block);
+                    *stmt = do_block(self.allocator, clause.unbox().block);
                     !matches!(stmt, Statement::DoBlock(do_block) if is_empty_block(&do_block.block))
                 }
                 // `if false then ... end`.

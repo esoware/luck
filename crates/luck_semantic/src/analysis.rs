@@ -1,5 +1,5 @@
 use luck_ast::{Call, Chunk, SuffixedExpression, TreeCounts};
-use luck_token::{LuaVersion, StdlibEnvironment};
+use luck_token::{LuaTarget, LuaVersion};
 
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
 use crate::scope::{NameId, Reference, ScopeTree, Symbol, SymbolId, build_with_initializers};
@@ -7,7 +7,7 @@ use crate::sink::NodeSink;
 use crate::stdlib_catalog::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
-/// A chunk's scope tree, read against the stdlib of one environment.
+/// A chunk's scope tree, read against the stdlib of one target.
 #[derive(Debug)]
 pub struct SemanticAnalysis<'ast> {
     scope_tree: ScopeTree<'ast>,
@@ -27,18 +27,18 @@ struct HostGlobal {
 }
 
 /// `chunk`'s scope tree, its tables sized from `counts`, the parse's or the
-/// default, read against the stdlib of its version in `environment`.
+/// default, read against the stdlib of `target`, the dialect `chunk` was
+/// parsed as.
 ///
-/// The environment only matters for Luau, where `Roblox` selects the
-/// Roblox runtime's stdlib and `Standalone` open-source Luau's. The scope
-/// tree is the same either way.
+/// For Luau, the scope tree is the same whether or not the target is Roblox,
+/// which only adds the Roblox runtime's stdlib.
 #[must_use]
 pub fn analyze<'ast>(
     chunk: &'ast Chunk<'ast>,
     counts: TreeCounts,
-    environment: StdlibEnvironment,
+    target: LuaTarget,
 ) -> SemanticAnalysis<'ast> {
-    analyze_with(chunk, counts, environment, &mut ())
+    analyze_with(chunk, counts, target, &mut ())
 }
 
 /// [`analyze`], showing `sink` each node the walk reaches.
@@ -46,14 +46,15 @@ pub fn analyze<'ast>(
 pub fn analyze_with<'ast, Sink>(
     chunk: &'ast Chunk<'ast>,
     counts: TreeCounts,
-    environment: StdlibEnvironment,
+    target: LuaTarget,
     sink: &mut Sink,
 ) -> SemanticAnalysis<'ast>
 where
     Sink: NodeSink<'ast>,
 {
+    debug_assert_eq!(chunk.version, target.version(), "the target is the chunk's dialect");
     let (scope_tree, initialized_locals) = build_with_initializers(chunk, counts, sink);
-    let stdlib = library_for(chunk.version, environment);
+    let stdlib = library_for(target);
     let symbol_shapes = symbol_shapes(&scope_tree, stdlib, &initialized_locals);
     let host_globals = scope_tree
         .names()
@@ -77,13 +78,13 @@ impl<'ast> SemanticAnalysis<'ast> {
     }
 
     #[must_use]
-    pub const fn version(&self) -> LuaVersion {
-        self.stdlib.version
+    pub const fn target(&self) -> LuaTarget {
+        self.stdlib.target
     }
 
     #[must_use]
-    pub const fn environment(&self) -> StdlibEnvironment {
-        self.stdlib.environment
+    pub const fn version(&self) -> LuaVersion {
+        self.stdlib.target.version()
     }
 
     /// Marks `names` as globals the host defines beyond the stdlib, such as
@@ -103,7 +104,7 @@ impl<'ast> SemanticAnalysis<'ast> {
     }
 
     /// Whether `name` is recognized as a global: a stdlib entry for this
-    /// environment, an extra global, or a name a `global` statement in this
+    /// target, an extra global, or a name a `global` statement in this
     /// chunk declares.
     #[must_use]
     pub fn is_known_global(&self, name: &str) -> bool {
@@ -235,11 +236,7 @@ mod tests {
         source: &'ast str,
         version: LuaVersion,
     ) -> SemanticAnalysis<'ast> {
-        analyze(
-            parse(allocator, source, version),
-            TreeCounts::default(),
-            StdlibEnvironment::Standalone,
-        )
+        analyze(parse(allocator, source, version), TreeCounts::default(), version.into())
     }
 
     #[test]
@@ -357,11 +354,11 @@ return y",
     }
 
     #[test]
-    fn roblox_globals_known_only_in_roblox_environment() {
+    fn roblox_globals_known_only_on_roblox() {
         let allocator = Allocator::new();
         let chunk = parse(&allocator, "print(game, bit32)", LuaVersion::Luau);
-        let standalone = analyze(chunk, TreeCounts::default(), StdlibEnvironment::Standalone);
-        let roblox = analyze(chunk, TreeCounts::default(), StdlibEnvironment::Roblox);
+        let standalone = analyze(chunk, TreeCounts::default(), LuaTarget::Luau);
+        let roblox = analyze(chunk, TreeCounts::default(), LuaTarget::LuauRoblox);
         assert!(!standalone.is_known_global("game"));
         assert!(roblox.is_known_global("game"));
         assert!(standalone.is_known_global("bit32"));
@@ -371,7 +368,7 @@ return y",
     fn resolve_last_statement_call(source: &str, version: LuaVersion) -> Option<String> {
         let allocator = Allocator::new();
         let chunk = parse(&allocator, source, version);
-        let analysis = analyze(chunk, TreeCounts::default(), StdlibEnvironment::Standalone);
+        let analysis = analyze(chunk, TreeCounts::default(), version.into());
         let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
             panic!("the last statement must be a call");
         };
@@ -547,12 +544,7 @@ end",
 return t";
         let chunk = parse(&allocator, source, LuaVersion::Lua54);
         let mut recorder = Recorder { source: source.as_bytes(), seen: Vec::new() };
-        let _analysis = analyze_with(
-            chunk,
-            TreeCounts::default(),
-            StdlibEnvironment::Standalone,
-            &mut recorder,
-        );
+        let _analysis = analyze_with(chunk, TreeCounts::default(), LuaTarget::Lua54, &mut recorder);
         assert_eq!(
             recorder.seen,
             [

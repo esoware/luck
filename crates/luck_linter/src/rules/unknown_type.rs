@@ -63,7 +63,7 @@ fn check_literal(
     // Roblox `typeof` also returns datatype names (`"Instance"`,
     // `"Vector3"`) that aren't in this list, so only case typos of a
     // primitive are flagged there.
-    let is_roblox_typeof = callee == "typeof" && context.semantic.environment().is_roblox();
+    let is_roblox_typeof = callee == "typeof" && context.semantic.target().is_roblox();
     let case_match = primitives.iter().find(|primitive| primitive.eq_ignore_ascii_case(name));
     if is_roblox_typeof && case_match.is_none() {
         return;

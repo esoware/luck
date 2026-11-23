@@ -5,6 +5,19 @@ use crate::{LuaVersion, Span};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     Identifier,
+
+    // Contextual keywords, each a name wherever its keyword reading doesn't
+    // apply, and a name in every version that lacks it. They follow
+    // `Identifier`, so `is_name` is one comparison.
+    Continue, // Luau
+    Export,   // Luau
+    Const,    // Luau
+    Type,     // Luau
+    Typeof,   // Luau
+    Read,     // Luau
+    Write,    // Luau
+    Global,   // Lua 5.5
+
     Number,
     /// Luau: a numeral with the `i` suffix, which reads as an exact 64-bit
     /// integer.
@@ -153,7 +166,15 @@ impl TokenKind {
             Self::True => "true",
             Self::Until => "until",
             Self::While => "while",
-            Self::Goto => "goto", // Lua 5.2+
+            Self::Goto => "goto",         // Lua 5.2+
+            Self::Continue => "continue", // Luau
+            Self::Export => "export",     // Luau
+            Self::Const => "const",       // Luau
+            Self::Type => "type",         // Luau
+            Self::Typeof => "typeof",     // Luau
+            Self::Read => "read",         // Luau
+            Self::Write => "write",       // Luau
+            Self::Global => "global",     // Lua 5.5
             Self::Plus => "+",
             Self::Minus => "-",
             Self::Star => "*",
@@ -201,29 +222,215 @@ impl TokenKind {
         })
     }
 
-    /// The keyword `text` spells under `version`, or `None` when it's a name
-    /// there, as `goto` is on 5.1 and Luau.
+    /// The keyword or contextual keyword `text` spells under `version`, as the
+    /// lexer reads it, or `None` when it's an identifier there, as `goto` is
+    /// on 5.1 and Luau and `type` is outside Luau.
     #[inline]
     #[must_use]
     pub fn keyword(text: &str, version: LuaVersion) -> Option<Self> {
         let packed = pack_keyword_candidate(text.as_bytes())?;
         let &(keyword, kind) = KEYWORDS.get(keyword_slot(packed))?;
-        (keyword == packed && (kind != Self::Goto || version.has_goto())).then_some(kind)
+        (keyword == packed && kind.is_keyword_in(version)).then_some(kind)
     }
 
-    /// Whether `text` is a keyword under `version`, counting Luau's
-    /// contextual `continue` and Lua 5.5's contextual `global` as ones.
+    /// Whether code luck writes can't name a variable `text` under
+    /// `version`: a keyword, or Lua 5.5's `global`, which builds without
+    /// `LUA_COMPAT_GLOBAL` reserve. Every other contextual keyword is a name
+    /// wherever a name goes.
     #[must_use]
     pub fn is_reserved(text: &str, version: LuaVersion) -> bool {
-        Self::keyword(text, version).is_some()
-            || (version.has_continue() && text == "continue")
-            || (version.has_global() && text == "global")
+        Self::keyword(text, version).is_some_and(|kind| !kind.is_name() || kind == Self::Global)
+    }
+
+    /// Whether the parser reads this kind as a name where one goes: an
+    /// identifier, or a contextual keyword.
+    #[inline]
+    #[must_use]
+    pub const fn is_name(self) -> bool {
+        match self {
+            Self::Identifier
+            | Self::Continue
+            | Self::Export
+            | Self::Const
+            | Self::Type
+            | Self::Typeof
+            | Self::Read
+            | Self::Write
+            | Self::Global => true,
+            Self::Number
+            | Self::Integer
+            | Self::StringLiteral
+            | Self::InterpolatedStringBegin
+            | Self::InterpolatedStringMiddle
+            | Self::InterpolatedStringEnd
+            | Self::InterpolatedStringSimple
+            | Self::And
+            | Self::Break
+            | Self::Do
+            | Self::Else
+            | Self::ElseIf
+            | Self::End
+            | Self::False
+            | Self::For
+            | Self::Function
+            | Self::If
+            | Self::In
+            | Self::Local
+            | Self::Nil
+            | Self::Not
+            | Self::Or
+            | Self::Repeat
+            | Self::Return
+            | Self::Then
+            | Self::True
+            | Self::Until
+            | Self::While
+            | Self::Goto
+            | Self::Plus
+            | Self::Minus
+            | Self::Star
+            | Self::Slash
+            | Self::FloorDiv
+            | Self::Percent
+            | Self::Caret
+            | Self::Hash
+            | Self::Ampersand
+            | Self::Tilde
+            | Self::Pipe
+            | Self::ShiftLeft
+            | Self::ShiftRight
+            | Self::Dot
+            | Self::DotDot
+            | Self::DotDotDot
+            | Self::Semicolon
+            | Self::Colon
+            | Self::DoubleColon
+            | Self::Comma
+            | Self::Equal
+            | Self::EqualEqual
+            | Self::TildeEqual
+            | Self::Less
+            | Self::LessEqual
+            | Self::Greater
+            | Self::GreaterEqual
+            | Self::LeftParen
+            | Self::RightParen
+            | Self::LeftBrace
+            | Self::RightBrace
+            | Self::LeftBracket
+            | Self::RightBracket
+            | Self::PlusEqual
+            | Self::MinusEqual
+            | Self::StarEqual
+            | Self::SlashEqual
+            | Self::FloorDivEqual
+            | Self::PercentEqual
+            | Self::CaretEqual
+            | Self::DotDotEqual
+            | Self::At
+            | Self::Arrow
+            | Self::Question
+            | Self::Eof => false,
+        }
+    }
+
+    /// Whether `version` reads this keyword's spelling as the keyword, which
+    /// holds for every keyword but those only some versions have.
+    const fn is_keyword_in(self, version: LuaVersion) -> bool {
+        match self {
+            // Lua 5.2+
+            Self::Goto => version.has_goto(),
+            // Luau
+            Self::Continue => version.has_continue(),
+            // Luau
+            Self::Const => version.has_const_stmt(),
+            // Luau
+            Self::Export | Self::Type | Self::Typeof | Self::Read | Self::Write => {
+                version.has_type_syntax()
+            }
+            // Lua 5.5
+            Self::Global => version.has_global(),
+            Self::And
+            | Self::Break
+            | Self::Do
+            | Self::Else
+            | Self::ElseIf
+            | Self::End
+            | Self::False
+            | Self::For
+            | Self::Function
+            | Self::If
+            | Self::In
+            | Self::Local
+            | Self::Nil
+            | Self::Not
+            | Self::Or
+            | Self::Repeat
+            | Self::Return
+            | Self::Then
+            | Self::True
+            | Self::Until
+            | Self::While => true,
+            Self::Identifier
+            | Self::Number
+            | Self::Integer
+            | Self::StringLiteral
+            | Self::InterpolatedStringBegin
+            | Self::InterpolatedStringMiddle
+            | Self::InterpolatedStringEnd
+            | Self::InterpolatedStringSimple
+            | Self::Plus
+            | Self::Minus
+            | Self::Star
+            | Self::Slash
+            | Self::FloorDiv
+            | Self::Percent
+            | Self::Caret
+            | Self::Hash
+            | Self::Ampersand
+            | Self::Tilde
+            | Self::Pipe
+            | Self::ShiftLeft
+            | Self::ShiftRight
+            | Self::Dot
+            | Self::DotDot
+            | Self::DotDotDot
+            | Self::Semicolon
+            | Self::Colon
+            | Self::DoubleColon
+            | Self::Comma
+            | Self::Equal
+            | Self::EqualEqual
+            | Self::TildeEqual
+            | Self::Less
+            | Self::LessEqual
+            | Self::Greater
+            | Self::GreaterEqual
+            | Self::LeftParen
+            | Self::RightParen
+            | Self::LeftBrace
+            | Self::RightBrace
+            | Self::LeftBracket
+            | Self::RightBracket
+            | Self::PlusEqual
+            | Self::MinusEqual
+            | Self::StarEqual
+            | Self::SlashEqual
+            | Self::FloorDivEqual
+            | Self::PercentEqual
+            | Self::CaretEqual
+            | Self::DotDotEqual
+            | Self::At
+            | Self::Arrow
+            | Self::Question
+            | Self::Eof => false,
+        }
     }
 
     /// Whether `text` is spelled like an identifier: an ASCII letter or `_`,
     /// then ASCII letters, digits, and `_`. Keywords are spelled that way too,
     /// so a name check pairs this with a keyword check such as
-    /// [`Self::keyword`] or [`Self::is_reserved`].
+    /// [`Self::is_reserved`].
     #[must_use]
     pub fn is_identifier_shaped(text: &str) -> bool {
         let mut bytes = text.bytes();
@@ -233,7 +440,7 @@ impl TokenKind {
 }
 
 /// Every keyword is 2 to 8 bytes, so its spelling packs into a `u64`.
-const KEYWORD_KINDS: [TokenKind; 22] = [
+const KEYWORD_KINDS: [TokenKind; 30] = [
     TokenKind::And,
     TokenKind::Break,
     TokenKind::Do,
@@ -256,16 +463,24 @@ const KEYWORD_KINDS: [TokenKind; 22] = [
     TokenKind::True,
     TokenKind::Until,
     TokenKind::While,
+    TokenKind::Continue,
+    TokenKind::Export,
+    TokenKind::Const,
+    TokenKind::Type,
+    TokenKind::Typeof,
+    TokenKind::Read,
+    TokenKind::Write,
+    TokenKind::Global,
 ];
 
 /// Gives each keyword its own slot. Building [`KEYWORDS`] fails to compile on
 /// a collision, so a new keyword may need a new multiplier.
-const KEYWORD_HASH_MULTIPLIER: u64 = 0x2A3D_9F0D_57A9_2BDF;
+const KEYWORD_HASH_MULTIPLIER: u64 = 0x4FA6_9611_45F2_1E95;
 
 /// A perfect hash table of the keywords, each beside its little-endian
 /// spelling, zero-padded. A free slot holds 0, which no name packs to.
-static KEYWORDS: [(u64, TokenKind); 32] = {
-    let mut table = [(0, TokenKind::Identifier); 32];
+static KEYWORDS: [(u64, TokenKind); 64] = {
+    let mut table = [(0, TokenKind::Identifier); 64];
     let mut i = 0;
     while i < KEYWORD_KINDS.len() {
         #[expect(clippy::indexing_slicing, reason = "const evaluation checks every index")]
@@ -289,9 +504,9 @@ static KEYWORDS: [(u64, TokenKind); 32] = {
 };
 
 #[inline]
-#[expect(clippy::as_conversions, reason = "the shift leaves 5 bits, which fit any usize")]
+#[expect(clippy::as_conversions, reason = "the shift leaves 6 bits, which fit any usize")]
 const fn keyword_slot(packed: u64) -> usize {
-    (packed.wrapping_mul(KEYWORD_HASH_MULTIPLIER) >> 59) as usize
+    (packed.wrapping_mul(KEYWORD_HASH_MULTIPLIER) >> 58) as usize
 }
 
 /// `bytes` packed as [`KEYWORDS`] packs a keyword, or `None` for a length no
@@ -329,7 +544,9 @@ pub struct Token {
     /// from the start of the source, comments included.
     pub has_line_break_before: bool,
     /// Whether this string or interpolated string piece runs to the end of its
-    /// line or of the source without its closing delimiter.
+    /// line or of the source without its closing delimiter, or for `Eof`,
+    /// whether a block comment ran to it without its closer. Only the last
+    /// comment can.
     pub is_unterminated: bool,
 }
 
@@ -367,7 +584,7 @@ impl Token {
     }
 
     /// How an error message names this token: its kind, followed by its text
-    /// for a name or a numeral.
+    /// for a name, a contextual keyword included, or a numeral.
     #[must_use]
     pub fn display(self, source: &[u8]) -> impl fmt::Display {
         TokenDisplay { kind: self.kind, text: self.text(source) }
@@ -381,8 +598,10 @@ struct TokenDisplay<'source> {
 
 impl fmt::Display for TokenDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if matches!(self.kind, TokenKind::Identifier | TokenKind::Number | TokenKind::Integer) {
-            // A name or a numeral is ASCII, which this writes as it is.
+        // A name or a numeral is ASCII, which this writes as it is.
+        if self.kind.is_name() {
+            write!(f, "{} `{}`", TokenKind::Identifier, self.text.escape_ascii())
+        } else if matches!(self.kind, TokenKind::Number | TokenKind::Integer) {
             write!(f, "{} `{}`", self.kind, self.text.escape_ascii())
         } else {
             self.kind.fmt(f)

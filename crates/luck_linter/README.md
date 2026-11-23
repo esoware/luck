@@ -25,8 +25,8 @@ A diagnostic may carry a `Fix`, a set of text edits applied together, of one `Fi
 
 ```rust
 use luck_allocator::Allocator;
-use luck_core::LuaTarget;
 use luck_linter::{FixKind, LintConfig};
+use luck_token::LuaTarget;
 
 let allocator = Allocator::new();
 let config = LintConfig::default();

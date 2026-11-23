@@ -4,9 +4,9 @@
 use core::fmt;
 
 use luck_bundler::DynamicRequire;
-use luck_core::LuaTarget;
 use luck_linter::LintConfig;
 use luck_minifier::TransformConfig;
+use luck_token::LuaTarget;
 use rustc_hash::FxHashMap;
 use serde::de::{Deserialize, Deserializer, Error, SeqAccess, Visitor};
 

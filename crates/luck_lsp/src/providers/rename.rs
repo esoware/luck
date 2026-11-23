@@ -100,7 +100,7 @@ pub(crate) fn rename(
 fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), String> {
     // Checked under the document's Lua version, so keywords are rejected
     // version-accurately (`goto` is an identifier in 5.1).
-    if !is_valid_identifier_in(new_name, document.lua_version()) {
+    if !is_valid_identifier_in(new_name, document.version()) {
         return Err(format!("`{new_name}` isn't a valid identifier"));
     }
     // The analysis knows only the configured globals the document names.
@@ -124,7 +124,7 @@ mod tests {
     use ls_types::{
         Range, TextDocumentIdentifier, TextDocumentPositionParams, Uri, WorkDoneProgressParams,
     };
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;

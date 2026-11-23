@@ -42,7 +42,7 @@ fn block_comment_closes_at_its_own_level() {
 }
 
 /// A block comment with no closer is an error and still a comment, through
-/// the end of the source, and is listed as cut off.
+/// the end of the source, and the `Eof` token after it says it was cut off.
 #[test]
 fn unterminated_block_comment_is_a_comment_to_the_end_of_the_source() {
     for (source, start, kind, position) in [
@@ -83,14 +83,14 @@ y = 2
             }],
             "{source:?}"
         );
-        assert_eq!(result.unterminated, [span], "{source:?}");
+        assert!(eof.is_unterminated, "{source:?}");
     }
 }
 
 #[test]
-fn terminated_block_comment_is_not_listed_as_cut_off() {
+fn terminated_block_comment_leaves_the_end_whole() {
     let result = lex_lua51("x = [[a]] --[[ b ]]");
-    assert_eq!(result.unterminated, Vec::<Span>::new());
+    assert!(result.tokens.iter().all(|token| !token.is_unterminated), "{:?}", result.tokens);
 }
 
 #[test]

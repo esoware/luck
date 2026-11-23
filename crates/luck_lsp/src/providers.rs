@@ -29,11 +29,10 @@ mod tests {
         ReferenceContext, ReferenceParams, RenameParams, TextDocumentIdentifier,
         TextDocumentPositionParams, Uri, WorkDoneProgressParams,
     };
-    use luck_core::LuaTarget;
     use luck_testgen::{
         broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
     };
-    use luck_token::LuaVersion;
+    use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
     use crate::fixtures::document;

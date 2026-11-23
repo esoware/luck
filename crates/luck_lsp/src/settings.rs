@@ -11,12 +11,11 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use luck_config::{CONFIG_FILE_NAME, Editorconfigs, Project, find_config};
-use luck_core::LuaTarget;
 use luck_diagnostics::FileDiagnostics;
 use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
 use luck_resolver::{ResolveOptions, Resolver};
-use luck_token::LuaVersion;
+use luck_token::{LuaTarget, LuaVersion};
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 

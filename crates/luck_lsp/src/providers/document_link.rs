@@ -41,7 +41,7 @@ fn collect_links(
         position,
         offset: position.map(|at| document.offset(at)),
         document_path,
-        resolver: document.settings().project.resolver(document.lua_version()),
+        resolver: document.settings().project.resolver(document.version()),
         links: Vec::new(),
     };
     collector.visit_block(&document.parse().chunk.block);
@@ -136,7 +136,7 @@ mod tests {
     use std::path::Path;
 
     use luck_config::Project;
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document_in;

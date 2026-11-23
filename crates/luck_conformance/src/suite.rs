@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::{fs, io, thread};
 
 use flate2::read::GzDecoder;
-use luck_core::LuaTarget;
+use luck_token::LuaTarget;
 use tar::Archive;
 
 /// One dialect's official test suite, pinned to the release of the

@@ -80,7 +80,7 @@ fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
         }
     };
 
-    let version = file.project.target_for(Some(file_path)).lua_version();
+    let version = file.project.target_for(Some(file_path)).version();
     let mut result = luck_parser::parse(allocator, &source, version);
     if result.errors.is_empty() {
         // The compile-time errors real Lua reports beyond the grammar, such as

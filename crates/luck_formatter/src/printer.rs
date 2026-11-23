@@ -31,7 +31,8 @@ use core::mem;
 use core::ops::Range;
 
 use luck_allocator::{Allocator, List};
-use luck_token::{CodeBuffer, index_to_offset, offset_to_index};
+use luck_data_structures::CodeBuffer;
+use luck_token::{index_to_offset, offset_to_index};
 
 use crate::ir::{FormatElement, GroupId, LineMode, TextWidth, columns};
 use crate::{FormatOptions, IndentStyle, LineEndings};

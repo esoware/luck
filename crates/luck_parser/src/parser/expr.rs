@@ -137,7 +137,15 @@ impl<'ast> Parser<'ast> {
     #[inline]
     fn parse_primary_expr(&mut self) -> Expression<'ast> {
         match self.peek() {
-            TokenKind::Identifier => {
+            TokenKind::Identifier
+            | TokenKind::Continue
+            | TokenKind::Export
+            | TokenKind::Const
+            | TokenKind::Type
+            | TokenKind::Typeof
+            | TokenKind::Read
+            | TokenKind::Write
+            | TokenKind::Global => {
                 let name = self.advance_name();
                 self.counts.name_uses = self.counts.name_uses.wrapping_add(1);
                 let start = name.span.start;
@@ -593,7 +601,7 @@ impl<'ast> Parser<'ast> {
             let value = self.parse_expr(0);
             let span = Span::new(open.start, self.previous_span.end);
             Field::Bracketed { span, key, value }
-        } else if self.is_at_identifier() && self.peek_next() == TokenKind::Equal {
+        } else if self.is_at_name() && self.peek_next() == TokenKind::Equal {
             // `Name = expr`, which needs one token of lookahead for the `=`.
             let name = self.advance_name();
             self.advance();

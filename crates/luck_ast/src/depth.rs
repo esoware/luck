@@ -24,16 +24,16 @@ pub const MAX_NESTING_DEPTH: usize = 2001;
 
 /// The stack a thread needs to run any luck stage on any input.
 ///
-/// That's about six times the most any stage was measured to take on a tree
-/// [`MAX_NESTING_DEPTH`] deep in an optimized build, on Linux and Windows,
-/// and two and a half times in an unoptimized one. A main thread starts with
-/// the platform's stack, 1 MiB on Windows, and a spawned Rust thread with
-/// 2 MiB, so give this to every thread that parses, prints, formats,
-/// minifies, analyzes, lints, or bundles, with
-/// `std::thread::Builder::stack_size`. The linter runs a large file's rules
-/// on rayon's pool, and `luck_bundler` reads modules there, so build that
-/// with `ThreadPoolBuilder::stack_size` too. `luck_lsp` starts its own
-/// workers with it.
+/// That's at least six times the most any stage was measured to take on a
+/// tree [`MAX_NESTING_DEPTH`] deep in an optimized build, and two and a half
+/// times in an unoptimized one, with Cargo's default full debuginfo or with
+/// line tables only. A main thread starts with the platform's stack, 1 MiB
+/// on Windows, and a spawned Rust thread with 2 MiB, so give this to every
+/// thread that parses, prints, formats, minifies, analyzes, lints, or
+/// bundles, with `std::thread::Builder::stack_size`. The linter runs a large
+/// file's rules on rayon's pool, and `luck_bundler` reads modules there, so
+/// build that with `ThreadPoolBuilder::stack_size` too. `luck_lsp` starts its
+/// own workers with it.
 ///
 /// A stack is reserved address space, and a thread takes memory only for the
 /// pages it touches.

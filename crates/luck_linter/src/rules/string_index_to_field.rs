@@ -104,9 +104,19 @@ mod tests {
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
+    /// Luau reads `continue` as a name wherever a name goes, a field included.
     #[test]
-    fn ignores_luau_continue_key() {
-        let diags = run_rule(&StringIndexToField, "local x = t[\"continue\"]", LuaVersion::Luau);
+    fn flags_luau_continue_key() {
+        let source = "local x = t[\"continue\"]";
+        let diags = run_rule(&StringIndexToField, source, LuaVersion::Luau);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(fix_and_reparse(source, &diags, LuaVersion::Luau), "local x = t.continue");
+    }
+
+    /// Lua 5.5 builds without `LUA_COMPAT_GLOBAL` reserve `global`.
+    #[test]
+    fn ignores_lua55_global_key() {
+        let diags = run_rule(&StringIndexToField, "local x = t[\"global\"]", LuaVersion::Lua55);
         assert!(diags.is_empty(), "{diags:?}");
     }
 

@@ -3,10 +3,9 @@
 
 use luck_allocator::Allocator;
 use luck_ast::MIN_STACK_BYTES;
-use luck_core::LuaTarget;
 use luck_linter::{FixKind, LintConfig};
 use luck_testgen::{deep_and_long_sources, on_the_smallest_stack};
-use luck_token::LuaVersion;
+use luck_token::LuaTarget;
 use rayon::ThreadPoolBuilder;
 
 fn every_rule() -> LintConfig {
@@ -30,7 +29,7 @@ fn linting_and_fixing_fit_the_smallest_stack() {
         let pool =
             ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build().expect("the pool starts");
         let config = every_rule();
-        for &target in targets(version) {
+        for target in LuaTarget::ALL.into_iter().filter(|target| target.version() == version) {
             pool.install(|| {
                 let allocator = Allocator::new();
                 let fixed = luck_linter::fix(
@@ -45,15 +44,4 @@ fn linting_and_fixing_fit_the_smallest_stack() {
             });
         }
     });
-}
-
-const fn targets(version: LuaVersion) -> &'static [LuaTarget] {
-    match version {
-        LuaVersion::Lua51 => &[LuaTarget::Lua51],
-        LuaVersion::Lua52 => &[LuaTarget::Lua52],
-        LuaVersion::Lua53 => &[LuaTarget::Lua53],
-        LuaVersion::Lua54 => &[LuaTarget::Lua54],
-        LuaVersion::Lua55 => &[LuaTarget::Lua55],
-        LuaVersion::Luau => &[LuaTarget::Luau, LuaTarget::LuauRoblox],
-    }
 }

@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
 use luck_allocator::Allocator;
 use luck_config::Project;
-use luck_core::LuaTarget;
 use luck_diagnostics::{Diagnostic, Severity};
 use luck_linter::{Category, FixError, FixKind, Fixed, LintConfig, Message, RuleLevel};
 use luck_resolver::{FileSystem as _, FileSystemOs};
-use luck_token::LuaVersion;
+use luck_token::{LuaTarget, LuaVersion};
 
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source, write_output};
@@ -328,7 +327,7 @@ impl LintArgs {
 
         let (finding_errors, total_warnings) = severity_counts(&messages);
         let total_errors = finding_errors.saturating_add(usize::from(fix_error.is_some()));
-        let version = target.lua_version();
+        let version = target.version();
 
         let rendered = self.rendered(stdin_path, current_source, messages, version, is_quiet);
         let _unused = if self.format.is_for_tools() && fixes.is_empty() {
@@ -415,7 +414,7 @@ impl LintArgs {
         };
 
         let (finding_errors, warning_count) = severity_counts(&messages);
-        let version = target.lua_version();
+        let version = target.version();
         let label = file_path.to_string_lossy();
         let rendered = self.rendered(&label, current_source, messages, version, is_quiet);
         // Fixes that couldn't be made or written fail the run, as an unread

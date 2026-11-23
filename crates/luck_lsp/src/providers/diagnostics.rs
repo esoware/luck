@@ -89,8 +89,8 @@ where
 #[cfg(test)]
 mod tests {
     use ls_types::Position;
-    use luck_core::LuaTarget;
     use luck_linter::{Category, LintConfig, RuleLevel};
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::{document, document_linted_by};

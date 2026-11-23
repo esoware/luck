@@ -131,7 +131,7 @@ impl<'ast> Visit<'ast> for SpanStack<'_> {
 #[cfg(test)]
 mod tests {
     use ls_types::Range;
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;

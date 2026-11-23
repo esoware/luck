@@ -193,7 +193,7 @@ impl FmtArgs {
         })?;
 
         let file_path = Path::new(stdin_path);
-        let version = project.target_for(Some(file_path)).lua_version();
+        let version = project.target_for(Some(file_path)).version();
         let options = self.format_options(&Editorconfigs::default(), project, file_path);
 
         match format_document(&Allocator::new(), &source, file_path, version, &options, range) {
@@ -246,7 +246,7 @@ impl FmtArgs {
         };
 
         let options = self.format_options(editorconfigs, &file.project, file_path);
-        let version = file.project.target_for(Some(file_path)).lua_version();
+        let version = file.project.target_for(Some(file_path)).version();
         let formatted =
             match format_document(allocator, &source, file_path, version, &options, range) {
                 FormatOutcome::Failed(rendered) => return FileOutcome::Failed(rendered),

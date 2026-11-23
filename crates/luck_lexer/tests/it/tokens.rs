@@ -336,13 +336,16 @@ fn goto_is_a_keyword_only_in_lua52_plus() {
 }
 
 #[test]
-fn global_is_a_name_in_every_version() {
+fn a_contextual_keyword_lexes_as_its_own_kind_only_where_its_version_has_it() {
     for version in LuaVersion::ALL {
-        assert_eq!(
-            first_kind_in("global", version),
-            TokenKind::Identifier,
-            "global should be identifier in {version:?}"
-        );
+        for (text, kind, has_it) in [
+            ("continue", TokenKind::Continue, version.has_continue()),
+            ("type", TokenKind::Type, version.has_type_syntax()),
+            ("global", TokenKind::Global, version.has_global()),
+        ] {
+            let expected = if has_it { kind } else { TokenKind::Identifier };
+            assert_eq!(first_kind_in(text, version), expected, "{text} in {version:?}");
+        }
     }
 }
 
@@ -364,7 +367,7 @@ fn lua52_goto_and_label_lex_token_by_token() {
 fn lua55_global_stmt_lexes_token_by_token() {
     assert_eq!(
         kinds_in("global x = 5", LuaVersion::Lua55),
-        vec![TokenKind::Identifier, TokenKind::Identifier, TokenKind::Equal, TokenKind::Number,]
+        vec![TokenKind::Global, TokenKind::Identifier, TokenKind::Equal, TokenKind::Number,]
     );
 }
 

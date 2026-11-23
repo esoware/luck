@@ -204,40 +204,44 @@ fn flags_e013_at_the_construct_a_wrapper_pushes_past_the_cap() {
 
 #[test]
 fn flags_e013_in_every_module_past_the_cap() {
-    let deep = format!("return {}\n", in_tables(MAX_NESTING_DEPTH - 1));
-    let errors = bundle_files(
-        "main.lua",
-        &[
-            (
-                "main.lua",
-                "\
+    with_the_smallest_stack(|| {
+        let deep = format!("return {}\n", in_tables(MAX_NESTING_DEPTH - 1));
+        let errors = bundle_files(
+            "main.lua",
+            &[
+                (
+                    "main.lua",
+                    "\
 require(\"a\")
 require(\"b\")
 ",
-            ),
-            ("a.lua", &deep),
-            ("b.lua", &deep),
-        ],
-        LuaVersion::Lua54,
-    )
-    .expect_err("neither module fits");
-    let located = located(&errors);
-    let mut files: Vec<&str> = located
-        .iter()
-        .filter(|(_, error)| error.code == "E013")
-        .filter_map(|(path, _)| path.rsplit('/').next())
-        .collect();
-    files.sort_unstable();
-    assert_eq!(files, ["a.lua", "b.lua"], "{errors:?}");
+                ),
+                ("a.lua", &deep),
+                ("b.lua", &deep),
+            ],
+            LuaVersion::Lua54,
+        )
+        .expect_err("neither module fits");
+        let located = located(&errors);
+        let mut files: Vec<&str> = located
+            .iter()
+            .filter(|(_, error)| error.code == "E013")
+            .filter_map(|(path, _)| path.rsplit('/').next())
+            .collect();
+        files.sort_unstable();
+        assert_eq!(files, ["a.lua", "b.lua"], "{errors:?}");
+    });
 }
 
 #[test]
 fn lone_module_at_the_cap_bundles_verbatim() {
-    let source = format!("return {}\n", in_tables(MAX_NESTING_DEPTH - 1));
-    let output = bundle_files("main.lua", &[("main.lua", &source)], LuaVersion::Lua54)
-        .expect("a lone module needs no wrapper")
-        .output;
-    assert_eq!(output, source.as_bytes());
+    with_the_smallest_stack(|| {
+        let source = format!("return {}\n", in_tables(MAX_NESTING_DEPTH - 1));
+        let output = bundle_files("main.lua", &[("main.lua", &source)], LuaVersion::Lua54)
+            .expect("a lone module needs no wrapper")
+            .output;
+        assert_eq!(output, source.as_bytes());
+    });
 }
 
 /// A module that exports `value` from the export table, since a closure
@@ -259,47 +263,50 @@ print(deep)
 
 #[test]
 fn luau_export_reads_are_measured_as_lowered() {
-    let bundle_export_module = |source: &str| {
-        bundle_files(
-            "main.luau",
-            &[
-                (
-                    "main.luau",
-                    "\
+    with_the_smallest_stack(|| {
+        let bundle_export_module = |source: &str| {
+            bundle_files(
+                "main.luau",
+                &[
+                    (
+                        "main.luau",
+                        "\
 local x = require(\"./x\")
 print(x)
 ",
-                ),
-                ("x.luau", source),
-            ],
-            LuaVersion::Luau,
+                    ),
+                    ("x.luau", source),
+                ],
+                LuaVersion::Luau,
+            )
+        };
+
+        let literal = luau_table_export_module(MAX_NESTING_DEPTH - 3, "1");
+        let output = String::from_utf8(
+            bundle_export_module(&literal).expect("a literal at the cap fits").output,
         )
-    };
+        .unwrap();
+        assert!(output.contains("__luck_exports.value"), "{output}");
+        let allocator = Allocator::new();
+        let reparsed = luck_parser::parse(&allocator, output.as_bytes(), LuaVersion::Luau);
+        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
 
-    let literal = luau_table_export_module(MAX_NESTING_DEPTH - 3, "1");
-    let output = String::from_utf8(
-        bundle_export_module(&literal).expect("a literal at the cap fits").output,
-    )
-    .unwrap();
-    assert!(output.contains("__luck_exports.value"), "{output}");
-    let allocator = Allocator::new();
-    let reparsed = luck_parser::parse(&allocator, output.as_bytes(), LuaVersion::Luau);
-    assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+        // Lowering reads `value` as a field of the export table, one level deeper.
+        let export_read = luau_table_export_module(MAX_NESTING_DEPTH - 3, "value");
+        let errors =
+            bundle_export_module(&export_read).expect_err("the lowered read passes the cap");
+        let located = located(&errors);
+        let [(_, error)] = located.as_slice() else {
+            panic!("expected one error: {errors:?}");
+        };
+        assert_eq!(error.code, "E013", "{error:?}");
+        assert_eq!(
+            error.span.map(|span| span.text(export_read.as_bytes())),
+            Some(&b"value"[..]),
+            "{error:?}"
+        );
 
-    // Lowering reads `value` as a field of the export table, one level deeper.
-    let export_read = luau_table_export_module(MAX_NESTING_DEPTH - 3, "value");
-    let errors = bundle_export_module(&export_read).expect_err("the lowered read passes the cap");
-    let located = located(&errors);
-    let [(_, error)] = located.as_slice() else {
-        panic!("expected one error: {errors:?}");
-    };
-    assert_eq!(error.code, "E013", "{error:?}");
-    assert_eq!(
-        error.span.map(|span| span.text(export_read.as_bytes())),
-        Some(&b"value"[..]),
-        "{error:?}"
-    );
-
-    let shallower_read = luau_table_export_module(MAX_NESTING_DEPTH - 4, "value");
-    bundle_export_module(&shallower_read).expect("one level shallower fits");
+        let shallower_read = luau_table_export_module(MAX_NESTING_DEPTH - 4, "value");
+        bundle_export_module(&shallower_read).expect("one level shallower fits");
+    });
 }
