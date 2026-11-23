@@ -8,9 +8,9 @@
 //! A chain resolves from its prefix forward, a suffix at a time, so what it
 //! reads, or what any of its calls calls, costs one pass over it.
 
-use luck_ast::{Call, ChainHead, Expression, Name, Suffix, SuffixedExpression};
+use luck_ast::{AstKind, Call, ChainHead, Expression, Name, Suffix, SuffixedExpression};
+use luck_semantic::{Scoping, Semantic, SymbolId};
 
-use crate::scope::{ScopeTree, SymbolId};
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
 /// What a chain's head reads, as far as it's known.
@@ -31,7 +31,7 @@ impl HeadState {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ShapeResolver<'input> {
-    tree: &'input ScopeTree<'input>,
+    tree: &'input Scoping,
     library: &'static StdlibLibrary,
     /// Each symbol's shape, by symbol index.
     symbol_shapes: &'input [Option<&'static str>],
@@ -39,7 +39,7 @@ pub(crate) struct ShapeResolver<'input> {
 
 impl<'input> ShapeResolver<'input> {
     pub(crate) const fn new(
-        tree: &'input ScopeTree<'input>,
+        tree: &'input Scoping,
         library: &'static StdlibLibrary,
         symbol_shapes: &'input [Option<&'static str>],
     ) -> Self {
@@ -188,22 +188,34 @@ fn string_shape(library: &StdlibLibrary) -> Option<&'static str> {
 
 /// Each symbol's shape, by symbol index.
 ///
-/// Only a never-reassigned local in `initialized_locals` whose initializer
-/// has a known shape has one. A local comes before any initializer that
-/// reads it, so a shaped local seeds later ones.
+/// Only a never-reassigned local that a `local` statement with one value
+/// per name declares, and whose value has a known shape, has one. Nodes are
+/// in source order, so a local comes before any value that can read it, and
+/// a shaped local seeds later ones.
 pub(crate) fn symbol_shapes(
-    tree: &ScopeTree<'_>,
+    semantic: &Semantic<'_>,
     library: &'static StdlibLibrary,
-    initialized_locals: &[(SymbolId, &Expression<'_>)],
 ) -> Vec<Option<&'static str>> {
+    let tree = semantic.scoping();
     let mut shapes = vec![None; tree.symbols().len()];
-    for &(symbol, initializer) in initialized_locals {
-        if tree.symbol(symbol).is_modified {
+    for (_, node) in semantic.nodes().iter() {
+        let AstKind::LocalAssignment(local) = node.kind() else {
+            continue;
+        };
+        if local.exprs.len() != local.names.len() {
             continue;
         }
-        let shape = ShapeResolver::new(tree, library, &shapes).expr_shape(initializer);
-        if let Some(slot) = shapes.get_mut(symbol.index()) {
-            *slot = shape;
+        for (attributed, initializer) in local.names.iter().zip(&local.exprs) {
+            let Some(symbol) = tree.symbol_of(&attributed.name) else {
+                continue;
+            };
+            if tree.symbol(symbol).is_modified {
+                continue;
+            }
+            let shape = ShapeResolver::new(tree, library, &shapes).expr_shape(initializer);
+            if let Some(slot) = shapes.get_mut(symbol.index()) {
+                *slot = shape;
+            }
         }
     }
     shapes
@@ -288,12 +300,11 @@ impl<'chain> ChainCallees<'chain> {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_ast::TreeCounts;
+    use luck_semantic::SemanticBuilder;
     use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
     use crate::fixtures::parse;
-    use crate::scope::build_with_initializers;
     use crate::stdlib_catalog::{FUNCTION, VALUE, optional, required, signature};
     use crate::stdlib_model::{
         StdlibArgKind, StdlibFunction, StdlibNamespace, StdlibShape, StdlibValue, stdlib_map,
@@ -447,9 +458,9 @@ mod tests {
     fn shape_of(source: &str, name: &str) -> Option<&'static str> {
         let allocator = Allocator::new();
         let chunk = parse(&allocator, source, LuaVersion::Lua54);
-        let (tree, initialized_locals) =
-            build_with_initializers(chunk, TreeCounts::default(), &mut ());
-        let shapes = symbol_shapes(&tree, &SHAPED_LIBRARY, &initialized_locals);
+        let semantic = SemanticBuilder::new().with_nodes(true).build(chunk).semantic;
+        let shapes = symbol_shapes(&semantic, &SHAPED_LIBRARY);
+        let tree = semantic.scoping();
         let symbol = tree.symbols().iter().find(|symbol| tree.name(symbol.name) == name)?;
         shapes.get(symbol.id.index()).copied().flatten()
     }

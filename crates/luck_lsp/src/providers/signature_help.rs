@@ -2,7 +2,7 @@ use ls_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, Position,
     SignatureHelp, SignatureInformation,
 };
-use luck_semantic::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
+use luck_stdlib::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
 use luck_token::index_to_offset;
 
 use crate::document::DocumentState;

@@ -1,43 +1,32 @@
-use luck_allocator::Allocator;
-use luck_ast::Chunk;
-use luck_semantic::{StdlibLibrary, library_for};
-use luck_token::{LuaTarget, LuaVersion};
+use std::ffi::OsStr;
+use std::fs;
+use std::path::Path;
 
-/// `source`'s tree, which must parse cleanly, kept in `allocator` so it
-/// lives as long as the names it lends an analysis.
-pub(crate) fn parse<'ast>(
-    allocator: &'ast Allocator,
-    source: &'ast str,
-    version: LuaVersion,
-) -> &'ast Chunk<'ast> {
-    let parsed = luck_parser::parse(allocator, source.as_bytes(), version);
-    assert!(parsed.errors.is_empty(), "{source}: {:?}", parsed.errors);
-    allocator.alloc(parsed.chunk)
-}
+use luck_testgen::{
+    collect_fixture_files, detect_version, generate_full, generate_runtime_safe, is_error_fixture,
+};
+use luck_token::LuaVersion;
 
-pub(crate) const NUMBERED_VERSIONS: [LuaVersion; 5] =
-    [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55];
-
-pub(crate) fn standalone_library(version: LuaVersion) -> &'static StdlibLibrary {
-    library_for(version.into())
-}
-
-pub(crate) fn luau() -> &'static StdlibLibrary {
-    standalone_library(LuaVersion::Luau)
-}
-
-pub(crate) fn roblox() -> &'static StdlibLibrary {
-    library_for(LuaTarget::LuauRoblox)
-}
-
-pub(crate) fn all_libraries() -> [(&'static str, &'static StdlibLibrary); 7] {
-    [
-        ("lua51", standalone_library(LuaVersion::Lua51)),
-        ("lua52", standalone_library(LuaVersion::Lua52)),
-        ("lua53", standalone_library(LuaVersion::Lua53)),
-        ("lua54", standalone_library(LuaVersion::Lua54)),
-        ("lua55", standalone_library(LuaVersion::Lua55)),
-        ("luau", luau()),
-        ("luau_roblox", roblox()),
-    ]
+/// Runs `check` on every fixture that isn't an error fixture, as the
+/// version its path names, and on generated programs of every version.
+pub(crate) fn for_each_valid_source(mut check: impl FnMut(&str, LuaVersion)) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let mut checked = 0usize;
+    for path in collect_fixture_files(&root).unwrap() {
+        let relative = path.strip_prefix(&root).unwrap();
+        let is_source = matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau"));
+        if !is_source || is_error_fixture(relative) {
+            continue;
+        }
+        let source = fs::read_to_string(&path).unwrap();
+        check(&source, detect_version(relative));
+        checked = checked.saturating_add(1);
+    }
+    assert!(checked > 0, "no fixtures found under {}", root.display());
+    for version in LuaVersion::ALL {
+        for seed in 0..40 {
+            check(&generate_full(seed, version, 25), version);
+            check(&generate_runtime_safe(seed, version, 25), version);
+        }
+    }
 }

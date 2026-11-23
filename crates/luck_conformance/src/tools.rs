@@ -14,6 +14,7 @@ use luck_formatter::FormatOptions;
 use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
+use luck_semantic::SemanticBuilder;
 use luck_testgen::tree_shape;
 use luck_token::{LineIndex, LuaVersion};
 
@@ -23,6 +24,9 @@ use crate::{execute, runtime};
 
 /// What every check found on one file. Only the parser checks a file the
 /// reference interpreter rejects, so the other stages are `None` for one.
+///
+/// The parser's check takes in the errors semantic analysis finds beyond the
+/// grammar, as `luck check` does.
 #[derive(Debug)]
 pub(crate) struct FileReport {
     /// The reference interpreter rejects the file.
@@ -62,8 +66,16 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile) -> FileReport 
         Err(panicked) => return FileReport::stopped(suite, file, &panicked),
     };
     let lines = LineIndex::new(source, version);
+    let compile_errors = if parse.errors.is_empty() {
+        match guard(|| SemanticBuilder::new().with_check(true).build(&parse.chunk).diagnostics) {
+            Ok(errors) => errors,
+            Err(panicked) => return FileReport::stopped(suite, file, &panicked),
+        }
+    } else {
+        parse.errors.clone()
+    };
     if !execute::compiles(&file.bytes) {
-        let parser = parse.errors.first().map_or(TestResult::IncorrectlyPassed, |error| {
+        let parser = compile_errors.first().map_or(TestResult::IncorrectlyPassed, |error| {
             TestResult::CorrectError(render_errors(slice::from_ref(error), &lines))
         });
         return FileReport {
@@ -83,6 +95,12 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile) -> FileReport 
             &TestResult::ParseError(render_errors(&parse.errors, &lines)),
         );
     }
+    // The tree is whole, so every other stage still has something to check.
+    let parser = if compile_errors.is_empty() {
+        TestResult::Passed
+    } else {
+        TestResult::ParseError(render_errors(&compile_errors, &lines))
+    };
     let codegen = guard(|| codegen(&allocator, &parse)).unwrap_or_else(|error| error);
     let (formatter, format_output) =
         guard(|| formatter(&allocator, &parse)).unwrap_or_else(|error| (error, None));
@@ -94,7 +112,7 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile) -> FileReport 
     });
     FileReport {
         should_fail: false,
-        parser: TestResult::Passed,
+        parser,
         codegen: Some(codegen),
         formatter: Some(formatter),
         minifier: Some(minifier),

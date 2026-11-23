@@ -2,7 +2,7 @@ use core::ptr;
 
 use luck_allocator::Allocator;
 use luck_ast::{Call, Expression, Statement, TreeCounts};
-use luck_semantic::{
+use luck_stdlib::{
     StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, analyze,
     expand_replace_template, library_for,
 };
@@ -1061,7 +1061,7 @@ fn settings_provider_shapes() {
 fn resolve_last_call(source: &str) -> Option<String> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source, LuaVersion::Luau);
-    let analysis = analyze(chunk, TreeCounts::default(), LuaTarget::LuauRoblox);
+    let (analysis, _) = analyze(chunk, TreeCounts::default(), LuaTarget::LuauRoblox);
     let last_stmt = chunk.block.stmts.last()?;
     let chain = if let Statement::FunctionCall(chain) = last_stmt {
         chain
@@ -1081,7 +1081,7 @@ fn resolve_last_call(source: &str) -> Option<String> {
 fn chain_callee_names(source: &str) -> Vec<Option<String>> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source, LuaVersion::Lua54);
-    let analysis = analyze(chunk, TreeCounts::default(), LuaTarget::Lua54);
+    let (analysis, _) = analyze(chunk, TreeCounts::default(), LuaTarget::Lua54);
     let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
         panic!("the last statement must be a call");
     };

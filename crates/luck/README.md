@@ -11,8 +11,9 @@ The parsing crates are always present: `luck::allocator`, `luck::token`, `luck::
 | `codegen` | `luck::codegen`, the compact printer |
 | `minifier` | `luck::minifier` |
 | `formatter` | `luck::formatter` |
-| `semantic` | `luck::semantic`, scope analysis and the stdlib catalogs |
-| `linter` | `luck::linter`, and `semantic` |
+| `semantic` | `luck::semantic`, scoping, compile-time checks, the node table, and `require` sites, in one pass |
+| `stdlib` | `luck::stdlib`, each target's standard library and what a chunk reaches in it, and `semantic` |
+| `linter` | `luck::linter`, and `stdlib` |
 | `resolver` | `luck::resolver`, module resolution and source reading |
 | `bundler` | `luck::bundler`, and `resolver` and `minifier` |
 | `config` | `luck::config`, `luck.json` and `.editorconfig` loading, and the stages it configures |

@@ -26,6 +26,7 @@ luck_ast         = { workspace = true }
 luck_diagnostics = { workspace = true }
 luck_parser      = { workspace = true }
 luck_semantic    = { workspace = true }
+luck_stdlib      = { workspace = true }
 luck_token       = { workspace = true }
 
 bitflags   = { workspace = true }

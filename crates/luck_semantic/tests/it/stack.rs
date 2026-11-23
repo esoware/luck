@@ -2,10 +2,10 @@
 //! typed as it's typed, broken or not.
 
 use luck_allocator::Allocator;
+use luck_semantic::SemanticBuilder;
 use luck_testgen::{
     broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
 };
-use luck_token::LuaTarget;
 
 #[test]
 fn analyzing_fits_the_smallest_stack() {
@@ -16,11 +16,25 @@ fn analyzing_fits_the_smallest_stack() {
     on_the_smallest_stack(sources, |source, version| {
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
-        let counts = parsed.counts;
         let chunk = allocator.alloc(parsed.chunk);
-        for target in LuaTarget::ALL.into_iter().filter(|target| target.version() == version) {
-            let analysis = luck_semantic::analyze(chunk, counts, target);
-            assert!(!analysis.scope_tree().scopes().is_empty(), "the chunk has a scope");
-        }
+        let built = SemanticBuilder::new()
+            .with_counts(parsed.counts)
+            .with_check(true)
+            .with_nodes(true)
+            .with_requires(true)
+            .build(chunk);
+        assert!(!built.semantic.scoping().scopes().is_empty(), "the chunk has a scope");
+    });
+}
+
+#[test]
+fn checking_valid_deep_and_long_sources_finds_nothing() {
+    on_the_smallest_stack(deep_and_long_sources(), |source, version| {
+        let allocator = Allocator::new();
+        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.first());
+        let chunk = allocator.alloc(parsed.chunk);
+        let built = SemanticBuilder::new().with_check(true).build(chunk);
+        assert!(built.diagnostics.is_empty(), "the source is valid: {:?}", built.diagnostics);
     });
 }

@@ -20,7 +20,7 @@ impl_rule!(
 
 impl WholeRule for ValueOverwrittenBeforeRead {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scope_tree();
+        let tree = context.semantic.scoping();
         context
             .local_flow()
             .overwritten_values

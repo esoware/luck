@@ -3,14 +3,21 @@ use core::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
-use luck_token::LuaVersion;
+use luck_semantic::SemanticBuilder;
+use luck_token::{LuaVersion, Span};
 
-/// Parse errors, or validation errors after a clean parse, as `luck check`
+use crate::common::for_each_valid_source;
+
+/// Parse errors, or the checker's after a clean parse, as `luck check`
 /// reports them.
 fn check(source: &str, version: LuaVersion) -> Vec<Diagnostic> {
     let allocator = Allocator::new();
     let result = luck_parser::parse(&allocator, source.as_bytes(), version);
-    if result.errors.is_empty() { luck_parser::validate(&result.chunk) } else { result.errors }
+    if !result.errors.is_empty() {
+        return result.errors;
+    }
+    let chunk = allocator.alloc(result.chunk);
+    SemanticBuilder::new().with_counts(result.counts).with_check(true).build(chunk).diagnostics
 }
 
 fn assert_no_errors(errors: &[Diagnostic]) {
@@ -164,10 +171,10 @@ local function f(...value) value = 2 end",
 }
 
 #[test]
-fn validation_errors_follow_check_and_walk_order() {
-    // Not sorted by position: const writes come before goto errors, a value's
-    // writes before its own assignment's, and function bodies' gotos before
-    // the main chunk's.
+fn errors_come_in_source_order() {
+    // Found in the walk's order, a value's writes before its own assignment's
+    // and function bodies' gotos before the main chunk's, and reported in
+    // the source's.
     let source = "\
 goto top
 local x <const> = 1
@@ -181,10 +188,10 @@ x = function() x = 2 goto inner end";
     assert_eq!(
         found,
         [
-            (inner_write, "attempt to assign to const variable `x`"),
-            (outer_write, "attempt to assign to const variable `x`"),
-            (inner_goto, "no visible label `inner` for `goto`"),
             (0, "no visible label `top` for `goto`"),
+            (outer_write, "attempt to assign to const variable `x`"),
+            (inner_write, "attempt to assign to const variable `x`"),
+            (inner_goto, "no visible label `inner` for `goto`"),
         ]
     );
 }
@@ -222,7 +229,13 @@ local f = function() ::onlyinfunction:: end",
 
 #[test]
 fn duplicate_label_rejected() {
-    assert_has_errors(&check("::l:: ::l::", LuaVersion::Lua54), "duplicate label in block");
+    let errors = check("::l:: ::l::", LuaVersion::Lua54);
+    let [error] = &*errors else {
+        panic!("{errors:?}");
+    };
+    assert_eq!(error.message, "label `l` already defined");
+    let labeled: Vec<Span> = error.labels.iter().map(|label| label.span).collect();
+    assert_eq!(labeled, [Span::new(0, 5)], "the first `::l::` is labeled");
     assert_has_errors(
         &check("::l:: do ::l:: goto l end", LuaVersion::Lua54),
         "shadowing visible label",
@@ -485,13 +498,13 @@ goto late2 local z = 3 ::late2:: print(z)";
     assert_eq!(
         messages,
         [
-            (at("goto late end"), into_scope("late")),
-            (at("goto late2"), into_scope("late2")),
             (at("goto zeta\n"), unresolved("zeta")),
             (at("goto alpha"), unresolved("alpha")),
             (at("goto mid"), unresolved("mid")),
             (at("goto zeta end"), unresolved("zeta")),
             (at("goto beta"), unresolved("beta")),
+            (at("goto late end"), into_scope("late")),
+            (at("goto late2"), into_scope("late2")),
         ]
     );
 }
@@ -516,4 +529,42 @@ fn many_forward_gotos_resolve_without_rescanning_the_pending_ones() {
     }
     nested.push_str("::l0::\n");
     assert_eq!(check(&nested, LuaVersion::Lua54).len(), 59_999, "all but one label is missing");
+}
+
+#[test]
+fn type_function_cannot_reference_an_outer_local() {
+    for source in [
+        "\
+local x = 1
+type function f() return x end",
+        "\
+local x = 1
+type function f() local function g() return x end return g end",
+        "\
+local function g() end
+type function f() return g() end",
+    ] {
+        let errors = check(source, LuaVersion::Luau);
+        let [error] = &*errors else {
+            panic!("luau rejects the outer local in {source}: {errors:?}");
+        };
+        assert!(error.message.starts_with("type function cannot reference outer local"));
+    }
+    let errors = check(
+        "\
+type function f(t)
+    local inner = t
+    return function() return inner, types.number end
+end",
+        LuaVersion::Luau,
+    );
+    assert!(errors.is_empty(), "a type function's own locals are its to read: {errors:?}");
+}
+
+#[test]
+fn valid_sources_check_clean() {
+    for_each_valid_source(|source, version| {
+        let errors = check(source, version);
+        assert!(errors.is_empty(), "{version:?}: {errors:?}\n{source}");
+    });
 }

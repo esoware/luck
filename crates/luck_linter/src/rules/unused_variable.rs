@@ -23,7 +23,7 @@ impl_rule!(
 impl WholeRule for UnusedVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let tree = semantic.scope_tree();
+        let tree = semantic.scoping();
         let mut findings = Vec::new();
 
         for symbol in tree.symbols() {
@@ -46,6 +46,7 @@ impl WholeRule for UnusedVariable {
                 SymbolKind::FunctionName => "function",
                 SymbolKind::Parameter
                 | SymbolKind::ImplicitSelf
+                | SymbolKind::ImplicitArg
                 | SymbolKind::IteratorVariable
                 | SymbolKind::NumericForVariable => continue,
             };

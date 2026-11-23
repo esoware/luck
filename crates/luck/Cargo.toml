@@ -29,7 +29,8 @@ bundler   = ["luck_bundler", "resolver", "minifier"]
 minifier  = ["luck_minifier"]
 formatter = ["luck_formatter"]
 semantic  = ["luck_semantic"]
-linter    = ["luck_linter", "semantic"]
+stdlib    = ["luck_stdlib", "semantic"]
+linter    = ["luck_linter", "stdlib"]
 config    = ["luck_config", "bundler", "minifier", "formatter", "linter"]
 
 [dependencies]
@@ -46,6 +47,7 @@ luck_minifier    = { workspace = true, optional = true }
 luck_parser      = { workspace = true }
 luck_resolver    = { workspace = true, optional = true }
 luck_semantic    = { workspace = true, optional = true }
+luck_stdlib      = { workspace = true, optional = true }
 luck_token       = { workspace = true }
 
 [dev-dependencies]

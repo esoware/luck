@@ -1,5 +1,6 @@
 local counters = require("counters")
 
+global ipairs, print
 global total
 total = 0
 

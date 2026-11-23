@@ -274,7 +274,6 @@ impl<'ast> Parser<'ast> {
         // ordinary Luau.
         if self.is_at(TokenKind::Function) {
             let function_span = self.advance();
-            self.has_type_function = true;
             let name = self.expect_identifier_recover();
             let Some(body) = self.parse_function_body(function_span) else {
                 return Statement::Error(start_span);

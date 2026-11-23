@@ -23,7 +23,7 @@ luck init          # scaffold a luck.json
 luck build         # bundle the project into a single file
 luck fmt src/      # format
 luck lint src/     # lint (add --fix to auto-fix)
-luck check src/    # report syntax errors
+luck check src/    # report syntax and compile errors
 ```
 
 Configuration lives in `luck.json`. `lint`, `fmt`, `check`, and the language server give each file the nearest one above it, `build` takes the one above the working directory, and `bundle`, `graph`, and `minify` the one above their input. Build entries, module search paths, minifier passes, format options, lint rule settings, and per-extension targets all come from it, and `overrides` change the lint and format settings of the files their globs match. The `lua` and `luau` keys can each name any dialect, so a Roblox or Rojo tree that keeps Luau in `.lua` files sets `"lua": "roblox"`. A mistake in it is reported where it is, at load. See the schema shipped with the [VS Code extension](editors/vscode).

@@ -32,6 +32,7 @@ luck_minifier        = { version = "0.6.0", path = "crates/luck_minifier" }
 luck_parser          = { version = "0.6.0", path = "crates/luck_parser" }
 luck_resolver        = { version = "0.6.0", path = "crates/luck_resolver" }
 luck_semantic        = { version = "0.6.0", path = "crates/luck_semantic" }
+luck_stdlib          = { version = "0.6.0", path = "crates/luck_stdlib" }
 luck_testgen         = { path = "crates/luck_testgen" }
 luck_token           = { version = "0.6.0", path = "crates/luck_token" }
 
@@ -43,6 +44,7 @@ criterion2            = { version = "3", default-features = false }
 crossbeam-channel     = "0.5"
 flate2                = "1"
 globset               = { version = "0.4", default-features = false }
+hashbrown             = { version = "0.17", default-features = false, features = ["inline-more"] }
 humansize             = "2"
 ignore                = "0.4"
 insta                 = "1"

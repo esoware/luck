@@ -23,7 +23,7 @@ pub struct ParseResult<'ast> {
     /// them toward [`luck_ast::MAX_NESTING_DEPTH`]. With no errors, that's
     /// never fewer than [`luck_ast::block_nesting_depth`] finds.
     pub nesting_depth: usize,
-    /// What the chunk holds, for `luck_semantic::analyze` to size its tables
-    /// from.
+    /// What the chunk holds, for `luck_semantic::SemanticBuilder::with_counts`
+    /// to size its tables from.
     pub counts: TreeCounts,
 }

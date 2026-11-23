@@ -1,6 +1,6 @@
 linter_luau Summary:
 Files Linted   : 55/55
-Diagnostics    : 16601
+Diagnostics    : 16599
  12790 no_implicit_globals
    765 multiple_statements_per_line
    513 shadowing
@@ -12,7 +12,7 @@ Diagnostics    : 16601
    177 must_use
    150 unused_loop_variable
    110 unused_argument
-   103 value_overwritten_before_read
+   101 value_overwritten_before_read
     97 unused_variable
     61 divide_by_zero
     54 unnecessary_negation
@@ -419,7 +419,6 @@ luau-0.740/basic.luau
 50:32 multiple_statements_per_line: statement starts on the same line as the previous statement
 50:58 multiple_statements_per_line: statement starts on the same line as the previous statement
 53:1 no_implicit_globals: global variable `assert` used
-53:26 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
 53:39 multiple_statements_per_line: statement starts on the same line as the previous statement
 53:56 multiple_statements_per_line: statement starts on the same line as the previous statement
 54:1 no_implicit_globals: global variable `assert` used
@@ -427,7 +426,6 @@ luau-0.740/basic.luau
 54:45 multiple_statements_per_line: statement starts on the same line as the previous statement
 54:62 multiple_statements_per_line: statement starts on the same line as the previous statement
 55:1 no_implicit_globals: global variable `assert` used
-55:26 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
 55:39 multiple_statements_per_line: statement starts on the same line as the previous statement
 55:82 multiple_statements_per_line: statement starts on the same line as the previous statement
 56:1 no_implicit_globals: global variable `assert` used

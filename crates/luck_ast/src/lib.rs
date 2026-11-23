@@ -18,9 +18,10 @@
 //! decodes once, and its spelling as written, which a tree built in code
 //! leaves out. A parsed tree's leaves borrow the source, and a built tree's
 //! live in the arena, so a printer never needs the source. A name also holds
-//! a [`NameIndex`], a plain field that the parser numbers and a pass that
-//! holds the tree mutably may renumber. A tree is `Send` and `Sync`, and may
-//! join nodes from any number of arenas that outlive it.
+//! a [`NameIndex`], a plain field that the parser numbers, each name its own,
+//! by which semantic analysis finds what the name declares or refers to. A
+//! tree is `Send` and `Sync`, and may join nodes from any number of arenas
+//! that outlive it.
 //!
 //! `luck_ast_tools` generates the tree's support code from its types. Two
 //! traversals share one walk: [`Visit`] borrows the

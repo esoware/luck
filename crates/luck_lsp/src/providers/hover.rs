@@ -1,5 +1,5 @@
 use ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
-use luck_semantic::{StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibParam};
+use luck_stdlib::{StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibParam};
 use luck_token::LuaVersion;
 
 use crate::document::DocumentState;
@@ -14,7 +14,7 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
     let node = find_node_at(&document.parse().chunk.block, offset)?;
     let path = node.path();
     let semantic = document.semantic();
-    let tree = semantic.scope_tree();
+    let tree = semantic.scoping();
     // Resolving from the root's reference lets shaped locals (`f:read` after
     // `local f = io.open(...)`) resolve through their shape, and gives a
     // shadowed base (`local string = 1; string.format`) no stdlib hover

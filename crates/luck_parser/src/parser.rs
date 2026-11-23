@@ -25,7 +25,6 @@ use luck_token::{
 use rustc_hash::FxHashMap;
 
 use self::forgotten::label_forgotten_ends;
-use crate::validate::check_type_functions;
 use crate::{Groupings, ParseResult};
 
 /// The tree and every list in it go in `allocator`, and its names and
@@ -113,7 +112,6 @@ fn parse_recording<'ast>(
         has_module_return: false,
         has_value_exports: false,
         exported_names: FxHashMap::default(),
-        has_type_function: false,
         open: OpenConstructs::default(),
         has_syntax_error: false,
         errors: Vec::new(),
@@ -130,7 +128,6 @@ fn parse_recording<'ast>(
 
 /// Lua needs only one token of lookahead, so `token` and `next` stand in for
 /// a materialized token stream, which measured slower to write and read back.
-#[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the parse")]
 struct Parser<'ast> {
     allocator: &'ast Allocator,
     source: &'ast [u8],
@@ -160,9 +157,6 @@ struct Parser<'ast> {
     has_value_exports: bool,
     /// Where each exported name is declared.
     exported_names: FxHashMap<&'ast str, Span>,
-    /// Whether a `type function` appeared, so its body needs the scope check
-    /// the parser can't do without tracking locals.
-    has_type_function: bool,
     open: OpenConstructs,
     /// Whether a syntax error has been reported, or a string cut off before
     /// its closer read, since the last statement began where one reliably
@@ -312,9 +306,6 @@ impl<'ast> Parser<'ast> {
         let lexed = self.lexer.finish();
         let mut errors = lexed.errors;
         errors.append(&mut self.errors);
-        if self.has_type_function && errors.is_empty() {
-            errors = check_type_functions(&chunk);
-        }
         errors.sort_by_key(|e| e.span.map(|span| span.start));
         self.groupings.finish();
         let parse = ParseResult {

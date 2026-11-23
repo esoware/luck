@@ -20,7 +20,7 @@ impl_rule!(
 impl WholeRule for NoImplicitGlobals {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let tree = semantic.scope_tree();
+        let tree = semantic.scoping();
         let mut findings = Vec::new();
 
         for reference in tree.global_references() {

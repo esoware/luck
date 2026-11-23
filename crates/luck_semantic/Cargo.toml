@@ -3,7 +3,7 @@ name                   = "luck_semantic"
 version.workspace      = true
 authors.workspace      = true
 categories.workspace   = true
-description            = "Scope and symbol analysis with stdlib definitions for Lua and Luau"
+description            = "One semantic pass over a Lua or Luau tree: scoping, compile-time checks, a node table, and require sites"
 edition.workspace      = true
 homepage.workspace     = true
 keywords.workspace     = true
@@ -14,26 +14,15 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
-# The generated catalogs are expressions that `include!` splices in, which cargo-shear reads as files
-# with no items.
-[package.metadata.cargo-shear]
-ignored-paths = ["src/stdlib_catalog/*.rs"]
-
 [dependencies]
-luck_ast   = { workspace = true }
-luck_token = { workspace = true }
+luck_ast         = { workspace = true }
+luck_diagnostics = { workspace = true }
+luck_token       = { workspace = true }
 
+hashbrown  = { workspace = true }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]
 luck_allocator = { workspace = true }
 luck_parser    = { workspace = true }
 luck_testgen   = { workspace = true }
-
-# The catalog generator reads stdlib_data with these.
-serde = { workspace = true }
-toml  = { workspace = true }
-
-# Only the ignored regenerate_roblox_api test uses these, to fetch and parse the live Roblox API dump.
-serde_json = { workspace = true }
-ureq       = { workspace = true }

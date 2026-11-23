@@ -21,7 +21,7 @@ impl_rule!(
 
 impl WholeRule for AccessingUninitialized {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scope_tree();
+        let tree = context.semantic.scoping();
         context
             .local_flow()
             .first_unassigned_uses

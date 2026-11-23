@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use clap::Args;
 use luck_allocator::Allocator;
 use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_semantic::SemanticBuilder;
 
 use crate::exit::Exit;
 use crate::output::OUTPUT_BUFFER_BYTES;
@@ -81,20 +82,26 @@ fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
     };
 
     let version = file.project.target_for(Some(file_path)).version();
-    let mut result = luck_parser::parse(allocator, &source, version);
-    if result.errors.is_empty() {
+    let result = luck_parser::parse(allocator, &source, version);
+    let errors = if result.errors.is_empty() {
         // The compile-time errors real Lua reports beyond the grammar, such as
-        // const writes and unresolved gotos. Only `check` pays for this pass.
-        result.errors = luck_parser::validate(&result.chunk);
-    }
-    if result.errors.is_empty() {
+        // const writes and unresolved gotos.
+        SemanticBuilder::new()
+            .with_counts(result.counts)
+            .with_check(true)
+            .build(&result.chunk)
+            .diagnostics
+    } else {
+        result.errors
+    };
+    if errors.is_empty() {
         return None;
     }
 
     let mut rendered = Vec::new();
     let label = file_path.to_string_lossy();
     let source_file = SourceFile { label: &label, text: Some(&source), version };
-    DefaultReporter.render(source_file, &result.errors, &mut rendered);
+    DefaultReporter.render(source_file, &errors, &mut rendered);
     Some(rendered)
 }
 

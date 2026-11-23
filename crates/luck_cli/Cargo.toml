@@ -32,6 +32,7 @@ luck_lsp         = { workspace = true }
 luck_minifier    = { workspace = true }
 luck_parser      = { workspace = true }
 luck_resolver    = { workspace = true }
+luck_semantic    = { workspace = true }
 luck_token       = { workspace = true }
 
 ariadne               = { workspace = true }

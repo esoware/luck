@@ -10,7 +10,7 @@ use luck_allocator::Allocator;
 use luck_ast::{SuffixedExpression, Visit};
 use luck_bundler::{BundleOptions, BundleResult, DynamicRequire, LineMapEntry};
 use luck_diagnostics::FileDiagnostics;
-use luck_semantic::{ScopeId, ScopeKind, ScopeTree, SymbolId};
+use luck_semantic::{ScopeId, ScopeKind, Scoping, SemanticBuilder, SymbolId};
 use luck_token::LuaVersion;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tempfile::TempDir;
@@ -61,14 +61,11 @@ fn bundle_files(files: &[(&str, &[u8])], entry: &str, version: LuaVersion) -> Bu
     bundle_project(directory.path(), entry, version).expect("bundle failed")
 }
 
-fn scope_tree_of<'ast>(
-    allocator: &'ast Allocator,
-    output: &'ast str,
-    version: LuaVersion,
-) -> ScopeTree<'ast> {
+fn scoping_of(allocator: &Allocator, output: &str, version: LuaVersion) -> Scoping {
     let parsed = luck_parser::parse(allocator, output.as_bytes(), version);
     assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
-    ScopeTree::build(allocator.alloc(parsed.chunk), parsed.counts)
+    let chunk = allocator.alloc(parsed.chunk);
+    SemanticBuilder::new().with_counts(parsed.counts).build(chunk).semantic.into_scoping()
 }
 
 fn assert_reparses(output: &str, version: LuaVersion) {
@@ -90,7 +87,7 @@ fn line_map_entry<'map>(result: &'map BundleResult, file_name: &str) -> &'map Li
 // does.
 fn max_function_upvalues(output: &str, version: LuaVersion) -> usize {
     let allocator = Allocator::new();
-    let tree = scope_tree_of(&allocator, output, version);
+    let tree = scoping_of(&allocator, output, version);
     let mut upvalues: FxHashMap<ScopeId, FxHashSet<SymbolId>> = FxHashMap::default();
     for reference in tree.references() {
         let Some(symbol) = reference.resolved else {
@@ -234,7 +231,7 @@ return 1
         LuaVersion::Lua54,
     );
     let allocator = Allocator::new();
-    let tree = scope_tree_of(&allocator, text(&result.output), LuaVersion::Lua54);
+    let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Lua54);
     let shared_writes = tree
         .references()
         .iter()
@@ -335,7 +332,7 @@ name = \"B\"
         LuaVersion::Lua52,
     );
     let allocator = Allocator::new();
-    let tree = scope_tree_of(&allocator, text(&result.output), LuaVersion::Lua52);
+    let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Lua52);
     let wrapper = tree
         .references()
         .iter()
@@ -553,7 +550,7 @@ animal = \"bird\"
         LuaVersion::Luau,
     );
     let allocator = Allocator::new();
-    let tree = scope_tree_of(&allocator, text(&result.output), LuaVersion::Luau);
+    let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Luau);
     let shadow_start =
         text(&result.output).find("\"cat\"").expect("the shadow stays in the bundle");
     let has_shadow_read = tree
@@ -584,7 +581,7 @@ export local value = table
         LuaVersion::Luau,
     );
     let allocator = Allocator::new();
-    let tree = scope_tree_of(&allocator, text(&result.output), LuaVersion::Luau);
+    let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Luau);
     let freeze_start = text(&result.output).find("table.freeze(").unwrap_or(usize::MAX);
     let is_captured = tree.references().iter().any(|reference| {
         tree.name(reference.name) == "table"
@@ -606,7 +603,7 @@ export function increment() count += 1 end
         LuaVersion::Luau,
     );
     let allocator = Allocator::new();
-    let tree = scope_tree_of(&allocator, text(&result.output), LuaVersion::Luau);
+    let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Luau);
     let has_local_write = tree.references().iter().any(|reference| {
         tree.name(reference.name) == "count"
             && reference.kind.is_write()

@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
 use luck_ast::{Call, Expression, GetSpan as _, Statement, Suffix, SuffixedExpression};
 use luck_diagnostics::Tag;
-use luck_semantic::{
+use luck_stdlib::{
     ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction, expand_replace_template,
 };
 use luck_token::{index_to_offset, is_lua_whitespace, offset_to_index};
@@ -185,9 +185,9 @@ fn starts_with_rebound_name(expanded: &[u8], offset: u32, semantic: &SemanticAna
         .position(|&b| !b.is_ascii_alphanumeric() && b != b'_')
         .unwrap_or(expanded.len());
     let name = str::from_utf8(expanded.get(..name_length).unwrap_or_default()).unwrap_or_default();
-    let tree = semantic.scope_tree();
+    let tree = semantic.scoping();
     !name.is_empty()
-        && (semantic.nearest_local(name, offset).is_some()
+        && (tree.nearest_local(name, offset).is_some()
             || tree.name_id(name).is_some_and(|id| tree.is_assigned_global(id)))
 }
 
@@ -294,7 +294,7 @@ fn check_field_accesses(
             continue;
         }
         if let Some(deprecation) = entry.deprecation()
-            && !semantic.scope_tree().resolves_to_local(root)
+            && !semantic.scoping().resolves_to_local(root)
         {
             let path = chain.head(read_index).dotted_path().map(|path| path.to_string());
             findings.push(

@@ -1,5 +1,5 @@
 use luck_ast::{Call, Expression, StringLiteral};
-use luck_semantic::SemanticAnalysis;
+use luck_stdlib::SemanticAnalysis;
 use luck_token::{BinOp, LuaVersion};
 
 use crate::binary::operator_pairs;

@@ -2,7 +2,7 @@ use core::cell::RefCell;
 use core::ptr;
 
 use luck_ast::{Call, Statement};
-use luck_semantic::{ChainCallees, SemanticAnalysis};
+use luck_stdlib::{ChainCallees, SemanticAnalysis};
 use rayon::prelude::*;
 
 use crate::diagnostic::Finding;

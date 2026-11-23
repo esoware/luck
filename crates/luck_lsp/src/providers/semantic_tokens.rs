@@ -13,7 +13,8 @@ use luck_ast::{
     ChainHead, Expression, Field, GenericTypeList, Statement, Suffix, SuffixedExpression,
     TableConstructor, Type, TypeDeclarationValue, TypeField, Visit,
 };
-use luck_semantic::{SemanticAnalysis, StdlibEntry, SymbolKind};
+use luck_semantic::SymbolKind;
+use luck_stdlib::{SemanticAnalysis, StdlibEntry};
 use luck_token::{Span, Token, TokenKind, index_to_offset};
 
 use crate::document::{DocumentState, span_text};
@@ -295,7 +296,7 @@ impl Classifier<'_> {
 
     fn classify_scope_names(&mut self) {
         let semantic = self.semantic;
-        let tree = semantic.scope_tree();
+        let tree = semantic.scoping();
         let stdlib = semantic.stdlib();
 
         self.symbol_keys.reserve_exact(tree.symbols().len());
@@ -351,7 +352,7 @@ impl Classifier<'_> {
     fn classify_members(&mut self) {
         let Self { source, tokens, semantic, .. } = *self;
         let library = semantic.stdlib();
-        let tree = semantic.scope_tree();
+        let tree = semantic.scoping();
         // By where they start, so a root's is found by walking on in step
         // with the tokens.
         let whole_source = Span::new(0, index_to_offset(source.len()));
@@ -414,7 +415,7 @@ impl Classifier<'_> {
     }
 
     fn propagate_to_references(&mut self) {
-        let tree = self.semantic.scope_tree();
+        let tree = self.semantic.scoping();
         for symbol in tree.symbols() {
             let declared_key = self.symbol_keys.get(symbol.id.index()).copied();
             let Some(&(_, declared)) = declared_key.and_then(|key| self.get(key)) else {
@@ -653,7 +654,9 @@ impl<'ast> Visit<'ast> for Classifier<'_> {
 
 const fn symbol_classify(kind: SymbolKind) -> Classification {
     match kind {
-        SymbolKind::Parameter | SymbolKind::ImplicitSelf => Classification::plain(TYPE_PARAMETER),
+        SymbolKind::Parameter | SymbolKind::ImplicitSelf | SymbolKind::ImplicitArg => {
+            Classification::plain(TYPE_PARAMETER)
+        }
         SymbolKind::FunctionName => Classification::plain(TYPE_FUNCTION),
         SymbolKind::Local | SymbolKind::IteratorVariable | SymbolKind::NumericForVariable => {
             Classification::plain(TYPE_VARIABLE)

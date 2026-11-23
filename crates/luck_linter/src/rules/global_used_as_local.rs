@@ -1,4 +1,4 @@
-use luck_semantic::{Reference, ScopeId, ScopeKind, ScopeTree};
+use luck_semantic::{Reference, ScopeId, ScopeKind, Scoping};
 
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -16,7 +16,7 @@ impl_rule!(
 
 impl WholeRule for GlobalUsedAsLocal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scope_tree();
+        let tree = context.semantic.scoping();
         let mut global_references: Vec<&Reference> = tree.global_references().collect();
         global_references.sort_by_key(|reference| reference.name);
 
@@ -58,7 +58,7 @@ impl WholeRule for GlobalUsedAsLocal {
     }
 }
 
-fn enclosing_function(tree: &ScopeTree<'_>, scope: ScopeId) -> Option<ScopeId> {
+fn enclosing_function(tree: &Scoping, scope: ScopeId) -> Option<ScopeId> {
     let function = tree.scope(scope).function;
     (tree.scope(function).kind == ScopeKind::Function).then_some(function)
 }

@@ -1,5 +1,5 @@
 use luck_ast::{Call, Expression, FunctionArgs};
-use luck_semantic::SemanticAnalysis;
+use luck_stdlib::SemanticAnalysis;
 
 use crate::call::dotted_callee;
 
@@ -17,7 +17,7 @@ pub(crate) fn global_new_call<'ast>(
     if field != "new" || root.text != global {
         return None;
     }
-    if semantic.scope_tree().resolves_to_local(root) {
+    if semantic.scoping().resolves_to_local(root) {
         return None;
     }
     let FunctionArgs::Parenthesized { args, .. } = call.args else {

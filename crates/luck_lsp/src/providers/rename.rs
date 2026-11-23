@@ -9,7 +9,7 @@
 
 use ls_types::{Position, PrepareRenameResponse, RenameParams, TextEdit, WorkspaceEdit};
 use luck_ast::is_valid_identifier_in;
-use luck_semantic::{SymbolId, SymbolKind};
+use luck_semantic::SymbolId;
 use luck_token::Span;
 
 use crate::document::{DocumentState, span_text};
@@ -39,7 +39,7 @@ fn rename_target(
         return Ok(None);
     };
     let symbol = tree.symbol(symbol_id);
-    if symbol.kind == SymbolKind::ImplicitSelf {
+    if symbol.kind.is_implicit() {
         return Err(
             "`self` is the method's implicit parameter, so it has no declaration to rename"
                 .to_owned(),

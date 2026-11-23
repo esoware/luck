@@ -1,5 +1,5 @@
 use luck_ast::{Block, GetSpan as _, LocalAssignment, LocalFunction, Statement};
-use luck_semantic::{ScopeKind, ScopeTree, Symbol, SymbolId};
+use luck_semantic::{ScopeKind, Scoping, Symbol, SymbolId};
 use luck_token::{LuaVersion, Span, TokenKind, line_breaks, offset_to_index};
 use rustc_hash::FxHashSet;
 
@@ -35,7 +35,7 @@ pub struct Exports<'ast> {
 impl<'ast> Exports<'ast> {
     /// The plan for `block`, whose names `source` holds and `tree` resolves,
     /// when it exports a value.
-    pub(crate) fn new(block: &Block<'_>, tree: &ScopeTree<'_>, source: &'ast [u8]) -> Self {
+    pub(crate) fn new(block: &Block<'_>, tree: &Scoping, source: &'ast [u8]) -> Self {
         let exported: Vec<&Symbol> =
             tree.symbols().iter().filter(|symbol| symbol.is_exported).collect();
         let exported_symbol = |definition: Span| {
@@ -244,7 +244,7 @@ pub(crate) fn has_value_exports(block: &Block<'_>) -> bool {
 }
 
 /// A closure can write such an export after the module returns.
-fn is_written_from_a_closure(tree: &ScopeTree<'_>, symbol: &Symbol) -> bool {
+fn is_written_from_a_closure(tree: &Scoping, symbol: &Symbol) -> bool {
     tree.resolved_references(symbol.id).iter().any(|&id| {
         let reference = tree.reference(id);
         reference.kind.is_write()

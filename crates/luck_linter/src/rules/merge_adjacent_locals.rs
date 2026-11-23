@@ -80,7 +80,7 @@ fn mergeable<'ast>(
     // Both values in `local a, b = x, y` are evaluated before either name is
     // bound, so merging `local a = 1 local b = a` would make `b` read an outer
     // or global `a`.
-    let tree = context.semantic.scope_tree();
+    let tree = context.semantic.scoping();
     let reads_first = tree.references_within(second.initializer).any(|id| {
         tree.reference(id)
             .resolved

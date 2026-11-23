@@ -1,6 +1,6 @@
 use luck_ast::{Block, GetSpan as _, Statement};
 use luck_diagnostics::Tag;
-use luck_semantic::SemanticAnalysis;
+use luck_stdlib::SemanticAnalysis;
 
 use crate::cfg::FlowGraph;
 use crate::diagnostic::Finding;

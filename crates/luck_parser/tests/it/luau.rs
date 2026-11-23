@@ -803,25 +803,6 @@ fn const_needs_one_value_per_name_unless_the_last_is_multi_valued() {
 }
 
 #[test]
-fn type_function_cannot_reference_an_outer_local() {
-    let allocator = Allocator::new();
-    for source in [
-        "\
-local x = 1
-type function f() return x end",
-        "\
-local x = 1
-type function f() local function g() return x end return g end",
-        "\
-local function g() end
-type function f() return g() end",
-    ] {
-        let result = parse_luau(&allocator, source);
-        assert!(!result.errors.is_empty(), "luau rejects the outer local in {source}");
-    }
-}
-
-#[test]
 fn simple_interpolated_string_is_an_attribute_literal() {
     let allocator = Allocator::new();
     // Luau lexes a backtick string with no holes as a constant string.

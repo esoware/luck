@@ -16,7 +16,7 @@ impl_rule!(
 impl WholeRule for GlobalUsage {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let is_roblox = context.semantic.target().is_roblox();
-        let tree = context.semantic.scope_tree();
+        let tree = context.semantic.scoping();
         tree.global_references()
             .filter(|reference| match tree.name(reference.name) {
                 "_G" => true,

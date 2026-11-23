@@ -1,16 +1,16 @@
 use luck_ast::{Call, Chunk, SuffixedExpression, TreeCounts};
+use luck_diagnostics::Diagnostic;
+use luck_semantic::{NameId, Reference, Scoping, Semantic, SemanticBuilder, SymbolId};
 use luck_token::{LuaTarget, LuaVersion};
 
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
-use crate::scope::{NameId, Reference, ScopeTree, Symbol, SymbolId, build_with_initializers};
-use crate::sink::NodeSink;
 use crate::stdlib_catalog::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
-/// A chunk's scope tree, read against the stdlib of one target.
+/// A chunk's [`Semantic`], read against the stdlib of one target.
 #[derive(Debug)]
 pub struct SemanticAnalysis<'ast> {
-    scope_tree: ScopeTree<'ast>,
+    semantic: Semantic<'ast>,
     stdlib: &'static StdlibLibrary,
     /// Each symbol's shape, by symbol index: a never-reassigned local
     /// initialized from a value of known shape, such as
@@ -26,50 +26,45 @@ struct HostGlobal {
     is_extra: bool,
 }
 
-/// `chunk`'s scope tree, its tables sized from `counts`, the parse's or the
-/// default, read against the stdlib of `target`, the dialect `chunk` was
-/// parsed as.
+/// `chunk`'s semantic, read against the stdlib of `target`, the dialect
+/// `chunk` was parsed as, and beside it the checker's errors.
 ///
-/// For Luau, the scope tree is the same whether or not the target is Roblox,
-/// which only adds the Roblox runtime's stdlib.
+/// The semantic holds the node table, which the shapes read, and its tables
+/// are sized from `counts`, the parse's or the default. For Luau, it's the
+/// same whether or not the target is Roblox, which only adds the Roblox
+/// runtime's stdlib.
 #[must_use]
 pub fn analyze<'ast>(
     chunk: &'ast Chunk<'ast>,
     counts: TreeCounts,
     target: LuaTarget,
-) -> SemanticAnalysis<'ast> {
-    analyze_with(chunk, counts, target, &mut ())
-}
-
-/// [`analyze`], showing `sink` each node the walk reaches.
-#[must_use]
-pub fn analyze_with<'ast, Sink>(
-    chunk: &'ast Chunk<'ast>,
-    counts: TreeCounts,
-    target: LuaTarget,
-    sink: &mut Sink,
-) -> SemanticAnalysis<'ast>
-where
-    Sink: NodeSink<'ast>,
-{
+) -> (SemanticAnalysis<'ast>, Vec<Diagnostic>) {
     debug_assert_eq!(chunk.version, target.version(), "the target is the chunk's dialect");
-    let (scope_tree, initialized_locals) = build_with_initializers(chunk, counts, sink);
+    let built =
+        SemanticBuilder::new().with_counts(counts).with_check(true).with_nodes(true).build(chunk);
+    let semantic = built.semantic;
     let stdlib = library_for(target);
-    let symbol_shapes = symbol_shapes(&scope_tree, stdlib, &initialized_locals);
-    let host_globals = scope_tree
+    let symbol_shapes = symbol_shapes(&semantic, stdlib);
+    let host_globals = semantic
+        .scoping()
         .names()
         .map(|(_, name)| HostGlobal {
             is_stdlib: stdlib.globals.contains_key(name),
             is_extra: false,
         })
         .collect();
-    SemanticAnalysis { scope_tree, stdlib, symbol_shapes, host_globals }
+    (SemanticAnalysis { semantic, stdlib, symbol_shapes, host_globals }, built.diagnostics)
 }
 
 impl<'ast> SemanticAnalysis<'ast> {
     #[must_use]
-    pub const fn scope_tree(&self) -> &ScopeTree<'ast> {
-        &self.scope_tree
+    pub const fn semantic(&self) -> &Semantic<'ast> {
+        &self.semantic
+    }
+
+    #[must_use]
+    pub const fn scoping(&self) -> &Scoping {
+        self.semantic.scoping()
     }
 
     #[must_use]
@@ -95,8 +90,11 @@ impl<'ast> SemanticAnalysis<'ast> {
         Names: IntoIterator<Item = &'name str>,
     {
         for name in names {
-            if let Some(global) =
-                self.scope_tree.name_id(name).and_then(|id| self.host_globals.get_mut(id.index()))
+            if let Some(global) = self
+                .semantic
+                .scoping()
+                .name_id(name)
+                .and_then(|id| self.host_globals.get_mut(id.index()))
             {
                 global.is_extra = true;
             }
@@ -108,7 +106,7 @@ impl<'ast> SemanticAnalysis<'ast> {
     /// chunk declares.
     #[must_use]
     pub fn is_known_global(&self, name: &str) -> bool {
-        self.scope_tree.name_id(name).map_or_else(
+        self.scoping().name_id(name).map_or_else(
             || self.stdlib.globals.contains_key(name),
             |id| self.is_known_global_name(id),
         )
@@ -120,7 +118,7 @@ impl<'ast> SemanticAnalysis<'ast> {
         self.host_globals
             .get(name.index())
             .is_some_and(|global| global.is_stdlib || global.is_extra)
-            || self.scope_tree.is_declared_global(name)
+            || self.scoping().is_declared_global(name)
     }
 
     /// Whether [`Self::add_extra_globals`] marked `name`.
@@ -173,7 +171,7 @@ impl<'ast> SemanticAnalysis<'ast> {
     }
 
     fn shape_resolver(&self) -> ShapeResolver<'_> {
-        ShapeResolver::new(&self.scope_tree, self.stdlib, &self.symbol_shapes)
+        ShapeResolver::new(self.scoping(), self.stdlib, &self.symbol_shapes)
     }
 
     /// The entry `segments` names, where `root` is the reference their first
@@ -200,33 +198,16 @@ impl<'ast> SemanticAnalysis<'ast> {
                 }
                 Some(current)
             }
-            None if self.scope_tree.is_host_global(root) => self.stdlib.lookup(segments),
+            None if self.scoping().is_host_global(root) => self.stdlib.lookup(segments),
             None => None,
         }
-    }
-
-    /// For completion: the last local named `name` declared before `offset`.
-    ///
-    /// Half-typed text like `f:` has no parsed reference to resolve by span.
-    /// Scope isn't checked, so a local from a block that already closed can
-    /// still match.
-    #[must_use]
-    pub fn nearest_local(&self, name: &str, offset: u32) -> Option<&Symbol> {
-        let name_id = self.scope_tree.name_id(name)?;
-        self.scope_tree
-            .symbols()
-            .iter()
-            .filter(|symbol| symbol.name == name_id && symbol.definition_span.end <= offset)
-            .max_by_key(|symbol| symbol.definition_span.start)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_ast::{
-        Block, Expression, FunctionBody, GetSpan as _, Name, Statement, TableConstructor,
-    };
+    use luck_ast::Statement;
 
     use super::*;
     use crate::fixtures::parse;
@@ -236,7 +217,7 @@ mod tests {
         source: &'ast str,
         version: LuaVersion,
     ) -> SemanticAnalysis<'ast> {
-        analyze(parse(allocator, source, version), TreeCounts::default(), version.into())
+        analyze(parse(allocator, source, version), TreeCounts::default(), version.into()).0
     }
 
     #[test]
@@ -252,13 +233,13 @@ mod tests {
     fn reaches_host_print(source: &str, version: LuaVersion) -> bool {
         let allocator = Allocator::new();
         let analysis = analyze_source(&allocator, source, version);
-        let tree = &analysis.scope_tree;
+        let tree = analysis.scoping();
         let print = tree
             .references()
             .iter()
             .rfind(|reference| tree.name(reference.name) == "print")
             .expect("the source references print");
-        tree.reaches_host_global(&Name::new("print".into(), None, print.span))
+        tree.is_host_global(print)
     }
 
     #[test]
@@ -336,7 +317,7 @@ global *
 return y",
             LuaVersion::Lua55,
         );
-        let y = &analysis.scope_tree.references()[0];
+        let y = &analysis.scoping().references()[0];
         assert!(analysis.is_defined_global(y));
         assert!(!analysis.is_known_global("y"), "rename still treats `y` as a free name");
     }
@@ -345,20 +326,20 @@ return y",
     fn extra_globals_are_known_globals() {
         let allocator = Allocator::new();
         let mut analysis = analyze_source(&allocator, "vim.cmd('x')", LuaVersion::Lua54);
-        let vim = analysis.scope_tree.name_id("vim").expect("the chunk names vim");
+        let vim = analysis.scoping().name_id("vim").expect("the chunk names vim");
         assert!(!analysis.is_known_global("vim"));
         analysis.add_extra_globals(["vim", "absent"]);
         assert!(analysis.is_known_global("vim"));
         assert!(analysis.is_extra_global(vim));
-        assert!(analysis.is_defined_global(&analysis.scope_tree.references()[0]));
+        assert!(analysis.is_defined_global(&analysis.scoping().references()[0]));
     }
 
     #[test]
     fn roblox_globals_known_only_on_roblox() {
         let allocator = Allocator::new();
         let chunk = parse(&allocator, "print(game, bit32)", LuaVersion::Luau);
-        let standalone = analyze(chunk, TreeCounts::default(), LuaTarget::Luau);
-        let roblox = analyze(chunk, TreeCounts::default(), LuaTarget::LuauRoblox);
+        let (standalone, _) = analyze(chunk, TreeCounts::default(), LuaTarget::Luau);
+        let (roblox, _) = analyze(chunk, TreeCounts::default(), LuaTarget::LuauRoblox);
         assert!(!standalone.is_known_global("game"));
         assert!(roblox.is_known_global("game"));
         assert!(standalone.is_known_global("bit32"));
@@ -368,7 +349,7 @@ return y",
     fn resolve_last_statement_call(source: &str, version: LuaVersion) -> Option<String> {
         let allocator = Allocator::new();
         let chunk = parse(&allocator, source, version);
-        let analysis = analyze(chunk, TreeCounts::default(), version.into());
+        let (analysis, _) = analyze(chunk, TreeCounts::default(), version.into());
         let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
             panic!("the last statement must be a call");
         };
@@ -378,7 +359,7 @@ return y",
     fn unknown_globals(source: &str) -> Vec<String> {
         let allocator = Allocator::new();
         let analysis = analyze_source(&allocator, source, LuaVersion::Luau);
-        let tree = &analysis.scope_tree;
+        let tree = analysis.scoping();
         tree.global_references()
             .filter(|reference| !analysis.is_defined_global(reference))
             .map(|reference| tree.name(reference.name).to_owned())
@@ -396,7 +377,7 @@ local function f() return missing end
 return f",
             LuaVersion::Lua54,
         );
-        let tree = &analysis.scope_tree;
+        let tree = analysis.scoping();
         let env = tree
             .symbols()
             .iter()
@@ -444,7 +425,7 @@ local table = {}
 table.insert(f)",
             LuaVersion::Lua54,
         );
-        let tree = &analysis.scope_tree;
+        let tree = analysis.scoping();
         let reference_to = |name: &str| {
             tree.references()
                 .iter()
@@ -459,20 +440,18 @@ table.insert(f)",
     }
 
     #[test]
-    fn nearest_local_takes_the_last_declaration_before_the_offset() {
+    fn analysis_reports_the_checker_s_errors() {
         let allocator = Allocator::new();
-        let analysis = analyze_source(
+        let chunk = parse(
             &allocator,
             "\
-local f = 1
-local f = 2
-",
+local x <const> = 1
+x = 2",
             LuaVersion::Lua54,
         );
-        let second = analysis.nearest_local("f", 24).map(|symbol| symbol.definition_span.start);
-        assert_eq!(second, Some(18));
-        assert!(analysis.nearest_local("f", 6).is_none());
-        assert!(analysis.nearest_local("g", 24).is_none());
+        let (_, diagnostics) = analyze(chunk, TreeCounts::default(), LuaTarget::Lua54);
+        let messages: Vec<&str> = diagnostics.iter().map(|diag| &*diag.message).collect();
+        assert_eq!(messages, ["attempt to assign to const variable `x`"]);
     }
 
     #[test]
@@ -505,66 +484,6 @@ end",
             unknown.is_empty(),
             "a type function can call a type function declared before it, as luau-analyze \
              accepts, so the body has no unknown global: {unknown:?}"
-        );
-    }
-
-    /// Each node the walk shows, by the hook that saw it and its text.
-    struct Recorder<'ast> {
-        source: &'ast [u8],
-        seen: Vec<String>,
-    }
-
-    impl<'ast> NodeSink<'ast> for Recorder<'ast> {
-        fn block(&mut self, block: &'ast Block<'ast>) {
-            self.seen.push(format!("block {}", block.stmts.len()));
-        }
-        fn function_body(&mut self, body: &'ast FunctionBody<'ast>) {
-            self.seen.push(format!("body {}", body.params.len()));
-        }
-        fn stmt(&mut self, stmt: &'ast Statement<'ast>) {
-            self.seen.push(format!("stmt {}", stmt.span().text(self.source).escape_ascii()));
-        }
-
-        fn expr(&mut self, expr: &'ast Expression<'ast>) {
-            self.seen.push(format!("expr {}", expr.span().text(self.source).escape_ascii()));
-        }
-        fn chain(&mut self, chain: &'ast SuffixedExpression<'ast>, is_target: bool) {
-            let text = chain.span.text(self.source).escape_ascii();
-            self.seen.push(format!("{} {text}", if is_target { "target" } else { "chain" }));
-        }
-        fn table(&mut self, table: &'ast TableConstructor<'ast>) {
-            self.seen.push(format!("table {}", table.fields.len()));
-        }
-    }
-
-    #[test]
-    fn analyze_with_shows_the_sink_each_node_in_evaluation_order() {
-        let allocator = Allocator::new();
-        let source = "t.x = f({}, function(a) return a end)
-return t";
-        let chunk = parse(&allocator, source, LuaVersion::Lua54);
-        let mut recorder = Recorder { source: source.as_bytes(), seen: Vec::new() };
-        let _analysis = analyze_with(chunk, TreeCounts::default(), LuaTarget::Lua54, &mut recorder);
-        assert_eq!(
-            recorder.seen,
-            [
-                "block 2",
-                "stmt t.x = f({}, function(a) return a end)",
-                "expr f({}, function(a) return a end)",
-                "chain f({}, function(a) return a end)",
-                "expr f",
-                "expr {}",
-                "table 0",
-                "expr function(a) return a end",
-                "body 1",
-                "block 1",
-                "stmt return a",
-                "expr a",
-                "target t.x",
-                "expr t",
-                "stmt return t",
-                "expr t",
-            ]
         );
     }
 }

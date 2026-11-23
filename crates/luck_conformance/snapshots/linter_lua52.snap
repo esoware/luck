@@ -19,9 +19,9 @@ Diagnostics    : 8266
     20 unbalanced_assignment
     15 set_but_never_read
     14 implicit_return
-    13 accessing_uninitialized
     13 comparison_precedence
     13 must_use
+    12 accessing_uninitialized
     11 empty_block
     10 loop_executes_once
      9 parenthesized_conditions
@@ -31,9 +31,9 @@ Diagnostics    : 8266
      5 string_index_to_field
      4 incorrect_stdlib_use
      4 unnecessary_assert
+     3 mutating_uninitialized
      3 unused_label
      2 divide_by_zero
-     2 mutating_uninitialized
      2 redundant_nil_init
      1 constant_table_comparison
      1 format_string
@@ -2441,8 +2441,8 @@ lua-5.2.2-tests/code.lua
 120:1 no_implicit_globals: global variable `assert` used
 124:1 no_implicit_globals: global variable `check` used
 128:1 no_implicit_globals: global variable `check` used
-130:13 accessing_uninitialized: `c` is read before any value is assigned, so it is `nil`
-130:16 accessing_uninitialized: `b` is read before any value is assigned, so it is `nil`
+130:3 mutating_uninitialized: field/index assignment on uninitialized `b` (value is `nil`)
+130:5 accessing_uninitialized: `c` is read before any value is assigned, so it is `nil`
 144:1 no_implicit_globals: global variable `checkequal` used
 144:24 parenthesized_conditions: unnecessary parentheses around `if` condition
 144:28 no_implicit_globals: global variable `a` used

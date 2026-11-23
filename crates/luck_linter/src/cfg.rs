@@ -8,7 +8,7 @@ use luck_ast::{
     BinaryOp, Block, Expression, FunctionBody, GenericFor, GetSpan as _, IfExpression, IfStatement,
     Name, NumericFor, RepeatLoop, Statement, Type, Visit, WhileLoop, unwrap_parentheses,
 };
-use luck_semantic::SemanticAnalysis;
+use luck_stdlib::SemanticAnalysis;
 use luck_token::{BinOp, Span};
 use rustc_hash::FxHashMap;
 
@@ -599,7 +599,7 @@ mod tests {
     }
 
     fn analyze<'ast>(chunk: &'ast Chunk<'ast>) -> SemanticAnalysis<'ast> {
-        luck_semantic::analyze(chunk, TreeCounts::default(), chunk.version.into())
+        luck_stdlib::analyze(chunk, TreeCounts::default(), chunk.version.into()).0
     }
 
     fn flow_of(source: &str, version: LuaVersion) -> FlowGraph {

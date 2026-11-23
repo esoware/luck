@@ -23,6 +23,7 @@ use luck_codegen::LiteralSpelling;
 use luck_formatter::FormatOptions;
 use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
 use luck_minifier::TransformConfig;
+use luck_semantic::SemanticBuilder;
 use rayon::ThreadPoolBuilder;
 
 use crate::heap::{HEAP, TrackedAllocator};
@@ -120,7 +121,14 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
         record_stats_in(allocator, || luck_parser::parse(allocator, source, version));
     assert!(parse.errors.is_empty(), "{}: {:?}", file.file_name, parse.errors);
     let ((), semantic) = record_stats_in(allocator, || {
-        drop(luck_semantic::analyze(&parse.chunk, parse.counts, target));
+        drop(
+            SemanticBuilder::new()
+                .with_counts(parse.counts)
+                .with_check(true)
+                .with_nodes(true)
+                .with_requires(true)
+                .build(&parse.chunk),
+        );
     });
     let config = every_rule();
     let ((), linter) = record_stats_in(allocator, || {

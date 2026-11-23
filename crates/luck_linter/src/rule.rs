@@ -5,7 +5,7 @@ use luck_ast::{
 };
 use luck_diagnostics::Severity;
 use luck_parser::{Groupings, ParseResult};
-use luck_semantic::{ResolvedCallee, SemanticAnalysis};
+use luck_stdlib::{ResolvedCallee, SemanticAnalysis};
 use luck_token::{Comment, LineIndex, Span};
 
 use crate::config::LintConfig;

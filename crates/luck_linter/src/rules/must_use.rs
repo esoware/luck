@@ -1,5 +1,5 @@
 use luck_ast::GetSpan as _;
-use luck_semantic::{ResolvedCallee, StdlibEntry};
+use luck_stdlib::{ResolvedCallee, StdlibEntry};
 
 use crate::diagnostic::Finding;
 use crate::node_type::{NodeType, NodeTypeSet};

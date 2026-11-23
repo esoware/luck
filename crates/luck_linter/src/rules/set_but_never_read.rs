@@ -23,7 +23,7 @@ impl_rule!(
 
 impl WholeRule for SetButNeverRead {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scope_tree();
+        let tree = context.semantic.scoping();
         let mut findings = Vec::new();
 
         for symbol in tree.symbols() {

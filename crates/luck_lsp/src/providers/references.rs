@@ -3,7 +3,6 @@
 //! whole answer.
 
 use ls_types::{Location, ReferenceParams};
-use luck_semantic::SymbolKind;
 use luck_token::Span;
 
 use crate::document::DocumentState;
@@ -24,7 +23,7 @@ pub(crate) fn references(document: &DocumentState, params: &ReferenceParams) -> 
         .map(|&reference_id| tree.reference(reference_id).span)
         .collect();
     // The implicit `self`'s declaration has no token, only an empty span.
-    if params.context.include_declaration && symbol.kind != SymbolKind::ImplicitSelf {
+    if params.context.include_declaration && !symbol.kind.is_implicit() {
         spans.push(symbol.definition_span);
     }
     spans.sort_by_key(|span| span.start);

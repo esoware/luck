@@ -1,5 +1,5 @@
 use luck_ast::{FunctionName, Name, Statement, Suffix, Var};
-use luck_semantic::{SemanticAnalysis, StdlibEntry};
+use luck_stdlib::{SemanticAnalysis, StdlibEntry};
 use luck_token::Span;
 
 use crate::diagnostic::Finding;
@@ -19,7 +19,7 @@ impl_rule!(
 impl WholeRule for BuiltinGlobalWrite {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let tree = semantic.scope_tree();
+        let tree = semantic.scoping();
         let mut findings = Vec::new();
 
         for reference in tree.global_references() {
@@ -48,7 +48,7 @@ impl WholeRule for BuiltinGlobalWrite {
 /// (`_G`, Roblox's `shared`, `_PROMPT`) exist to be set.
 fn is_overwritable_builtin(semantic: &SemanticAnalysis<'_>, name: &str) -> bool {
     semantic.is_read_only_global(name)
-        && semantic.scope_tree().name_id(name).is_none_or(|id| !semantic.is_extra_global(id))
+        && semantic.scoping().name_id(name).is_none_or(|id| !semantic.is_extra_global(id))
 }
 
 fn overwrite_finding(name: &str, span: Span) -> Finding {
@@ -78,7 +78,7 @@ impl FieldWriteChecker<'_> {
         // Writing through a writable base (`_G.x = 1`, Roblox's
         // `shared.score = 1`) is intended.
         if !is_overwritable_builtin(self.semantic, root.text.as_str())
-            || !self.semantic.scope_tree().reaches_host_global(root)
+            || !self.semantic.scoping().reaches_host_global(root)
         {
             return false;
         }

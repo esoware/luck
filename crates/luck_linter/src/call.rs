@@ -4,7 +4,7 @@ use luck_ast::{
     Call, Expression, FunctionArgs, GetSpan as _, Name, StringLiteral, Suffix, TableConstructor,
     is_multi_value,
 };
-use luck_semantic::SemanticAnalysis;
+use luck_stdlib::SemanticAnalysis;
 use luck_token::Span;
 
 /// Whether `call` is a plain `name(...)` call to the host's global `name`. A
@@ -12,7 +12,7 @@ use luck_token::Span;
 pub(crate) fn is_global_call(call: Call<'_>, name: &str, semantic: &SemanticAnalysis<'_>) -> bool {
     call.method.is_none()
         && call.callee.as_name().is_some_and(|callee| {
-            callee.text == name && semantic.scope_tree().reaches_host_global(callee)
+            callee.text == name && semantic.scoping().reaches_host_global(callee)
         })
 }
 

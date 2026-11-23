@@ -1,4 +1,5 @@
-use luck_semantic::{SemanticAnalysis, Symbol};
+use luck_semantic::Symbol;
+use luck_stdlib::SemanticAnalysis;
 
 use crate::fix::{Fix, RuleFixer};
 
@@ -12,7 +13,7 @@ pub(crate) fn prefix_underscore(
     semantic: &SemanticAnalysis<'_>,
     symbol: &Symbol,
 ) -> Option<Fix> {
-    let tree = semantic.scope_tree();
+    let tree = semantic.scoping();
     if !tree.resolved_references(symbol.id).is_empty() {
         return None;
     }

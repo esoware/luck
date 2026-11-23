@@ -4,7 +4,7 @@ use luck_ast::{
     Block, Call, ChainHead, Expression, FunctionArgs, GetSpan as _, Name, Statement, StringLiteral,
     Suffix, SuffixedExpression, Var, Visit,
 };
-use luck_semantic::{ScopeTree, SymbolId, SymbolKind};
+use luck_semantic::{Scoping, SymbolId};
 use luck_token::{CommentKind, Span, Token, TokenKind, offset_to_index};
 
 use crate::document::{DocumentState, span_text};
@@ -456,15 +456,13 @@ impl<'ast> StringArgFinder<'ast> {
 /// the scope tree, so shadowed names map to the right declaration. A name
 /// parse recovery made up is nothing to find, and neither is the implicit
 /// `self`'s declaration, which no token spells.
-pub(crate) fn local_at(tree: &ScopeTree<'_>, offset: u32) -> Option<(SymbolId, Span)> {
+pub(crate) fn local_at(tree: &Scoping, offset: u32) -> Option<(SymbolId, Span)> {
     if let Some(reference) = tree.reference_at(offset).map(|id| tree.reference(id)) {
         return Some((reference.resolved?, reference.span));
     }
     tree.symbols()
         .iter()
-        .find(|symbol| {
-            symbol.kind != SymbolKind::ImplicitSelf && touches(symbol.definition_span, offset)
-        })
+        .find(|symbol| !symbol.kind.is_implicit() && touches(symbol.definition_span, offset))
         .map(|symbol| (symbol.id, symbol.definition_span))
 }
 

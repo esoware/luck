@@ -8,7 +8,7 @@
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
-use luck_semantic::{
+use luck_stdlib::{
     StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibLibrary, StdlibParam, StdlibSignature,
 };
 use luck_token::{LuaVersion, offset_to_index};

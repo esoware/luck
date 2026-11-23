@@ -8,9 +8,9 @@ use luck_token::{LuaNumber, Span};
 /// An identifier: a variable, a field, a parameter, a label, a type, or an
 /// attribute. A name the parser found missing has empty text.
 ///
-/// Its [`NameIndex`] is a pass's numbering kept on the node, so `==`,
-/// `Debug`, and `ContentEq` leave it out, and two names are equal when their
-/// text and span are.
+/// Its [`NameIndex`] tells it apart from the tree's other names, not from a
+/// name in another tree, so `==`, `Debug`, and `ContentEq` leave it out, and
+/// two names are equal when their text and span are.
 #[derive(Clone, Copy, Ast)]
 // In this order the text's length and the index share a word, between an
 // aligned pointer and an aligned span, which parses measurably faster.
@@ -36,11 +36,13 @@ impl fmt::Debug for Name<'_> {
     }
 }
 
-/// A name's index into the tables of the pass that numbered it.
+/// A name's index among the names of its tree, by which semantic analysis
+/// finds what it declares, refers to, or labels.
 ///
-/// The parser numbers the names it reads from 0, in reading order, and a
-/// pass that holds the tree mutably may number them its own way. An index
-/// past `u32::MAX - 1` saturates.
+/// The parser numbers the names it reads from 0, in reading order, each its
+/// own. A pass that holds the tree mutably may number them its own way, but
+/// analysis finds the role of only one of the names that share an index. An
+/// index past `u32::MAX - 1` saturates.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct NameIndex(NonZeroU32);
 

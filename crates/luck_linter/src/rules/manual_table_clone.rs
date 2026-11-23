@@ -2,7 +2,8 @@ use luck_ast::{
     Block, Expression, GenericFor, GetSpan as _, LocalAssignment, Name, NumericFor, Statement,
     Suffix, Var,
 };
-use luck_semantic::{ScopeTree, SemanticAnalysis};
+use luck_semantic::Scoping;
+use luck_stdlib::SemanticAnalysis;
 use luck_token::{Span, UnOp};
 
 use crate::call::is_global_call;
@@ -94,7 +95,7 @@ fn manual_copy_span(
                 && !matches!(suggestion, Suggestion::TableMove)
         }
         Statement::NumericFor(loop_node) => {
-            is_numeric_clone(loop_node, destination, semantic.scope_tree())
+            is_numeric_clone(loop_node, destination, semantic.scoping())
         }
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
@@ -142,18 +143,14 @@ fn is_generic_clone(
     let [iterator] = &*loop_node.exprs else {
         return false;
     };
-    let tree = semantic.scope_tree();
+    let tree = semantic.scoping();
     is_pairs_call(iterator, semantic)
         && copied_value(&loop_node.block, destination, &key.name, tree)
             .is_some_and(|copied| is_read_of_local(copied, &value.name, tree))
 }
 
 /// Is this `for i = 1, #src do out[i] = src[i] end`?
-fn is_numeric_clone(
-    loop_node: &NumericFor<'_>,
-    destination: &Name<'_>,
-    tree: &ScopeTree<'_>,
-) -> bool {
+fn is_numeric_clone(loop_node: &NumericFor<'_>, destination: &Name<'_>, tree: &Scoping) -> bool {
     let Some(source_table) = length_of_name(&loop_node.limit) else {
         return false;
     };
@@ -175,7 +172,7 @@ fn copied_value<'ast>(
     body: &'ast Block<'ast>,
     destination: &Name<'_>,
     key: &Name<'_>,
-    tree: &ScopeTree<'_>,
+    tree: &Scoping,
 ) -> Option<&'ast Expression<'ast>> {
     let [Statement::Assignment(assignment)] = &*body.stmts else {
         return None;
@@ -226,19 +223,19 @@ fn length_of_name<'ast>(expr: &'ast Expression<'ast>) -> Option<&'ast Name<'ast>
     Some(name)
 }
 
-fn declaration_of(name: &Name<'_>, tree: &ScopeTree<'_>) -> Option<Span> {
+fn declaration_of(name: &Name<'_>, tree: &Scoping) -> Option<Span> {
     let reference = tree.reference(tree.reference_of(name)?);
     Some(tree.symbol(reference.resolved?).definition_span)
 }
 
-fn is_read_of_local(expr: &Expression<'_>, declaration: &Name<'_>, tree: &ScopeTree<'_>) -> bool {
+fn is_read_of_local(expr: &Expression<'_>, declaration: &Name<'_>, tree: &Scoping) -> bool {
     matches!(expr, Expression::Name(name)
         if declaration_of(name, tree) == Some(declaration.span))
 }
 
 /// Whether `expr` is the same name as `source`, resolving the same way, so a
 /// loop variable that shadows it doesn't count.
-fn is_same_binding(expr: &Expression<'_>, source: &Name<'_>, tree: &ScopeTree<'_>) -> bool {
+fn is_same_binding(expr: &Expression<'_>, source: &Name<'_>, tree: &Scoping) -> bool {
     matches!(expr, Expression::Name(name)
         if name.text == source.text
             && declaration_of(name, tree) == declaration_of(source, tree))

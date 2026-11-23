@@ -18,7 +18,7 @@ pub(crate) struct LocalFlow {
 
 impl LocalFlow {
     pub(crate) fn compute(context: &LintContext<'_>) -> Self {
-        let tree = context.semantic.scope_tree();
+        let tree = context.semantic.scoping();
         let mut tracked: Vec<&Symbol> = tree
             .symbols()
             .iter()
@@ -67,7 +67,7 @@ impl LocalFlow {
         walk: &mut GraphWalk<'_>,
         context: &LintContext<'_>,
     ) {
-        let tree = context.semantic.scope_tree();
+        let tree = context.semantic.scoping();
         let graph = walk.graph;
         let reference_ids = tree.resolved_references(symbol.id);
         let mut uses = Vec::with_capacity(reference_ids.len());

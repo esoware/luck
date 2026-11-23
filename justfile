@@ -80,13 +80,13 @@ ast:
 schema:
   cargo test -p luck_config regenerate_luckrc_schema -- --ignored
 
-# Regenerate luck_semantic's static stdlib catalog after a stdlib_data file changes
+# Regenerate luck_stdlib's static stdlib catalog after a stdlib_data file changes
 stdlib:
-  cargo test -p luck_semantic regenerate_stdlib_catalog -- --ignored
+  cargo test -p luck_stdlib regenerate_stdlib_catalog -- --ignored
 
 # Regenerate roblox_api.toml and roblox_enums.toml from the live Roblox API dump, then the stdlib catalog
 roblox-api:
-  cargo test -p luck_semantic regenerate_roblox_api -- --ignored
+  cargo test -p luck_stdlib regenerate_roblox_api -- --ignored
   just stdlib
 
 # Regenerate the committed minsize.snap after the minifier or the benchmark files change

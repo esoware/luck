@@ -26,7 +26,7 @@ impl_rule!(
 impl WholeRule for UnusedArgument {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let tree = semantic.scope_tree();
+        let tree = semantic.scoping();
         let mut findings = Vec::new();
 
         for symbol in tree.symbols() {

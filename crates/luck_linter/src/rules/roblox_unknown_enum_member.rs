@@ -41,7 +41,7 @@ impl NodeRule for RobloxUnknownEnumMember {
         let Some(mut entry) = stdlib.globals.get("Enum") else {
             return;
         };
-        if context.semantic.scope_tree().resolves_to_local(root) {
+        if context.semantic.scoping().resolves_to_local(root) {
             return;
         }
         // A target's last field is stored to, not read.

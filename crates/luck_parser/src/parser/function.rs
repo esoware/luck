@@ -94,6 +94,10 @@ impl<'ast> Parser<'ast> {
     /// Parse `... [name] [: type]`; `...` must be the current token.
     fn parse_vararg_param(&mut self) -> Box<'ast, VarArgParam<'ast>> {
         let dots = self.advance();
+        // Lua 5.1: a vararg function binds its extra arguments' table to `arg`.
+        if self.version.has_implicit_vararg_table() {
+            self.counts.declarations = self.counts.declarations.wrapping_add(1);
+        }
         // Lua 5.5: named varargs `...name`.
         let name = (self.version.has_named_varargs() && self.is_at_name()).then(|| {
             self.counts.declarations = self.counts.declarations.wrapping_add(1);

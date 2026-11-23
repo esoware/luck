@@ -3,7 +3,7 @@ use luck_ast::Chunk;
 use luck_token::LuaVersion;
 
 /// `source`'s tree, which must parse cleanly, kept in `allocator` so it
-/// lives as long as the names it lends an analysis.
+/// outlives the node table that borrows it.
 pub(crate) fn parse<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,

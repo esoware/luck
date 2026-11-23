@@ -10,7 +10,8 @@ use luck_allocator::Allocator;
 use luck_formatter::FormatResult;
 use luck_linter::{Analysis, FixKind, Message};
 use luck_parser::ParseResult;
-use luck_semantic::{ScopeTree, SemanticAnalysis};
+use luck_semantic::Scoping;
+use luck_stdlib::SemanticAnalysis;
 use luck_token::{LuaVersion, Span, Token};
 
 use crate::analyzed::{Analyzed, Arena};
@@ -217,8 +218,8 @@ impl DocumentState {
         self.analysis().semantic()
     }
 
-    pub(crate) fn tree(&self) -> &ScopeTree<'_> {
-        self.semantic().scope_tree()
+    pub(crate) fn tree(&self) -> &Scoping {
+        self.semantic().scoping()
     }
 
     pub(crate) fn version(&self) -> LuaVersion {

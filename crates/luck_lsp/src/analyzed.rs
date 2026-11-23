@@ -173,7 +173,7 @@ mod tests {
         let shared = Arc::new(analyzed("local answer = 42", &spare));
         let reader = Arc::clone(&shared);
         let names = thread::spawn(move || {
-            let tree = reader.analysis().semantic().scope_tree();
+            let tree = reader.analysis().semantic().scoping();
             tree.symbols()
                 .iter()
                 .map(|symbol| tree.name(symbol.name).to_owned())

@@ -24,9 +24,12 @@
 //!   enables `resolver` and `minifier`)
 //! - `minifier` - AST transform pipeline (feature `minifier`)
 //! - `formatter` - Prettier-style formatter (feature `formatter`)
-//! - `semantic` - Scope tree + stdlib model (feature `semantic`)
+//! - `semantic` - Scoping, compile-time checks, the node table, and `require`
+//!   sites, in one pass (feature `semantic`)
+//! - `stdlib` - Each target's standard library, and what a chunk reaches in
+//!   it (feature `stdlib`, enables `semantic`)
 //! - `linter` - Rule engine with auto-fixes (feature `linter`, enables
-//!   `semantic`)
+//!   `stdlib`)
 //! - `config` - `luck.json` and `.editorconfig` loading (feature `config`,
 //!   enables the stages it configures)
 //!
@@ -199,6 +202,8 @@ pub use luck_parser as parser;
 pub use luck_resolver as resolver;
 #[cfg(feature = "semantic")]
 pub use luck_semantic as semantic;
+#[cfg(feature = "stdlib")]
+pub use luck_stdlib as stdlib;
 pub use luck_token as token;
 
 pub use version::VERSION;

@@ -1,5 +1,5 @@
 use luck_ast::{Call, Expression, FunctionArgs, GetSpan as _};
-use luck_semantic::SemanticAnalysis;
+use luck_stdlib::SemanticAnalysis;
 use luck_token::BinOp;
 
 use crate::call::is_global_call;

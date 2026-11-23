@@ -1,5 +1,5 @@
 use luck_ast::{Call, Expression, FunctionBody, GetSpan as _, Statement};
-use luck_semantic::ScopeTree;
+use luck_semantic::Scoping;
 use rustc_hash::FxHashMap;
 
 use crate::call::{CallArg, CallArgs};
@@ -23,7 +23,7 @@ impl WholeRule for MismatchedArgCount {
         if signatures.is_empty() {
             return Vec::new();
         }
-        let tree = context.semantic.scope_tree();
+        let tree = context.semantic.scoping();
         context
             .nodes
             .as_slice()
@@ -94,7 +94,7 @@ fn function_signatures(context: &LintContext<'_>) -> FxHashMap<u32, FunctionSign
 /// function by the time a call runs.
 fn check_call(
     call: Call<'_>,
-    tree: &ScopeTree<'_>,
+    tree: &Scoping,
     signatures: &FxHashMap<u32, FunctionSignature>,
 ) -> Option<Finding> {
     if call.method.is_some() {

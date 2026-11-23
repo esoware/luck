@@ -15,7 +15,7 @@ impl_rule!(
 impl WholeRule for UndefinedVariable {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let semantic = context.semantic;
-        let tree = semantic.scope_tree();
+        let tree = semantic.scoping();
         tree.global_references()
             .filter(|reference| {
                 // `setting_global` owns writes, and a global this file writes

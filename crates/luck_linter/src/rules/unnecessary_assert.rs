@@ -1,6 +1,6 @@
 use luck_ast::{Call, Expression, GetSpan as _};
 use luck_diagnostics::Tag;
-use luck_semantic::SemanticAnalysis;
+use luck_stdlib::SemanticAnalysis;
 
 use crate::call::{CallArg, CallArgs, is_global_call};
 use crate::diagnostic::Finding;

@@ -6,8 +6,8 @@ use ls_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionResponse, CompletionTextEdit,
     Documentation, InsertTextFormat, MarkupContent, MarkupKind, Position, TextEdit,
 };
-use luck_ast::{Call, FunctionArgs, Name, StringLiteral};
-use luck_semantic::{StdlibEntry, StdlibFunction};
+use luck_ast::{Call, FunctionArgs, StringLiteral};
+use luck_stdlib::{StdlibEntry, StdlibFunction};
 use luck_token::{Span, TokenKind, index_to_offset};
 use rustc_hash::FxHashSet;
 
@@ -39,7 +39,7 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
     // Every local or parameter declared before the cursor, whether or not it's
     // still in scope there, because completion is best-effort. The implicit
     // `self` has an empty span, so it fails the text check.
-    let tree = semantic.scope_tree();
+    let tree = semantic.scoping();
     for symbol in tree.symbols() {
         let span = symbol.definition_span;
         let name = tree.name(symbol.name);
@@ -77,13 +77,15 @@ fn member_completions(
         return Vec::new();
     };
     let semantic = document.semantic();
-    let tree = semantic.scope_tree();
+    let tree = semantic.scoping();
     // A reference at the root is exact. Text mid-typing often has none, so
     // that case falls back to the nearest declaration before the cursor.
-    let (root_local, reaches_host_global) =
-        tree.reference_of(&Name::new(root.into(), None, *root_span)).map_or_else(
+    let (root_local, reaches_host_global) = tree
+        .reference_at(root_span.start)
+        .filter(|&id| tree.reference(id).span == *root_span)
+        .map_or_else(
             || {
-                let local = semantic.nearest_local(root, offset).map(|symbol| symbol.id);
+                let local = tree.nearest_local(root, offset).map(|symbol| symbol.id);
                 (local, local.is_none())
             },
             |reference_id| {

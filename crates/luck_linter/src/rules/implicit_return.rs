@@ -1,5 +1,5 @@
 use luck_ast::{Expression, Statement};
-use luck_semantic::SemanticAnalysis;
+use luck_stdlib::SemanticAnalysis;
 
 use crate::cfg::{Exit, FlowGraph};
 use crate::diagnostic::Finding;

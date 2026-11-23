@@ -34,6 +34,7 @@ luck_formatter   = { workspace = true }
 luck_linter      = { workspace = true }
 luck_minifier    = { workspace = true }
 luck_parser      = { workspace = true }
+luck_semantic    = { workspace = true }
 luck_testgen     = { workspace = true }
 luck_token       = { workspace = true }
 

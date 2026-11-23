@@ -1,7 +1,7 @@
 linter_lua51 Summary:
 Files Linted   : 22/22
-Diagnostics    : 6875
-  5040 no_implicit_globals
+Diagnostics    : 6859
+  5024 no_implicit_globals
    421 setting_global
    313 shadowing
    243 multiple_statements_per_line
@@ -21,7 +21,7 @@ Diagnostics    : 6875
     13 comparison_precedence
     13 implicit_return
     13 must_use
-    11 accessing_uninitialized
+    10 accessing_uninitialized
      9 empty_block
      9 loop_executes_once
      7 set_but_never_read
@@ -31,7 +31,7 @@ Diagnostics    : 6875
      5 string_index_to_field
      4 global_used_as_local
      4 unnecessary_assert
-     2 mutating_uninitialized
+     3 mutating_uninitialized
      2 redundant_nil_init
      1 divide_by_zero
      1 format_string
@@ -58,7 +58,6 @@ lua5.1-tests/api.lua
 12:29 no_implicit_globals: global variable `assert` used
 15:10 setting_global: setting global variable `pack` (missing `local`?)
 15:10 no_implicit_globals: global variable `pack` used
-15:27 no_implicit_globals: global variable `arg` used
 18:1 no_implicit_globals: global variable `print` used
 21:1 setting_global: setting global variable `a` (missing `local`?)
 21:1 no_implicit_globals: global variable `a` used
@@ -326,10 +325,8 @@ lua5.1-tests/api.lua
 167:10 setting_global: setting global variable `check3` (missing `local`?)
 167:10 no_implicit_globals: global variable `check3` used
 168:3 no_implicit_globals: global variable `assert` used
-168:10 no_implicit_globals: global variable `arg` used
 169:3 no_implicit_globals: global variable `assert` used
 169:10 no_implicit_globals: global variable `string` used
-169:22 no_implicit_globals: global variable `arg` used
 171:1 no_implicit_globals: global variable `check3` used
 171:15 undefined_variable: undefined variable `T`
 171:15 no_implicit_globals: global variable `T` used
@@ -2539,12 +2536,9 @@ lua5.1-tests/code.lua
 17:10 no_implicit_globals: global variable `check` used
 18:13 undefined_variable: undefined variable `T`
 18:13 no_implicit_globals: global variable `T` used
-19:12 no_implicit_globals: global variable `arg` used
 21:5 no_implicit_globals: global variable `assert` used
 21:12 no_implicit_globals: global variable `string` used
-21:36 no_implicit_globals: global variable `arg` used
 23:3 no_implicit_globals: global variable `assert` used
-23:12 no_implicit_globals: global variable `arg` used
 27:10 setting_global: setting global variable `checkequal` (missing `local`?)
 27:10 no_implicit_globals: global variable `checkequal` used
 28:7 undefined_variable: undefined variable `T`
@@ -2598,8 +2592,8 @@ lua5.1-tests/code.lua
 110:1 no_implicit_globals: global variable `check` used
 111:1 no_implicit_globals: global variable `assert` used
 113:1 no_implicit_globals: global variable `check` used
-115:13 accessing_uninitialized: `c` is read before any value is assigned, so it is `nil`
-115:16 accessing_uninitialized: `b` is read before any value is assigned, so it is `nil`
+115:3 mutating_uninitialized: field/index assignment on uninitialized `b` (value is `nil`)
+115:5 accessing_uninitialized: `c` is read before any value is assigned, so it is `nil`
 128:1 no_implicit_globals: global variable `checkequal` used
 128:24 parenthesized_conditions: unnecessary parentheses around `if` condition
 128:28 no_implicit_globals: global variable `a` used
@@ -6748,24 +6742,17 @@ lua5.1-tests/vararg.lua
 5:10 no_implicit_globals: global variable `f` used
 6:3 no_implicit_globals: global variable `assert` used
 6:10 no_implicit_globals: global variable `type` used
-6:15 no_implicit_globals: global variable `arg` used
 7:3 no_implicit_globals: global variable `assert` used
 7:10 no_implicit_globals: global variable `type` used
-7:15 no_implicit_globals: global variable `arg` used
-8:11 no_implicit_globals: global variable `arg` used
 8:20 no_implicit_globals: global variable `assert` used
-8:33 no_implicit_globals: global variable `arg` used
-9:10 no_implicit_globals: global variable `arg` used
 12:10 setting_global: setting global variable `c12` (missing `local`?)
 12:10 no_implicit_globals: global variable `c12` used
 13:3 no_implicit_globals: global variable `assert` used
-13:10 no_implicit_globals: global variable `arg` used
 14:20 multiple_statements_per_line: statement starts on the same line as the previous statement
 14:26 deprecated: `table.getn` is deprecated
 14:26 no_implicit_globals: global variable `table` used
 20:10 setting_global: setting global variable `vararg` (missing `local`?)
 20:10 no_implicit_globals: global variable `vararg` used
-20:30 no_implicit_globals: global variable `arg` used
 22:42 no_implicit_globals: global variable `unpack` used
 24:1 no_implicit_globals: global variable `assert` used
 24:8 no_implicit_globals: global variable `f` used
@@ -6815,8 +6802,6 @@ lua5.1-tests/vararg.lua
 40:1 no_implicit_globals: global variable `assert` used
 41:10 no_implicit_globals: global variable `print` used
 42:1 no_implicit_globals: global variable `assert` used
-45:32 no_implicit_globals: global variable `arg` used
-45:40 no_implicit_globals: global variable `arg` used
 46:1 no_implicit_globals: global variable `assert` used
 47:1 no_implicit_globals: global variable `print` used
 49:1 setting_global: setting global variable `lim` (missing `local`?)
@@ -6862,7 +6847,6 @@ lua5.1-tests/vararg.lua
 78:16 shadowing: variable `a` shadows outer variable
 79:9 shadowing: variable `b` shadows outer variable
 80:3 no_implicit_globals: global variable `assert` used
-80:10 no_implicit_globals: global variable `arg` used
 82:11 shadowing: variable `b` shadows outer variable
 82:14 shadowing: variable `c` shadows outer variable
 83:24 no_implicit_globals: global variable `oneless` used

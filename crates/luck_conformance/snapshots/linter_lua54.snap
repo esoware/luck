@@ -20,8 +20,8 @@ Diagnostics    : 10812
     31 mixed_table
     22 must_use
     21 set_but_never_read
-    17 accessing_uninitialized
     17 empty_block
+    16 accessing_uninitialized
     15 comparison_precedence
     15 for_range
     15 redundant_nil_init
@@ -34,7 +34,7 @@ Diagnostics    : 10812
      5 ambiguous_newline_call
      4 incorrect_stdlib_use
      4 integer_parsing
-     3 mutating_uninitialized
+     4 mutating_uninitialized
      3 redundant_return
      2 builtin_global_write
      2 constant_table_comparison
@@ -2624,8 +2624,8 @@ lua-5.4.9-tests/code.lua
 370:19 empty_block: empty numeric `for` loop body
 370:23 unused_loop_variable: unused loop variable `i`
 378:9 shadowing: variable `a` shadows outer variable
-379:13 accessing_uninitialized: `c` is read before any value is assigned, so it is `nil`
-379:16 accessing_uninitialized: `b` is read before any value is assigned, so it is `nil`
+379:3 mutating_uninitialized: field/index assignment on uninitialized `b` (value is `nil`)
+379:5 accessing_uninitialized: `c` is read before any value is assigned, so it is `nil`
 402:19 shadowing: variable `a` shadows outer variable
 408:30 shadowing: variable `a` shadows outer variable
 408:33 multiple_statements_per_line: statement starts on the same line as the previous statement

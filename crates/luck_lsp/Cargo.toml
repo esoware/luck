@@ -24,6 +24,7 @@ luck_linter      = { workspace = true }
 luck_parser      = { workspace = true }
 luck_resolver    = { workspace = true }
 luck_semantic    = { workspace = true }
+luck_stdlib      = { workspace = true }
 luck_token       = { workspace = true }
 
 crossbeam-channel = { workspace = true }

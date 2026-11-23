@@ -108,7 +108,7 @@ fn table_stdlib_function<'call>(
     context: &LintContext<'_>,
 ) -> Option<&'call str> {
     let (root, field) = dotted_callee(call)?;
-    if root.text != "table" || context.semantic.scope_tree().resolves_to_local(root) {
+    if root.text != "table" || context.semantic.scoping().resolves_to_local(root) {
         return None;
     }
     context.semantic.stdlib().lookup(&["table", field])?;

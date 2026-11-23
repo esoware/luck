@@ -6,14 +6,9 @@
     reason = "a test panics to fail, so a Panics section says nothing"
 )]
 
-extern crate alloc;
-
 mod common;
 
+mod checker;
 mod counts;
-mod drift;
-mod names;
-mod roblox_api;
 mod stack;
-mod stdlib;
-mod stdlib_catalog;
+mod tables;

@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
-use luck_diagnostics::Severity;
+use luck_diagnostics::{Diagnostic, Severity};
 use luck_parser::ParseResult;
-use luck_semantic::SemanticAnalysis;
+use luck_stdlib::SemanticAnalysis;
 use luck_token::{LintVerb, LuaTarget};
 use rayon::prelude::*;
 
@@ -10,7 +10,7 @@ use crate::config::{LintConfig, RuleLevel};
 use crate::diagnostic::{Category, Finding, Message};
 use crate::directives::Directives;
 use crate::fix::FixKind;
-use crate::nodes::{NodeCollector, Nodes};
+use crate::nodes::Nodes;
 use crate::rule::{LintContext, NodeRule, Rule, WholeRule};
 use crate::rules::{RULES, RuleEntry};
 
@@ -37,7 +37,9 @@ pub fn lint(
 /// the kinds `fixes` holds.
 ///
 /// A parse with errors yields its errors, each an E008, and no rules run, so
-/// neither config nor a directive turns one off.
+/// neither config nor a directive turns one off. So does a clean parse of a
+/// chunk Lua refuses to compile, with the errors semantic analysis finds, such
+/// as a write to a `<const>` local.
 ///
 /// # Panics
 ///
@@ -50,7 +52,7 @@ pub fn lint_parsed(
     fixes: FixKind,
 ) -> Vec<Message> {
     if !parse.errors.is_empty() {
-        return parse_error_messages(parse);
+        return error_messages(&parse.errors);
     }
     lint_analyzed(parse, &analyze(parse, target, config), config, fixes, &|| false)
         .unwrap_or_default()
@@ -60,8 +62,8 @@ pub fn lint_parsed(
 /// build either twice, building the fixes of the kinds `fixes` holds. `config`
 /// must be the one `analysis` was built with.
 ///
-/// A parse with errors yields its errors, as [`lint_parsed`] does.
-/// `is_cancelled` is asked between rules and between runs of nodes, and once
+/// A parse with errors, or an analysis with errors, yields them, as
+/// [`lint_parsed`] does. `is_cancelled` is asked between rules and between runs of nodes, and once
 /// it says so, the lint stops and returns `None`.
 ///
 /// # Panics
@@ -77,18 +79,22 @@ pub fn lint_analyzed(
     is_cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Option<Vec<Message>> {
     if !parse.errors.is_empty() {
-        return Some(parse_error_messages(parse));
+        return Some(error_messages(&parse.errors));
+    }
+    if !analysis.errors.is_empty() {
+        return Some(error_messages(&analysis.errors));
     }
     let mut messages = run_rules(&LintContext::new(parse, analysis, config, fixes), is_cancelled)?;
     messages.sort_by_key(|message| message.span().start);
     Some(messages)
 }
 
-/// A parse's semantic analysis, the linter's table of its nodes, which
-/// [`analyze`] builds in one walk, and its lint directives.
+/// A parse's semantic analysis and the compile-time errors it found, the
+/// linter's table of its nodes, and its lint directives.
 #[derive(Debug)]
 pub struct Analysis<'ast> {
     semantic: SemanticAnalysis<'ast>,
+    errors: Vec<Diagnostic>,
     nodes: Nodes<'ast>,
     directives: Directives,
 }
@@ -122,22 +128,21 @@ pub fn analyze<'ast>(
 ) -> Analysis<'ast> {
     let chunk = &parse.chunk;
     let mut directives = Directives::new(&parse.comments, parse.source);
-    let (mut semantic, nodes) = if RULES.iter().enumerate().any(|(slot, entry)| {
+    let (mut semantic, errors) = luck_stdlib::analyze(chunk, parse.counts, target);
+    let nodes = if RULES.iter().enumerate().any(|(slot, entry)| {
         rule_severity(entry.rule(), config).is_some() || directives.enables(slot)
     }) {
-        let mut collector = NodeCollector::new(chunk);
-        let semantic = luck_semantic::analyze_with(chunk, parse.counts, target, &mut collector);
-        (semantic, collector.finish())
+        Nodes::collect(chunk)
     } else {
-        (luck_semantic::analyze(chunk, parse.counts, target), Nodes::default())
+        Nodes::default()
     };
     directives.cover_statements(&nodes, parse.source, chunk.version);
     semantic.add_extra_globals(config.extra_globals.iter().map(String::as_str));
-    Analysis { semantic, nodes, directives }
+    Analysis { semantic, errors, nodes, directives }
 }
 
-fn parse_error_messages(parse: &ParseResult<'_>) -> Vec<Message> {
-    parse.errors.iter().map(|error| Message { diagnostic: error.clone(), fix: None }).collect()
+fn error_messages(errors: &[Diagnostic]) -> Vec<Message> {
+    errors.iter().map(|error| Message { diagnostic: error.clone(), fix: None }).collect()
 }
 
 /// Node rules share one bus pass while whole-tree rules run beside it, on

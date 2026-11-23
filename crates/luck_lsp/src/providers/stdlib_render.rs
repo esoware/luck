@@ -1,4 +1,4 @@
-use luck_semantic::{StdlibArgKind, StdlibConstant, StdlibParam};
+use luck_stdlib::{StdlibArgKind, StdlibConstant, StdlibParam};
 
 /// How many values of a constant set hover and signature help list. Large
 /// generated sets (Roblox service and class names) would swamp the panel, so

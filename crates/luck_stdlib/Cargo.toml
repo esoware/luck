@@ -1,0 +1,38 @@
+[package]
+name                   = "luck_stdlib"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "The standard libraries of Lua 5.1-5.5, Luau, and Roblox, and what a chunk's names and calls reach in them"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+# The generated catalogs are expressions that `include!` splices in, which cargo-shear reads as files
+# with no items.
+[package.metadata.cargo-shear]
+ignored-paths = ["src/stdlib_catalog/*.rs"]
+
+[dependencies]
+luck_ast         = { workspace = true }
+luck_diagnostics = { workspace = true }
+luck_semantic    = { workspace = true }
+luck_token       = { workspace = true }
+
+[dev-dependencies]
+luck_allocator = { workspace = true }
+luck_parser    = { workspace = true }
+
+# The catalog generator reads stdlib_data with these.
+serde = { workspace = true }
+toml  = { workspace = true }
+
+# Only the ignored regenerate_roblox_api test uses these, to fetch and parse the live Roblox API dump.
+serde_json = { workspace = true }
+ureq       = { workspace = true }
