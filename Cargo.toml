@@ -23,6 +23,7 @@ luck_bundler         = { version = "0.6.0", path = "crates/luck_bundler" }
 luck_codegen         = { version = "0.6.0", path = "crates/luck_codegen" }
 luck_config          = { version = "0.6.0", path = "crates/luck_config" }
 luck_core            = { version = "0.6.0", path = "crates/luck_core" }
+luck_diagnostics     = { version = "0.6.0", path = "crates/luck_diagnostics" }
 luck_formatter       = { version = "0.6.0", path = "crates/luck_formatter" }
 luck_lexer           = { version = "0.6.0", path = "crates/luck_lexer" }
 luck_linter          = { version = "0.6.0", path = "crates/luck_linter" }

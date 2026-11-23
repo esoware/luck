@@ -8,7 +8,7 @@ use luck_resolver::{FileSystem as _, FileSystemOs};
 use crate::exit::Exit;
 use crate::output::OUTPUT_BUFFER_BYTES;
 use crate::project::{ProjectFile, for_each_outcome_in_order, project_files};
-use crate::render::render_source_errors;
+use crate::reporter::{DefaultReporter, Reporter as _, SourceFile};
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -91,12 +91,11 @@ fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
         return None;
     }
 
-    Some(render_source_errors(
-        file_path.to_string_lossy().into_owned(),
-        &source,
-        &result.errors,
-        version,
-    ))
+    let mut rendered = Vec::new();
+    let label = file_path.to_string_lossy();
+    let source_file = SourceFile { label: &label, text: Some(&source), version };
+    DefaultReporter.render(source_file, &result.errors, &mut rendered);
+    Some(rendered)
 }
 
 #[cfg(test)]

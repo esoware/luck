@@ -13,9 +13,7 @@ use super::{Closer, Parser};
 enum Construct {
     IfStatement,
     WhileLoop,
-    DoBlock,
     ForLoop,
-    RepeatLoop,
 }
 
 impl Construct {
@@ -23,9 +21,7 @@ impl Construct {
         match self {
             Self::IfStatement => "if-statement",
             Self::WhileLoop => "while-loop",
-            Self::DoBlock => "do-block",
             Self::ForLoop => "for-loop",
-            Self::RepeatLoop => "repeat-loop",
         }
     }
 }
@@ -413,8 +409,7 @@ impl<'ast> Parser<'ast> {
         };
 
         self.close(Closer::Else);
-        self.close(Closer::BlockEnd);
-        let end_span = self.expect_keyword(TokenKind::End, Construct::IfStatement);
+        let end_span = self.expect_closer(TokenKind::End, Closer::BlockEnd, if_span);
         let span = if_span.merge(end_span);
 
         Statement::new_if_stmt(span, condition, block, elseif_clauses, else_clause, self.allocator)
@@ -428,8 +423,7 @@ impl<'ast> Parser<'ast> {
         let Some(block) = self.parse_loop_block() else {
             return Statement::Error(while_span);
         };
-        self.close(Closer::BlockEnd);
-        let end_span = self.expect_keyword(TokenKind::End, Construct::WhileLoop);
+        let end_span = self.expect_closer(TokenKind::End, Closer::BlockEnd, while_span);
         let span = while_span.merge(end_span);
         Statement::new_while_loop(span, condition, block, self.allocator)
     }
@@ -440,8 +434,7 @@ impl<'ast> Parser<'ast> {
         let Some(block) = self.parse_block() else {
             return Statement::Error(do_span);
         };
-        self.close(Closer::BlockEnd);
-        let end_span = self.expect_keyword(TokenKind::End, Construct::DoBlock);
+        let end_span = self.expect_closer(TokenKind::End, Closer::BlockEnd, do_span);
         let span = do_span.merge(end_span);
         Statement::new_do_block(span, block, self.allocator)
     }
@@ -471,8 +464,7 @@ impl<'ast> Parser<'ast> {
         let Some(block) = self.parse_loop_block() else {
             return Statement::Error(for_span);
         };
-        self.close(Closer::BlockEnd);
-        let end_span = self.expect_keyword(TokenKind::End, Construct::ForLoop);
+        let end_span = self.expect_closer(TokenKind::End, Closer::BlockEnd, for_span);
         let span = for_span.merge(end_span);
         Statement::new_numeric_for(
             span,
@@ -502,8 +494,7 @@ impl<'ast> Parser<'ast> {
         let Some(block) = self.parse_loop_block() else {
             return Statement::Error(for_span);
         };
-        self.close(Closer::BlockEnd);
-        let end_span = self.expect_keyword(TokenKind::End, Construct::ForLoop);
+        let end_span = self.expect_closer(TokenKind::End, Closer::BlockEnd, for_span);
         let span = for_span.merge(end_span);
         Statement::new_generic_for(span, names, exprs, block, self.allocator)
     }
@@ -514,8 +505,7 @@ impl<'ast> Parser<'ast> {
         let Some(block) = self.parse_loop_block() else {
             return Statement::Error(repeat_span);
         };
-        self.close(Closer::BlockEnd);
-        self.expect_keyword(TokenKind::Until, Construct::RepeatLoop);
+        self.expect_closer(TokenKind::Until, Closer::BlockEnd, repeat_span);
         let condition = self.parse_expr(0);
         let span = Span::new(repeat_span.start, self.previous_span.end);
         Statement::new_repeat_loop(span, block, condition, self.allocator)

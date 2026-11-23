@@ -3,10 +3,10 @@ use luck_ast::{
     Block, Call, Chunk, Expression, FunctionArgs, FunctionBody, GetSpan as _, Name, Statement,
     Suffix, SuffixedExpression, TreeCounts, Var,
 };
-use luck_core::Diagnostic;
+use luck_diagnostics::Diagnostic;
 use luck_semantic::{NodeSink, ScopeId, ScopeKind, ScopeTree, StdlibEntry, SymbolId};
 use luck_token::{LuaVersion, Span, StdlibEnvironment};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::dynamic_require::DynamicRequire;
 use crate::exports::{Exports, has_value_exports};
@@ -59,7 +59,6 @@ pub(crate) fn extract_requires<'ast>(
     chunk: &Chunk<'_>,
     counts: TreeCounts,
     source: &'ast str,
-    file_path: &str,
     dynamic_require: DynamicRequire,
 ) -> ExtractedRequires<'ast> {
     let (version, block) = (chunk.version, &chunk.block);
@@ -69,8 +68,7 @@ pub(crate) fn extract_requires<'ast>(
     } else {
         ScopeTree::build_for_names(chunk, &ASKED_NAMES, &mut uses)
     };
-    RequireFinder::new(allocator, source, file_path, version, dynamic_require, &tree)
-        .read(block, uses)
+    RequireFinder::new(allocator, source, version, dynamic_require, &tree).read(block, uses)
 }
 
 /// Every name [`RequireFinder`] asks its tree about, unless it counts
@@ -244,14 +242,14 @@ impl<'tree> NodeSink<'tree> for Uses<'tree> {
 struct RequireFinder<'tree, 'ast> {
     allocator: &'ast Allocator,
     source: &'ast str,
-    file_path: &'tree str,
     version: LuaVersion,
     dynamic_require: DynamicRequire,
     tree: &'tree ScopeTree<'tree>,
     sites: Vec<RequireSite<'ast>>,
     dynamic_callees: Vec<Span>,
     diags: Vec<Diagnostic>,
-    seen_require_strings: FxHashSet<&'ast str>,
+    /// The call that first required each string.
+    first_requires: FxHashMap<&'ast str, Span>,
     direct_callees: Vec<Span>,
 }
 
@@ -259,7 +257,6 @@ impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
     fn new(
         allocator: &'ast Allocator,
         source: &'ast str,
-        file_path: &'tree str,
         version: LuaVersion,
         dynamic_require: DynamicRequire,
         tree: &'tree ScopeTree<'tree>,
@@ -267,14 +264,13 @@ impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
         Self {
             allocator,
             source,
-            file_path,
             version,
             dynamic_require,
             tree,
             sites: Vec::new(),
             dynamic_callees: Vec::new(),
             diags: Vec::new(),
-            seen_require_strings: FxHashSet::default(),
+            first_requires: FxHashMap::default(),
             direct_callees: Vec::new(),
         }
     }
@@ -295,7 +291,6 @@ impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
         }
         let Self {
             source,
-            file_path,
             version,
             tree,
             mut sites,
@@ -319,7 +314,7 @@ impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
                             && reference.kind.is_read()
                             && !is_direct_callee(reference.span)
                     })
-                    .map(|reference| Diagnostic::w005_aliased(file_path, reference.span)),
+                    .map(|reference| Diagnostic::w005_aliased(reference.span)),
             );
         }
 
@@ -329,7 +324,7 @@ impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
             uses.package_loaded_writes
                 .iter()
                 .filter(|(package, _)| tree.reaches_host_global(package))
-                .map(|(_, target)| Diagnostic::e006(file_path, *target)),
+                .map(|(_, target)| Diagnostic::e006(*target)),
         );
         let has_global_arg_read = uses.arg_reads.iter().any(|name| !tree.resolves_to_local(name));
 
@@ -364,7 +359,7 @@ impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
         };
         self.direct_callees.push(callee.span);
         if !self.tree.reaches_host_global(callee) {
-            self.diags.push(Diagnostic::w005_shadowed(self.file_path, call.span()));
+            self.diags.push(Diagnostic::w005_shadowed(call.span()));
             return;
         }
 
@@ -373,8 +368,14 @@ impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
             // before any searcher, so no file can stand in for it.
             Some(require_string) if is_standard_library(require_string, self.version) => {}
             Some(require_string) => {
-                if !self.seen_require_strings.insert(require_string) {
-                    self.diags.push(Diagnostic::w001(self.file_path, call.span(), require_string));
+                match self.first_requires.get(require_string) {
+                    Some(&first) => {
+                        let diag = Diagnostic::w001(call.span(), require_string, first);
+                        self.diags.push(diag);
+                    }
+                    None => {
+                        self.first_requires.insert(require_string, call.span());
+                    }
                 }
                 self.sites.push(RequireSite { require_string, call_span: call.span() });
             }
@@ -388,14 +389,14 @@ impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
     fn handle_dynamic_call(&mut self, call: Call<'_>, callee_span: Span) {
         match self.dynamic_require {
             DynamicRequire::Error => {
-                self.diags.push(Diagnostic::e002(self.file_path, call.span()));
+                self.diags.push(Diagnostic::e002(call.span()));
                 return;
             }
             DynamicRequire::Warn if self.version.is_luau() => {
-                self.diags.push(Diagnostic::w007_runtime(self.file_path, call.span()));
+                self.diags.push(Diagnostic::w007_runtime(call.span()));
             }
             DynamicRequire::Warn => {
-                self.diags.push(Diagnostic::w007_loader_fallback(self.file_path, call.span()));
+                self.diags.push(Diagnostic::w007_loader_fallback(call.span()));
             }
             DynamicRequire::Allow => {}
         }
@@ -427,7 +428,7 @@ impl<'tree, 'ast> RequireFinder<'tree, 'ast> {
     /// through its table rather than a direct call.
     fn flag_global_table_require(&mut self, chain: &SuffixedExpression<'_>, table: &Name<'_>) {
         if self.tree.reaches_host_global(table) {
-            self.diags.push(Diagnostic::w005_aliased(self.file_path, chain.head(1).span()));
+            self.diags.push(Diagnostic::w005_aliased(chain.head(1).span()));
         }
     }
 }
@@ -516,14 +517,7 @@ mod tests {
     ) -> ExtractedRequires<'ast> {
         let parsed = luck_parser::parse(allocator, source, version);
         assert!(parsed.errors.is_empty(), "parse failed: {:?}", parsed.errors);
-        extract_requires(
-            allocator,
-            &parsed.chunk,
-            parsed.counts,
-            source,
-            "test.lua",
-            dynamic_require,
-        )
+        extract_requires(allocator, &parsed.chunk, parsed.counts, source, dynamic_require)
     }
 
     fn extract<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ExtractedRequires<'ast> {
@@ -823,17 +817,20 @@ package.loaded.x = 1
     }
 
     #[test]
-    fn duplicate_require_flags_w001() {
+    fn duplicate_require_flags_w001_and_points_at_the_first() {
         let allocator = Allocator::new();
-        let result = extract(
-            &allocator,
-            "\
+        let source = "\
 local a = require(\"utils\")
 local b = require(\"utils\")
-",
-        );
+";
+        let result = extract(&allocator, source);
         assert_eq!(result.sites.len(), 2);
-        assert_eq!(with_code(&result, "W001").len(), 1, "{:?}", result.diags);
+        let [warning] = with_code(&result, "W001")[..] else {
+            panic!("{:?}", result.diags);
+        };
+        let labeled: Vec<&str> =
+            warning.labels.iter().map(|label| label.span.text(source)).collect();
+        assert_eq!(labeled, ["require(\"utils\")"], "{warning:?}");
     }
 
     #[test]
@@ -963,8 +960,7 @@ obj.require(\"x\")
         let chunk = allocator.alloc(parsed.chunk);
         let mut uses = Uses::new(version);
         let tree = ScopeTree::build_with(chunk, parsed.counts, &mut uses);
-        let finder =
-            RequireFinder::new(allocator, source, "test.lua", version, DynamicRequire::Warn, &tree);
+        let finder = RequireFinder::new(allocator, source, version, DynamicRequire::Warn, &tree);
         Some(finder.read(&chunk.block, uses))
     }
 

@@ -1,21 +1,21 @@
+use luck_diagnostics::Diagnostic;
 use luck_token::{LuaVersion, Span, TokenKind, read_integer};
 
 use crate::cursor::Cursor;
-use crate::lex_error::{LexError, lex_error};
 
 /// Scan a numeral that starts at `start` with `first`, a digit or a `.`
 /// before one, with the cursor past `first`.
 ///
 /// # Errors
 ///
-/// Returns a [`LexError`] for a malformed numeral.
+/// Returns a [`Diagnostic`] for a malformed numeral.
 #[inline]
 pub(crate) fn scan_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
     first: u8,
-) -> Result<TokenKind, LexError> {
+) -> Result<TokenKind, Diagnostic> {
     let rest = cursor.rest();
     let digit_count = rest.iter().take_while(|b| b.is_ascii_digit()).count();
     // Most numerals are decimal integers that nothing else touches.
@@ -35,7 +35,7 @@ pub(crate) fn scan_number(
 ///
 /// # Errors
 ///
-/// Returns a [`LexError`] for a malformed numeral.
+/// Returns a [`Diagnostic`] for a malformed numeral.
 #[cold]
 #[inline(never)]
 fn scan_other_number(
@@ -43,7 +43,7 @@ fn scan_other_number(
     version: LuaVersion,
     start: usize,
     first: u8,
-) -> Result<TokenKind, LexError> {
+) -> Result<TokenKind, Diagnostic> {
     let is_integer = match (first, cursor.rest()) {
         // Every reference scanner reads the digit after a leading `.` as the
         // numeral's first, so `.0x` opens a hex scan that can never convert.
@@ -78,13 +78,13 @@ fn scan_other_number(
 ///
 /// # Errors
 ///
-/// Returns a [`LexError`] for a malformed hexadecimal numeral.
+/// Returns a [`Diagnostic`] for a malformed hexadecimal numeral.
 fn scan_hex_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
     prefix_length: usize,
-) -> Result<bool, LexError> {
+) -> Result<bool, Diagnostic> {
     cursor.advance_by(prefix_length);
 
     let has_integer_part = eat_digits(cursor, version, u8::is_ascii_hexdigit);
@@ -92,7 +92,7 @@ fn scan_hex_number(
     if version.has_hex_floats() {
         // Lua 5.2+
         if !has_integer_part && cursor.peek() != Some(b'.') {
-            return Err(lex_error(
+            return Err(Diagnostic::e008(
                 cursor.span_since(start),
                 "hex literal requires at least one digit after `0x`",
             ));
@@ -100,20 +100,23 @@ fn scan_hex_number(
         if cursor.eat(b'.') {
             let has_fraction = eat_digits(cursor, version, u8::is_ascii_hexdigit);
             if !has_integer_part && !has_fraction {
-                return Err(lex_error(
+                return Err(Diagnostic::e008(
                     cursor.span_since(start),
                     "hex float requires digits before or after decimal point",
                 ));
             }
         }
         if matches!(cursor.peek(), Some(b'p' | b'P')) && !eat_exponent(cursor, version) {
-            return Err(lex_error(cursor.span_since(start), "hex float exponent requires digits"));
+            return Err(Diagnostic::e008(
+                cursor.span_since(start),
+                "hex float exponent requires digits",
+            ));
         }
     } else {
         // Without hex floats, a `.` can't start a fraction, so a digitless
         // `0x` is malformed whatever follows it.
         if !has_integer_part {
-            return Err(lex_error(
+            return Err(Diagnostic::e008(
                 cursor.span_since(start),
                 "hex literal requires at least one digit after `0x`",
             ));
@@ -121,7 +124,7 @@ fn scan_hex_number(
         if matches!(cursor.rest(), [b'.', digit, ..] if digit.is_ascii_hexdigit())
             || matches!(cursor.peek(), Some(b'p' | b'P'))
         {
-            return Err(lex_error(
+            return Err(Diagnostic::e008(
                 cursor.span_since(start),
                 "hex float literals are not supported in this Lua version",
             ));
@@ -133,7 +136,7 @@ fn scan_hex_number(
     if (version.has_hex_scan_dots() && cursor.peek() == Some(b'.'))
         || is_touching_numeral(cursor, version)
     {
-        return Err(lex_error(
+        return Err(Diagnostic::e008(
             Span::from_indices(start, cursor.position().saturating_add(1)),
             "malformed hexadecimal number",
         ));
@@ -146,17 +149,17 @@ fn scan_hex_number(
 ///
 /// # Errors
 ///
-/// Returns a [`LexError`] for a malformed binary numeral.
+/// Returns a [`Diagnostic`] for a malformed binary numeral.
 fn scan_binary_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
     prefix_length: usize,
-) -> Result<bool, LexError> {
+) -> Result<bool, Diagnostic> {
     cursor.advance_by(prefix_length);
 
     if !eat_digits(cursor, version, |b| matches!(b, b'0' | b'1')) {
-        return Err(lex_error(
+        return Err(Diagnostic::e008(
             cursor.span_since(start),
             "binary literal requires at least one digit",
         ));
@@ -175,13 +178,13 @@ fn scan_binary_number(
 ///
 /// # Errors
 ///
-/// Returns a [`LexError`] for a malformed decimal numeral.
+/// Returns a [`Diagnostic`] for a malformed decimal numeral.
 fn scan_decimal_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
     is_fraction: bool,
-) -> Result<bool, LexError> {
+) -> Result<bool, Diagnostic> {
     let mut is_float = is_fraction;
     if !is_fraction {
         eat_digits(cursor, version, u8::is_ascii_digit);
@@ -198,7 +201,10 @@ fn scan_decimal_number(
     if has_exponent {
         is_float = true;
         if !eat_exponent(cursor, version) {
-            return Err(lex_error(cursor.span_since(start), "decimal exponent requires digits"));
+            return Err(Diagnostic::e008(
+                cursor.span_since(start),
+                "decimal exponent requires digits",
+            ));
         }
     }
 
@@ -209,7 +215,7 @@ fn scan_decimal_number(
     // Luau consumes the suffix on floats too: `2.5i` is a malformed integer,
     // not a float followed by an identifier.
     if is_float && version.has_luau_integer_literals() && cursor.eat(b'i') {
-        return Err(lex_error(
+        return Err(Diagnostic::e008(
             cursor.span_since(start),
             "the `i` integer suffix is not allowed on float literals",
         ));
@@ -235,8 +241,8 @@ fn is_touching_numeral(cursor: &Cursor<'_>, version: LuaVersion) -> bool {
     })
 }
 
-fn touching_letter_error(cursor: &Cursor<'_>, start: usize) -> LexError {
-    lex_error(
+fn touching_letter_error(cursor: &Cursor<'_>, start: usize) -> Diagnostic {
+    Diagnostic::e008(
         Span::from_indices(start, cursor.position().saturating_add(1)),
         "malformed number (a numeral cannot touch a letter)",
     )
@@ -282,17 +288,17 @@ fn eat_exponent(cursor: &mut Cursor<'_>, version: LuaVersion) -> bool {
 ///
 /// # Errors
 ///
-/// Returns a [`LexError`] when the value doesn't fit in 64 bits.
+/// Returns a [`Diagnostic`] when the value doesn't fit in 64 bits.
 fn eat_integer_suffix(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
     start: usize,
-) -> Result<bool, LexError> {
+) -> Result<bool, Diagnostic> {
     if !(version.has_luau_integer_literals() && cursor.eat(b'i')) {
         return Ok(false);
     }
     if read_integer(cursor.text_since(start)).is_none() {
-        return Err(lex_error(
+        return Err(Diagnostic::e008(
             cursor.span_since(start),
             "integer literal is outside the 64-bit range",
         ));
@@ -307,10 +313,10 @@ fn eat_integer_suffix(
 ///
 /// # Errors
 ///
-/// Returns a [`LexError`] spanning the numeral and the two dots.
-fn reject_adjacent_concat(cursor: &Cursor<'_>, start: usize) -> Result<(), LexError> {
+/// Returns a [`Diagnostic`] spanning the numeral and the two dots.
+fn reject_adjacent_concat(cursor: &Cursor<'_>, start: usize) -> Result<(), Diagnostic> {
     if cursor.rest().starts_with(b"..") {
-        return Err(lex_error(
+        return Err(Diagnostic::e008(
             Span::from_indices(start, cursor.position().saturating_add(2)),
             "malformed number (a numeral cannot directly precede `..`)",
         ));

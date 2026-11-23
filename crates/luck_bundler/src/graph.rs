@@ -1,10 +1,10 @@
-use alloc::borrow::Cow;
+use core::mem;
 use std::path::{Path, PathBuf};
 
 use luck_allocator::ThreadAllocators;
-use luck_core::Diagnostic;
+use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem as _, FileSystemOs, ResolveOptions, Resolver, to_slash_lossy};
-use luck_token::{LuaVersion, Span};
+use luck_token::LuaVersion;
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
@@ -36,7 +36,8 @@ pub struct DependencyGraph<'ast> {
     /// Leaves first, or discovery order when there's a cycle.
     pub topological_order: Vec<ModuleId>,
     pub entry_id: ModuleId,
-    pub warnings: Vec<Diagnostic>,
+    /// By module, in discovery order.
+    pub warnings: Vec<FileDiagnostics>,
 }
 
 impl<'ast> DependencyGraph<'ast> {
@@ -57,7 +58,7 @@ impl<'ast> DependencyGraph<'ast> {
         arenas: &'ast ThreadAllocators,
         entry_path: &Path,
         options: &BundleOptions<'_>,
-    ) -> Result<Self, Vec<Diagnostic>> {
+    ) -> Result<Self, Vec<FileDiagnostics>> {
         // Emitted paths are made relative to this, so it must be canonical like
         // the modules' paths.
         let root = absolute_project_root(options.project_root);
@@ -87,24 +88,28 @@ fn number_modules<'ast>(
     entry: PathBuf,
     mut found: FxHashMap<PathBuf, Discovered<'ast>>,
     mut discover: impl FnMut(&Path) -> Discovered<'ast>,
-) -> Result<DependencyGraph<'ast>, Vec<Diagnostic>> {
+) -> Result<DependencyGraph<'ast>, Vec<FileDiagnostics>> {
     let mut ids: FxHashMap<PathBuf, ModuleId> = FxHashMap::default();
     ids.insert(entry.clone(), ModuleId(0));
     let mut paths = vec![entry];
     let mut modules: Vec<ModuleInfo<'ast>> = Vec::new();
     let mut errors = Vec::new();
-    let mut warnings = Vec::new();
+    // By module, so each holds what's found in its file.
+    let mut module_warnings: Vec<Vec<Diagnostic>> = Vec::new();
     let mut next = 0;
     while let Some(path) = paths.get(next) {
         if next >= MAX_MODULE_COUNT {
-            errors.push(Diagnostic::e009(&to_slash_lossy(path), Span::default(), MAX_MODULE_COUNT));
+            let diags = vec![Diagnostic::e009(MAX_MODULE_COUNT)];
+            errors.push(FileDiagnostics { path: path.clone(), diags });
             break;
         }
-        let Discovered { errors: module_errors, warnings: module_warnings, module } =
+        let Discovered { errors: found_errors, warnings: found_warnings, module } =
             found.remove(path).unwrap_or_else(|| discover(path));
-        errors.extend(module_errors);
-        warnings.extend(module_warnings);
+        if !found_errors.is_empty() {
+            errors.push(FileDiagnostics { path: path.clone(), diags: found_errors });
+        }
         if let Some(ResolvedModuleInfo { mut info, requires }) = module {
+            module_warnings.push(found_warnings);
             info.dependencies = requires
                 .into_iter()
                 .filter_map(|(site, resolved)| {
@@ -129,9 +134,18 @@ fn number_modules<'ast>(
     }
 
     // No errors, so every module was read and each index is its `ModuleId`.
-    let topological_order = topological_order(&modules, &mut warnings);
+    let topological_order = topological_order(&modules, &mut module_warnings);
     let entry_id = ModuleId(0);
-    warn_inert_hot_comments(&modules, entry_id, &mut warnings);
+    warn_inert_hot_comments(&modules, entry_id, &mut module_warnings);
+    let warnings = modules
+        .iter()
+        .zip(&mut module_warnings)
+        .filter(|(_, diags)| !diags.is_empty())
+        .map(|(module, diags)| FileDiagnostics {
+            path: module.path.clone(),
+            diags: mem::take(diags),
+        })
+        .collect();
     Ok(DependencyGraph { modules, topological_order, entry_id, warnings })
 }
 
@@ -141,18 +155,14 @@ fn number_modules<'ast>(
 fn warn_inert_hot_comments(
     modules: &[ModuleInfo<'_>],
     entry_id: ModuleId,
-    warnings: &mut Vec<Diagnostic>,
+    warnings: &mut [Vec<Diagnostic>],
 ) {
-    for (i, module) in modules.iter().enumerate() {
+    for ((i, module), module_warnings) in modules.iter().enumerate().zip(warnings) {
         if ModuleId(i) == entry_id {
             continue;
         }
         if let Some(span) = module.hot_comments.first() {
-            warnings.push(Diagnostic::w006(
-                &to_slash_lossy(&module.path),
-                *span,
-                span.text(module.source),
-            ));
+            module_warnings.push(Diagnostic::w006(*span, span.text(module.source)));
         }
     }
 }
@@ -162,7 +172,10 @@ fn warn_inert_hot_comments(
 ///
 /// A deferred cycle works as in real Lua, and a load-time cycle fails at
 /// runtime the way the target version fails.
-fn topological_order(modules: &[ModuleInfo<'_>], warnings: &mut Vec<Diagnostic>) -> Vec<ModuleId> {
+fn topological_order(
+    modules: &[ModuleInfo<'_>],
+    warnings: &mut [Vec<Diagnostic>],
+) -> Vec<ModuleId> {
     // Node `i` is `modules[i]`. Insertion order breaks toposort's ties, so the
     // edges go in require order.
     let mut graph: DiGraph<(), ()> = DiGraph::with_capacity(modules.len(), 0);
@@ -192,25 +205,19 @@ fn topological_order(modules: &[ModuleInfo<'_>], warnings: &mut Vec<Diagnostic>)
 
     // The require that closes the cycle: the last module in the path requiring
     // the first.
-    let closing_require = match cycle.as_slice() {
-        [.., from, to] => modules.get(from.0).map(|module| (module, *to)),
-        [] | [_] => None,
+    let (reporting_id, closing_span) = match cycle.as_slice() {
+        [.., from, to] => {
+            let closing_span = modules.get(from.0).and_then(|module| {
+                let dependency = module.dependencies.iter().find(|found| found.target == *to);
+                dependency.map(|found| found.call_span)
+            });
+            (*from, closing_span)
+        }
+        [] | [_] => (ModuleId(0), None),
     };
-    let (reporting_module, closing_span) = closing_require.map_or_else(
-        || (modules.first(), None),
-        |(module, to)| {
-            let closing_span = module
-                .dependencies
-                .iter()
-                .find(|dependency| dependency.target == to)
-                .map(|dependency| dependency.call_span);
-            (Some(module), closing_span)
-        },
-    );
-    let file_path =
-        reporting_module.map_or(Cow::Borrowed(""), |module| to_slash_lossy(&module.path));
-
-    warnings.push(Diagnostic::w003(&file_path, closing_span.unwrap_or_default(), &cycle_paths));
+    if let Some(module_warnings) = warnings.get_mut(reporting_id.0) {
+        module_warnings.push(Diagnostic::w003(closing_span, &cycle_paths));
+    }
     (0..modules.len()).map(ModuleId).collect()
 }
 

@@ -7,9 +7,6 @@
 //!
 //! - [`LuaTarget`]: the user-facing dialect (Lua 5.1-5.5, Luau, or Roblox),
 //!   which projects onto a syntax version and a stdlib environment.
-//! - [`Diagnostic`]: an error or warning with a code, span, and help. Its
-//!   numbered constructors, such as [`Diagnostic::e008`], build every coded
-//!   one.
 //!
 //! # Usage
 //!
@@ -27,8 +24,6 @@
     )
 )]
 
-mod diagnostic;
 mod lua_target;
 
-pub use diagnostic::{Diagnostic, DiagnosticSeverity};
 pub use lua_target::LuaTarget;

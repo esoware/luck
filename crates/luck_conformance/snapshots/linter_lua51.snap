@@ -220,7 +220,7 @@ lua5.1-tests/api.lua
 75:1 no_implicit_globals: global variable `tcheck` used
 75:8 no_implicit_globals: global variable `t` used
 75:11 mixed_table: table mixes positional and record fields, so iteration with `ipairs` will skip the record fields
-79:36 multiple_statements_per_line: statement starts on the same line as the previous statement (line 79)
+79:36 multiple_statements_per_line: statement starts on the same line as the previous statement
 80:13 undefined_variable: undefined variable `T`
 80:13 no_implicit_globals: global variable `T` used
 80:66 no_implicit_globals: global variable `unpack` used
@@ -329,7 +329,7 @@ lua5.1-tests/api.lua
 158:5 undefined_variable: undefined variable `T`
 158:5 no_implicit_globals: global variable `T` used
 163:27 no_implicit_globals: global variable `assert` used
-163:43 multiple_statements_per_line: statement starts on the same line as the previous statement (line 163)
+163:43 multiple_statements_per_line: statement starts on the same line as the previous statement
 165:1 no_implicit_globals: global variable `assert` used
 165:8 no_implicit_globals: global variable `type` used
 165:13 no_implicit_globals: global variable `a` used
@@ -581,7 +581,7 @@ lua5.1-tests/api.lua
 282:1 undefined_variable: undefined variable `T`
 282:1 no_implicit_globals: global variable `T` used
 282:14 undefined_variable: undefined variable `T`
-282:14 multiple_statements_per_line: statement starts on the same line as the previous statement (line 282)
+282:14 multiple_statements_per_line: statement starts on the same line as the previous statement
 282:14 no_implicit_globals: global variable `T` used
 284:5 shadowing: variable `i` shadows outer variable
 284:9 no_implicit_globals: global variable `Lim` used
@@ -629,7 +629,7 @@ lua5.1-tests/api.lua
 321:1 setting_global: setting global variable `A` (missing `local`?)
 321:1 no_implicit_globals: global variable `A` used
 321:10 setting_global: setting global variable `B` (missing `local`?)
-321:10 multiple_statements_per_line: statement starts on the same line as the previous statement (line 321)
+321:10 multiple_statements_per_line: statement starts on the same line as the previous statement
 321:10 no_implicit_globals: global variable `B` used
 324:17 undefined_variable: undefined variable `T`
 324:17 no_implicit_globals: global variable `T` used
@@ -711,21 +711,21 @@ lua5.1-tests/api.lua
 377:1 no_implicit_globals: global variable `collectgarbage` used
 380:5 undefined_variable: undefined variable `T`
 380:5 no_implicit_globals: global variable `T` used
-380:23 multiple_statements_per_line: statement starts on the same line as the previous statement (line 380)
+380:23 multiple_statements_per_line: statement starts on the same line as the previous statement
 380:23 no_implicit_globals: global variable `debug` used
 380:45 no_implicit_globals: global variable `tt` used
 380:50 setting_global: setting global variable `na` (missing `local`?)
-380:50 multiple_statements_per_line: statement starts on the same line as the previous statement (line 380)
+380:50 multiple_statements_per_line: statement starts on the same line as the previous statement
 380:50 no_implicit_globals: global variable `na` used
 380:55 undefined_variable: undefined variable `T`
 380:55 no_implicit_globals: global variable `T` used
 381:5 undefined_variable: undefined variable `T`
 381:5 no_implicit_globals: global variable `T` used
-381:23 multiple_statements_per_line: statement starts on the same line as the previous statement (line 381)
+381:23 multiple_statements_per_line: statement starts on the same line as the previous statement
 381:23 no_implicit_globals: global variable `debug` used
 381:45 no_implicit_globals: global variable `tt` used
 381:50 setting_global: setting global variable `nb` (missing `local`?)
-381:50 multiple_statements_per_line: statement starts on the same line as the previous statement (line 381)
+381:50 multiple_statements_per_line: statement starts on the same line as the previous statement
 381:50 no_implicit_globals: global variable `nb` used
 381:55 undefined_variable: undefined variable `T`
 381:55 no_implicit_globals: global variable `T` used
@@ -733,12 +733,12 @@ lua5.1-tests/api.lua
 382:1 no_implicit_globals: global variable `c` used
 382:5 undefined_variable: undefined variable `T`
 382:5 no_implicit_globals: global variable `T` used
-382:23 multiple_statements_per_line: statement starts on the same line as the previous statement (line 382)
+382:23 multiple_statements_per_line: statement starts on the same line as the previous statement
 382:23 no_implicit_globals: global variable `debug` used
 382:42 no_implicit_globals: global variable `c` used
 382:45 no_implicit_globals: global variable `tt` used
 382:50 setting_global: setting global variable `nc` (missing `local`?)
-382:50 multiple_statements_per_line: statement starts on the same line as the previous statement (line 382)
+382:50 multiple_statements_per_line: statement starts on the same line as the previous statement
 382:50 no_implicit_globals: global variable `nc` used
 382:55 undefined_variable: undefined variable `T`
 382:55 no_implicit_globals: global variable `T` used
@@ -785,15 +785,15 @@ lua5.1-tests/api.lua
 396:1 setting_global: setting global variable `t` (missing `local`?)
 396:1 no_implicit_globals: global variable `t` used
 396:8 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
-396:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 396)
+396:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 396:15 setting_global: setting global variable `c` (missing `local`?)
-396:15 multiple_statements_per_line: statement starts on the same line as the previous statement (line 396)
+396:15 multiple_statements_per_line: statement starts on the same line as the previous statement
 396:15 no_implicit_globals: global variable `c` used
 397:1 undefined_variable: undefined variable `T`
 397:1 no_implicit_globals: global variable `T` used
 397:9 no_implicit_globals: global variable `e` used
 397:13 undefined_variable: undefined variable `T`
-397:13 multiple_statements_per_line: statement starts on the same line as the previous statement (line 397)
+397:13 multiple_statements_per_line: statement starts on the same line as the previous statement
 397:13 no_implicit_globals: global variable `T` used
 399:1 no_implicit_globals: global variable `collectgarbage` used
 402:1 no_implicit_globals: global variable `assert` used
@@ -859,7 +859,7 @@ lua5.1-tests/api.lua
 427:1 setting_global: setting global variable `cl` (missing `local`?)
 427:1 no_implicit_globals: global variable `cl` used
 428:1 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
-428:10 multiple_statements_per_line: statement starts on the same line as the previous statement (line 428)
+428:10 multiple_statements_per_line: statement starts on the same line as the previous statement
 428:10 no_implicit_globals: global variable `collectgarbage` used
 429:1 no_implicit_globals: global variable `assert` used
 429:8 deprecated: `table.getn` is deprecated
@@ -880,7 +880,7 @@ lua5.1-tests/api.lua
 438:1 no_implicit_globals: global variable `x` used
 438:5 undefined_variable: undefined variable `T`
 438:5 no_implicit_globals: global variable `T` used
-438:24 multiple_statements_per_line: statement starts on the same line as the previous statement (line 438)
+438:24 multiple_statements_per_line: statement starts on the same line as the previous statement
 438:24 no_implicit_globals: global variable `debug` used
 438:43 no_implicit_globals: global variable `x` used
 439:1 no_implicit_globals: global variable `assert` used
@@ -967,7 +967,7 @@ lua5.1-tests/api.lua
 500:10 no_implicit_globals: global variable `A` used
 505:3 merge_adjacent_locals: adjacent `local` declarations can be merged
 505:9 shadowing: variable `a` shadows outer variable
-505:17 multiple_statements_per_line: statement starts on the same line as the previous statement (line 505)
+505:17 multiple_statements_per_line: statement starts on the same line as the previous statement
 506:7 shadowing: variable `i` shadows outer variable
 506:25 undefined_variable: undefined variable `T`
 506:25 no_implicit_globals: global variable `T` used
@@ -1098,15 +1098,15 @@ lua5.1-tests/api.lua
 612:37 no_implicit_globals: global variable `expand` used
 615:1 setting_global: setting global variable `G` (missing `local`?)
 615:1 no_implicit_globals: global variable `G` used
-615:6 multiple_statements_per_line: statement starts on the same line as the previous statement (line 615)
+615:6 multiple_statements_per_line: statement starts on the same line as the previous statement
 615:6 no_implicit_globals: global variable `collectgarbage` used
-615:24 multiple_statements_per_line: statement starts on the same line as the previous statement (line 615)
+615:24 multiple_statements_per_line: statement starts on the same line as the previous statement
 615:27 no_implicit_globals: global variable `collectgarbage` used
 616:1 no_implicit_globals: global variable `loadstring` used
 616:12 no_implicit_globals: global variable `expand` used
 617:1 no_implicit_globals: global variable `assert` used
 617:8 no_implicit_globals: global variable `G` used
-617:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 617)
+617:16 multiple_statements_per_line: statement starts on the same line as the previous statement
 617:16 no_implicit_globals: global variable `collectgarbage` used
 619:1 no_implicit_globals: global variable `testamem` used
 620:10 undefined_variable: undefined variable `T`
@@ -1155,7 +1155,7 @@ lua5.1-tests/api.lua
 676:1 no_implicit_globals: global variable `testamem` used
 677:9 shadowing: variable `a` shadows outer variable
 678:7 shadowing: variable `i` shadows outer variable
-678:28 multiple_statements_per_line: statement starts on the same line as the previous statement (line 678)
+678:28 multiple_statements_per_line: statement starts on the same line as the previous statement
 679:11 no_implicit_globals: global variable `type` used
 682:7 shadowing: variable `a` shadows outer variable
 682:7 redefining_local: local `a` is redeclared in the same block
@@ -1377,25 +1377,25 @@ lua5.1-tests/attrib.lua
 151:1 setting_global: setting global variable `X` (missing `local`?)
 151:1 no_implicit_globals: global variable `X` used
 151:10 setting_global: setting global variable `x` (missing `local`?)
-151:10 multiple_statements_per_line: statement starts on the same line as the previous statement (line 151)
+151:10 multiple_statements_per_line: statement starts on the same line as the previous statement
 151:10 no_implicit_globals: global variable `x` used
-151:17 multiple_statements_per_line: statement starts on the same line as the previous statement (line 151)
+151:17 multiple_statements_per_line: statement starts on the same line as the previous statement
 151:24 global_usage: global environment `_G` used
 151:24 no_implicit_globals: global variable `_G` used
 152:12 setting_global: setting global variable `x` (missing `local`?)
-152:12 multiple_statements_per_line: statement starts on the same line as the previous statement (line 152)
+152:12 multiple_statements_per_line: statement starts on the same line as the previous statement
 152:12 no_implicit_globals: global variable `x` used
-152:19 multiple_statements_per_line: statement starts on the same line as the previous statement (line 152)
+152:19 multiple_statements_per_line: statement starts on the same line as the previous statement
 152:26 undefined_variable: undefined variable `_M`
 152:26 no_implicit_globals: global variable `_M` used
 153:18 setting_global: setting global variable `x` (missing `local`?)
-153:18 multiple_statements_per_line: statement starts on the same line as the previous statement (line 153)
+153:18 multiple_statements_per_line: statement starts on the same line as the previous statement
 153:18 no_implicit_globals: global variable `x` used
-153:25 multiple_statements_per_line: statement starts on the same line as the previous statement (line 153)
+153:25 multiple_statements_per_line: statement starts on the same line as the previous statement
 153:32 undefined_variable: undefined variable `_M`
 153:32 no_implicit_globals: global variable `_M` used
 154:34 setting_global: setting global variable `x` (missing `local`?)
-154:34 multiple_statements_per_line: statement starts on the same line as the previous statement (line 154)
+154:34 multiple_statements_per_line: statement starts on the same line as the previous statement
 154:34 no_implicit_globals: global variable `x` used
 155:8 no_implicit_globals: global variable `X` used
 155:27 no_implicit_globals: global variable `X` used
@@ -1417,16 +1417,16 @@ lua5.1-tests/attrib.lua
 161:8 no_implicit_globals: global variable `X` used
 161:29 no_implicit_globals: global variable `X` used
 162:30 setting_global: setting global variable `x` (missing `local`?)
-162:30 multiple_statements_per_line: statement starts on the same line as the previous statement (line 162)
+162:30 multiple_statements_per_line: statement starts on the same line as the previous statement
 162:30 no_implicit_globals: global variable `x` used
 163:8 no_implicit_globals: global variable `X` used
 163:31 no_implicit_globals: global variable `X` used
 163:46 no_implicit_globals: global variable `X` used
 163:56 no_implicit_globals: global variable `X` used
-164:34 multiple_statements_per_line: statement starts on the same line as the previous statement (line 164)
+164:34 multiple_statements_per_line: statement starts on the same line as the previous statement
 164:41 no_implicit_globals: global variable `x` used
 164:50 setting_global: setting global variable `x` (missing `local`?)
-164:50 multiple_statements_per_line: statement starts on the same line as the previous statement (line 164)
+164:50 multiple_statements_per_line: statement starts on the same line as the previous statement
 164:50 no_implicit_globals: global variable `x` used
 165:8 undefined_variable: undefined variable `_NAME`
 165:8 no_implicit_globals: global variable `_NAME` used
@@ -1525,7 +1525,7 @@ lua5.1-tests/attrib.lua
 247:24 no_implicit_globals: global variable `b` used
 247:29 no_implicit_globals: global variable `a` used
 247:35 no_implicit_globals: global variable `a` used
-250:40 multiple_statements_per_line: statement starts on the same line as the previous statement (line 250)
+250:40 multiple_statements_per_line: statement starts on the same line as the previous statement
 251:33 no_implicit_globals: global variable `unpack` used
 254:3 no_implicit_globals: global variable `assert` used
 255:3 setting_global: setting global variable `A` (missing `local`?)
@@ -1619,9 +1619,9 @@ lua5.1-tests/attrib.lua
 297:25 no_implicit_globals: global variable `a` used
 299:10 setting_global: setting global variable `f` (missing `local`?)
 299:10 no_implicit_globals: global variable `f` used
-299:10 duplicate_function: duplicate function definition `f`, also defined on line 243
-303:19 multiple_statements_per_line: statement starts on the same line as the previous statement (line 303)
-303:33 multiple_statements_per_line: statement starts on the same line as the previous statement (line 303)
+299:10 duplicate_function: duplicate function definition `f`
+303:19 multiple_statements_per_line: statement starts on the same line as the previous statement
+303:33 multiple_statements_per_line: statement starts on the same line as the previous statement
 304:1 no_implicit_globals: global variable `assert` used
 305:24 no_implicit_globals: global variable `assert` used
 306:3 no_implicit_globals: global variable `print` used
@@ -1654,16 +1654,16 @@ lua5.1-tests/attrib.lua
 317:23 no_implicit_globals: global variable `b` used
 317:33 no_implicit_globals: global variable `c` used
 317:36 no_implicit_globals: global variable `print` used
-319:15 multiple_statements_per_line: statement starts on the same line as the previous statement (line 319)
-319:31 multiple_statements_per_line: statement starts on the same line as the previous statement (line 319)
-320:15 multiple_statements_per_line: statement starts on the same line as the previous statement (line 320)
-320:30 multiple_statements_per_line: statement starts on the same line as the previous statement (line 320)
-320:46 multiple_statements_per_line: statement starts on the same line as the previous statement (line 320)
+319:15 multiple_statements_per_line: statement starts on the same line as the previous statement
+319:31 multiple_statements_per_line: statement starts on the same line as the previous statement
+320:15 multiple_statements_per_line: statement starts on the same line as the previous statement
+320:30 multiple_statements_per_line: statement starts on the same line as the previous statement
+320:46 multiple_statements_per_line: statement starts on the same line as the previous statement
 322:1 no_implicit_globals: global variable `assert` used
 330:9 shadowing: variable `a` shadows outer variable
-331:19 multiple_statements_per_line: statement starts on the same line as the previous statement (line 331)
-331:24 multiple_statements_per_line: statement starts on the same line as the previous statement (line 331)
-331:29 multiple_statements_per_line: statement starts on the same line as the previous statement (line 331)
+331:19 multiple_statements_per_line: statement starts on the same line as the previous statement
+331:24 multiple_statements_per_line: statement starts on the same line as the previous statement
+331:29 multiple_statements_per_line: statement starts on the same line as the previous statement
 333:3 no_implicit_globals: global variable `assert` used
 337:1 no_implicit_globals: global variable `print` used
 
@@ -1711,7 +1711,7 @@ lua5.1-tests/big.lua
 359:10 setting_global: setting global variable `xxxx` (missing `local`?)
 359:10 no_implicit_globals: global variable `xxxx` used
 359:19 no_implicit_globals: global variable `coroutine` used
-359:41 multiple_statements_per_line: statement starts on the same line as the previous statement (line 359)
+359:41 multiple_statements_per_line: statement starts on the same line as the previous statement
 361:1 no_implicit_globals: global variable `assert` used
 361:8 no_implicit_globals: global variable `xxxx` used
 363:1 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
@@ -1720,18 +1720,18 @@ lua5.1-tests/big.lua
 367:1 no_implicit_globals: global variable `print` used
 368:1 setting_global: setting global variable `i` (missing `local`?)
 368:1 no_implicit_globals: global variable `i` used
-368:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 368)
+368:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 369:7 no_implicit_globals: global variable `i` used
 369:28 no_implicit_globals: global variable `i` used
 369:31 setting_global: setting global variable `i` (missing `local`?)
-369:31 multiple_statements_per_line: statement starts on the same line as the previous statement (line 369)
+369:31 multiple_statements_per_line: statement starts on the same line as the previous statement
 369:31 no_implicit_globals: global variable `i` used
 369:33 no_implicit_globals: global variable `i` used
 370:1 undefined_variable: undefined variable `stat`
 370:1 no_implicit_globals: global variable `stat` used
 371:1 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
 373:1 no_implicit_globals: global variable `print` used
-375:25 multiple_statements_per_line: statement starts on the same line as the previous statement (line 375)
+375:25 multiple_statements_per_line: statement starts on the same line as the previous statement
 376:1 undefined_variable: undefined variable `stat`
 376:1 no_implicit_globals: global variable `stat` used
 379:1 no_implicit_globals: global variable `print` used
@@ -1783,20 +1783,20 @@ lua5.1-tests/calls.lua
 38:2 string_index_to_field: `["t"]` is equivalent to `.t`
 40:1 no_implicit_globals: global variable `assert` used
 40:8 no_implicit_globals: global variable `a` used
-44:50 multiple_statements_per_line: statement starts on the same line as the previous statement (line 44)
+44:50 multiple_statements_per_line: statement starts on the same line as the previous statement
 45:3 no_implicit_globals: global variable `assert` used
 52:1 no_implicit_globals: global variable `assert` used
-53:20 multiple_statements_per_line: statement starts on the same line as the previous statement (line 53)
+53:20 multiple_statements_per_line: statement starts on the same line as the previous statement
 53:20 no_implicit_globals: global variable `assert` used
 55:1 no_implicit_globals: global variable `print` used
 57:1 setting_global: setting global variable `t` (missing `local`?)
 57:1 no_implicit_globals: global variable `t` used
 58:10 setting_global: setting global variable `f` (missing `local`?)
 58:10 no_implicit_globals: global variable `f` used
-58:10 duplicate_function: duplicate function definition `f`, also defined on line 12
+58:10 duplicate_function: duplicate function definition `f`
 58:12 shadowing: variable `a` shadows outer variable
 58:34 setting_global: setting global variable `t` (missing `local`?)
-58:34 multiple_statements_per_line: statement starts on the same line as the previous statement (line 58)
+58:34 multiple_statements_per_line: statement starts on the same line as the previous statement
 58:34 no_implicit_globals: global variable `t` used
 60:1 no_implicit_globals: global variable `f` used
 62:1 no_implicit_globals: global variable `assert` used
@@ -1825,11 +1825,11 @@ lua5.1-tests/calls.lua
 79:10 no_implicit_globals: global variable `err_on_n` used
 80:16 no_implicit_globals: global variable `error` used
 80:25 undefined_variable: undefined variable `exit`
-80:25 multiple_statements_per_line: statement starts on the same line as the previous statement (line 80)
+80:25 multiple_statements_per_line: statement starts on the same line as the previous statement
 80:25 no_implicit_globals: global variable `exit` used
 81:8 no_implicit_globals: global variable `err_on_n` used
 81:24 undefined_variable: undefined variable `exit`
-81:24 multiple_statements_per_line: statement starts on the same line as the previous statement (line 81)
+81:24 multiple_statements_per_line: statement starts on the same line as the previous statement
 81:24 no_implicit_globals: global variable `exit` used
 86:12 setting_global: setting global variable `dummy` (missing `local`?)
 86:12 no_implicit_globals: global variable `dummy` used
@@ -1845,7 +1845,7 @@ lua5.1-tests/calls.lua
 100:1 no_implicit_globals: global variable `deep` used
 103:10 setting_global: setting global variable `deep` (missing `local`?)
 103:10 no_implicit_globals: global variable `deep` used
-103:10 duplicate_function: duplicate function definition `deep`, also defined on line 96
+103:10 duplicate_function: duplicate function definition `deep`
 103:38 no_implicit_globals: global variable `deep` used
 104:1 no_implicit_globals: global variable `assert` used
 104:8 no_implicit_globals: global variable `deep` used
@@ -1855,7 +1855,7 @@ lua5.1-tests/calls.lua
 117:13 shadowing: variable `a` shadows outer variable
 117:13 redefining_local: local `a` is redeclared in the same block
 118:9 setting_global: setting global variable `lim` (missing `local`?)
-118:9 multiple_statements_per_line: statement starts on the same line as the previous statement (line 118)
+118:9 multiple_statements_per_line: statement starts on the same line as the previous statement
 118:9 no_implicit_globals: global variable `lim` used
 119:10 no_implicit_globals: global variable `lim` used
 120:1 no_implicit_globals: global variable `assert` used
@@ -1949,7 +1949,7 @@ lua5.1-tests/calls.lua
 196:9 no_implicit_globals: global variable `select` used
 200:10 setting_global: setting global variable `f` (missing `local`?)
 200:10 no_implicit_globals: global variable `f` used
-200:10 duplicate_function: duplicate function definition `f`, also defined on line 12
+200:10 duplicate_function: duplicate function definition `f`
 201:10 setting_global: setting global variable `ret2` (missing `local`?)
 201:10 no_implicit_globals: global variable `ret2` used
 201:16 shadowing: variable `a` shadows outer variable
@@ -2042,7 +2042,7 @@ lua5.1-tests/calls.lua
 272:16 no_implicit_globals: global variable `string` used
 272:28 implicit_return: function returns on some paths but falls through on others
 272:38 shadowing: variable `x` shadows outer variable
-273:32 multiple_statements_per_line: statement starts on the same line as the previous statement (line 273)
+273:32 multiple_statements_per_line: statement starts on the same line as the previous statement
 277:1 no_implicit_globals: global variable `assert` used
 278:1 no_implicit_globals: global variable `assert` used
 278:8 no_implicit_globals: global variable `debug` used
@@ -2056,7 +2056,7 @@ lua5.1-tests/calls.lua
 289:1 no_implicit_globals: global variable `assert` used
 290:1 no_implicit_globals: global variable `assert` used
 290:27 shadowing: variable `a` shadows outer variable
-290:30 multiple_statements_per_line: statement starts on the same line as the previous statement (line 290)
+290:30 multiple_statements_per_line: statement starts on the same line as the previous statement
 290:37 accessing_uninitialized: `a` is read before any value is assigned, so it is `nil`
 291:1 no_implicit_globals: global variable `assert` used
 291:19 shadowing: variable `a` shadows outer variable
@@ -2092,8 +2092,8 @@ lua5.1-tests/checktable.lua
 32:26 undefined_variable: undefined variable `T`
 32:26 no_implicit_globals: global variable `T` used
 33:11 no_implicit_globals: global variable `assert` used
-38:20 multiple_statements_per_line: statement starts on the same line as the previous statement (line 38)
-38:37 multiple_statements_per_line: statement starts on the same line as the previous statement (line 38)
+38:20 multiple_statements_per_line: statement starts on the same line as the previous statement
+38:37 multiple_statements_per_line: statement starts on the same line as the previous statement
 42:10 setting_global: setting global variable `mostra` (missing `local`?)
 42:10 no_implicit_globals: global variable `mostra` used
 43:28 undefined_variable: undefined variable `T`
@@ -2126,12 +2126,12 @@ lua5.1-tests/closure.lua
 1:1 no_implicit_globals: global variable `print` used
 4:10 setting_global: setting global variable `f` (missing `local`?)
 4:10 no_implicit_globals: global variable `f` used
-9:39 multiple_statements_per_line: statement starts on the same line as the previous statement (line 9)
-9:48 multiple_statements_per_line: statement starts on the same line as the previous statement (line 9)
+9:39 multiple_statements_per_line: statement starts on the same line as the previous statement
+9:48 multiple_statements_per_line: statement starts on the same line as the previous statement
 13:3 no_implicit_globals: global variable `collectgarbage` used
-14:10 multiple_statements_per_line: statement starts on the same line as the previous statement (line 14)
+14:10 multiple_statements_per_line: statement starts on the same line as the previous statement
 14:10 no_implicit_globals: global variable `assert` used
-14:35 multiple_statements_per_line: statement starts on the same line as the previous statement (line 14)
+14:35 multiple_statements_per_line: statement starts on the same line as the previous statement
 15:3 no_implicit_globals: global variable `assert` used
 16:3 no_implicit_globals: global variable `assert` used
 17:3 no_implicit_globals: global variable `collectgarbage` used
@@ -2178,7 +2178,7 @@ lua5.1-tests/closure.lua
 55:13 no_implicit_globals: global variable `pairs` used
 56:3 no_implicit_globals: global variable `a` used
 56:26 shadowing: variable `x` shadows outer variable
-56:37 multiple_statements_per_line: statement starts on the same line as the previous statement (line 56)
+56:37 multiple_statements_per_line: statement starts on the same line as the previous statement
 60:1 no_implicit_globals: global variable `a` used
 61:13 no_implicit_globals: global variable `a` used
 62:1 no_implicit_globals: global variable `assert` used
@@ -2202,23 +2202,23 @@ lua5.1-tests/closure.lua
 82:10 no_implicit_globals: global variable `f` used
 88:10 setting_global: setting global variable `f` (missing `local`?)
 88:10 no_implicit_globals: global variable `f` used
-88:10 duplicate_function: duplicate function definition `f`, also defined on line 4
+88:10 duplicate_function: duplicate function definition `f`
 88:12 shadowing: variable `x` shadows outer variable
 93:9 implicit_return: function returns on some paths but falls through on others
 102:25 no_implicit_globals: global variable `error` used
 109:3 no_implicit_globals: global variable `f` used
 110:3 no_implicit_globals: global variable `assert` used
-111:17 multiple_statements_per_line: statement starts on the same line as the previous statement (line 111)
+111:17 multiple_statements_per_line: statement starts on the same line as the previous statement
 111:17 no_implicit_globals: global variable `assert` used
 115:1 must_use: return value of `pcall` is discarded
 115:1 no_implicit_globals: global variable `pcall` used
 115:7 no_implicit_globals: global variable `f` used
 116:1 no_implicit_globals: global variable `assert` used
-117:15 multiple_statements_per_line: statement starts on the same line as the previous statement (line 117)
+117:15 multiple_statements_per_line: statement starts on the same line as the previous statement
 117:15 no_implicit_globals: global variable `assert` used
 122:10 setting_global: setting global variable `f` (missing `local`?)
 122:10 no_implicit_globals: global variable `f` used
-122:10 duplicate_function: duplicate function definition `f`, also defined on line 4
+122:10 duplicate_function: duplicate function definition `f`
 122:12 shadowing: variable `x` shadows outer variable
 128:1 setting_global: setting global variable `y` (missing `local`?)
 128:1 no_implicit_globals: global variable `y` used
@@ -2227,7 +2227,7 @@ lua5.1-tests/closure.lua
 130:8 no_implicit_globals: global variable `y` used
 134:1 merge_adjacent_locals: adjacent `local` declarations can be merged
 137:9 shadowing: variable `x` shadows outer variable
-138:31 multiple_statements_per_line: statement starts on the same line as the previous statement (line 138)
+138:31 multiple_statements_per_line: statement starts on the same line as the previous statement
 140:1 no_implicit_globals: global variable `assert` used
 142:1 no_implicit_globals: global variable `print` used
 147:20 shadowing: variable `a` shadows outer variable
@@ -2338,11 +2338,11 @@ lua5.1-tests/closure.lua
 228:5 shadowing: variable `i` shadows outer variable
 228:15 global_usage: global environment `_G` used
 228:15 no_implicit_globals: global variable `_G` used
-228:25 multiple_statements_per_line: statement starts on the same line as the previous statement (line 228)
+228:25 multiple_statements_per_line: statement starts on the same line as the previous statement
 228:25 no_implicit_globals: global variable `assert` used
 229:1 global_usage: global environment `_G` used
 229:1 no_implicit_globals: global variable `_G` used
-229:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 229)
+229:16 multiple_statements_per_line: statement starts on the same line as the previous statement
 229:16 no_implicit_globals: global variable `assert` used
 232:10 setting_global: setting global variable `pf` (missing `local`?)
 232:10 no_implicit_globals: global variable `pf` used
@@ -2379,7 +2379,7 @@ lua5.1-tests/closure.lua
 271:8 no_implicit_globals: global variable `table` used
 271:34 deprecated: `table.getn` is deprecated
 271:34 no_implicit_globals: global variable `table` used
-275:10 duplicate_function: duplicate function definition `foo`, also defined on line 190
+275:10 duplicate_function: duplicate function definition `foo`
 276:3 no_implicit_globals: global variable `assert` used
 276:10 no_implicit_globals: global variable `debug` used
 276:42 no_implicit_globals: global variable `debug` used
@@ -2424,14 +2424,14 @@ lua5.1-tests/closure.lua
 309:10 no_implicit_globals: global variable `coroutine` used
 309:37 no_implicit_globals: global variable `all` used
 312:1 no_implicit_globals: global variable `assert` used
-316:15 multiple_statements_per_line: statement starts on the same line as the previous statement (line 316)
+316:15 multiple_statements_per_line: statement starts on the same line as the previous statement
 316:15 no_implicit_globals: global variable `setmetatable` used
 317:7 shadowing: variable `x` shadows outer variable
 317:7 redefining_local: local `x` is redeclared in the same block
 317:11 no_implicit_globals: global variable `coroutine` used
 318:19 shadowing: variable `a` shadows outer variable
 319:28 shadowing: variable `f` shadows outer variable
-319:43 multiple_statements_per_line: statement starts on the same line as the previous statement (line 319)
+319:43 multiple_statements_per_line: statement starts on the same line as the previous statement
 322:15 no_implicit_globals: global variable `coroutine` used
 328:7 shadowing: variable `f` shadows outer variable
 328:7 redefining_local: local `f` is redeclared in the same block
@@ -2465,7 +2465,7 @@ lua5.1-tests/closure.lua
 353:19 shadowing: variable `a` shadows outer variable
 354:13 global_usage: global environment `_G` used
 354:13 no_implicit_globals: global variable `_G` used
-354:39 multiple_statements_per_line: statement starts on the same line as the previous statement (line 354)
+354:39 multiple_statements_per_line: statement starts on the same line as the previous statement
 355:13 no_implicit_globals: global variable `error` used
 358:1 no_implicit_globals: global variable `assert` used
 358:12 no_implicit_globals: global variable `coroutine` used
@@ -2505,10 +2505,10 @@ lua5.1-tests/closure.lua
 386:5 no_implicit_globals: global variable `T` used
 387:9 no_implicit_globals: global variable `fact` used
 391:30 undefined_variable: undefined variable `T`
-391:30 multiple_statements_per_line: statement starts on the same line as the previous statement (line 391)
+391:30 multiple_statements_per_line: statement starts on the same line as the previous statement
 391:30 no_implicit_globals: global variable `T` used
 392:30 undefined_variable: undefined variable `T`
-392:30 multiple_statements_per_line: statement starts on the same line as the previous statement (line 392)
+392:30 multiple_statements_per_line: statement starts on the same line as the previous statement
 392:30 no_implicit_globals: global variable `T` used
 395:3 no_implicit_globals: global variable `assert` used
 400:1 setting_global: setting global variable `_X` (missing `local`?)
@@ -2577,9 +2577,9 @@ lua5.1-tests/code.lua
 46:13 unused_variable: unused variable `c`
 47:9 unused_variable: unused variable `d`
 47:9 set_but_never_read: value assigned to `d` is never read
-47:12 multiple_statements_per_line: statement starts on the same line as the previous statement (line 47)
+47:12 multiple_statements_per_line: statement starts on the same line as the previous statement
 47:18 unused_variable: unused variable `e`
-48:12 multiple_statements_per_line: statement starts on the same line as the previous statement (line 48)
+48:12 multiple_statements_per_line: statement starts on the same line as the previous statement
 53:1 no_implicit_globals: global variable `check` used
 53:20 unused_argument: unused argument `b`
 53:22 unused_argument: unused argument `c`
@@ -2616,7 +2616,7 @@ lua5.1-tests/code.lua
 128:28 no_implicit_globals: global variable `a` used
 128:41 setting_global: setting global variable `a` (missing `local`?)
 128:41 no_implicit_globals: global variable `a` used
-128:50 multiple_statements_per_line: statement starts on the same line as the previous statement (line 128)
+128:50 multiple_statements_per_line: statement starts on the same line as the previous statement
 128:53 no_implicit_globals: global variable `a` used
 128:65 setting_global: setting global variable `a` (missing `local`?)
 128:65 no_implicit_globals: global variable `a` used
@@ -2624,7 +2624,7 @@ lua5.1-tests/code.lua
 129:28 no_implicit_globals: global variable `a` used
 129:39 setting_global: setting global variable `a` (missing `local`?)
 129:39 no_implicit_globals: global variable `a` used
-129:48 multiple_statements_per_line: statement starts on the same line as the previous statement (line 129)
+129:48 multiple_statements_per_line: statement starts on the same line as the previous statement
 129:51 no_implicit_globals: global variable `a` used
 129:61 setting_global: setting global variable `a` (missing `local`?)
 129:61 no_implicit_globals: global variable `a` used
@@ -2633,21 +2633,21 @@ lua5.1-tests/code.lua
 131:34 setting_global: setting global variable `a` (missing `local`?)
 131:34 no_implicit_globals: global variable `a` used
 135:1 no_implicit_globals: global variable `checkequal` used
-135:33 multiple_statements_per_line: statement starts on the same line as the previous statement (line 135)
+135:33 multiple_statements_per_line: statement starts on the same line as the previous statement
 135:41 accessing_uninitialized: `a` is read before any value is assigned, so it is `nil`
 135:46 no_implicit_globals: global variable `b` used
 135:54 setting_global: setting global variable `b` (missing `local`?)
 135:54 no_implicit_globals: global variable `b` used
 136:33 parenthesized_conditions: unnecessary parentheses around `if` condition
-136:33 multiple_statements_per_line: statement starts on the same line as the previous statement (line 136)
+136:33 multiple_statements_per_line: statement starts on the same line as the previous statement
 136:41 accessing_uninitialized: `a` is read before any value is assigned, so it is `nil`
 136:51 no_implicit_globals: global variable `b` used
 136:59 setting_global: setting global variable `b` (missing `local`?)
 136:59 no_implicit_globals: global variable `b` used
 138:1 no_implicit_globals: global variable `checkequal` used
-138:34 multiple_statements_per_line: statement starts on the same line as the previous statement (line 138)
+138:34 multiple_statements_per_line: statement starts on the same line as the previous statement
 138:46 accessing_uninitialized: `a` is read before any value is assigned, so it is `nil`
-139:34 multiple_statements_per_line: statement starts on the same line as the previous statement (line 139)
+139:34 multiple_statements_per_line: statement starts on the same line as the previous statement
 139:46 unnecessary_negation: negated comparison, consider `a < 0`
 139:50 accessing_uninitialized: `a` is read before any value is assigned, so it is `nil`
 139:61 unnecessary_negation: negated comparison, consider `a > l`
@@ -2670,12 +2670,12 @@ lua5.1-tests/constructs.lua
 18:1 no_implicit_globals: global variable `assert` used
 19:1 setting_global: setting global variable `x` (missing `local`?)
 19:1 no_implicit_globals: global variable `x` used
-19:46 multiple_statements_per_line: statement starts on the same line as the previous statement (line 19)
+19:46 multiple_statements_per_line: statement starts on the same line as the previous statement
 19:46 no_implicit_globals: global variable `assert` used
 19:53 no_implicit_globals: global variable `x` used
 20:1 setting_global: setting global variable `x` (missing `local`?)
 20:1 no_implicit_globals: global variable `x` used
-20:50 multiple_statements_per_line: statement starts on the same line as the previous statement (line 20)
+20:50 multiple_statements_per_line: statement starts on the same line as the previous statement
 20:50 no_implicit_globals: global variable `assert` used
 20:57 no_implicit_globals: global variable `x` used
 22:1 setting_global: setting global variable `x` (missing `local`?)
@@ -2700,17 +2700,17 @@ lua5.1-tests/constructs.lua
 27:22 no_implicit_globals: global variable `tonumber` used
 31:1 empty_block: empty `repeat` loop body
 31:17 empty_block: empty `repeat` loop body
-31:17 multiple_statements_per_line: statement starts on the same line as the previous statement (line 31)
+31:17 multiple_statements_per_line: statement starts on the same line as the previous statement
 32:1 empty_block: empty `while` loop body
 32:21 empty_block: empty `while` loop body
-32:21 multiple_statements_per_line: statement starts on the same line as the previous statement (line 32)
+32:21 multiple_statements_per_line: statement starts on the same line as the previous statement
 35:8 unused_variable: unused variable `a`
 35:8 shadowing: variable `a` shadows outer variable
-35:11 multiple_statements_per_line: statement starts on the same line as the previous statement (line 35)
+35:11 multiple_statements_per_line: statement starts on the same line as the previous statement
 35:20 setting_global: setting global variable `f` (missing `local`?)
 35:20 no_implicit_globals: global variable `f` used
-35:34 multiple_statements_per_line: statement starts on the same line as the previous statement (line 35)
-35:43 multiple_statements_per_line: statement starts on the same line as the previous statement (line 35)
+35:34 multiple_statements_per_line: statement starts on the same line as the previous statement
+35:43 multiple_statements_per_line: statement starts on the same line as the previous statement
 38:1 implicit_return: function returns on some paths but falls through on others
 38:10 setting_global: setting global variable `f` (missing `local`?)
 38:10 no_implicit_globals: global variable `f` used
@@ -2759,10 +2759,10 @@ lua5.1-tests/constructs.lua
 65:1 no_implicit_globals: global variable `i` used
 66:1 setting_global: setting global variable `t` (missing `local`?)
 66:1 no_implicit_globals: global variable `t` used
-69:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 69)
+69:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 69:16 no_implicit_globals: global variable `n` used
 69:25 shadowing: variable `i` shadows outer variable
-69:44 multiple_statements_per_line: statement starts on the same line as the previous statement (line 69)
+69:44 multiple_statements_per_line: statement starts on the same line as the previous statement
 69:44 no_implicit_globals: global variable `t` used
 71:1 no_implicit_globals: global variable `assert` used
 71:13 no_implicit_globals: global variable `n` used
@@ -2775,15 +2775,15 @@ lua5.1-tests/constructs.lua
 72:30 no_implicit_globals: global variable `t` used
 72:43 no_implicit_globals: global variable `t` used
 72:45 no_implicit_globals: global variable `n` used
-74:10 duplicate_function: duplicate function definition `f`, also defined on line 38
+74:10 duplicate_function: duplicate function definition `f`
 74:12 shadowing: variable `b` shadows outer variable
 77:11 unused_variable: unused variable `a`
 77:11 shadowing: variable `a` shadows outer variable
 78:24 unused_variable: unused variable `b`
 78:24 shadowing: variable `b` shadows outer variable
-78:29 multiple_statements_per_line: statement starts on the same line as the previous statement (line 78)
-78:35 multiple_statements_per_line: statement starts on the same line as the previous statement (line 78)
-79:28 multiple_statements_per_line: statement starts on the same line as the previous statement (line 79)
+78:29 multiple_statements_per_line: statement starts on the same line as the previous statement
+78:35 multiple_statements_per_line: statement starts on the same line as the previous statement
+79:28 multiple_statements_per_line: statement starts on the same line as the previous statement
 81:16 unused_variable: unused variable `a`
 81:16 shadowing: variable `a` shadows outer variable
 81:18 unused_variable: unused variable `b`
@@ -2791,7 +2791,7 @@ lua5.1-tests/constructs.lua
 81:20 unused_variable: unused variable `c`
 81:22 unused_variable: unused variable `d`
 81:24 no_implicit_globals: global variable `math` used
-81:37 multiple_statements_per_line: statement starts on the same line as the previous statement (line 81)
+81:37 multiple_statements_per_line: statement starts on the same line as the previous statement
 87:1 no_implicit_globals: global variable `assert` used
 90:7 shadowing: variable `f` shadows outer variable
 90:7 redefining_local: local `f` is redeclared in the same block
@@ -2814,10 +2814,10 @@ lua5.1-tests/constructs.lua
 107:1 no_implicit_globals: global variable `x` used
 108:1 no_implicit_globals: global variable `assert` used
 108:8 no_implicit_globals: global variable `x` used
-110:10 duplicate_function: duplicate function definition `f`, also defined on line 38
+110:10 duplicate_function: duplicate function definition `f`
 117:10 setting_global: setting global variable `g` (missing `local`?)
 117:10 no_implicit_globals: global variable `g` used
-124:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 124)
+124:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 124:8 no_implicit_globals: global variable `g` used
 128:9 shadowing: variable `a` shadows outer variable
 128:12 shadowing: variable `b` shadows outer variable
@@ -2833,14 +2833,14 @@ lua5.1-tests/constructs.lua
 135:17 accessing_uninitialized: `b` is read before any value is assigned, so it is `nil`
 137:10 setting_global: setting global variable `g` (missing `local`?)
 137:10 no_implicit_globals: global variable `g` used
-137:10 duplicate_function: duplicate function definition `g`, also defined on line 117
-137:19 multiple_statements_per_line: statement starts on the same line as the previous statement (line 137)
+137:10 duplicate_function: duplicate function definition `g`
+137:19 multiple_statements_per_line: statement starts on the same line as the previous statement
 137:19 redundant_return: bare `return` at the end of the function has no effect
 138:1 no_implicit_globals: global variable `assert` used
 138:8 no_implicit_globals: global variable `g` used
 139:10 setting_global: setting global variable `g` (missing `local`?)
 139:10 no_implicit_globals: global variable `g` used
-139:10 duplicate_function: duplicate function definition `g`, also defined on line 117
+139:10 duplicate_function: duplicate function definition `g`
 140:7 no_implicit_globals: global variable `g` used
 141:1 no_implicit_globals: global variable `assert` used
 143:1 no_implicit_globals: global variable `print` used
@@ -2849,7 +2849,7 @@ lua5.1-tests/constructs.lua
 154:1 no_implicit_globals: global variable `assert` used
 156:10 setting_global: setting global variable `g` (missing `local`?)
 156:10 no_implicit_globals: global variable `g` used
-156:10 duplicate_function: duplicate function definition `g`, also defined on line 117
+156:10 duplicate_function: duplicate function definition `g`
 156:13 shadowing: variable `a` shadows outer variable
 156:15 shadowing: variable `b` shadows outer variable
 160:10 setting_global: setting global variable `h` (missing `local`?)
@@ -2882,16 +2882,16 @@ lua5.1-tests/constructs.lua
 178:38 comparison_precedence: chained comparison on the left side parses as `(a op b) op c`, not as a math-style chain
 179:1 setting_global: setting global variable `x` (missing `local`?)
 179:1 no_implicit_globals: global variable `x` used
-179:20 multiple_statements_per_line: statement starts on the same line as the previous statement (line 179)
+179:20 multiple_statements_per_line: statement starts on the same line as the previous statement
 179:20 no_implicit_globals: global variable `assert` used
 179:27 no_implicit_globals: global variable `x` used
 180:1 setting_global: setting global variable `x` (missing `local`?)
 180:1 no_implicit_globals: global variable `x` used
-180:27 multiple_statements_per_line: statement starts on the same line as the previous statement (line 180)
+180:27 multiple_statements_per_line: statement starts on the same line as the previous statement
 180:27 no_implicit_globals: global variable `assert` used
 180:34 no_implicit_globals: global variable `x` used
 184:9 shadowing: variable `a` shadows outer variable
-184:12 multiple_statements_per_line: statement starts on the same line as the previous statement (line 184)
+184:12 multiple_statements_per_line: statement starts on the same line as the previous statement
 185:3 no_implicit_globals: global variable `assert` used
 188:10 setting_global: setting global variable `F` (missing `local`?)
 188:10 no_implicit_globals: global variable `F` used
@@ -2900,15 +2900,15 @@ lua5.1-tests/constructs.lua
 189:10 no_implicit_globals: global variable `debug` used
 193:1 unbalanced_assignment: 2 target(s) but 1 value(s) in assignment
 193:7 no_implicit_globals: global variable `F` used
-193:18 multiple_statements_per_line: statement starts on the same line as the previous statement (line 193)
+193:18 multiple_statements_per_line: statement starts on the same line as the previous statement
 193:18 no_implicit_globals: global variable `assert` used
 194:1 unbalanced_assignment: 2 target(s) but 1 value(s) in assignment
 194:7 no_implicit_globals: global variable `F` used
-194:20 multiple_statements_per_line: statement starts on the same line as the previous statement (line 194)
+194:20 multiple_statements_per_line: statement starts on the same line as the previous statement
 194:20 no_implicit_globals: global variable `assert` used
 201:10 setting_global: setting global variable `ID` (missing `local`?)
 201:10 no_implicit_globals: global variable `ID` used
-203:10 duplicate_function: duplicate function definition `f`, also defined on line 38
+203:10 duplicate_function: duplicate function definition `f`
 204:9 shadowing: variable `b` shadows outer variable
 205:15 deprecated: `math.mod` is deprecated
 205:15 no_implicit_globals: global variable `math` used
@@ -3061,22 +3061,22 @@ lua5.1-tests/errors.lua
 127:8 no_implicit_globals: global variable `lineerror` used
 134:1 setting_global: setting global variable `X` (missing `local`?)
 134:1 no_implicit_globals: global variable `X` used
-134:5 multiple_statements_per_line: statement starts on the same line as the previous statement (line 134)
+134:5 multiple_statements_per_line: statement starts on the same line as the previous statement
 134:5 no_implicit_globals: global variable `assert` used
 134:12 no_implicit_globals: global variable `lineerror` used
 135:1 setting_global: setting global variable `X` (missing `local`?)
 135:1 no_implicit_globals: global variable `X` used
-135:5 multiple_statements_per_line: statement starts on the same line as the previous statement (line 135)
+135:5 multiple_statements_per_line: statement starts on the same line as the previous statement
 135:5 no_implicit_globals: global variable `assert` used
 135:12 no_implicit_globals: global variable `lineerror` used
 136:1 setting_global: setting global variable `X` (missing `local`?)
 136:1 no_implicit_globals: global variable `X` used
-136:5 multiple_statements_per_line: statement starts on the same line as the previous statement (line 136)
+136:5 multiple_statements_per_line: statement starts on the same line as the previous statement
 136:5 no_implicit_globals: global variable `assert` used
 136:12 no_implicit_globals: global variable `lineerror` used
 137:1 setting_global: setting global variable `X` (missing `local`?)
 137:1 no_implicit_globals: global variable `X` used
-137:5 multiple_statements_per_line: statement starts on the same line as the previous statement (line 137)
+137:5 multiple_statements_per_line: statement starts on the same line as the previous statement
 137:5 no_implicit_globals: global variable `assert` used
 137:12 no_implicit_globals: global variable `lineerror` used
 139:1 setting_global: setting global variable `lineerror` (missing `local`?)
@@ -3084,13 +3084,13 @@ lua5.1-tests/errors.lua
 141:1 setting_global: setting global variable `C` (missing `local`?)
 141:1 no_implicit_globals: global variable `C` used
 142:11 no_implicit_globals: global variable `debug` used
-142:46 multiple_statements_per_line: statement starts on the same line as the previous statement (line 142)
+142:46 multiple_statements_per_line: statement starts on the same line as the previous statement
 142:55 setting_global: setting global variable `y` (missing `local`?)
 142:55 no_implicit_globals: global variable `y` used
 142:60 setting_global: setting global variable `C` (missing `local`?)
 142:60 no_implicit_globals: global variable `C` used
 142:62 no_implicit_globals: global variable `C` used
-142:67 multiple_statements_per_line: statement starts on the same line as the previous statement (line 142)
+142:67 multiple_statements_per_line: statement starts on the same line as the previous statement
 142:67 no_implicit_globals: global variable `y` used
 145:11 no_implicit_globals: global variable `string` used
 147:1 no_implicit_globals: global variable `assert` used
@@ -3102,7 +3102,7 @@ lua5.1-tests/errors.lua
 151:1 setting_global: setting global variable `C` (missing `local`?)
 151:1 no_implicit_globals: global variable `C` used
 154:8 no_implicit_globals: global variable `debug` used
-154:43 multiple_statements_per_line: statement starts on the same line as the previous statement (line 154)
+154:43 multiple_statements_per_line: statement starts on the same line as the previous statement
 154:43 no_implicit_globals: global variable `y` used
 156:21 no_implicit_globals: global variable `xpcall` used
 156:31 no_implicit_globals: global variable `debug` used
@@ -3170,7 +3170,7 @@ lua5.1-tests/events.lua
 3:1 setting_global: setting global variable `X` (missing `local`?)
 3:1 no_implicit_globals: global variable `X` used
 3:9 setting_global: setting global variable `B` (missing `local`?)
-3:9 multiple_statements_per_line: statement starts on the same line as the previous statement (line 3)
+3:9 multiple_statements_per_line: statement starts on the same line as the previous statement
 3:9 no_implicit_globals: global variable `B` used
 5:1 no_implicit_globals: global variable `setfenv` used
 5:12 no_implicit_globals: global variable `setmetatable` used
@@ -3200,7 +3200,7 @@ lua5.1-tests/events.lua
 18:8 no_implicit_globals: global variable `getmetatable` used
 19:1 setting_global: setting global variable `a` (missing `local`?)
 19:1 no_implicit_globals: global variable `a` used
-19:7 multiple_statements_per_line: statement starts on the same line as the previous statement (line 19)
+19:7 multiple_statements_per_line: statement starts on the same line as the previous statement
 19:7 no_implicit_globals: global variable `setmetatable` used
 19:20 no_implicit_globals: global variable `a` used
 21:1 no_implicit_globals: global variable `assert` used
@@ -3239,16 +3239,16 @@ lua5.1-tests/events.lua
 49:5 no_implicit_globals: global variable `setmetatable` used
 50:10 setting_global: setting global variable `f` (missing `local`?)
 50:10 no_implicit_globals: global variable `f` used
-50:10 duplicate_function: duplicate function definition `f`, also defined on line 36
+50:10 duplicate_function: duplicate function definition `f`
 50:12 shadowing: variable `t` shadows outer variable
 50:21 no_implicit_globals: global variable `rawset` used
 51:16 no_implicit_globals: global variable `f` used
-52:12 multiple_statements_per_line: statement starts on the same line as the previous statement (line 52)
-52:25 multiple_statements_per_line: statement starts on the same line as the previous statement (line 52)
+52:12 multiple_statements_per_line: statement starts on the same line as the previous statement
+52:25 multiple_statements_per_line: statement starts on the same line as the previous statement
 53:1 no_implicit_globals: global variable `assert` used
 57:5 no_implicit_globals: global variable `setmetatable` used
-59:12 multiple_statements_per_line: statement starts on the same line as the previous statement (line 59)
-59:23 multiple_statements_per_line: statement starts on the same line as the previous statement (line 59)
+59:12 multiple_statements_per_line: statement starts on the same line as the previous statement
+59:23 multiple_statements_per_line: statement starts on the same line as the previous statement
 60:1 no_implicit_globals: global variable `assert` used
 64:9 shadowing: variable `a` shadows outer variable
 65:7 no_implicit_globals: global variable `setmetatable` used
@@ -3256,34 +3256,34 @@ lua5.1-tests/events.lua
 66:33 no_implicit_globals: global variable `setmetatable` used
 70:5 no_implicit_globals: global variable `assert` used
 77:9 shadowing: variable `a` shadows outer variable
-78:27 multiple_statements_per_line: statement starts on the same line as the previous statement (line 78)
+78:27 multiple_statements_per_line: statement starts on the same line as the previous statement
 79:3 no_implicit_globals: global variable `setmetatable` used
 79:43 shadowing: variable `t` shadows outer variable
-79:60 multiple_statements_per_line: statement starts on the same line as the previous statement (line 79)
+79:60 multiple_statements_per_line: statement starts on the same line as the previous statement
 79:60 no_implicit_globals: global variable `rawset` used
-80:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 80)
-80:24 multiple_statements_per_line: statement starts on the same line as the previous statement (line 80)
+80:16 multiple_statements_per_line: statement starts on the same line as the previous statement
+80:24 multiple_statements_per_line: statement starts on the same line as the previous statement
 80:24 no_implicit_globals: global variable `assert` used
-81:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 81)
+81:16 multiple_statements_per_line: statement starts on the same line as the previous statement
 81:17 string_index_to_field: `['a1']` is equivalent to `.a1`
-81:27 multiple_statements_per_line: statement starts on the same line as the previous statement (line 81)
+81:27 multiple_statements_per_line: statement starts on the same line as the previous statement
 81:27 no_implicit_globals: global variable `assert` used
-82:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 82)
+82:16 multiple_statements_per_line: statement starts on the same line as the previous statement
 82:17 string_index_to_field: `['a11']` is equivalent to `.a11`
-82:28 multiple_statements_per_line: statement starts on the same line as the previous statement (line 82)
+82:28 multiple_statements_per_line: statement starts on the same line as the previous statement
 82:28 no_implicit_globals: global variable `assert` used
-83:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 83)
-83:25 multiple_statements_per_line: statement starts on the same line as the previous statement (line 83)
+83:16 multiple_statements_per_line: statement starts on the same line as the previous statement
+83:25 multiple_statements_per_line: statement starts on the same line as the previous statement
 83:25 no_implicit_globals: global variable `assert` used
-84:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 84)
-84:26 multiple_statements_per_line: statement starts on the same line as the previous statement (line 84)
+84:16 multiple_statements_per_line: statement starts on the same line as the previous statement
+84:26 multiple_statements_per_line: statement starts on the same line as the previous statement
 84:26 no_implicit_globals: global variable `assert` used
-85:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 85)
-85:26 multiple_statements_per_line: statement starts on the same line as the previous statement (line 85)
+85:16 multiple_statements_per_line: statement starts on the same line as the previous statement
+85:26 multiple_statements_per_line: statement starts on the same line as the previous statement
 85:26 no_implicit_globals: global variable `assert` used
 89:10 setting_global: setting global variable `f` (missing `local`?)
 89:10 no_implicit_globals: global variable `f` used
-89:10 duplicate_function: duplicate function definition `f`, also defined on line 36
+89:10 duplicate_function: duplicate function definition `f`
 89:13 shadowing: variable `t` shadows outer variable
 90:12 no_implicit_globals: global variable `f` used
 93:17 no_implicit_globals: global variable `unpack` used
@@ -3293,10 +3293,10 @@ lua5.1-tests/events.lua
 101:1 no_implicit_globals: global variable `setmetatable` used
 103:10 setting_global: setting global variable `f` (missing `local`?)
 103:10 no_implicit_globals: global variable `f` used
-103:10 duplicate_function: duplicate function definition `f`, also defined on line 36
+103:10 duplicate_function: duplicate function definition `f`
 104:25 setting_global: setting global variable `cap` (missing `local`?)
 104:25 no_implicit_globals: global variable `cap` used
-104:49 multiple_statements_per_line: statement starts on the same line as the previous statement (line 104)
+104:49 multiple_statements_per_line: statement starts on the same line as the previous statement
 106:11 no_implicit_globals: global variable `f` used
 107:11 no_implicit_globals: global variable `f` used
 108:11 no_implicit_globals: global variable `f` used
@@ -3328,7 +3328,7 @@ lua5.1-tests/events.lua
 121:28 no_implicit_globals: global variable `cap` used
 121:46 no_implicit_globals: global variable `cap` used
 121:62 no_implicit_globals: global variable `cap` used
-122:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 122)
+122:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 122:8 no_implicit_globals: global variable `assert` used
 122:15 no_implicit_globals: global variable `getmetatable` used
 123:1 no_implicit_globals: global variable `assert` used
@@ -3515,11 +3515,11 @@ lua5.1-tests/events.lua
 235:6 no_implicit_globals: global variable `type` used
 236:6 no_implicit_globals: global variable `A` used
 238:12 no_implicit_globals: global variable `setmetatable` used
-242:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 242)
+242:16 multiple_statements_per_line: statement starts on the same line as the previous statement
 242:16 no_implicit_globals: global variable `setmetatable` used
 243:1 setting_global: setting global variable `d` (missing `local`?)
 243:1 no_implicit_globals: global variable `d` used
-243:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 243)
+243:16 multiple_statements_per_line: statement starts on the same line as the previous statement
 243:16 no_implicit_globals: global variable `setmetatable` used
 243:29 no_implicit_globals: global variable `d` used
 245:1 setting_global: setting global variable `A` (missing `local`?)
@@ -3544,8 +3544,8 @@ lua5.1-tests/events.lua
 253:8 no_implicit_globals: global variable `x` used
 257:15 shadowing: variable `c` shadows outer variable
 257:15 redefining_local: local `c` is redeclared in the same block
-258:11 multiple_statements_per_line: statement starts on the same line as the previous statement (line 258)
-258:19 multiple_statements_per_line: statement starts on the same line as the previous statement (line 258)
+258:11 multiple_statements_per_line: statement starts on the same line as the previous statement
+258:19 multiple_statements_per_line: statement starts on the same line as the previous statement
 258:19 no_implicit_globals: global variable `setmetatable` used
 262:1 no_implicit_globals: global variable `assert` used
 262:23 no_implicit_globals: global variable `pcall` used
@@ -3668,7 +3668,7 @@ lua5.1-tests/gc.lua
 15:9 unused_variable: unused variable `a`
 15:9 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
 15:9 set_but_never_read: value assigned to `a` is never read
-15:17 multiple_statements_per_line: statement starts on the same line as the previous statement (line 15)
+15:17 multiple_statements_per_line: statement starts on the same line as the previous statement
 16:3 setting_global: setting global variable `contCreate` (missing `local`?)
 16:3 no_implicit_globals: global variable `contCreate` used
 16:16 no_implicit_globals: global variable `contCreate` used
@@ -3747,11 +3747,11 @@ lua5.1-tests/gc.lua
 77:20 no_implicit_globals: global variable `s` used
 77:23 no_implicit_globals: global variable `x` used
 77:26 setting_global: setting global variable `n` (missing `local`?)
-77:26 multiple_statements_per_line: statement starts on the same line as the previous statement (line 77)
+77:26 multiple_statements_per_line: statement starts on the same line as the previous statement
 77:26 no_implicit_globals: global variable `n` used
 77:28 no_implicit_globals: global variable `n` used
 77:33 setting_global: setting global variable `j` (missing `local`?)
-77:33 multiple_statements_per_line: statement starts on the same line as the previous statement (line 77)
+77:33 multiple_statements_per_line: statement starts on the same line as the previous statement
 77:33 no_implicit_globals: global variable `j` used
 77:35 no_implicit_globals: global variable `tostring` used
 77:44 no_implicit_globals: global variable `n` used
@@ -3787,7 +3787,7 @@ lua5.1-tests/gc.lua
 93:3 no_implicit_globals: global variable `a` used
 98:3 no_implicit_globals: global variable `collectgarbage` used
 99:3 no_implicit_globals: global variable `collectgarbage` used
-101:31 multiple_statements_per_line: statement starts on the same line as the previous statement (line 101)
+101:31 multiple_statements_per_line: statement starts on the same line as the previous statement
 101:37 unused_variable: unused variable `b`
 102:3 merge_adjacent_locals: adjacent `local` declarations can be merged
 102:13 deprecated: `gcinfo` is deprecated
@@ -3849,31 +3849,31 @@ lua5.1-tests/gc.lua
 150:1 no_implicit_globals: global variable `print` used
 151:1 setting_global: setting global variable `a` (missing `local`?)
 151:1 no_implicit_globals: global variable `a` used
-151:9 multiple_statements_per_line: statement starts on the same line as the previous statement (line 151)
+151:9 multiple_statements_per_line: statement starts on the same line as the previous statement
 151:9 no_implicit_globals: global variable `setmetatable` used
 151:22 no_implicit_globals: global variable `a` used
 153:9 no_implicit_globals: global variable `lim` used
 153:16 no_implicit_globals: global variable `a` used
 155:5 unused_loop_variable: unused loop variable `i`
 155:9 no_implicit_globals: global variable `lim` used
-155:28 multiple_statements_per_line: statement starts on the same line as the previous statement (line 155)
+155:28 multiple_statements_per_line: statement starts on the same line as the previous statement
 155:28 no_implicit_globals: global variable `a` used
 156:9 no_implicit_globals: global variable `lim` used
 156:16 no_implicit_globals: global variable `a` used
 157:9 no_implicit_globals: global variable `lim` used
 157:24 no_implicit_globals: global variable `string` used
-157:44 multiple_statements_per_line: statement starts on the same line as the previous statement (line 157)
+157:44 multiple_statements_per_line: statement starts on the same line as the previous statement
 157:44 no_implicit_globals: global variable `a` used
 158:1 no_implicit_globals: global variable `collectgarbage` used
 160:12 no_implicit_globals: global variable `pairs` used
 160:18 no_implicit_globals: global variable `a` used
 160:24 no_implicit_globals: global variable `assert` used
-160:51 multiple_statements_per_line: statement starts on the same line as the previous statement (line 160)
+160:51 multiple_statements_per_line: statement starts on the same line as the previous statement
 161:1 no_implicit_globals: global variable `assert` used
 161:15 no_implicit_globals: global variable `lim` used
 163:1 setting_global: setting global variable `a` (missing `local`?)
 163:1 no_implicit_globals: global variable `a` used
-163:9 multiple_statements_per_line: statement starts on the same line as the previous statement (line 163)
+163:9 multiple_statements_per_line: statement starts on the same line as the previous statement
 163:9 no_implicit_globals: global variable `setmetatable` used
 163:22 no_implicit_globals: global variable `a` used
 164:1 no_implicit_globals: global variable `a` used
@@ -3891,7 +3891,7 @@ lua5.1-tests/gc.lua
 172:5 shadowing: variable `i` shadows outer variable
 172:5 unused_loop_variable: unused loop variable `i`
 172:9 no_implicit_globals: global variable `lim` used
-172:28 multiple_statements_per_line: statement starts on the same line as the previous statement (line 172)
+172:28 multiple_statements_per_line: statement starts on the same line as the previous statement
 172:28 no_implicit_globals: global variable `a` used
 173:5 shadowing: variable `i` shadows outer variable
 173:9 no_implicit_globals: global variable `lim` used
@@ -3904,12 +3904,12 @@ lua5.1-tests/gc.lua
 176:18 no_implicit_globals: global variable `a` used
 176:24 no_implicit_globals: global variable `assert` used
 176:41 no_implicit_globals: global variable `lim` used
-176:57 multiple_statements_per_line: statement starts on the same line as the previous statement (line 176)
+176:57 multiple_statements_per_line: statement starts on the same line as the previous statement
 177:1 no_implicit_globals: global variable `assert` used
 177:15 no_implicit_globals: global variable `lim` used
 179:1 setting_global: setting global variable `a` (missing `local`?)
 179:1 no_implicit_globals: global variable `a` used
-179:9 multiple_statements_per_line: statement starts on the same line as the previous statement (line 179)
+179:9 multiple_statements_per_line: statement starts on the same line as the previous statement
 179:9 no_implicit_globals: global variable `setmetatable` used
 179:22 no_implicit_globals: global variable `a` used
 182:1 no_implicit_globals: global variable `a` used
@@ -3927,7 +3927,7 @@ lua5.1-tests/gc.lua
 187:5 shadowing: variable `i` shadows outer variable
 187:5 unused_loop_variable: unused loop variable `i`
 187:9 no_implicit_globals: global variable `lim` used
-187:28 multiple_statements_per_line: statement starts on the same line as the previous statement (line 187)
+187:28 multiple_statements_per_line: statement starts on the same line as the previous statement
 187:28 no_implicit_globals: global variable `a` used
 188:1 no_implicit_globals: global variable `collectgarbage` used
 189:1 no_implicit_globals: global variable `assert` used
@@ -3948,7 +3948,7 @@ lua5.1-tests/gc.lua
 204:1 no_implicit_globals: global variable `collectgarbage` used
 205:1 merge_adjacent_locals: adjacent `local` declarations can be merged
 205:11 no_implicit_globals: global variable `newproxy` used
-207:22 multiple_statements_per_line: statement starts on the same line as the previous statement (line 207)
+207:22 multiple_statements_per_line: statement starts on the same line as the previous statement
 207:22 no_implicit_globals: global variable `setmetatable` used
 208:5 shadowing: variable `i` shadows outer variable
 208:17 no_implicit_globals: global variable `newproxy` used
@@ -3956,7 +3956,7 @@ lua5.1-tests/gc.lua
 209:22 no_implicit_globals: global variable `assert` used
 209:29 no_implicit_globals: global variable `getmetatable` used
 209:48 no_implicit_globals: global variable `getmetatable` used
-210:16 multiple_statements_per_line: statement starts on the same line as the previous statement (line 210)
+210:16 multiple_statements_per_line: statement starts on the same line as the previous statement
 210:27 no_implicit_globals: global variable `pairs` used
 211:12 no_implicit_globals: global variable `pairs` used
 212:5 shadowing: variable `i` shadows outer variable
@@ -3993,7 +3993,7 @@ lua5.1-tests/gc.lua
 239:7 redefining_local: local `u` is redeclared in the same block
 239:11 no_implicit_globals: global variable `newproxy` used
 240:11 no_implicit_globals: global variable `getmetatable` used
-241:31 multiple_statements_per_line: statement starts on the same line as the previous statement (line 241)
+241:31 multiple_statements_per_line: statement starts on the same line as the previous statement
 241:31 no_implicit_globals: global variable `setmetatable` used
 243:3 no_implicit_globals: global variable `assert` used
 243:10 no_implicit_globals: global variable `next` used
@@ -4053,10 +4053,10 @@ lua5.1-tests/gc.lua
 lua5.1-tests/locals.lua
 1:1 no_implicit_globals: global variable `print` used
 5:12 shadowing: variable `i` shadows outer variable
-5:21 multiple_statements_per_line: statement starts on the same line as the previous statement (line 5)
+5:21 multiple_statements_per_line: statement starts on the same line as the previous statement
 5:21 no_implicit_globals: global variable `assert` used
 6:12 shadowing: variable `i` shadows outer variable
-6:22 multiple_statements_per_line: statement starts on the same line as the previous statement (line 6)
+6:22 multiple_statements_per_line: statement starts on the same line as the previous statement
 6:22 no_implicit_globals: global variable `assert` used
 7:3 no_implicit_globals: global variable `assert` used
 9:11 unused_variable: unused variable `i`
@@ -4085,10 +4085,10 @@ lua5.1-tests/locals.lua
 41:9 unused_variable: unused variable `f`
 41:9 shadowing: variable `f` shadows outer variable
 44:7 unused_variable: unused variable `b`
-45:10 multiple_statements_per_line: statement starts on the same line as the previous statement (line 45)
+45:10 multiple_statements_per_line: statement starts on the same line as the previous statement
 45:23 shadowing: variable `b` shadows outer variable
-45:26 multiple_statements_per_line: statement starts on the same line as the previous statement (line 45)
-45:35 multiple_statements_per_line: statement starts on the same line as the previous statement (line 45)
+45:26 multiple_statements_per_line: statement starts on the same line as the previous statement
+45:35 multiple_statements_per_line: statement starts on the same line as the previous statement
 45:35 no_implicit_globals: global variable `assert` used
 48:1 no_implicit_globals: global variable `assert` used
 48:8 no_implicit_globals: global variable `x` used
@@ -4101,11 +4101,11 @@ lua5.1-tests/locals.lua
 58:37 setting_global: setting global variable `A` (missing `local`?)
 58:37 no_implicit_globals: global variable `A` used
 58:39 no_implicit_globals: global variable `A` used
-58:44 multiple_statements_per_line: statement starts on the same line as the previous statement (line 58)
+58:44 multiple_statements_per_line: statement starts on the same line as the previous statement
 58:51 no_implicit_globals: global variable `A` used
 59:3 setting_global: setting global variable `A` (missing `local`?)
 59:3 no_implicit_globals: global variable `A` used
-59:9 multiple_statements_per_line: statement starts on the same line as the previous statement (line 59)
+59:9 multiple_statements_per_line: statement starts on the same line as the previous statement
 59:9 no_implicit_globals: global variable `assert` used
 60:17 no_implicit_globals: global variable `assert` used
 60:24 no_implicit_globals: global variable `setfenv` used
@@ -4122,8 +4122,8 @@ lua5.1-tests/locals.lua
 67:18 redefining_local: local `f` is redeclared in the same block
 67:23 no_implicit_globals: global variable `assert` used
 67:30 no_implicit_globals: global variable `setfenv` used
-68:24 multiple_statements_per_line: statement starts on the same line as the previous statement (line 68)
-69:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 69)
+68:24 multiple_statements_per_line: statement starts on the same line as the previous statement
+69:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 69:8 no_implicit_globals: global variable `assert` used
 69:15 no_implicit_globals: global variable `getfenv` used
 74:10 no_implicit_globals: global variable `loadstring` used
@@ -4516,15 +4516,15 @@ lua5.1-tests/nextvar.lua
 82:7 redefining_local: local `lim` is redeclared in the same block
 83:7 shadowing: variable `a` shadows outer variable
 83:7 redefining_local: local `a` is redeclared in the same block
-83:15 multiple_statements_per_line: statement starts on the same line as the previous statement (line 83)
-83:25 multiple_statements_per_line: statement starts on the same line as the previous statement (line 83)
-84:9 multiple_statements_per_line: statement starts on the same line as the previous statement (line 84)
-84:19 multiple_statements_per_line: statement starts on the same line as the previous statement (line 84)
-84:35 multiple_statements_per_line: statement starts on the same line as the previous statement (line 84)
-84:45 multiple_statements_per_line: statement starts on the same line as the previous statement (line 84)
-85:9 multiple_statements_per_line: statement starts on the same line as the previous statement (line 85)
-85:19 multiple_statements_per_line: statement starts on the same line as the previous statement (line 85)
-85:29 multiple_statements_per_line: statement starts on the same line as the previous statement (line 85)
+83:15 multiple_statements_per_line: statement starts on the same line as the previous statement
+83:25 multiple_statements_per_line: statement starts on the same line as the previous statement
+84:9 multiple_statements_per_line: statement starts on the same line as the previous statement
+84:19 multiple_statements_per_line: statement starts on the same line as the previous statement
+84:35 multiple_statements_per_line: statement starts on the same line as the previous statement
+84:45 multiple_statements_per_line: statement starts on the same line as the previous statement
+85:9 multiple_statements_per_line: statement starts on the same line as the previous statement
+85:19 multiple_statements_per_line: statement starts on the same line as the previous statement
+85:29 multiple_statements_per_line: statement starts on the same line as the previous statement
 89:3 no_implicit_globals: global variable `assert` used
 96:3 no_implicit_globals: global variable `assert` used
 115:9 shadowing: variable `a` shadows outer variable
@@ -4535,7 +4535,7 @@ lua5.1-tests/nextvar.lua
 125:10 no_implicit_globals: global variable `select` used
 131:7 shadowing: variable `a` shadows outer variable
 131:7 redefining_local: local `a` is redeclared in the same block
-132:29 multiple_statements_per_line: statement starts on the same line as the previous statement (line 132)
+132:29 multiple_statements_per_line: statement starts on the same line as the previous statement
 132:29 no_implicit_globals: global variable `foo` used
 132:36 no_implicit_globals: global variable `unpack` used
 138:1 no_implicit_globals: global variable `assert` used
@@ -4655,8 +4655,8 @@ lua5.1-tests/nextvar.lua
 254:14 no_implicit_globals: global variable `pairs` used
 254:26 no_implicit_globals: global variable `assert` used
 256:18 no_implicit_globals: global variable `next` used
-256:27 multiple_statements_per_line: statement starts on the same line as the previous statement (line 256)
-256:48 multiple_statements_per_line: statement starts on the same line as the previous statement (line 256)
+256:27 multiple_statements_per_line: statement starts on the same line as the previous statement
+256:48 multiple_statements_per_line: statement starts on the same line as the previous statement
 256:54 no_implicit_globals: global variable `next` used
 257:14 no_implicit_globals: global variable `pairs` used
 257:26 no_implicit_globals: global variable `assert` used
@@ -4707,10 +4707,10 @@ lua5.1-tests/nextvar.lua
 304:1 no_implicit_globals: global variable `assert` used
 307:22 shadowing: variable `a` shadows outer variable
 308:3 no_implicit_globals: global variable `table` used
-308:24 multiple_statements_per_line: statement starts on the same line as the previous statement (line 308)
+308:24 multiple_statements_per_line: statement starts on the same line as the previous statement
 308:24 no_implicit_globals: global variable `table` used
 309:3 no_implicit_globals: global variable `table` used
-309:27 multiple_statements_per_line: statement starts on the same line as the previous statement (line 309)
+309:27 multiple_statements_per_line: statement starts on the same line as the previous statement
 309:27 no_implicit_globals: global variable `table` used
 310:3 no_implicit_globals: global variable `table` used
 310:19 deprecated: `table.getn` is deprecated
@@ -4735,9 +4735,9 @@ lua5.1-tests/nextvar.lua
 327:23 deprecated: `table.getn` is deprecated
 327:23 no_implicit_globals: global variable `table` used
 330:1 no_implicit_globals: global variable `table` used
-330:25 multiple_statements_per_line: statement starts on the same line as the previous statement (line 330)
+330:25 multiple_statements_per_line: statement starts on the same line as the previous statement
 330:25 no_implicit_globals: global variable `table` used
-330:49 multiple_statements_per_line: statement starts on the same line as the previous statement (line 330)
+330:49 multiple_statements_per_line: statement starts on the same line as the previous statement
 330:49 no_implicit_globals: global variable `table` used
 331:1 no_implicit_globals: global variable `assert` used
 331:8 no_implicit_globals: global variable `table` used
@@ -4759,7 +4759,7 @@ lua5.1-tests/nextvar.lua
 342:8 deprecated: `table.getn` is deprecated
 342:8 no_implicit_globals: global variable `table` used
 343:1 no_implicit_globals: global variable `print` used
-347:13 multiple_statements_per_line: statement starts on the same line as the previous statement (line 347)
+347:13 multiple_statements_per_line: statement starts on the same line as the previous statement
 349:1 no_implicit_globals: global variable `assert` used
 349:8 no_implicit_globals: global variable `next` used
 349:32 no_implicit_globals: global variable `next` used
@@ -4781,58 +4781,58 @@ lua5.1-tests/nextvar.lua
 356:1 loop_executes_once: numeric `for` loop body always errors, so the loop executes at most once
 356:5 unused_loop_variable: unused loop variable `i`
 356:17 no_implicit_globals: global variable `error` used
-357:10 multiple_statements_per_line: statement starts on the same line as the previous statement (line 357)
+357:10 multiple_statements_per_line: statement starts on the same line as the previous statement
 357:14 unused_loop_variable: unused loop variable `i`
 357:23 no_implicit_globals: global variable `assert` used
-357:38 multiple_statements_per_line: statement starts on the same line as the previous statement (line 357)
-357:47 multiple_statements_per_line: statement starts on the same line as the previous statement (line 357)
+357:38 multiple_statements_per_line: statement starts on the same line as the previous statement
+357:47 multiple_statements_per_line: statement starts on the same line as the previous statement
 357:47 no_implicit_globals: global variable `assert` used
-358:10 multiple_statements_per_line: statement starts on the same line as the previous statement (line 358)
+358:10 multiple_statements_per_line: statement starts on the same line as the previous statement
 358:14 unused_loop_variable: unused loop variable `i`
 358:26 no_implicit_globals: global variable `assert` used
-358:41 multiple_statements_per_line: statement starts on the same line as the previous statement (line 358)
-358:50 multiple_statements_per_line: statement starts on the same line as the previous statement (line 358)
+358:41 multiple_statements_per_line: statement starts on the same line as the previous statement
+358:50 multiple_statements_per_line: statement starts on the same line as the previous statement
 358:50 no_implicit_globals: global variable `assert` used
-360:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 360)
+360:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 360:12 unused_loop_variable: unused loop variable `i`
-360:38 multiple_statements_per_line: statement starts on the same line as the previous statement (line 360)
+360:38 multiple_statements_per_line: statement starts on the same line as the previous statement
 360:38 no_implicit_globals: global variable `assert` used
 363:8 for_range: numeric `for` loop ends at 0.9 instead of 0.999999999, did you forget to specify a step?
-363:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 363)
+363:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 363:12 unused_loop_variable: unused loop variable `i`
-363:48 multiple_statements_per_line: statement starts on the same line as the previous statement (line 363)
+363:48 multiple_statements_per_line: statement starts on the same line as the previous statement
 363:48 no_implicit_globals: global variable `assert` used
-364:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 364)
+364:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 364:12 unused_loop_variable: unused loop variable `i`
-364:36 multiple_statements_per_line: statement starts on the same line as the previous statement (line 364)
+364:36 multiple_statements_per_line: statement starts on the same line as the previous statement
 364:36 no_implicit_globals: global variable `assert` used
-365:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 365)
+365:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 365:12 unused_loop_variable: unused loop variable `i`
-365:43 multiple_statements_per_line: statement starts on the same line as the previous statement (line 365)
+365:43 multiple_statements_per_line: statement starts on the same line as the previous statement
 365:43 no_implicit_globals: global variable `assert` used
 366:8 for_range: numeric `for` from 1 to 0.99999 with a positive step never iterates
-366:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 366)
+366:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 366:12 unused_loop_variable: unused loop variable `i`
-366:42 multiple_statements_per_line: statement starts on the same line as the previous statement (line 366)
+366:42 multiple_statements_per_line: statement starts on the same line as the previous statement
 366:42 no_implicit_globals: global variable `assert` used
 367:8 for_range: numeric `for` from 99999 to 100000 with a negative step never iterates
-367:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 367)
+367:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 367:12 unused_loop_variable: unused loop variable `i`
-367:43 multiple_statements_per_line: statement starts on the same line as the previous statement (line 367)
+367:43 multiple_statements_per_line: statement starts on the same line as the previous statement
 367:43 no_implicit_globals: global variable `assert` used
 368:8 for_range: numeric `for` loop ends at 1 instead of 0.99999, did you forget to specify a step?
-368:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 368)
+368:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 368:12 unused_loop_variable: unused loop variable `i`
-368:43 multiple_statements_per_line: statement starts on the same line as the previous statement (line 368)
+368:43 multiple_statements_per_line: statement starts on the same line as the previous statement
 368:43 no_implicit_globals: global variable `assert` used
-371:8 multiple_statements_per_line: statement starts on the same line as the previous statement (line 371)
+371:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 371:12 unused_loop_variable: unused loop variable `i`
-371:42 multiple_statements_per_line: statement starts on the same line as the previous statement (line 371)
+371:42 multiple_statements_per_line: statement starts on the same line as the previous statement
 371:42 no_implicit_globals: global variable `assert` used
 374:1 no_implicit_globals: global variable `collectgarbage` used
 379:19 shadowing: variable `n` shadows outer variable
 380:9 shadowing: variable `t` shadows outer variable
-380:17 multiple_statements_per_line: statement starts on the same line as the previous statement (line 380)
+380:17 multiple_statements_per_line: statement starts on the same line as the previous statement
 381:10 implicit_return: function returns on some paths but falls through on others
 381:22 shadowing: variable `n` shadows outer variable
 384:24 no_implicit_globals: global variable `unpack` used
@@ -4863,7 +4863,7 @@ lua5.1-tests/vararg.lua
 12:10 no_implicit_globals: global variable `c12` used
 13:3 no_implicit_globals: global variable `assert` used
 13:10 no_implicit_globals: global variable `arg` used
-14:20 multiple_statements_per_line: statement starts on the same line as the previous statement (line 14)
+14:20 multiple_statements_per_line: statement starts on the same line as the previous statement
 14:26 deprecated: `table.getn` is deprecated
 14:26 no_implicit_globals: global variable `table` used
 20:10 setting_global: setting global variable `vararg` (missing `local`?)
@@ -4927,10 +4927,10 @@ lua5.1-tests/vararg.lua
 50:10 shadowing: variable `a` shadows outer variable
 50:10 redefining_local: local `a` is redeclared in the same block
 51:12 no_implicit_globals: global variable `lim` used
-51:33 multiple_statements_per_line: statement starts on the same line as the previous statement (line 51)
+51:33 multiple_statements_per_line: statement starts on the same line as the previous statement
 53:10 setting_global: setting global variable `f` (missing `local`?)
 53:10 no_implicit_globals: global variable `f` used
-53:10 duplicate_function: duplicate function definition `f`, also defined on line 5
+53:10 duplicate_function: duplicate function definition `f`
 53:12 shadowing: variable `a` shadows outer variable
 53:15 shadowing: variable `b` shadows outer variable
 53:15 unused_argument: unused argument `b`
@@ -4950,7 +4950,7 @@ lua5.1-tests/vararg.lua
 63:6 no_implicit_globals: global variable `f` used
 64:6 no_implicit_globals: global variable `g` used
 68:12 no_implicit_globals: global variable `lim` used
-68:29 multiple_statements_per_line: statement starts on the same line as the previous statement (line 68)
+68:29 multiple_statements_per_line: statement starts on the same line as the previous statement
 69:1 no_implicit_globals: global variable `assert` used
 69:13 no_implicit_globals: global variable `math` used
 69:29 no_implicit_globals: global variable `lim` used
@@ -4961,7 +4961,7 @@ lua5.1-tests/vararg.lua
 76:19 unused_argument: unused argument `a`
 78:10 setting_global: setting global variable `f` (missing `local`?)
 78:10 no_implicit_globals: global variable `f` used
-78:10 duplicate_function: duplicate function definition `f`, also defined on line 5
+78:10 duplicate_function: duplicate function definition `f`
 78:16 shadowing: variable `a` shadows outer variable
 79:9 shadowing: variable `b` shadows outer variable
 80:3 no_implicit_globals: global variable `assert` used

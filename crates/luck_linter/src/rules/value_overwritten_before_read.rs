@@ -1,3 +1,5 @@
+use luck_diagnostics::Tag;
+
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
 
@@ -31,6 +33,7 @@ impl WholeRule for ValueOverwrittenBeforeRead {
                     ),
                     span,
                 )
+                .with_tag(Tag::Unnecessary)
                 .with_help("remove the earlier assignment or read it first")
             })
             .collect()
@@ -42,10 +45,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&ValueOverwrittenBeforeRead, source, LuaVersion::Lua54)
     }
 
@@ -144,7 +147,7 @@ x = 2
 return x";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].span.text(source), "x", "the span should cover `x`: {diags:?}");
+        assert_eq!(diags[0].span().text(source), "x", "the span should cover `x`: {diags:?}");
     }
 
     #[test]

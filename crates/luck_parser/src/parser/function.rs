@@ -2,14 +2,18 @@ use core::mem;
 
 use luck_allocator::{Box, List};
 use luck_ast::{FunctionBody, GetSpan as _, Name, Parameter, Type, VarArgParam};
-use luck_token::TokenKind;
+use luck_token::{Span, TokenKind};
 
 use super::types::GenericsOwner;
 use super::{Closer, FunctionScope, Parser};
 
 impl<'ast> Parser<'ast> {
-    /// `None` when the body or its block would pass the depth cap.
-    pub(super) fn parse_function_body(&mut self) -> Option<FunctionBody<'ast>> {
+    /// The body after the `function` keyword at `function_span`, or `None`
+    /// when the body or its block would pass the depth cap.
+    pub(super) fn parse_function_body(
+        &mut self,
+        function_span: Span,
+    ) -> Option<FunctionBody<'ast>> {
         if !self.enter_depth() {
             return None;
         }
@@ -26,7 +30,7 @@ impl<'ast> Parser<'ast> {
 
         self.open(Closer::Paren);
         let (params, vararg) = self.parse_params();
-        self.expect_closer(TokenKind::RightParen, Closer::Paren);
+        self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
 
         // Luau: optional return type annotation after `)`.
         let return_type = (self.version.has_type_syntax() && self.eat(TokenKind::Colon))
@@ -43,8 +47,7 @@ impl<'ast> Parser<'ast> {
         self.exit_depth();
         let block = parsed_block?;
 
-        self.close(Closer::BlockEnd);
-        let end_span = self.expect(TokenKind::End);
+        let end_span = self.expect_closer(TokenKind::End, Closer::BlockEnd, function_span);
         let span = start_span.merge(end_span);
         Some(FunctionBody::new(span, generics, params, vararg, return_type, block))
     }

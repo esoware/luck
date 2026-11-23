@@ -33,12 +33,14 @@
     expect(clippy::missing_panics_doc, reason = "a Panics section says nothing about a test")
 )]
 
+extern crate alloc;
+
 mod groupings;
 mod parse_result;
 mod parser;
 mod validate;
 
 pub use groupings::Groupings;
-pub use parse_result::{ParseError, ParseResult};
+pub use parse_result::ParseResult;
 pub use parser::{parse, parse_with_tokens};
 pub use validate::validate;

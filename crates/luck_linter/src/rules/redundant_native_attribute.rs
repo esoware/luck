@@ -1,4 +1,5 @@
 use luck_ast::{Expression, FunctionAttribute, Statement};
+use luck_diagnostics::Tag;
 use luck_token::{Span, leading_hot_comments, offset_to_index};
 
 use crate::diagnostic::Finding;
@@ -87,6 +88,7 @@ fn check_attributes(
                 "`@native` attribute is redundant in a `--!native` module",
                 attribute.span,
             )
+            .with_tag(Tag::Unnecessary)
             .with_fix(context, FixKind::Fix, |fixer| {
                 let span = removal_span(attribute, attributes, context.source)?;
                 Some(fixer.delete("remove the redundant `@native` attribute", span))
@@ -149,10 +151,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&RedundantNativeAttribute, source, LuaVersion::Luau)
     }
 

@@ -9,13 +9,13 @@ use std::path::Path;
 use luck_allocator::Allocator;
 use luck_ast::{SuffixedExpression, Visit};
 use luck_bundler::{BundleOptions, BundleResult, DynamicRequire, LineMapEntry};
-use luck_core::Diagnostic;
+use luck_diagnostics::FileDiagnostics;
 use luck_semantic::{ScopeId, ScopeKind, ScopeTree, SymbolId};
 use luck_token::LuaVersion;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tempfile::TempDir;
 
-use crate::common::bundle_both;
+use crate::common::{bundle_both, codes};
 
 const LUA_REQUIRE_UTIL: &[u8] = b"\
 local util = require(\"util\")
@@ -43,7 +43,7 @@ fn bundle_project(
     directory: &Path,
     entry: &str,
     version: LuaVersion,
-) -> Result<BundleResult, Vec<Diagnostic>> {
+) -> Result<BundleResult, Vec<FileDiagnostics>> {
     let search_paths = if version.is_luau() { vec![] } else { vec!["?.lua".to_owned()] };
     bundle_both(
         &directory.join(entry),
@@ -434,7 +434,7 @@ print(util, other)
         "main.lua",
         LuaVersion::Lua54,
     );
-    let is_warned = result.warnings.iter().any(|warning| warning.code == "W005");
+    let is_warned = codes(&result.warnings).contains(&"W005");
     assert!(
         is_warned || !result.output.contains("_G.require"),
         "`_G.require` escapes bundling, so it must be rewritten or get W005: {:?}",

@@ -14,7 +14,9 @@
 //! - `ast` - AST nodes and their builder, `Visit`, `VisitMut`, `AstKind`,
 //!   `GetSpan`, `ContentEq` (always on)
 //! - `parser` - Pratt + recursive-descent parser (always on)
-//! - `core` - Dialect targets, diagnostics (always on)
+//! - `core` - Dialect targets (always on)
+//! - `diagnostics` - The diagnostic every stage reports problems with, and
+//!   its numbered constructors (always on)
 //! - `codegen` - Compact printer (feature `codegen`)
 //! - `resolver` - Module resolution, source loading, path form (feature
 //!   `resolver`)
@@ -128,7 +130,7 @@
 //! let config = LintConfig::default();
 //! let source = "print(undefined_name)";
 //! let diags = luck::linter::lint(&allocator, source, LuaTarget::Lua54, &config, FixKind::empty());
-//! assert_eq!(diags[0].rule, "undefined_variable");
+//! assert_eq!(diags[0].code, "undefined_variable");
 //!
 //! let fixed = luck::linter::fix(&allocator, "unpack(t)", LuaTarget::Lua54, &config, FixKind::Fix);
 //! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok("table.unpack(t)"));
@@ -183,6 +185,7 @@ pub use luck_codegen as codegen;
 #[cfg(feature = "config")]
 pub use luck_config as config;
 pub use luck_core as core;
+pub use luck_diagnostics as diagnostics;
 #[cfg(feature = "formatter")]
 pub use luck_formatter as formatter;
 pub use luck_lexer as lexer;

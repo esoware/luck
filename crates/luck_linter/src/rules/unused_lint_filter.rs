@@ -1,3 +1,4 @@
+use luck_diagnostics::Tag;
 use luck_token::{
     LintExtent, LintVerb, LuaVersion, Span, index_to_offset, is_lua_whitespace, offset_to_index,
     strip_line_break,
@@ -65,6 +66,7 @@ impl UnusedLintFilter {
             if unused.len() == directive.entries.len() {
                 findings.push(
                     Finding::new("unused `allow` directive", directive.span)
+                        .with_tag(Tag::Unnecessary)
                         .with_help("no rule it names reports anything where it applies")
                         .with_directive_fix(context, |fixer| {
                             fixer.fix("remove the unused directive", removal(context, &unused))
@@ -84,6 +86,7 @@ impl UnusedLintFilter {
                 };
                 findings.push(
                     Finding::new(format!("unused `{name}` in this `allow`"), found.name)
+                        .with_tag(Tag::Unnecessary)
                         .with_help(help)
                         .with_directive_fix(context, |fixer| {
                             fixer.fix(
@@ -192,10 +195,10 @@ fn comment_removal(source: &str, span: Span, version: LuaVersion) -> TextEdit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&UnusedLintFilter, source, LuaVersion::Lua54)
     }
 
@@ -228,7 +231,7 @@ x = 1";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].message, "unused `undefined_variable` in this `allow`");
-        assert_eq!(diags[0].span.text(source), "undefined_variable");
+        assert_eq!(diags[0].span().text(source), "undefined_variable");
         assert_eq!(
             fixed(source),
             "\

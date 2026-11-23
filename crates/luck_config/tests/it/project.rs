@@ -8,7 +8,7 @@ use luck_formatter::{FormatOptions, IndentStyle};
 use luck_linter::{Category, LintConfig, RuleLevel};
 use luck_token::LuaVersion;
 
-use crate::common::{loaded, project_with};
+use crate::common::{load_error, loaded, project_with};
 
 #[test]
 fn defaults_take_every_lua_file_in_the_dialect_of_its_extension() {
@@ -40,10 +40,10 @@ fn either_key_names_any_dialect() {
 fn rejects_a_dialect_on_its_value() {
     let text = r#"{ "luau": "lua99" }"#;
     let directory = project_with(&[("luck.json", text)]);
-    let diag = Project::load(&directory.path().join("luck.json")).unwrap_err();
+    let (_, diag) = load_error(&directory.path().join("luck.json"));
     assert_eq!(diag.code, "E014");
     assert!(diag.message.contains("unknown variant `lua99`, expected one of"), "{diag:?}");
-    assert_eq!(diag.span.text(text), r#""lua99""#);
+    assert_eq!(diag.span.map(|span| span.text(text)), Some(r#""lua99""#));
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn rejects_entry_beside_entries() {
         "luck.json",
         r#"{ "entry": "a.lua", "entries": [{ "entry": "b.lua", "output": "c.lua" }] }"#,
     )]);
-    let diag = Project::load(&directory.path().join("luck.json")).unwrap_err();
+    let (_, diag) = load_error(&directory.path().join("luck.json"));
     assert_eq!(diag.code, "E014");
     assert!(diag.message.contains("`entry` and `entries` can't both be set"), "{diag:?}");
 }
@@ -61,9 +61,9 @@ fn rejects_entry_beside_entries() {
 fn rejects_empty_entries_on_the_list() {
     let text = r#"{ "entries": [] }"#;
     let directory = project_with(&[("luck.json", text)]);
-    let diag = Project::load(&directory.path().join("luck.json")).unwrap_err();
+    let (_, diag) = load_error(&directory.path().join("luck.json"));
     assert!(diag.message.contains("`entries` is empty"), "{diag:?}");
-    assert_eq!(diag.span.text(text), "[");
+    assert_eq!(diag.span.map(|span| span.text(text)), Some("["));
 }
 
 #[test]

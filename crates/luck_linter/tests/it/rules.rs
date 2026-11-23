@@ -9,7 +9,7 @@ fn flags_undefined_variable() {
     assert!(
         diags
             .iter()
-            .any(|diag| diag.rule == "undefined_variable" && diag.message.contains("undefined_var"))
+            .any(|diag| diag.code == "undefined_variable" && diag.message.contains("undefined_var"))
     );
 }
 
@@ -23,39 +23,39 @@ f(1)",
         LuaTarget::Lua55,
         &LintConfig::default(),
     );
-    assert!(diags.iter().all(|diag| diag.rule != "undefined_variable"), "{diags:?}");
+    assert!(diags.iter().all(|diag| diag.code != "undefined_variable"), "{diags:?}");
 }
 
 #[test]
 fn ignores_known_globals() {
     let diags = lint("print(tostring(1))", LuaTarget::Lua54, &LintConfig::default());
-    assert!(diags.iter().all(|diag| diag.rule != "undefined_variable"));
+    assert!(diags.iter().all(|diag| diag.code != "undefined_variable"));
 }
 
 #[test]
 fn flags_unused_variable() {
     let diags = lint("local unused = 1", LuaTarget::Lua54, &LintConfig::default());
     assert!(
-        diags.iter().any(|diag| diag.rule == "unused_variable" && diag.message.contains("unused"))
+        diags.iter().any(|diag| diag.code == "unused_variable" && diag.message.contains("unused"))
     );
 }
 
 #[test]
 fn ignores_underscore_prefixed_unused_local() {
     let diags = lint("local _unused = 1", LuaTarget::Lua54, &LintConfig::default());
-    assert!(diags.iter().all(|diag| diag.rule != "unused_variable"));
+    assert!(diags.iter().all(|diag| diag.code != "unused_variable"));
 }
 
 #[test]
 fn flags_setting_global() {
     let diags = lint("my_global = 1", LuaTarget::Lua54, &LintConfig::default());
-    assert!(diags.iter().any(|diag| diag.rule == "setting_global"));
+    assert!(diags.iter().any(|diag| diag.code == "setting_global"));
 }
 
 #[test]
 fn flags_duplicate_keys() {
     let diags = lint("local t = { a = 1, a = 2 }", LuaTarget::Lua54, &LintConfig::default());
-    assert!(diags.iter().any(|diag| diag.rule == "duplicate_keys"));
+    assert!(diags.iter().any(|diag| diag.code == "duplicate_keys"));
 }
 
 #[test]
@@ -67,7 +67,7 @@ if x == 0/0 then end",
         LuaTarget::Lua54,
         &LintConfig::default(),
     );
-    assert!(diags.iter().any(|diag| diag.rule == "compare_nan"));
+    assert!(diags.iter().any(|diag| diag.code == "compare_nan"));
 }
 
 #[test]
@@ -79,7 +79,7 @@ if x == {} then end",
         LuaTarget::Lua54,
         &LintConfig::default(),
     );
-    assert!(diags.iter().any(|diag| diag.rule == "constant_table_comparison"));
+    assert!(diags.iter().any(|diag| diag.code == "constant_table_comparison"));
 }
 
 #[test]
@@ -92,38 +92,38 @@ b = a",
         LuaTarget::Lua54,
         &LintConfig::default(),
     );
-    assert!(diags.iter().any(|diag| diag.rule == "almost_swapped"));
+    assert!(diags.iter().any(|diag| diag.code == "almost_swapped"));
 }
 
 #[test]
 fn flags_type_check_inside_call() {
     let diags = lint("if type(x == \"string\") then end", LuaTarget::Lua54, &LintConfig::default());
-    assert!(diags.iter().any(|diag| diag.rule == "type_check_inside_call"));
+    assert!(diags.iter().any(|diag| diag.code == "type_check_inside_call"));
 }
 
 #[test]
 fn flags_reversed_for_loop() {
     let config = enable("reversed_for_loop");
     let diags = lint("for i = 10, 1 do end", LuaTarget::Lua54, &config);
-    assert!(diags.iter().any(|diag| diag.rule == "reversed_for_loop"));
+    assert!(diags.iter().any(|diag| diag.code == "reversed_for_loop"));
 }
 
 #[test]
 fn flags_unbalanced_assignment() {
     let config = enable("unbalanced_assignment");
     let diags = lint("local a, b, c = 1, 2", LuaTarget::Lua54, &config);
-    assert!(diags.iter().any(|diag| diag.rule == "unbalanced_assignment"));
+    assert!(diags.iter().any(|diag| diag.code == "unbalanced_assignment"));
 }
 
 #[test]
 fn flags_incorrect_stdlib_use_with_too_few_args() {
     let diags = lint("table.insert()", LuaTarget::Lua54, &LintConfig::default());
-    assert!(diags.iter().any(|diag| diag.rule == "incorrect_stdlib_use"));
+    assert!(diags.iter().any(|diag| diag.code == "incorrect_stdlib_use"));
 }
 
 #[test]
 fn flags_must_use() {
     let config = enable("must_use");
     let diags = lint("tostring(42)", LuaTarget::Lua54, &config);
-    assert!(diags.iter().any(|diag| diag.rule == "must_use"));
+    assert!(diags.iter().any(|diag| diag.code == "must_use"));
 }

@@ -1,6 +1,7 @@
 use luck_allocator::Allocator;
 use luck_core::LuaTarget;
-use luck_linter::{FixKind, LintConfig, LintDiagnostic, RuleLevel, Severity};
+use luck_diagnostics::Severity;
+use luck_linter::{FixKind, LintConfig, Message, RuleLevel};
 
 use crate::common::{lint, with_level};
 
@@ -13,7 +14,7 @@ local unused = 1",
         LuaTarget::Lua54,
         &LintConfig::default(),
     );
-    assert!(diags.iter().all(|diag| diag.rule != "unused_variable"));
+    assert!(diags.iter().all(|diag| diag.code != "unused_variable"));
 }
 
 #[test]
@@ -27,7 +28,7 @@ local second = 2",
     );
     let messages: Vec<&str> = diags
         .iter()
-        .filter(|diag| diag.rule == "unused_variable")
+        .filter(|diag| diag.code == "unused_variable")
         .map(|diag| &*diag.message)
         .collect();
     assert_eq!(messages.len(), 1, "{diags:?}");
@@ -43,7 +44,7 @@ local unused = 1",
         LuaTarget::Lua54,
         &LintConfig::default(),
     );
-    assert!(diags.iter().all(|diag| diag.rule != "unused_variable"), "{diags:?}");
+    assert!(diags.iter().all(|diag| diag.code != "unused_variable"), "{diags:?}");
 }
 
 #[test]
@@ -55,7 +56,7 @@ local unused = 1",
         LuaTarget::Lua54,
         &LintConfig::default(),
     );
-    assert!(diags.iter().any(|diag| diag.rule == "unused_variable"), "{diags:?}");
+    assert!(diags.iter().any(|diag| diag.code == "unused_variable"), "{diags:?}");
 }
 
 #[test]
@@ -70,7 +71,7 @@ print(undef)",
     );
     let denied = diags
         .iter()
-        .find(|diag| diag.rule == "undefined_variable")
+        .find(|diag| diag.code == "undefined_variable")
         .expect("undefined_variable fires");
     assert_eq!(denied.severity, Severity::Error);
 }
@@ -87,7 +88,7 @@ print(undef)",
     );
     let downgraded = diags
         .iter()
-        .find(|diag| diag.rule == "undefined_variable")
+        .find(|diag| diag.code == "undefined_variable")
         .expect("undefined_variable fires");
     assert_eq!(downgraded.severity, Severity::Warning);
 }
@@ -99,7 +100,7 @@ fn file_level_allow_covers_whole_file() {
 local a = 1
 local b = 2";
     let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
-    assert!(diags.iter().all(|diag| diag.rule != "unused_variable"));
+    assert!(diags.iter().all(|diag| diag.code != "unused_variable"));
 }
 
 #[test]
@@ -111,8 +112,8 @@ local a = 1
 local b = 2
 -- luck: deny(unused_variable) end";
     let diags = lint(source, LuaTarget::Lua54, &config);
-    let region_diags: Vec<_> = diags.iter().filter(|diag| diag.rule == "unused_variable").collect();
-    assert_ne!(region_diags, Vec::<&LintDiagnostic>::new());
+    let region_diags: Vec<_> = diags.iter().filter(|diag| diag.code == "unused_variable").collect();
+    assert_ne!(region_diags, Vec::<&Message>::new());
     for diag in region_diags {
         assert_eq!(diag.severity, Severity::Error);
     }
@@ -127,7 +128,7 @@ local a = 1
 local b = 2
 -- luck: deny(unused_variable) end";
     let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
-    let unused_diags: Vec<_> = diags.iter().filter(|diag| diag.rule == "unused_variable").collect();
+    let unused_diags: Vec<_> = diags.iter().filter(|diag| diag.code == "unused_variable").collect();
     assert_eq!(unused_diags.len(), 1, "{diags:?}");
     assert!(unused_diags[0].message.contains("`b`"), "{diags:?}");
     assert_eq!(unused_diags[0].severity, Severity::Error);
@@ -140,7 +141,7 @@ fn unclosed_region_extends_to_end_of_file() {
 local a = 1
 local b = 2";
     let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
-    assert!(diags.iter().all(|diag| diag.rule != "unused_variable"));
+    assert!(diags.iter().all(|diag| diag.code != "unused_variable"));
 }
 
 #[test]
@@ -153,10 +154,10 @@ local b = 2
 local c = 3";
     let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
     assert!(
-        diags.iter().all(|diag| !(diag.rule == "unused_variable" && diag.message.contains("`a`")))
+        diags.iter().all(|diag| !(diag.code == "unused_variable" && diag.message.contains("`a`")))
     );
     assert!(
-        diags.iter().any(|diag| diag.rule == "unused_variable" && diag.message.contains("`c`"))
+        diags.iter().any(|diag| diag.code == "unused_variable" && diag.message.contains("`c`"))
     );
 }
 
@@ -168,7 +169,7 @@ local _x = 1";
     let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
     let invalid = diags
         .iter()
-        .find(|diag| diag.rule == "invalid_lint_filter")
+        .find(|diag| diag.code == "invalid_lint_filter")
         .unwrap_or_else(|| panic!("diags: {diags:?}"));
     assert!(invalid.message.contains("unused_variable"));
 }
@@ -179,7 +180,7 @@ fn invalid_lint_filter_silent_on_known() {
 -- luck: allow(unused_variable)
 local _x = 1";
     let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
-    assert!(diags.iter().all(|diag| diag.rule != "invalid_lint_filter"));
+    assert!(diags.iter().all(|diag| diag.code != "invalid_lint_filter"));
 }
 
 #[test]
@@ -192,9 +193,9 @@ my_global = 1";
     assert!(
         diags
             .iter()
-            .all(|diag| !(diag.rule == "unused_variable" && diag.message.contains("unused")))
+            .all(|diag| !(diag.code == "unused_variable" && diag.message.contains("unused")))
     );
-    assert!(diags.iter().any(|diag| diag.rule == "setting_global"));
+    assert!(diags.iter().any(|diag| diag.code == "setting_global"));
 }
 
 #[test]
@@ -207,7 +208,7 @@ local unused = 1",
         &LintConfig::default(),
     );
     assert!(
-        diags.iter().all(|diag| diag.rule != "unused_variable"),
+        diags.iter().all(|diag| diag.code != "unused_variable"),
         "a leveled block comment should work like `--[[`: {diags:?}"
     );
 }
@@ -228,7 +229,7 @@ return f, g";
     let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
     let shadowing: Vec<(&str, Severity)> = diags
         .iter()
-        .filter(|diag| diag.rule == "shadowing")
+        .filter(|diag| diag.code == "shadowing")
         .map(|diag| (&*diag.message, diag.severity))
         .collect();
     assert_eq!(shadowing.len(), 1, "{diags:?}");
@@ -248,7 +249,7 @@ end
 print(a)";
     let diags = lint(source, LuaTarget::Lua54, &LintConfig::default());
     assert!(
-        diags.iter().any(|diag| diag.rule == "shadowing" && diag.severity == Severity::Warning),
+        diags.iter().any(|diag| diag.code == "shadowing" && diag.severity == Severity::Warning),
         "{diags:?}"
     );
 }
@@ -289,25 +290,25 @@ local   _x = 1
 }
 
 #[test]
-fn parse_error_is_no_rule_a_directive_can_name() {
+fn the_parse_error_code_is_no_rule_a_directive_can_name() {
     let diags = lint(
         "\
--- #luck: allow(parse_error)
+-- #luck: allow(E008)
 local _x = 1",
         LuaTarget::Lua54,
         &LintConfig::default(),
     );
-    let rules: Vec<&str> = diags.iter().map(|diag| diag.rule).collect();
+    let rules: Vec<&str> = diags.iter().map(|diag| diag.code).collect();
     assert_eq!(rules, ["invalid_lint_filter"], "{diags:?}");
     let broken = lint(
         "\
--- #luck: allow(parse_error)
+-- #luck: allow(E008)
 local x =",
         LuaTarget::Lua54,
         &LintConfig::default(),
     );
-    let broken_rules: Vec<&str> = broken.iter().map(|diag| diag.rule).collect();
-    assert_eq!(broken_rules, ["parse_error"], "{broken:?}");
+    let broken_rules: Vec<&str> = broken.iter().map(|diag| diag.code).collect();
+    assert_eq!(broken_rules, ["E008"], "{broken:?}");
 }
 
 #[test]
@@ -333,7 +334,7 @@ local a = 1
 print(a)
 "
     );
-    assert_eq!(fixed.diags, []);
+    assert_eq!(fixed.messages, []);
 }
 
 #[test]
@@ -368,7 +369,7 @@ fn allow_after_cr_only_line_break_covers_next_stmt() {
     );
     let messages: Vec<&str> = diags
         .iter()
-        .filter(|diag| diag.rule == "unused_variable")
+        .filter(|diag| diag.code == "unused_variable")
         .map(|diag| &*diag.message)
         .collect();
     assert_eq!(

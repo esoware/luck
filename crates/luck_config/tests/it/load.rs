@@ -5,7 +5,7 @@ use std::path::Path;
 use luck_config::{Project, find_config};
 use tempfile::TempDir;
 
-use crate::common::{finishes_within, in_directory, project_with};
+use crate::common::{finishes_within, in_directory, load_error, project_with};
 
 #[test]
 fn root_config_rejects_an_escape_through_a_transitive_extends() {
@@ -14,9 +14,8 @@ fn root_config_rejects_an_escape_through_a_transitive_extends() {
         ("project/base.json", r#"{ "extends": ["../outside.json"] }"#),
         ("project/luck.json", r#"{ "root": true, "extends": ["base.json"] }"#),
     ]);
-    let diag = Project::load(&project.path().join("project/luck.json"))
-        .expect_err("a chain leaving a `root` config's directory must be rejected");
-    assert!(diag.file_path.ends_with("base.json"), "{diag:?}");
+    let (path, diag) = load_error(&project.path().join("project/luck.json"));
+    assert!(path.ends_with("base.json"), "{path:?}");
     assert!(diag.message.contains("outside"), "{diag:?}");
 }
 
@@ -26,19 +25,19 @@ fn parse_error_in_an_extended_file_names_that_file() {
         ("base.json", "{ broken"),
         ("luck.json", r#"{ "extends": ["base.json"] }"#),
     ]);
-    let diag = Project::load(&project.path().join("luck.json"))
-        .expect_err("a malformed parent must fail to load");
+    let (path, diag) = load_error(&project.path().join("luck.json"));
     assert!(
-        diag.file_path.ends_with("base.json"),
-        "the error must name the file that failed to parse, not `luck.json`: {diag:?}"
+        path.ends_with("base.json"),
+        "the error must name the file that failed to parse, not `luck.json`: {path:?} {diag:?}"
     );
 }
 
 #[test]
 fn a_config_that_cannot_be_read_is_e010() {
     let project = project_with(&[]);
-    let diag = Project::load(&project.path().join("luck.json")).unwrap_err();
+    let (_, diag) = load_error(&project.path().join("luck.json"));
     assert_eq!(diag.code, "E010");
+    assert_eq!(diag.span, None, "a file that can't be read has no place to point at");
 }
 
 #[test]
@@ -72,10 +71,10 @@ fn long_extends_chain_does_not_overflow_the_stack() {
         };
         fs::write(project.path().join(format!("layer{layer}.json")), body).expect("write layer");
     }
-    if let Err(diag) = Project::load(&project.path().join("layer0.json")) {
+    if let Err(error) = Project::load(&project.path().join("layer0.json")) {
         assert!(
-            diag.message.contains("extends"),
-            "a chain that is too long must be reported as an `extends` error: {diag:?}"
+            error.diags.iter().all(|diag| diag.message.contains("extends")),
+            "a chain that is too long must be reported as an `extends` error: {error:?}"
         );
     }
 }

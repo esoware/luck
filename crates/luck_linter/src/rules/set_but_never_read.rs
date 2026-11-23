@@ -1,3 +1,4 @@
+use luck_diagnostics::Tag;
 use luck_semantic::SymbolKind;
 
 use crate::diagnostic::Finding;
@@ -56,6 +57,7 @@ impl WholeRule for SetButNeverRead {
                     format!("value assigned to `{name}` is never read"),
                     symbol.definition_span,
                 )
+                .with_tag(Tag::Unnecessary)
                 .with_help("remove the assignment or use the value somewhere"),
             );
         }
@@ -69,10 +71,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&SetButNeverRead, source, LuaVersion::Lua54)
     }
 

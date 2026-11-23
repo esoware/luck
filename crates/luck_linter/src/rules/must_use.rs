@@ -58,7 +58,7 @@ mod tests {
     fn run(source: &str, version: LuaVersion) -> Vec<String> {
         run_rule(&MustUse, source, version)
             .into_iter()
-            .map(|diag| diag.message.into_owned())
+            .map(|diag| diag.message.to_string())
             .collect()
     }
 

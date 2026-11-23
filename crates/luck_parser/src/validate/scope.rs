@@ -12,19 +12,19 @@ use luck_ast::{
     Attribute, AttributedName, Block, Chunk, Expression, FunctionBody, FunctionDecl, GenericFor,
     GetSpan as _, Name, NumericFor, RepeatLoop, Statement, Type, TypeDeclarationValue, Var, Visit,
 };
+use luck_diagnostics::Diagnostic;
 use luck_token::{LuaVersion, Span};
 
 use super::continue_until::skipped_local_count;
 use super::gotos::{BlockStart, FunctionGotos, GotoTracker};
-use crate::ParseError;
 
-pub(super) fn check(chunk: &Chunk<'_>) -> Vec<ParseError> {
+pub(super) fn check(chunk: &Chunk<'_>) -> Vec<Diagnostic> {
     ScopeChecker::run(chunk, false)
 }
 
 /// Report type functions that reference an outer local, a check Luau's parser
 /// makes as it reads the body. `parse` runs this because it tracks no locals.
-pub(crate) fn check_type_functions(chunk: &Chunk<'_>) -> Vec<ParseError> {
+pub(crate) fn check_type_functions(chunk: &Chunk<'_>) -> Vec<Diagnostic> {
     ScopeChecker::run(chunk, true)
 }
 
@@ -56,7 +56,7 @@ struct ScopeChecker<'ast> {
     type_function_base: usize,
     has_skipped_locals: bool,
     gotos: GotoTracker<'ast>,
-    errors: Vec<ParseError>,
+    errors: Vec<Diagnostic>,
 }
 
 fn is_readonly_attribute(attribute: &Attribute<'_>) -> bool {
@@ -64,7 +64,7 @@ fn is_readonly_attribute(attribute: &Attribute<'_>) -> bool {
 }
 
 impl<'ast> ScopeChecker<'ast> {
-    fn run(chunk: &'ast Chunk<'ast>, is_type_function_pass: bool) -> Vec<ParseError> {
+    fn run(chunk: &'ast Chunk<'ast>, is_type_function_pass: bool) -> Vec<Diagnostic> {
         let version = chunk.version;
         let mut checker = Self {
             version,
@@ -145,36 +145,31 @@ impl<'ast> ScopeChecker<'ast> {
         let index = match self.resolve(name.as_str()) {
             Resolved::ImplicitGlobal => return,
             Resolved::Undeclared => {
-                self.errors.push(ParseError {
-                    span: token.span,
-                    message: format!("variable `{name}` not declared"),
-                });
+                self.errors
+                    .push(Diagnostic::e008(token.span, format!("variable `{name}` not declared")));
                 return;
             }
             Resolved::Binding(index) => index,
         };
         if index < self.type_function_base {
-            self.errors.push(ParseError {
-                span: token.span,
-                message: format!("type function cannot reference outer local `{name}`"),
-            });
+            self.errors.push(Diagnostic::e008(
+                token.span,
+                format!("type function cannot reference outer local `{name}`"),
+            ));
         }
         let Some(binding) = self.bindings.get_mut(index) else {
             return;
         };
         if let Some(condition_span) = binding.skipped_until.take() {
-            self.errors.push(ParseError {
-                span: condition_span,
-                message: format!(
+            self.errors.push(Diagnostic::e008(condition_span, format!(
                     "local `{name}` used in the `until` condition is declared after a `continue` statement"
-                ),
-            });
+                )));
         }
         if is_write && binding.is_readonly && !self.is_type_function_pass {
-            self.errors.push(ParseError {
-                span: token.span,
-                message: format!("attempt to assign to const variable `{name}`"),
-            });
+            self.errors.push(Diagnostic::e008(
+                token.span,
+                format!("attempt to assign to const variable `{name}`"),
+            ));
         }
     }
 

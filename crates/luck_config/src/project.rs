@@ -4,11 +4,12 @@ use std::path::{Path, PathBuf};
 
 use globset::{Candidate, GlobSet};
 use luck_bundler::{BundleOptions, DynamicRequire};
-use luck_core::{Diagnostic, LuaTarget};
+use luck_core::LuaTarget;
+use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
 use luck_minifier::TransformConfig;
-use luck_token::{LuaVersion, Span};
+use luck_token::LuaVersion;
 
 use crate::build::{BuildConfig, BuildKeys};
 use crate::config::{Entries, LuckConfig, OverrideConfig};
@@ -16,7 +17,7 @@ use crate::editorconfig::Editorconfigs;
 use crate::filter::ProjectFilter;
 use crate::format_config::FormatConfig;
 use crate::glob::compiled;
-use crate::load::{self, Loaded, config_directory, display};
+use crate::load::{self, Loaded, config_directory, in_file};
 use crate::path::canonicalize_existing;
 
 /// A `luck.json` loaded through its `extends` chain and validated, or the
@@ -52,12 +53,11 @@ impl Project {
     /// # Errors
     ///
     /// Returns E010 when `config_path` can't be read, and E014 when it or a
-    /// file it extends isn't a valid config, each placed where the problem
-    /// is.
-    pub fn load(config_path: &Path) -> Result<Self, Diagnostic> {
+    /// file it extends isn't a valid config, each in the file at fault and
+    /// placed where the problem is.
+    pub fn load(config_path: &Path) -> Result<Self, FileDiagnostics> {
         let Loaded { config, files } = load::load(config_path)?;
-        let invalid =
-            |problem: &str| Diagnostic::e014(&display(config_path), Span::default(), problem);
+        let invalid = |problem: &str| in_file(config_path, Diagnostic::e014(None, problem));
         #[expect(
             clippy::unneeded_field_pattern,
             reason = "every key is named, so one `luck.json` gains can't go unread here"

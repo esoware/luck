@@ -367,7 +367,7 @@ impl Server {
                 let Some(lints) = document.lints(&session) else {
                     return;
                 };
-                diagnostics::to_lsp(document.state(&session), lints)
+                diagnostics::to_lsp(&uri, document.state(&session), lints)
             };
             session.send(Task::Publish { uri, document, diags });
         });

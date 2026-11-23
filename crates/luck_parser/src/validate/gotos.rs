@@ -9,10 +9,9 @@
 use core::mem;
 
 use luck_ast::{GotoStatement, LabelStatement};
+use luck_diagnostics::Diagnostic;
 use luck_token::{LuaVersion, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
-
-use crate::ParseError;
 
 struct PendingGoto {
     span: Span,
@@ -57,7 +56,7 @@ pub(super) struct FunctionGotos<'ast> {
 pub(super) struct GotoTracker<'ast> {
     version: LuaVersion,
     function: FunctionGotos<'ast>,
-    errors: Vec<ParseError>,
+    errors: Vec<Diagnostic>,
 }
 
 impl<'ast> GotoTracker<'ast> {
@@ -114,17 +113,15 @@ impl<'ast> GotoTracker<'ast> {
             function.visible_labels.contains_key(name.as_str())
         };
         if is_defined {
-            self.errors.push(ParseError {
-                span: label.span,
-                message: format!("label `{name}` already defined"),
-            });
+            self.errors
+                .push(Diagnostic::e008(label.span, format!("label `{name}` already defined")));
         }
         for goto in block.pending_gotos.remove(name.as_str()).unwrap_or_default() {
             if goto.active_vars < active_vars {
-                self.errors.push(ParseError {
-                    span: goto.span,
-                    message: format!("`goto {name}` jumps into the scope of a local"),
-                });
+                self.errors.push(Diagnostic::e008(
+                    goto.span,
+                    format!("`goto {name}` jumps into the scope of a local"),
+                ));
             }
         }
         if block.labels.insert(name.as_str()) {
@@ -154,7 +151,7 @@ impl<'ast> GotoTracker<'ast> {
         mem::take(&mut self.function)
     }
 
-    pub(super) fn into_errors(self) -> Vec<ParseError> {
+    pub(super) fn into_errors(self) -> Vec<Diagnostic> {
         self.errors
     }
 
@@ -170,10 +167,8 @@ impl<'ast> GotoTracker<'ast> {
             .collect();
         unresolved.sort_unstable_by_key(|(span, _)| span.start);
         for (span, name) in unresolved {
-            self.errors.push(ParseError {
-                span,
-                message: format!("no visible label `{name}` for `goto`"),
-            });
+            self.errors
+                .push(Diagnostic::e008(span, format!("no visible label `{name}` for `goto`")));
         }
     }
 }

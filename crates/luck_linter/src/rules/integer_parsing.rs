@@ -75,10 +75,10 @@ fn check_number(literal: &NumberLiteral<'_>, version: LuaVersion) -> Option<Find
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
+    fn run(source: &str, version: LuaVersion) -> Vec<Message> {
         run_rule(&IntegerParsing, source, version)
     }
 

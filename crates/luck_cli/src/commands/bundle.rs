@@ -11,7 +11,7 @@ use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::write_output;
 use crate::project::{bundle_arenas, bundle_options, existing_file, one_shot_project};
-use crate::render::print_diags;
+use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -72,7 +72,7 @@ impl BundleArgs {
                 .map_err(|errors| fail_with_diags(&errors, version))?;
             check_output_paths(&minified.source_files, self.output.iter()).map_err(usage_error)?;
             if verbosity != Verbosity::Quiet {
-                print_diags(&minified.warnings, version);
+                print_files(&minified.warnings, version);
             }
             return write_output(self.output.as_deref(), &minified.output);
         }
@@ -84,7 +84,7 @@ impl BundleArgs {
             .map_err(usage_error)?;
 
         if verbosity != Verbosity::Quiet {
-            print_diags(&result.warnings, version);
+            print_files(&result.warnings, version);
         }
 
         if let Some(map_path) = self.line_map.as_deref() {

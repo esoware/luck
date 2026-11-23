@@ -6,8 +6,7 @@ use luck_ast::{
     LocalAssignmentKind, LocalFunction, LocalFunctionKind, MAX_NESTING_DEPTH, Name, OneOrMore,
     Statement, Suffix, SuffixedExpression, Var, VisitMut, spans_past_nesting_cap,
 };
-use luck_core::Diagnostic;
-use luck_resolver::to_slash_lossy;
+use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_token::{LuaNumber, LuaVersion, Span, chunk_header};
 
 use crate::emitter::{self, HOLE, Key, Plan, Wrapper};
@@ -31,7 +30,7 @@ pub(crate) fn emit_chunk<'ast>(
     allocator: &'ast Allocator,
     mut graph: DependencyGraph<'ast>,
     version: LuaVersion,
-) -> Result<(Chunk<'ast>, String), Vec<Diagnostic>> {
+) -> Result<(Chunk<'ast>, String), Vec<FileDiagnostics>> {
     let Some(entry) = graph.modules.get(graph.entry_id.0) else {
         let empty = Block::new(Span::default(), List::new());
         return Ok((Chunk::new(version, empty), String::new()));
@@ -165,18 +164,18 @@ pub(crate) fn rewrite_module<'ast>(
 }
 
 /// An E013 for each construct `block`, `module`'s rewritten tree, nests past
-/// [`MAX_NESTING_DEPTH`] in `wrapper`.
+/// [`MAX_NESTING_DEPTH`] in `wrapper`, or `None` when none does.
 pub(crate) fn overflow_errors(
     block: &Block<'_>,
     module: &ModuleInfo<'_>,
     wrapper: Wrapper,
-) -> Vec<Diagnostic> {
+) -> Option<FileDiagnostics> {
     let levels = wrapper.levels();
-    let file_path = to_slash_lossy(&module.path);
-    spans_past_nesting_cap(block, levels)
+    let diags: Vec<Diagnostic> = spans_past_nesting_cap(block, levels)
         .into_iter()
-        .map(|span| Diagnostic::e013(&file_path, span, levels, MAX_NESTING_DEPTH))
-        .collect()
+        .map(|span| Diagnostic::e013(span, levels, MAX_NESTING_DEPTH))
+        .collect();
+    (!diags.is_empty()).then(|| FileDiagnostics { path: module.path.clone(), diags })
 }
 
 struct ModuleRewriter<'module, 'ast> {

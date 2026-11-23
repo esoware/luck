@@ -60,12 +60,14 @@ fn check_params(function: FunctionNode<'_>, findings: &mut Vec<Finding>) {
         if name == "_" {
             continue;
         }
-        let is_repeat = params.iter().take(i).any(|earlier| earlier.name.text == name);
-        if is_repeat || (function.is_method && name == "self") {
-            findings.push(Finding::new(
-                format!("parameter `{name}` is already defined"),
-                param_name.span,
-            ));
+        let first = params.iter().take(i).find(|earlier| earlier.name.text == name);
+        if first.is_some() || (function.is_method && name == "self") {
+            let finding =
+                Finding::new(format!("parameter `{name}` is already defined"), param_name.span);
+            findings.push(match first {
+                Some(earlier) => finding.with_label(earlier.name.span, "first defined here"),
+                None => finding.with_help("a method declared with `:` already has `self`"),
+            });
         }
     }
 }
@@ -75,10 +77,10 @@ mod tests {
     use luck_token::{LuaVersion, offset_to_index};
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&DuplicateParameter, source, LuaVersion::Lua54)
     }
 
@@ -89,7 +91,7 @@ mod tests {
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`a`"));
         // The second occurrence is the one flagged.
-        assert_eq!(offset_to_index(diags[0].span.start), source.rfind('a').unwrap());
+        assert_eq!(offset_to_index(diags[0].span().start), source.rfind('a').unwrap());
     }
 
     #[test]

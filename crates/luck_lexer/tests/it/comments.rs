@@ -1,6 +1,7 @@
+use luck_diagnostics::Diagnostic;
 use luck_lexer::lex;
 use luck_token::{
-    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, SourceError, Span, TokenKind,
+    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, TokenKind,
 };
 
 use crate::common::lex_lua51;
@@ -34,7 +35,7 @@ x --[[ block
 #[test]
 fn block_comment_closes_at_its_own_level() {
     let result = lex_lua51("x --[=[ block ]] ]=]");
-    assert_eq!(result.errors, Vec::<SourceError>::new());
+    assert_eq!(result.errors, Vec::<Diagnostic>::new());
     assert_eq!(result.comments.len(), 1);
     assert_eq!(result.comments[0].kind, CommentKind::SingleLineBlock);
     assert_eq!(result.comments[0].span, Span::new(2, 20));
@@ -67,7 +68,7 @@ y = 2
         };
         assert_eq!(
             result.errors,
-            [SourceError { span, message: "unterminated block comment".to_owned() }],
+            [Diagnostic::e008(span, "unterminated block comment")],
             "{source:?}"
         );
         assert_eq!(

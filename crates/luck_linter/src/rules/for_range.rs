@@ -172,10 +172,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&ForRange, source, LuaVersion::Lua54)
     }
 

@@ -2,22 +2,22 @@ use core::fmt::Write as _;
 use core::ops::Range;
 
 use luck_allocator::Allocator;
-use luck_parser::ParseError;
+use luck_diagnostics::Diagnostic;
 use luck_token::LuaVersion;
 
 /// Parse errors, or validation errors after a clean parse, as `luck check`
 /// reports them.
-fn check(source: &str, version: LuaVersion) -> Vec<ParseError> {
+fn check(source: &str, version: LuaVersion) -> Vec<Diagnostic> {
     let allocator = Allocator::new();
     let result = luck_parser::parse(&allocator, source, version);
     if result.errors.is_empty() { luck_parser::validate(&result.chunk) } else { result.errors }
 }
 
-fn assert_no_errors(errors: &[ParseError]) {
+fn assert_no_errors(errors: &[Diagnostic]) {
     assert!(errors.is_empty(), "unexpected: {errors:?}");
 }
 
-fn assert_has_errors(errors: &[ParseError], description: &str) {
+fn assert_has_errors(errors: &[Diagnostic], description: &str) {
     assert!(!errors.is_empty(), "expected errors for {description}, got none");
 }
 
@@ -139,7 +139,7 @@ value = 2"
             assert_eq!(errors.len(), 1, "{version:?} {source}: {errors:?}");
             assert_eq!(errors[0].message, "attempt to assign to const variable `value`");
             assert_eq!(
-                Range::<usize>::from(errors[0].span).start,
+                Range::<usize>::from(errors[0].span.unwrap()).start,
                 source.rfind("value = 2").expect("final assignment")
             );
         }
@@ -174,7 +174,7 @@ local x <const> = 1
 x = function() x = 2 goto inner end";
     let errors = check(source, LuaVersion::Lua54);
     let found: Vec<(usize, &str)> =
-        errors.iter().map(|e| (Range::<usize>::from(e.span).start, e.message.as_str())).collect();
+        errors.iter().map(|e| (Range::<usize>::from(e.span.unwrap()).start, &*e.message)).collect();
     let outer_write = source.find("x = function").expect("outer write");
     let inner_write = source.find("x = 2").expect("inner write");
     let inner_goto = source.find("goto inner").expect("inner goto");
@@ -477,7 +477,7 @@ do local x = 1 goto late end local y = 2 ::late:: print(y)
 goto late2 local z = 3 ::late2:: print(z)";
     let messages: Vec<(usize, String)> = check(source, LuaVersion::Lua54)
         .into_iter()
-        .map(|error| (error.span.start.try_into().unwrap(), error.message))
+        .map(|error| (error.span.unwrap().start.try_into().unwrap(), error.message.to_string()))
         .collect();
     let at = |needle: &str| source.find(needle).expect("the source holds the statement");
     let unresolved = |name: &str| format!("no visible label `{name}` for `goto`");

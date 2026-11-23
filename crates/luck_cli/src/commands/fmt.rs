@@ -13,7 +13,7 @@ use luck_token::LuaVersion;
 use crate::exit::{Exit, usage_error};
 use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
 use crate::project::{ProjectFile, for_each_outcome_in_order, one_shot_project, project_files};
-use crate::render::render_source_errors;
+use crate::reporter::{DefaultReporter, Reporter as _, SourceFile};
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -312,12 +312,11 @@ fn format_document(
 ) -> FormatOutcome {
     let parse = luck_parser::parse(allocator, source, version);
     if !parse.errors.is_empty() {
-        return FormatOutcome::Failed(render_source_errors(
-            file_path.to_string_lossy().into_owned(),
-            source,
-            &parse.errors,
-            version,
-        ));
+        let mut rendered = Vec::new();
+        let label = file_path.to_string_lossy();
+        let file = SourceFile { label: &label, text: Some(source), version };
+        DefaultReporter.render(file, &parse.errors, &mut rendered);
+        return FormatOutcome::Failed(rendered);
     }
     let result = range.map_or_else(
         || luck_formatter::format_parsed(allocator, &parse, options),

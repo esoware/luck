@@ -15,7 +15,7 @@ use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_testgen::{deep_and_long_sources, on_the_smallest_stack};
 use tempfile::TempDir;
 
-use crate::common::bundle_both;
+use crate::common::{bundle_both, codes};
 
 #[test]
 fn bundling_fits_the_smallest_stack() {
@@ -44,7 +44,7 @@ print(m)
         };
         // A module nested to the cap passes it inside its wrapper.
         if let Err(errors) = bundle_both(&entry, &options) {
-            assert!(errors.iter().all(|error| error.code == "E013"), "{errors:?}");
+            assert!(codes(&errors).iter().all(|&code| code == "E013"), "{errors:?}");
         }
     });
 }

@@ -1,6 +1,7 @@
 use luck_allocator::Allocator;
 use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
-use luck_token::{CommentKind, LuaVersion, SourceError, chunk_header, leading_hot_comments};
+use luck_diagnostics::Diagnostic;
+use luck_token::{CommentKind, LuaVersion, chunk_header, leading_hot_comments};
 
 use crate::bind::bind;
 use crate::binding::Bindings;
@@ -14,13 +15,13 @@ use crate::transform_config::TransformConfig;
 ///
 /// # Errors
 ///
-/// Returns the parse errors when `source` doesn't parse.
+/// Returns the parse errors, each an E008, when `source` doesn't parse.
 pub fn minify<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,
     version: LuaVersion,
     config: &TransformConfig,
-) -> Result<String, Vec<SourceError>> {
+) -> Result<String, Vec<Diagnostic>> {
     let mut result = luck_parser::parse(allocator, source, version);
     if !result.errors.is_empty() {
         return Err(result.errors);
@@ -55,27 +56,25 @@ pub fn minify<'ast>(
 ///
 /// # Errors
 ///
-/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
+/// Returns an E008 for a tree nested deeper than [`MAX_NESTING_DEPTH`],
 /// which `luck_parser` never builds, and leaves the tree as it was but for
 /// its names' indexes.
 pub fn minify_chunk<'ast>(
     allocator: &'ast Allocator,
     chunk: &mut Chunk<'ast>,
     config: &TransformConfig,
-) -> Result<String, SourceError> {
+) -> Result<String, Diagnostic> {
     if !minify_tree(allocator, chunk, config, true) {
         return Err(nesting_error(chunk));
     }
     Ok(luck_codegen::compact(chunk))
 }
 
-fn nesting_error(chunk: &Chunk<'_>) -> SourceError {
-    SourceError {
-        span: chunk.block.span,
-        message: format!(
-            "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
-        ),
-    }
+fn nesting_error(chunk: &Chunk<'_>) -> Diagnostic {
+    Diagnostic::e008(
+        chunk.block.span,
+        format!("maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"),
+    )
 }
 
 /// Binds the tree once, compresses it to its fixpoint, and names its locals

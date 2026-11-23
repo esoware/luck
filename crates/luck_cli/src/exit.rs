@@ -2,10 +2,10 @@ use core::fmt::Display;
 use core::slice;
 use std::process::ExitCode;
 
-use luck_core::Diagnostic;
-use luck_token::{LuaVersion, SourceError};
+use luck_diagnostics::{Diagnostic, FileDiagnostics};
+use luck_token::LuaVersion;
 
-use crate::render::{print_diags, print_source_errors};
+use crate::reporter::{print_document, print_files};
 
 /// How a command failed, once it has reported why. A command that ran and
 /// found no problems returns `Ok` and exits 0.
@@ -42,26 +42,26 @@ pub(crate) fn operation_error(message: impl Display) -> Exit {
     report_error(message, Exit::Failure)
 }
 
-pub(crate) fn fail_with_diags(diags: &[Diagnostic], version: LuaVersion) -> Exit {
-    print_diags(diags, version);
+pub(crate) fn fail_with_diags(files: &[FileDiagnostics], version: LuaVersion) -> Exit {
+    print_files(files, version);
     Exit::Failure
 }
 
 /// A `luck.json` that doesn't load is a usage error.
-pub(crate) fn config_error(diag: &Diagnostic) -> Exit {
+pub(crate) fn config_error(file: &FileDiagnostics) -> Exit {
     // Lua 5.4 ends a line where JSON5 does, but at the rare LS and PS.
-    print_diags(slice::from_ref(diag), LuaVersion::Lua54);
+    print_files(slice::from_ref(file), LuaVersion::Lua54);
     Exit::Usage
 }
 
 /// `source` is a document that isn't on disk, such as a bundle being minified
-/// or stdin.
-pub(crate) fn fail_with_source_errors(
-    path: String,
+/// or stdin, which `label` names.
+pub(crate) fn fail_with_document_errors(
+    label: &str,
     source: &str,
-    errors: &[SourceError],
+    errors: &[Diagnostic],
     version: LuaVersion,
 ) -> Exit {
-    print_source_errors(path, source, errors, version);
+    print_document(label, source, errors, version);
     Exit::Failure
 }

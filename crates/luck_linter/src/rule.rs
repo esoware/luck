@@ -3,12 +3,13 @@ use std::sync::OnceLock;
 use luck_ast::{
     Block, Call, Expression, GetSpan as _, Statement, SuffixedExpression, TableConstructor,
 };
+use luck_diagnostics::Severity;
 use luck_parser::{Groupings, ParseResult};
 use luck_semantic::{ResolvedCallee, SemanticAnalysis};
 use luck_token::{Comment, LineIndex, Span};
 
 use crate::config::LintConfig;
-use crate::diagnostic::{Category, Finding, Severity};
+use crate::diagnostic::{Category, Finding};
 use crate::directives::Directives;
 use crate::driver::Analysis;
 use crate::fix::FixKind;
@@ -100,6 +101,10 @@ pub trait Rule: Send + Sync {
     /// The kinds the rule's fixes come in, empty when it offers none. Some
     /// of its diagnostics may still have no fix.
     fn fix_kind(&self) -> FixKind;
+
+    /// The rule's source on GitHub, at the release this linter is, where its
+    /// doc comment and its `flags_` and `ignores_` tests document it.
+    fn docs_url(&self) -> &'static str;
 }
 
 /// The last argument, when there is one, lists the kinds the rule's fixes
@@ -120,14 +125,24 @@ macro_rules! impl_rule {
             fn category(&self) -> $crate::diagnostic::Category {
                 $crate::diagnostic::Category::$category
             }
-            fn default_severity(&self) -> $crate::diagnostic::Severity {
-                $crate::diagnostic::Severity::$severity
+            fn default_severity(&self) -> luck_diagnostics::Severity {
+                luck_diagnostics::Severity::$severity
             }
             fn description(&self) -> &'static str {
                 $description
             }
             fn fix_kind(&self) -> $crate::fix::FixKind {
                 $crate::fix::FixKind::empty() $($(.union($crate::fix::FixKind::$fix_kind))+)?
+            }
+            fn docs_url(&self) -> &'static str {
+                concat!(
+                    env!("CARGO_PKG_REPOSITORY"),
+                    "/blob/v",
+                    env!("CARGO_PKG_VERSION"),
+                    "/crates/luck_linter/src/rules/",
+                    $name,
+                    ".rs",
+                )
             }
         }
     };

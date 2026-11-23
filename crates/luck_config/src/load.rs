@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{self, Path, PathBuf};
 
 use json5::char::{is_json5_identifier, is_json5_line_terminator};
-use luck_core::Diagnostic;
+use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::Span;
 use rustc_hash::FxHashMap;
@@ -49,11 +49,12 @@ pub(crate) struct Loaded {
 /// # Errors
 ///
 /// Returns E010 when `config_path` can't be read, and E014 when a file in
-/// the chain isn't a valid config or names a file it can't extend.
-pub(crate) fn load(config_path: &Path) -> Result<Loaded, Diagnostic> {
-    let canonical = config_path
-        .canonicalize()
-        .map_err(|e| Diagnostic::e010(&display(config_path), Span::default(), &e.to_string()))?;
+/// the chain isn't a valid config or names a file it can't extend, in the
+/// file at fault.
+pub(crate) fn load(config_path: &Path) -> Result<Loaded, FileDiagnostics> {
+    let canonical = config_path.canonicalize().map_err(|e| {
+        in_file(config_path, Diagnostic::e010(&display(config_path), &e.to_string()))
+    })?;
     let mut walk = ExtendsWalk::default();
     let config = walk.layer(config_path, canonical, None, 0)?;
     Ok(Loaded { config, files: walk.files })
@@ -83,28 +84,28 @@ impl ExtendsWalk {
         canonical: PathBuf,
         root_boundary: Option<&Path>,
         depth: usize,
-    ) -> Result<LuckConfig, Diagnostic> {
+    ) -> Result<LuckConfig, FileDiagnostics> {
         let finished_key = (canonical.clone(), root_boundary.map(Path::to_path_buf));
         if let Some(finished) = self.finished.get(&finished_key) {
             return Ok(finished.clone());
         }
         let text = fs::read_to_string(path)
-            .map_err(|e| Diagnostic::e010(&display(path), Span::default(), &e.to_string()))?;
+            .map_err(|e| in_file(path, Diagnostic::e010(&display(path), &e.to_string())))?;
         if !self.files.contains(&canonical) {
             self.files.push(canonical.clone());
         }
-        let config = parse(&text, path)?;
+        let config = parse(&text).map_err(|diag| in_file(path, diag))?;
         let directory = config_directory(path);
         let own_boundary = if config.root == Some(true) {
             Some(directory.canonicalize().map_err(|e| {
-                Diagnostic::e010(&display(&directory), Span::default(), &e.to_string())
+                in_file(path, Diagnostic::e010(&display(&directory), &e.to_string()))
             })?)
         } else {
             None
         };
         let boundary = own_boundary.as_deref().or(root_boundary);
         let extends_error = |name: &str, problem: String| {
-            Diagnostic::e014(&display(path), text_span(&text, name), &problem)
+            in_file(path, Diagnostic::e014(Some(text_span(&text, name)), &problem))
         };
         self.chain.push(canonical);
         let mut merged = LuckConfig::default();
@@ -152,17 +153,17 @@ impl ExtendsWalk {
 ///
 /// Returns E014, at the place the JSON5 reader stopped, when `text` isn't a
 /// valid config.
-pub(crate) fn parse(text: &str, path: &Path) -> Result<LuckConfig, Diagnostic> {
+pub(crate) fn parse(text: &str) -> Result<LuckConfig, Diagnostic> {
     json5::from_str(text).map_err(|e| {
         let message = e.to_string();
         let (problem, span) = e.position().map_or_else(
-            || (message.as_str(), Span::default()),
+            || (message.as_str(), None),
             |position| {
                 let problem = message.strip_suffix(&format!(" at {position}")).unwrap_or(&message);
-                (problem, token_at(text, offset_of(text, position)))
+                (problem, Some(token_at(text, offset_of(text, position))))
             },
         );
-        Diagnostic::e014(&display(path), span, problem)
+        Diagnostic::e014(span, problem)
     })
 }
 
@@ -226,10 +227,16 @@ fn text_span(text: &str, name: &str) -> Span {
         })
 }
 
-/// The form every diagnostic names its file in.
-pub(crate) fn display(path: &Path) -> String {
+/// The form a message names a file in.
+fn display(path: &Path) -> String {
     let canonical = FileSystemOs.canonicalize(path);
     to_slash_lossy(canonical.as_deref().unwrap_or(path)).into_owned()
+}
+
+/// `diag`, in the file at `path`, which names it canonically when it can.
+pub(crate) fn in_file(path: &Path, diag: Diagnostic) -> FileDiagnostics {
+    let canonical = FileSystemOs.canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    FileDiagnostics { path: canonical, diags: vec![diag] }
 }
 
 #[cfg(test)]
@@ -239,40 +246,40 @@ mod tests {
 
     #[test]
     fn rejects_invalid_json5_at_the_place_it_stops() {
-        let diag = parse("{\n  lua: \"lua54\" \"luau\"\n}", Path::new("luck.json")).unwrap_err();
+        let diag = parse("{\n  lua: \"lua54\" \"luau\"\n}").unwrap_err();
         assert_eq!(diag.code, "E014");
         assert_eq!(diag.message, "invalid config: expected comma");
-        assert_eq!((diag.span.start, diag.span.end), (17, 23));
+        assert_eq!(diag.span, Some(Span::new(17, 23)));
     }
 
     #[test]
     fn places_an_unknown_key_on_the_key() {
         let text = "{\r\n  \"lua\": \"lua54\",\r\n  unknown_key: true\r\n}";
-        let diag = parse(text, Path::new("luck.json")).unwrap_err();
+        let diag = parse(text).unwrap_err();
         assert!(
             diag.message.starts_with("invalid config: unknown field `unknown_key`"),
             "{diag:?}"
         );
-        assert_eq!(diag.span.text(text), "unknown_key");
+        assert_eq!(diag.span.map(|span| span.text(text)), Some("unknown_key"));
     }
 
     #[test]
     fn places_a_bad_value_on_the_value() {
         let text = "{ \"lua\": 'lua99' }";
-        let diag = parse(text, Path::new("luck.json")).unwrap_err();
+        let diag = parse(text).unwrap_err();
         assert!(diag.message.contains("unknown variant `lua99`"), "{diag:?}");
-        assert_eq!(diag.span.text(text), "'lua99'");
+        assert_eq!(diag.span.map(|span| span.text(text)), Some("'lua99'"));
     }
 
     #[test]
     fn places_an_unknown_rule_on_its_name() {
         let text = "{ lint: { rules: { unsued_variable: 'off' } } }";
-        let diag = parse(text, Path::new("luck.json")).unwrap_err();
+        let diag = parse(text).unwrap_err();
         assert_eq!(
             diag.message,
             "invalid config: unknown lint rule `unsued_variable`, did you mean `unused_variable`?"
         );
-        assert_eq!(diag.span.text(text), "unsued_variable");
+        assert_eq!(diag.span.map(|span| span.text(text)), Some("unsued_variable"));
     }
 
     #[test]
@@ -285,7 +292,6 @@ mod tests {
             lua: "lua54",
             minify: true, // trailing comma
         }"#,
-            Path::new("luck.json"),
         )
         .expect("JSON5 features should parse");
         assert_eq!(config.minify, Some(true));
@@ -313,10 +319,10 @@ mod tests {
             ("a.json", r#"{ "extends": ["b.json"], "lua": "lua54" }"#),
             ("b.json", r#"{ "extends": ["a.json"] }"#),
         ]);
-        let diag = load(&project.path().join("a.json")).unwrap_err();
-        assert!(diag.file_path.ends_with("b.json"), "{diag:?}");
+        let error = load(&project.path().join("a.json")).unwrap_err();
+        assert!(error.path.ends_with("b.json"), "{error:?}");
         assert_eq!(
-            diag.message,
+            error.diags[0].message,
             "invalid config: `extends` names `a.json`, which extends this file again"
         );
     }
@@ -338,8 +344,8 @@ mod tests {
             ("outside.json", r#"{ "lua": "lua53" }"#),
             ("project/luck.json", r#"{ "root": true, "extends": ["../outside.json"] }"#),
         ]);
-        let diag = load(&project.path().join("project/luck.json")).unwrap_err();
-        assert!(diag.message.contains("which is outside"), "{diag:?}");
+        let error = load(&project.path().join("project/luck.json")).unwrap_err();
+        assert!(error.diags[0].message.contains("which is outside"), "{error:?}");
     }
 
     #[test]
@@ -350,8 +356,8 @@ mod tests {
             ("project/root.json", r#"{ "root": true, "extends": ["shared.json"] }"#),
             ("project/luck.json", r#"{ "extends": ["shared.json", "root.json"] }"#),
         ]);
-        let diag = load(&project.path().join("project/luck.json")).unwrap_err();
-        assert!(diag.message.contains("which is outside"), "{diag:?}");
+        let error = load(&project.path().join("project/luck.json")).unwrap_err();
+        assert!(error.diags[0].message.contains("which is outside"), "{error:?}");
     }
 
     #[test]
@@ -379,9 +385,10 @@ mod tests {
     #[test]
     fn a_missing_extended_file_is_reported_on_the_file_that_names_it() {
         let project = project_with(&[("luck.json", r#"{ "extends": ["gone.json"] }"#)]);
-        let diag = load(&project.path().join("luck.json")).unwrap_err();
-        assert!(diag.file_path.ends_with("luck.json"), "{diag:?}");
+        let error = load(&project.path().join("luck.json")).unwrap_err();
+        assert!(error.path.ends_with("luck.json"), "{error:?}");
+        let diag = &error.diags[0];
         assert!(diag.message.contains("`extends` names `gone.json`, which can't be read"));
-        assert_eq!((diag.span.start, diag.span.end), (14, 25));
+        assert_eq!(diag.span, Some(Span::new(14, 25)));
     }
 }

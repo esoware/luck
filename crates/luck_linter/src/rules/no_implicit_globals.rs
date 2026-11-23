@@ -48,10 +48,10 @@ mod tests {
 
     use super::*;
     use crate::config::LintConfig;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule_with_config;
 
-    fn run(source: &str, extra_globals: &[&str]) -> Vec<LintDiagnostic> {
+    fn run(source: &str, extra_globals: &[&str]) -> Vec<Message> {
         let config = LintConfig {
             extra_globals: extra_globals.iter().map(ToString::to_string).collect(),
             ..LintConfig::default()

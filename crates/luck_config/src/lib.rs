@@ -8,7 +8,7 @@
 //! Everything is checked at load: the JSON5 syntax, every key, the dialects,
 //! the globs, the lint rule names and options, and the build keys that can't
 //! go together. A problem comes back as one E014 [`Diagnostic`] placed where
-//! it is in the file at fault.
+//! it is, in the [`FileDiagnostics`] of the file at fault.
 //!
 //! Each tool derives the `luck.json` shape of its own option types behind its
 //! `serde` feature, which this crate turns on, so `transforms`,
@@ -20,7 +20,8 @@
 //! The VS Code schema is generated from the config types, with the type
 //! names as its `$defs` keys and the doc comments as its descriptions.
 //!
-//! [`Diagnostic`]: luck_core::Diagnostic
+//! [`Diagnostic`]: luck_diagnostics::Diagnostic
+//! [`FileDiagnostics`]: luck_diagnostics::FileDiagnostics
 //!
 //! # Usage
 //!

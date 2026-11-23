@@ -1,9 +1,9 @@
+use luck_diagnostics::Diagnostic;
 use luck_token::{EscapeError, LuaVersion, Span, Token, TokenKind, read_escape};
 use memchr::memmem;
 
 use super::Lexer;
 use crate::cursor::Cursor;
-use crate::lex_error::{LexError, lex_error};
 use crate::search::{ByteMatchTable, byte_match_table, find_match};
 
 // Stop bytes for raw interpolated-string text: escape lead, interpolation
@@ -250,14 +250,14 @@ pub(super) fn advance_past_long_bracket_close(
     start: usize,
     level: usize,
     unterminated: &'static str,
-    errors: &mut Vec<LexError>,
+    errors: &mut Vec<Diagnostic>,
 ) -> bool {
     let body_start = cursor.position();
     loop {
         let rest = cursor.rest();
         let Some(bracket_offset) = memchr::memchr(b']', rest) else {
             cursor.advance_by(rest.len());
-            errors.push(lex_error(cursor.span_since(start), unterminated));
+            errors.push(Diagnostic::e008(cursor.span_since(start), unterminated));
             return false;
         };
         cursor.advance_by(bracket_offset.saturating_add(1));
@@ -270,7 +270,7 @@ pub(super) fn advance_past_long_bracket_close(
                 && let Some(offset) = memmem::find(cursor.text_since(body_start).as_bytes(), b"[[")
             {
                 let nested_open = body_start.saturating_add(offset);
-                errors.push(lex_error(
+                errors.push(Diagnostic::e008(
                     Span::from_indices(nested_open, nested_open.saturating_add(2)),
                     "nesting of `[[...]]` is deprecated",
                 ));

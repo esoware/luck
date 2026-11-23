@@ -5,7 +5,7 @@ use luck_allocator::Allocator;
 use luck_core::LuaTarget;
 use luck_resolver::{FileSystem as _, FileSystemOs};
 
-use crate::exit::{Exit, fail_with_source_errors, operation_error};
+use crate::exit::{Exit, fail_with_document_errors, operation_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::{format_size, read_stdin_source, write_output};
 use crate::project::{existing_file, one_shot_project};
@@ -63,7 +63,7 @@ impl MinifyArgs {
 
         let version = target.lua_version();
         let minified = luck_minifier::minify(&Allocator::new(), &source, version, &transforms)
-            .map_err(|errors| fail_with_source_errors(file_path, &source, &errors, version))?;
+            .map_err(|errors| fail_with_document_errors(&file_path, &source, &errors, version))?;
 
         if self.stats {
             let minified_size = minified.len();

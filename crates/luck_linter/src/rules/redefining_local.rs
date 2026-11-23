@@ -1,5 +1,5 @@
 use luck_ast::{Block, Name, Statement};
-use luck_token::{LineIndex, MAX_ACTIVE_LOCALS, Span};
+use luck_token::{MAX_ACTIVE_LOCALS, Span};
 
 use crate::diagnostic::Finding;
 use crate::rule::{LintContext, WholeRule, impl_rule};
@@ -23,11 +23,7 @@ impl_rule!(
 
 impl WholeRule for RedefiningLocal {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut checker = RedefineChecker {
-            lines: context.line_index(),
-            declarations: Vec::new(),
-            findings: Vec::new(),
-        };
+        let mut checker = RedefineChecker { declarations: Vec::new(), findings: Vec::new() };
         for block in context.nodes.blocks() {
             checker.check_block(block);
         }
@@ -36,7 +32,6 @@ impl WholeRule for RedefiningLocal {
 }
 
 struct RedefineChecker<'ast> {
-    lines: &'ast LineIndex,
     /// Each name the block declares, in order. Every one stays active until
     /// the block ends, so no Lua compiles a block with more than
     /// [`MAX_ACTIVE_LOCALS`], and the rest of one isn't checked.
@@ -88,16 +83,15 @@ impl<'ast> RedefineChecker<'ast> {
         if name.starts_with('_') {
             return;
         }
-        if let Some((_, first_span)) =
+        if let Some(&(_, first_span)) =
             self.declarations.iter().find(|(declared_name, _)| *declared_name == name)
         {
-            let (line, column) = self.lines.line_column(first_span.start);
             self.findings.push(
                 Finding::new(
                     format!("local `{name}` is redeclared in the same block"),
                     declared.span,
                 )
-                .with_help(format!("first declared at {line}:{column}")),
+                .with_label(first_span, "first declared here"),
             );
         }
         self.declarations.push((name, declared.span));
@@ -111,10 +105,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&RedefiningLocal, source, LuaVersion::Lua54)
     }
 
@@ -126,6 +120,7 @@ local x = 2
 print(x) end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`x`"));
+        assert_eq!(diags[0].labels.first().map(|label| label.span.start), Some(9));
     }
 
     #[test]
@@ -182,8 +177,9 @@ local _ = 2");
     fn flags_each_redeclaration_in_a_block_at_the_local_limit() {
         let diags = run(&locals_declared_twice(100));
         assert_eq!(diags.len(), 100, "{diags:?}");
-        assert!(
-            diags[0].help.as_deref().is_some_and(|help| help.ends_with("1:7")),
+        assert_eq!(
+            diags[0].labels.first().map(|label| label.span.start),
+            Some(6),
             "{:?}",
             diags[0]
         );

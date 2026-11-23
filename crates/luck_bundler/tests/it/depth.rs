@@ -9,12 +9,12 @@ use std::path::Path;
 use luck_allocator::Allocator;
 use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_bundler::{BundleOptions, BundleResult, DynamicRequire};
-use luck_core::Diagnostic;
+use luck_diagnostics::FileDiagnostics;
 use luck_testgen::with_the_smallest_stack;
 use luck_token::{LuaVersion, offset_to_index};
 use tempfile::TempDir;
 
-use crate::common::bundle_both;
+use crate::common::{bundle_both, located};
 
 /// `1` inside `count` table constructors.
 fn in_tables(count: usize) -> String {
@@ -37,7 +37,7 @@ fn bundle_project(
     directory: &Path,
     entry: &str,
     version: LuaVersion,
-) -> Result<BundleResult, Vec<Diagnostic>> {
+) -> Result<BundleResult, Vec<FileDiagnostics>> {
     let search_paths = if version.is_luau() { vec![] } else { vec!["?.lua".to_owned()] };
     bundle_both(
         &directory.join(entry),
@@ -57,7 +57,7 @@ fn bundle_files(
     entry: &str,
     files: &[(&str, &str)],
     version: LuaVersion,
-) -> Result<BundleResult, Vec<Diagnostic>> {
+) -> Result<BundleResult, Vec<FileDiagnostics>> {
     bundle_project(write_project(files).path(), entry, version)
 }
 
@@ -142,7 +142,7 @@ return ",
 
 impl Shape {
     /// The deep file's source and the bundle's result.
-    fn bundle(&self, tables: usize) -> (String, Result<BundleResult, Vec<Diagnostic>>) {
+    fn bundle(&self, tables: usize) -> (String, Result<BundleResult, Vec<FileDiagnostics>>) {
         let deep_source = format!("{}{}\n", self.prefix, in_tables(tables));
         let mut files = self.other_files.to_vec();
         files.push((self.deep_file, &deep_source));
@@ -181,15 +181,17 @@ fn flags_e013_at_the_construct_a_wrapper_pushes_past_the_cap() {
             let tables = MAX_NESTING_DEPTH - shape.wrapper_levels;
             let (deep_source, result) = shape.bundle(tables);
             let errors = result.err().unwrap_or_else(|| panic!("{}: must not bundle", shape.name));
-            let [error] = errors.as_slice() else {
+            let located = located(&errors);
+            let [(path, error)] = located.as_slice() else {
                 panic!("{}: expected one error: {errors:?}", shape.name);
             };
             assert_eq!(error.code, "E013", "{}: {error:?}", shape.name);
-            assert!(error.file_path.ends_with(shape.deep_file), "{}: {error:?}", shape.name);
+            assert!(path.ends_with(shape.deep_file), "{}: {error:?}", shape.name);
             // The innermost table is the one past the cap.
             let innermost = shape.prefix.len() + tables - 1;
-            assert_eq!(offset_to_index(error.span.start), innermost, "{}: {error:?}", shape.name);
-            assert_eq!(error.span.text(&deep_source), "{1}", "{}: {error:?}", shape.name);
+            let span = error.span.unwrap_or_default();
+            assert_eq!(offset_to_index(span.start), innermost, "{}: {error:?}", shape.name);
+            assert_eq!(span.text(&deep_source), "{1}", "{}: {error:?}", shape.name);
             let help = error.help.as_deref().unwrap_or_default();
             assert!(
                 help.contains(&format!("{} levels deeper", shape.wrapper_levels)),
@@ -219,10 +221,11 @@ require(\"b\")
         LuaVersion::Lua54,
     )
     .expect_err("neither module fits");
-    let mut files: Vec<&str> = errors
+    let located = located(&errors);
+    let mut files: Vec<&str> = located
         .iter()
-        .filter(|error| error.code == "E013")
-        .filter_map(|error| error.file_path.rsplit('/').next())
+        .filter(|(_, error)| error.code == "E013")
+        .filter_map(|(path, _)| path.rsplit('/').next())
         .collect();
     files.sort_unstable();
     assert_eq!(files, ["a.lua", "b.lua"], "{errors:?}");
@@ -283,11 +286,12 @@ print(x)
     // Lowering reads `value` as a field of the export table, one level deeper.
     let export_read = luau_table_export_module(MAX_NESTING_DEPTH - 3, "value");
     let errors = bundle_export_module(&export_read).expect_err("the lowered read passes the cap");
-    let [error] = errors.as_slice() else {
+    let located = located(&errors);
+    let [(_, error)] = located.as_slice() else {
         panic!("expected one error: {errors:?}");
     };
     assert_eq!(error.code, "E013", "{error:?}");
-    assert_eq!(error.span.text(&export_read), "value", "{error:?}");
+    assert_eq!(error.span.map(|span| span.text(&export_read)), Some("value"), "{error:?}");
 
     let shallower_read = luau_table_export_module(MAX_NESTING_DEPTH - 4, "value");
     bundle_export_module(&shallower_read).expect("one level shallower fits");

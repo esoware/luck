@@ -70,7 +70,7 @@ mod tests {
 
     use super::*;
     use crate::config::{CyclomaticComplexityOptions, LintConfig, RuleLevel, RuleSetting};
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule_with_config;
 
     fn config(threshold: Option<u32>) -> LintConfig {
@@ -82,7 +82,7 @@ mod tests {
         config
     }
 
-    fn run(source: &str, threshold: Option<u32>) -> Vec<LintDiagnostic> {
+    fn run(source: &str, threshold: Option<u32>) -> Vec<Message> {
         run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Lua54, &config(threshold))
     }
 

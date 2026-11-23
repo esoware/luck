@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use luck_allocator::Allocator;
 use luck_ast::MAX_NESTING_DEPTH;
-use luck_core::Diagnostic;
+use luck_diagnostics::FileDiagnostics;
 use luck_token::{
     LuaVersion, Span, chunk_header, chunk_start, ends_with_line_break, line_breaks, spell_string,
 };
@@ -463,7 +463,7 @@ pub(crate) fn emit<'ast>(
     allocator: &'ast Allocator,
     graph: &mut DependencyGraph<'ast>,
     version: LuaVersion,
-) -> Result<(String, Vec<LineMapEntry>), Vec<Diagnostic>> {
+) -> Result<(String, Vec<LineMapEntry>), Vec<FileDiagnostics>> {
     let Some(entry) = graph.modules.get(graph.entry_id.0) else {
         return Ok((String::new(), Vec::new()));
     };

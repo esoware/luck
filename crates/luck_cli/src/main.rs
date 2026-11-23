@@ -27,7 +27,7 @@ mod exit;
 mod minify_flags;
 mod output;
 mod project;
-mod render;
+mod reporter;
 mod verbosity;
 
 use std::process::ExitCode;

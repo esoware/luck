@@ -10,7 +10,7 @@ Source text goes in and two streams come out: the tokens, and the comments betwe
 
 - `lex(source, version)` lexes a whole source into a `LexResult`: every token, ending in `Eof`, the comments, the errors, the spans of strings and comments left unterminated, and the spans of the lenient escapes.
 - `Lexer` hands out one token at a time with `next_token`, as the parser pulls them, and `finish` returns the rest of a `LexResult` once the source is drained.
-- `LexError` is `luck_token::SourceError`. The lexer refuses a source over 4 GiB with one.
+- Each error is an E008 `luck_diagnostics::Diagnostic`. The lexer refuses a source over 4 GiB with one.
 
 ```rust
 use luck_token::{LuaVersion, TokenKind};

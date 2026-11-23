@@ -1,4 +1,5 @@
 use luck_ast::{Block, FunctionBody, GotoStatement, LabelStatement, Visit};
+use luck_diagnostics::Tag;
 use luck_token::Span;
 
 use crate::diagnostic::Finding;
@@ -39,6 +40,7 @@ fn check_scope(block: &Block<'_>, findings: &mut Vec<Finding>) {
         if !scope.goto_names.iter().any(|goto_name| goto_name == name) {
             findings.push(
                 Finding::new(format!("label `{name}` is never targeted by a `goto`"), *span)
+                    .with_tag(Tag::Unnecessary)
                     .with_help("remove the label or add a `goto` that targets it"),
             );
         }
@@ -78,10 +80,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&UnusedLabel, source, LuaVersion::Lua54)
     }
 

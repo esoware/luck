@@ -8,11 +8,12 @@ use core::ops::Range;
 use bitflags::bitflags;
 use luck_allocator::Allocator;
 use luck_core::LuaTarget;
+use luck_diagnostics::Diagnostic;
 use luck_parser::ParseResult;
 use luck_token::Span;
 
 use crate::config::LintConfig;
-use crate::diagnostic::LintDiagnostic;
+use crate::diagnostic::Message;
 use crate::driver::lint_parsed;
 
 /// `ESLint` stops at the same count. Needing more almost always means two
@@ -100,8 +101,8 @@ pub struct Fixed<'ast> {
     /// The fixed source's parse, which is the parse of the source itself
     /// when nothing applied.
     pub parse: ParseResult<'ast>,
-    /// The fixed source's diagnostics.
-    pub diags: Vec<LintDiagnostic>,
+    /// The fixed source's messages.
+    pub messages: Vec<Message>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,8 +110,8 @@ pub enum FixError {
     /// Fixes were still coming after `rounds` rounds.
     BudgetExhausted { rounds: usize },
     /// The fixes of round `round`, counted from 1, together broke the
-    /// syntax, which fails with `message`.
-    ReparseFailed { round: usize, message: String },
+    /// syntax, as the first error of their text's parse says.
+    ReparseFailed { round: usize, error: Diagnostic },
 }
 
 impl fmt::Display for FixError {
@@ -120,8 +121,8 @@ impl fmt::Display for FixError {
                 f,
                 "fixes kept coming after {rounds} rounds, so two rules may be undoing each other"
             ),
-            Self::ReparseFailed { round, message } => {
-                write!(f, "the fixes of round {round} broke the syntax: {message}")
+            Self::ReparseFailed { round, error } => {
+                write!(f, "the fixes of round {round} broke the syntax: {error}")
             }
         }
     }
@@ -170,23 +171,23 @@ fn fix_within<'ast>(
     let version = target.lua_version();
     let mut parse = luck_parser::parse(allocator, source, version);
     for round in 1..=budget {
-        let diags = lint_parsed(&parse, target.stdlib_environment(), config, fixes);
-        let Some(text) = apply(parse.source, &diags, fixes) else {
-            return Ok(Fixed { parse, diags });
+        let messages = lint_parsed(&parse, target.stdlib_environment(), config, fixes);
+        let Some(text) = apply(parse.source, &messages, fixes) else {
+            return Ok(Fixed { parse, messages });
         };
-        let reparse = luck_parser::parse(allocator, allocator.alloc_str(&text), version);
-        if let Some(error) = reparse.errors.first() {
-            return Err(FixError::ReparseFailed { round, message: error.message.clone() });
+        let mut reparse = luck_parser::parse(allocator, allocator.alloc_str(&text), version);
+        if !reparse.errors.is_empty() {
+            return Err(FixError::ReparseFailed { round, error: reparse.errors.swap_remove(0) });
         }
         parse = reparse;
     }
     Err(FixError::BudgetExhausted { rounds: budget })
 }
 
-/// `source` with the fixes of `diags` of the kinds `fixes` holds that
+/// `source` with the fixes of `messages` of the kinds `fixes` holds that
 /// [`non_overlapping_edits`] keeps, or `None` when they change nothing.
-pub(crate) fn apply(source: &str, diags: &[LintDiagnostic], fixes: FixKind) -> Option<String> {
-    let edits = non_overlapping_edits(diags, fixes);
+pub(crate) fn apply(source: &str, messages: &[Message], fixes: FixKind) -> Option<String> {
+    let edits = non_overlapping_edits(messages, fixes);
     if edits.is_empty() {
         return None;
     }
@@ -202,7 +203,7 @@ pub(crate) fn apply(source: &str, diags: &[LintDiagnostic], fixes: FixKind) -> O
     (text != source).then_some(text)
 }
 
-/// The edits of `diags`'s fixes of the kinds `fixes` holds that one change
+/// The edits of `messages`'s fixes of the kinds `fixes` holds that one change
 /// can make together, in source order.
 ///
 /// The fixes reaching furthest into the source are taken first, so of two
@@ -210,10 +211,10 @@ pub(crate) fn apply(source: &str, diags: &[LintDiagnostic], fixes: FixKind) -> O
 /// half of a multi-edit fix changes the code's meaning. Edits at one offset
 /// keep a fixed order, whichever rule produced them.
 #[must_use]
-pub fn non_overlapping_edits(diags: &[LintDiagnostic], fixes: FixKind) -> Vec<&TextEdit> {
-    let mut candidates: Vec<&Fix> = diags
+pub fn non_overlapping_edits(messages: &[Message], fixes: FixKind) -> Vec<&TextEdit> {
+    let mut candidates: Vec<&Fix> = messages
         .iter()
-        .filter_map(|diag| diag.fix.as_ref())
+        .filter_map(|message| message.fix.as_ref())
         .filter(|candidate| fixes.contains(candidate.kind))
         .collect();
     candidates.sort_by_key(|candidate| {
@@ -255,9 +256,9 @@ fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
 mod tests {
     use super::*;
     use crate::config::RuleLevel;
-    use crate::fixtures::diagnostic;
+    use crate::fixtures::message;
 
-    fn diag_with_fix(kind: FixKind, replacements: &[(u32, u32, &'static str)]) -> LintDiagnostic {
+    fn diag_with_fix(kind: FixKind, replacements: &[(u32, u32, &'static str)]) -> Message {
         let edits: Box<[TextEdit]> = replacements
             .iter()
             .map(|&(start, end, replacement)| TextEdit {
@@ -265,13 +266,13 @@ mod tests {
                 replacement: replacement.into(),
             })
             .collect();
-        LintDiagnostic {
+        Message {
             fix: Some(Fix { kind, message: "test fix".into(), edits }),
-            ..diagnostic("test", Span::new(0, 0))
+            ..message(Span::new(0, 0))
         }
     }
 
-    fn diag_with_edit(start: u32, end: u32, replacement: &'static str) -> LintDiagnostic {
+    fn diag_with_edit(start: u32, end: u32, replacement: &'static str) -> Message {
         diag_with_fix(FixKind::Fix, &[(start, end, replacement)])
     }
 
@@ -344,7 +345,7 @@ local _bar = 2"
     fn edits_that_change_nothing_apply_nothing() {
         let diags = [diag_with_edit(0, 1, "a")];
         assert_eq!(apply("abcd", &diags, FixKind::Fix), None);
-        assert_eq!(apply("abcd", &[diagnostic("test", Span::new(0, 1))], FixKind::Fix), None);
+        assert_eq!(apply("abcd", &[message(Span::new(0, 1))], FixKind::Fix), None);
     }
 
     #[test]

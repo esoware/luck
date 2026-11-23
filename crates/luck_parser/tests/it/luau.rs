@@ -358,7 +358,7 @@ fn break_mid_block_rejected_in_luau() {
     let allocator = Allocator::new();
     // Statements after `break` are a grammar error in Luau.
     let result = parse_luau(&allocator, "while true do break print(1) end");
-    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
 }
 
 #[test]
@@ -433,7 +433,7 @@ fn attribute_on_local_variable_rejected() {
     let allocator = Allocator::new();
     // Luau only allows attributes before function declarations.
     let result = parse_luau(&allocator, "@native local x = 1");
-    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
 }
 
 #[test]
@@ -528,11 +528,11 @@ fn bracketed_and_parameterized_attributes() {
     // Arguments must be literals, and only deprecated takes them.
     assert_ne!(
         parse_luau(&allocator, "@[deprecated(foo())] function f() end").errors,
-        Vec::<luck_token::SourceError>::new()
+        Vec::<luck_diagnostics::Diagnostic>::new()
     );
     assert_ne!(
         parse_luau(&allocator, "@[native(1)] function f() end").errors,
-        Vec::<luck_token::SourceError>::new()
+        Vec::<luck_diagnostics::Diagnostic>::new()
     );
 }
 
@@ -559,7 +559,7 @@ fn attributes_on_function_exprs() {
     assert_no_errors(&parse_luau(&allocator, "f(@checked function() end)"));
     assert_ne!(
         parse_luau(&allocator, "local k = @nonsense function() end").errors,
-        Vec::<luck_token::SourceError>::new()
+        Vec::<luck_diagnostics::Diagnostic>::new()
     );
 }
 
@@ -577,7 +577,7 @@ fn empty_interpolation_rejected() {
             panic!("{source}: {:?}", result.errors);
         };
         assert_eq!(
-            (error.message.as_str(), error.span.text(source)),
+            (&*error.message, error.span.unwrap().text(source)),
             ("malformed interpolated string: expected expression inside `{}`", hole),
             "{source}"
         );
@@ -588,7 +588,7 @@ fn empty_interpolation_rejected() {
     assert_no_errors(&parse_luau(&allocator, "return `a{1}b`"));
     let unterminated = parse_luau(&allocator, "local s = `plain");
     assert_eq!(
-        unterminated.errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(),
+        unterminated.errors.iter().map(|e| &*e.message).collect::<Vec<_>>(),
         ["unterminated interpolated string"]
     );
 }

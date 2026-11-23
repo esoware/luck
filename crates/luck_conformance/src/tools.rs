@@ -8,12 +8,13 @@ use std::panic;
 use std::path::Path;
 
 use luck_allocator::Allocator;
+use luck_diagnostics::Diagnostic;
 use luck_formatter::FormatOptions;
 use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
 use luck_testgen::tree_shape;
-use luck_token::{LineIndex, LuaVersion, SourceError};
+use luck_token::{LineIndex, LuaVersion};
 
 use crate::snapshot::{LintLine, TestResult};
 use crate::suite::{Suite, SuiteFile};
@@ -121,11 +122,11 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
         .unwrap_or_else(|| "a panic without a message".to_owned())
 }
 
-fn render_errors(errors: &[SourceError], lines: &LineIndex) -> String {
+fn render_errors(errors: &[Diagnostic], lines: &LineIndex) -> String {
     errors
         .iter()
         .map(|error| {
-            let (line, column) = lines.line_column(error.span.start);
+            let (line, column) = lines.line_column(error.span.unwrap_or_default().start);
             format!("{line}:{column} {}", error.message)
         })
         .collect::<Vec<_>>()
@@ -230,11 +231,11 @@ fn lint(suite: &Suite, parse: &ParseResult<'_>, lines: &LineIndex) -> Vec<LintLi
         FixKind::empty(),
     )
     .iter()
-    .map(|diagnostic| {
-        let (line, column) = lines.line_column(diagnostic.span.start);
+    .map(|message| {
+        let (line, column) = lines.line_column(message.span().start);
         LintLine {
-            rule: diagnostic.rule,
-            text: format!("{line}:{column} {}: {}", diagnostic.rule, diagnostic.message),
+            rule: message.code,
+            text: format!("{line}:{column} {}: {}", message.code, message.message),
         }
     })
     .collect()

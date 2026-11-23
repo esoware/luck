@@ -2,6 +2,7 @@ use core::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_diagnostics::Diagnostic;
 use luck_parser::{Groupings, ParseResult};
 use luck_token::{LuaVersion, index_to_offset, offset_to_index};
 
@@ -13,12 +14,9 @@ use crate::{FormatOptions, LineEndings};
 #[derive(Debug, Clone)]
 pub struct FormatResult {
     pub output: String,
-    pub errors: Vec<FormatError>,
+    /// The parse's errors, each an E008. Formatting itself reports none.
+    pub errors: Vec<Diagnostic>,
 }
-
-/// A parse error, or the refusal of a tree nested past the cap. Formatting
-/// itself reports no others.
-pub type FormatError = luck_token::SourceError;
 
 fn print_chunk<'ast>(
     allocator: &'ast Allocator,
@@ -61,21 +59,19 @@ fn print_chunk<'ast>(
 ///
 /// # Errors
 ///
-/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
+/// Returns an E008 for a tree nested deeper than [`MAX_NESTING_DEPTH`],
 /// which `luck_parser` never builds and would refuse to read back.
 pub fn format_chunk<'ast>(
     allocator: &'ast Allocator,
     chunk: &'ast Chunk<'ast>,
     comments: Comments<'ast>,
     options: &FormatOptions,
-) -> Result<String, FormatError> {
+) -> Result<String, Diagnostic> {
     if block_nesting_depth(&chunk.block) > MAX_NESTING_DEPTH {
-        return Err(FormatError {
-            span: chunk.block.span,
-            message: format!(
-                "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
-            ),
-        });
+        return Err(Diagnostic::e008(
+            chunk.block.span,
+            format!("maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"),
+        ));
     }
     Ok(print_chunk(allocator, chunk, comments, None, options))
 }

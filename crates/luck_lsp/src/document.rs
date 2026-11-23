@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use ls_types::{DocumentSymbol, Position, Range, TextDocumentContentChangeEvent, Uri};
 use luck_allocator::Allocator;
 use luck_formatter::FormatResult;
-use luck_linter::{Analysis, FixKind, LintDiagnostic};
+use luck_linter::{Analysis, FixKind, Message};
 use luck_parser::ParseResult;
 use luck_semantic::{ScopeTree, SemanticAnalysis};
 use luck_token::{LuaVersion, Span, Token};
@@ -61,7 +61,7 @@ pub(crate) struct Document {
     line_index: OnceLock<Arc<LineIndex>>,
     state: OnceLock<DocumentState>,
     /// `None` when the version went stale while its lint ran.
-    lints: OnceLock<Option<Vec<LintDiagnostic>>>,
+    lints: OnceLock<Option<Vec<Message>>>,
     /// Set once a newer version or a close replaces this one, which stops
     /// its lint.
     is_stale: AtomicBool,
@@ -118,7 +118,7 @@ impl Document {
 
     /// This version's lints, which publishing, code actions, and fix-all
     /// share, or `None` when it went stale before they were done.
-    pub(crate) fn lints(&self, session: &Session) -> Option<&[LintDiagnostic]> {
+    pub(crate) fn lints(&self, session: &Session) -> Option<&[Message]> {
         self.lints.get_or_init(|| self.state(session).lint(&|| self.is_stale())).as_deref()
     }
 
@@ -270,10 +270,7 @@ impl DocumentState {
     /// Lints with the config the analysis was built under, building every
     /// kind of fix, since a suggestion is still a quick fix, or `None` once
     /// `is_cancelled` stops it. A document the project leaves out has none.
-    pub(crate) fn lint(
-        &self,
-        is_cancelled: &(dyn Fn() -> bool + Sync),
-    ) -> Option<Vec<LintDiagnostic>> {
+    pub(crate) fn lint(&self, is_cancelled: &(dyn Fn() -> bool + Sync)) -> Option<Vec<Message>> {
         if !self.settings.is_included {
             return Some(Vec::new());
         }

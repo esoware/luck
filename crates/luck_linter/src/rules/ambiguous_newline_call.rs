@@ -55,10 +55,10 @@ fn check_call(call: Call<'_>, source: &str, version: LuaVersion) -> Option<Findi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&AmbiguousNewlineCall, source, LuaVersion::Lua54)
     }
 

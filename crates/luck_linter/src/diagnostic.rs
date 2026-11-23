@@ -1,11 +1,11 @@
 use alloc::borrow::Cow;
+use core::ops::Deref;
 
+use luck_diagnostics::{Diagnostic, Label, Severity, Tag};
 use luck_token::Span;
 
 use crate::fix::{Fix, FixKind, RuleFixer};
-use crate::rule::LintContext;
-
-pub type Severity = luck_core::DiagnosticSeverity;
+use crate::rule::{LintContext, Rule};
 
 /// A group of lint rules, which `categories` sets the level of together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,21 +46,36 @@ impl Category {
     }
 }
 
-/// A message or help that's a fixed text borrows it, so only one that names
-/// something from the source is allocated.
+/// What the linter reports: a diagnostic, coded with the name of the rule
+/// that found it or E008 for a parse error, and its fix, when the rule
+/// offers one of a kind the host asked for.
+///
+/// It derefs to its diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LintDiagnostic {
-    pub rule: &'static str,
-    pub category: Category,
-    pub severity: Severity,
-    pub message: Cow<'static, str>,
-    pub span: Span,
-    pub help: Option<Cow<'static, str>>,
+pub struct Message {
+    pub diagnostic: Diagnostic,
     pub fix: Option<Fix>,
 }
 
-/// The driver makes each one a [`LintDiagnostic`] carrying the reporting
-/// rule's name and category and its resolved severity.
+impl Message {
+    /// Where the problem is, which every lint and parse error has.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        self.diagnostic.span.unwrap_or_default()
+    }
+}
+
+impl Deref for Message {
+    type Target = Diagnostic;
+
+    fn deref(&self) -> &Self::Target {
+        &self.diagnostic
+    }
+}
+
+/// What a rule found, which the driver makes a [`Message`] coded with the
+/// rule's name, at the severity it resolves, once no directive drops it, so
+/// a dropped one never builds its diagnostic.
 ///
 /// Its fields are private, so a fix reaches one only through
 /// [`Self::with_fix`] and its checks.
@@ -68,17 +83,30 @@ pub struct LintDiagnostic {
 pub(crate) struct Finding {
     message: Cow<'static, str>,
     span: Span,
+    labels: Vec<Label>,
     help: Option<Cow<'static, str>>,
+    tag: Option<Tag>,
     fix: Option<Fix>,
 }
 
 impl Finding {
     #[must_use]
-    pub(crate) fn new<Message>(message: Message, span: Span) -> Self
+    pub(crate) fn new<Text>(message: Text, span: Span) -> Self
     where
-        Message: Into<Cow<'static, str>>,
+        Text: Into<Cow<'static, str>>,
     {
-        Self { message: message.into(), span, help: None, fix: None }
+        Self { message: message.into(), span, labels: Vec::new(), help: None, tag: None, fix: None }
+    }
+
+    /// Adds another place the finding is about, such as the first of two
+    /// definitions, and what `message` says of it.
+    #[must_use]
+    pub(crate) fn with_label<Text>(mut self, span: Span, message: Text) -> Self
+    where
+        Text: Into<Cow<'static, str>>,
+    {
+        self.labels.push(Label { span, message: message.into() });
+        self
     }
 
     #[must_use]
@@ -87,6 +115,14 @@ impl Finding {
         Help: Into<Cow<'static, str>>,
     {
         self.help = Some(help.into());
+        self
+    }
+
+    /// Marks the code at the finding's span as doing nothing, or as a use of
+    /// something deprecated, for an editor to draw it so.
+    #[must_use]
+    pub(crate) const fn with_tag(mut self, tag: Tag) -> Self {
+        self.tag = Some(tag);
         self
     }
 
@@ -140,14 +176,14 @@ impl Finding {
         self.span
     }
 
-    pub(crate) fn into_diagnostic(
-        self,
-        rule: &'static str,
-        category: Category,
-        severity: Severity,
-    ) -> LintDiagnostic {
-        let Self { message, span, help, fix } = self;
-        LintDiagnostic { rule, category, severity, message, span, help, fix }
+    pub(crate) fn into_message(self, rule: &dyn Rule, severity: Severity) -> Message {
+        let Self { message, span, labels, help, tag, fix } = self;
+        let mut diagnostic =
+            Diagnostic::lint(rule.name(), severity, span, message).with_url(rule.docs_url());
+        diagnostic.labels = labels;
+        diagnostic.help = help;
+        diagnostic.tag = tag;
+        Message { diagnostic, fix }
     }
 }
 

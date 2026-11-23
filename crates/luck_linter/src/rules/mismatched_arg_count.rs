@@ -28,7 +28,7 @@ impl WholeRule for MismatchedArgCount {
             .nodes
             .as_slice()
             .iter()
-            .filter_map(|node| check_call(node.call()?, tree, &signatures, context))
+            .filter_map(|node| check_call(node.call()?, tree, &signatures))
             .collect()
     }
 }
@@ -96,7 +96,6 @@ fn check_call(
     call: Call<'_>,
     tree: &ScopeTree<'_>,
     signatures: &FxHashMap<u32, FunctionSignature>,
-    context: &LintContext<'_>,
 ) -> Option<Finding> {
     if call.method.is_some() {
         return None;
@@ -120,16 +119,16 @@ fn check_call(
     if guaranteed_arg_count <= signature.param_count {
         return None;
     }
-    let line = context.line_index().line(definition_start);
     Some(
         Finding::new(
             format!(
                 "call passes {guaranteed_arg_count} arguments to function `{}`, \
-                 which accepts only {} (defined on line {line})",
+                 which accepts only {}",
                 callee.text, signature.param_count
             ),
             call.span(),
         )
+        .with_label(symbol.definition_span, "defined here")
         .with_help("extra arguments are silently discarded"),
     )
 }
@@ -139,20 +138,22 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::MismatchedArgCount;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::diagnostic::Message;
+    use crate::fixtures::{labeled, run_rule};
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&MismatchedArgCount, source, LuaVersion::Lua54)
     }
 
     #[test]
     fn flags_extra_args_to_local_function() {
-        let diags = run("\
+        let source = "\
 local function f(a, b) return a + b end
-f(1, 2, 3)");
+f(1, 2, 3)";
+        let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("accepts only 2"), "{diags:?}");
+        assert!(diags[0].message.ends_with("which accepts only 2"), "{diags:?}");
+        assert_eq!(labeled(&diags[0], source), ["f"]);
     }
 
     #[test]

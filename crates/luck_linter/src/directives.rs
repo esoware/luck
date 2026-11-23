@@ -10,7 +10,7 @@ use core::ops::Range;
 
 use luck_ast::{GetSpan as _, Statement};
 use luck_token::{
-    Comment, CommentContent, LintDirective, LintExtent, LintVerb, LuaVersion, SourceError, Span,
+    Comment, CommentContent, DirectiveError, LintDirective, LintExtent, LintVerb, LuaVersion, Span,
     has_line_break,
 };
 
@@ -29,6 +29,18 @@ pub(crate) enum Target {
     Every,
     /// A name no rule has, which covers nothing.
     Unknown,
+}
+
+/// What's wrong with a `luck:` comment, which `invalid_lint_filter` reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirectiveProblem {
+    Malformed(DirectiveError),
+    /// A region's `end` that closes no `start` of its verb and rule, at the
+    /// rule's name.
+    UnopenedEnd {
+        verb: LintVerb,
+        name: Span,
+    },
 }
 
 #[derive(Debug)]
@@ -79,7 +91,7 @@ pub(crate) struct Directives {
     intervals: Vec<Interval>,
     /// What's wrong with each malformed `luck:` comment, and with each region
     /// `end` that closes none.
-    errors: Vec<SourceError>,
+    errors: Vec<DirectiveProblem>,
     /// By rule, whether a `deny` or `warn` names it, which runs it here
     /// whatever config says. Empty when none does.
     enabled: Vec<bool>,
@@ -103,7 +115,7 @@ impl Directives {
                     directives.add(comment.span, directive, source, &mut open_regions);
                 }
                 Ok(None) => {}
-                Err(error) => directives.errors.push(error),
+                Err(error) => directives.errors.push(DirectiveProblem::Malformed(error)),
             }
         }
         for region in open_regions {
@@ -159,13 +171,7 @@ impl Directives {
                             }
                             self.cover(region.entry, region.from, span.start);
                         }
-                        None => self.errors.push(SourceError {
-                            span: name,
-                            message: format!(
-                                "no `{}({name_text}) start` for this `end` to close",
-                                verb.name()
-                            ),
-                        }),
+                        None => self.errors.push(DirectiveProblem::UnopenedEnd { verb, name }),
                     }
                 }
             }
@@ -272,7 +278,7 @@ impl Directives {
         &self.entries
     }
 
-    pub(crate) fn errors(&self) -> &[SourceError] {
+    pub(crate) fn errors(&self) -> &[DirectiveProblem] {
         &self.errors
     }
 
@@ -503,17 +509,19 @@ local a = 1",
 
     #[test]
     fn an_end_closes_the_latest_region_of_its_verb_and_rule() {
-        let directives = directives_of(
-            "\
+        let source = "\
 -- luck: allow(shadowing) start
 -- luck: deny(shadowing) start
 -- luck: allow(shadowing, unused_variable) end
-local a = 1",
-        );
+local a = 1";
+        let directives = directives_of(source);
         let ends: Vec<Option<usize>> = directives.entries().iter().map(|entry| entry.end).collect();
         assert_eq!(ends, [Some(2), None, None, None]);
-        let errors: Vec<&str> =
-            directives.errors().iter().map(|error| error.message.as_str()).collect();
-        assert_eq!(errors, ["no `allow(unused_variable) start` for this `end` to close"]);
+        let Some(&DirectiveProblem::UnopenedEnd { verb, name }) = directives.errors().first()
+        else {
+            panic!("{:?}", directives.errors());
+        };
+        assert_eq!(directives.errors().len(), 1, "{:?}", directives.errors());
+        assert_eq!((verb, name.text(source)), (LintVerb::Allow, "unused_variable"));
     }
 }

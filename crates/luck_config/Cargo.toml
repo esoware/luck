@@ -15,13 +15,14 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-luck_bundler   = { workspace = true, features = ["serde"] }
-luck_core      = { workspace = true, features = ["serde"] }
-luck_formatter = { workspace = true, features = ["serde"] }
-luck_linter    = { workspace = true, features = ["serde"] }
-luck_minifier  = { workspace = true, features = ["serde"] }
-luck_resolver  = { workspace = true }
-luck_token     = { workspace = true }
+luck_bundler     = { workspace = true, features = ["serde"] }
+luck_core        = { workspace = true, features = ["serde"] }
+luck_diagnostics = { workspace = true }
+luck_formatter   = { workspace = true, features = ["serde"] }
+luck_linter      = { workspace = true, features = ["serde"] }
+luck_minifier    = { workspace = true, features = ["serde"] }
+luck_resolver    = { workspace = true }
+luck_token       = { workspace = true }
 
 globset     = { workspace = true }
 json5       = { workspace = true }

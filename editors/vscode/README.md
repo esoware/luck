@@ -2,7 +2,7 @@
 
 Lua/Luau language support powered by the luck toolchain:
 
-- **Diagnostics** from `luck_linter` on every change, with the rules `luck lint` runs on the same project, and a `luck.json` that doesn't load shown as an error on the file
+- **Diagnostics** from `luck_linter` on every change, with the rules `luck lint` runs on the same project, each linking to its rule, with the places it's about as related locations, and unused code faded and deprecated code struck through, and a `luck.json` that doesn't load shown as an error on the file
 - **Formatting** + range formatting from `luck_formatter`
 - **Hover** with stdlib signatures, deprecation, and must-use / pure markers
 - **Completion** of stdlib globals, namespace members, locals, keywords, and constant string arguments such as Roblox service names

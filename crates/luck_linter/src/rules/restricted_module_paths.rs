@@ -62,10 +62,10 @@ mod tests {
 
     use super::*;
     use crate::config::{LintConfig, RestrictedModulePathsOptions, RuleLevel, RuleSetting};
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule_with_config;
 
-    fn run(source: &str, paths: Vec<String>) -> Vec<LintDiagnostic> {
+    fn run(source: &str, paths: Vec<String>) -> Vec<Message> {
         let mut config = LintConfig::default();
         config.rules.restricted_module_paths = Some(RuleSetting::WithOptions(
             RuleLevel::Error,

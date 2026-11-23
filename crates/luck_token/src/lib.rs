@@ -5,9 +5,9 @@
 //! (every Lua and Luau token, which holds no text and slices it from its
 //! source), the AST operators ([`BinOp`], [`UnOp`], [`CompoundOp`]),
 //! [`Comment`] (extracted comments with position metadata), the comments that
-//! tell a tool what to do ([`CommentContent`], [`LintDirective`]), [`SourceError`],
-//! what a literal means and how to spell a value ([`read_numeral`],
-//! [`read_escape`], [`decode_string`], [`spell_number`], [`spell_string`]),
+//! tell a tool what to do ([`CommentContent`], [`LintDirective`]), what a
+//! literal means and how to spell a value ([`read_numeral`], [`read_escape`],
+//! [`decode_string`], [`spell_number`], [`spell_string`]),
 //! the definition of a line break ([`line_breaks`], [`has_line_break`]) and
 //! the [`LineIndex`] over it, and the [`CodeBuffer`] output builder.
 //!
@@ -37,7 +37,6 @@ mod comment;
 mod directive;
 mod number;
 mod op;
-mod source_error;
 mod span;
 mod string;
 mod token;
@@ -46,12 +45,13 @@ mod whitespace;
 
 pub use code_buffer::CodeBuffer;
 pub use comment::{Comment, CommentKind, CommentPosition, chunk_header, leading_hot_comments};
-pub use directive::{CommentContent, LintDirective, LintExtent, LintVerb};
+pub use directive::{
+    CommentContent, DirectiveError, DirectiveErrorKind, LintDirective, LintExtent, LintVerb,
+};
 pub use number::{
     LuaNumber, NumberSpelling, Numeral, read_integer, read_numeral, spell_integer, spell_number,
 };
 pub use op::{Associativity, BinOp, CompoundOp, UnOp};
-pub use source_error::SourceError;
 pub use span::{Span, index_to_offset, offset_to_index};
 pub use string::{
     EscapeError, Escaped, StringSpelling, StringValue, decode_interpolated_text, decode_string,

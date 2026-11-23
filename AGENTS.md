@@ -90,7 +90,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 
 ### Crates and modules
 
-- `luck_allocator`, `luck_token`, `luck_ast_macros`, and `luck_ast_tools` depend on nothing in the workspace. `luck_lexer`, `luck_core`, and `luck_resolver` depend on `luck_token` only, `luck_ast` on `luck_token`, `luck_allocator`, and `luck_ast_macros`, `luck_testgen` on `luck_token` and `luck_ast`, `luck_parser` on `luck_token`, `luck_lexer`, `luck_ast`, and `luck_allocator`, and `luck_codegen` and `luck_semantic` on `luck_token` and `luck_ast`.
+- `luck_allocator`, `luck_token`, `luck_ast_macros`, and `luck_ast_tools` depend on nothing in the workspace. `luck_diagnostics`, `luck_core`, and `luck_resolver` depend on `luck_token` only, `luck_lexer` on `luck_token` and `luck_diagnostics`, `luck_ast` on `luck_token`, `luck_allocator`, and `luck_ast_macros`, `luck_testgen` on `luck_token` and `luck_ast`, `luck_parser` on `luck_token`, `luck_diagnostics`, `luck_lexer`, `luck_ast`, and `luck_allocator`, and `luck_codegen` and `luck_semantic` on `luck_token` and `luck_ast`.
 - `luck_codegen`, `luck_formatter`, and `luck_minifier` never depend on `luck_semantic`, `luck_resolver`, `luck_linter`, `luck_bundler`, or `luck_config`.
 - `luck_cli` is the only crate that depends on `luck_lsp`, only `luck_cli`, `luck_lsp`, and the `luck` facade's opt-in `config` feature depend on `luck_config`, nothing depends on `luck_cli` or on the `luck` facade, and only `luck_allocs` turns on `luck_allocator`'s `track_allocations` feature.
 - Only `luck_allocator`, `luck_token`'s `code_buffer.rs`, `luck_lexer`'s `cursor.rs`, `luck_resolver`'s `file_system.rs`, `luck_benchmark`, `luck_allocs`'s `heap.rs`, and `luck_conformance`'s `execute.rs` may use `unsafe`.
@@ -99,13 +99,13 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - Check a version's syntax with a `LuaVersion::has_<feature>` predicate, never by comparing `LuaVersion` variants. The only `is_` forms are `is_luau` and `is_roblox`.
 - Adding a Lua version is a `LuaVersion` variant, a `LuaTarget` variant, and an arm in every `has_<feature>` predicate.
 - Modules are private, and each crate re-exports its public items from `lib.rs`, so every item has exactly one path. No `pub mod`. `lib.rs` holds the crate doc, the crate attributes, the module list, and the re-exports, and no other code.
-- Types that two crates share when neither depends on the other live in `luck_token` or `luck_core`.
+- Types that two crates share when neither depends on the other live in `luck_token` or `luck_core`, and diagnostics in `luck_diagnostics`.
 - Every crate in the workspace and the extension share one version. Don't change it by hand, because the Prepare release workflow bumps it.
 
 ### Types and errors
 
 - A transform or visitor matches every variant with no wildcard arm, so a new variant makes the compiler point at every consumer. The same goes for a helper that classifies its own enum, such as `category()` or a `has_<feature>` predicate. List every variant, so a new one has to pick its own answer. Where only one variant matters, use `if let` or `matches!` rather than a `match` with a wildcard.
-- An error reaches the user as a `Diagnostic` built with a numbered constructor such as `Diagnostic::e008`, never with an inline code. A lex, parse, or format error is a `SourceError`, and a parse failure is always E008.
+- Every problem reaches the user as a `luck_diagnostics::Diagnostic`, built with a numbered constructor such as `Diagnostic::e008`, never with an inline code, or with `Diagnostic::lint` and its rule's name. A lex or parse failure is always E008. A diagnostic names no file: one leaving the crate that knows its file goes in a `FileDiagnostics`. It points at other places with labels, never by writing a line number into its text.
 - A token holds no text. No global string interner, because its lock would serialize rayon's workers.
 - Every thread the code starts has an owner that joins it, through a `JoinHandle` or a scope, and every job on the language server's pool stops once its version goes stale or the client cancels its request. Only a test that times a call out leaves a thread behind.
 

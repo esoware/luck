@@ -1,10 +1,12 @@
 mod attributes;
 mod declaration;
 mod expr;
+mod forgotten;
 mod function;
 mod stmt;
 mod types;
 
+use alloc::borrow::Cow;
 use core::mem;
 
 use luck_allocator::{Allocator, Box, List, ThinBytes, ThinStr};
@@ -14,15 +16,17 @@ use luck_ast::{
     MAX_NESTING_DEPTH, Name, NameIndex, NumberLiteral, Parameter, Statement, StringLiteral, Suffix,
     TreeCounts, Type, TypeField, Var,
 };
+use luck_diagnostics::Diagnostic;
 use luck_lexer::Lexer;
 use luck_token::{
     LuaVersion, Span, StringValue, Token, TokenKind, decode_interpolated_text, decode_string,
     read_integer, read_numeral,
 };
-use rustc_hash::FxHashSet;
+use rustc_hash::FxHashMap;
 
+use self::forgotten::label_forgotten_ends;
 use crate::validate::check_type_functions;
-use crate::{Groupings, ParseError, ParseResult};
+use crate::{Groupings, ParseResult};
 
 /// The tree and every list in it go in `allocator`, and its names and
 /// literals borrow `source`, but for a string's value that decoding rewrote,
@@ -104,12 +108,13 @@ fn parse_recording<'ast>(
         function_scope: FunctionScope { is_chunk: true, is_vararg: true, is_in_loop: false },
         has_module_return: false,
         has_value_exports: false,
-        exported_names: FxHashSet::default(),
+        exported_names: FxHashMap::default(),
         has_type_function: false,
         open: OpenConstructs::default(),
         has_syntax_error: false,
         settled_unterminated: 0,
         errors: Vec::new(),
+        unclosed_blocks: Vec::new(),
         tokens,
         counts: TreeCounts::default(),
     };
@@ -150,7 +155,8 @@ struct Parser<'ast> {
     function_scope: FunctionScope,
     has_module_return: bool,
     has_value_exports: bool,
-    exported_names: FxHashSet<&'ast str>,
+    /// Where each exported name is declared.
+    exported_names: FxHashMap<&'ast str, Span>,
     /// Whether a `type function` appeared, so its body needs the scope check
     /// the parser can't do without tracking locals.
     has_type_function: bool,
@@ -161,7 +167,10 @@ struct Parser<'ast> {
     /// How many of the lexer's unterminated strings and block comments come
     /// before that statement.
     settled_unterminated: usize,
-    errors: Vec<ParseError>,
+    errors: Vec<Diagnostic>,
+    /// Each error that a block is missing its `end` or `until`, as its index
+    /// in `errors` and the span of the token that opened the block.
+    unclosed_blocks: Vec<(usize, Span)>,
     /// Every token lexed so far, for `parse_with_tokens`.
     tokens: Option<Vec<Token>>,
     counts: TreeCounts,
@@ -296,13 +305,16 @@ impl<'ast> Parser<'ast> {
         let start_span = self.token.span;
         let block = self.parse_block().unwrap_or_else(|| Block::new(start_span, List::new()));
         let chunk = Chunk::new(self.version, block);
+        if !self.unclosed_blocks.is_empty() {
+            label_forgotten_ends(&chunk, self.source, &self.unclosed_blocks, &mut self.errors);
+        }
         let lexed = self.lexer.finish();
         let mut errors = lexed.errors;
         errors.append(&mut self.errors);
         if self.has_type_function && errors.is_empty() {
             errors = check_type_functions(&chunk);
         }
-        errors.sort_by_key(|e| e.span.start);
+        errors.sort_by_key(|e| e.span.map(|span| span.start));
         self.groupings.sort();
         let parse = ParseResult {
             source: self.source,
@@ -481,26 +493,53 @@ impl<'ast> Parser<'ast> {
         self.open.close(closer);
     }
 
-    /// Close the bracket `opened` and consume its `kind` closer, as
-    /// [`Self::expect`] does.
+    /// Close the construct `closer` closes and consume its `kind` closer, as
+    /// [`Self::expect`] does, but one that's missing is an error that points
+    /// at `opener` too, the token that opened the construct.
     #[inline]
-    fn expect_closer(&mut self, kind: TokenKind, opened: Closer) -> Span {
-        self.close(opened);
-        if self.is_at(kind) { self.advance() } else { self.report_missing_closer(kind) }
+    fn expect_closer(&mut self, kind: TokenKind, closer: Closer, opener: Span) -> Span {
+        self.close(closer);
+        if self.is_at(kind) { self.advance() } else { self.report_missing_closer(kind, opener) }
     }
 
     /// A closing bracket of another kind that nothing open expects is a typo
-    /// for the missing `kind`, so it closes the bracket too.
+    /// for a missing bracket, so it closes the bracket too.
     #[cold]
     #[inline(never)]
-    fn report_missing_closer(&mut self, kind: TokenKind) -> Span {
-        let span = self.report_expected(kind);
-        if matches!(
-            self.peek(),
-            TokenKind::RightParen | TokenKind::RightBracket | TokenKind::RightBrace
-        ) && !self.is_at_expected_closer()
-        {
+    fn report_missing_closer(&mut self, kind: TokenKind, opener: Span) -> Span {
+        let span = self.report_unclosed(kind, opener);
+        let is_bracket = |closer| {
+            matches!(
+                closer,
+                TokenKind::RightParen | TokenKind::RightBracket | TokenKind::RightBrace
+            )
+        };
+        if is_bracket(kind) && is_bracket(self.peek()) && !self.is_at_expected_closer() {
             self.advance();
+        }
+        span
+    }
+
+    /// Record that the current token isn't the `kind` that closes what
+    /// `opener` opened, as PUC Lua and Luau report it, with the opener
+    /// labeled. Leaves the token in place and returns its span.
+    #[cold]
+    #[inline(never)]
+    fn report_unclosed(&mut self, kind: TokenKind, opener: Span) -> Span {
+        let span = self.token.span;
+        if !self.is_recovering() {
+            self.has_syntax_error = true;
+            let opener_text = opener.text(self.source);
+            let message = format!(
+                "expected {kind} to close `{opener_text}`, found {}",
+                self.token.display(self.source)
+            );
+            let diag = Diagnostic::e008(span, message)
+                .with_label(opener, format!("unclosed `{opener_text}`"));
+            if matches!(kind, TokenKind::End | TokenKind::Until) {
+                self.unclosed_blocks.push((self.errors.len(), opener));
+            }
+            self.errors.push(diag);
         }
         span
     }
@@ -567,9 +606,9 @@ impl<'ast> Parser<'ast> {
     #[inline(never)]
     fn error<Message>(&mut self, span: Span, message: Message)
     where
-        Message: Into<String>,
+        Message: Into<Cow<'static, str>>,
     {
-        self.errors.push(ParseError { span, message: message.into() });
+        self.errors.push(Diagnostic::e008(span, message));
     }
 
     /// Record a syntax error unless one is already being recovered from.
@@ -577,7 +616,7 @@ impl<'ast> Parser<'ast> {
     #[inline(never)]
     fn syntax_error<Message>(&mut self, span: Span, message: Message)
     where
-        Message: Into<String>,
+        Message: Into<Cow<'static, str>>,
     {
         if !self.is_recovering() {
             self.has_syntax_error = true;

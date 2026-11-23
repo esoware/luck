@@ -8,12 +8,12 @@ use std::{fs, io};
 
 use luck_allocator::{Allocator, ThreadAllocators};
 use luck_bundler::{BundleOptions, BundleResult, DependencyGraph, DynamicRequire};
-use luck_core::Diagnostic;
+use luck_diagnostics::FileDiagnostics;
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::LuaVersion;
 use tempfile::TempDir;
 
-use crate::common::{bundle_both, off_pool, on_pool};
+use crate::common::{bundle_both, codes, located, off_pool, on_pool};
 
 fn fixture_directory(dialect: &str, name: &str) -> PathBuf {
     let manifest_directory = env!("CARGO_MANIFEST_DIR");
@@ -32,7 +32,7 @@ fn run_bundle(
     name: &str,
     version: LuaVersion,
     entry_name: &str,
-) -> Result<String, Vec<Diagnostic>> {
+) -> Result<String, Vec<FileDiagnostics>> {
     run_bundle_with(dialect, name, version, entry_name, DynamicRequire::default())
         .map(|result| result.output)
 }
@@ -46,7 +46,7 @@ fn run_bundle_with(
     version: LuaVersion,
     entry_name: &str,
     dynamic_require: DynamicRequire,
-) -> Result<BundleResult, Vec<Diagnostic>> {
+) -> Result<BundleResult, Vec<FileDiagnostics>> {
     let input_directory = fixture_directory(dialect, name);
     let entry = input_directory.join(entry_name);
     let search_paths =
@@ -60,10 +60,6 @@ fn run_bundle_with(
             dynamic_require,
         },
     )
-}
-
-fn codes(diags: &[Diagnostic]) -> Vec<&str> {
-    diags.iter().map(|diag| diag.code).collect()
 }
 
 #[test]
@@ -359,10 +355,11 @@ fn luau_dependency_hot_comments_warn_w006() {
     )
     .expect("bundle failed");
     assert!(
-        result
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "W006" && warning.message.contains("--!nonstrict")),
+        located(&result.warnings).iter().any(|(path, warning)| {
+            path.ends_with("util.luau")
+                && warning.code == "W006"
+                && warning.message.contains("--!nonstrict")
+        }),
         "Expected W006 for util.luau, got: {:?}",
         codes(&result.warnings)
     );
@@ -441,7 +438,7 @@ fn temp_project(files: &[(&str, &[u8])]) -> io::Result<TempDir> {
 ///
 /// Returns the diagnostics that stopped the project at `directory` from
 /// bundling from `main.luau`.
-fn bundle_luau_project(directory: &Path) -> Result<BundleResult, Vec<Diagnostic>> {
+fn bundle_luau_project(directory: &Path) -> Result<BundleResult, Vec<FileDiagnostics>> {
     bundle_both(
         &directory.join("main.luau"),
         &BundleOptions {
@@ -457,7 +454,7 @@ fn bundle_luau_project(directory: &Path) -> Result<BundleResult, Vec<Diagnostic>
 ///
 /// Returns the diagnostics that stopped the project at `directory` from
 /// bundling from `main.lua` for Lua 5.4.
-fn bundle_lua_project(directory: &Path) -> Result<BundleResult, Vec<Diagnostic>> {
+fn bundle_lua_project(directory: &Path) -> Result<BundleResult, Vec<FileDiagnostics>> {
     bundle_both(
         &directory.join("main.lua"),
         &BundleOptions {
@@ -735,7 +732,7 @@ return 1
             temp_project(&[("main.luau", REQUIRE_UTIL.as_bytes()), ("util.luau", util.as_bytes())])
                 .expect("project");
         let result = bundle_luau_project(directory.path()).expect("bundle failed");
-        let w006_count = result.warnings.iter().filter(|warning| warning.code == "W006").count();
+        let w006_count = codes(&result.warnings).iter().filter(|&&code| code == "W006").count();
         assert_eq!(w006_count, expected_warnings, "util {util:?}: {:?}", result.warnings);
     }
 }
@@ -793,7 +790,7 @@ require(\"b\")
         bundle_lua_project(directory.path()).expect_err("an unresolved module must not bundle");
     assert_eq!(codes(&errors), ["E004", "E004"], "{errors:?}");
     let files: Vec<&str> =
-        errors.iter().filter_map(|error| error.file_path.rsplit('/').next()).collect();
+        errors.iter().filter_map(|file| file.path.file_name()?.to_str()).collect();
     assert_eq!(files, ["a.lua", "b.lua"], "{errors:?}");
 }
 
@@ -808,11 +805,12 @@ fn unresolved_lua_require_lists_the_paths_it_searched() {
     let directory = temp_project(&[("main.lua", b"require(\"missing.mod\")\n")]).expect("project");
     let errors =
         bundle_lua_project(directory.path()).expect_err("an unresolved module must not bundle");
-    let [error] = errors.as_slice() else {
+    let located = located(&errors);
+    let [(path, error)] = located.as_slice() else {
         panic!("expected one error: {errors:?}");
     };
     assert_eq!(error.code, "E004");
-    assert_eq!(error.file_path, format!("{}/main.lua", slashed_root(&directory)));
+    assert_eq!(*path, format!("{}/main.lua", slashed_root(&directory)));
     assert_eq!(error.message, "module not found: `missing.mod`");
     assert_eq!(
         error.help.as_deref(),
@@ -829,14 +827,15 @@ fn unresolved_luau_require_lists_the_four_files_it_could_be() {
     let directory = temp_project(&[("main.luau", b"require(\"./missing\")\n")]).expect("project");
     let errors =
         bundle_luau_project(directory.path()).expect_err("an unresolved module must not bundle");
-    let [error] = errors.as_slice() else {
+    let located = located(&errors);
+    let [(_, error)] = located.as_slice() else {
         panic!("expected one error: {errors:?}");
     };
     let base = format!("{}/./missing", slashed_root(&directory));
     assert_eq!(error.code, "E004");
     assert_eq!(
-        error.help,
-        Some(format!(
+        error.help.as_deref(),
+        Some(&*format!(
             "\
 searched paths:
   - `{base}.luau`
@@ -857,15 +856,16 @@ fn ambiguous_luau_require_names_both_files() {
     .expect("project");
     let errors =
         bundle_luau_project(directory.path()).expect_err("an ambiguous module must not bundle");
-    let [error] = errors.as_slice() else {
+    let located = located(&errors);
+    let [(_, error)] = located.as_slice() else {
         panic!("expected one error: {errors:?}");
     };
     let root = slashed_root(&directory);
     assert_eq!(error.code, "E007");
     assert_eq!(error.message, "ambiguous module resolution");
     assert_eq!(
-        error.help,
-        Some(format!(
+        error.help.as_deref(),
+        Some(&*format!(
             "ambiguity: both `{root}/util.luau` and `{root}/util.lua` exist, so remove one of \
              the conflicting files"
         ))
@@ -884,11 +884,12 @@ fn luaurc_alias_named_self_warns_w004_where_self_is_required() {
     fs::write(package.join("init.luau"), "return require(\"@self/x\")\n").expect("write init");
     fs::write(package.join("x.luau"), RETURN_ONE).expect("write x");
     let warnings = bundle_luau_project(directory.path()).expect("bundle failed").warnings;
-    let [warning] = warnings.as_slice() else {
+    let located = located(&warnings);
+    let [(path, warning)] = located.as_slice() else {
         panic!("expected one warning: {warnings:?}");
     };
     assert_eq!(warning.code, "W004");
-    assert_eq!(warning.file_path, format!("{}/pkg/init.luau", slashed_root(&directory)));
+    assert_eq!(*path, format!("{}/pkg/init.luau", slashed_root(&directory)));
 }
 
 #[test]

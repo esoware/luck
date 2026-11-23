@@ -24,7 +24,7 @@ return 1";
     let fix_kinds = |fixes: FixKind| -> Vec<(&str, Option<FixKind>)> {
         luck_linter::lint(&allocator, source, LuaTarget::Lua54, &config, fixes)
             .iter()
-            .map(|diag| (diag.rule, diag.fix.as_ref().map(|built| built.kind)))
+            .map(|diag| (diag.code, diag.fix.as_ref().map(|built| built.kind)))
             .collect()
     };
     assert_eq!(
@@ -56,7 +56,7 @@ return 1";
 local unused
 return 1"
     );
-    assert_eq!(result.diags, lint(result.parse.source, LuaTarget::Lua54, &config));
+    assert_eq!(result.messages, lint(result.parse.source, LuaTarget::Lua54, &config));
 }
 
 #[test]

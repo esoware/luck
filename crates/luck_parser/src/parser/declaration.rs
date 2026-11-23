@@ -3,6 +3,7 @@ use luck_ast::{
     Attribute, AttributedName, FunctionAttribute, FunctionName, GetSpan as _, LocalAssignmentKind,
     LocalFunctionKind, Name, Statement, TypeDeclarationValue, is_multi_value,
 };
+use luck_diagnostics::Diagnostic;
 use luck_token::{Span, TokenKind};
 
 use super::Parser;
@@ -39,7 +40,7 @@ impl<'ast> Parser<'ast> {
         let function_span = self.advance();
         let name = self.parse_function_name();
         let start_span = attributes.first().map_or(function_span, |attribute| attribute.span);
-        let Some(body) = self.parse_function_body() else {
+        let Some(body) = self.parse_function_body(function_span) else {
             return Statement::Error(start_span);
         };
         let span = start_span.merge(body.span);
@@ -105,10 +106,10 @@ impl<'ast> Parser<'ast> {
         kind: LocalFunctionKind,
     ) -> Statement<'ast> {
         let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
-        self.advance(); // `function`
+        let function_span = self.advance();
         let name = self.expect_identifier_recover();
         self.counts.declarations = self.counts.declarations.wrapping_add(1);
-        let Some(body) = self.parse_function_body() else {
+        let Some(body) = self.parse_function_body(function_span) else {
             return Statement::Error(start_span);
         };
         let span = start_span.merge(body.span);
@@ -203,9 +204,9 @@ impl<'ast> Parser<'ast> {
 
         // `global function name(...) ... end`
         if self.is_at(TokenKind::Function) {
-            self.advance();
+            let function_span = self.advance();
             let name = self.expect_identifier_recover();
-            let Some(body) = self.parse_function_body() else {
+            let Some(body) = self.parse_function_body(function_span) else {
                 return Statement::Error(global_span);
             };
             let span = global_span.merge(body.span);
@@ -276,10 +277,10 @@ impl<'ast> Parser<'ast> {
         // `type function Name funcbody` takes no `=`, and the body is
         // ordinary Luau.
         if self.is_at(TokenKind::Function) {
-            self.advance();
+            let function_span = self.advance();
             self.has_type_function = true;
             let name = self.expect_identifier_recover();
-            let Some(body) = self.parse_function_body() else {
+            let Some(body) = self.parse_function_body(function_span) else {
                 return Statement::Error(start_span);
             };
             let span = start_span.merge(body.span);
@@ -409,8 +410,13 @@ impl<'ast> Parser<'ast> {
     }
 
     fn register_exported_name(&mut self, name: Name<'ast>) {
-        if !self.exported_names.insert(name.text.as_str()) {
-            self.error(name.span, format!("duplicate exported identifier `{}`", name.text));
+        if let Some(&first) = self.exported_names.get(name.text.as_str()) {
+            let message = format!("duplicate exported identifier `{}`", name.text);
+            self.errors.push(
+                Diagnostic::e008(name.span, message).with_label(first, "first exported here"),
+            );
+        } else {
+            self.exported_names.insert(name.text.as_str(), name.span);
         }
     }
 }

@@ -1,4 +1,5 @@
 use luck_ast::{Call, Expression, GetSpan as _};
+use luck_diagnostics::Tag;
 use luck_semantic::SemanticAnalysis;
 
 use crate::call::{CallArg, CallArgs, is_global_call};
@@ -56,6 +57,7 @@ fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding
     };
     let finding = if is_truthy {
         Finding::new("`assert` on a constant value always passes", call.span())
+            .with_tag(Tag::Unnecessary)
             .with_help("remove the `assert` or check a real condition")
     } else {
         Finding::new("`assert` on a constant falsy value always errors", call.span())
@@ -69,10 +71,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&UnnecessaryAssert, source, LuaVersion::Lua54)
     }
 

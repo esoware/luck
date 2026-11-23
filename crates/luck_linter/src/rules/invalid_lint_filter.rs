@@ -1,10 +1,15 @@
+use alloc::borrow::Cow;
+
+use luck_token::{DirectiveError, DirectiveErrorKind};
+
 use crate::diagnostic::Finding;
-use crate::directives::Target;
+use crate::directives::{DirectiveProblem, Target};
 use crate::rule::{LintContext, Rule, WholeRule, impl_rule};
 use crate::rules::{closest_rule_name, rules};
 
 /// Flags a `luck:` comment that's no directive, and a directive's rule name
-/// no rule has, such as `parse_error`. Either would otherwise do nothing.
+/// no rule has, such as a parse error's code, `E008`. Either would otherwise
+/// do nothing.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InvalidLintFilter;
 
@@ -19,8 +24,19 @@ impl_rule!(
 impl WholeRule for InvalidLintFilter {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let directives = context.directives;
-        let malformed =
-            directives.errors().iter().map(|error| Finding::new(error.message.clone(), error.span));
+        let malformed = directives.errors().iter().map(|problem| match *problem {
+            DirectiveProblem::Malformed(error) => {
+                Finding::new(malformed_message(error, context.source), error.span)
+            }
+            DirectiveProblem::UnopenedEnd { verb, name } => Finding::new(
+                format!(
+                    "no `{}({}) start` for this `end` to close",
+                    verb.name(),
+                    name.text(context.source)
+                ),
+                name,
+            ),
+        });
         let unknown = directives
             .entries()
             .iter()
@@ -47,15 +63,41 @@ impl WholeRule for InvalidLintFilter {
     }
 }
 
+fn malformed_message(error: DirectiveError, source: &str) -> Cow<'static, str> {
+    let text = error.span.text(source);
+    match error.kind {
+        DirectiveErrorKind::Empty => "expected a directive after `luck:`".into(),
+        DirectiveErrorKind::NotLintVerb => "`#luck:` takes only `allow`, `deny`, or `warn`".into(),
+        DirectiveErrorKind::UnknownDirective => format!(
+            "unknown directive `{text}`, expected `allow`, `deny`, `warn`, `format`, or `ignore`"
+        )
+        .into(),
+        DirectiveErrorKind::UnknownFormatSetting => {
+            "expected `off`, `on`, or `ignore` after `format`".into()
+        }
+        DirectiveErrorKind::MissingList(verb) => {
+            format!("expected `(` after `{}`", verb.name()).into()
+        }
+        DirectiveErrorKind::UnclosedList => "unclosed `(`".into(),
+        DirectiveErrorKind::EmptyList(verb) => format!("`{}` names no rule", verb.name()).into(),
+        DirectiveErrorKind::RegionOnFileWide => {
+            "a `#luck:` directive covers the whole file, so it takes no `start` or `end`".into()
+        }
+        DirectiveErrorKind::UnknownExtent(verb) => {
+            format!("expected `start` or `end` after `{}(...)`, found `{text}`", verb.name()).into()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&InvalidLintFilter, source, LuaVersion::Lua54)
     }
 
@@ -69,12 +111,12 @@ local _x = 1");
     }
 
     #[test]
-    fn flags_parse_error_which_no_directive_can_silence() {
+    fn flags_the_parse_error_code_which_no_directive_can_silence() {
         let diags = run("\
--- #luck: allow(parse_error)
+-- #luck: allow(E008)
 local _x = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].message, "unknown lint rule `parse_error`");
+        assert_eq!(diags[0].message, "unknown lint rule `E008`");
     }
 
     #[test]
@@ -84,7 +126,7 @@ local _x = 1");
 local _x = 1";
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].span.text(source), "strat");
+        assert_eq!(diags[0].span().text(source), "strat");
     }
 
     #[test]

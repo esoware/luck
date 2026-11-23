@@ -40,7 +40,7 @@ fn parens_past_the_depth_cap_are_an_error() {
         let close = ")".repeat(MAX_NESTING_DEPTH + 1);
         let source = format!("{open}1{close}");
         let result = parse(&allocator, &source, LuaVersion::Lua54);
-        assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+        assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
     });
 }
 
@@ -80,7 +80,7 @@ fn blocks_past_the_depth_cap_are_an_error() {
         let blocks = MAX_NESTING_DEPTH;
         let source = format!("{}local x = 1{}", "do ".repeat(blocks), " end".repeat(blocks));
         let result = parse(&allocator, &source, LuaVersion::Lua54);
-        assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+        assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
     });
 }
 
@@ -92,7 +92,7 @@ fn tables_past_the_depth_cap_are_an_error() {
         let close = "}".repeat(MAX_NESTING_DEPTH);
         let source = format!("local x = {open}1{close}");
         let result = parse(&allocator, &source, LuaVersion::Lua54);
-        assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+        assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
     });
 }
 
@@ -104,7 +104,7 @@ fn functions_past_the_depth_cap_are_an_error() {
         let suffix = " end".repeat(MAX_NESTING_DEPTH);
         let source = format!("local x = {prefix}1{suffix}");
         let result = parse(&allocator, &source, LuaVersion::Lua54);
-        assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+        assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
     });
 }
 
@@ -603,6 +603,6 @@ fn an_operand_cut_off_at_the_cap_is_one_error_where_it_was_cut() {
             panic!("{:?}", result.errors);
         };
         let innermost = "local v = ".len() + MAX_NESTING_DEPTH;
-        assert_eq!(Range::<usize>::from(error.span).start, innermost);
+        assert_eq!(Range::<usize>::from(error.span.unwrap()).start, innermost);
     });
 }

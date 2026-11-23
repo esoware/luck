@@ -29,13 +29,13 @@
     )
 )]
 
+extern crate alloc;
+
 mod cursor;
-mod lex_error;
 mod lex_result;
 mod lexer;
 mod number;
 mod search;
 
-pub use lex_error::LexError;
 pub use lex_result::LexResult;
 pub use lexer::{Lexer, lex};

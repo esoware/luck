@@ -14,7 +14,7 @@ Positions count UTF-8 bytes when the client offers them, since a column then cos
 
 ## Features
 
-- Lint diagnostics on open and change, from `luck_linter`.
+- Lint diagnostics on open and change, from `luck_linter`, each with its labels as related locations, its help and note after its message, a link to its rule, and the `Unnecessary` or `Deprecated` tag where it has one.
 - Formatting and range formatting, from `luck_formatter`.
 - Hover, completion, signature help, go to definition, references, rename, document and workspace symbols, semantic tokens, document highlights, folding ranges, selection ranges, and document links.
 - Code actions: each diagnostic's fix or suggestion, `source.fixAll.luck`, which applies the fixes and leaves the suggestions, and comments that disable a rule.

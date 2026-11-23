@@ -31,7 +31,11 @@ fn lint_json_carries_a_rules_help() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     let finding: serde_json::Value =
         serde_json::from_str(stdout.lines().next().expect("one finding")).expect("a JSON object");
-    assert_eq!(finding["rule"], "unknown_type", "{stdout}");
+    assert_eq!(finding["code"], "unknown_type", "{stdout}");
+    assert!(
+        finding["url"].as_str().is_some_and(|url| url.ends_with("/rules/unknown_type.rs")),
+        "{stdout}"
+    );
     assert_eq!(finding["help"], "did you mean `string`?", "{stdout}");
 }
 
@@ -44,7 +48,7 @@ fn lint_json_help_is_null_for_a_rule_with_none() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     let finding: serde_json::Value =
         serde_json::from_str(stdout.lines().next().expect("one finding")).expect("a JSON object");
-    assert_eq!(finding["rule"], "parse_error", "{stdout}");
+    assert_eq!(finding["code"], "E008", "{stdout}");
     assert!(finding["help"].is_null(), "{stdout}");
 }
 

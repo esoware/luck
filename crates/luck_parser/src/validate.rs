@@ -3,12 +3,12 @@ mod gotos;
 mod scope;
 
 use luck_ast::Chunk;
+use luck_diagnostics::Diagnostic;
 
 pub(crate) use self::scope::check_type_functions;
-use crate::ParseError;
 
 /// Compile-time scope checks that Lua performs and [`parse`](crate::parse)
-/// skips.
+/// skips, each failure an E008.
 ///
 /// Covers writes to read-only bindings, names no Lua 5.5 `global` declaration
 /// covers, goto/label resolution, and Luau's continue/until rule. They need an
@@ -16,7 +16,7 @@ use crate::ParseError;
 /// Run it only on a clean parse, since a recovered AST produces misleading
 /// follow-on errors.
 #[must_use]
-pub fn validate(chunk: &Chunk<'_>) -> Vec<ParseError> {
+pub fn validate(chunk: &Chunk<'_>) -> Vec<Diagnostic> {
     let version = chunk.version;
     if version.has_goto() || version.has_read_only_bindings() || version.has_continue() {
         scope::check(chunk)

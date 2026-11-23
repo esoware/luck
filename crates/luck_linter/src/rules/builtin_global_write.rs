@@ -179,10 +179,10 @@ mod tests {
 
     use super::*;
     use crate::config::LintConfig;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::{run_rule, run_rule_roblox, run_rule_with_config};
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&BuiltinGlobalWrite, source, LuaVersion::Lua54)
     }
 

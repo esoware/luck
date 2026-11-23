@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use luck_config::{CONFIG_FILE_NAME, Editorconfigs, Project, find_config};
-use luck_core::{Diagnostic, LuaTarget};
+use luck_core::LuaTarget;
+use luck_diagnostics::FileDiagnostics;
 use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
 use luck_resolver::{ResolveOptions, Resolver};
@@ -80,7 +81,7 @@ impl LoadedProject {
 /// reports.
 #[derive(Debug)]
 pub(crate) struct ConfigError {
-    pub diag: Diagnostic,
+    pub file: FileDiagnostics,
     /// The cache's [`SettingsCache::generation`] when the lookup read it.
     pub generation: u64,
 }
@@ -130,8 +131,8 @@ impl Lookups {
         directory: Option<&Path>,
         config_path: Option<PathBuf>,
         project: Arc<LoadedProject>,
-        diag: Option<Diagnostic>,
-    ) -> (Arc<LoadedProject>, Option<Diagnostic>) {
+        error: Option<FileDiagnostics>,
+    ) -> (Arc<LoadedProject>, Option<FileDiagnostics>) {
         let found_meanwhile = match &config_path {
             Some(config) => self.by_config.get(config),
             None => self.cached(directory),
@@ -142,17 +143,16 @@ impl Lookups {
         }
         let names = project.project().files().iter().filter_map(|file| file.file_name());
         self.config_names.extend(names.map(OsString::from));
-        if let Some(error) = &diag {
-            let file = PathBuf::from(&error.file_path);
-            self.config_names.extend(file.file_name().map(OsString::from));
-            self.broken.push(file);
+        if let Some(broken) = &error {
+            self.config_names.extend(broken.path.file_name().map(OsString::from));
+            self.broken.push(broken.path.clone());
         }
         if let Some(config) = config_path {
             self.by_config.insert(config, Arc::clone(&project));
         }
         self.projects.push(Arc::clone(&project));
         self.remember(directory, &project);
-        (project, diag)
+        (project, error)
     }
 
     /// Makes `project` the one documents in `directory` get.
@@ -210,7 +210,7 @@ impl SettingsCache {
         let shared = config_path
             .as_ref()
             .and_then(|config| self.lookups.read().by_config.get(config).cloned());
-        let (project, diag) = match (shared, &config_path) {
+        let (project, error) = match (shared, &config_path) {
             (Some(project), _) => (project, None),
             (None, Some(config)) => match Project::load(config) {
                 Ok(loaded) => (Arc::new(LoadedProject::new(loaded)), None),
@@ -228,9 +228,9 @@ impl SettingsCache {
         if lookups.generation != generation {
             return (project, None);
         }
-        let (kept, reported) = lookups.keep(directory, config_path, project, diag);
+        let (kept, reported) = lookups.keep(directory, config_path, project, error);
         drop(lookups);
-        (kept, reported.map(|problem| ConfigError { diag: problem, generation }))
+        (kept, reported.map(|file| ConfigError { file, generation }))
     }
 
     /// Bumped by each [`clear`](Self::clear).
@@ -328,7 +328,7 @@ mod tests {
 
         let (project, first_error) = cache.project_for(Some(&file));
         let error = first_error.expect("the error comes with the first lookup");
-        assert_eq!(error.diag.code, "E014");
+        assert_eq!(error.file.diags[0].code, "E014");
         assert_eq!(error.generation, cache.generation());
         assert_eq!(project.project().target_for(Some(&file)), LuaTarget::Lua54);
         assert!(cache.project_for(Some(&file)).1.is_none(), "reported once");

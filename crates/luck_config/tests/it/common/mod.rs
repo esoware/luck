@@ -1,10 +1,11 @@
 use core::time::Duration;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::{env, fs};
 
 use luck_config::Project;
+use luck_diagnostics::Diagnostic;
 use tempfile::TempDir;
 
 pub(crate) fn project_with(files: &[(&str, &str)]) -> TempDir {
@@ -24,6 +25,14 @@ pub(crate) fn loaded(files: &[(&str, &str)]) -> (TempDir, Project) {
     let directory = project_with(files);
     let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
     (directory, project)
+}
+
+/// The one problem that stops the config at `config_path` from loading,
+/// and the file it's in.
+pub(crate) fn load_error(config_path: &Path) -> (PathBuf, Diagnostic) {
+    let error = Project::load(config_path).expect_err("the config must not load");
+    let [diag] = <[Diagnostic; 1]>::try_from(error.diags).expect("one problem");
+    (error.path, diag)
 }
 
 /// nextest gives each test its own process, so this can't race another test.

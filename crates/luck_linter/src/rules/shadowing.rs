@@ -29,14 +29,15 @@ impl WholeRule for Shadowing {
             if name.starts_with('_') || symbol.kind == SymbolKind::ImplicitSelf {
                 continue;
             }
-            let shadowed = tree.symbol(shadowed_id);
-            let (line, column) = context.line_index().line_column(shadowed.definition_span.start);
             findings.push(
                 Finding::new(
                     format!("variable `{name}` shadows outer variable"),
                     symbol.definition_span,
                 )
-                .with_help(format!("outer variable defined at {line}:{column}")),
+                .with_label(
+                    tree.symbol(shadowed_id).definition_span,
+                    "outer variable defined here",
+                ),
             );
         }
 
@@ -49,10 +50,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&Shadowing, source, LuaVersion::Lua54)
     }
 
@@ -60,11 +61,13 @@ mod tests {
     fn flags_nested_block_shadow() {
         // Inner-scope redeclaration of an outer local. `redefining_local`
         // covers only the same block.
-        let diags = run("\
+        let source = "\
 local x = 1
-do local x = 2 print(x) end");
+do local x = 2 print(x) end";
+        let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`x`"));
+        assert_eq!(diags[0].labels.first().map(|label| label.span.start), Some(6));
     }
 
     #[test]

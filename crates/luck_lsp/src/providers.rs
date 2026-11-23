@@ -43,7 +43,7 @@ mod tests {
         let uri: Uri = "file:///main.lua".parse().expect("a valid URI");
         let document = document(source, target);
         let lints = document.lint(&|| false).expect("nothing cancels it");
-        let diagnostics = diagnostics::to_lsp(&document, &lints);
+        let diagnostics = diagnostics::to_lsp(&uri, &document, &lints);
         let full_range = document.full_range();
         let text_document = TextDocumentIdentifier { uri: uri.clone() };
         let _actions = code_action::code_action(

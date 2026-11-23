@@ -1,19 +1,20 @@
 use luck_allocator::Allocator;
 use luck_core::LuaTarget;
+use luck_diagnostics::{Diagnostic, Severity};
 use luck_token::{LuaVersion, Span};
 
 use crate::config::LintConfig;
-use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
+use crate::diagnostic::Message;
 use crate::fix::{self, FixKind};
 use crate::rule::{LintContext, Rule};
 use crate::rules::{RULES, RuleEntry};
 use crate::{bus, driver};
 
-pub(crate) fn run_rule(rule: &dyn Rule, source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
+pub(crate) fn run_rule(rule: &dyn Rule, source: &str, version: LuaVersion) -> Vec<Message> {
     run_rule_with_config(rule, source, version, &LintConfig::default())
 }
 
-pub(crate) fn run_rule_roblox(rule: &dyn Rule, source: &str) -> Vec<LintDiagnostic> {
+pub(crate) fn run_rule_roblox(rule: &dyn Rule, source: &str) -> Vec<Message> {
     check(rule, source, LuaTarget::LuauRoblox, &LintConfig::default())
 }
 
@@ -22,18 +23,14 @@ pub(crate) fn run_rule_with_config(
     source: &str,
     version: LuaVersion,
     config: &LintConfig,
-) -> Vec<LintDiagnostic> {
+) -> Vec<Message> {
     check(rule, source, standalone(version), config)
 }
 
-/// Applies one round of the diagnostics' fixes, whatever their kind, as
-/// `--fix-suggestions` does, asserting that each diagnostic carries one and
+/// Applies one round of the messages' fixes, whatever their kind, as
+/// `--fix-suggestions` does, asserting that each message carries one and
 /// that the result re-parses.
-pub(crate) fn fix_and_reparse(
-    source: &str,
-    diags: &[LintDiagnostic],
-    version: LuaVersion,
-) -> String {
+pub(crate) fn fix_and_reparse(source: &str, diags: &[Message], version: LuaVersion) -> String {
     assert!(diags.iter().all(|diag| diag.fix.is_some()), "{diags:?}");
     let fixed = applied(source, diags);
     let allocator = Allocator::new();
@@ -42,8 +39,8 @@ pub(crate) fn fix_and_reparse(
     fixed
 }
 
-/// `source` after one round of the diagnostics' fixes, whatever their kind.
-pub(crate) fn applied(source: &str, diags: &[LintDiagnostic]) -> String {
+/// `source` after one round of the messages' fixes, whatever their kind.
+pub(crate) fn applied(source: &str, diags: &[Message]) -> String {
     fix::apply(source, diags, FixKind::all()).unwrap_or_else(|| source.to_owned())
 }
 
@@ -58,12 +55,7 @@ const fn standalone(version: LuaVersion) -> LuaTarget {
     }
 }
 
-fn check(
-    rule: &dyn Rule,
-    source: &str,
-    target: LuaTarget,
-    config: &LintConfig,
-) -> Vec<LintDiagnostic> {
+fn check(rule: &dyn Rule, source: &str, target: LuaTarget, config: &LintConfig) -> Vec<Message> {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, source, target.lua_version());
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
@@ -85,7 +77,7 @@ fn check(
             return driver::lint_analyzed(&parse, &analysis, config, FixKind::all(), &|| false)
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|diag| diag.rule == rule.name())
+                .filter(|diag| diag.code == rule.name())
                 .collect();
         }
     };
@@ -96,6 +88,12 @@ fn check(
     diags
 }
 
-pub(crate) fn diagnostic(rule: &'static str, span: Span) -> LintDiagnostic {
-    Finding::new("test", span).into_diagnostic(rule, Category::Correctness, Severity::Warning)
+/// The text each of `message`'s labels points at in `source`, in order.
+pub(crate) fn labeled<'source>(message: &Message, source: &'source str) -> Vec<&'source str> {
+    message.labels.iter().map(|label| label.span.text(source)).collect()
+}
+
+/// A message with no fix, at `span`.
+pub(crate) fn message(span: Span) -> Message {
+    Message { diagnostic: Diagnostic::lint("test", Severity::Warning, span, "test"), fix: None }
 }

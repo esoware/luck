@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::Path;
 
 use serde::Deserialize as _;
 use serde::de::IntoDeserializer as _;
@@ -29,10 +28,10 @@ pub(crate) fn globs(patterns: &[&str]) -> Vec<Glob> {
 }
 
 pub(crate) fn parsed(json: &str) -> LuckConfig {
-    parse(json, Path::new("luck.json")).expect("config parses")
+    parse(json).expect("config parses")
 }
 
 /// The message `json` fails to parse with.
 pub(crate) fn parse_error(json: &str) -> String {
-    parse(json, Path::new("luck.json")).expect_err("config doesn't parse").message
+    parse(json).expect_err("config doesn't parse").message.to_string()
 }

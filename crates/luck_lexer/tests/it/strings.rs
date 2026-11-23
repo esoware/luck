@@ -1,5 +1,6 @@
+use luck_diagnostics::Diagnostic;
 use luck_lexer::lex;
-use luck_token::{LuaVersion, SourceError, Span, TokenKind};
+use luck_token::{LuaVersion, Span, TokenKind};
 
 use crate::common::{lex_lua51, tokens, tokens_in};
 
@@ -31,7 +32,7 @@ fn decimal_escapes_up_to_255_lex() {
 #[test]
 fn decimal_escape_over_255_is_error() {
     let result = lex_lua51("\"\\256\"");
-    assert_ne!(result.errors, Vec::<SourceError>::new());
+    assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("too large"));
 }
 
@@ -151,8 +152,8 @@ y",
             panic!("{source:?}: {:?}", result.errors);
         };
         assert_eq!(
-            (error.message.as_str(), error.span.text(source)),
-            (message, text),
+            (&*error.message, error.span.map(|span| span.text(source))),
+            (message, Some(text)),
             "{source:?}"
         );
         let unterminated = if is_unterminated { vec![result.tokens[0].span] } else { Vec::new() };
@@ -163,7 +164,7 @@ y",
 #[test]
 fn unterminated_string_is_error() {
     let result = lex_lua51("\"hello");
-    assert_ne!(result.errors, Vec::<SourceError>::new());
+    assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("unterminated"));
 }
 
@@ -209,7 +210,7 @@ fn hex_escape_lexes_outside_lua51() {
 #[test]
 fn hex_escape_with_a_non_hex_digit_is_error() {
     let result = lex("\"\\xG1\"", LuaVersion::Lua52);
-    assert_ne!(result.errors, Vec::<SourceError>::new());
+    assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("hex digit"));
 }
 
@@ -244,14 +245,14 @@ fn unicode_escape_lexes_everywhere_but_lua52() {
 #[test]
 fn unicode_escape_without_digits_is_error() {
     let result = lex("\"\\u{}\"", LuaVersion::Lua53);
-    assert_ne!(result.errors, Vec::<SourceError>::new());
+    assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("at least one hex digit"));
 }
 
 #[test]
 fn unicode_escape_without_open_brace_is_error() {
     let result = lex("\"\\u41}\"", LuaVersion::Lua53);
-    assert_ne!(result.errors, Vec::<SourceError>::new());
+    assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("`{`"));
 }
 
@@ -285,7 +286,7 @@ line2]]";
 #[test]
 fn unterminated_long_string_is_error() {
     let result = lex_lua51("[[oops");
-    assert_ne!(result.errors, Vec::<SourceError>::new());
+    assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("unterminated"));
 }
 
@@ -294,7 +295,7 @@ fn luau_undefined_escape_lexes_as_the_literal_character() {
     let result = lex(r#""\q""#, LuaVersion::Luau);
     assert_eq!(
         result.errors,
-        Vec::<SourceError>::new(),
+        Vec::<Diagnostic>::new(),
         "Luau reads an undefined escape as its literal character, so it should lex without errors"
     );
 }
@@ -303,7 +304,7 @@ fn luau_undefined_escape_lexes_as_the_literal_character() {
 fn records_where_each_lenient_escape_is() {
     let source = "x = '\\q\\n\\\u{e9}' .. `\\w\\{{a}\\}`";
     let result = lex(source, LuaVersion::Luau);
-    assert_eq!(result.errors, Vec::<SourceError>::new());
+    assert_eq!(result.errors, Vec::<Diagnostic>::new());
     let escapes: Vec<&str> = result.lenient_escapes.iter().map(|span| span.text(source)).collect();
     assert_eq!(escapes, ["\\q", "\\\u{e9}", "\\w"]);
     let lua51 = lex("x = '\\x41\\z\\u{48}\\65'", LuaVersion::Lua51);
@@ -346,7 +347,7 @@ return 1",
             panic!("{source:?}: {:?}", result.errors);
         };
         assert_eq!(error.message, "nesting of `[[...]]` is deprecated", "{source:?}");
-        assert_eq!(error.span, Span::new(nested_open, nested_open + 2), "{source:?}");
+        assert_eq!(error.span, Some(Span::new(nested_open, nested_open + 2)), "{source:?}");
     }
 }
 

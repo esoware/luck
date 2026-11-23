@@ -1,5 +1,3 @@
-use core::mem;
-
 use luck_token::{CommentContent, Span};
 
 use crate::diagnostic::Finding;
@@ -23,7 +21,7 @@ impl_rule!(
 impl WholeRule for CommentDirective {
     fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
         let first_token_start = context.block.span.start;
-        let mut has_seen_mode = false;
+        let mut first_mode: Option<Span> = None;
         let mut findings = Vec::new();
         for comment in context.comments {
             if comment.content != CommentContent::HotComment {
@@ -40,11 +38,15 @@ impl WholeRule for CommentDirective {
             let body = comment.span.text(context.source).get(3..).unwrap_or_default();
             let hot_comment = HotComment::split(body, comment.span.start.saturating_add(3));
             if hot_comment.sets_mode() {
-                if mem::replace(&mut has_seen_mode, true) {
-                    findings.push(Finding::new(
-                        "type checking mode is already set by an earlier directive",
-                        hot_comment.word_span,
-                    ));
+                match first_mode {
+                    Some(first) => findings.push(
+                        Finding::new(
+                            "type checking mode is already set by an earlier directive",
+                            hot_comment.word_span,
+                        )
+                        .with_label(first, "first set here"),
+                    ),
+                    None => first_mode = Some(hot_comment.word_span),
                 }
             } else {
                 findings.extend(hot_comment.problem());
@@ -128,10 +130,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&CommentDirective, source, LuaVersion::Luau)
     }
 

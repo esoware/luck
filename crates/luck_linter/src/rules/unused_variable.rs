@@ -1,3 +1,4 @@
+use luck_diagnostics::Tag;
 use luck_semantic::SymbolKind;
 
 use crate::diagnostic::Finding;
@@ -60,6 +61,7 @@ impl WholeRule for UnusedVariable {
 
             findings.push(
                 Finding::new(format!("unused {kind_name} `{name}`"), symbol.definition_span)
+                    .with_tag(Tag::Unnecessary)
                     .with_help("prefix with `_` to suppress this warning")
                     .with_fix(context, FixKind::Suggestion, |fixer| {
                         prefix_underscore(fixer, semantic, symbol)
@@ -76,10 +78,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::{applied, fix_and_reparse, run_rule};
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&UnusedVariable, source, LuaVersion::Luau)
     }
 
@@ -101,6 +103,7 @@ export local answer = 42
 local dead = 1");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`dead`"));
+        assert_eq!(diags[0].tag, Some(Tag::Unnecessary), "an editor fades it");
     }
 
     #[test]

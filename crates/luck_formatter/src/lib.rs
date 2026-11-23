@@ -60,7 +60,7 @@ mod quotes;
 mod sort_requires;
 
 pub use comments::Comments;
-pub use format::{FormatError, FormatResult, format, format_chunk, format_parsed, format_range};
+pub use format::{FormatResult, format, format_chunk, format_parsed, format_range};
 pub use format_options::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
     IndentStyle, LineEndings, QuoteStyle, SpaceAfterFunction,

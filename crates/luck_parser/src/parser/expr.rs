@@ -194,7 +194,7 @@ impl<'ast> Parser<'ast> {
         self.open(Closer::Paren);
         let expr = self.parse_expr(0);
         self.grouping_depth = self.grouping_depth.wrapping_sub(1);
-        let close = self.expect_closer(TokenKind::RightParen, Closer::Paren);
+        let close = self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
         let parens = open.merge(close);
         let grouped = if is_multi_value(&expr) || matches!(expr, Expression::Integer(_)) {
             if !self.enter_wrapper(level) {
@@ -310,7 +310,7 @@ impl<'ast> Parser<'ast> {
                 let open = self.advance();
                 self.open(Closer::Bracket);
                 let index = self.parse_expr(0);
-                let close = self.expect_closer(TokenKind::RightBracket, Closer::Bracket);
+                let close = self.expect_closer(TokenKind::RightBracket, Closer::Bracket, open);
                 Suffix::Index { span: open.merge(close), index }
             }
             TokenKind::Colon => self.parse_method_call(),
@@ -350,9 +350,13 @@ impl<'ast> Parser<'ast> {
     /// Parse Luau's `<<T, U>>`, returning the type arguments and the span of
     /// the final `>`.
     fn parse_type_instantiation(&mut self) -> (TypeArgs<'ast>, Span) {
-        self.advance(); // first `<`
+        let open = self.advance(); // first `<`
         let type_args = self.parse_type_args(); // second `<` through first `>`
-        let close = self.expect(TokenKind::Greater);
+        let close = if self.is_at(TokenKind::Greater) {
+            self.advance()
+        } else {
+            self.report_unclosed(TokenKind::Greater, open)
+        };
         (type_args, close)
     }
 
@@ -413,17 +417,21 @@ impl<'ast> Parser<'ast> {
         self.open(Closer::StringSegment);
         let start = self.scratch.segments.len();
         self.parse_interpolated_hole(first);
+        let mut open_hole = first;
         while self.is_at(TokenKind::InterpolatedStringMiddle) {
-            let middle = self.token;
+            open_hole = self.token;
             self.advance();
-            self.parse_interpolated_hole(middle);
+            self.parse_interpolated_hole(open_hole);
         }
         let (end_span, tail) = if self.is_at(TokenKind::InterpolatedStringEnd) {
             let end = self.token;
             self.advance();
             (end.span, self.interpolated_text(end))
         } else {
-            let end_span = self.report_unfinished_interpolated_string();
+            // The `{` is the last byte of the text before the hole.
+            let brace_start = open_hole.span.end.saturating_sub(1);
+            let end_span = self
+                .report_unclosed(TokenKind::RightBrace, Span::new(brace_start, open_hole.span.end));
             let at = self.previous_span.end;
             let missing = StringLiteral::new(ThinBytes::new(b""), None, Span::new(at, at));
             (end_span, missing)
@@ -459,18 +467,6 @@ impl<'ast> Parser<'ast> {
         Expression::Error(span)
     }
 
-    #[cold]
-    #[inline(never)]
-    fn report_unfinished_interpolated_string(&mut self) -> Span {
-        let span = self.token.span;
-        let message = format!(
-            "expected interpolated string continuation, found {}",
-            self.token.display(self.source)
-        );
-        self.syntax_error(span, message);
-        span
-    }
-
     /// The arguments sit one level under the run of suffixes, which
     /// [`Self::parse_suffix_run`] has already counted, so the parentheses add
     /// none of their own.
@@ -493,7 +489,7 @@ impl<'ast> Parser<'ast> {
                 } else {
                     self.parse_expr_list()
                 };
-                let close = self.expect_closer(TokenKind::RightParen, Closer::Paren);
+                let close = self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
                 FunctionArgs::Parenthesized { span: open.merge(close), args }
             }
             TokenKind::LeftBrace => {
@@ -530,8 +526,8 @@ impl<'ast> Parser<'ast> {
         if !self.is_at(TokenKind::Function) {
             return self.report_missing_function();
         }
-        self.advance(); // `function`
-        let Some(body) = self.parse_function_body() else {
+        let function_span = self.advance();
+        let Some(body) = self.parse_function_body(function_span) else {
             return Expression::Error(start_span);
         };
         let span = start_span.merge(body.span);
@@ -572,7 +568,7 @@ impl<'ast> Parser<'ast> {
         }
         self.exit_depth();
 
-        let close = self.expect_closer(TokenKind::RightBrace, Closer::Brace);
+        let close = self.expect_closer(TokenKind::RightBrace, Closer::Brace, open);
         let fields = List::split_off_in(&mut self.scratch.fields, start, self.allocator);
         let span = open.merge(close);
         Some(TableConstructor::boxed(span, fields, has_trailing_separator, self.allocator))
@@ -592,7 +588,7 @@ impl<'ast> Parser<'ast> {
             let open = self.advance();
             self.open(Closer::Bracket);
             let key = self.parse_expr(0);
-            self.expect_closer(TokenKind::RightBracket, Closer::Bracket);
+            self.expect_closer(TokenKind::RightBracket, Closer::Bracket, open);
             self.expect(TokenKind::Equal);
             let value = self.parse_expr(0);
             let span = Span::new(open.start, self.previous_span.end);

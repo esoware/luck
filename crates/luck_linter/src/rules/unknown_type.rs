@@ -129,10 +129,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::UnknownType;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::{run_rule, run_rule_roblox};
 
-    fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
+    fn run(source: &str, version: LuaVersion) -> Vec<Message> {
         run_rule(&UnknownType, source, version)
     }
 

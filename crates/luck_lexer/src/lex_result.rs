@@ -1,13 +1,13 @@
+use luck_diagnostics::Diagnostic;
 use luck_token::{Comment, Span, Token};
-
-use crate::lex_error::LexError;
 
 #[derive(Debug, Default)]
 pub struct LexResult {
     /// Every token, ending in `Eof` for any source [`Lexer::new`](crate::Lexer::new) accepts.
     pub tokens: Vec<Token>,
     pub comments: Vec<Comment>,
-    pub errors: Vec<LexError>,
+    /// Each an E008.
+    pub errors: Vec<Diagnostic>,
     /// What [`Lexer::unterminated`](crate::Lexer::unterminated) gives once
     /// the source is lexed.
     pub unterminated: Vec<Span>,

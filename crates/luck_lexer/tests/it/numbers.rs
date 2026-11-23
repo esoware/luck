@@ -1,5 +1,6 @@
+use luck_diagnostics::Diagnostic;
 use luck_lexer::lex;
-use luck_token::{LuaVersion, SourceError, Span, TokenKind};
+use luck_token::{LuaVersion, Span, TokenKind};
 
 use crate::common::{tokens, tokens_in};
 
@@ -53,14 +54,14 @@ fn number_adjacent_to_concat_is_malformed() {
 fn hex_number_adjacent_to_concat_is_malformed_on_lua52_and_later() {
     // The 5.1 and Luau scanners stop at the dot after a radix prefix, so
     // `0xFF..2` is a valid concat there. 5.2+ fails in the hex-float path.
-    assert_eq!(lex("return 0xFF..2", LuaVersion::Lua51).errors, Vec::<SourceError>::new());
-    assert_ne!(lex("return 0xFF..2", LuaVersion::Lua54).errors, Vec::<SourceError>::new());
+    assert_eq!(lex("return 0xFF..2", LuaVersion::Lua51).errors, Vec::<Diagnostic>::new());
+    assert_ne!(lex("return 0xFF..2", LuaVersion::Lua54).errors, Vec::<Diagnostic>::new());
 }
 
 #[test]
 fn hex_literal_without_digits_is_error() {
     let result = lex("0x", LuaVersion::Lua54);
-    assert_ne!(result.errors, Vec::<SourceError>::new());
+    assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("hex literal requires at least one digit"));
 }
 
@@ -75,7 +76,7 @@ fn digitless_hex_prefix_is_error_in_every_version() {
         }
     }
     // Underscores separate digits but aren't digits themselves.
-    assert_ne!(lex("0x_", LuaVersion::Luau).errors, Vec::<SourceError>::new());
+    assert_ne!(lex("0x_", LuaVersion::Luau).errors, Vec::<Diagnostic>::new());
 }
 
 #[test]
@@ -164,7 +165,7 @@ fn binary_literal_lexes_only_in_luau() {
 #[test]
 fn binary_literal_without_digits_is_error() {
     let result = lex("0b", LuaVersion::Luau);
-    assert_ne!(result.errors, Vec::<SourceError>::new());
+    assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("binary literal requires at least one digit"));
 }
 
@@ -290,7 +291,7 @@ fn decimal_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
 #[test]
 fn malformed_decimal_numeral_error_spans_the_numeral_and_the_letter() {
     let result = lex("x = 12ab", LuaVersion::Lua54);
-    assert_eq!(result.errors[0].span, Span::new(4, 7));
+    assert_eq!(result.errors[0].span, Some(Span::new(4, 7)));
 }
 
 #[test]
@@ -330,7 +331,7 @@ fn integer_range_normalization_preserves_boundaries_and_spans() {
                 assert_eq!(result.tokens[0].span, span);
             } else {
                 assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
-                assert_eq!(result.errors[0].span, span);
+                assert_eq!(result.errors[0].span, Some(span));
                 assert_eq!(result.errors[0].message, "integer literal is outside the 64-bit range");
             }
         }
@@ -343,7 +344,7 @@ fn decimal_exponent_directly_before_concat_lexes_on_lua51_and_luau() {
         let result = lex("return 1e5..2", version);
         assert_eq!(
             result.errors,
-            Vec::<SourceError>::new(),
+            Vec::<Diagnostic>::new(),
             "`1e5..2` should lex as a concat under {version:?}, whose scanners stop at `.` after an exponent"
         );
     }
@@ -355,7 +356,7 @@ fn luau_hex_and_binary_numerals_directly_before_concat_lex() {
         let result = lex(source, LuaVersion::Luau);
         assert_eq!(
             result.errors,
-            Vec::<SourceError>::new(),
+            Vec::<Diagnostic>::new(),
             "`{source}` should lex as a concat, because Luau's scanner stops at `.` after the radix prefix"
         );
     }
@@ -368,7 +369,7 @@ fn hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
         let result = lex(source, version);
         assert_eq!(
             result.errors,
-            Vec::<SourceError>::new(),
+            Vec::<Diagnostic>::new(),
             "`0x1g` should split into `0x1` and `g` under {version:?}, as `x=0x1g=2` compiles there"
         );
         let [_, _, number, name, ..] = result.tokens.as_slice() else {
@@ -440,7 +441,7 @@ fn luau_underscore_inside_radix_prefix_lexes() {
         let result = lex(source, LuaVersion::Luau);
         assert_eq!(
             result.errors,
-            Vec::<SourceError>::new(),
+            Vec::<Diagnostic>::new(),
             "Luau strips every `_` before conversion, so `{source}` should keep its radix prefix"
         );
     }

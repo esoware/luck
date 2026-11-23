@@ -27,7 +27,7 @@ impl NodeRule for DuplicateKeys {
     fn on_table(
         &self,
         table: &TableConstructor<'_>,
-        context: &LintContext<'_>,
+        _context: &LintContext<'_>,
         findings: &mut Vec<Finding>,
     ) {
         let mut first_spans: FxHashMap<Key<'_>, Span> = FxHashMap::default();
@@ -46,11 +46,10 @@ impl NodeRule for DuplicateKeys {
             let Some((key, span)) = keyed else {
                 continue;
             };
-            if let Some(first_span) = first_spans.get(&key) {
-                let (line, column) = context.line_index().line_column(first_span.start);
+            if let Some(&first_span) = first_spans.get(&key) {
                 findings.push(
                     Finding::new(format!("duplicate key `{key}` in table constructor"), span)
-                        .with_help(format!("previous definition at {line}:{column}")),
+                        .with_label(first_span, "first defined here"),
                 );
             } else {
                 first_spans.insert(key, span);
@@ -144,10 +143,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&DuplicateKeys, source, LuaVersion::Lua54)
     }
 
@@ -155,7 +154,8 @@ mod tests {
     fn flags_repeated_name_key() {
         let diags = run("local t = { a = 1, b = 2, a = 3 }");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].help.as_deref(), Some("previous definition at 1:13"));
+        assert_eq!(diags[0].span().start, 26);
+        assert_eq!(diags[0].labels.first().map(|label| label.span.start), Some(12));
     }
 
     #[test]
@@ -176,7 +176,7 @@ mod tests {
         let diags = run("local t = { a = 1, a = 2, a = 3 }");
         assert_eq!(diags.len(), 2, "{diags:?}");
         assert!(
-            diags.iter().all(|diag| diag.help.as_deref() == Some("previous definition at 1:13")),
+            diags.iter().all(|diag| diag.labels.first().map(|label| label.span.start) == Some(12)),
             "{diags:?}"
         );
     }

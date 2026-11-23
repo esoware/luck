@@ -1,34 +1,50 @@
-use alloc::borrow::Cow;
-use core::fmt::Write as _;
 use std::fs;
 use std::io::{self, BufWriter, Write as _};
-use std::path::{self, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
 use luck_allocator::Allocator;
 use luck_config::Project;
-use luck_core::{Diagnostic, LuaTarget};
-use luck_linter::{
-    Category, FixError, FixKind, Fixed, LintConfig, LintDiagnostic, RuleLevel, Severity,
-};
-use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
-use luck_token::{LineIndex, LuaVersion};
+use luck_core::LuaTarget;
+use luck_diagnostics::{Diagnostic, Severity};
+use luck_linter::{Category, FixError, FixKind, Fixed, LintConfig, Message, RuleLevel};
+use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_token::LuaVersion;
 
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
 use crate::project::{
     ProjectFile, for_each_outcome_in_order, one_shot_project, project_files, working_project,
 };
-use crate::render::{line_and_column, render_document_diags};
+use crate::reporter::{DefaultReporter, GithubReporter, JsonReporter, Reporter, SourceFile};
 use crate::verbosity::Verbosity;
 
-#[derive(Clone, ValueEnum)]
+#[derive(Clone, Copy, ValueEnum)]
 enum LintFormat {
     Default,
     /// One JSON object per finding, a line each.
     Json,
     /// GitHub Actions annotations.
     Github,
+}
+
+impl LintFormat {
+    fn reporter(self) -> &'static dyn Reporter {
+        match self {
+            Self::Default => &DefaultReporter,
+            Self::Json => &JsonReporter,
+            Self::Github => &GithubReporter,
+        }
+    }
+
+    /// People read the default format on stderr, and tools read the others
+    /// on stdout.
+    const fn is_for_tools(self) -> bool {
+        match self {
+            Self::Default => false,
+            Self::Json | Self::Github => true,
+        }
+    }
 }
 
 /// Each flag's id and long name, short name, level, and help.
@@ -185,13 +201,6 @@ pub(crate) struct LintArgs {
     stdin_filepath: Option<String>,
 }
 
-enum Rendered {
-    /// ariadne output, for stderr.
-    Pretty(Vec<u8>),
-    /// A machine-readable format, one finding per line, for stdout.
-    Lines(String),
-}
-
 /// Per-file lint result, buffered so parallel workers never interleave output.
 struct LintOutcome {
     error_count: usize,
@@ -199,7 +208,8 @@ struct LintOutcome {
     is_fixed: bool,
     /// A file that couldn't be read or written back, for stderr.
     note: Option<String>,
-    rendered: Option<Rendered>,
+    /// The findings in the run's format.
+    rendered: Vec<u8>,
 }
 
 impl LintArgs {
@@ -262,10 +272,10 @@ impl LintArgs {
                     if let Some(note) = &outcome.note {
                         let _unused = writeln!(stderr, "{note}");
                     }
-                    let _unused = match &outcome.rendered {
-                        Some(Rendered::Pretty(pretty)) => stderr.write_all(pretty),
-                        Some(Rendered::Lines(lines)) => stdout.write_all(lines.as_bytes()),
-                        None => Ok(()),
+                    let _unused = if self.format.is_for_tools() {
+                        stdout.write_all(&outcome.rendered)
+                    } else {
+                        stderr.write_all(&outcome.rendered)
                     };
                     total_errors = total_errors.saturating_add(outcome.error_count);
                     total_warnings = total_warnings.saturating_add(outcome.warning_count);
@@ -304,7 +314,7 @@ impl LintArgs {
         let (target, lint_config) = (project.target_for(path), project.lint_for(path));
         let allocator = Allocator::new();
         let fixes = self.fixes();
-        let (current_source, diags, fix_error) =
+        let (current_source, messages, fix_error) =
             fixed_or_linted(&allocator, &source, target, &lint_config, fixes);
 
         if !fixes.is_empty() {
@@ -316,20 +326,16 @@ impl LintArgs {
             eprintln!("error: cannot fix `{stdin_path}`: {error}");
         }
 
-        let (finding_errors, total_warnings) = severity_counts(&diags);
+        let (finding_errors, total_warnings) = severity_counts(&messages);
         let total_errors = finding_errors.saturating_add(usize::from(fix_error.is_some()));
         let version = target.lua_version();
 
-        if let Some(rendered) = self.rendered(stdin_path, current_source, diags, version, is_quiet)
-        {
-            match rendered {
-                Rendered::Pretty(pretty) => {
-                    let _unused = io::stderr().write_all(&pretty);
-                }
-                Rendered::Lines(lines) if !fixes.is_empty() => eprint!("{lines}"),
-                Rendered::Lines(lines) => print!("{lines}"),
-            }
-        }
+        let rendered = self.rendered(stdin_path, current_source, messages, version, is_quiet);
+        let _unused = if self.format.is_for_tools() && fixes.is_empty() {
+            io::stdout().write_all(&rendered)
+        } else {
+            io::stderr().write_all(&rendered)
+        };
 
         self.exit_status(total_errors, total_warnings, is_quiet)
     }
@@ -384,20 +390,20 @@ impl LintArgs {
                     warning_count: 0,
                     is_fixed: false,
                     note: Some(format!("error: cannot read `{}`: {error}", file_path.display())),
-                    rendered: None,
+                    rendered: Vec::new(),
                 };
             }
         };
 
         let target = file.project.target_for(Some(file_path));
         let lint_config = file.project.lint_for(Some(file_path));
-        let (fixed, fixed_diags, fix_error) =
+        let (fixed, fixed_messages, fix_error) =
             fixed_or_linted(allocator, &source, target, &lint_config, self.fixes());
         let mut note =
             fix_error.map(|error| format!("error: cannot fix `{}`: {error}", file_path.display()));
         let mut is_fixed = false;
-        let (current_source, diags) = if fixed == source {
-            (fixed, fixed_diags)
+        let (current_source, messages) = if fixed == source {
+            (fixed, fixed_messages)
         } else if let Err(error) = fs::write(file_path, fixed) {
             note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
             let unfixed =
@@ -405,117 +411,42 @@ impl LintArgs {
             (source.as_str(), unfixed)
         } else {
             is_fixed = true;
-            (fixed, fixed_diags)
+            (fixed, fixed_messages)
         };
 
-        let (finding_errors, warning_count) = severity_counts(&diags);
+        let (finding_errors, warning_count) = severity_counts(&messages);
         let version = target.lua_version();
-        let rendered =
-            self.rendered(&file_path.to_string_lossy(), current_source, diags, version, is_quiet);
+        let label = file_path.to_string_lossy();
+        let rendered = self.rendered(&label, current_source, messages, version, is_quiet);
         // Fixes that couldn't be made or written fail the run, as an unread
         // file does.
         let error_count = finding_errors.saturating_add(usize::from(note.is_some()));
         LintOutcome { error_count, warning_count, is_fixed, note, rendered }
     }
 
-    /// What the run prints for `diags`, if anything. `--quiet` drops the
-    /// warnings from the output only: they still count toward the exit code.
+    /// What the run prints for `messages`, in its format. `--quiet` drops
+    /// the warnings from the output only: they still count toward the exit
+    /// code.
     fn rendered(
         &self,
-        file_label: &str,
+        label: &str,
         source: &str,
-        mut diags: Vec<LintDiagnostic>,
+        messages: Vec<Message>,
         version: LuaVersion,
         is_quiet: bool,
-    ) -> Option<Rendered> {
-        if is_quiet {
-            diags.retain(|diag| diag.severity == Severity::Error);
+    ) -> Vec<u8> {
+        let mut rendered = Vec::new();
+        if self.silent {
+            return rendered;
         }
-        (!diags.is_empty() && !self.silent).then(|| self.render(file_label, source, diags, version))
-    }
-
-    fn render(
-        &self,
-        file_label: &str,
-        source: &str,
-        diags: Vec<LintDiagnostic>,
-        version: LuaVersion,
-    ) -> Rendered {
-        match self.format {
-            LintFormat::Default => {
-                let renderable_diags: Vec<Diagnostic> = diags
-                    .into_iter()
-                    .map(|diag| Diagnostic {
-                        code: diag.rule,
-                        message: diag.message.into_owned(),
-                        severity: diag.severity,
-                        file_path: file_label.to_owned(),
-                        span: diag.span,
-                        help: diag.help.map(Cow::into_owned),
-                    })
-                    .collect();
-                Rendered::Pretty(render_document_diags(
-                    file_label.to_owned(),
-                    source,
-                    &renderable_diags,
-                    version,
-                ))
-            }
-            LintFormat::Json => {
-                let line_index = LineIndex::new(source, version);
-                let mut lines = String::new();
-                for diag in &diags {
-                    let (line, column) = line_and_column(&line_index, source, diag.span.start);
-                    let (end_line, end_column) =
-                        line_and_column(&line_index, source, diag.span.end);
-                    let json_value = serde_json::json!({
-                        "file": file_label,
-                        "rule": diag.rule,
-                        "severity": diag.severity.name(),
-                        "message": diag.message,
-                        "help": diag.help,
-                        "start": diag.span.start,
-                        "end": diag.span.end,
-                        "line": line,
-                        "column": column,
-                        "end_line": end_line,
-                        "end_column": end_column,
-                    });
-                    lines.push_str(&json_value.to_string());
-                    lines.push('\n');
-                }
-                Rendered::Lines(lines)
-            }
-            LintFormat::Github => {
-                let line_index = LineIndex::new(source, version);
-                // The runner resolves a relative path from the workspace root,
-                // not the working directory, and makes an absolute one
-                // relative to the workspace.
-                let label = Path::new(file_label);
-                let absolute = path::absolute(label).unwrap_or_else(|_| label.to_path_buf());
-                let canonical = FileSystemOs.canonicalize(&absolute).unwrap_or(absolute);
-                let file = annotation_property(&to_slash_lossy(&canonical));
-                let mut lines = String::new();
-                for diag in &diags {
-                    let (line, column) = line_and_column(&line_index, source, diag.span.start);
-                    let (end_line, end_column) =
-                        line_and_column(&line_index, source, diag.span.end);
-                    let message = diag.help.as_ref().map_or_else(
-                        || diag.message.clone(),
-                        |help| format!("{}\nhelp: {help}", diag.message).into(),
-                    );
-                    let _unused = writeln!(
-                        lines,
-                        "::{} file={file},line={line},endLine={end_line},col={column},\
-                         endColumn={end_column},title={}::{}",
-                        diag.severity.name(),
-                        annotation_property(diag.rule),
-                        annotation_data(&message),
-                    );
-                }
-                Rendered::Lines(lines)
-            }
-        }
+        let diags: Vec<Diagnostic> = messages
+            .into_iter()
+            .map(|message| message.diagnostic)
+            .filter(|diag| !is_quiet || diag.is_error())
+            .collect();
+        let file = SourceFile { label, text: Some(source), version };
+        self.format.reporter().render(file, &diags, &mut rendered);
+        rendered
     }
 
     /// What the flags layer over every file's lint settings, the config's
@@ -525,43 +456,32 @@ impl LintArgs {
     }
 }
 
-/// The message of a GitHub workflow command, escaped the way the runner
-/// unescapes it.
-fn annotation_data(text: &str) -> String {
-    text.replace('%', "%25").replace('\r', "%0D").replace('\n', "%0A")
-}
-
-/// A property value of a GitHub workflow command, where `:` and `,` delimit
-/// too.
-fn annotation_property(text: &str) -> String {
-    annotation_data(text).replace(':', "%3A").replace(',', "%2C")
-}
-
 /// `source` with its fixes of the kinds `fixes` holds applied, the fixed
-/// text's diagnostics, and why fixing failed, if it did. A failure leaves
-/// `source` as it was, with its own diagnostics.
+/// text's messages, and why fixing failed, if it did. A failure leaves
+/// `source` as it was, with its own messages.
 fn fixed_or_linted<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,
     target: LuaTarget,
     lint_config: &LintConfig,
     fixes: FixKind,
-) -> (&'ast str, Vec<LintDiagnostic>, Option<FixError>) {
+) -> (&'ast str, Vec<Message>, Option<FixError>) {
     let fix_error = if fixes.is_empty() {
         None
     } else {
         match luck_linter::fix(allocator, source, target, lint_config, fixes) {
-            Ok(Fixed { parse, diags }) => return (parse.source, diags, None),
+            Ok(Fixed { parse, messages }) => return (parse.source, messages, None),
             Err(error) => Some(error),
         }
     };
-    let diags = luck_linter::lint(allocator, source, target, lint_config, FixKind::empty());
-    (source, diags, fix_error)
+    let messages = luck_linter::lint(allocator, source, target, lint_config, FixKind::empty());
+    (source, messages, fix_error)
 }
 
-/// Count `diags` by severity, as `(errors, warnings)`.
-fn severity_counts(diags: &[LintDiagnostic]) -> (usize, usize) {
-    let count = |severity: Severity| diags.iter().filter(|diag| diag.severity == severity).count();
+/// Count `messages` by severity, as `(errors, warnings)`.
+fn severity_counts(messages: &[Message]) -> (usize, usize) {
+    let count =
+        |severity: Severity| messages.iter().filter(|message| message.severity == severity).count();
     (count(Severity::Error), count(Severity::Warning))
 }
 
@@ -593,8 +513,6 @@ fn print_lint_config(lint_config: &LintConfig) {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-
     use clap::Parser as _;
     use clap::error::ErrorKind;
 
@@ -624,21 +542,8 @@ mod tests {
         LintConfig::clone(&project.lint_for(None))
     }
 
-    fn lint_source(
-        source: &str,
-        target: LuaTarget,
-        lint_config: &LintConfig,
-    ) -> Vec<LintDiagnostic> {
+    fn lint_source(source: &str, target: LuaTarget, lint_config: &LintConfig) -> Vec<Message> {
         luck_linter::lint(&Allocator::new(), source, target, lint_config, FixKind::empty())
-    }
-
-    fn rendered_lines(format: &str, file_label: &str, source: &str) -> String {
-        let diags = lint_source(source, LuaTarget::Lua54, &LintConfig::default());
-        let args = lint_args(&["--format", format]);
-        match args.render(file_label, source, diags, LuaVersion::Lua54) {
-            Rendered::Lines(lines) => lines,
-            Rendered::Pretty(_) => panic!("{format} is a line format"),
-        }
     }
 
     #[test]
@@ -804,15 +709,10 @@ local unused = 1
 print(undefined_var)";
         let diags = lint_source(source, LuaTarget::Lua54, &LintConfig::default());
         let args = lint_args(&["--format", "json"]);
-        let lines_when = |is_quiet: bool| match args.rendered(
-            "a.lua",
-            source,
-            diags.clone(),
-            LuaVersion::Lua54,
-            is_quiet,
-        ) {
-            Some(Rendered::Lines(lines)) => lines,
-            Some(Rendered::Pretty(_)) | None => panic!("json renders lines"),
+        let lines_when = |is_quiet: bool| {
+            let rendered =
+                args.rendered("a.lua", source, diags.clone(), LuaVersion::Lua54, is_quiet);
+            String::from_utf8(rendered).expect("JSON is UTF-8")
         };
 
         let all_lines = lines_when(false);
@@ -823,55 +723,17 @@ print(undefined_var)";
     }
 
     #[test]
-    fn json_format_gives_the_line_and_column_of_a_finding() {
-        let lines = rendered_lines(
-            "json",
-            "src/a.lua",
-            "\
-local a = 1
-local unused = 2
-print(a)",
+    fn a_silent_run_renders_nothing() {
+        let diags = lint_source("print(undefined_var)", LuaTarget::Lua54, &LintConfig::default());
+        assert!(!diags.is_empty(), "{diags:?}");
+        let rendered = lint_args(&["--silent"]).rendered(
+            "a.lua",
+            "print(undefined_var)",
+            diags,
+            LuaVersion::Lua54,
+            false,
         );
-        let finding: serde_json::Value = serde_json::from_str(lines.trim()).expect("one finding");
-        assert_eq!(finding["rule"], "unused_variable");
-        let number = |key: &str| finding[key].as_u64().expect("a number");
-        assert_eq!((number("start"), number("end")), (18, 24));
-        assert_eq!((number("line"), number("column")), (2, 7));
-        assert_eq!((number("end_line"), number("end_column")), (2, 13));
-    }
-
-    /// The path is absolute, since the runner would resolve a relative one
-    /// from the workspace root even when lint runs in a subdirectory.
-    #[test]
-    fn github_format_writes_one_annotation_per_finding() {
-        let lines = rendered_lines(
-            "github",
-            r"src\a.lua",
-            "\
-local a = 1
-local unused = 2
-print(a)",
-        );
-        let (file, rest) = lines
-            .strip_prefix("::warning file=")
-            .and_then(|annotation| annotation.split_once(','))
-            .expect("one warning annotation");
-        let working_directory = env::current_dir().expect("current directory");
-        assert_eq!(
-            file,
-            annotation_property(&to_slash_lossy(&working_directory.join(r"src\a.lua")))
-        );
-        assert_eq!(
-            rest,
-            "line=2,endLine=2,col=7,endColumn=13,title=unused_variable::unused variable \
-             `unused`%0Ahelp: prefix with `_` to suppress this warning\n"
-        );
-    }
-
-    #[test]
-    fn annotation_escapes_what_the_runner_would_parse() {
-        assert_eq!(annotation_data("50% of a\r\nb"), "50%25 of a%0D%0Ab");
-        assert_eq!(annotation_property("C:/a,b.lua"), "C%3A/a%2Cb.lua");
+        assert!(rendered.is_empty(), "{}", String::from_utf8_lossy(&rendered));
     }
 
     #[test]
@@ -889,12 +751,12 @@ print(a)",
 
         let diags = lint_source("print(game)", target, &lint_config);
         assert!(
-            diags.iter().all(|diag| diag.rule != "undefined_variable"),
+            diags.iter().all(|diag| diag.code != "undefined_variable"),
             "roblox global `game` should not be undefined"
         );
 
         // Standalone Luau (the default) does flag it; that contrast is the point.
         let standalone_diags = lint_source("print(game)", LuaTarget::Luau, &lint_config);
-        assert!(standalone_diags.iter().any(|diag| diag.rule == "undefined_variable"));
+        assert!(standalone_diags.iter().any(|diag| diag.code == "undefined_variable"));
     }
 }

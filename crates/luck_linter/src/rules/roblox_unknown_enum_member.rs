@@ -83,10 +83,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::RobloxUnknownEnumMember;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::{run_rule, run_rule_roblox};
 
-    fn run_roblox(source: &str) -> Vec<LintDiagnostic> {
+    fn run_roblox(source: &str) -> Vec<Message> {
         run_rule_roblox(&RobloxUnknownEnumMember, source)
     }
 

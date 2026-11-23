@@ -66,7 +66,7 @@ pub(crate) fn bundle_options<'project>(
 /// Reports the config's problem and returns [`Exit::Usage`] when it doesn't
 /// load.
 pub(crate) fn load_project(config_path: &Path) -> Result<Project, Exit> {
-    Project::load(config_path).map_err(|diag| config_error(&diag))
+    Project::load(config_path).map_err(|error| config_error(&error))
 }
 
 /// The project a command that takes one input reads it under: `-c` when

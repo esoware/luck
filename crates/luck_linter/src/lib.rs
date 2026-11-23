@@ -58,7 +58,7 @@ pub use config::{
     CategoryLevels, CyclomaticComplexityOptions, LintConfig, RestrictedModulePathsOptions,
     RuleLevel, RuleSetting, RuleSettings,
 };
-pub use diagnostic::{Category, LintDiagnostic, Severity};
+pub use diagnostic::{Category, Message};
 pub use driver::{Analysis, analyze, lint, lint_analyzed, lint_parsed};
 pub use fix::{Fix, FixError, FixKind, Fixed, TextEdit, fix, non_overlapping_edits};
 pub use rule::Rule;

@@ -5,7 +5,7 @@ use ls_types::{
     CodeActionResponse, Diagnostic, NumberOrString, Range, TextEdit, Uri, WorkspaceEdit,
 };
 use luck_ast::{Block, Expression, GetSpan as _, Statement, Visit};
-use luck_linter::{Fix, FixKind, LintDiagnostic};
+use luck_linter::{Fix, FixKind, Message};
 use luck_token::{Span, has_line_break, is_lua_whitespace, offset_to_index};
 use rustc_hash::FxHashMap;
 
@@ -20,7 +20,7 @@ pub(crate) const FIX_ALL_KIND: CodeActionKind = CodeActionKind::new(FIX_ALL_KIND
 pub(crate) fn code_action(
     document: &DocumentState,
     params: &CodeActionParams,
-    lints: &[LintDiagnostic],
+    lints: &[Message],
 ) -> CodeActionResponse {
     let uri = &params.text_document.uri;
     let requested: Vec<(&Diagnostic, &str, Span)> = params
@@ -42,7 +42,7 @@ pub(crate) fn code_action(
         lints_starting_at(lints, requested.iter().map(|&(_, _, span)| span.start).collect());
     // A diagnostic carries its lint's rule and range back unchanged, so the
     // pair names the one lint it came from.
-    let matched: Vec<(&Diagnostic, &str, &LintDiagnostic)> = requested
+    let matched: Vec<(&Diagnostic, &str, &Message)> = requested
         .into_iter()
         .filter_map(|(diag, rule, span)| Some((diag, rule, *lints_by_key.get(&(span, rule))?)))
         .collect();
@@ -51,7 +51,7 @@ pub(crate) fn code_action(
     let disabler = (!matched.is_empty() && document.parse().errors.is_empty()).then(|| {
         Disabler::new(
             document,
-            &matched.iter().map(|(_, _, lint)| lint.span.start).collect::<Vec<_>>(),
+            &matched.iter().map(|(_, _, lint)| lint.span().start).collect::<Vec<_>>(),
         )
     });
 
@@ -110,18 +110,15 @@ pub(crate) fn code_action(
 /// A request can hold every lint of a file, and many can start at one place,
 /// as each comparison in a run of them does, so a lint is found by key, not
 /// by a walk over the others that start there.
-fn lints_starting_at(
-    lints: &[LintDiagnostic],
-    mut starts: Vec<u32>,
-) -> FxHashMap<(Span, &str), &LintDiagnostic> {
+fn lints_starting_at(lints: &[Message], mut starts: Vec<u32>) -> FxHashMap<(Span, &str), &Message> {
     starts.sort_unstable();
     starts.dedup();
     let mut by_key = FxHashMap::default();
     for start in starts {
-        let from = lints.partition_point(|lint| lint.span.start < start);
-        let to = lints.partition_point(|lint| lint.span.start <= start);
+        let from = lints.partition_point(|lint| lint.span().start < start);
+        let to = lints.partition_point(|lint| lint.span().start <= start);
         for lint in lints.get(from..to).unwrap_or_default() {
-            by_key.insert((lint.span, lint.rule), lint);
+            by_key.insert((lint.span(), lint.code), lint);
         }
     }
     by_key
@@ -142,7 +139,7 @@ fn fix_edits(document: &DocumentState, fix: &Fix) -> Vec<TextEdit> {
 ///
 /// LSP forbids overlapping edits in one change list, and a dropped fix is
 /// published again once the client applies these.
-fn all_fix_edits(document: &DocumentState, lints: &[LintDiagnostic]) -> Vec<TextEdit> {
+fn all_fix_edits(document: &DocumentState, lints: &[Message]) -> Vec<TextEdit> {
     let mut positions = document.positions();
     luck_linter::non_overlapping_edits(lints, FixKind::Fix)
         .into_iter()
@@ -283,7 +280,7 @@ fn should_offer_fix_all(context: &CodeActionContext) -> bool {
 /// has none.
 pub(crate) fn fix_all<'document, I>(documents: I) -> WorkspaceEdit
 where
-    I: IntoIterator<Item = (&'document Uri, &'document DocumentState, &'document [LintDiagnostic])>,
+    I: IntoIterator<Item = (&'document Uri, &'document DocumentState, &'document [Message])>,
 {
     let changes = documents
         .into_iter()
@@ -299,7 +296,8 @@ where
 mod tests {
     use ls_types::{PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams};
     use luck_core::LuaTarget;
-    use luck_linter::{Category, LintConfig, RuleLevel, Severity, TextEdit as LinterTextEdit};
+    use luck_diagnostics::{Diagnostic as LuckDiagnostic, Severity};
+    use luck_linter::{Category, LintConfig, RuleLevel, TextEdit as LinterTextEdit};
 
     use super::*;
     use crate::fixtures::document_linted_by;
@@ -317,7 +315,7 @@ mod tests {
     }
 
     /// `text` linted under `config`, and its lints.
-    fn linted(text: &str, config: &LintConfig) -> (DocumentState, Vec<LintDiagnostic>) {
+    fn linted(text: &str, config: &LintConfig) -> (DocumentState, Vec<Message>) {
         let document = document_linted_by(text, LuaTarget::Lua54, config.clone());
         let lints = document.lint(&|| false).expect("nothing cancels it");
         (document, lints)
@@ -357,8 +355,8 @@ mod tests {
     fn disabled(text: &str, config: &LintConfig, lint_index: usize) -> String {
         let (document, lints) = linted(text, config);
         let lint = lints.get(lint_index).expect("the lint fired");
-        let disabler = Disabler::new(&document, &[lint.span.start]);
-        let edit = disabler.edit(0, lint.rule).expect("a statement holds it");
+        let disabler = Disabler::new(&document, &[lint.span().start]);
+        let edit = disabler.edit(0, lint.code).expect("a statement holds it");
         applied(&document, vec![edit])
     }
 
@@ -400,7 +398,7 @@ mod tests {
     fn two_diagnostics_of_one_rule_yield_one_fix_each() {
         let (document, lints) =
             linted("local x = nil local y = nil\n", &config_enabling("redundant_nil_init"));
-        let diags = diagnostics::to_lsp(&document, &lints);
+        let diags = diagnostics::to_lsp(&uri(), &document, &lints);
         let range = Range::new(Position::new(0, 0), Position::new(0, 27));
         let actions = code_action(&document, &params(range, diags, None), &lints);
         let fix_count = actions
@@ -415,13 +413,13 @@ mod tests {
         // Directives apply only after a clean parse, so a comment can't
         // silence a syntax error.
         let (document, lints) = linted("local x =\n", &config_enabling("redundant_nil_init"));
-        let diags = diagnostics::to_lsp(&document, &lints);
+        let diags = diagnostics::to_lsp(&uri(), &document, &lints);
         let range = Range::new(Position::new(0, 0), Position::new(1, 0));
         let actions = code_action(&document, &params(range, diags, None), &lints);
         let titles: Vec<&str> =
             actions.iter().map(|action| only_action(action).title.as_str()).collect();
         assert!(
-            !titles.iter().any(|title| title.contains("parse_error")),
+            !titles.iter().any(|title| title.starts_with("Disable")),
             "offering to disable an unsuppressible error: {titles:?}"
         );
     }
@@ -484,14 +482,14 @@ local u = second_missing
         assert_eq!(remaining.len(), 1, "the later statement stays flagged: {remaining:?}");
     }
 
-    fn lint_with_fix(edits: Vec<LinterTextEdit>) -> LintDiagnostic {
-        LintDiagnostic {
-            rule: "test_rule",
-            category: Category::Style,
-            severity: Severity::Warning,
-            message: "bad".into(),
-            span: Span::new(0, 0),
-            help: None,
+    fn lint_with_fix(edits: Vec<LinterTextEdit>) -> Message {
+        Message {
+            diagnostic: LuckDiagnostic::lint(
+                "test_rule",
+                Severity::Warning,
+                Span::new(0, 0),
+                "bad",
+            ),
             fix: Some(Fix { kind: FixKind::Fix, message: "fix".into(), edits: edits.into() }),
         }
     }
@@ -502,7 +500,7 @@ local u = second_missing
 
     /// An unused variable, whose rename is a suggestion, beside a redundant
     /// `nil`, whose deletion is a fix.
-    fn suggestion_and_fix() -> (DocumentState, Vec<LintDiagnostic>) {
+    fn suggestion_and_fix() -> (DocumentState, Vec<Message>) {
         let mut config = LintConfig::default();
         config.rules.set_level("redundant_nil_init", RuleLevel::Warn);
         linted("local unused = nil\n", &config)
@@ -518,7 +516,7 @@ local u = second_missing
     #[test]
     fn a_suggestion_is_a_quick_fix_the_client_never_prefers() {
         let (document, lints) = suggestion_and_fix();
-        let diags = diagnostics::to_lsp(&document, &lints);
+        let diags = diagnostics::to_lsp(&uri(), &document, &lints);
         let range = Range::new(Position::new(0, 0), Position::new(0, 18));
         let quick_fixes = Some(vec![CodeActionKind::QUICKFIX]);
         let actions = code_action(&document, &params(range, diags, quick_fixes), &lints);

@@ -8,8 +8,9 @@ use std::path::Path;
 use luck_allocator::{Allocator, ThreadAllocators};
 use luck_ast::MIN_STACK_BYTES;
 use luck_bundler::{BundleOptions, BundleResult, bundle, bundle_minified};
-use luck_core::Diagnostic;
+use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_minifier::TransformConfig;
+use luck_resolver::to_slash_lossy;
 use rayon::ThreadPoolBuilder;
 
 /// What `work` returns on a pool of `thread_count` threads, each with the
@@ -49,7 +50,7 @@ pub(crate) fn off_pool<T>(work: impl FnOnce() -> T) -> T {
 pub(crate) fn bundle_both(
     entry: &Path,
     options: &BundleOptions<'_>,
-) -> Result<BundleResult, Vec<Diagnostic>> {
+) -> Result<BundleResult, Vec<FileDiagnostics>> {
     let transforms = TransformConfig::default();
     let text_result = on_pool(1, || bundle(&ThreadAllocators::new(), entry, options));
     let threaded_result = off_pool(|| bundle(&ThreadAllocators::new(), entry, options));
@@ -81,4 +82,20 @@ pub(crate) fn bundle_both(
         }
     }
     text_result
+}
+
+/// Each diagnostic in `files`, with the slash form of its file's path.
+pub(crate) fn located(files: &[FileDiagnostics]) -> Vec<(String, &Diagnostic)> {
+    files
+        .iter()
+        .flat_map(|file| {
+            let path = to_slash_lossy(&file.path).into_owned();
+            file.diags.iter().map(move |diag| (path.clone(), diag))
+        })
+        .collect()
+}
+
+/// Each diagnostic's code, in order.
+pub(crate) fn codes(files: &[FileDiagnostics]) -> Vec<&str> {
+    files.iter().flat_map(|file| &file.diags).map(|diag| diag.code).collect()
 }

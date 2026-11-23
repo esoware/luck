@@ -1,4 +1,5 @@
 use luck_ast::{Block, Statement};
+use luck_diagnostics::Tag;
 
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
@@ -37,11 +38,13 @@ fn check_tail(block: &Block<'_>, context: &LintContext<'_>) -> Option<Finding> {
         return None;
     }
     let span = return_stmt.span;
-    Some(Finding::new("bare `return` at the end of the function has no effect", span).with_fix(
-        context,
-        FixKind::Fix,
-        |fixer| fixer.delete("remove the redundant `return`", span),
-    ))
+    Some(
+        Finding::new("bare `return` at the end of the function has no effect", span)
+            .with_tag(Tag::Unnecessary)
+            .with_fix(context, FixKind::Fix, |fixer| {
+                fixer.delete("remove the redundant `return`", span)
+            }),
+    )
 }
 
 #[cfg(test)]
@@ -49,10 +52,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::{fix_and_reparse, run_rule};
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&RedundantReturn, source, LuaVersion::Lua54)
     }
 

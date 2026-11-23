@@ -1,14 +1,15 @@
 mod string;
 
+use alloc::borrow::Cow;
 use core::mem;
 
+use luck_diagnostics::Diagnostic;
 use luck_token::{
     Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, Token, TokenKind,
     chunk_start, has_line_break, has_shebang,
 };
 
 use crate::cursor::Cursor;
-use crate::lex_error::{LexError, lex_error};
 use crate::lex_result::LexResult;
 use crate::number::scan_number;
 use string::{advance_past_long_bracket_close, eat_long_bracket_level};
@@ -52,7 +53,7 @@ pub struct Lexer<'source> {
     comments: Vec<Comment>,
     /// How many of `comments` know their token. The rest lead the next one.
     attached_comment_count: usize,
-    errors: Vec<LexError>,
+    errors: Vec<Diagnostic>,
     /// Unmatched `{` count for each open interpolation expression, innermost
     /// last (Luau). A `}` at depth 0 closes the expression and resumes the
     /// string.
@@ -67,11 +68,11 @@ impl<'source> Lexer<'source> {
     ///
     /// # Errors
     ///
-    /// Returns a [`LexError`] for a source over 4 GiB, which `u32` spans can't
+    /// Returns an E008 for a source over 4 GiB, which `u32` spans can't
     /// address.
-    pub fn new(source: &'source str, version: LuaVersion) -> Result<Self, LexError> {
+    pub fn new(source: &'source str, version: LuaVersion) -> Result<Self, Diagnostic> {
         if u32::try_from(source.len()).is_err() {
-            return Err(lex_error(
+            return Err(Diagnostic::e008(
                 Span::new(0, 0),
                 format!(
                     "input is {} bytes, but the maximum supported file size is 4 GiB",
@@ -284,8 +285,8 @@ impl<'source> Lexer<'source> {
     }
 
     #[cold]
-    fn reject(&mut self, start: usize, message: impl Into<String>) {
-        self.errors.push(lex_error(self.cursor.span_since(start), message));
+    fn reject(&mut self, start: usize, message: impl Into<Cow<'static, str>>) {
+        self.errors.push(Diagnostic::e008(self.cursor.span_since(start), message));
     }
 
     fn lex_shebang(&mut self) {

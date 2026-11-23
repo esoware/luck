@@ -194,6 +194,8 @@ pub(crate) fn closest_rule_name(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use rustc_hash::FxHashSet;
 
     use super::*;
@@ -219,8 +221,8 @@ mod tests {
             Err("unknown lint rule `unsued_variable`, did you mean `unused_variable`?".to_owned())
         );
         assert_eq!(
-            rule_named("parse_error").map(Rule::name),
-            Err("unknown lint rule `parse_error`".to_owned()),
+            rule_named("E008").map(Rule::name),
+            Err("unknown lint rule `E008`".to_owned()),
             "config can't turn a parse error off, so it doesn't name one"
         );
     }
@@ -236,6 +238,22 @@ mod tests {
         let mut seen_names = FxHashSet::default();
         for name in rules().map(Rule::name) {
             assert!(seen_names.insert(name), "duplicate rule name `{name}`");
+        }
+    }
+
+    #[test]
+    fn each_rule_links_to_its_own_source_file() {
+        let rules_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/rules");
+        for rule in rules() {
+            let file = format!("{}.rs", rule.name());
+            assert!(rules_directory.join(&file).is_file(), "no `{file}` for `{}`", rule.name());
+            assert_eq!(
+                rule.docs_url(),
+                format!(
+                    "https://github.com/esoware/luck/blob/v{}/crates/luck_linter/src/rules/{file}",
+                    env!("CARGO_PKG_VERSION")
+                )
+            );
         }
     }
 

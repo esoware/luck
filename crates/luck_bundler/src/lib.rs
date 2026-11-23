@@ -43,8 +43,6 @@
     )
 )]
 
-extern crate alloc;
-
 mod block_emitter;
 mod bundle;
 mod discovery;

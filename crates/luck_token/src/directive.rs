@@ -12,7 +12,7 @@
 //!   Nothing else may follow, so a misspelled `start` can't quietly shrink a
 //!   region to one statement. Only these may follow `#luck:`.
 
-use crate::{Comment, CommentKind, LuaVersion, SourceError, Span, is_lua_whitespace};
+use crate::{Comment, CommentKind, LuaVersion, Span, is_lua_whitespace};
 
 /// What a comment tells a tool, which the lexer reads once from its text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +82,37 @@ impl LintVerb {
     }
 }
 
+/// What's malformed in a `luck:` comment, at the part at fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectiveError {
+    pub span: Span,
+    pub kind: DirectiveErrorKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectiveErrorKind {
+    /// Nothing follows `luck:`, and the span is the whole comment.
+    Empty,
+    /// `#luck:` before a word other than a lint verb.
+    NotLintVerb,
+    /// A word that names no directive.
+    UnknownDirective,
+    /// `format` before a word other than `off`, `on`, or `ignore`, or before
+    /// none, when the span is `format` itself.
+    UnknownFormatSetting,
+    /// A lint verb with no `(` after it, at the verb.
+    MissingList(LintVerb),
+    /// A `(` with no `)`, at the `(`.
+    UnclosedList,
+    /// A list that names no rule, at the list and its parentheses.
+    EmptyList(LintVerb),
+    /// `start` or `end` after the list of a `#luck:` directive, which covers
+    /// the whole file.
+    RegionOnFileWide,
+    /// A word after the list other than `start` or `end`.
+    UnknownExtent(LintVerb),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintExtent {
     /// `#luck:`.
@@ -114,11 +145,10 @@ impl LintDirective {
     ///
     /// Returns why a `luck:` comment is no directive, or what's malformed in
     /// one, at the part at fault.
-    pub fn parse(comment: &Comment, source: &str) -> Result<Option<Self>, SourceError> {
+    pub fn parse(comment: &Comment, source: &str) -> Result<Option<Self>, DirectiveError> {
         let text = comment.span.text(source);
         let start = comment.span.start;
-        let error =
-            |part: &str, message: String| SourceError { span: span_in(text, start, part), message };
+        let error = |part: &str, kind| DirectiveError { span: span_in(text, start, part), kind };
         let Some((command, is_file_wide)) = command(text, comment.kind) else {
             return Ok(None);
         };
@@ -126,28 +156,28 @@ impl LintDirective {
             Ok(Command::Lint { verb, word, rest }) => (verb, word, rest),
             Ok(Command::FormatOff | Command::FormatOn | Command::FormatIgnore) => return Ok(None),
             Err(invalid) => {
-                let message = invalid.message();
-                return Err(match invalid.word() {
-                    Some(word) => error(word, message),
-                    None => SourceError { span: comment.span, message },
-                });
+                let kind = invalid.kind();
+                return Err(invalid
+                    .word()
+                    .map_or(DirectiveError { span: comment.span, kind }, |word| {
+                        error(word, kind)
+                    }));
             }
         };
-        let verb_name = verb.name();
         let Some(inside) = trim_start(after_verb).strip_prefix('(') else {
-            return Err(error(verb_word, format!("expected `(` after `{verb_name}`")));
+            return Err(error(verb_word, DirectiveErrorKind::MissingList(verb)));
         };
         let Some((list, after_list)) = inside.split_once(')') else {
             let open =
                 after_verb.get(..after_verb.len().saturating_sub(inside.len())).unwrap_or_default();
-            return Err(error(trim_start(open), "unclosed `(`".to_owned()));
+            return Err(error(trim_start(open), DirectiveErrorKind::UnclosedList));
         };
         let span = span_in(text, start, list);
         if names(list).next().is_none() {
             let parenthesized = Span::new(span.start.saturating_sub(1), span.end.saturating_add(1));
-            return Err(SourceError {
+            return Err(DirectiveError {
                 span: parenthesized,
-                message: format!("`{verb_name}` names no rule"),
+                kind: DirectiveErrorKind::EmptyList(verb),
             });
         }
         let tail = trim(after_list);
@@ -157,18 +187,9 @@ impl LintDirective {
             ("start", false) => LintExtent::RegionStart,
             ("end", false) => LintExtent::RegionEnd,
             ("start" | "end", true) => {
-                return Err(error(
-                    tail,
-                    "a `#luck:` directive covers the whole file, so it takes no `start` or `end`"
-                        .to_owned(),
-                ));
+                return Err(error(tail, DirectiveErrorKind::RegionOnFileWide));
             }
-            _ => {
-                return Err(error(
-                    tail,
-                    format!("expected `start` or `end` after `{verb_name}(...)`, found `{tail}`"),
-                ));
-            }
+            _ => return Err(error(tail, DirectiveErrorKind::UnknownExtent(verb))),
         };
         Ok(Some(Self { verb, extent, list: span }))
     }
@@ -212,14 +233,12 @@ impl<'text> Invalid<'text> {
         }
     }
 
-    fn message(&self) -> String {
+    const fn kind(&self) -> DirectiveErrorKind {
         match *self {
-            Self::Empty => "expected a directive after `luck:`".to_owned(),
-            Self::FileWide(_) => "`#luck:` takes only `allow`, `deny`, or `warn`".to_owned(),
-            Self::Unknown(word) => format!(
-                "unknown directive `{word}`, expected `allow`, `deny`, `warn`, `format`, or `ignore`"
-            ),
-            Self::FormatSetting(_) => "expected `off`, `on`, or `ignore` after `format`".to_owned(),
+            Self::Empty => DirectiveErrorKind::Empty,
+            Self::FileWide(_) => DirectiveErrorKind::NotLintVerb,
+            Self::Unknown(_) => DirectiveErrorKind::UnknownDirective,
+            Self::FormatSetting(_) => DirectiveErrorKind::UnknownFormatSetting,
         }
     }
 }

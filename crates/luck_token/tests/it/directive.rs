@@ -1,6 +1,6 @@
 use luck_token::{
-    Comment, CommentContent, CommentKind, CommentPosition, LintDirective, LintExtent, LintVerb,
-    LuaVersion, Span,
+    Comment, CommentContent, CommentKind, CommentPosition, DirectiveErrorKind, LintDirective,
+    LintExtent, LintVerb, LuaVersion, Span,
 };
 
 fn comment(text: &str, kind: CommentKind) -> Comment {
@@ -25,11 +25,10 @@ fn extent(text: &str) -> Option<LintExtent> {
         .map(|found| found.extent)
 }
 
-/// The message of what's malformed in `text`'s directive, and the text it
-/// points at.
-fn error(text: &str) -> Option<(String, &str)> {
+/// What's malformed in `text`'s directive, and the text it points at.
+fn error(text: &str) -> Option<(DirectiveErrorKind, &str)> {
     let found = LintDirective::parse(&comment(text, CommentKind::Line), text).err()?;
-    Some((found.message, found.span.text(text)))
+    Some((found.kind, found.span.text(text)))
 }
 
 #[test]
@@ -151,29 +150,18 @@ fn rule_spans_are_absolute() {
 
 #[test]
 fn says_what_is_malformed_at_the_part_at_fault() {
-    for (text, message, part) in [
-        (
-            "-- luck: allow(x) strat",
-            "expected `start` or `end` after `allow(...)`, found `strat`",
-            "strat",
-        ),
-        (
-            "-- #luck: allow(x) start",
-            "a `#luck:` directive covers the whole file, so it takes no `start` or `end`",
-            "start",
-        ),
-        ("-- luck: deny x", "expected `(` after `deny`", "deny"),
-        ("-- luck: deny (x", "unclosed `(`", "("),
-        ("-- luck: warn( , )", "`warn` names no rule", "( , )"),
-        (
-            "-- luck: alow(x)",
-            "unknown directive `alow(x)`, expected `allow`, `deny`, `warn`, `format`, or `ignore`",
-            "alow(x)",
-        ),
-        ("-- luck: format of", "expected `off`, `on`, or `ignore` after `format`", "of"),
-        ("-- #luck: ignore", "`#luck:` takes only `allow`, `deny`, or `warn`", "ignore"),
-        ("-- luck: ", "expected a directive after `luck:`", "-- luck: "),
+    for (text, kind, part) in [
+        ("-- luck: allow(x) strat", DirectiveErrorKind::UnknownExtent(LintVerb::Allow), "strat"),
+        ("-- #luck: allow(x) start", DirectiveErrorKind::RegionOnFileWide, "start"),
+        ("-- luck: deny x", DirectiveErrorKind::MissingList(LintVerb::Deny), "deny"),
+        ("-- luck: deny (x", DirectiveErrorKind::UnclosedList, "("),
+        ("-- luck: warn( , )", DirectiveErrorKind::EmptyList(LintVerb::Warn), "( , )"),
+        ("-- luck: alow(x)", DirectiveErrorKind::UnknownDirective, "alow(x)"),
+        ("-- luck: format of", DirectiveErrorKind::UnknownFormatSetting, "of"),
+        ("-- luck: format", DirectiveErrorKind::UnknownFormatSetting, "format"),
+        ("-- #luck: ignore", DirectiveErrorKind::NotLintVerb, "ignore"),
+        ("-- luck: ", DirectiveErrorKind::Empty, "-- luck: "),
     ] {
-        assert_eq!(error(text), Some((message.to_owned(), part)), "{text:?}");
+        assert_eq!(error(text), Some((kind, part)), "{text:?}");
     }
 }

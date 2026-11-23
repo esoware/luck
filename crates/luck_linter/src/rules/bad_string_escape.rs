@@ -47,10 +47,10 @@ mod tests {
     use luck_token::{LuaVersion, offset_to_index};
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
+    fn run(source: &str, version: LuaVersion) -> Vec<Message> {
         run_rule(&BadStringEscape, source, version)
     }
 
@@ -128,9 +128,9 @@ local x = 1
 local x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e
 ";
         let diags = run(source, LuaVersion::Lua51);
-        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span.text(source)).collect();
+        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span().text(source)).collect();
         assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");
-        assert_eq!(offset_to_index(diags[0].span.start), source.find("= \"").unwrap() + 3);
+        assert_eq!(offset_to_index(diags[0].span().start), source.find("= \"").unwrap() + 3);
     }
 
     #[test]
@@ -157,7 +157,7 @@ local x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e
     fn flags_unknown_escapes_in_interpolated_string_segments() {
         let source = "local x = `a\\q{1}b\\w`";
         let diags = run(source, LuaVersion::Luau);
-        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span.text(source)).collect();
+        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span().text(source)).collect();
         assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");
     }
 
@@ -165,7 +165,7 @@ local x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e
     fn flags_unknown_escapes_in_a_backtick_string_without_holes() {
         let source = "local x = `a\\qb\\{c}\\w`";
         let diags = run(source, LuaVersion::Luau);
-        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span.text(source)).collect();
+        let flagged: Vec<&str> = diags.iter().map(|diag| diag.span().text(source)).collect();
         assert_eq!(flagged, ["\\q", "\\w"], "{diags:?}");
     }
 
@@ -187,7 +187,7 @@ local x = \"\\q\" --[[ '\\q ]] local y = '\\w' -- \\e
         let diags = run(source, LuaVersion::Lua51);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(
-            diags[0].span.text(source),
+            diags[0].span().text(source),
             "\\\u{e9}",
             "the span should cover the whole character: {diags:?}"
         );

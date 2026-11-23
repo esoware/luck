@@ -1,0 +1,18 @@
+[package]
+name                   = "luck_diagnostics"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "The diagnostic type every luck tool reports problems with"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+luck_token = { workspace = true }

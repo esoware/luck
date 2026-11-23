@@ -41,17 +41,18 @@ impl NodeRule for DuplicateConditions {
         let mut earlier: Vec<&Expression<'_>> =
             Vec::with_capacity(if_stmt.elseif_clauses.len().saturating_add(1));
         for condition in conditions {
-            if !earlier.iter().any(|&earlier_condition| earlier_condition.content_eq(condition)) {
+            let Some(first) =
+                earlier.iter().find(|&&earlier_condition| earlier_condition.content_eq(condition))
+            else {
                 earlier.push(condition);
                 continue;
-            }
+            };
             let span = condition.span();
             let text = span.text(context.source).trim();
             findings.push(
                 Finding::new(format!("duplicate condition `{text}` in `if`/`elseif` chain"), span)
-                    .with_help(
-                        "the same condition is checked earlier, so this branch is unreachable unless the condition has side effects",
-                    ),
+                    .with_label(first.span(), "first checked here")
+                    .with_help("this branch is unreachable unless the condition has side effects"),
             );
         }
     }
@@ -64,10 +65,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&DuplicateConditions, source, LuaVersion::Lua54)
     }
 

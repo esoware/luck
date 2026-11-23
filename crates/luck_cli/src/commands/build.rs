@@ -8,14 +8,14 @@ use clap::Args;
 use luck_allocator::ThreadAllocators;
 use luck_bundler::{bundle, bundle_minified};
 use luck_config::{BuildConfig, Project, check_output_paths, find_config};
-use luck_core::Diagnostic;
+use luck_diagnostics::FileDiagnostics;
 use luck_token::{LuaVersion, chunk_start, has_shebang};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
 use crate::exit::{Exit, config_error, operation_error, usage_error};
 use crate::output::{format_size, write_output_file};
 use crate::project::{bundle_arenas, current_directory, load_project};
-use crate::render::print_diags;
+use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -179,9 +179,9 @@ impl BuildArgs {
         };
         let project = match Project::load(&config_path) {
             Ok(project) => project,
-            Err(diag) => {
-                config_error(&diag);
-                return Ok(vec![config_path, PathBuf::from(diag.file_path)]);
+            Err(error) => {
+                config_error(&error);
+                return Ok(vec![config_path, error.path]);
             }
         };
         let mut read_files = project.files().to_vec();
@@ -220,13 +220,10 @@ impl BuildArgs {
         arenas.reset();
         let version = config.target.lua_version();
         let options = project.bundle_options(version);
-        let bundle_failure = |errors: Vec<Diagnostic>| {
-            print_diags(&errors, version);
-            let source_files = errors
-                .iter()
-                .map(|diag| PathBuf::from(&diag.file_path))
-                .chain([config.entry.clone()])
-                .collect();
+        let bundle_failure = |errors: Vec<FileDiagnostics>| {
+            print_files(&errors, version);
+            let source_files =
+                errors.into_iter().map(|file| file.path).chain([config.entry.clone()]).collect();
             BuildFailure::Failed { source_files }
         };
         let check_output = |source_files: &[PathBuf]| {
@@ -241,14 +238,14 @@ impl BuildArgs {
                 .map_err(bundle_failure)?;
             check_output(&minified.source_files)?;
             if verbosity != Verbosity::Quiet {
-                print_diags(&minified.warnings, version);
+                print_files(&minified.warnings, version);
             }
             (minified.output, minified.source_files, Some(minified.source_byte_count))
         } else {
             let result = bundle(arenas, &config.entry, &options).map_err(bundle_failure)?;
             check_output(&result.source_files)?;
             if verbosity != Verbosity::Quiet {
-                print_diags(&result.warnings, version);
+                print_files(&result.warnings, version);
             }
             (result.output, result.source_files, None)
         };

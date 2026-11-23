@@ -1,4 +1,5 @@
 use luck_ast::{Block, GetSpan as _, Statement};
+use luck_diagnostics::Tag;
 use luck_semantic::SemanticAnalysis;
 
 use crate::cfg::FlowGraph;
@@ -23,7 +24,7 @@ impl WholeRule for UnreachableCode {
             .blocks()
             .iter()
             .filter_map(|block| first_unreachable_stmt(block, context.semantic))
-            .map(|stmt| Finding::new("unreachable code", stmt.span()))
+            .map(|stmt| Finding::new("unreachable code", stmt.span()).with_tag(Tag::Unnecessary))
             .collect()
     }
 }
@@ -49,10 +50,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&UnreachableCode, source, LuaVersion::Lua54)
     }
 

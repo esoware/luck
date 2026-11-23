@@ -1,8 +1,8 @@
 use luck_allocator::Allocator;
 use luck_core::LuaTarget;
-use luck_linter::{FixKind, LintConfig, LintDiagnostic, RuleLevel};
+use luck_linter::{FixKind, LintConfig, Message, RuleLevel};
 
-pub(crate) fn lint(source: &str, target: LuaTarget, config: &LintConfig) -> Vec<LintDiagnostic> {
+pub(crate) fn lint(source: &str, target: LuaTarget, config: &LintConfig) -> Vec<Message> {
     luck_linter::lint(&Allocator::new(), source, target, config, FixKind::empty())
 }
 

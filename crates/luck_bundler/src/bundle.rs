@@ -2,7 +2,7 @@ use core::mem;
 use std::path::{Path, PathBuf};
 
 use luck_allocator::ThreadAllocators;
-use luck_core::Diagnostic;
+use luck_diagnostics::FileDiagnostics;
 use luck_minifier::TransformConfig;
 
 use crate::block_emitter;
@@ -13,7 +13,8 @@ use crate::graph::{BundleOptions, DependencyGraph};
 pub struct BundleResult {
     /// Parses for the target, so every luck tool can read it back.
     pub output: String,
-    pub warnings: Vec<Diagnostic>,
+    /// By module, in discovery order.
+    pub warnings: Vec<FileDiagnostics>,
     /// Every bundled module's canonical path, in discovery order.
     pub source_files: Vec<PathBuf>,
     pub line_map: Vec<LineMapEntry>,
@@ -23,7 +24,8 @@ pub struct BundleResult {
 pub struct MinifiedBundle {
     /// Opens with the entry's shebang and its Luau hot comments.
     pub output: String,
-    pub warnings: Vec<Diagnostic>,
+    /// By module, in discovery order.
+    pub warnings: Vec<FileDiagnostics>,
     /// Every bundled module's canonical path, in discovery order.
     pub source_files: Vec<PathBuf>,
     /// The bundled modules' sources' total size.
@@ -43,7 +45,7 @@ pub fn bundle(
     arenas: &ThreadAllocators,
     entry_path: &Path,
     options: &BundleOptions<'_>,
-) -> Result<BundleResult, Vec<Diagnostic>> {
+) -> Result<BundleResult, Vec<FileDiagnostics>> {
     let mut graph = DependencyGraph::build(arenas, entry_path, options)?;
     let (output, line_map) = emitter::emit(arenas.get(), &mut graph, options.version)?;
     Ok(BundleResult {
@@ -67,7 +69,7 @@ pub fn bundle_minified(
     entry_path: &Path,
     options: &BundleOptions<'_>,
     transforms: &TransformConfig,
-) -> Result<MinifiedBundle, Vec<Diagnostic>> {
+) -> Result<MinifiedBundle, Vec<FileDiagnostics>> {
     let mut graph = DependencyGraph::build(arenas, entry_path, options)?;
     let allocator = arenas.get();
     let warnings = mem::take(&mut graph.warnings);

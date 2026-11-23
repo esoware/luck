@@ -21,12 +21,13 @@ schemars = ["dep:schemars", "serde"]
 workspace = true
 
 [dependencies]
-luck_allocator = { workspace = true }
-luck_ast       = { workspace = true }
-luck_core      = { workspace = true }
-luck_parser    = { workspace = true }
-luck_semantic  = { workspace = true }
-luck_token     = { workspace = true }
+luck_allocator   = { workspace = true }
+luck_ast         = { workspace = true }
+luck_core        = { workspace = true }
+luck_diagnostics = { workspace = true }
+luck_parser      = { workspace = true }
+luck_semantic    = { workspace = true }
+luck_token       = { workspace = true }
 
 bitflags   = { workspace = true }
 rayon      = { workspace = true }

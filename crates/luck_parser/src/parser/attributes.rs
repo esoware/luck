@@ -6,6 +6,7 @@
 
 use luck_allocator::List;
 use luck_ast::{Attribute, Expression, Field, FunctionAttribute, GetSpan as _, Name};
+use luck_diagnostics::Diagnostic;
 use luck_token::{Span, TokenKind};
 
 use super::{Closer, Parser};
@@ -107,7 +108,8 @@ impl<'ast> Parser<'ast> {
             if self.token.span.start != at_span.end {
                 self.error(at_span, "attribute name must directly follow `@`");
             }
-            if self.eat(TokenKind::LeftBracket) {
+            if self.is_at(TokenKind::LeftBracket) {
+                let open = self.advance();
                 self.open(Closer::Bracket);
                 loop {
                     let name = self.expect_identifier_recover();
@@ -121,7 +123,7 @@ impl<'ast> Parser<'ast> {
                         break;
                     }
                 }
-                self.expect_closer(TokenKind::RightBracket, Closer::Bracket);
+                self.expect_closer(TokenKind::RightBracket, Closer::Bracket, open);
             } else {
                 let name = self.expect_identifier_recover();
                 self.validate_function_attribute(name, None, start, self.groupings.len());
@@ -152,14 +154,14 @@ impl<'ast> Parser<'ast> {
         }
         let args = match self.peek() {
             TokenKind::LeftParen => {
-                self.advance();
+                let open = self.advance();
                 self.open(Closer::Paren);
                 let args = if self.is_at(TokenKind::RightParen) {
                     List::new()
                 } else {
                     self.parse_expr_list()
                 };
-                self.expect_closer(TokenKind::RightParen, Closer::Paren);
+                self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
                 for expr in &args {
                     if !self.is_attribute_literal(expr, groupings_start) {
                         self.error(expr.span(), "attribute arguments must be literals");
@@ -207,15 +209,18 @@ impl<'ast> Parser<'ast> {
         if args.is_some() && name.text != "deprecated" {
             self.error(name.span, format!("attribute `@{}` does not take arguments", name.text));
         }
-        let is_duplicate = self
+        let first = self
             .scratch
             .attributes
             .get(list_start..)
             .unwrap_or_default()
             .iter()
-            .any(|attribute| attribute.name.text == name.text);
-        if is_duplicate {
-            self.error(name.span, format!("duplicate attribute `@{}`", name.text));
+            .find(|attribute| attribute.name.text == name.text);
+        if let Some(first_attribute) = first {
+            let message = format!("duplicate attribute `@{}`", name.text);
+            let diag = Diagnostic::e008(name.span, message)
+                .with_label(first_attribute.span, "first given here");
+            self.errors.push(diag);
         }
         if name.text == "deprecated"
             && let Some(deprecated_args) = args

@@ -1,22 +1,19 @@
 use luck_allocator::Allocator;
 use luck_core::LuaTarget;
+use luck_diagnostics::Severity;
 use luck_parser::ParseResult;
 use luck_semantic::SemanticAnalysis;
-use luck_token::{LintVerb, SourceError, StdlibEnvironment};
+use luck_token::{LintVerb, StdlibEnvironment};
 use rayon::prelude::*;
 
 use crate::bus;
 use crate::config::{LintConfig, RuleLevel};
-use crate::diagnostic::{Category, Finding, LintDiagnostic, Severity};
+use crate::diagnostic::{Category, Finding, Message};
 use crate::directives::Directives;
 use crate::fix::FixKind;
 use crate::nodes::{NodeCollector, Nodes};
 use crate::rule::{LintContext, NodeRule, Rule, WholeRule};
 use crate::rules::{RULES, RuleEntry};
-
-/// The rule a parse error's diagnostic names. No rule has the name, so
-/// neither config nor a directive can turn one off.
-const PARSE_ERROR_RULE: &str = "parse_error";
 
 /// Parses `source` into `allocator` and lints it for `target`, whose stdlib
 /// environment decides which globals exist. A diagnostic carries a fix only
@@ -32,14 +29,16 @@ pub fn lint(
     target: LuaTarget,
     config: &LintConfig,
     fixes: FixKind,
-) -> Vec<LintDiagnostic> {
+) -> Vec<Message> {
     let parse = luck_parser::parse(allocator, source, target.lua_version());
     lint_parsed(&parse, target.stdlib_environment(), config, fixes)
 }
 
 /// [`analyze`]s `parse` in `environment` and lints it, building the fixes of
-/// the kinds `fixes` holds. A parse with errors yields one `parse_error`
-/// diagnostic per error, and no rules run.
+/// the kinds `fixes` holds.
+///
+/// A parse with errors yields its errors, each an E008, and no rules run, so
+/// neither config nor a directive turns one off.
 ///
 /// # Panics
 ///
@@ -50,9 +49,9 @@ pub fn lint_parsed(
     environment: StdlibEnvironment,
     config: &LintConfig,
     fixes: FixKind,
-) -> Vec<LintDiagnostic> {
+) -> Vec<Message> {
     if !parse.errors.is_empty() {
-        return parse_error_diags(parse);
+        return parse_error_messages(parse);
     }
     lint_analyzed(parse, &analyze(parse, environment, config), config, fixes, &|| false)
         .unwrap_or_default()
@@ -62,9 +61,9 @@ pub fn lint_parsed(
 /// build either twice, building the fixes of the kinds `fixes` holds. `config`
 /// must be the one `analysis` was built with.
 ///
-/// A parse with errors yields one `parse_error` diagnostic per error, and no
-/// rules run. `is_cancelled` is asked between rules and between runs of
-/// nodes, and once it says so, the lint stops and returns `None`.
+/// A parse with errors yields its errors, as [`lint_parsed`] does.
+/// `is_cancelled` is asked between rules and between runs of nodes, and once
+/// it says so, the lint stops and returns `None`.
 ///
 /// # Panics
 ///
@@ -77,13 +76,13 @@ pub fn lint_analyzed(
     config: &LintConfig,
     fixes: FixKind,
     is_cancelled: &(dyn Fn() -> bool + Sync),
-) -> Option<Vec<LintDiagnostic>> {
+) -> Option<Vec<Message>> {
     if !parse.errors.is_empty() {
-        return Some(parse_error_diags(parse));
+        return Some(parse_error_messages(parse));
     }
-    let mut diags = run_rules(&LintContext::new(parse, analysis, config, fixes), is_cancelled)?;
-    diags.sort_by_key(|diag| diag.span.start);
-    Some(diags)
+    let mut messages = run_rules(&LintContext::new(parse, analysis, config, fixes), is_cancelled)?;
+    messages.sort_by_key(|message| message.span().start);
+    Some(messages)
 }
 
 /// A parse's semantic analysis, the linter's table of its nodes, which
@@ -139,20 +138,8 @@ pub fn analyze<'ast>(
     Analysis { semantic, nodes, directives }
 }
 
-fn parse_error_diags(parse: &ParseResult<'_>) -> Vec<LintDiagnostic> {
-    parse.errors.iter().map(parse_error_diag).collect()
-}
-
-fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
-    LintDiagnostic {
-        rule: PARSE_ERROR_RULE,
-        category: Category::Correctness,
-        severity: Severity::Error,
-        message: error.message.clone().into(),
-        span: error.span,
-        help: None,
-        fix: None,
-    }
+fn parse_error_messages(parse: &ParseResult<'_>) -> Vec<Message> {
+    parse.errors.iter().map(|error| Message { diagnostic: error.clone(), fix: None }).collect()
 }
 
 /// Node rules share one bus pass while whole-tree rules run beside it, on
@@ -169,7 +156,7 @@ fn parse_error_diag(error: &SourceError) -> LintDiagnostic {
 fn run_rules(
     context: &LintContext<'_>,
     is_cancelled: &(dyn Fn() -> bool + Sync),
-) -> Option<Vec<LintDiagnostic>> {
+) -> Option<Vec<Message>> {
     let (config, directives, nodes) = (context.config, context.directives, context.nodes);
     let severities: Vec<Option<Severity>> =
         RULES.iter().map(|entry| rule_severity(entry.rule(), config)).collect();
@@ -237,11 +224,11 @@ fn run_rules(
     }
 
     let mut used = vec![false; directives.entries().len()];
-    let mut diags = Vec::with_capacity(findings_by_slot.iter().map(Vec::len).sum());
+    let mut messages = Vec::with_capacity(findings_by_slot.iter().map(Vec::len).sum());
     for (slot, rule_findings) in findings_by_slot.into_iter().enumerate() {
         if !rule_findings.is_empty() {
             let severity = severities.get(slot).copied().flatten();
-            report(slot, rule_findings, severity, directives, Some(&mut used), &mut diags);
+            report(slot, rule_findings, severity, directives, Some(&mut used), &mut messages);
         }
     }
     // It reads which `allow`s the other rules' diagnostics met, so it runs
@@ -252,12 +239,12 @@ fn run_rules(
         }
         let rule_findings = rule.check(context, &used, runs);
         let severity = severities.get(slot).copied().flatten();
-        report(slot, rule_findings, severity, directives, None, &mut diags);
+        report(slot, rule_findings, severity, directives, None, &mut messages);
     }
-    Some(diags)
+    Some(messages)
 }
 
-/// Makes the findings of the rule at `slot` its diagnostics.
+/// Makes the findings of the rule at `slot` its messages.
 ///
 /// Each takes the level the directive that wins over it sets, or else
 /// `severity`, which is `None` for a rule only a directive runs. An `allow`
@@ -268,12 +255,11 @@ pub(crate) fn report(
     severity: Option<Severity>,
     directives: &Directives,
     mut used: Option<&mut [bool]>,
-    diags: &mut Vec<LintDiagnostic>,
+    messages: &mut Vec<Message>,
 ) {
     let Some(rule) = RULES.get(slot).map(RuleEntry::rule) else {
         return;
     };
-    let (name, category, fix_kind) = (rule.name(), rule.category(), rule.fix_kind());
     let mut cover = directives.cover_of(slot);
     if !cover.is_empty() && !findings.is_sorted_by_key(|finding| finding.span().start) {
         findings.sort_by_key(|finding| finding.span().start);
@@ -293,12 +279,13 @@ pub(crate) fn report(
                 None => continue,
             },
         };
-        let diag = finding.into_diagnostic(name, category, level);
+        let message = finding.into_message(rule, level);
         debug_assert!(
-            diag.fix.as_ref().is_none_or(|fix| fix_kind.contains(fix.kind)),
-            "rule `{name}` offers a fix of a kind its `fix_kind()` leaves out: {diag:?}"
+            message.fix.as_ref().is_none_or(|fix| rule.fix_kind().contains(fix.kind)),
+            "rule `{}` offers a fix of a kind its `fix_kind()` leaves out: {message:?}",
+            rule.name()
         );
-        diags.push(diag);
+        messages.push(message);
     }
 }
 
@@ -364,7 +351,7 @@ print(x, y)";
         let diags = lint_analyzed(&parse, &analysis, &silent, FixKind::empty(), &|| false)
             .expect("nothing cancels it");
         let found: Vec<(&str, u32, Severity)> =
-            diags.iter().map(|diag| (diag.rule, diag.span.start, diag.severity)).collect();
+            diags.iter().map(|diag| (diag.code, diag.span().start, diag.severity)).collect();
         assert_eq!(found, [("redundant_nil_init", 0, Severity::Error)], "{diags:?}");
     }
 
@@ -397,7 +384,7 @@ print(x)";
         };
         let config = LintConfig::default();
         let (asked, whole) = questions(&config);
-        assert!(whole.iter().any(|diag| diag.rule == "unused_lint_filter"), "{whole:?}");
+        assert!(whole.iter().any(|diag| diag.code == "unused_lint_filter"), "{whole:?}");
         let mut without_filter = LintConfig::default();
         without_filter.rules.set_level("unused_lint_filter", RuleLevel::Off);
         let (asked_without, _) = questions(&without_filter);

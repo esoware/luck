@@ -37,12 +37,10 @@ impl WholeRule for MultipleStatementsPerLine {
                 if previous_line == lines.line(next.start) {
                     findings.push(
                         Finding::new(
-                            format!(
-                                "statement starts on the same line as the previous statement \
-                                 (line {previous_line})"
-                            ),
+                            "statement starts on the same line as the previous statement",
                             *next,
                         )
+                        .with_label(*previous, "the previous statement")
                         .with_help("put each statement on its own line"),
                     );
                 }
@@ -57,17 +55,19 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::diagnostic::Message;
+    use crate::fixtures::{labeled, run_rule};
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&MultipleStatementsPerLine, source, LuaVersion::Lua54)
     }
 
     #[test]
     fn flags_adjacent_locals_one_line() {
-        let diags = run("local a = 1 local b = 2");
+        let source = "local a = 1 local b = 2";
+        let diags = run(source);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
+        assert_eq!(labeled(&diags[0], source), ["local a = 1"]);
     }
 
     #[test]

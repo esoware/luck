@@ -1,5 +1,6 @@
+use luck_diagnostics::Diagnostic;
 use luck_lexer::{Lexer, lex};
-use luck_token::{Comment, LuaVersion, SourceError, TokenKind};
+use luck_token::{Comment, LuaVersion, TokenKind};
 
 use crate::common::tokens_in;
 
@@ -22,7 +23,7 @@ fn pieces(source: &str) -> Vec<(TokenKind, &str)> {
 fn interpolated_string_without_exprs_lexes_as_one_simple_token() {
     for (source, text) in [("`hello`", "hello"), ("``", "")] {
         let result = lex(source, LuaVersion::Luau);
-        assert_eq!(result.errors, Vec::<SourceError>::new(), "{source:?}");
+        assert_eq!(result.errors, Vec::<Diagnostic>::new(), "{source:?}");
         let [simple, eof] = result.tokens.as_slice() else {
             panic!("{source:?}: {:?}", result.tokens);
         };
@@ -37,7 +38,7 @@ fn interpolated_string_without_exprs_lexes_as_one_simple_token() {
 fn each_piece_spans_its_delimiters_and_carries_the_text_between_them() {
     let source = "`a{x}b{y}c`";
     let result = lex(source, LuaVersion::Luau);
-    assert_eq!(result.errors, Vec::<SourceError>::new());
+    assert_eq!(result.errors, Vec::<Diagnostic>::new());
     let spans: Vec<&str> = result.tokens.iter().map(|token| token.span.text(source)).collect();
     assert_eq!(spans, ["`a{", "x", "}b{", "y", "}c`", ""]);
     assert_eq!(
@@ -114,14 +115,14 @@ fn a_string_inside_a_hole_opens_its_own_pieces() {
 #[test]
 fn unterminated_interpolated_string_is_error() {
     let result = lex("`hello", LuaVersion::Luau);
-    assert_ne!(result.errors, Vec::<SourceError>::new());
+    assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("unterminated"));
 }
 
 #[test]
 fn interpolated_string_double_brace_is_error() {
     let result = lex("`{{x}}`", LuaVersion::Luau);
-    assert_ne!(result.errors, Vec::<SourceError>::new());
+    assert_ne!(result.errors, Vec::<Diagnostic>::new());
     assert!(result.errors[0].message.contains("`{{` is not allowed"));
 }
 
@@ -169,8 +170,8 @@ y",
             panic!("{source:?}: {:?}", result.errors);
         };
         assert_eq!(
-            (error.message.as_str(), error.span.text(source)),
-            (message, text),
+            (&*error.message, error.span.map(|span| span.text(source))),
+            (message, Some(text)),
             "{source:?}"
         );
     }

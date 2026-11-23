@@ -1,7 +1,6 @@
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::fs;
-use std::path::PathBuf;
 
 use crossbeam_channel::Sender;
 use ls_types::notification::{Notification as _, PublishDiagnostics, ShowMessage};
@@ -66,23 +65,20 @@ impl Session {
     /// Shows why the `luck.json` that `defaults` stand in for doesn't load,
     /// and publishes the problem on the file at fault.
     pub(crate) fn report_config_error(&self, defaults: &Project, error: ConfigError) {
-        let ConfigError { diag, generation } = error;
+        let ConfigError { file, generation } = error;
+        let problems: Vec<&str> = file.diags.iter().map(|diag| &*diag.message).collect();
         let message = format!(
             "luck: the `luck.json` in `{}` doesn't load, so its files use the defaults: {}",
             defaults.root().display(),
-            diag.message
+            problems.join("; ")
         );
         let shown = ShowMessageParams { typ: MessageType::ERROR, message };
         let mut notifications = vec![Notification::new(ShowMessage::METHOD.to_owned(), shown)];
-        let path = PathBuf::from(&diag.file_path);
-        if let Some(uri) = Uri::from_file_path(&path) {
+        if let Some(uri) = Uri::from_file_path(&file.path) {
             // A file that can't be read has no text to place the problem in.
-            let text = fs::read_to_string(&path).unwrap_or_default();
-            let published = PublishDiagnosticsParams {
-                uri,
-                diagnostics: vec![diagnostics::config_to_lsp(&diag, &text, self.encoding)],
-                version: None,
-            };
+            let text = fs::read_to_string(&file.path).unwrap_or_default();
+            let diagnostics = diagnostics::config_to_lsp(&uri, &file.diags, &text, self.encoding);
+            let published = PublishDiagnosticsParams { uri, diagnostics, version: None };
             notifications.push(Notification::new(PublishDiagnostics::METHOD.to_owned(), published));
         }
         self.send(Task::ConfigError { generation, notifications });

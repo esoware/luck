@@ -1,5 +1,6 @@
 use luck_allocator::Allocator;
 use luck_ast::{Call, Expression, GetSpan as _, Statement, Suffix, SuffixedExpression};
+use luck_diagnostics::Tag;
 use luck_semantic::{
     ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction, expand_replace_template,
 };
@@ -56,6 +57,7 @@ fn check_call(site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec
     if let Some(deprecation) = entry.deprecation() {
         let name = callee.name();
         let finding = Finding::new(format!("`{name}` is deprecated"), call.span())
+            .with_tag(Tag::Deprecated)
             .with_help(deprecation.message);
         findings.push(match deprecation.replacement {
             Some(replacement) => {
@@ -106,6 +108,7 @@ fn deprecated_params(
                 format!("argument {arg_number} of `{}` is deprecated", callee.name()),
                 arg.span(),
             )
+            .with_tag(Tag::Deprecated)
             .with_help(deprecation.message)
         })
     })
@@ -137,6 +140,7 @@ fn deprecated_constants(
                 format!("`{value}` is a deprecated argument of `{}`", callee.name()),
                 span,
             )
+            .with_tag(Tag::Deprecated)
             .with_help(deprecation.message),
         )
     })
@@ -292,6 +296,7 @@ fn check_field_accesses(
             let path = chain.head(read_index).dotted_path().map(|path| path.to_string());
             findings.push(
                 Finding::new(format!("`{}` is deprecated", path.unwrap_or_default()), name.span)
+                    .with_tag(Tag::Deprecated)
                     .with_help(deprecation.message),
             );
         }
@@ -304,8 +309,8 @@ mod tests {
 
     use luck_token::LuaVersion;
 
-    use super::Deprecated;
-    use crate::diagnostic::LintDiagnostic;
+    use super::{Deprecated, Tag};
+    use crate::diagnostic::Message;
     use crate::fix::FixKind;
     use crate::fixtures::{fix_and_reparse, run_rule, run_rule_roblox};
 
@@ -316,7 +321,7 @@ mod tests {
         Some((diag.fix?.message.into_owned(), applied))
     }
 
-    fn fix_kind(diags: &[LintDiagnostic]) -> Option<FixKind> {
+    fn fix_kind(diags: &[Message]) -> Option<FixKind> {
         diags.first()?.fix.as_ref().map(|fix| fix.kind)
     }
 
@@ -324,6 +329,7 @@ mod tests {
     fn flags_and_fixes_an_exact_replacement() {
         let diags = run_rule(&Deprecated, "unpack(t)", LuaVersion::Lua54);
         assert_eq!(fix_kind(&diags), Some(FixKind::Fix), "{diags:?}");
+        assert_eq!(diags[0].tag, Some(Tag::Deprecated), "an editor strikes it through");
     }
 
     #[test]

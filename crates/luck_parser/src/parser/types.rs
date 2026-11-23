@@ -319,11 +319,11 @@ impl<'ast> Parser<'ast> {
         if !self.enter_depth() {
             return Type::Error(typeof_span);
         }
-        self.advance();
+        let open = self.advance();
         self.open(Closer::Paren);
         let expr = self.parse_expr(0);
         self.exit_depth();
-        let close = self.expect_closer(TokenKind::RightParen, Closer::Paren);
+        let close = self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
         let span = typeof_span.merge(close);
         Type::new_typeof(span, expr, self.allocator)
     }
@@ -362,7 +362,7 @@ impl<'ast> Parser<'ast> {
             }
         }
         let args = List::split_off_in(&mut self.scratch.types, start, self.allocator);
-        let close = self.consume_type_close_angle();
+        let close = self.consume_type_close_angle(open);
         TypeArgs::new(open.merge(close), args)
     }
 
@@ -435,15 +435,15 @@ impl<'ast> Parser<'ast> {
         }
 
         let params = List::split_off_in(&mut self.scratch.generic_params, start, self.allocator);
-        let close = self.consume_type_close_angle();
+        let close = self.consume_type_close_angle(open);
         GenericTypeList::new(open.merge(close), params)
     }
 
-    /// The lexer is greedy, so `Foo<T>=x` holds `GreaterEqual`, which gets
-    /// split here: this returns the `>`'s span and leaves `=` as the current
-    /// token.
+    /// The `>` that closes the `<` at `open`. The lexer is greedy, so
+    /// `Foo<T>=x` holds `GreaterEqual`, which gets split here: this returns
+    /// the `>`'s span and leaves `=` as the current token.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
-    fn consume_type_close_angle(&mut self) -> Span {
+    fn consume_type_close_angle(&mut self, open: Span) -> Span {
         match self.peek() {
             TokenKind::Greater => self.advance(),
             TokenKind::GreaterEqual => {
@@ -458,18 +458,8 @@ impl<'ast> Parser<'ast> {
                 self.previous_span = Span::new(span.start, split_at);
                 self.previous_span
             }
-            _ => self.report_unclosed_generics(),
+            _ => self.report_unclosed(TokenKind::Greater, open),
         }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn report_unclosed_generics(&mut self) -> Span {
-        let span = self.token.span;
-        let message =
-            format!("expected `>` to close generics, found {}", self.token.display(self.source));
-        self.syntax_error(span, message);
-        span
     }
 
     fn parse_table_type(&mut self) -> Type<'ast> {
@@ -492,7 +482,7 @@ impl<'ast> Parser<'ast> {
         self.exit_depth();
         let fields = List::split_off_in(&mut self.scratch.type_fields, start, self.allocator);
         self.check_table_type_fields(&fields, has_trailing_separator);
-        let close = self.expect_closer(TokenKind::RightBrace, Closer::Brace);
+        let close = self.expect_closer(TokenKind::RightBrace, Closer::Brace, open);
         let span = open.merge(close);
         Type::new_table(span, fields, has_trailing_separator, self.allocator)
     }
@@ -561,7 +551,7 @@ impl<'ast> Parser<'ast> {
             let open = self.advance();
             self.open(Closer::Bracket);
             let key = self.parse_type();
-            self.expect_closer(TokenKind::RightBracket, Closer::Bracket);
+            self.expect_closer(TokenKind::RightBracket, Closer::Bracket, open);
             self.expect(TokenKind::Colon);
             let value = self.parse_type();
             let span = access_span.unwrap_or(open).merge(value.span());
@@ -623,7 +613,7 @@ impl<'ast> Parser<'ast> {
             }
         }
 
-        let close = self.expect_closer(TokenKind::RightParen, Closer::Paren);
+        let close = self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
 
         if self.eat(TokenKind::Arrow) {
             let params =

@@ -75,10 +75,10 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
+    use crate::diagnostic::Message;
     use crate::fixtures::{fix_and_reparse, run_rule, run_rule_roblox};
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule_roblox(&RobloxManualFromScaleOrFromOffset, source)
     }
 

@@ -7,7 +7,7 @@ use core::fmt;
 #[cfg(feature = "serde")]
 use core::marker::PhantomData;
 
-use luck_core::DiagnosticSeverity;
+use luck_diagnostics::Severity;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "serde")]
 use serde::de::{
@@ -120,11 +120,11 @@ pub enum RuleLevel {
 impl RuleLevel {
     /// `None` for [`RuleLevel::Off`].
     #[must_use]
-    pub const fn severity(self) -> Option<DiagnosticSeverity> {
+    pub const fn severity(self) -> Option<Severity> {
         match self {
             Self::Off => None,
-            Self::Warn => Some(DiagnosticSeverity::Warning),
-            Self::Error => Some(DiagnosticSeverity::Error),
+            Self::Warn => Some(Severity::Warning),
+            Self::Error => Some(Severity::Error),
         }
     }
 }
@@ -682,8 +682,8 @@ mod tests {
             typo.contains("unknown lint rule `unsued_variable`, did you mean `unused_variable`?"),
             "{typo}"
         );
-        let pseudo_rule = lint_error(r#"{ "rules": { "parse_error": "off" } }"#);
-        assert!(pseudo_rule.contains("unknown lint rule `parse_error`"), "{pseudo_rule}");
+        let parse_error_code = lint_error(r#"{ "rules": { "E008": "off" } }"#);
+        assert!(parse_error_code.contains("unknown lint rule `E008`"), "{parse_error_code}");
     }
 
     #[test]

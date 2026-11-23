@@ -8,7 +8,7 @@ use luck_resolver::to_slash_lossy;
 
 use crate::exit::{Exit, fail_with_diags};
 use crate::project::{bundle_arenas, bundle_options, existing_file, one_shot_project};
-use crate::render::print_diags;
+use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
 #[derive(Clone, ValueEnum)]
@@ -60,7 +60,7 @@ impl GraphArgs {
             .map_err(|errors| fail_with_diags(&errors, version))?;
 
         if verbosity != Verbosity::Quiet {
-            print_diags(&dependency_graph.warnings, version);
+            print_files(&dependency_graph.warnings, version);
         }
 
         match self.format {

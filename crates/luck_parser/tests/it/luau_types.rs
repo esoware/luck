@@ -334,7 +334,7 @@ fn named_parameter_outside_a_function_type_is_an_error() {
     let allocator = Allocator::new();
     let parsed = parse_luau(&allocator, "type X = (value: number)");
     assert_eq!(parsed.errors.len(), 1, "{:?}", parsed.errors);
-    assert_eq!(parsed.errors[0].span, luck_token::Span::new(10, 15));
+    assert_eq!(parsed.errors[0].span, Some(luck_token::Span::new(10, 15)));
     assert_eq!(parsed.errors[0].message, "named parameters are only valid in function types");
 }
 
@@ -457,7 +457,7 @@ fn annotation_not_confused_with_method_call() {
 fn type_annotations_rejected_outside_luau() {
     let allocator = Allocator::new();
     let result = luck_parser::parse(&allocator, "local x: number = 1", LuaVersion::Lua54);
-    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
 }
 
 #[test]

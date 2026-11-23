@@ -35,14 +35,11 @@ impl WholeRule for DuplicateFunction {
                 let Some(name) = declared_name else {
                     continue;
                 };
-                if let Some(first_span) = definitions.get(&name) {
-                    let line = context.line_index().line(first_span.start);
-                    findings.push(Finding::new(
-                        format!(
-                            "duplicate function definition `{name}`, also defined on line {line}"
-                        ),
-                        name_span,
-                    ));
+                if let Some(&first_span) = definitions.get(&name) {
+                    findings.push(
+                        Finding::new(format!("duplicate function definition `{name}`"), name_span)
+                            .with_label(first_span, "first defined here"),
+                    );
                 } else {
                     definitions.insert(name, name_span);
                 }
@@ -74,32 +71,36 @@ mod tests {
     use luck_token::LuaVersion;
 
     use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::diagnostic::Message;
+    use crate::fixtures::{labeled, run_rule};
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
+    fn run(source: &str) -> Vec<Message> {
         run_rule(&DuplicateFunction, source, LuaVersion::Lua54)
     }
 
     #[test]
     fn flags_duplicate_plain_function() {
-        let diags = run("\
+        let source = "\
 function f() end
-function f() end");
+function f() end";
+        let diags = run(source);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`f`"));
-        assert!(diags[0].message.contains("line 1"));
+        assert_eq!(diags[0].message, "duplicate function definition `f`");
+        assert_eq!(diags[0].span().start, 26);
+        assert_eq!(labeled(&diags[0], source), ["f"]);
+        assert_eq!(diags[0].labels[0].span.start, 9);
     }
 
     #[test]
     fn flags_duplicate_dotted_function() {
-        let diags = run("\
+        let source = "\
 local t = {}
 function t.m() end
-function t.m() end");
+function t.m() end";
+        let diags = run(source);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("`t.m`"));
-        assert!(diags[0].message.contains("line 2"));
+        assert_eq!(labeled(&diags[0], source), ["t.m"]);
     }
 
     #[test]
@@ -120,7 +121,7 @@ function f() end
 function f() end
 end");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("line 2"));
+        assert_eq!(diags[0].labels.first().map(|label| label.span.start), Some(12));
     }
 
     #[test]
