@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-/// Offsets are `u32` to keep spans small, which caps a file at 4 GB.
+/// Offsets are `u32` to keep spans small, which caps a file at 4 GiB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Span {
     pub start: u32,
@@ -30,7 +30,7 @@ impl Span {
         Self { start: self.start.min(other.start), end: self.end.max(other.end) }
     }
 
-    /// This span moved `offset` bytes later, saturating at the 4 GB cap.
+    /// This span moved `offset` bytes later, saturating at the 4 GiB cap.
     #[must_use]
     pub const fn shifted(self, offset: u32) -> Self {
         Self::new(self.start.saturating_add(offset), self.end.saturating_add(offset))
@@ -46,7 +46,7 @@ impl Span {
 impl From<Span> for Range<usize> {
     #[inline]
     fn from(span: Span) -> Self {
-        span.start as usize..span.end as usize
+        offset_to_index(span.start)..offset_to_index(span.end)
     }
 }
 

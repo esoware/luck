@@ -1,7 +1,7 @@
 use LuaVersion::{Lua51, Lua54, Luau};
 use luck_token::{
-    LineIndex, LuaVersion, chunk_start, ends_with_line_break, has_line_break, is_lua_whitespace,
-    line_breaks, strip_line_break,
+    LuaVersion, ends_with_line_break, has_line_break, is_lua_whitespace, line_breaks,
+    strip_line_break,
 };
 
 #[test]
@@ -56,53 +56,4 @@ fn only_c_locale_isspace_bytes_are_lua_whitespace() {
     for b in [b'a', 0x00, 0x08, 0xA0, 0xFE] {
         assert!(!is_lua_whitespace(b), "{b:#x}");
     }
-}
-
-#[test]
-fn chunk_start_skips_a_bom_only_where_the_loader_does() {
-    let with_bom = "\u{FEFF}return".as_bytes();
-    assert_eq!(chunk_start(with_bom, Lua54), 3);
-    assert_eq!(chunk_start(b"return", Lua54), 0);
-    assert_eq!(chunk_start(with_bom, Lua51), 0);
-    assert_eq!(chunk_start(with_bom, Luau), 0);
-}
-
-#[test]
-fn line_index_counts_lines_and_byte_columns_from_one() {
-    let source = "\
-local x
-do local y
-end";
-    let lines = LineIndex::new(source.as_bytes(), Lua54);
-    assert_eq!(lines.line_column(0), (1, 1));
-    assert_eq!(lines.line_column(6), (1, 7));
-    // The `d` of `do`.
-    assert_eq!(lines.line_column(8), (2, 1));
-    assert_eq!(lines.line_column(17), (2, 10));
-    assert_eq!(lines.line(17), 2);
-    let latin1 = LineIndex::new(b"-- \xE9\xE8\nx", Lua54);
-    assert_eq!(latin1.line_column(5), (1, 6));
-    assert_eq!(latin1.line_column(6), (2, 1));
-}
-
-#[test]
-fn line_index_breaks_lines_as_the_version_does() {
-    assert_eq!(LineIndex::new(b"a\rb", Lua54).line(2), 2);
-    assert_eq!(LineIndex::new(b"a\rb", Luau).line(2), 1);
-}
-
-#[test]
-fn line_index_reads_a_shebang_as_one_line_up_to_its_lf() {
-    for version in LuaVersion::ALL {
-        assert_eq!(LineIndex::new(b"#!x\ry\r\nz", version).line_column(7), (2, 1), "{version:?}");
-    }
-}
-
-#[test]
-fn line_index_starts_the_first_line_past_a_skipped_bom() {
-    let source = "\u{feff}local x
-y";
-    assert_eq!(LineIndex::new(source.as_bytes(), Lua54).line_column(3), (1, 1));
-    assert_eq!(LineIndex::new(source.as_bytes(), Lua54).line_column(11), (2, 1));
-    assert_eq!(LineIndex::new(source.as_bytes(), Lua51).line_column(3), (1, 4));
 }

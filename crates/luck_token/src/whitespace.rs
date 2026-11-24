@@ -7,7 +7,7 @@
 use std::iter;
 use std::ops::Range;
 
-use crate::{LuaVersion, index_to_offset};
+use crate::LuaVersion;
 
 /// Whether `byte` is whitespace to the lexer: Lua's `isspace` in the C locale,
 /// which Luau's `isSpace` matches.
@@ -55,66 +55,6 @@ pub const fn ends_with_line_break(bytes: &[u8], version: LuaVersion) -> bool {
     match bytes {
         [.., b'\n'] => true,
         [.., b'\r'] => version.has_lfcr_line_break(),
-        _ => false,
-    }
-}
-
-/// The byte offset `source`'s code starts at: past a UTF-8 BOM where
-/// `version`'s loader skips one, else 0.
-pub fn chunk_start(source: &[u8], version: LuaVersion) -> usize {
-    const BOM: &[u8] = "\u{FEFF}".as_bytes();
-    if version.has_bom_skip() && source.starts_with(BOM) { BOM.len() } else { 0 }
-}
-
-/// Where each line of a source starts, with lines broken as `version` breaks
-/// them and the first one starting past a BOM its loader skips.
-#[derive(Debug, Clone)]
-pub struct LineIndex {
-    line_starts: Vec<u32>,
-}
-
-impl LineIndex {
-    pub fn new(source: &[u8], version: LuaVersion) -> Self {
-        let first_line_start = chunk_start(source, version);
-        let chunk = &source[first_line_start..];
-        // Loaders skip a shebang line up to its LF, so a CR in it starts no
-        // line.
-        let shebang_length = if has_shebang(chunk, version) {
-            memchr::memchr(b'\n', chunk).unwrap_or(chunk.len())
-        } else {
-            0
-        };
-        let scan_start = first_line_start + shebang_length;
-        let rest = &source[scan_start..];
-        let line_starts = iter::once(index_to_offset(first_line_start))
-            .chain(
-                line_breaks(rest, version)
-                    .map(|line_break| index_to_offset(scan_start + line_break.end)),
-            )
-            .collect();
-        Self { line_starts }
-    }
-
-    /// The one-based line `offset` is on.
-    pub fn line(&self, offset: u32) -> u32 {
-        index_to_offset(self.line_starts.partition_point(|&start| start <= offset)).max(1)
-    }
-
-    /// The one-based line and byte column of `offset`.
-    pub fn line_column(&self, offset: u32) -> (u32, u32) {
-        let line = self.line(offset);
-        let line_start = self.line_starts[(line - 1) as usize];
-        // An offset in a BOM before the first line is in its first column.
-        (line, offset.saturating_sub(line_start) + 1)
-    }
-}
-
-/// Whether `chunk`, the source from [`chunk_start`] on, opens with a first line
-/// `version`'s loader skips.
-pub const fn has_shebang(chunk: &[u8], version: LuaVersion) -> bool {
-    match chunk {
-        [b'#', b'!', _, ..] => true,
-        [b'#', ..] => version.has_bare_hash_shebang(),
         _ => false,
     }
 }

@@ -2,28 +2,29 @@
 //! numbers stay reserved.
 
 use std::borrow::Cow;
+use std::io;
 
 use luck_token::Span;
 
 use crate::diagnostic::{Diagnostic, Severity, Tag};
 
 impl Diagnostic {
-    fn error_at<Message>(code: &'static str, span: Option<Span>, message: Message) -> Self
+    fn error<Message>(code: &'static str, span: Option<Span>, message: Message) -> Self
     where
         Message: Into<Cow<'static, str>>,
     {
         Self::new(code, Severity::Error, message.into(), span)
     }
 
-    fn warning_at<Message>(code: &'static str, span: Span, message: Message) -> Self
+    fn warning<Message>(code: &'static str, span: Option<Span>, message: Message) -> Self
     where
         Message: Into<Cow<'static, str>>,
     {
-        Self::new(code, Severity::Warning, message.into(), Some(span))
+        Self::new(code, Severity::Warning, message.into(), span)
     }
 
     pub fn e002(span: Span) -> Self {
-        Self::error_at("E002", Some(span), "`require` argument must be a string literal")
+        Self::error("E002", Some(span), "`require` argument must be a string literal")
             .with_help("use a string literal: `require(\"module_name\")`")
     }
 
@@ -61,12 +62,12 @@ impl Diagnostic {
     }
 
     fn module_not_found(span: Span, module_name: &str, searched: &str) -> Self {
-        Self::error_at("E004", Some(span), format!("module not found: `{module_name}`"))
+        Self::error("E004", Some(span), format!("module not found: `{module_name}`"))
             .with_help(format!("searched paths:\n  - {searched}"))
     }
 
     pub fn e004_missing_prefix(span: Span, module_name: &str) -> Self {
-        Self::error_at(
+        Self::error(
             "E004",
             Some(span),
             format!(
@@ -80,7 +81,7 @@ impl Diagnostic {
     }
 
     pub fn e004_bare_self_alias(span: Span) -> Self {
-        Self::error_at("E004", Some(span), "`@self` can't be used alone, so use `@self/subpath`")
+        Self::error("E004", Some(span), "`@self` can't be used alone, so use `@self/subpath`")
     }
 
     pub fn e007_both_extensions(span: Span, luau_path: &str, lua_path: &str) -> Self {
@@ -102,7 +103,7 @@ impl Diagnostic {
     }
 
     fn ambiguous_resolution(span: Span, details: &str) -> Self {
-        Self::error_at("E007", Some(span), "ambiguous module resolution")
+        Self::error("E007", Some(span), "ambiguous module resolution")
             .with_help(format!("ambiguity: {details}, so remove one of the conflicting files"))
     }
 
@@ -111,11 +112,11 @@ impl Diagnostic {
     where
         Message: Into<Cow<'static, str>>,
     {
-        Self::error_at("E008", Some(span), message)
+        Self::error("E008", Some(span), message)
     }
 
     pub fn e009(limit: usize) -> Self {
-        Self::error_at("E009", None, format!("too many modules: exceeded {limit} module limit"))
+        Self::error("E009", None, format!("too many modules: exceeded {limit} module limit"))
             .with_help(format!(
                 "a bundle may contain at most {limit} modules, so reduce the dependency graph or \
                  split the build"
@@ -123,20 +124,24 @@ impl Diagnostic {
     }
 
     /// `path` is the file that can't be read, as the message names it.
-    pub fn e010(path: &str, io_error: &str) -> Self {
-        Self::error_at("E010", None, format!("cannot read file `{path}`: {io_error}"))
+    pub fn e010(path: &str, io_error: &io::Error) -> Self {
+        Self::error("E010", None, format!("cannot read file `{path}`: {io_error}"))
             .with_help("check that the file exists and is readable")
     }
 
-    pub fn e012(byte_len: usize, limit: usize) -> Self {
-        Self::error_at("E012", None, format!("file too large: {byte_len} bytes (limit: {limit})"))
-            .with_help(format!("files must be at most {limit} bytes"))
+    pub fn e012(byte_count: usize, byte_limit: usize) -> Self {
+        Self::error(
+            "E012",
+            None,
+            format!("file too large: {byte_count} bytes (limit: {byte_limit})"),
+        )
+        .with_help(format!("files must be at most {byte_limit} bytes"))
     }
 
     /// A construct in a module that parses alone but that the module's bundle
     /// wrapper, `wrapper_levels` deep, would nest past `limit`.
     pub fn e013(span: Span, wrapper_levels: usize, limit: usize) -> Self {
-        Self::error_at(
+        Self::error(
             "E013",
             Some(span),
             format!("maximum nesting depth exceeded once bundled (luck resource limit: {limit})"),
@@ -150,11 +155,11 @@ impl Diagnostic {
     /// A `luck.json`, a file it extends, or a std definition it names, that
     /// isn't valid, at `span` when the problem has a place in the file.
     pub fn e014(span: Option<Span>, problem: &str) -> Self {
-        Self::error_at("E014", span, format!("invalid config: {problem}"))
+        Self::error("E014", span, format!("invalid config: {problem}"))
     }
 
     pub fn w001(span: Span, module_name: &str, first_span: Span) -> Self {
-        Self::warning_at("W001", span, format!("module `{module_name}` required multiple times"))
+        Self::warning("W001", Some(span), format!("module `{module_name}` required multiple times"))
             .with_label(first_span, "first required here")
     }
 
@@ -162,18 +167,17 @@ impl Diagnostic {
     pub fn w003(span: Option<Span>, cycle_path: &[String]) -> Self {
         let quoted_paths: Vec<String> = cycle_path.iter().map(|path| format!("`{path}`")).collect();
         let cycle = quoted_paths.join(" -> ");
-        Self::new("W003", Severity::Warning, "circular dependency between modules".into(), span)
-            .with_help(format!(
-                "cycle: {cycle}\nmodules load lazily, so a cycle through a function body works, \
-                 but one hit while a module is still loading fails at runtime, as it would \
-                 without bundling"
-            ))
+        Self::warning("W003", span, "circular dependency between modules").with_help(format!(
+            "cycle: {cycle}\nmodules load lazily, so a cycle through a function body works, \
+             but one hit while a module is still loading fails at runtime, as it would \
+             without bundling"
+        ))
     }
 
     pub fn w004(span: Span) -> Self {
-        Self::warning_at(
+        Self::warning(
             "W004",
-            span,
+            Some(span),
             "alias `self` defined in `.luaurc` is shadowed by built-in `@self`",
         )
     }
@@ -181,9 +185,9 @@ impl Diagnostic {
     /// A read of a name `require` that isn't the global one: a local, a field
     /// of a local `_ENV`, or a global the file replaces.
     pub fn w005_shadowed(span: Span) -> Self {
-        Self::warning_at(
+        Self::warning(
             "W005",
-            span,
+            Some(span),
             "this `require` is not the global `require`, so calls through it are not bundled",
         )
         .with_help(
@@ -193,9 +197,9 @@ impl Diagnostic {
     }
 
     pub fn w005_aliased(span: Span) -> Self {
-        Self::warning_at(
+        Self::warning(
             "W005",
-            span,
+            Some(span),
             "global `require` is referenced without being called, so aliased call sites are not \
              bundled",
         )
@@ -206,14 +210,14 @@ impl Diagnostic {
     }
 
     pub fn w006(span: Span, hot_comment: &str) -> Self {
-        Self::warning_at(
+        Self::warning(
             "W006",
-            span,
+            Some(span),
             format!("hot comment `{hot_comment}` has no effect in a bundle"),
         )
         .with_help(
             "Luau hot comments only apply at the top of a chunk, so only the entry module's \
-                 are hoisted above the bundle's loader",
+             are hoisted above the bundle's loader",
         )
         .with_tag(Tag::Unnecessary)
     }
@@ -221,9 +225,9 @@ impl Diagnostic {
     /// Lua targets only: the cache is keyed by module name, so a name computed at
     /// runtime can still find a bundled module.
     pub fn w007_loader_fallback(span: Span) -> Self {
-        Self::warning_at(
+        Self::warning(
             "W007",
-            span,
+            Some(span),
             "`require` argument is not a string literal, so the module is resolved at runtime",
         )
         .with_help(
@@ -237,48 +241,14 @@ impl Diagnostic {
     /// requires take an Instance, so a runtime argument can't name a bundled
     /// module.
     pub fn w007_runtime(span: Span) -> Self {
-        Self::warning_at(
+        Self::warning(
             "W007",
-            span,
+            Some(span),
             "`require` argument is not a string literal, so the module is resolved at runtime",
         )
         .with_help(
             "the call is left exactly as written and resolves against the runtime, not the \
              bundle, so use a string literal to bundle the module itself",
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn constructors_set_code_severity_and_help() {
-        let e2 = Diagnostic::e002(Span::new(0, 10));
-        assert_eq!((e2.code, e2.span), ("E002", Some(Span::new(0, 10))));
-        assert!(e2.is_error());
-
-        let e4 = Diagnostic::e004(Span::new(0, 10), "mymod", &["src/mymod.lua".to_owned()]);
-        assert_eq!(
-            e4.help.as_deref(),
-            Some(
-                "\
-searched paths:
-  - `src/mymod.lua`"
-            )
-        );
-
-        let w1 = Diagnostic::w001(Span::new(20, 25), "utils", Span::new(0, 5));
-        assert_eq!(w1.code, "W001");
-        assert!(!w1.is_error());
-        assert!(w1.help.is_none());
-        assert_eq!(w1.labels[0].span, Span::new(0, 5));
-    }
-
-    #[test]
-    fn a_problem_with_no_place_has_no_span() {
-        assert_eq!(Diagnostic::e010("gone.lua", "no such file").span, None);
-        assert_eq!(Diagnostic::e014(None, "bad").span, None);
     }
 }

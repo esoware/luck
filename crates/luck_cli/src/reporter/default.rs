@@ -159,6 +159,8 @@ fn write_compact(label: &str, diag: &Diagnostic, output: &mut Vec<u8>) {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::*;
 
     fn rendered(label: &str, text: Option<&[u8]>, diags: &[Diagnostic]) -> String {
@@ -204,7 +206,8 @@ mod tests {
 
     #[test]
     fn unreadable_file_uses_compact_rendering_with_its_help() {
-        let diag = Diagnostic::e010("gone.lua", "no such file");
+        let io_error = io::Error::new(io::ErrorKind::NotFound, "no such file");
+        let diag = Diagnostic::e010("gone.lua", &io_error);
         let text = rendered("gone.lua", None, &[diag]);
         assert_eq!(
             text,

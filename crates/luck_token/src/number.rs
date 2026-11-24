@@ -510,6 +510,7 @@ fn spell_float(value: f64, is_float_marked: bool) -> NumberSpelling {
     write_layout(layout, magnitude, digits, exponent, is_float_marked, &mut spelling);
     spelling
 }
+
 /// The shortest layout of `digits`, the first worth `10^exponent`. Earlier
 /// layouts win a tie: plain, then exponents with the most digits before the
 /// point, then hex.

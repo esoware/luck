@@ -135,7 +135,7 @@ impl<'input> Reader<'input> {
     ) -> Result<ParsedModule<'ast>, Diagnostic> {
         let file = FileSystemOs
             .read(path)
-            .map_err(|io_error| Diagnostic::e010(&to_slash_lossy(path), &io_error.to_string()))?;
+            .map_err(|io_error| Diagnostic::e010(&to_slash_lossy(path), &io_error))?;
         if file.len() > MAX_FILE_SIZE {
             return Err(Diagnostic::e012(file.len(), MAX_FILE_SIZE));
         }

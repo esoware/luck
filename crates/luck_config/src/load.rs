@@ -46,9 +46,9 @@ pub(crate) struct Loaded {
 /// Later `extends` entries override earlier ones, and the file itself
 /// overrides them all. A file reached more than once is read once.
 pub(crate) fn load(config_path: &Path) -> Result<Loaded, FileDiagnostics> {
-    let canonical = FileSystemOs.canonicalize(config_path).map_err(|e| {
-        in_file(config_path, Diagnostic::e010(&display(config_path), &e.to_string()))
-    })?;
+    let canonical = FileSystemOs
+        .canonicalize(config_path)
+        .map_err(|e| in_file(config_path, Diagnostic::e010(&display(config_path), &e)))?;
     let mut walk = ExtendsWalk::default();
     let config = walk.layer(config_path, canonical, None, 0)?;
     Ok(Loaded { config, files: walk.files })
@@ -80,7 +80,7 @@ impl ExtendsWalk {
             return Ok(finished.clone());
         }
         let text = fs::read_to_string(path)
-            .map_err(|e| in_file(path, Diagnostic::e010(&display(path), &e.to_string())))?;
+            .map_err(|e| in_file(path, Diagnostic::e010(&display(path), &e)))?;
         if !self.files.contains(&canonical) {
             self.files.push(canonical.clone());
         }
@@ -99,9 +99,11 @@ impl ExtendsWalk {
             })?;
         }
         let own_boundary = if config.root == Some(true) {
-            Some(FileSystemOs.canonicalize(&directory).map_err(|e| {
-                in_file(path, Diagnostic::e010(&display(&directory), &e.to_string()))
-            })?)
+            Some(
+                FileSystemOs
+                    .canonicalize(&directory)
+                    .map_err(|e| in_file(path, Diagnostic::e010(&display(&directory), &e)))?,
+            )
         } else {
             None
         };
@@ -226,7 +228,7 @@ fn text_span(text: &str, name: &str) -> Span {
 /// resolved.
 pub(crate) fn read_std_definition(path: &Path) -> Result<StdlibDefinition, FileDiagnostics> {
     let text = fs::read_to_string(path)
-        .map_err(|e| in_file(path, Diagnostic::e010(&display(path), &e.to_string())))?;
+        .map_err(|e| in_file(path, Diagnostic::e010(&display(path), &e)))?;
     StdlibDefinition::parse(&text).map_err(|diag| in_file(path, diag))
 }
 

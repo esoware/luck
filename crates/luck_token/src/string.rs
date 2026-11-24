@@ -60,6 +60,15 @@ pub enum EscapeError {
     Undefined,
 }
 
+/// The kind of string an escape is in, which decides the escapes it takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StringKind {
+    /// In single or double quotes.
+    Quoted,
+    /// Luau: the text of an interpolated string, in backticks.
+    Interpolated,
+}
+
 /// Reads the escape sequence after a `\`, where `rest` starts.
 ///
 /// Returns how many bytes of `rest` it spans, with what it puts in the
@@ -69,7 +78,7 @@ pub enum EscapeError {
 #[expect(clippy::missing_panics_doc, reason = "`\\x` reads only hex digits, and two fit a byte")]
 pub fn read_escape(
     rest: &[u8],
-    is_interpolated: bool,
+    kind: StringKind,
     version: LuaVersion,
 ) -> (usize, Result<Escaped, EscapeError>) {
     let Some((&escaped, after)) = rest.split_first() else {
@@ -119,7 +128,7 @@ pub fn read_escape(
         }
         b'u' if version.has_unicode_escape() => read_unicode_escape(after, version),
         // Luau
-        b'{' | b'}' | b'`' if is_interpolated => byte(escaped),
+        b'{' | b'}' | b'`' if kind == StringKind::Interpolated => byte(escaped),
         _ if !version.has_strict_escapes() => {
             (1, Ok(Escaped { is_lenient: true, ..Escaped::byte(escaped) }))
         }
@@ -217,7 +226,7 @@ pub fn decode_string<'raw>(
                 _ => after_quote,
             };
             if has_escape {
-                decode_escapes(body, false, version, output)
+                decode_escapes(body, StringKind::Quoted, version, output)
             } else {
                 StringValue::Verbatim(body)
             }
@@ -236,7 +245,7 @@ pub fn decode_interpolated_text<'raw>(
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
     if has_escape {
-        decode_escapes(text, true, version, output)
+        decode_escapes(text, StringKind::Interpolated, version, output)
     } else {
         StringValue::Verbatim(text)
     }
@@ -244,7 +253,7 @@ pub fn decode_interpolated_text<'raw>(
 
 fn decode_escapes<'raw>(
     body: &'raw [u8],
-    is_interpolated: bool,
+    kind: StringKind,
     version: LuaVersion,
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
@@ -256,7 +265,7 @@ fn decode_escapes<'raw>(
     output.extend_from_slice(before_escape);
     loop {
         let after_backslash = &remaining[1..];
-        let (length, meaning) = read_escape(after_backslash, is_interpolated, version);
+        let (length, meaning) = read_escape(after_backslash, kind, version);
         if let Ok(escaped) = meaning {
             output.extend_from_slice(escaped.as_bytes());
         }
@@ -477,7 +486,7 @@ impl EscapeCounts {
                     b'\'' => counts.single_quotes += 1,
                     _ => {
                         let is_followed_by_digit = valid.get(index).is_some_and(u8::is_ascii_digit);
-                        counts.extra_bytes += escape(byte, is_followed_by_digit).len() - 1;
+                        counts.extra_bytes += escape(byte, is_followed_by_digit).length - 1;
                         counts.can_be_long &= matches!(byte, b'\n' | b'\t' | b'\\');
                     }
                 }
@@ -560,10 +569,6 @@ impl EscapeText {
 
     fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.length]
-    }
-
-    const fn len(&self) -> usize {
-        self.length
     }
 }
 

@@ -1,6 +1,7 @@
 use luck_token::{
-    EscapeError, LuaVersion, StringValue, decode_interpolated_text, decode_string, read_escape,
-    spell_string, spell_string_shorter_than, write_interpolated_text, write_long_string,
+    EscapeError, Escaped, LuaVersion, StringKind, StringValue, decode_interpolated_text,
+    decode_string, read_escape, spell_string, spell_string_shorter_than, write_interpolated_text,
+    write_long_string,
 };
 
 fn decode(raw: &str) -> Vec<u8> {
@@ -28,7 +29,7 @@ fn written(bytes: &[u8]) -> String {
 }
 
 fn escape_error(escape: &str, version: LuaVersion) -> (usize, Option<EscapeError>) {
-    let (length, meaning) = read_escape(escape.as_bytes(), false, version);
+    let (length, meaning) = read_escape(escape.as_bytes(), StringKind::Quoted, version);
     (length, meaning.err())
 }
 
@@ -93,9 +94,9 @@ fn lua51_and_luau_read_an_undefined_escape_as_the_character() {
     assert_eq!(decode_in(r#""\u{48}""#, lua51), b"u{48}");
     assert_eq!(decode_in(r#""\65""#, lua51), b"A");
     assert_eq!(decode_in(r#""\q\{""#, LuaVersion::Luau), b"q{");
-    let (_, lenient) = read_escape(b"q", false, lua51);
-    assert!(lenient.is_ok_and(luck_token::Escaped::is_lenient));
-    let (_, defined) = read_escape(b"n", false, lua51);
+    let (_, lenient) = read_escape(b"q", StringKind::Quoted, lua51);
+    assert!(lenient.is_ok_and(Escaped::is_lenient));
+    let (_, defined) = read_escape(b"n", StringKind::Quoted, lua51);
     assert!(defined.is_ok_and(|escaped| !escaped.is_lenient()));
 }
 
@@ -105,7 +106,7 @@ fn an_interpolated_string_also_escapes_its_delimiters() {
     let value = decode_interpolated_text(br"a\{b\}c\`d\q", true, LuaVersion::Luau, &mut output);
     assert_eq!(value, StringValue::Decoded);
     assert_eq!(output, b"a{b}c`dq");
-    let (_, brace) = read_escape(b"{", true, LuaVersion::Luau);
+    let (_, brace) = read_escape(b"{", StringKind::Interpolated, LuaVersion::Luau);
     assert!(brace.is_ok_and(|escaped| !escaped.is_lenient()));
 }
 

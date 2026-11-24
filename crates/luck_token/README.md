@@ -1,6 +1,6 @@
 # luck_token
 
-The types and rules every other luck crate builds on, except `luck_allocator` and `luck_data_structures`: positions, tokens, dialects, and how Lua reads literals and line breaks.
+The types and rules every luck crate that reads or writes Lua builds on: positions, tokens, dialects, and how Lua reads literals, line breaks, and what opens a chunk.
 
 A source is bytes, as PUC Lua and Luau read it, so its strings and comments need not be UTF-8. Its names and numerals are ASCII.
 
@@ -16,6 +16,7 @@ A source is bytes, as PUC Lua and Luau read it, so its strings and comments need
 - `read_numeral`, `read_integer`, `read_escape`, and `decode_string`: what a numeral, an escape, or a string literal means in each version, which the lexer checks and the parser decodes with. `LuaNumber` is a number's value, an integer or a float, and a string's is bytes. `LuaNumber::to_integer` gives the integer a float equals, as Lua 5.3+ converts one for a bitwise operator or a table key, and `LuaNumber::literal_magnitude` the magnitude a literal of a number holds, under a `-` when it's negative.
 - `spell_number`, `spell_integer`, `spell_string`, `write_long_string`, and `write_interpolated_text`: the shortest literal that reads back as a value, for the printers. A number spells on the stack, and a string measures itself before it writes. `spell_string_shorter_than` spells one only when that beats a length, such as the literal's own, and stops measuring as soon as it can't.
 - `line_breaks`, `has_line_break`, and `LineIndex`: what counts as a line break in each version, and line and column lookup.
+- `chunk_start`, `has_shebang`, `leading_hot_comments`, and `chunk_header`: what a chunk opens with before its code, which is a BOM and a first line its loader skips and the Luau hot comments that take effect only there, and the header a printer that drops comments writes to keep them.
 
 ```rust
 use luck_token::{LuaVersion, Span, Token, TokenKind};

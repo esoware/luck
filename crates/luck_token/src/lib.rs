@@ -8,15 +8,17 @@
 //! [`Comment`] (extracted comments with position metadata), the comments that
 //! tell a tool what to do ([`CommentContent`], [`LintDirective`]), what a
 //! literal means and how to spell a value ([`read_numeral`], [`read_escape`],
-//! [`decode_string`], [`spell_number`], [`spell_string`]), and the definition
+//! [`decode_string`], [`spell_number`], [`spell_string`]), the definition
 //! of a line break ([`line_breaks`], [`has_line_break`]) with the
-//! [`LineIndex`] over it.
+//! [`LineIndex`] over it, and what a chunk opens with before its code
+//! ([`chunk_start`], [`has_shebang`], [`leading_hot_comments`],
+//! [`chunk_header`]).
 //!
 //! A source is bytes, as PUC Lua and Luau read it, so its strings and
 //! comments need not be UTF-8. Its names and numerals are ASCII.
 //!
-//! This crate has zero internal dependencies, and every luck crate but
-//! `luck_allocator` and `luck_data_structures` builds on it.
+//! This crate depends on no other luck crate, and every luck crate that
+//! reads or writes Lua builds on it.
 //!
 //! # Usage
 //!
@@ -37,8 +39,10 @@
 //! assert_eq!(begin.text(source), b"hello ");
 //! ```
 
+mod chunk;
 mod comment;
 mod directive;
+mod line_index;
 mod lua_target;
 mod number;
 mod op;
@@ -48,10 +52,12 @@ mod token;
 mod version;
 mod whitespace;
 
-pub use comment::{Comment, CommentKind, CommentPosition, chunk_header, leading_hot_comments};
+pub use chunk::{chunk_header, chunk_start, has_shebang, leading_hot_comments};
+pub use comment::{Comment, CommentKind, CommentPosition};
 pub use directive::{
     CommentContent, DirectiveError, DirectiveErrorKind, LintDirective, LintExtent, LintVerb,
 };
+pub use line_index::LineIndex;
 pub use lua_target::LuaTarget;
 pub use number::{
     LuaNumber, NumberSpelling, Numeral, read_integer, read_numeral, spell_integer, spell_number,
@@ -59,13 +65,12 @@ pub use number::{
 pub use op::{Associativity, BinOp, CompoundOp, UnOp};
 pub use span::{Span, index_to_offset, offset_to_index};
 pub use string::{
-    EscapeError, Escaped, StringSpelling, StringValue, decode_interpolated_text, decode_string,
-    read_escape, spell_string, spell_string_shorter_than, write_interpolated_text,
+    EscapeError, Escaped, StringKind, StringSpelling, StringValue, decode_interpolated_text,
+    decode_string, read_escape, spell_string, spell_string_shorter_than, write_interpolated_text,
     write_long_string,
 };
 pub use token::{Token, TokenKind};
 pub use version::{LuaVersion, MAX_ACTIVE_LOCALS};
 pub use whitespace::{
-    LineIndex, chunk_start, ends_with_line_break, has_line_break, has_shebang, is_lua_whitespace,
-    line_breaks, strip_line_break,
+    ends_with_line_break, has_line_break, is_lua_whitespace, line_breaks, strip_line_break,
 };

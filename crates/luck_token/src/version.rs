@@ -17,244 +17,8 @@ impl LuaVersion {
     pub const ALL: [Self; 6] =
         [Self::Lua51, Self::Lua52, Self::Lua53, Self::Lua54, Self::Lua55, Self::Luau];
 
-    pub const fn has_goto(self) -> bool {
-        match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Luau => false,
-        }
-    }
-
-    /// 5.4 made labels unique among the visible labels of a function.
-    pub const fn has_label_shadowing(self) -> bool {
-        match self {
-            Self::Lua52 | Self::Lua53 => true,
-            Self::Lua51 | Self::Lua54 | Self::Lua55 | Self::Luau => false,
-        }
-    }
-
-    pub const fn has_floor_div(self) -> bool {
-        match self {
-            Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
-            Self::Lua51 | Self::Lua52 => false,
-        }
-    }
-
-    pub const fn has_bitwise_ops(self) -> bool {
-        match self {
-            Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Lua52 | Self::Luau => false,
-        }
-    }
-
-    pub const fn has_attributes(self) -> bool {
-        match self {
-            Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Luau => false,
-        }
-    }
-
-    /// `global` stays an ordinary name, as in stock builds (`LUA_COMPAT_GLOBAL`), and the
-    /// parser recognizes a declaration by the token after it.
-    pub const fn has_global(self) -> bool {
-        match self {
-            Self::Lua55 => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Luau => false,
-        }
-    }
-
-    /// Whether global access desugars to an index of the `_ENV` upvalue
-    /// (Lua 5.2+). Elsewhere a binding named `_ENV` is an ordinary local with
-    /// no effect on the names around it.
-    pub const fn has_env_upvalue(self) -> bool {
-        match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Luau => false,
-        }
-    }
-
-    /// Observable via `math.type`, `tostring` (`1` vs `1.0`), and `//`.
-    /// Luau keeps a single f64 number type, like 5.1 and 5.2.
-    pub const fn has_integer_subtype(self) -> bool {
-        match self {
-            Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Lua52 | Self::Luau => false,
-        }
-    }
-
-    /// Whether an attribute may precede the first name in an attnamelist
-    /// (`local <const> x`, `global <const> y`).
-    pub const fn has_leading_attributes(self) -> bool {
-        match self {
-            Self::Lua55 => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Luau => false,
-        }
-    }
-
-    /// Lua 5.1's grammar has `laststat ::= return | break`; Luau extends it
-    /// with `continue` but keeps the last-statement restriction. 5.2+
-    /// allows `break` anywhere.
-    pub const fn has_last_stmt_break(self) -> bool {
-        match self {
-            Self::Lua51 | Self::Luau => true,
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    /// Whether a call's `(` on a new line is an "ambiguous syntax"
-    /// parse error (5.1 and Luau). 5.2+ parses it as a call.
-    pub const fn has_ambiguous_call_newline_error(self) -> bool {
-        match self {
-            Self::Lua51 | Self::Luau => true,
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    pub const fn has_empty_stmt(self) -> bool {
-        match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Luau => false,
-        }
-    }
-
-    /// Lua 5.1 and Luau treat any escaped non-digit character as that literal character
-    /// (`"\m"` is `"m"`); 5.2+ reject them.
-    pub const fn has_strict_escapes(self) -> bool {
-        match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Luau => false,
-        }
-    }
-
-    pub const fn has_hex_escape(self) -> bool {
-        match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
-            Self::Lua51 => false,
-        }
-    }
-
-    pub const fn has_whitespace_escape(self) -> bool {
-        match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
-            Self::Lua51 => false,
-        }
-    }
-
-    pub const fn has_unicode_escape(self) -> bool {
-        match self {
-            Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
-            Self::Lua51 | Self::Lua52 => false,
-        }
-    }
-
-    pub const fn has_hex_floats(self) -> bool {
-        match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Luau => false,
-        }
-    }
-
-    pub const fn has_binary_literals(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    pub const fn has_underscore_separators(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    /// Whether a hex or binary numeral past 64 bits reads as 2^64, as Luau's
-    /// `strtoull` saturates. PUC Lua rounds it to the nearest double (5.1,
-    /// 5.2) or wraps it as an integer (5.3+).
-    pub const fn has_saturating_hex_numerals(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    /// Whether Luau's distinct 64-bit integer literals (`123i`) are supported.
-    pub const fn has_luau_integer_literals(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    /// Whether a `.` stays in the numeral scan past a radix prefix or an
-    /// exponent, so `0xFF..2` and `1e5..2` are malformed rather than concats.
-    /// The 5.1 and Luau scanners stop before the dot there.
-    pub const fn has_hex_scan_dots(self) -> bool {
-        match self {
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Luau => false,
-        }
-    }
-
-    /// Whether any letter or `_` touching a decimal numeral makes it malformed.
-    /// 5.2 and 5.3 read only hex digits past a numeral, so `1then` splits there
-    /// into a number and a keyword.
-    pub const fn has_strict_numeral_end(self) -> bool {
-        match self {
-            Self::Lua51 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
-            Self::Lua52 | Self::Lua53 => false,
-        }
-    }
-
-    pub const fn has_explicit_type_instantiation(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    pub const fn has_value_exports(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    pub const fn has_type_syntax(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    pub const fn has_function_attributes(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    pub const fn has_if_exprs(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    /// Whether `const name = value` declares a local, as a contextual keyword.
-    pub const fn has_const_stmt(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    /// Whether some binding is read-only, so writing to it is a compile error:
-    /// `<const>` and `<close>` locals, or Luau's `const`.
-    pub const fn has_read_only_bindings(self) -> bool {
-        match self {
-            Self::Lua54 | Self::Lua55 | Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 => false,
-        }
+    pub const fn is_luau(self) -> bool {
+        matches!(self, Self::Luau)
     }
 
     /// Whether a lone CR ends a line and LFCR is one line break. Luau's lexer
@@ -301,11 +65,92 @@ impl LuaVersion {
         }
     }
 
-    /// Lua 5.1's default `LUA_COMPAT_LSTR` rejects the nesting.
-    pub const fn has_long_bracket_nesting_error(self) -> bool {
+    pub const fn has_hex_floats(self) -> bool {
         match self {
-            Self::Lua51 => true,
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => false,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
+        }
+    }
+
+    pub const fn has_binary_literals(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    pub const fn has_underscore_separators(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether Luau's distinct 64-bit integer literals (`123i`) are supported.
+    pub const fn has_luau_integer_literals(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether a hex or binary numeral past 64 bits reads as 2^64, as Luau's
+    /// `strtoull` saturates. PUC Lua rounds it to the nearest double (5.1,
+    /// 5.2) or wraps it as an integer (5.3+).
+    pub const fn has_saturating_hex_numerals(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether a `.` stays in the numeral scan past a radix prefix or an
+    /// exponent, so `0xFF..2` and `1e5..2` are malformed rather than concats.
+    /// The 5.1 and Luau scanners stop before the dot there.
+    pub const fn has_hex_scan_dots(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
+        }
+    }
+
+    /// Whether any letter or `_` touching a decimal numeral makes it malformed.
+    /// 5.2 and 5.3 read only hex digits past a numeral, so `1then` splits there
+    /// into a number and a keyword.
+    pub const fn has_strict_numeral_end(self) -> bool {
+        match self {
+            Self::Lua51 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua52 | Self::Lua53 => false,
+        }
+    }
+
+    /// Lua 5.1 and Luau treat any escaped non-digit character as that literal character
+    /// (`"\m"` is `"m"`); 5.2+ reject them.
+    pub const fn has_strict_escapes(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
+        }
+    }
+
+    pub const fn has_hex_escape(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua51 => false,
+        }
+    }
+
+    pub const fn has_whitespace_escape(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua51 => false,
+        }
+    }
+
+    pub const fn has_unicode_escape(self) -> bool {
+        match self {
+            Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua51 | Self::Lua52 => false,
         }
     }
 
@@ -327,14 +172,162 @@ impl LuaVersion {
         }
     }
 
-    pub const fn is_luau(self) -> bool {
-        matches!(self, Self::Luau)
+    /// Lua 5.1's default `LUA_COMPAT_LSTR` rejects the nesting.
+    pub const fn has_long_bracket_nesting_error(self) -> bool {
+        match self {
+            Self::Lua51 => true,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => false,
+        }
+    }
+
+    pub const fn has_interpolated_strings(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    pub const fn has_floor_div(self) -> bool {
+        match self {
+            Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua51 | Self::Lua52 => false,
+        }
+    }
+
+    pub const fn has_bitwise_ops(self) -> bool {
+        match self {
+            Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Luau => false,
+        }
+    }
+
+    pub const fn has_if_exprs(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    pub const fn has_goto(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
+        }
+    }
+
+    /// 5.4 made labels unique among the visible labels of a function.
+    pub const fn has_label_shadowing(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 => true,
+            Self::Lua51 | Self::Lua54 | Self::Lua55 | Self::Luau => false,
+        }
+    }
+
+    pub const fn has_empty_stmt(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
+        }
+    }
+
+    /// Lua 5.1's grammar has `laststat ::= return | break`; Luau extends it
+    /// with `continue` but keeps the last-statement restriction. 5.2+
+    /// allows `break` anywhere.
+    pub const fn has_last_stmt_break(self) -> bool {
+        match self {
+            Self::Lua51 | Self::Luau => true,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether a call's `(` on a new line is an "ambiguous syntax"
+    /// parse error (5.1 and Luau). 5.2+ parses it as a call.
+    pub const fn has_ambiguous_call_newline_error(self) -> bool {
+        match self {
+            Self::Lua51 | Self::Luau => true,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Whether `continue` ends a loop iteration (Luau, as a contextual
+    /// keyword).
+    pub const fn has_continue(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    pub const fn has_compound_assignment(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// `global` stays an ordinary name, as in stock builds (`LUA_COMPAT_GLOBAL`), and the
+    /// parser recognizes a declaration by the token after it.
+    pub const fn has_global(self) -> bool {
+        match self {
+            Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Luau => false,
+        }
+    }
+
+    /// Whether `const name = value` declares a local, as a contextual keyword.
+    pub const fn has_const_stmt(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    pub const fn has_value_exports(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    pub const fn has_attributes(self) -> bool {
+        match self {
+            Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Luau => false,
+        }
+    }
+
+    /// Whether an attribute may precede the first name in an attnamelist
+    /// (`local <const> x`, `global <const> y`).
+    pub const fn has_leading_attributes(self) -> bool {
+        match self {
+            Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Luau => false,
+        }
     }
 
     pub const fn has_const_for_variables(self) -> bool {
         match self {
             Self::Lua55 => true,
             Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Luau => false,
+        }
+    }
+
+    /// Whether some binding is read-only, so writing to it is a compile error:
+    /// `<const>` and `<close>` locals, or Luau's `const`.
+    pub const fn has_read_only_bindings(self) -> bool {
+        match self {
+            Self::Lua54 | Self::Lua55 | Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 => false,
+        }
+    }
+
+    /// Whether global access desugars to an index of the `_ENV` upvalue
+    /// (Lua 5.2+). Elsewhere a binding named `_ENV` is an ordinary local with
+    /// no effect on the names around it.
+    pub const fn has_env_upvalue(self) -> bool {
+        match self {
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Luau => false,
         }
     }
 
@@ -351,6 +344,65 @@ impl LuaVersion {
         match self {
             Self::Lua55 => true,
             Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Luau => false,
+        }
+    }
+
+    /// Whether a vararg function binds an implicit `arg` table even when
+    /// nothing reads it, as stock 5.1 builds do under `LUA_COMPAT_VARARG`.
+    pub const fn has_implicit_vararg_table(self) -> bool {
+        match self {
+            Self::Lua51 => true,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => false,
+        }
+    }
+
+    pub const fn has_type_syntax(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    pub const fn has_explicit_type_instantiation(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    pub const fn has_function_attributes(self) -> bool {
+        match self {
+            Self::Luau => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
+        }
+    }
+
+    /// Observable via `math.type`, `tostring` (`1` vs `1.0`), and `//`.
+    /// Luau keeps a single f64 number type, like 5.1 and 5.2.
+    pub const fn has_integer_subtype(self) -> bool {
+        match self {
+            Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Luau => false,
+        }
+    }
+
+    /// Whether float `%` is computed as fmod plus a sign fix (5.3+).
+    /// 5.1, 5.2, and Luau compute `a - floor(a/b)*b`, which loses
+    /// precision at large magnitudes and the sign of zero results.
+    pub const fn has_fmod_float_modulo(self) -> bool {
+        match self {
+            Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Luau => false,
+        }
+    }
+
+    /// Whether the float `%` sign fix compares operand signs directly
+    /// (5.4+). 5.3 tests `fmod(a,b)*b < 0`, whose product can underflow
+    /// to zero for subnormal operands and skip the fix.
+    pub const fn has_float_modulo_sign_compare(self) -> bool {
+        match self {
+            Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Luau => false,
         }
     }
 
@@ -417,38 +469,6 @@ impl LuaVersion {
         }
     }
 
-    /// Whether a vararg function binds an implicit `arg` table even when
-    /// nothing reads it, as stock 5.1 builds do under `LUA_COMPAT_VARARG`.
-    pub const fn has_implicit_vararg_table(self) -> bool {
-        match self {
-            Self::Lua51 => true,
-            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => false,
-        }
-    }
-
-    /// Whether `continue` ends a loop iteration (Luau, as a contextual
-    /// keyword).
-    pub const fn has_continue(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    pub const fn has_compound_assignment(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
-    pub const fn has_interpolated_strings(self) -> bool {
-        match self {
-            Self::Luau => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => false,
-        }
-    }
-
     /// Whether a required module chunk receives the resolved file path as its
     /// second argument (Lua 5.2+). 5.1 loaders pass only the module name, and
     /// Luau's `require` calls the chunk with no arguments.
@@ -477,26 +497,6 @@ impl LuaVersion {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
             Self::Lua51 => false,
-        }
-    }
-
-    /// Whether float `%` is computed as fmod plus a sign fix (5.3+).
-    /// 5.1, 5.2, and Luau compute `a - floor(a/b)*b`, which loses
-    /// precision at large magnitudes and the sign of zero results.
-    pub const fn has_fmod_float_modulo(self) -> bool {
-        match self {
-            Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Lua52 | Self::Luau => false,
-        }
-    }
-
-    /// Whether the float `%` sign fix compares operand signs directly
-    /// (5.4+). 5.3 tests `fmod(a,b)*b < 0`, whose product can underflow
-    /// to zero for subnormal operands and skip the fix.
-    pub const fn has_float_modulo_sign_compare(self) -> bool {
-        match self {
-            Self::Lua54 | Self::Lua55 => true,
-            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Luau => false,
         }
     }
 

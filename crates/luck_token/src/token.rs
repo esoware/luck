@@ -109,27 +109,19 @@ pub enum TokenKind {
 }
 
 impl fmt::Display for TokenKind {
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "every other kind has a fixed spelling, which static_text matches exhaustively"
-    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Identifier => "identifier",
-            Self::Number => "number",
-            Self::Integer => "integer",
-            Self::StringLiteral => "string",
-            Self::InterpolatedStringBegin => "interpolated string start",
-            Self::InterpolatedStringMiddle => "interpolated string middle",
-            Self::InterpolatedStringEnd => "interpolated string end",
-            Self::InterpolatedStringSimple => "interpolated string",
-            Self::Eof => "end of file",
-            fixed => {
-                let text = fixed.static_text().expect("every other kind has a fixed spelling");
-                return write!(f, "`{text}`");
-            }
-        })
+        match self.spelling() {
+            Spelling::Fixed(text) => write!(f, "`{text}`"),
+            Spelling::Described(description) => f.write_str(description),
+        }
     }
+}
+
+/// A kind's exact source spelling, or for a kind whose text varies and for
+/// `Eof`, which has none, what an error message calls it.
+enum Spelling {
+    Fixed(&'static str),
+    Described(&'static str),
 }
 
 impl TokenKind {
@@ -137,16 +129,27 @@ impl TokenKind {
     /// for `Eof`, which has none.
     #[inline]
     pub const fn static_text(self) -> Option<&'static str> {
-        Some(match self {
-            Self::Identifier
-            | Self::Number
-            | Self::Integer
-            | Self::StringLiteral
-            | Self::InterpolatedStringBegin
-            | Self::InterpolatedStringMiddle
-            | Self::InterpolatedStringEnd
-            | Self::InterpolatedStringSimple
-            | Self::Eof => return None,
+        match self.spelling() {
+            Spelling::Fixed(text) => Some(text),
+            Spelling::Described(_) => None,
+        }
+    }
+
+    const fn spelling(self) -> Spelling {
+        Spelling::Fixed(match self {
+            Self::Identifier => return Spelling::Described("identifier"),
+            Self::Number => return Spelling::Described("number"),
+            Self::Integer => return Spelling::Described("integer"),
+            Self::StringLiteral => return Spelling::Described("string"),
+            Self::InterpolatedStringBegin => {
+                return Spelling::Described("interpolated string start");
+            }
+            Self::InterpolatedStringMiddle => {
+                return Spelling::Described("interpolated string middle");
+            }
+            Self::InterpolatedStringEnd => return Spelling::Described("interpolated string end"),
+            Self::InterpolatedStringSimple => return Spelling::Described("interpolated string"),
+            Self::Eof => return Spelling::Described("end of file"),
             Self::And => "and",
             Self::Break => "break",
             Self::Do => "do",

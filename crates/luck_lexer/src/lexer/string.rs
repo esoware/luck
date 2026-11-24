@@ -1,5 +1,5 @@
 use luck_diagnostics::Diagnostic;
-use luck_token::{EscapeError, LuaVersion, Span, Token, TokenKind, read_escape};
+use luck_token::{EscapeError, LuaVersion, Span, StringKind, Token, TokenKind, read_escape};
 use memchr::memmem;
 
 use super::Lexer;
@@ -39,7 +39,7 @@ impl Lexer<'_> {
                     self.cursor.bump();
                     // The next iteration reports the unterminated string.
                     if self.cursor.peek().is_some() {
-                        self.scan_escape(false);
+                        self.scan_escape(StringKind::Quoted);
                     }
                 }
                 // The scan stops only at those bytes and at `quote`.
@@ -123,10 +123,10 @@ impl Lexer<'_> {
     /// as [`read_escape`] reads it for every stage. A malformed one goes to
     /// `errors`, and one only Lua 5.1 and Luau read, as the character it
     /// escapes, to `lenient_escapes`.
-    fn scan_escape(&mut self, is_interpolated: bool) {
+    fn scan_escape(&mut self, kind: StringKind) {
         self.has_escape = true;
         let escape_start = self.cursor.position() - 1;
-        let (length, meaning) = read_escape(self.cursor.rest(), is_interpolated, self.version);
+        let (length, meaning) = read_escape(self.cursor.rest(), kind, self.version);
         match meaning {
             Ok(escaped) => {
                 let character_start = self.cursor.position();
@@ -177,7 +177,7 @@ impl Lexer<'_> {
                     // opening an interpolation, and the next iteration
                     // reports an unterminated string.
                     if self.cursor.peek().is_some() {
-                        self.scan_escape(true);
+                        self.scan_escape(StringKind::Interpolated);
                     }
                 }
                 Some(b'{') if self.cursor.peek_next() == Some(b'{') => {
