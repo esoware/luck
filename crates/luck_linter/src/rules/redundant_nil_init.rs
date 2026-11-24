@@ -1,10 +1,11 @@
-use luck_ast::{Expression, GetSpan as _, LocalAssignment, Statement, is_multi_value};
+use luck_ast::{AstKind, AstType, Expression, GetSpan as _, LocalAssignment, is_multi_value};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::Span;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags `nil` initializers on locals, as in `local x = nil` or the trailing
 /// `nil` in `local a, b = 1, nil`, since a local starts out `nil` anyway.
@@ -20,18 +21,16 @@ impl_rule!(
     Fix
 );
 
-impl NodeRule for RedundantNilInit {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::LocalAssignment])
+impl RuleRunner for RedundantNilInit {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::LocalAssignment])
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Statement::LocalAssignment(local) = stmt {
-            findings.extend(check_local(local, context));
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        if let AstKind::LocalAssignment(local) = node.kind()
+            && let Some(finding) = check_local(local, context)
+        {
+            context.diagnostic(finding);
         }
     }
 }

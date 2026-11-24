@@ -1,5 +1,6 @@
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags backslash escapes in strings that the dialect doesn't define, which
 /// Lua 5.1 and Luau read as the bare character.
@@ -18,8 +19,11 @@ impl_rule!(
     "invalid backslash escape in string literal"
 );
 
-impl WholeRule for BadStringEscape {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+impl RuleRunner for BadStringEscape {
+    fn run_once(&self, context: &LintContext<'_>) {
+        if context.lenient_escapes.is_empty() {
+            return;
+        }
         let extended_escapes = if context.semantic.version().has_hex_escape() {
             " `\\xXX` `\\z` `\\u{XXX}`"
         } else {
@@ -29,7 +33,7 @@ impl WholeRule for BadStringEscape {
             "valid escapes: `\\a` `\\b` `\\f` `\\n` `\\r` `\\t` `\\v` `\\\\` `\\\"` `\\'` \
              `\\ddd`{extended_escapes}"
         );
-        let findings = context.lenient_escapes.iter().map(|&span| {
+        for &span in context.lenient_escapes {
             let escaped = span.text(context.source).get(1..).unwrap_or_default();
             // The escape takes one byte, and its span the whole character.
             let display = match str::from_utf8(escaped).ok().and_then(|text| text.chars().next()) {
@@ -39,9 +43,11 @@ impl WholeRule for BadStringEscape {
                 Some(character) => format!("\\{character}"),
                 None => format!("\\x{:02x}", escaped.first().copied().unwrap_or_default()),
             };
-            Finding::new(format!("invalid string escape `{display}`"), span).with_help(help.clone())
-        });
-        findings.collect()
+            context.diagnostic(
+                Finding::new(format!("invalid string escape `{display}`"), span)
+                    .with_help(help.clone()),
+            );
+        }
     }
 }
 

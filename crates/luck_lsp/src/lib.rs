@@ -32,9 +32,8 @@
 //!
 //! # Usage
 //!
-//! The server starts its own workers with [`luck_ast::MIN_STACK_BYTES`] of
-//! stack. A large file's lint runs on rayon's global pool, so a host builds
-//! that pool with `ThreadPoolBuilder::stack_size(MIN_STACK_BYTES)` first.
+//! The server runs every job on workers it starts with
+//! [`luck_ast::MIN_STACK_BYTES`] of stack.
 
 #![cfg_attr(
     test,

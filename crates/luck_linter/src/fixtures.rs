@@ -1,13 +1,16 @@
+use alloc::rc::Rc;
+
 use luck_allocator::Allocator;
 use luck_diagnostics::{Diagnostic, Severity};
 use luck_token::{LuaTarget, LuaVersion, Span};
 
 use crate::config::LintConfig;
+use crate::context::ContextHost;
 use crate::diagnostic::Message;
+use crate::driver;
 use crate::fix::{self, FixKind};
-use crate::rule::{LintContext, Rule};
+use crate::rule::Rule;
 use crate::rules::{RULES, RuleEntry};
-use crate::{bus, driver};
 
 pub(crate) fn run_rule(rule: &dyn Rule, source: &str, version: LuaVersion) -> Vec<Message> {
     run_rule_with_config(rule, source, version, &LintConfig::default())
@@ -24,6 +27,21 @@ pub(crate) fn run_rule_with_config(
     config: &LintConfig,
 ) -> Vec<Message> {
     check(rule, source, version.into(), config)
+}
+
+/// What `answer` says of the host of `source`, parsed for `target` with no
+/// errors and analyzed with the default config.
+pub(crate) fn with_host<T>(
+    source: &str,
+    target: LuaTarget,
+    answer: impl FnOnce(&ContextHost<'_>) -> T,
+) -> T {
+    let allocator = Allocator::new();
+    let parse = luck_parser::parse(&allocator, source.as_bytes(), target.version());
+    assert!(parse.errors.is_empty(), "parse of {source:?}: {:?}", parse.errors);
+    let config = LintConfig::default();
+    let analysis = driver::analyze(&parse, target, &config);
+    answer(&ContextHost::new(&parse, &analysis, &config, FixKind::all()))
 }
 
 /// Applies one round of the messages' fixes, whatever their kind, as
@@ -49,15 +67,17 @@ fn check(rule: &dyn Rule, source: &str, target: LuaTarget, config: &LintConfig) 
     let parse = luck_parser::parse(&allocator, source.as_bytes(), target.version());
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
     let analysis = driver::analyze(&parse, target, config);
-    let context = LintContext::new(&parse, &analysis, config, FixKind::all());
+    let host = Rc::new(ContextHost::new(&parse, &analysis, config, FixKind::all()));
     let slot = RULES
         .iter()
         .position(|entry| entry.rule().name() == rule.name())
         .expect("only registered rules are tested");
     let findings = match RULES[slot] {
-        RuleEntry::Whole(whole_rule) => whole_rule.check(&context),
-        RuleEntry::Node(node_rule) => {
-            bus::run(&[node_rule], analysis.nodes().as_slice(), &context, &|| false)
+        RuleEntry::Rule(runner) => {
+            if !runner.should_run(&host) {
+                return Vec::new();
+            }
+            driver::execute(&[runner], &host, &|| false)
                 .and_then(|mut findings| findings.pop())
                 .unwrap_or_default()
         }

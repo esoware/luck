@@ -198,7 +198,7 @@ pub(crate) fn symbol_shapes(
 ) -> Vec<Option<&'static str>> {
     let tree = semantic.scoping();
     let mut shapes = vec![None; tree.symbols().len()];
-    for (_, node) in semantic.nodes().iter() {
+    for node in semantic.nodes().iter() {
         let AstKind::LocalAssignment(local) = node.kind() else {
             continue;
         };

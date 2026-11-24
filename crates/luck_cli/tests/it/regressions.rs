@@ -69,6 +69,9 @@ return sum, text, either, field
 /// One sibling list of each kind. A list is one level of nesting however long
 /// it is, and 20,000 `elseif`s overflowed `minify`'s stack when it recursed
 /// per clause.
+///
+/// A function holds at most 200 locals, so the one with 20,000 parameters is
+/// in `params.lua`, apart from the valid lists in `main.lua`.
 fn long_lists_project() -> TempDir {
     const ITEMS: usize = 20_000;
     let numbered = |template: &str| -> String {
@@ -83,13 +86,11 @@ end
 if false then a(){}
 elseif a then a()
 end
-local function f(_{}) return a end
 local t = {{{}}}
-{}return f, t
+{}return t
 ",
         numbered("\nelseif a == # then a()"),
         "\nelseif false then a()".repeat(ITEMS),
-        numbered(", _#"),
         numbered("k# = a, "),
         numbered(
             "\
@@ -100,6 +101,8 @@ goto l#
     );
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", &source);
+    let params = format!("local function f(_{}) return _ end\nreturn f\n", numbered(", _#"));
+    write_file(directory.path(), "params.lua", &params);
     directory
 }
 
@@ -214,7 +217,7 @@ return not (a == (not (b == c)))
         fs::read_to_string(&path).expect("main.lua reads"),
         "\
 local a, b, c = 1, 2, 3
-return (a ~= (b ~= c))
+return a ~= (b ~= c)
 "
     );
 }
@@ -673,6 +676,8 @@ fn every_command_survives_long_lists() {
         &["minify", "main.lua", "-o", "minified.lua"],
         &["bundle", "main.lua", "-o", "bundle.lua"],
         &["fmt", "main.lua"],
+        &["minify", "params.lua", "-o", "minified_params.lua"],
+        &["fmt", "params.lua"],
     ] {
         let output = run(directory.path(), args);
         assert_eq!(
@@ -683,6 +688,14 @@ fn every_command_survives_long_lists() {
             stderr_text(&output)
         );
     }
+    let output = run(directory.path(), &["lint", "params.lua"]);
+    assert_eq!(output.status.code(), Some(1i32), "{}", stderr_text(&output));
+    let report = format!("{}{}", stdout_text(&output), stderr_text(&output));
+    assert!(
+        report.contains("too many local variables (limit is 200) in function")
+            && report.contains("1 error(s), 0 warning(s)"),
+        "the compiler's limit is the one problem:\n{report}"
+    );
 }
 
 #[test]

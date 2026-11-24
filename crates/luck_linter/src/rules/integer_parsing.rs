@@ -1,9 +1,10 @@
-use luck_ast::{Expression, NumberLiteral};
+use luck_ast::{AstKind, AstType, NumberLiteral};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::LuaVersion;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Lua 5.1, 5.2, and Luau store every number as a double, so integers above
 /// 2^53 can round.
@@ -21,18 +22,16 @@ impl_rule!(
     "integer literal the target Lua version can't represent exactly"
 );
 
-impl NodeRule for IntegerParsing {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::Number])
+impl RuleRunner for IntegerParsing {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::NumberLiteral])
     }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::Number(literal) = expr {
-            findings.extend(check_number(literal, context.semantic.version()));
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        if let AstKind::NumberLiteral(literal) = node.kind()
+            && let Some(finding) = check_number(literal, context.semantic.version())
+        {
+            context.diagnostic(finding);
         }
     }
 }

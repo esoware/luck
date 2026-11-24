@@ -17,9 +17,6 @@ use crate::graph::DependencyGraph;
 use crate::loader::{LoaderShape, PREFIX_STEM, write_prelude};
 use crate::module::{Dependency, ModuleId, ModuleInfo};
 
-/// `LUAI_MAXUPVALUES` in Lua 5.1.
-const LUA51_MAX_UPVALUES: usize = 60;
-
 /// Upvalues a rewritten function can gain: the loader and its dynamic entry.
 const LOADER_UPVALUES: usize = 2;
 
@@ -250,7 +247,7 @@ impl<'ast> Plan<'ast> {
                 version,
                 is_loader_global: modules.iter().any(|module| {
                     module.max_function_upvalues.saturating_add(LOADER_UPVALUES)
-                        > LUA51_MAX_UPVALUES
+                        > version.max_upvalues()
                 }),
                 has_dynamic_entry: modules.iter().any(|module| !module.dynamic_callees.is_empty()),
                 has_export_runtime: modules.iter().any(|module| module.exports.has_values),

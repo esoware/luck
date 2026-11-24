@@ -1,11 +1,12 @@
-use luck_ast::{Expression, FunctionAttribute, Statement};
+use luck_ast::{AstKind, AstType, FunctionAttribute};
 use luck_diagnostics::Tag;
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::{Span, leading_hot_comments, offset_to_index};
 
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RedundantNativeAttribute;
@@ -19,71 +20,40 @@ impl_rule!(
     Fix
 );
 
-impl NodeRule for RedundantNativeAttribute {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[
-            NodeType::FunctionDecl,
-            NodeType::LocalFunction,
-            NodeType::FunctionDef,
+impl RuleRunner for RedundantNativeAttribute {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[
+            AstType::FunctionDecl,
+            AstType::LocalFunction,
+            AstType::FunctionDef,
         ])
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let attributes = match stmt {
-            Statement::FunctionDecl(function_decl) => &function_decl.attributes,
-            Statement::LocalFunction(local_function) => &local_function.attributes,
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::LocalAssignment(_)
-            | Statement::Return(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::Continue(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => return,
-        };
-        check_attributes(attributes, context, findings);
+
+    fn should_run(&self, host: &ContextHost<'_>) -> bool {
+        has_native_directive(host)
     }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::FunctionDef(function) = expr {
-            check_attributes(&function.attributes, context, findings);
-        }
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let kind = node.kind();
+        let attributes = if let AstKind::FunctionDecl(function_decl) = kind {
+            &function_decl.attributes
+        } else if let AstKind::LocalFunction(local_function) = kind {
+            &local_function.attributes
+        } else if let AstKind::FunctionDef(function) = kind {
+            &function.attributes
+        } else {
+            return;
+        };
+        check_attributes(attributes, context);
     }
 }
 
-fn check_attributes(
-    attributes: &[FunctionAttribute<'_>],
-    context: &LintContext<'_>,
-    findings: &mut Vec<Finding>,
-) {
-    if attributes.is_empty() || !has_native_directive(context) {
-        return;
-    }
+fn check_attributes(attributes: &[FunctionAttribute<'_>], context: &LintContext<'_>) {
     for attribute in attributes {
         if attribute.name.text != "native" {
             continue;
         }
-        findings.push(
+        context.diagnostic(
             Finding::new(
                 "`@native` attribute is redundant in a `--!native` module",
                 attribute.span,
@@ -139,11 +109,11 @@ fn removal_span(
 
 /// Whether a `--!native` hot comment comes before any code. Luau ignores one
 /// placed later.
-fn has_native_directive(context: &LintContext<'_>) -> bool {
-    leading_hot_comments(context.comments, context.block.span.start).any(|comment| {
+fn has_native_directive(host: &ContextHost<'_>) -> bool {
+    leading_hot_comments(host.comments, host.chunk.block.span.start).any(|comment| {
         comment
             .span
-            .text(context.source)
+            .text(host.source)
             .get(3..)
             .is_some_and(|word| word.trim_ascii_end() == b"native")
     })

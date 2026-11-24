@@ -1,15 +1,14 @@
-use luck_ast::Expression;
+use luck_semantic::ReferenceKind;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags reads of `_`, which by convention names a value being thrown away.
 ///
 /// A read usually means the author grabbed the wrong binding, or a nearer `_`
-/// shadows the one they meant. Declared names and assignment targets aren't
-/// expressions, so they never reach the hook. That includes Luau's `_ += 1`,
-/// which does read `_`, but is rare and clearly deliberate.
+/// shadows the one they meant. Only a plain read counts, so not Luau's
+/// `_ += 1`, which does read `_`, but is rare and clearly deliberate.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PlaceholderRead;
 
@@ -21,26 +20,22 @@ impl_rule!(
     "use of `_` as a value; convention reserves it for ignored bindings"
 );
 
-impl NodeRule for PlaceholderRead {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::Name])
-    }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Expression::Name(name) = expr
-            && name.text == "_"
-        {
-            findings.push(
-                Finding::new(
-                    "read of `_`, but convention is to use `_` only for ignored bindings",
-                    name.span,
-                )
-                .with_help("rename the binding or pull the value into a meaningful local"),
-            );
+impl RuleRunner for PlaceholderRead {
+    fn run_once(&self, context: &LintContext<'_>) {
+        let tree = context.scoping();
+        let Some(placeholder) = tree.name_id("_") else {
+            return;
+        };
+        for reference in tree.references() {
+            if reference.name == placeholder && reference.kind == ReferenceKind::Read {
+                context.diagnostic(
+                    Finding::new(
+                        "read of `_`, but convention is to use `_` only for ignored bindings",
+                        reference.span,
+                    )
+                    .with_help("rename the binding or pull the value into a meaningful local"),
+                );
+            }
         }
     }
 }

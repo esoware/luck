@@ -1,6 +1,8 @@
-//! Each graph covers one block and stops at nested function bodies, whose
-//! flow is their own.
+//! A function's control-flow graph, which every rule that asks for one
+//! shares. Each graph covers one block and stops at nested function bodies,
+//! whose flow is their own.
 
+use core::cell::OnceCell;
 use core::mem;
 use core::num::Saturating;
 
@@ -8,12 +10,13 @@ use luck_ast::{
     BinaryOp, Block, FunctionBody, GenericFor, GetSpan as _, IfExpression, IfStatement, Name,
     NumericFor, RepeatLoop, Statement, Type, Visit, WhileLoop,
 };
-use luck_stdlib::SemanticAnalysis;
+use luck_semantic::LabelId;
 use luck_token::{BinOp, Span};
 use luck_value::ToBoolean as _;
 use rustc_hash::FxHashMap;
 
 use crate::call::is_global_call;
+use crate::context::ContextHost;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Exit {
@@ -60,6 +63,9 @@ pub(crate) struct FlowGraph {
     is_reachable: Vec<bool>,
     /// Each loop body, in source order.
     loops: Vec<LoopBody>,
+    /// What each loop's body reaches, in the order of `loops`, built on
+    /// first use.
+    loop_exits: OnceCell<Box<[Exits]>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -97,10 +103,9 @@ pub(crate) struct LocalDeclaration {
 }
 
 impl FlowGraph {
-    pub(crate) fn of_block<'ast>(
-        block: &'ast Block<'ast>,
-        semantic: &'ast SemanticAnalysis<'ast>,
-    ) -> Self {
+    /// The graph of `block`, which a function body's block is in every
+    /// graph a rule reads.
+    pub(crate) fn of_block<'ast>(block: &'ast Block<'ast>, host: &ContextHost<'ast>) -> Self {
         let mut builder = GraphBuilder {
             graph: Self {
                 successors: vec![[None; 2]; EXIT_NODE_COUNT],
@@ -109,15 +114,15 @@ impl FlowGraph {
                 locals: Vec::new(),
                 is_reachable: Vec::new(),
                 loops: Vec::new(),
+                loop_exits: OnceCell::new(),
             },
-            semantic,
+            host,
             cursor: None,
             run: None,
             scope_end: 0,
             break_target: Exit::Break.node(),
             continue_target: Exit::End.node(),
-            labels: FxHashMap::default(),
-            label_names: Vec::new(),
+            label_nodes: FxHashMap::default(),
         };
         let entry = builder.new_node();
         builder.cursor = Some(entry);
@@ -142,7 +147,8 @@ impl FlowGraph {
         self.is_reachable.get(exit.node()).copied().unwrap_or_default()
     }
 
-    pub(crate) fn exits(&self) -> Exits {
+    #[cfg(test)]
+    fn exits(&self) -> Exits {
         let mut exits = Exits::default();
         for exit in [Exit::End, Exit::Break, Exit::ReturnValue, Exit::ReturnEmpty, Exit::Error] {
             if self.reaches(exit) {
@@ -152,13 +158,17 @@ impl FlowGraph {
         exits
     }
 
-    /// The exits each loop's body reaches, by where the loop starts, as the
-    /// graph of that body alone has them, where a jump out of the body is a
-    /// `Break`.
-    ///
+    /// The exits the body of the loop that starts at `loop_start` reaches,
+    /// as the graph of that body alone has them, where a jump out of the
+    /// body is a `Break`.
+    pub(crate) fn loop_exits(&self, loop_start: u32) -> Option<Exits> {
+        let index = self.loops.binary_search_by_key(&loop_start, |body| body.start).ok()?;
+        self.loop_exits.get_or_init(|| self.every_loop_s_exits()).get(index).copied()
+    }
+
     /// Inner bodies go first, so an outer one steps over each in one move to
     /// what it reaches past its end, and the whole costs one pass.
-    pub(crate) fn loop_exits(&self) -> impl Iterator<Item = (u32, Exits)> {
+    fn every_loop_s_exits(&self) -> Box<[Exits]> {
         let mut reached: Vec<Vec<usize>> = vec![Vec::new(); self.loops.len()];
         let mut visited_in = vec![usize::MAX; self.node_count()];
         let mut stack = Vec::new();
@@ -184,22 +194,26 @@ impl FlowGraph {
                 *slot = past_end;
             }
         }
-        self.loops.iter().zip(reached).map(|(body, past_end)| {
-            let mut exits = Exits::default();
-            for node in past_end {
-                let exit = if node == body.continue_target {
-                    Exit::End
-                } else {
-                    // Else the loop's `break`, or a jump out of its body.
-                    [Exit::ReturnValue, Exit::ReturnEmpty, Exit::Error]
-                        .into_iter()
-                        .find(|exit| exit.node() == node)
-                        .unwrap_or(Exit::Break)
-                };
-                exits.insert(exit);
-            }
-            (body.start, exits)
-        })
+        self.loops
+            .iter()
+            .zip(reached)
+            .map(|(body, past_end)| {
+                let mut exits = Exits::default();
+                for node in past_end {
+                    let exit = if node == body.continue_target {
+                        Exit::End
+                    } else {
+                        // Else the loop's `break`, or a jump out of its body.
+                        [Exit::ReturnValue, Exit::ReturnEmpty, Exit::Error]
+                            .into_iter()
+                            .find(|exit| exit.node() == node)
+                            .unwrap_or(Exit::Break)
+                    };
+                    exits.insert(exit);
+                }
+                exits
+            })
+            .collect()
     }
 
     /// Whether the code at `offset`, or else the first code after it, can
@@ -232,9 +246,9 @@ impl FlowGraph {
     }
 }
 
-struct GraphBuilder<'ast> {
+struct GraphBuilder<'host, 'ast> {
     graph: FlowGraph,
-    semantic: &'ast SemanticAnalysis<'ast>,
+    host: &'host ContextHost<'ast>,
     /// The node the next code runs after, or `None` right after a jump.
     cursor: Option<usize>,
     /// The run of simple statements the cursor ends, which the next one
@@ -243,13 +257,12 @@ struct GraphBuilder<'ast> {
     scope_end: u32,
     break_target: usize,
     continue_target: usize,
-    /// The node of each label visible here, by name, innermost last.
-    labels: FxHashMap<&'ast str, Vec<usize>>,
-    /// The name of each label in `labels`, in the order they became visible.
-    label_names: Vec<&'ast str>,
+    /// The node of each label of a block the builder has entered, which
+    /// the `goto`s semantic analysis resolved to it jump to.
+    label_nodes: FxHashMap<LabelId, usize>,
 }
 
-impl<'ast> GraphBuilder<'ast> {
+impl<'ast> GraphBuilder<'_, 'ast> {
     fn new_node(&mut self) -> usize {
         self.graph.successors.push([None; 2]);
         self.graph.code_starts.push(0);
@@ -314,32 +327,27 @@ impl<'ast> GraphBuilder<'ast> {
     fn scoped_block(&mut self, block: &'ast Block<'ast>, scope_end: u32) {
         self.run = None;
         let outer_scope_end = mem::replace(&mut self.scope_end, scope_end);
-        let outer_label_count = self.label_names.len();
-        // A label is visible in its whole block, `goto`s before it included.
+        // A label is visible in its whole block, `goto`s before it included,
+        // so its node comes before the code of every block inside it.
         for stmt in &block.stmts {
             if let Statement::Label(label) = stmt
-                && let name = label.name.text
-                && !name.is_empty()
+                && let Some(id) = self.host.scoping().label_of(&label.name)
             {
                 let node = self.new_node();
-                self.labels.entry(name.as_str()).or_default().push(node);
-                self.label_names.push(name.as_str());
+                self.label_nodes.insert(id, node);
             }
         }
         for stmt in &block.stmts {
             self.stmt(stmt);
         }
-        for name in self.label_names.drain(outer_label_count..) {
-            if let Some(nodes) = self.labels.get_mut(name) {
-                nodes.pop();
-            }
-        }
         self.scope_end = outer_scope_end;
         self.run = None;
     }
 
+    /// The node of the label `name` names, or reaches as a `goto`'s.
     fn label_node(&self, name: &Name<'_>) -> Option<usize> {
-        self.labels.get(name.text.as_str())?.last().copied()
+        let id = self.host.scoping().label_of(name)?;
+        self.label_nodes.get(&id).copied()
     }
 
     fn stmt(&mut self, stmt: &'ast Statement<'ast>) {
@@ -348,7 +356,7 @@ impl<'ast> GraphBuilder<'ast> {
                 let node = self.simple(chain.span);
                 if chain
                     .last_call()
-                    .is_some_and(|call| is_global_call(call, "error", self.semantic))
+                    .is_some_and(|call| is_global_call(call, "error", self.host.semantic))
                 {
                     self.connect(node, Exit::Error.node());
                     self.cursor = None;
@@ -435,7 +443,7 @@ impl<'ast> GraphBuilder<'ast> {
     fn while_loop(&mut self, node: &'ast WhileLoop<'ast>) {
         let head = self.code(Span::new(node.span.start, node.block.span.start));
         let after = self.new_node();
-        let truth = node.condition.to_boolean(&self.semantic.version());
+        let truth = node.condition.to_boolean(self.host);
         if truth == Some(false) {
             self.cursor = None;
         }
@@ -453,7 +461,7 @@ impl<'ast> GraphBuilder<'ast> {
         let scope_end = node.condition.span().end;
         let body = self.loop_body(node.span.start, &node.block, scope_end, after, condition);
         self.graph.code.push((node.condition.span(), condition));
-        let truth = node.condition.to_boolean(&self.semantic.version());
+        let truth = node.condition.to_boolean(self.host);
         if truth != Some(true) {
             self.connect(condition, body);
         }
@@ -562,10 +570,11 @@ mod tests {
     use core::fmt::Write as _;
 
     use luck_allocator::Allocator;
-    use luck_ast::{Chunk, TreeCounts};
+    use luck_ast::Chunk;
     use luck_token::LuaVersion;
 
     use super::*;
+    use crate::fixtures::with_host;
 
     fn parse_chunk<'ast>(
         allocator: &'ast Allocator,
@@ -577,14 +586,8 @@ mod tests {
         allocator.alloc(parse.chunk)
     }
 
-    fn analyze<'ast>(chunk: &'ast Chunk<'ast>) -> SemanticAnalysis<'ast> {
-        luck_stdlib::analyze(chunk, TreeCounts::default(), chunk.version.into()).0
-    }
-
     fn flow_of(source: &str, version: LuaVersion) -> FlowGraph {
-        let allocator = Allocator::new();
-        let chunk = parse_chunk(&allocator, source, version);
-        FlowGraph::of_block(&chunk.block, &analyze(chunk))
+        with_host(source, version.into(), |host| FlowGraph::of_block(&host.chunk.block, host))
     }
 
     fn flow(source: &str) -> FlowGraph {
@@ -779,13 +782,15 @@ return 2",
 
     #[test]
     fn continue_of_the_analyzed_block_ends_it() {
-        let allocator = Allocator::new();
-        let chunk = parse_chunk(&allocator, "for _ = 1, 3 do continue end", LuaVersion::Luau);
-        let Some(Statement::NumericFor(numeric_for)) = chunk.block.stmts.first() else {
-            panic!("the statement must be a numeric for");
-        };
-        let semantic = analyze(chunk);
-        assert!(FlowGraph::of_block(&numeric_for.block, &semantic).reaches(Exit::End));
+        let reaches_end =
+            with_host("for _ = 1, 3 do continue end", LuaVersion::Luau.into(), |host| {
+                let Some(Statement::NumericFor(numeric_for)) = host.chunk.block.stmts.first()
+                else {
+                    panic!("the statement must be a numeric for");
+                };
+                FlowGraph::of_block(&numeric_for.block, host).reaches(Exit::End)
+            });
+        assert!(reaches_end);
     }
 
     #[test]
@@ -814,19 +819,15 @@ goto top",
 
     #[test]
     fn goto_to_a_label_outside_the_block_leaves_it() {
-        let allocator = Allocator::new();
-        let chunk = parse_chunk(
-            &allocator,
-            "\
+        let source = "\
 while true do goto done end
-::done::",
-            LuaVersion::Lua54,
-        );
-        let Some(Statement::WhileLoop(while_loop)) = chunk.block.stmts.first() else {
-            panic!("the statement must be a while loop");
-        };
-        let semantic = analyze(chunk);
-        let graph = FlowGraph::of_block(&while_loop.block, &semantic);
+::done::";
+        let graph = with_host(source, LuaVersion::Lua54.into(), |host| {
+            let Some(Statement::WhileLoop(while_loop)) = host.chunk.block.stmts.first() else {
+                panic!("the statement must be a while loop");
+            };
+            FlowGraph::of_block(&while_loop.block, host)
+        });
         assert!(graph.reaches(Exit::Break));
         assert!(!graph.reaches(Exit::End));
     }
@@ -930,18 +931,20 @@ do return end
             ),
         ];
         for (source, version) in sources {
-            let allocator = Allocator::new();
-            let chunk = parse_chunk(&allocator, source, version);
-            let semantic = analyze(chunk);
-            let nested: FxHashMap<u32, Exits> =
-                FlowGraph::of_block(&chunk.block, &semantic).loop_exits().collect();
-            let mut bodies = LoopBodies::default();
-            bodies.visit_block(&chunk.block);
-            assert!(!bodies.0.is_empty(), "{source}");
-            for (start, body) in bodies.0 {
-                let alone = FlowGraph::of_block(body, &semantic).exits();
-                assert_eq!(nested.get(&start), Some(&alone), "the loop at {start} in {source}");
-            }
+            with_host(source, version.into(), |host| {
+                let graph = FlowGraph::of_block(&host.chunk.block, host);
+                let mut bodies = LoopBodies::default();
+                bodies.visit_block(&host.chunk.block);
+                assert!(!bodies.0.is_empty(), "{source}");
+                for (start, body) in bodies.0 {
+                    let alone = FlowGraph::of_block(body, host).exits();
+                    assert_eq!(
+                        graph.loop_exits(start),
+                        Some(alone),
+                        "the loop at {start} in {source}"
+                    );
+                }
+            });
         }
     }
 

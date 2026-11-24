@@ -194,8 +194,9 @@ local v0 = 0
 
 #[test]
 fn lua51_rewritten_require_stays_within_the_upvalue_limit() {
-    let locals = (0..60usize).map(|i| format!("local u{i} = {i}\n")).collect::<Vec<_>>().concat();
-    let sum = (0..60usize).map(|i| format!("u{i}")).collect::<Vec<_>>().join(" + ");
+    let limit = LuaVersion::Lua51.max_upvalues();
+    let locals = (0..limit).map(|i| format!("local u{i} = {i}\n")).collect::<Vec<_>>().concat();
+    let sum = (0..limit).map(|i| format!("u{i}")).collect::<Vec<_>>().join(" + ");
     let main = format!(
         "\
 {locals}local function f()
@@ -211,7 +212,7 @@ print(f())
         LuaVersion::Lua51,
     );
     let upvalues = max_function_upvalues(text(&result.output), LuaVersion::Lua51);
-    assert!(upvalues <= 60, "Lua 5.1 allows 60 upvalues per function, the bundle has {upvalues}");
+    assert!(upvalues <= limit, "Lua 5.1 allows {limit} upvalues per function, not {upvalues}");
 }
 
 #[test]

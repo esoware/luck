@@ -1,9 +1,10 @@
 use luck_diagnostics::Tag;
 use luck_semantic::SymbolKind;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 use crate::underscore_fix::prefix_underscore;
 
 /// Flags a `for` loop variable that's never read (Luacheck 213).
@@ -23,11 +24,10 @@ impl_rule!(
     Suggestion
 );
 
-impl WholeRule for UnusedLoopVariable {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+impl RuleRunner for UnusedLoopVariable {
+    fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
-        let mut findings = Vec::new();
 
         for symbol in tree.symbols() {
             if !matches!(symbol.kind, SymbolKind::IteratorVariable | SymbolKind::NumericForVariable)
@@ -47,7 +47,7 @@ impl WholeRule for UnusedLoopVariable {
                 continue;
             }
 
-            findings.push(
+            context.diagnostic(
                 Finding::new(format!("unused loop variable `{name}`"), symbol.definition_span)
                     .with_tag(Tag::Unnecessary)
                     .with_help("prefix with `_` to suppress this warning")
@@ -56,8 +56,6 @@ impl WholeRule for UnusedLoopVariable {
                     }),
             );
         }
-
-        findings
     }
 }
 

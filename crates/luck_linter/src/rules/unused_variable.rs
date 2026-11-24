@@ -1,9 +1,10 @@
 use luck_diagnostics::Tag;
 use luck_semantic::SymbolKind;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 use crate::underscore_fix::prefix_underscore;
 
 /// The `_` prefix is a suggestion, because it silences the warning rather
@@ -20,11 +21,10 @@ impl_rule!(
     Suggestion
 );
 
-impl WholeRule for UnusedVariable {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+impl RuleRunner for UnusedVariable {
+    fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
-        let mut findings = Vec::new();
 
         for symbol in tree.symbols() {
             let name = tree.name(symbol.name);
@@ -60,7 +60,7 @@ impl WholeRule for UnusedVariable {
                 continue;
             }
 
-            findings.push(
+            context.diagnostic(
                 Finding::new(format!("unused {kind_name} `{name}`"), symbol.definition_span)
                     .with_tag(Tag::Unnecessary)
                     .with_help("prefix with `_` to suppress this warning")
@@ -69,8 +69,6 @@ impl WholeRule for UnusedVariable {
                     }),
             );
         }
-
-        findings
     }
 }
 

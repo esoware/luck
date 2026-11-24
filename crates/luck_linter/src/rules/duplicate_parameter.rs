@@ -1,10 +1,10 @@
-use luck_ast::{Expression, Statement};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::MAX_ACTIVE_LOCALS;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
-use crate::node_type::NodeTypeSet;
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DuplicateParameter;
@@ -17,28 +17,14 @@ impl_rule!(
     "function declares two parameters with the same name"
 );
 
-impl NodeRule for DuplicateParameter {
-    fn node_types(&self) -> NodeTypeSet {
+impl RuleRunner for DuplicateParameter {
+    fn node_types(&self) -> AstTypesBitset {
         FunctionNode::NODE_TYPES
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Some(function) = FunctionNode::of_stmt(stmt) {
-            check_params(function, findings);
-        }
-    }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Some(function) = FunctionNode::of_expr(expr) {
-            check_params(function, findings);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        if let Some(function) = FunctionNode::of(node, context.nodes) {
+            check_params(function, context);
         }
     }
 }
@@ -49,7 +35,7 @@ impl NodeRule for DuplicateParameter {
 ///
 /// Parameters are locals, so no Lua compiles a function with more than
 /// [`MAX_ACTIVE_LOCALS`] of them, and one that has more isn't checked.
-fn check_params(function: FunctionNode<'_>, findings: &mut Vec<Finding>) {
+fn check_params(function: FunctionNode<'_>, context: &LintContext<'_>) {
     let params = &function.body.params;
     let vararg_name = function.body.vararg.as_deref().and_then(|vararg| vararg.name.as_ref());
     if params.len().saturating_add(usize::from(vararg_name.is_some())) > MAX_ACTIVE_LOCALS {
@@ -64,7 +50,7 @@ fn check_params(function: FunctionNode<'_>, findings: &mut Vec<Finding>) {
         if first.is_some() || (function.is_method && name == "self") {
             let finding =
                 Finding::new(format!("parameter `{name}` is already defined"), param_name.span);
-            findings.push(match first {
+            context.diagnostic(match first {
                 Some(earlier) => finding.with_label(earlier.name.span, "first defined here"),
                 None => finding.with_help("a method declared with `:` already has `self`"),
             });

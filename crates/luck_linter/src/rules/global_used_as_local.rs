@@ -1,7 +1,8 @@
 use luck_semantic::{Reference, ScopeId, ScopeKind, Scoping};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GlobalUsedAsLocal;
@@ -14,9 +15,9 @@ impl_rule!(
     "global variable is only used inside one function; use a local"
 );
 
-impl WholeRule for GlobalUsedAsLocal {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scoping();
+impl RuleRunner for GlobalUsedAsLocal {
+    fn run_once(&self, context: &LintContext<'_>) {
+        let tree = context.scoping();
         let mut global_references: Vec<&Reference> = tree.global_references().collect();
         global_references.sort_by_key(|reference| reference.name);
 
@@ -45,16 +46,15 @@ impl WholeRule for GlobalUsedAsLocal {
             firsts.push(first);
         }
         firsts.sort_by_key(|first| first.span.start);
-        firsts
-            .into_iter()
-            .map(|first| {
+        for first in firsts {
+            context.diagnostic(
                 Finding::new(
                     format!("global `{}` is only used inside one function", tree.name(first.name)),
                     first.span,
                 )
-                .with_help("declare it `local` inside that function")
-            })
-            .collect()
+                .with_help("declare it `local` inside that function"),
+            );
+        }
     }
 }
 

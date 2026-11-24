@@ -1,9 +1,11 @@
-use luck_ast::{FunctionName, Name, Statement, Suffix, Var};
+use luck_ast::{AstKind, AstType, FunctionName, Name, Suffix, Var};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::{SemanticAnalysis, StdlibEntry};
 use luck_token::Span;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BuiltinGlobalWrite;
@@ -16,30 +18,32 @@ impl_rule!(
     "overwriting a standard-library global or one of its fields"
 );
 
-impl WholeRule for BuiltinGlobalWrite {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let semantic = context.semantic;
-        let tree = semantic.scoping();
-        let mut findings = Vec::new();
+/// Every write of a name or a field is an assignment's, a compound
+/// assignment's, or a `function` statement's.
+impl RuleRunner for BuiltinGlobalWrite {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[
+            AstType::Assignment,
+            AstType::CompoundAssignment,
+            AstType::FunctionDecl,
+        ])
+    }
 
-        for reference in tree.global_references() {
-            if !reference.kind.is_write() {
-                continue;
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let kind = node.kind();
+        if let AstKind::Assignment(assignment) = kind {
+            for var in &assignment.targets {
+                check_var_target(var, context);
             }
-            let name = tree.name(reference.name);
-            if !is_overwritable_builtin(semantic, name) {
-                continue;
-            }
-            findings.push(overwrite_finding(name, reference.span));
+            return;
         }
-
-        let mut checker = FieldWriteChecker { semantic, findings };
-        for block in context.nodes.blocks() {
-            for stmt in &block.stmts {
-                checker.check_stmt(stmt);
-            }
+        // Luau
+        if let AstKind::CompoundAssignment(compound) = kind {
+            return check_var_target(&compound.var, context);
         }
-        checker.findings
+        if let AstKind::FunctionDecl(decl) = kind {
+            check_function_name(&decl.name, context);
+        }
     }
 }
 
@@ -60,117 +64,95 @@ fn overwrite_finding(name: &str, span: Span) -> Finding {
     )
 }
 
-struct FieldWriteChecker<'semantic> {
-    semantic: &'semantic SemanticAnalysis<'semantic>,
-    findings: Vec<Finding>,
+/// A write of the whole global `name`.
+fn check_name_write(name: &Name<'_>, context: &LintContext<'_>) {
+    let tree = context.scoping();
+    if let Some(reference) = tree.reference_of(name).map(|id| tree.reference(id))
+        && reference.kind.is_write()
+        && tree.is_global(reference)
+        && is_overwritable_builtin(context.semantic, name.text.as_str())
+    {
+        context.diagnostic(overwrite_finding(name.text.as_str(), reference.span));
+    }
 }
 
-impl FieldWriteChecker<'_> {
-    /// A field of a stdlib value, such as `package.loaded` or a Roblox
-    /// instance's property, isn't the library. Neither is a `path` that no
-    /// longer reaches the host's global.
-    fn writes_namespace_member<'path>(
-        &self,
-        root: &Name<'_>,
-        path: impl IntoIterator<Item = &'path str>,
-        leaf: Option<&str>,
-    ) -> bool {
-        // Writing through a writable base (`_G.x = 1`, Roblox's
-        // `shared.score = 1`) is intended.
-        if !is_overwritable_builtin(self.semantic, root.text.as_str())
-            || !self.semantic.scoping().reaches_host_global(root)
-        {
-            return false;
-        }
-        let Some(StdlibEntry::Namespace(namespace)) = self.semantic.stdlib().lookup(path) else {
-            return false;
-        };
-        // So is a leaf the model marks writable (`package.path = ...`).
-        leaf.and_then(|name| namespace.members.get(name)).is_none_or(StdlibEntry::is_read_only)
+/// A field of a stdlib value, such as `package.loaded` or a Roblox
+/// instance's property, isn't the library. Neither is a `path` that no
+/// longer reaches the host's global.
+fn writes_namespace_member<'path>(
+    semantic: &SemanticAnalysis<'_>,
+    root: &Name<'_>,
+    path: impl IntoIterator<Item = &'path str>,
+    leaf: Option<&str>,
+) -> bool {
+    // Writing through a writable base (`_G.x = 1`, Roblox's
+    // `shared.score = 1`) is intended.
+    if !is_overwritable_builtin(semantic, root.text.as_str())
+        || !semantic.scoping().reaches_host_global(root)
+    {
+        return false;
     }
+    let Some(StdlibEntry::Namespace(namespace)) = semantic.stdlib().lookup(path) else {
+        return false;
+    };
+    // So is a leaf the model marks writable (`package.path = ...`).
+    leaf.and_then(|name| namespace.members.get(name)).is_none_or(StdlibEntry::is_read_only)
+}
 
-    fn check_var_target(&mut self, var: &Var<'_>) {
-        // Whole-name writes surface as unresolved Write references.
-        let Var::Suffixed(chain) = var else {
-            return;
-        };
-        let Some((container, last)) = chain.head(chain.suffixes.len()).split_last() else {
-            return;
-        };
-        let leaf = match last {
-            Suffix::Field(name) => Some(name.text.as_str()),
-            Suffix::Index { .. } => None,
-            Suffix::Call(_) | Suffix::MethodCall(_) | Suffix::TypeInstantiation { .. } => return,
-        };
-        let span = chain.span;
-        let Some(path) = container.dotted_path() else {
-            return;
-        };
-        if !self.writes_namespace_member(path.root(), path.segments(), leaf) {
-            return;
-        }
-        let mut display = path.to_string();
-        if let Some(name) = leaf {
-            display.push('.');
-            display.push_str(name);
-        }
-        self.findings.push(overwrite_finding(&display, span));
+fn check_var_target(var: &Var<'_>, context: &LintContext<'_>) {
+    let chain = match var {
+        Var::Name(name) => return check_name_write(name, context),
+        Var::Suffixed(chain) => chain,
+    };
+    let Some((container, last)) = chain.head(chain.suffixes.len()).split_last() else {
+        return;
+    };
+    let leaf = match last {
+        Suffix::Field(name) => Some(name.text.as_str()),
+        Suffix::Index { .. } => None,
+        Suffix::Call(_) | Suffix::MethodCall(_) | Suffix::TypeInstantiation { .. } => return,
+    };
+    let Some(path) = container.dotted_path() else {
+        return;
+    };
+    if !writes_namespace_member(context.semantic, path.root(), path.segments(), leaf) {
+        return;
     }
+    let mut display = path.to_string();
+    if let Some(name) = leaf {
+        display.push('.');
+        display.push_str(name);
+    }
+    context.diagnostic(overwrite_finding(&display, chain.span));
+}
 
-    fn check_function_name(&mut self, function_name: &FunctionName<'_>) {
-        let (container, leaf, separator) = if let Some(method) = &function_name.method {
-            (&*function_name.names, method, ':')
-        } else {
-            // Bare `function print()` surfaces as an unresolved Write
-            // reference, and has no container here.
-            let Some((leaf, container)) = function_name.names.split_last() else {
-                return;
-            };
-            (container, leaf, '.')
-        };
-        let segments: Vec<&str> = container.iter().map(|name| name.text.as_str()).collect();
-        let Some(root) = container.first() else {
+fn check_function_name(function_name: &FunctionName<'_>, context: &LintContext<'_>) {
+    let (container, leaf, separator) = if let Some(method) = &function_name.method {
+        (&*function_name.names, method, ':')
+    } else {
+        let Some((leaf, container)) = function_name.names.split_last() else {
             return;
         };
-        let leaf_name = leaf.text;
-        if !self.writes_namespace_member(root, segments.iter().copied(), Some(leaf_name.as_str())) {
-            return;
+        if container.is_empty() {
+            return check_name_write(leaf, context);
         }
-        let display = format!("{}{separator}{leaf_name}", segments.join("."));
-        self.findings.push(overwrite_finding(&display, function_name.span));
+        (container, leaf, '.')
+    };
+    let segments: Vec<&str> = container.iter().map(|name| name.text.as_str()).collect();
+    let Some(root) = container.first() else {
+        return;
+    };
+    let leaf_name = leaf.text;
+    if !writes_namespace_member(
+        context.semantic,
+        root,
+        segments.iter().copied(),
+        Some(leaf_name.as_str()),
+    ) {
+        return;
     }
-
-    fn check_stmt(&mut self, stmt: &Statement<'_>) {
-        match stmt {
-            Statement::Assignment(assignment) => {
-                for var in &assignment.targets {
-                    self.check_var_target(var);
-                }
-            }
-            // Luau
-            Statement::CompoundAssignment(compound) => self.check_var_target(&compound.var),
-            Statement::FunctionDecl(decl) => self.check_function_name(&decl.name),
-            Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::Return(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::Continue(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-    }
+    let display = format!("{}{separator}{leaf_name}", segments.join("."));
+    context.diagnostic(overwrite_finding(&display, function_name.span));
 }
 
 #[cfg(test)]

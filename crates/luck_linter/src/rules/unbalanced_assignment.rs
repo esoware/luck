@@ -1,8 +1,9 @@
-use luck_ast::{Statement, is_multi_value};
+use luck_ast::{AstKind, AstType, is_multi_value};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnbalancedAssignment;
@@ -15,64 +16,37 @@ impl_rule!(
     "assignment has a different number of targets and values"
 );
 
-impl NodeRule for UnbalancedAssignment {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::LocalAssignment, NodeType::Assignment])
+impl RuleRunner for UnbalancedAssignment {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::LocalAssignment, AstType::Assignment])
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        match stmt {
-            Statement::LocalAssignment(local) => {
-                let name_count = local.names.len();
-                let value_count = local.exprs.len();
-                if !local.exprs.last().is_some_and(is_multi_value)
-                    && name_count != value_count
-                    && value_count > 0
-                {
-                    findings.push(Finding::new(
-                        format!("{name_count} name(s) but {value_count} value(s) in assignment"),
-                        local.span,
-                    ));
-                }
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let kind = node.kind();
+        if let AstKind::LocalAssignment(local) = kind {
+            let name_count = local.names.len();
+            let value_count = local.exprs.len();
+            if !local.exprs.last().is_some_and(is_multi_value)
+                && name_count != value_count
+                && value_count > 0
+            {
+                context.diagnostic(Finding::new(
+                    format!("{name_count} name(s) but {value_count} value(s) in assignment"),
+                    local.span,
+                ));
             }
-            Statement::Assignment(assignment) => {
-                let target_count = assignment.targets.len();
-                let value_count = assignment.values.len();
-                if !assignment.values.last().is_some_and(is_multi_value)
-                    && target_count != value_count
-                {
-                    findings.push(Finding::new(
-                        format!(
-                            "{target_count} target(s) but {value_count} value(s) in assignment"
-                        ),
-                        assignment.span,
-                    ));
-                }
+            return;
+        }
+        if let AstKind::Assignment(assignment) = kind {
+            let target_count = assignment.targets.len();
+            let value_count = assignment.values.len();
+            if !assignment.values.last().is_some_and(is_multi_value) && target_count != value_count
+            {
+                context.diagnostic(Finding::new(
+                    format!("{target_count} target(s) but {value_count} value(s) in assignment"),
+                    assignment.span,
+                ));
             }
-            Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::Return(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::Continue(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
         }
     }
 }

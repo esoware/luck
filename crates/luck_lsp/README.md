@@ -27,4 +27,4 @@ Positions count UTF-8 bytes when the client offers them, since a column then cos
 - `serve_stdio()` serves over stdin and stdout, `serve_socket(port)` over TCP, for debugging, and `serve(connection)` over any `lsp_server::Connection`, such as the in-memory pair the tests drive it through.
 - Each returns an error when the session doesn't end as LSP says it should, such as with `exit` before `shutdown`, which the CLI turns into exit code 1.
 
-The server starts its workers with `luck_ast::MIN_STACK_BYTES` of stack. The linter runs a large file's rules on rayon's global pool, so a host builds that pool with `ThreadPoolBuilder::stack_size(MIN_STACK_BYTES)` before it serves, as `luck lsp` does.
+The server runs every job on workers it starts with `luck_ast::MIN_STACK_BYTES` of stack.

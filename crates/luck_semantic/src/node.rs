@@ -1,16 +1,18 @@
 use core::iter;
 
-use luck_ast::{AstKind, GetSpan};
+use luck_ast::{AstKind, AstType, GetSpan};
 use luck_token::Span;
 
+use crate::ast_types_bitset::AstTypesBitset;
 use crate::id::{NodeId, ScopeId};
 
-/// A node of the tree and the scope it's in, which for a node that opens a
-/// scope is the scope around it.
+/// A node of the tree, its id, and the scope it's in, which for a node that
+/// opens a scope is the scope around it.
 #[derive(Debug, Clone, Copy)]
 pub struct AstNode<'ast> {
     kind: AstKind<'ast>,
     scope: ScopeId,
+    id: NodeId,
 }
 
 impl<'ast> AstNode<'ast> {
@@ -23,6 +25,11 @@ impl<'ast> AstNode<'ast> {
     pub const fn scope(&self) -> ScopeId {
         self.scope
     }
+
+    #[must_use]
+    pub const fn id(&self) -> NodeId {
+        self.id
+    }
 }
 
 impl GetSpan for AstNode<'_> {
@@ -32,7 +39,7 @@ impl GetSpan for AstNode<'_> {
 }
 
 /// Every node of a tree that has an [`AstKind`], flattened in source
-/// preorder, with the id of each one's parent.
+/// preorder, with the id of each one's parent, as `oxc_semantic`'s.
 ///
 /// A node comes before what it holds, and what it holds is in source order,
 /// so nodes are sorted by where they start, and the nodes inside one follow
@@ -42,16 +49,31 @@ pub struct AstNodes<'ast> {
     nodes: Vec<AstNode<'ast>>,
     /// `None` for the chunk.
     parent_ids: Vec<Option<NodeId>>,
+    /// Every type of node the tree holds.
+    node_kinds_set: AstTypesBitset,
 }
 
 impl<'ast> AstNodes<'ast> {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Self { nodes: Vec::with_capacity(capacity), parent_ids: Vec::with_capacity(capacity) }
+        Self {
+            nodes: Vec::with_capacity(capacity),
+            parent_ids: Vec::with_capacity(capacity),
+            node_kinds_set: AstTypesBitset::new(),
+        }
     }
 
-    pub(crate) fn push(&mut self, kind: AstKind<'ast>, scope: ScopeId, parent: Option<NodeId>) {
-        self.nodes.push(AstNode { kind, scope });
+    /// Adds the node `id`, the next in preorder.
+    pub(crate) fn push(
+        &mut self,
+        id: NodeId,
+        kind: AstKind<'ast>,
+        scope: ScopeId,
+        parent: Option<NodeId>,
+    ) {
+        debug_assert_eq!(id.index(), self.nodes.len(), "nodes are added in id order");
+        self.nodes.push(AstNode { kind, scope, id });
         self.parent_ids.push(parent);
+        self.node_kinds_set.set(kind.ty());
     }
 
     /// Zero when the build didn't ask for the table.
@@ -65,9 +87,9 @@ impl<'ast> AstNodes<'ast> {
         self.nodes.is_empty()
     }
 
-    /// Every node with its id, in preorder.
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (NodeId, &AstNode<'ast>)> + '_ {
-        self.nodes.iter().enumerate().map(|(i, node)| (NodeId::from_index(i), node))
+    /// Every node, in preorder.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &AstNode<'ast>> + '_ {
+        self.nodes.iter()
     }
 
     #[must_use]
@@ -90,6 +112,13 @@ impl<'ast> AstNodes<'ast> {
         self.parent_ids.get(id.index()).copied().flatten()
     }
 
+    /// `None` for the chunk.
+    #[must_use]
+    pub fn parent_node(&self, id: NodeId) -> Option<&AstNode<'ast>> {
+        self.parent_id(id).map(|parent| self.get(parent))
+    }
+
+    /// `None` for the chunk.
     #[must_use]
     pub fn parent_kind(&self, id: NodeId) -> Option<AstKind<'ast>> {
         self.parent_id(id).map(|parent| self.kind(parent))
@@ -118,6 +147,18 @@ impl<'ast> AstNodes<'ast> {
         iter::once(last)
             .chain(self.ancestor_ids(last))
             .find(|&id| offset <= self.get(id).span().end)
+    }
+
+    /// Whether the tree holds a node of `ty`.
+    #[must_use]
+    pub const fn contains(&self, ty: AstType) -> bool {
+        self.node_kinds_set.has(ty)
+    }
+
+    /// Whether the tree holds a node of any type in `types`.
+    #[must_use]
+    pub fn contains_any(&self, types: AstTypesBitset) -> bool {
+        self.node_kinds_set.intersects(types)
     }
 }
 

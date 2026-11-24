@@ -1,8 +1,9 @@
-use luck_ast::{Expression, Statement, Var};
+use luck_ast::{AstKind, AstType, Expression, Statement, Var};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::nodes::adjacent_stmts;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AlmostSwapped;
@@ -15,15 +16,20 @@ impl_rule!(
     "looks like a failed variable swap; use `a, b = b, a`"
 );
 
-impl WholeRule for AlmostSwapped {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        context
-            .nodes
-            .blocks()
-            .iter()
-            .flat_map(|block| adjacent_stmts(block))
-            .filter_map(|(first, second)| failed_swap(first, second))
-            .collect()
+impl RuleRunner for AlmostSwapped {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::Block])
+    }
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
+        };
+        for (first, second) in block.stmts.iter().zip(block.stmts.iter().skip(1)) {
+            if let Some(finding) = failed_swap(first, second) {
+                context.diagnostic(finding);
+            }
+        }
     }
 }
 

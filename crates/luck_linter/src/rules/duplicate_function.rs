@@ -1,9 +1,11 @@
-use luck_ast::{FunctionName, Statement};
+use luck_ast::{AstKind, AstType, FunctionName, Statement};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::Span;
 use rustc_hash::FxHashMap;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DuplicateFunction;
@@ -16,36 +18,38 @@ impl_rule!(
     "function with the same name is defined twice in the same block"
 );
 
-impl WholeRule for DuplicateFunction {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut findings = Vec::new();
+impl RuleRunner for DuplicateFunction {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::Block])
+    }
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
+        };
         let mut definitions: FxHashMap<String, Span> = FxHashMap::default();
-        for block in context.nodes.blocks() {
-            definitions.clear();
-            for stmt in &block.stmts {
-                // `redefining_local` covers local functions.
-                let (declared_name, name_span) = if let Statement::FunctionDecl(decl) = stmt {
-                    (full_name(&decl.name), decl.name.span)
-                } else if let Statement::GlobalFunction(function) = stmt {
-                    // Lua 5.5
-                    (Some(function.name.text.as_str().to_owned()), function.name.span)
-                } else {
-                    continue;
-                };
-                let Some(name) = declared_name else {
-                    continue;
-                };
-                if let Some(&first_span) = definitions.get(&name) {
-                    findings.push(
-                        Finding::new(format!("duplicate function definition `{name}`"), name_span)
-                            .with_label(first_span, "first defined here"),
-                    );
-                } else {
-                    definitions.insert(name, name_span);
-                }
+        for stmt in &block.stmts {
+            // `redefining_local` covers local functions.
+            let (declared_name, name_span) = if let Statement::FunctionDecl(decl) = stmt {
+                (full_name(&decl.name), decl.name.span)
+            } else if let Statement::GlobalFunction(function) = stmt {
+                // Lua 5.5
+                (Some(function.name.text.as_str().to_owned()), function.name.span)
+            } else {
+                continue;
+            };
+            let Some(name) = declared_name else {
+                continue;
+            };
+            if let Some(&first_span) = definitions.get(&name) {
+                context.diagnostic(
+                    Finding::new(format!("duplicate function definition `{name}`"), name_span)
+                        .with_label(first_span, "first defined here"),
+                );
+            } else {
+                definitions.insert(name, name_span);
             }
         }
-        findings
     }
 }
 

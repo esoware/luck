@@ -27,14 +27,20 @@ fn analyzing_fits_the_smallest_stack() {
     });
 }
 
+/// A long list of locals holds more than any Lua compiles in one function,
+/// which is all the checker finds.
 #[test]
-fn checking_valid_deep_and_long_sources_finds_nothing() {
+fn checking_valid_deep_and_long_sources_finds_only_their_excess_of_locals() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.first());
         let chunk = allocator.alloc(parsed.chunk);
         let built = SemanticBuilder::new().with_check(true).build(chunk);
-        assert!(built.diagnostics.is_empty(), "the source is valid: {:?}", built.diagnostics);
+        let errors: Vec<&str> = built.diagnostics.iter().map(|diag| &*diag.message).collect();
+        assert!(
+            errors.iter().all(|message| message.starts_with("too many local variables")),
+            "the source is valid but for its length: {errors:?}"
+        );
     });
 }

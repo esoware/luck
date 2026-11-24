@@ -1,11 +1,11 @@
-use luck_ast::{Expression, Statement};
-use luck_stdlib::SemanticAnalysis;
+use luck_ast::{AstKind, AstType};
+use luck_semantic::{AstNode, AstTypesBitset};
 
-use crate::cfg::{Exit, FlowGraph};
+use crate::cfg::Exit;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
-use crate::node_type::NodeTypeSet;
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// A function that never returns a value is a procedure and isn't flagged,
 /// so a bare `return` used as a guard clause doesn't count.
@@ -22,40 +22,39 @@ impl_rule!(
     "function returns on some paths but falls through on others"
 );
 
-impl NodeRule for ImplicitReturn {
-    fn node_types(&self) -> NodeTypeSet {
-        FunctionNode::NODE_TYPES
+/// A function body's block runs in the function's scope, whose graph it
+/// asks for.
+impl RuleRunner for ImplicitReturn {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::Block])
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        findings.extend(
-            FunctionNode::of_stmt(stmt)
-                .and_then(|function| check_function(function, context.semantic)),
-        );
-    }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        findings.extend(
-            FunctionNode::of_expr(expr)
-                .and_then(|function| check_function(function, context.semantic)),
-        );
-    }
-}
 
-fn check_function(function: FunctionNode<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding> {
-    let graph = FlowGraph::of_block(&function.body.block, semantic);
-    (graph.reaches(Exit::ReturnValue) && graph.reaches(Exit::End)).then(|| {
-        Finding::new("function returns on some paths but falls through on others", function.span)
-            .with_help("add a `return` on the fallthrough path to make the implicit `nil` explicit")
-    })
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        if !matches!(node.kind(), AstKind::Block(_)) {
+            return;
+        }
+        let Some(function) = context
+            .nodes
+            .parent_node(node.id())
+            .and_then(|body| FunctionNode::of(body, context.nodes))
+        else {
+            return;
+        };
+        if let Some(graph) = context.cfg(node.scope())
+            && graph.reaches(Exit::ReturnValue)
+            && graph.reaches(Exit::End)
+        {
+            context.diagnostic(
+                Finding::new(
+                    "function returns on some paths but falls through on others",
+                    function.span,
+                )
+                .with_help(
+                    "add a `return` on the fallthrough path to make the implicit `nil` explicit",
+                ),
+            );
+        }
+    }
 }
 
 #[cfg(test)]

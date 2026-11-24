@@ -32,6 +32,32 @@ pub(crate) fn until_reads_skipped_local(condition: Span, name: &str) -> Diagnost
     )
 }
 
+/// The function's header, `None` for the chunk, which Lua calls the main
+/// function.
+fn in_function(diagnostic: Diagnostic, header: Option<Span>) -> Diagnostic {
+    match header {
+        Some(span) => diagnostic.with_label(span, "in this function"),
+        None => diagnostic,
+    }
+}
+
+/// The declaration that takes a function past `limit` active locals, as
+/// `lparser.c` counts them.
+pub(crate) fn too_many_locals(span: Span, limit: usize, function: Option<Span>) -> Diagnostic {
+    let place = if function.is_some() { "function" } else { "main function" };
+    let error =
+        Diagnostic::e008(span, format!("too many local variables (limit is {limit}) in {place}"));
+    in_function(error, function)
+}
+
+/// The use that takes a function past `limit` upvalues, which may be one in
+/// a function nested inside it, since each function between a variable and
+/// its use captures it.
+pub(crate) fn too_many_upvalues(span: Span, limit: usize, function: Option<Span>) -> Diagnostic {
+    let error = Diagnostic::e008(span, format!("too many upvalues (limit is {limit}) in function"));
+    in_function(error, function)
+}
+
 pub(crate) fn duplicate_label(span: Span, name: &str, first: Span) -> Diagnostic {
     Diagnostic::e008(span, format!("label `{name}` already defined"))
         .with_label(first, "first defined here")

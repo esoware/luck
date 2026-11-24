@@ -386,6 +386,85 @@ impl LuaVersion {
         }
     }
 
+    /// Whether a vararg function whose `...` has no name holds its extra
+    /// arguments in a hidden local, `(vararg table)` in 5.5's `parlist`.
+    #[must_use]
+    pub const fn has_hidden_vararg_table(self) -> bool {
+        match self {
+            Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Luau => false,
+        }
+    }
+
+    /// Whether the compiler folds a `<const>` local whose value is a
+    /// constant into its uses, so it takes no register and no function
+    /// captures it (`RDKCTC`, 5.4+).
+    #[must_use]
+    pub const fn has_compile_time_constants(self) -> bool {
+        match self {
+            Self::Lua54 | Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Luau => false,
+        }
+    }
+
+    /// Whether the compiler counts a function's locals and upvalues against
+    /// its limits as it parses, as PUC Lua's one-pass compiler does. Luau's
+    /// counts what its optimizer leaves, which depends on the level it
+    /// compiles at.
+    #[must_use]
+    pub const fn has_parse_time_limits(self) -> bool {
+        match self {
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
+            Self::Luau => false,
+        }
+    }
+
+    /// Whether [`MAX_ACTIVE_LOCALS`] counts only the locals in registers,
+    /// which leaves compile-time constants out, as 5.5's `adjustlocalvars`
+    /// does. Earlier versions count every local a function declares.
+    #[must_use]
+    pub const fn has_register_local_limit(self) -> bool {
+        match self {
+            Self::Lua55 => true,
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Luau => false,
+        }
+    }
+
+    /// The hidden locals a numeric `for` declares before its variable, which
+    /// count toward [`MAX_ACTIVE_LOCALS`]. Luau's compiler keeps a loop's
+    /// state in registers that are no locals.
+    #[must_use]
+    pub const fn numeric_for_state_locals(self) -> usize {
+        match self {
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 => 3,
+            Self::Lua55 => 2,
+            Self::Luau => 0,
+        }
+    }
+
+    /// The hidden locals a generic `for` declares before its variables, which
+    /// count toward [`MAX_ACTIVE_LOCALS`]: the iterator, its state, and its
+    /// control value, and in 5.4 the value it closes.
+    #[must_use]
+    pub const fn generic_for_state_locals(self) -> usize {
+        match self {
+            Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua55 => 3,
+            Self::Lua54 => 4,
+            Self::Luau => 0,
+        }
+    }
+
+    /// The upvalues one function can capture: `LUAI_MAXUPVALUES` in 5.1,
+    /// `MAXUPVAL` in 5.2+, and `kMaxUpvalueCount` in Luau.
+    #[must_use]
+    pub const fn max_upvalues(self) -> usize {
+        match self {
+            Self::Lua51 => 60,
+            Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => 255,
+            Self::Luau => 200,
+        }
+    }
+
     /// Whether a vararg function binds an implicit `arg` table even when
     /// nothing reads it, as stock 5.1 builds do under `LUA_COMPAT_VARARG`.
     #[must_use]

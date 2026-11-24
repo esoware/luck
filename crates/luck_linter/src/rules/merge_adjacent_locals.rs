@@ -1,12 +1,14 @@
 use luck_ast::{
-    Attribute, ContentEq as _, GetSpan as _, LocalAssignment, LocalAssignmentKind, Statement,
+    AstKind, AstType, Attribute, ContentEq as _, GetSpan as _, LocalAssignment,
+    LocalAssignmentKind, Statement,
 };
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::Span;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::nodes::adjacent_stmts;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MergeAdjacentLocals;
@@ -20,40 +22,41 @@ impl_rule!(
     Fix
 );
 
-impl WholeRule for MergeAdjacentLocals {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut findings = Vec::new();
-        for block in context.nodes.blocks() {
-            let mut pairs = adjacent_stmts(block);
-            while let Some((first_stmt, second_stmt)) = pairs.next() {
-                let (
-                    Statement::LocalAssignment(first_local),
-                    Statement::LocalAssignment(second_local),
-                ) = (first_stmt, second_stmt)
-                else {
-                    continue;
-                };
-                let Some((first, second)) = mergeable(first_local, second_local, context) else {
-                    continue;
-                };
-                let span = Span::new(first_local.span.start, second_local.span.end);
-                findings.push(
-                    Finding::new("adjacent `local` declarations can be merged", first_local.span)
-                        .with_help("combine into a single multi-binding `local`")
-                        .with_fix(context, FixKind::Fix, |fixer| {
-                            fixer.replace(
-                                "merge adjacent `local` declarations",
-                                span,
-                                build_merged(context.source, &first, &second),
-                            )
-                        }),
-                );
-                // Skip the window that starts at `second_local`, so no two
-                // fixes touch the same statement.
-                pairs.next();
-            }
+impl RuleRunner for MergeAdjacentLocals {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::Block])
+    }
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
+        };
+        let mut pairs = block.stmts.iter().zip(block.stmts.iter().skip(1));
+        while let Some(pair) = pairs.next() {
+            let (Statement::LocalAssignment(first_local), Statement::LocalAssignment(second_local)) =
+                pair
+            else {
+                continue;
+            };
+            let Some((first, second)) = mergeable(first_local, second_local, context) else {
+                continue;
+            };
+            let span = Span::new(first_local.span.start, second_local.span.end);
+            context.diagnostic(
+                Finding::new("adjacent `local` declarations can be merged", first_local.span)
+                    .with_help("combine into a single multi-binding `local`")
+                    .with_fix(context, FixKind::Fix, |fixer| {
+                        fixer.replace(
+                            "merge adjacent `local` declarations",
+                            span,
+                            build_merged(context.source, &first, &second),
+                        )
+                    }),
+            );
+            // Skip the window that starts at `second_local`, so no two fixes
+            // touch the same statement.
+            pairs.next();
         }
-        findings
     }
 }
 

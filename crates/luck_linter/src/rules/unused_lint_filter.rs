@@ -4,10 +4,11 @@ use luck_token::{
     strip_line_break,
 };
 
+use crate::context::ContextHost;
 use crate::diagnostic::Finding;
 use crate::directives::{Directive, Directives, Target};
 use crate::fix::TextEdit;
-use crate::rule::{LintContext, Rule as _, impl_rule};
+use crate::rule::{Rule as _, impl_rule};
 use crate::rules::RULES;
 
 /// Flags an `allow` that drops no diagnostic of a rule that ran, with a fix
@@ -33,7 +34,7 @@ impl UnusedLintFilter {
     /// `used` doesn't count, so one is never reported.
     pub(crate) fn check<Runs>(
         self,
-        context: &LintContext<'_>,
+        context: &ContextHost<'_>,
         used: &[bool],
         runs: Runs,
     ) -> Vec<Finding>
@@ -104,7 +105,7 @@ impl UnusedLintFilter {
 /// The edits that take `removed`, entries of one directive, out of it, and
 /// the `end`s that close their regions out of theirs. A directive left with
 /// no entry goes whole.
-fn removal(context: &LintContext<'_>, removed: &[usize]) -> Vec<TextEdit> {
+fn removal(context: &ContextHost<'_>, removed: &[usize]) -> Vec<TextEdit> {
     let directives = context.directives;
     let mut entries: Vec<usize> = removed
         .iter()

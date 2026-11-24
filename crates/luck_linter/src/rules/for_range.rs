@@ -1,10 +1,12 @@
-use luck_ast::{Expression, NumericFor, Statement};
-use luck_token::{LuaVersion, UnOp};
+use luck_ast::{AstKind, AstType, Expression, NumericFor};
+use luck_semantic::{AstNode, AstTypesBitset};
+use luck_token::UnOp;
+use luck_value::ValueContext;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::number_value;
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags numeric `for` ranges that can't iterate or are likely off by one.
 ///
@@ -22,31 +24,27 @@ impl_rule!(
     "numeric `for` range can't iterate or is off by one"
 );
 
-impl NodeRule for ForRange {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::NumericFor])
+impl RuleRunner for ForRange {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::NumericFor])
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Statement::NumericFor(numeric_for) = stmt
-            && let Some((message, help)) = range_problem(numeric_for, context.semantic.version())
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        if let AstKind::NumericFor(numeric_for) = node.kind()
+            && let Some((message, help)) = range_problem(numeric_for, context)
         {
-            findings.push(Finding::new(message, numeric_for.span).with_help(help));
+            context.diagnostic(Finding::new(message, numeric_for.span).with_help(help));
         }
     }
 }
 
 fn range_problem(
     numeric_for: &NumericFor<'_>,
-    version: LuaVersion,
+    context: &dyn ValueContext,
 ) -> Option<(String, &'static str)> {
-    let start = number_value(&numeric_for.start, version);
-    let limit = number_value(&numeric_for.limit, version);
-    let step = numeric_for.step.as_ref().and_then(|step| number_value(step, version));
+    let start = number_value(&numeric_for.start, context);
+    let limit = number_value(&numeric_for.limit, context);
+    let step = numeric_for.step.as_ref().and_then(|step| number_value(step, context));
 
     // A zero step loops forever before Lua 5.4 and raises an error from 5.4
     // on.
@@ -173,6 +171,8 @@ fn is_length_of_identifier(expr: &Expression<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;

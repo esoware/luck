@@ -1,10 +1,11 @@
 use core::iter;
 
-use luck_ast::{ContentEq as _, Expression, GetSpan as _, Statement};
+use luck_ast::{AstKind, AstType, ContentEq as _, Expression, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DuplicateConditions;
@@ -17,17 +18,13 @@ impl_rule!(
     "`if`/`elseif` chain has duplicate conditions"
 );
 
-impl NodeRule for DuplicateConditions {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::IfStatement])
+impl RuleRunner for DuplicateConditions {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::IfStatement])
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Statement::IfStatement(if_stmt) = stmt else {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::IfStatement(if_stmt) = node.kind() else {
             return;
         };
         // Only an `elseif` can repeat an earlier condition.
@@ -50,7 +47,7 @@ impl NodeRule for DuplicateConditions {
             let span = condition.span();
             let source_text = String::from_utf8_lossy(span.text(context.source));
             let text = source_text.trim();
-            findings.push(
+            context.diagnostic(
                 Finding::new(format!("duplicate condition `{text}` in `if`/`elseif` chain"), span)
                     .with_label(first.span(), "first checked here")
                     .with_help("this branch is unreachable unless the condition has side effects"),

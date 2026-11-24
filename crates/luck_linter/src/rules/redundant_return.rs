@@ -1,9 +1,11 @@
-use luck_ast::{Block, Statement};
+use luck_ast::{AstKind, AstType, Statement};
 use luck_diagnostics::Tag;
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RedundantReturn;
@@ -19,32 +21,36 @@ impl_rule!(
 
 /// Only the chunk and function bodies are checked, since in a nested block a
 /// bare `return` is an early exit.
-impl WholeRule for RedundantReturn {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        context
-            .nodes
-            .function_blocks()
-            .iter()
-            .filter_map(|block| check_tail(block, context))
-            .collect()
+impl RuleRunner for RedundantReturn {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::Block])
     }
-}
 
-fn check_tail(block: &Block<'_>, context: &LintContext<'_>) -> Option<Finding> {
-    let Some(Statement::Return(return_stmt)) = block.stmts.last() else {
-        return None;
-    };
-    if !return_stmt.exprs.is_empty() {
-        return None;
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
+        };
+        if !matches!(
+            context.nodes.parent_kind(node.id()),
+            Some(AstKind::FunctionBody(_) | AstKind::Chunk(_))
+        ) {
+            return;
+        }
+        let Some(Statement::Return(return_stmt)) = block.stmts.last() else {
+            return;
+        };
+        if !return_stmt.exprs.is_empty() {
+            return;
+        }
+        let span = return_stmt.span;
+        context.diagnostic(
+            Finding::new("bare `return` at the end of the function has no effect", span)
+                .with_tag(Tag::Unnecessary)
+                .with_fix(context, FixKind::Fix, |fixer| {
+                    fixer.delete("remove the redundant `return`", span)
+                }),
+        );
     }
-    let span = return_stmt.span;
-    Some(
-        Finding::new("bare `return` at the end of the function has no effect", span)
-            .with_tag(Tag::Unnecessary)
-            .with_fix(context, FixKind::Fix, |fixer| {
-                fixer.delete("remove the redundant `return`", span)
-            }),
-    )
 }
 
 #[cfg(test)]

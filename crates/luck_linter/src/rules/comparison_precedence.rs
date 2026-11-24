@@ -1,10 +1,11 @@
-use luck_ast::{Expression, GetSpan as _};
+use luck_ast::{AstKind, AstType, Expression, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::{BinOp, UnOp};
 
 use crate::binary::{OperatorPair, operator_pairs};
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Lua's comparison operators share one precedence and associate left, so
 /// `a < b == c` parses as `(a < b) == c`. Unary `not` binds tighter than
@@ -20,31 +21,27 @@ impl_rule!(
     "chained comparison or `not` operand that doesn't parse the way it reads"
 );
 
-impl NodeRule for ComparisonPrecedence {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp])
+impl RuleRunner for ComparisonPrecedence {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::BinaryOp])
     }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Expression::BinaryOp(run) = expr else {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::BinaryOp(run) = node.kind() else {
             return;
         };
         if !run.links.first().op.is_comparison() {
             return;
         }
         for pair in operator_pairs(run) {
-            check_pair(pair, context, findings);
+            check_pair(pair, context);
         }
     }
 }
 
 /// A comparison's operand that is itself a comparison is the run's
 /// operators on that side, since a bare one would have joined the run.
-fn check_pair(pair: OperatorPair<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+fn check_pair(pair: OperatorPair<'_>, context: &LintContext<'_>) {
     let chained_side = if pair.lhs.is_none() {
         Some("left")
     } else if pair.rhs.is_none() {
@@ -53,7 +50,7 @@ fn check_pair(pair: OperatorPair<'_>, context: &LintContext<'_>, findings: &mut 
         None
     };
     if let Some(side) = chained_side {
-        findings.push(
+        context.diagnostic(
             Finding::new(
                 format!(
                     "chained comparison on the {side} side parses as `(a op b) op c`, not as a math-style chain"
@@ -94,7 +91,7 @@ fn check_pair(pair: OperatorPair<'_>, context: &LintContext<'_>, findings: &mut 
             | BinOp::Shl
             | BinOp::Shr => return,
         };
-        findings.push(
+        context.diagnostic(
             Finding::new(
                 format!(
                     "`not` applies only to the left operand, so this parses as `(not x) {} y`",

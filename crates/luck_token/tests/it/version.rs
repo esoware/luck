@@ -74,6 +74,19 @@ fn source_predicates_match_their_versions() {
 }
 
 #[test]
+fn compiler_limit_predicates_match_their_versions() {
+    let puc_versions = [Lua51, Lua52, Lua53, Lua54, Lua55];
+    assert_eq!(versions_with(LuaVersion::has_parse_time_limits), puc_versions);
+    assert_eq!(versions_with(LuaVersion::has_compile_time_constants), [Lua54, Lua55]);
+    assert_eq!(versions_with(LuaVersion::has_register_local_limit), [Lua55]);
+    assert_eq!(versions_with(LuaVersion::has_hidden_vararg_table), [Lua55]);
+    let counts = |count: fn(LuaVersion) -> usize| LuaVersion::ALL.map(count);
+    assert_eq!(counts(LuaVersion::numeric_for_state_locals), [3, 3, 3, 3, 2, 0]);
+    assert_eq!(counts(LuaVersion::generic_for_state_locals), [3, 3, 3, 4, 3, 0]);
+    assert_eq!(counts(LuaVersion::max_upvalues), [60, 255, 255, 255, 255, 200]);
+}
+
+#[test]
 fn require_predicates_match_their_versions() {
     let lua52_and_later = [Lua52, Lua53, Lua54, Lua55];
     assert_eq!(versions_with(LuaVersion::has_require_filepath_arg), lua52_and_later);

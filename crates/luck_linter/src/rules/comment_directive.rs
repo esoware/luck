@@ -1,7 +1,8 @@
 use luck_token::{CommentContent, Span, is_lua_whitespace};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 use crate::suggest::closest;
 
 const KNOWN_DIRECTIVES: &[&str] =
@@ -18,18 +19,17 @@ impl_rule!(
     "invalid or misplaced `--!` comment directive"
 );
 
-impl WholeRule for CommentDirective {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let first_token_start = context.block.span.start;
+impl RuleRunner for CommentDirective {
+    fn run_once(&self, context: &LintContext<'_>) {
+        let first_token_start = context.chunk.block.span.start;
         let mut first_mode: Option<Span> = None;
-        let mut findings = Vec::new();
         for comment in context.comments {
             if comment.content != CommentContent::HotComment {
                 continue;
             }
             // Luau ignores hot comments after the first token.
             if comment.span.start > first_token_start {
-                findings.push(Finding::new(
+                context.diagnostic(Finding::new(
                     "comment directive after the first statement has no effect",
                     comment.span,
                 ));
@@ -37,22 +37,23 @@ impl WholeRule for CommentDirective {
             }
             let body = comment.span.text(context.source).get(3..).unwrap_or_default();
             let hot_comment = HotComment::split(body, comment.span.start.saturating_add(3));
-            if hot_comment.sets_mode() {
-                match first_mode {
-                    Some(first) => findings.push(
-                        Finding::new(
-                            "type checking mode is already set by an earlier directive",
-                            hot_comment.word_span,
-                        )
-                        .with_label(first, "first set here"),
-                    ),
-                    None => first_mode = Some(hot_comment.word_span),
+            if !hot_comment.sets_mode() {
+                if let Some(finding) = hot_comment.problem() {
+                    context.diagnostic(finding);
                 }
-            } else {
-                findings.extend(hot_comment.problem());
+                continue;
+            }
+            match first_mode {
+                Some(first) => context.diagnostic(
+                    Finding::new(
+                        "type checking mode is already set by an earlier directive",
+                        hot_comment.word_span,
+                    )
+                    .with_label(first, "first set here"),
+                ),
+                None => first_mode = Some(hot_comment.word_span),
             }
         }
-        findings
     }
 }
 

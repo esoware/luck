@@ -1,10 +1,11 @@
-use luck_ast::{Expression, Suffix, SuffixedExpression};
+use luck_ast::{AstKind, AstType, Expression, Suffix};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::TokenKind;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{ChainPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StringIndexToField;
@@ -18,19 +19,19 @@ impl_rule!(
     Fix
 );
 
-impl NodeRule for StringIndexToField {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::Suffixed])
+impl RuleRunner for StringIndexToField {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_chain(
-        &self,
-        chain: &SuffixedExpression<'_>,
-        _position: ChainPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
         for suffix in &chain.suffixes {
-            findings.extend(check_index(suffix, context));
+            if let Some(finding) = check_index(suffix, context) {
+                context.diagnostic(finding);
+            }
         }
     }
 }

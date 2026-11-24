@@ -9,12 +9,12 @@ use core::cmp::Reverse;
 use core::ops::Range;
 
 use luck_ast::{GetSpan as _, Statement};
+use luck_semantic::AstNodes;
 use luck_token::{
     Comment, CommentContent, DirectiveError, LintDirective, LintExtent, LintVerb, LuaVersion, Span,
     has_line_break,
 };
 
-use crate::nodes::{NodeKind, Nodes};
 use crate::rules::RULES;
 
 /// Past the last offset, so a range to the end of the file also holds a
@@ -205,7 +205,7 @@ impl Directives {
         }
     }
 
-    /// Finishes the table once the node table is built.
+    /// Finishes the table with the statements of `nodes`' blocks.
     ///
     /// Each directive on a statement covers the one it trails on its line, or
     /// else the next to start, or else the one it's inside. A statement that
@@ -214,22 +214,17 @@ impl Directives {
     /// written in.
     pub(crate) fn cover_statements(
         &mut self,
-        nodes: &Nodes<'_>,
+        nodes: &AstNodes<'_>,
         source: &[u8],
         version: LuaVersion,
     ) {
         if self.list.iter().any(|directive| directive.extent == LintExtent::Statement) {
             let mut stmts: Vec<Span> = nodes
-                .as_slice()
                 .iter()
-                .filter_map(|node| match node.kind {
-                    NodeKind::Statement(Statement::Error(_))
-                    | NodeKind::Expression(_)
-                    | NodeKind::Table(_)
-                    | NodeKind::Chain(..)
-                    | NodeKind::Call { .. } => None,
-                    NodeKind::Statement(stmt) => Some(stmt.span()),
-                })
+                .filter_map(|node| node.kind().as_block())
+                .flat_map(|block| &block.stmts)
+                .filter(|stmt| !matches!(stmt, Statement::Error(_)))
+                .map(Statement::span)
                 .collect();
             stmts.sort_unstable_by_key(|stmt| stmt.start);
             let mut remaining = stmts.into_iter().peekable();

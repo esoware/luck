@@ -1,11 +1,13 @@
-use luck_ast::GetSpan as _;
+use luck_ast::{AstKind, AstType, Call, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::call::calls_in;
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::number_value;
 use crate::roblox::global_new_call;
-use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxManualFromScaleOrFromOffset;
@@ -19,64 +21,73 @@ impl_rule!(
     Fix
 );
 
-impl NodeRule for RobloxManualFromScaleOrFromOffset {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallExpr])
+impl RuleRunner for RobloxManualFromScaleOrFromOffset {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let CallSite { call, position, .. } = *site;
-        if position == CallPosition::Statement {
+
+    fn should_run(&self, host: &ContextHost<'_>) -> bool {
+        host.semantic.target().is_roblox()
+    }
+
+    /// A call statement's value goes unused, so it isn't checked.
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
+        };
+        let last = if context.is_statement(node) { chain.suffixes.len() } else { usize::MAX };
+        for (index, call) in calls_in(chain) {
+            if index.saturating_add(1) != last {
+                check_call(call, context);
+            }
         }
-        let Some(args) = global_new_call(call, "UDim2", context.semantic) else {
-            return;
-        };
-        let [x_scale_arg, x_offset_arg, y_scale_arg, y_offset_arg] = args else {
-            return;
-        };
-        let version = context.semantic.version();
-        let (Some(x_scale), Some(x_offset), Some(y_scale), Some(y_offset)) = (
-            number_value(x_scale_arg, version),
-            number_value(x_offset_arg, version),
-            number_value(y_scale_arg, version),
-            number_value(y_offset_arg, version),
-        ) else {
-            return;
-        };
-        let is_scale_zero = x_scale == 0.0f64 && y_scale == 0.0f64;
-        let is_offset_zero = x_offset == 0.0f64 && y_offset == 0.0f64;
-        let (constructor, first_arg, second_arg) = if is_offset_zero && !is_scale_zero {
-            ("fromScale", x_scale_arg, y_scale_arg)
-        } else if is_scale_zero && !is_offset_zero {
-            ("fromOffset", x_offset_arg, y_offset_arg)
-        } else {
-            return;
-        };
-        let replacement = [
-            b"UDim2.",
-            constructor.as_bytes(),
-            b"(",
-            first_arg.span().text(context.source),
-            b", ",
-            second_arg.span().text(context.source),
-            b")",
-        ]
-        .concat();
-        findings.push(
-            Finding::new(
-                format!("this `UDim2.new` can be written as `UDim2.{constructor}`"),
-                call.span(),
-            )
-            .with_help(format!("use `{}`", String::from_utf8_lossy(&replacement)))
-            .with_fix(context, FixKind::Fix, |fixer| {
-                fixer.replace(
-                    format!("replace with `UDim2.{constructor}`"),
-                    call.span(),
-                    replacement,
-                )
-            }),
-        );
     }
+}
+
+fn check_call(call: Call<'_>, context: &LintContext<'_>) {
+    let Some(args) = global_new_call(call, "UDim2", context.semantic) else {
+        return;
+    };
+    let [x_scale_arg, x_offset_arg, y_scale_arg, y_offset_arg] = args else {
+        return;
+    };
+    let (Some(x_scale), Some(x_offset), Some(y_scale), Some(y_offset)) = (
+        number_value(x_scale_arg, context),
+        number_value(x_offset_arg, context),
+        number_value(y_scale_arg, context),
+        number_value(y_offset_arg, context),
+    ) else {
+        return;
+    };
+    let is_scale_zero = x_scale == 0.0f64 && y_scale == 0.0f64;
+    let is_offset_zero = x_offset == 0.0f64 && y_offset == 0.0f64;
+    let (constructor, first_arg, second_arg) = if is_offset_zero && !is_scale_zero {
+        ("fromScale", x_scale_arg, y_scale_arg)
+    } else if is_scale_zero && !is_offset_zero {
+        ("fromOffset", x_offset_arg, y_offset_arg)
+    } else {
+        return;
+    };
+    let replacement = [
+        b"UDim2.",
+        constructor.as_bytes(),
+        b"(",
+        first_arg.span().text(context.source),
+        b", ",
+        second_arg.span().text(context.source),
+        b")",
+    ]
+    .concat();
+    context.diagnostic(
+        Finding::new(
+            format!("this `UDim2.new` can be written as `UDim2.{constructor}`"),
+            call.span(),
+        )
+        .with_help(format!("use `{}`", String::from_utf8_lossy(&replacement)))
+        .with_fix(context, FixKind::Fix, |fixer| {
+            fixer.replace(format!("replace with `UDim2.{constructor}`"), call.span(), replacement)
+        }),
+    );
 }
 
 #[cfg(test)]

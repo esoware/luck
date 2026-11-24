@@ -1,11 +1,13 @@
-use luck_ast::{Call, ChainHead, Expression, FunctionArgs, GetSpan as _, Suffix};
-use luck_token::{BinOp, LuaVersion, UnOp};
+use luck_ast::{AstKind, AstType, Call, ChainHead, Expression, FunctionArgs, GetSpan as _, Suffix};
+use luck_semantic::{AstNode, AstTypesBitset};
+use luck_token::{BinOp, UnOp};
+use luck_value::ValueContext;
 
-use crate::call::dotted_callee;
+use crate::call::{calls_in, dotted_callee};
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::has_number_value;
-use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TableOperations;
@@ -18,17 +20,22 @@ impl_rule!(
     "misuse of `table.insert`, `table.remove`, `table.move`, or `table.create`"
 );
 
-impl NodeRule for TableOperations {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
+impl RuleRunner for TableOperations {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let call = site.call;
-        check_call(call, context, findings);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        for (_, call) in calls_in(chain) {
+            check_call(call, context);
+        }
     }
 }
 
-fn check_call(call: Call<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
+fn check_call(call: Call<'_>, context: &LintContext<'_>) {
     let Some(function_name) = table_stdlib_function(call, context) else {
         return;
     };
@@ -36,28 +43,27 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>, findings: &mut Vec<Find
         return;
     };
     let finding = |message: &'static str| Finding::new(message, call.span());
-    let version = context.semantic.version();
-    let is_zero = |expr: &Expression<'_>| has_number_value(expr, version, 0.0);
+    let is_zero = |expr: &Expression<'_>| has_number_value(expr, context, 0.0);
     match (function_name, &**args) {
         ("insert", [table, index, _]) => {
             if is_zero(index) {
-                findings.push(
+                context.diagnostic(
                     finding("`table.insert` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
                 );
                 return;
             }
             if length_operand(index).is_some_and(|target| same_target(target, table)) {
-                findings.push(
+                context.diagnostic(
                     finding("`table.insert(t, #t, v)` inserts the value before the last element")
                         .with_help("to append, use `table.insert(t, v)`"),
                 );
                 return;
             }
-            if length_offset_operand(index, BinOp::Add, version)
+            if length_offset_operand(index, BinOp::Add, context)
                 .is_some_and(|target| same_target(target, table))
             {
-                findings.push(
+                context.diagnostic(
                     finding(
                         "`table.insert(t, #t + 1, v)` appends, so the index argument is redundant",
                     )
@@ -67,16 +73,16 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>, findings: &mut Vec<Find
         }
         ("remove", [table, index]) => {
             if is_zero(index) {
-                findings.push(
+                context.diagnostic(
                     finding("`table.remove` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
                 );
                 return;
             }
-            if length_offset_operand(index, BinOp::Sub, version)
+            if length_offset_operand(index, BinOp::Sub, context)
                 .is_some_and(|target| same_target(target, table))
             {
-                findings.push(
+                context.diagnostic(
                     finding("`table.remove(t, #t - 1)` removes the value before the last element")
                         .with_help("`table.remove(t)` removes the last element"),
                 );
@@ -84,17 +90,18 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>, findings: &mut Vec<Find
         }
         ("move", move_args) => {
             if move_args.get(1).is_some_and(is_zero) {
-                findings
-                    .push(finding("`table.move` with start index 0, but Lua arrays are 1-based"));
+                context.diagnostic(finding(
+                    "`table.move` with start index 0, but Lua arrays are 1-based",
+                ));
             }
             if move_args.get(3).is_some_and(is_zero) {
-                findings.push(finding(
+                context.diagnostic(finding(
                     "`table.move` with destination index 0, but Lua arrays are 1-based",
                 ));
             }
         }
         ("create", [_, Expression::TableConstructor(_)]) => {
-            findings.push(
+            context.diagnostic(
                 finding("`table.create(n, {...})` fills every slot with the same table object")
                     .with_help("use a `for` loop to give each element its own table"),
             );
@@ -127,7 +134,7 @@ fn length_operand<'ast>(expr: &'ast Expression<'ast>) -> Option<&'ast Expression
 fn length_offset_operand<'ast>(
     expr: &'ast Expression<'ast>,
     op: BinOp,
-    version: LuaVersion,
+    context: &dyn ValueContext,
 ) -> Option<&'ast Expression<'ast>> {
     let Expression::BinaryOp(run) = expr else {
         return None;
@@ -135,7 +142,7 @@ fn length_offset_operand<'ast>(
     let [link] = &*run.links else {
         return None;
     };
-    if link.op != op || !has_number_value(&link.operand, version, 1.0) {
+    if link.op != op || !has_number_value(&link.operand, context, 1.0) {
         return None;
     }
     length_operand(&run.first)
@@ -160,6 +167,8 @@ fn same_target(left: &Expression<'_>, right: &Expression<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;

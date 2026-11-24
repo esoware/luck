@@ -1,8 +1,9 @@
-use luck_ast::{ContentEq as _, Statement};
+use luck_ast::{AstKind, AstType, ContentEq as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct IfSameThenElse;
@@ -15,17 +16,13 @@ impl_rule!(
     "`if` and `else` branches have identical bodies"
 );
 
-impl NodeRule for IfSameThenElse {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::IfStatement])
+impl RuleRunner for IfSameThenElse {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::IfStatement])
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Statement::IfStatement(if_stmt) = stmt else {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::IfStatement(if_stmt) = node.kind() else {
             return;
         };
         let Some(else_clause) = &if_stmt.else_clause else {
@@ -35,7 +32,7 @@ impl NodeRule for IfSameThenElse {
             let finding =
                 Finding::new("`if` and `else` branches have identical bodies", if_stmt.span);
             // An `elseif` keeps the first condition meaningful.
-            findings.push(if if_stmt.elseif_clauses.is_empty() {
+            context.diagnostic(if if_stmt.elseif_clauses.is_empty() {
                 finding.with_help("the condition has no effect, so remove the `if`")
             } else {
                 finding

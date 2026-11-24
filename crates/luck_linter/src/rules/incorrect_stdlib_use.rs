@@ -1,10 +1,11 @@
-use luck_ast::GetSpan as _;
+use luck_ast::{AstKind, AstType, Call, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::{ResolvedCallee, StdlibEntry, StdlibFunction};
 
-use crate::call::{CallArg, CallArgs, string_literal_value};
+use crate::call::{CallArg, CallArgs, calls_in, string_literal_value};
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// How many allowed values a message lists. Generated sets (Roblox service
 /// and class names) run to hundreds of values.
@@ -21,24 +22,24 @@ impl_rule!(
     "wrong argument count or invalid constant in a standard library call"
 );
 
-impl NodeRule for IncorrectStdlibUse {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
+impl RuleRunner for IncorrectStdlibUse {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_call(
-        &self,
-        site: &CallSite<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        check_call(site, findings);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        for (index, call) in calls_in(chain) {
+            if let Some(callee) = context.callee(node, index) {
+                check_call(call, &callee, context);
+            }
+        }
     }
 }
 
-fn check_call(site: &CallSite<'_>, findings: &mut Vec<Finding>) {
-    let CallSite { call, callee: Some(callee), .. } = *site else {
-        return;
-    };
+fn check_call(call: Call<'_>, callee: &ResolvedCallee<'_>, context: &LintContext<'_>) {
     let StdlibEntry::Function(function) = callee.entry() else {
         return;
     };
@@ -66,8 +67,12 @@ fn check_call(site: &CallSite<'_>, findings: &mut Vec<Finding>) {
         None
     };
     match arity_message {
-        Some(message) => findings.push(Finding::new(message, call.span())),
-        None => findings.extend(invalid_constant_args(&callee, function, args, arg_count)),
+        Some(message) => context.diagnostic(Finding::new(message, call.span())),
+        None => {
+            for finding in invalid_constant_args(callee, function, args, arg_count) {
+                context.diagnostic(finding);
+            }
+        }
     }
 }
 

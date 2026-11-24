@@ -1,9 +1,10 @@
-use luck_ast::{ChainHead, DottedPath, Expression, Suffix, SuffixedExpression};
+use luck_ast::{AstKind, AstType, ChainHead, DottedPath, Expression, Suffix};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::Span;
 
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{ChainPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Indexing `Enum` with an unknown name throws at runtime on Roblox, so a
 /// typo here is always a bug. Only the first segment that fails to resolve is
@@ -19,35 +20,37 @@ impl_rule!(
     "unknown Roblox enum type, item, or item member"
 );
 
-impl NodeRule for RobloxUnknownEnumMember {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::Suffixed])
+impl RuleRunner for RobloxUnknownEnumMember {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_chain(
-        &self,
-        chain: &SuffixedExpression<'_>,
-        position: ChainPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+
+    fn should_run(&self, host: &ContextHost<'_>) -> bool {
+        host.semantic.target().is_roblox()
+    }
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
         let Expression::Name(root) = &chain.prefix else {
             return;
         };
         if root.text != "Enum" {
             return;
         }
-        // Only the Roblox stdlib has an `Enum` global.
         let stdlib = context.semantic.stdlib();
         let Some(mut entry) = stdlib.globals.get("Enum") else {
             return;
         };
-        if context.semantic.scoping().resolves_to_local(root) {
+        if context.scoping().resolves_to_local(root) {
             return;
         }
         // A target's last field is stored to, not read.
-        let read_count = match position {
-            ChainPosition::Value => chain.suffixes.len(),
-            ChainPosition::AssignmentTarget => chain.suffixes.len().saturating_sub(1),
+        let read_count = if context.is_assignment_target(node) {
+            chain.suffixes.len().saturating_sub(1)
+        } else {
+            chain.suffixes.len()
         };
         for (read_index, suffix) in (0usize..).zip(chain.suffixes.iter().take(read_count)) {
             let Suffix::Field(name) = suffix else {
@@ -57,7 +60,11 @@ impl NodeRule for RobloxUnknownEnumMember {
             // Past the first unknown segment, nothing resolves, so the chain
             // warns once.
             let Some(member) = stdlib.child(entry, segment.as_str()) else {
-                findings.push(unknown_member(chain.head(read_index), segment.as_str(), name.span));
+                context.diagnostic(unknown_member(
+                    chain.head(read_index),
+                    segment.as_str(),
+                    name.span,
+                ));
                 return;
             };
             entry = member;

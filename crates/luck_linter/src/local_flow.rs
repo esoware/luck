@@ -1,10 +1,13 @@
-use core::mem;
+use core::{mem, ptr};
 
-use luck_semantic::{ReferenceId, ReferenceKind, Symbol, SymbolId, SymbolKind};
+use luck_ast::{AstKind, Expression, is_multi_value};
+use luck_semantic::{
+    AstNodes, Reference, ReferenceId, ReferenceKind, ScopeId, Symbol, SymbolId, SymbolKind,
+};
 use luck_token::{MAX_ACTIVE_LOCALS, Span};
 
 use crate::cfg::{FlowGraph, LocalDeclaration};
-use crate::rule::LintContext;
+use crate::context::ContextHost;
 
 #[derive(Debug, Default)]
 pub(crate) struct LocalFlow {
@@ -17,43 +20,40 @@ pub(crate) struct LocalFlow {
 }
 
 impl LocalFlow {
-    pub(crate) fn compute(context: &LintContext<'_>) -> Self {
-        let tree = context.semantic.scoping();
+    pub(crate) fn compute(host: &ContextHost<'_>) -> Self {
+        let tree = host.scoping();
         let mut tracked: Vec<&Symbol> = tree
             .symbols()
             .iter()
             .filter(|symbol| {
                 !tree.name(symbol.name).starts_with('_')
-                    && (context.nodes.uninitialized_locals().contains(symbol)
+                    && (is_uninitialized(symbol, host.nodes)
                         || (symbol.kind == SymbolKind::Local
                             && symbol.is_modified
                             && !symbol.is_upvalue))
             })
             .collect();
         tracked.sort_unstable_by_key(|symbol| symbol.definition_span.start);
+        let mut functions: Vec<ScopeId> =
+            tracked.iter().map(|symbol| host.function_of(symbol.scope)).collect();
+        functions.sort_unstable();
+        functions.dedup();
 
         let mut flow = Self::default();
-        for &function_block in context.nodes.function_blocks() {
-            let span = function_block.span;
-            let first_inside =
-                tracked.partition_point(|symbol| symbol.definition_span.start < span.start);
-            if tracked
-                .get(first_inside)
-                .is_none_or(|symbol| symbol.definition_span.start >= span.end)
-            {
+        for function in functions {
+            let Some(graph) = host.cfg(function) else {
                 continue;
-            }
-            let graph = FlowGraph::of_block(function_block, context.semantic);
+            };
             if exceeds_local_limit(graph.locals()) {
                 continue;
             }
-            let mut walk = GraphWalk::new(&graph);
+            let mut walk = GraphWalk::new(graph);
             for local in graph.locals() {
                 if let Ok(index) = tracked.binary_search_by_key(&local.name_span.start, |symbol| {
                     symbol.definition_span.start
                 }) && let Some(symbol) = tracked.get(index)
                 {
-                    flow.add_local(symbol, local, &mut walk, context);
+                    flow.add_local(symbol, local, &mut walk, host);
                 }
             }
         }
@@ -65,9 +65,9 @@ impl LocalFlow {
         symbol: &Symbol,
         local: &LocalDeclaration,
         walk: &mut GraphWalk<'_>,
-        context: &LintContext<'_>,
+        host: &ContextHost<'_>,
     ) {
-        let tree = context.semantic.scoping();
+        let tree = host.scoping();
         let graph = walk.graph;
         let reference_ids = tree.resolved_references(symbol.id);
         let mut uses = Vec::with_capacity(reference_ids.len());
@@ -86,7 +86,7 @@ impl LocalFlow {
             });
         }
 
-        let is_uninitialized = context.nodes.uninitialized_locals().contains(symbol);
+        let is_uninitialized = is_uninitialized(symbol, host.nodes);
         if is_uninitialized && let Some(reference_id) = walk.first_unassigned_use(&uses, local) {
             self.first_unassigned_uses.push((symbol.id, reference_id));
         }
@@ -122,6 +122,38 @@ impl LocalFlow {
             }
         }
     }
+}
+
+/// Whether `symbol` is a local its `local` statement gives no value, as the
+/// `x` of `local x` or the `b` of `local a, b = 1`.
+fn is_uninitialized(symbol: &Symbol, nodes: &AstNodes<'_>) -> bool {
+    let (AstKind::AttributedName(attributed), Some(AstKind::LocalAssignment(local))) =
+        (nodes.kind(symbol.declaration), nodes.parent_kind(symbol.declaration))
+    else {
+        return false;
+    };
+    // A call or `...` last can fill every name after it.
+    !local.exprs.last().is_some_and(is_multi_value)
+        && local
+            .names
+            .iter()
+            .position(|name| ptr::eq(name, attributed))
+            .is_some_and(|position| position >= local.exprs.len())
+}
+
+/// Whether `reference` is the name a field or index write goes through
+/// directly, as the `x` of `x.foo = 1`, which the scope tree records as a
+/// plain read.
+pub(crate) fn is_field_write_prefix(reference: &Reference, host: &ContextHost<'_>) -> bool {
+    let Some(chain_node) = host.nodes.parent_node(reference.node) else {
+        return false;
+    };
+    let AstKind::SuffixedExpression(chain) = chain_node.kind() else {
+        return false;
+    };
+    chain.suffixes.len() == 1
+        && matches!(&chain.prefix, Expression::Name(name) if name.span == reference.span)
+        && host.is_assignment_target(chain_node)
 }
 
 /// Whether more `local` names are active at once somewhere in the function

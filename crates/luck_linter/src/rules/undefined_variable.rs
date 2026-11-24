@@ -1,5 +1,6 @@
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UndefinedVariable;
@@ -12,27 +13,27 @@ impl_rule!(
     "use of undefined variable"
 );
 
-impl WholeRule for UndefinedVariable {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+impl RuleRunner for UndefinedVariable {
+    fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
-        tree.global_references()
-            .filter(|reference| {
-                // `setting_global` owns writes, and a global this file writes
-                // (`function f() end`, `counter = 0`) counts as defined
-                // everywhere in it, or script-style Lua would error on every
-                // use.
-                !reference.kind.is_write()
-                    && !semantic.is_defined_global(reference)
-                    && tree.name(reference.name) != "_"
-                    && !tree.is_assigned_global(reference.name)
-            })
-            .map(|reference| {
-                let name = tree.name(reference.name);
+        for reference in tree.global_references() {
+            // `setting_global` owns writes, and a global this file writes
+            // (`function f() end`, `counter = 0`) counts as defined
+            // everywhere in it, or script-style Lua would error on every use.
+            if reference.kind.is_write()
+                || semantic.is_defined_global(reference)
+                || tree.name(reference.name) == "_"
+                || tree.is_assigned_global(reference.name)
+            {
+                continue;
+            }
+            let name = tree.name(reference.name);
+            context.diagnostic(
                 Finding::new(format!("undefined variable `{name}`"), reference.span)
-                    .with_help("declare it with `local`, or add it to `extra_globals`")
-            })
-            .collect()
+                    .with_help("declare it with `local`, or add it to `extra_globals`"),
+            );
+        }
     }
 }
 

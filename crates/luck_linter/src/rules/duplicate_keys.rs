@@ -1,13 +1,14 @@
 use core::fmt;
 
-use luck_ast::{Expression, Field, GetSpan as _, TableConstructor};
-use luck_token::{LuaVersion, Span};
-use luck_value::{ConstantEvaluation as _, ConstantValue};
+use luck_ast::{AstKind, AstType, Expression, Field, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
+use luck_token::Span;
+use luck_value::{ConstantEvaluation as _, ConstantValue, ValueContext};
 use rustc_hash::FxHashMap;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DuplicateKeys;
@@ -20,29 +21,27 @@ impl_rule!(
     "table constructor has duplicate keys"
 );
 
-impl NodeRule for DuplicateKeys {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::TableConstructor])
+impl RuleRunner for DuplicateKeys {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::TableConstructor])
     }
-    fn on_table(
-        &self,
-        table: &TableConstructor<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let version = context.semantic.version();
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::TableConstructor(table) = node.kind() else {
+            return;
+        };
         let mut first_spans: FxHashMap<Key<'_>, Span> = FxHashMap::default();
         for field in &table.fields {
             let keyed = match field {
                 Field::Named { name, .. } => Some((Key::String(name.text.as_bytes()), name.span)),
-                Field::Bracketed { key, .. } => table_key(key, version).map(|k| (k, key.span())),
+                Field::Bracketed { key, .. } => table_key(key, context).map(|k| (k, key.span())),
                 Field::Positional(_) => None,
             };
             let Some((key, span)) = keyed else {
                 continue;
             };
             if let Some(&first_span) = first_spans.get(&key) {
-                findings.push(
+                context.diagnostic(
                     Finding::new(format!("duplicate key `{key}` in table constructor"), span)
                         .with_label(first_span, "first defined here"),
                 );
@@ -76,8 +75,8 @@ impl fmt::Display for Key<'_> {
 /// The string or number key `expr` evaluates to. Values compare, so
 /// `["\97"]` and `["a"]` set one key, and so do `[1]`, `[1.0]`, and `[0x1]`,
 /// and `[0]` and `[-0]`. NaN is no key: setting it raises.
-fn table_key<'ast>(expr: &Expression<'ast>, version: LuaVersion) -> Option<Key<'ast>> {
-    match expr.evaluate_value(&version)? {
+fn table_key<'ast>(expr: &Expression<'ast>, context: &dyn ValueContext) -> Option<Key<'ast>> {
+    match expr.evaluate_value(context)? {
         ConstantValue::String(bytes) => Some(Key::String(bytes)),
         ConstantValue::Number(number) => {
             let float = number.to_f64();
@@ -92,6 +91,8 @@ fn table_key<'ast>(expr: &Expression<'ast>, version: LuaVersion) -> Option<Key<'
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;

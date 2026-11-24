@@ -572,8 +572,6 @@ where
     // too small for a deep file.
     let _already_built = ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global();
     let thread_count = rayon::current_num_threads();
-    // A worker waiting on a file's own parallel lint can steal another file,
-    // which takes an arena of its own, so the pool can grow past this.
     let pool = AllocatorPool::new(thread_count);
     // A smaller window leaves threads idle behind a slow file, and a larger
     // one gains nothing.

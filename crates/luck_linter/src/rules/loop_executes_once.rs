@@ -1,11 +1,10 @@
-use luck_ast::{Block, GetSpan as _, Statement};
-use rustc_hash::FxHashMap;
+use luck_ast::{AstKind, AstType};
+use luck_semantic::{AstNode, AstTypesBitset};
 
-use crate::cfg::{Exit, Exits, FlowGraph};
+use crate::cfg::Exit;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::nodes::NodeKind;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags loops whose body `break`s, `return`s, or `error`s on every path, so
 /// it runs at most once. Such a loop was usually meant to be an `if` or a
@@ -21,82 +20,54 @@ impl_rule!(
     "loop body always exits on the first iteration"
 );
 
-impl WholeRule for LoopExecutesOnce {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let loop_types = NodeTypeSet::from_types(&[
-            NodeType::WhileLoop,
-            NodeType::RepeatLoop,
-            NodeType::NumericFor,
-            NodeType::GenericFor,
-        ]);
-        if !context.nodes.contains_any(loop_types) {
-            return Vec::new();
-        }
-        // The exits of each loop inside one already analyzed, whose graph
-        // held theirs, by where the loop starts.
-        let mut nested_exits: FxHashMap<u32, Exits> = FxHashMap::default();
-        let mut findings = Vec::new();
-        for node in context.nodes.as_slice() {
-            let NodeKind::Statement(stmt) = node.kind else {
-                continue;
-            };
-            let Some((body, kind)) = loop_body(stmt) else {
-                continue;
-            };
-            let span = stmt.span();
-            let exits = nested_exits.remove(&span.start).unwrap_or_else(|| {
-                let graph = FlowGraph::of_block(body, context.semantic);
-                nested_exits.extend(graph.loop_exits());
-                graph.exits()
-            });
-            if exits.reaches(Exit::End) {
-                continue;
-            }
-            let can_return = exits.reaches(Exit::ReturnValue) || exits.reaches(Exit::ReturnEmpty);
-            let label = match (can_return, exits.reaches(Exit::Break), exits.reaches(Exit::Error)) {
-                (true, false, _) => "always returns",
-                (false, true, false) => "always breaks",
-                // A body stuck in an inner infinite loop reaches no exit, and
-                // never starts another iteration either.
-                (false, false, _) => "always errors",
-                (true, true, _) | (false, true, true) => "always exits",
-            };
-            findings.push(
-                Finding::new(
-                    format!("{kind} loop body {label}, so the loop executes at most once"),
-                    span,
-                )
-                .with_help("if a single execution is intended, use a `do ... end` block"),
-            );
-        }
-        findings
+/// A loop's body is part of its function's graph, which knows each loop's
+/// exits.
+impl RuleRunner for LoopExecutesOnce {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[
+            AstType::WhileLoop,
+            AstType::RepeatLoop,
+            AstType::NumericFor,
+            AstType::GenericFor,
+        ])
     }
-}
 
-fn loop_body<'ast>(stmt: &'ast Statement<'ast>) -> Option<(&'ast Block<'ast>, &'static str)> {
-    match stmt {
-        Statement::WhileLoop(node) => Some((&node.block, "`while`")),
-        Statement::RepeatLoop(node) => Some((&node.block, "`repeat`")),
-        Statement::NumericFor(node) => Some((&node.block, "numeric `for`")),
-        Statement::GenericFor(node) => Some((&node.block, "generic `for`")),
-        Statement::Assignment(_)
-        | Statement::FunctionCall(_)
-        | Statement::DoBlock(_)
-        | Statement::IfStatement(_)
-        | Statement::FunctionDecl(_)
-        | Statement::LocalFunction(_)
-        | Statement::LocalAssignment(_)
-        | Statement::Return(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalDeclaration(_)
-        | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_)
-        | Statement::Break(_)
-        | Statement::Continue(_)
-        | Statement::CompoundAssignment(_)
-        | Statement::TypeDeclaration(_)
-        | Statement::Error(_) => None,
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let kind = node.kind();
+        let (span, loop_name) = if let AstKind::WhileLoop(while_loop) = kind {
+            (while_loop.span, "`while`")
+        } else if let AstKind::RepeatLoop(repeat_loop) = kind {
+            (repeat_loop.span, "`repeat`")
+        } else if let AstKind::NumericFor(numeric_for) = kind {
+            (numeric_for.span, "numeric `for`")
+        } else if let AstKind::GenericFor(generic_for) = kind {
+            (generic_for.span, "generic `for`")
+        } else {
+            return;
+        };
+        let Some(exits) = context.cfg(node.scope()).and_then(|graph| graph.loop_exits(span.start))
+        else {
+            return;
+        };
+        if exits.reaches(Exit::End) {
+            return;
+        }
+        let can_return = exits.reaches(Exit::ReturnValue) || exits.reaches(Exit::ReturnEmpty);
+        let label = match (can_return, exits.reaches(Exit::Break), exits.reaches(Exit::Error)) {
+            (true, false, _) => "always returns",
+            (false, true, false) => "always breaks",
+            // A body stuck in an inner infinite loop reaches no exit, and
+            // never starts another iteration either.
+            (false, false, _) => "always errors",
+            (true, true, _) | (false, true, true) => "always exits",
+        };
+        context.diagnostic(
+            Finding::new(
+                format!("{loop_name} loop body {label}, so the loop executes at most once"),
+                span,
+            )
+            .with_help("if a single execution is intended, use a `do ... end` block"),
+        );
     }
 }
 

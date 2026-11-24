@@ -30,10 +30,10 @@ pub const MAX_NESTING_DEPTH: usize = 2001;
 /// line tables only. A main thread starts with the platform's stack, 1 MiB
 /// on Windows, and a spawned Rust thread with 2 MiB, so give this to every
 /// thread that parses, prints, formats, minifies, analyzes, lints, or
-/// bundles, with `std::thread::Builder::stack_size`. The linter runs a large
-/// file's rules on rayon's pool, and `luck_bundler` reads modules there, so
-/// build that with `ThreadPoolBuilder::stack_size` too. `luck_lsp` starts its
-/// own workers with it.
+/// bundles, with `std::thread::Builder::stack_size`. `luck_bundler` reads
+/// modules on rayon's pool, so build that with
+/// `ThreadPoolBuilder::stack_size` too. `luck_lsp` starts its own workers
+/// with it.
 ///
 /// A stack is reserved address space, and a thread takes memory only for the
 /// pages it touches.

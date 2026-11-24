@@ -1,8 +1,8 @@
-//! `AstKind`, a reference to any node, and `AstType`, which kind it is: one
-//! variant for each struct that derives `Ast`. Ported from oxc's
-//! `generators/ast_kind.rs`.
+//! `AstKind`, a reference to any node, `AstType`, which kind it is, one
+//! variant for each struct that derives `Ast`, and `AST_TYPE_MAX`. Ported
+//! from oxc's `generators/ast_kind.rs`.
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Literal, TokenStream};
 use quote::{format_ident, quote};
 
 use crate::output::{doc, line_break};
@@ -27,11 +27,17 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
     let imports = schema
         .imports(nodes.iter().map(|type_def| type_def.name.as_str()).chain(["GetSpan", "Span"]));
     let separator = line_break();
+    let ast_type_max =
+        Literal::u8_unsuffixed(u8::try_from(nodes.len().saturating_sub(1)).unwrap_or(u8::MAX));
+    let max_doc = doc("The largest discriminant of an [`AstType`].");
     let type_doc = doc("Which kind of node an [`AstKind`] refers to.");
     let kind_doc = doc("A reference to a node: a value of a struct that derives `Ast`, which \
          [`Visit::enter_node`](crate::Visit::enter_node) is handed.");
     quote! {
         #imports
+        #max_doc
+        pub const AST_TYPE_MAX: u8 = #ast_type_max;
+        #separator
         #type_doc
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         #[repr(u8)]

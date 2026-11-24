@@ -1,12 +1,24 @@
 use core::slice;
 
 use luck_ast::{
-    Call, Expression, FunctionArgs, GetSpan as _, Name, StringLiteral, Suffix, TableConstructor,
-    is_multi_value,
+    Call, Expression, FunctionArgs, GetSpan as _, Name, StringLiteral, Suffix, SuffixedExpression,
+    TableConstructor, is_multi_value,
 };
 use luck_stdlib::SemanticAnalysis;
-use luck_token::{LuaVersion, Span};
-use luck_value::ToBoolean as _;
+use luck_token::Span;
+use luck_value::{ToBoolean as _, ValueContext};
+
+/// Each call in `chain`, first to last, with the index of its suffix, which
+/// [`ChainCallees::callee`](luck_stdlib::ChainCallees::callee) takes.
+pub(crate) fn calls_in<'ast>(
+    chain: &'ast SuffixedExpression<'ast>,
+) -> impl Iterator<Item = (usize, Call<'ast>)> {
+    chain
+        .suffixes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, suffix)| Some((index, Call::new(chain.head(index), suffix)?)))
+}
 
 /// Whether `call` is a plain `name(...)` call to the host's global `name`. A
 /// method call, or a `name` the chunk shadows or rebinds, is user code.
@@ -64,9 +76,9 @@ impl<'ast> CallArg<'ast> {
     }
 
     /// Whether the argument's value is truthy, when that's known.
-    pub(crate) fn to_boolean(self, version: LuaVersion) -> Option<bool> {
+    pub(crate) fn to_boolean(self, context: &dyn ValueContext) -> Option<bool> {
         match self {
-            Self::Expr(expr) => expr.to_boolean(&version),
+            Self::Expr(expr) => expr.to_boolean(context),
             Self::String(_) | Self::Table(_) => Some(true),
         }
     }

@@ -29,10 +29,10 @@ struct HostGlobal {
 /// `chunk`'s semantic, read against the stdlib of `target`, the dialect
 /// `chunk` was parsed as, and beside it the checker's errors.
 ///
-/// The semantic holds the node table, which the shapes read, and the
-/// `require` sites, and its tables are sized from `counts`, the parse's or
-/// the default. For Luau, it's the same whether or not the target is Roblox,
-/// which only adds the Roblox runtime's stdlib.
+/// The semantic holds every part: the checker's errors, the node table,
+/// which the shapes read, and the `require` sites. Its tables are sized from
+/// `counts`, the parse's or the default. For Luau, it's the same whether or
+/// not the target is Roblox, which only adds the Roblox runtime's stdlib.
 #[must_use]
 pub fn analyze<'ast>(
     chunk: &'ast Chunk<'ast>,

@@ -1,14 +1,16 @@
-use luck_ast::{Call, Expression, StringLiteral};
-use luck_token::{LuaVersion, Span, index_to_offset};
+use luck_ast::{AstKind, AstType, Call, Expression, StringLiteral};
+use luck_semantic::{AstNode, AstTypesBitset};
+use luck_token::{Span, index_to_offset};
+use luck_value::ValueContext;
 
-use crate::call::{CallArg, CallArgs, dotted_callee};
+use crate::call::{CallArg, CallArgs, calls_in, dotted_callee};
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::format_pattern::{
     PatternError, validate_format, validate_gsub_replacement, validate_lua_pattern,
     validate_os_date, validate_pack_format,
 };
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Both `string.format("...", ...)` and `("..."):format(...)` are checked.
 /// So are literal `string.gsub` replacements and `os.date` formats.
@@ -23,21 +25,32 @@ impl_rule!(
     "malformed format, pattern, pack, or date literal, or wrong argument count"
 );
 
-impl NodeRule for FormatString {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
+impl RuleRunner for FormatString {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let CallSite { call, callee: Some(_), .. } = *site else {
+
+    /// Only a call that reaches the stdlib's function is checked, so a
+    /// shadowed `string` isn't.
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        let semantic = context.semantic;
-        let Some(dsl) = DslKind::of_call(call) else {
-            return;
-        };
-        findings.extend(check_dsl_literal(call, dsl, semantic.version()));
-        if dsl == DslKind::Gsub {
-            findings.extend(check_gsub_replacement(call, semantic.version()));
+        for (index, call) in calls_in(chain) {
+            let Some(dsl) = DslKind::of_call(call) else {
+                continue;
+            };
+            if context.callee(node, index).is_none() {
+                continue;
+            }
+            if let Some(finding) = check_dsl_literal(call, dsl, context) {
+                context.diagnostic(finding);
+            }
+            if dsl == DslKind::Gsub
+                && let Some(finding) = check_gsub_replacement(call, context)
+            {
+                context.diagnostic(finding);
+            }
         }
     }
 }
@@ -113,10 +126,11 @@ fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&StringLiteral<'_>, Call
     Some((literal, args))
 }
 
-fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Option<Finding> {
+fn check_dsl_literal(call: Call<'_>, dsl: DslKind, context: &dyn ValueContext) -> Option<Finding> {
+    let version = context.version();
     let (literal, trailing_args) = dsl_literal(call, dsl)?;
     let body = literal.as_str()?;
-    if dsl == DslKind::Find && is_plain_find(body, trailing_args.clone(), version) {
+    if dsl == DslKind::Find && is_plain_find(body, trailing_args.clone(), context) {
         return None;
     }
     // The argument count each specifier or value option asks for. Pattern
@@ -144,12 +158,16 @@ fn check_dsl_literal(call: Call<'_>, dsl: DslKind, version: LuaVersion) -> Optio
 ///
 /// `str_find_aux` also searches plainly when the pattern has no character
 /// from `SPECIALS`, which is what lets a lone `)` through.
-fn is_plain_find(pattern: &str, mut after_pattern: CallArgs<'_>, version: LuaVersion) -> bool {
+fn is_plain_find(
+    pattern: &str,
+    mut after_pattern: CallArgs<'_>,
+    context: &dyn ValueContext,
+) -> bool {
     let is_maybe_plain = match (after_pattern.next(), after_pattern.next()) {
         (None, _) => false,
         // A call or `...` here can expand over `init` and `plain`.
         (Some(init), None) => init.is_multi_value(),
-        (Some(_), Some(plain)) => plain.to_boolean(version) != Some(false),
+        (Some(_), Some(plain)) => plain.to_boolean(context) != Some(false),
     };
     is_maybe_plain || !pattern.contains(['^', '$', '*', '+', '?', '.', '(', '[', '%', '-'])
 }
@@ -169,7 +187,7 @@ fn check_arg_count(mut args: CallArgs<'_>, literal_span: Span, expected: usize) 
 }
 
 /// Capture indices are only checked when the pattern is a valid literal too.
-fn check_gsub_replacement(call: Call<'_>, version: LuaVersion) -> Option<Finding> {
+fn check_gsub_replacement(call: Call<'_>, context: &dyn ValueContext) -> Option<Finding> {
     let pattern_index = usize::from(call.method.is_none());
     let mut args = CallArgs::new(call.args);
     let pattern = args.nth(pattern_index).and_then(CallArg::string_literal);
@@ -177,7 +195,7 @@ fn check_gsub_replacement(call: Call<'_>, version: LuaVersion) -> Option<Finding
     let replacement_body = replacement.as_str()?;
     let capture_count =
         pattern.and_then(StringLiteral::as_str).and_then(|body| validate_lua_pattern(body).ok());
-    validate_gsub_replacement(replacement_body, capture_count, version)
+    validate_gsub_replacement(replacement_body, capture_count, context.version())
         .err()
         .map(|e| literal_error(e, replacement, replacement_body, "replacement"))
 }
@@ -211,6 +229,8 @@ fn literal_error(
 
 #[cfg(test)]
 mod tests {
+    use luck_token::LuaVersion;
+
     use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;

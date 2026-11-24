@@ -1,5 +1,7 @@
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::local_flow::is_field_write_prefix;
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Luacheck 321: a local declared without a value is read where no assignment
 /// can have reached it.
@@ -19,27 +21,25 @@ impl_rule!(
     "local is read before any value is assigned to it"
 );
 
-impl WholeRule for AccessingUninitialized {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scoping();
-        context
-            .local_flow()
-            .first_unassigned_uses
-            .iter()
-            .filter_map(|&(symbol_id, reference_id)| {
-                let first = tree.reference(reference_id);
-                (!context.nodes.uninitialized_locals().is_field_write_prefix(first)).then(|| {
-                    Finding::new(
-                        format!(
-                            "`{}` is read before any value is assigned, so it is `nil`",
-                            tree.name(tree.symbol(symbol_id).name)
-                        ),
-                        first.span,
-                    )
-                    .with_help("initialize at declaration or assign before reading")
-                })
-            })
-            .collect()
+impl RuleRunner for AccessingUninitialized {
+    fn run_once(&self, context: &LintContext<'_>) {
+        let tree = context.scoping();
+        for &(symbol_id, reference_id) in &context.local_flow().first_unassigned_uses {
+            let first = tree.reference(reference_id);
+            if is_field_write_prefix(first, context) {
+                continue;
+            }
+            context.diagnostic(
+                Finding::new(
+                    format!(
+                        "`{}` is read before any value is assigned, so it is `nil`",
+                        tree.name(tree.symbol(symbol_id).name)
+                    ),
+                    first.span,
+                )
+                .with_help("initialize at declaration or assign before reading"),
+            );
+        }
     }
 }
 

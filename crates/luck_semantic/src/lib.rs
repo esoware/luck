@@ -18,10 +18,12 @@
 //!
 //! - [`SemanticBuilder::with_check`] reports the errors Lua rejects a chunk
 //!   for at compile time beyond its grammar, such as a write to a `<const>`
-//!   local or a `goto` no label takes.
+//!   local, a `goto` no label takes, or a function with more locals than its
+//!   compiler holds.
 //! - [`SemanticBuilder::with_nodes`] builds [`AstNodes`], every node of the
 //!   tree in source preorder with its parent and scope, which symbols,
-//!   references, labels, and scopes point into by [`NodeId`], and in which
+//!   references, labels, and scopes point into by [`NodeId`], which knows
+//!   the [`AstTypesBitset`] of the node types it holds, and in which
 //!   [`AstNodes::node_at`] finds the innermost node at an offset.
 //! - [`SemanticBuilder::with_requires`] finds every [`RequireSite`], a call
 //!   of the host's `require`.
@@ -55,6 +57,7 @@
     )
 )]
 
+mod ast_types_bitset;
 mod builder;
 mod checker;
 #[cfg(test)]
@@ -65,6 +68,7 @@ mod node;
 mod scoping;
 mod semantic;
 
+pub use ast_types_bitset::AstTypesBitset;
 pub use builder::{SemanticBuilder, SemanticBuilderReturn};
 pub use id::{LabelId, NameId, NodeId, ReferenceId, ScopeId, SymbolId};
 pub use node::{AstNode, AstNodes};

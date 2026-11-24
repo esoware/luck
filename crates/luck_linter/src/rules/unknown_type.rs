@@ -1,12 +1,13 @@
-use luck_ast::{Call, Expression, StringLiteral};
+use luck_ast::{AstKind, AstType, Call, Expression, StringLiteral};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::SemanticAnalysis;
 use luck_token::{BinOp, LuaVersion};
 
 use crate::binary::operator_pairs;
 use crate::call::{CallArgs, is_global_call};
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 use crate::suggest::closest;
 
 #[derive(Debug, Clone, Copy)]
@@ -20,17 +21,13 @@ impl_rule!(
     "`type()` or `typeof()` result compared against an unknown type name"
 );
 
-impl NodeRule for UnknownType {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp])
+impl RuleRunner for UnknownType {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::BinaryOp])
     }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Expression::BinaryOp(run) = expr else {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::BinaryOp(run) = node.kind() else {
             return;
         };
         if !run.links.first().op.is_comparison() {
@@ -41,18 +38,13 @@ impl NodeRule for UnknownType {
                 && let (Some(lhs), Some(rhs)) = (pair.lhs, pair.rhs)
                 && let Some((callee, literal)) = classify_comparison(lhs, rhs, context.semantic)
             {
-                check_literal(callee, literal, context, findings);
+                check_literal(callee, literal, context);
             }
         }
     }
 }
 
-fn check_literal(
-    callee: &str,
-    literal: &StringLiteral<'_>,
-    context: &LintContext<'_>,
-    findings: &mut Vec<Finding>,
-) {
+fn check_literal(callee: &str, literal: &StringLiteral<'_>, context: &LintContext<'_>) {
     let Some(name) = literal.as_str() else {
         return;
     };
@@ -76,7 +68,7 @@ fn check_literal(
     if let Some(primitive) = suggestion {
         finding = finding.with_help(format!("did you mean `{primitive}`?"));
     }
-    findings.push(finding);
+    context.diagnostic(finding);
 }
 
 fn classify_comparison<'ast>(

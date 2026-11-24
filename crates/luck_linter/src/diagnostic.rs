@@ -5,8 +5,9 @@ use luck_diagnostics::{Diagnostic, Label, Severity, Tag};
 use luck_token::Span;
 use memchr::memmem;
 
+use crate::context::ContextHost;
 use crate::fix::{Fix, FixKind, RuleFixer};
-use crate::rule::{LintContext, Rule};
+use crate::rule::Rule;
 
 /// A group of lint rules, which `categories` sets the level of together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -137,7 +138,7 @@ impl Finding {
     #[must_use]
     pub(crate) fn with_fix<Build, Built>(
         mut self,
-        context: &LintContext<'_>,
+        context: &ContextHost<'_>,
         kind: FixKind,
         build: Build,
     ) -> Self
@@ -161,7 +162,7 @@ impl Finding {
     #[must_use]
     pub(crate) fn with_directive_fix<Build>(
         mut self,
-        context: &LintContext<'_>,
+        context: &ContextHost<'_>,
         build: Build,
     ) -> Self
     where
@@ -190,7 +191,7 @@ impl Finding {
 
 /// Whether each edit's replacement holds, in order, every comment in the
 /// span it replaces.
-fn keeps_comments(fix: &Fix, context: &LintContext<'_>) -> bool {
+fn keeps_comments(fix: &Fix, context: &ContextHost<'_>) -> bool {
     fix.edits.iter().all(|edit| {
         let mut unmatched: &[u8] = &edit.replacement;
         for comment in context.comments_within(edit.span) {

@@ -1,5 +1,6 @@
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Outside Roblox, `shared` is an ordinary name.
 #[derive(Debug, Clone, Copy)]
@@ -13,25 +14,25 @@ impl_rule!(
     "use of the global environment tables `_G` or `shared`"
 );
 
-impl WholeRule for GlobalUsage {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+impl RuleRunner for GlobalUsage {
+    fn run_once(&self, context: &LintContext<'_>) {
         let is_roblox = context.semantic.target().is_roblox();
-        let tree = context.semantic.scoping();
-        tree.global_references()
-            .filter(|reference| match tree.name(reference.name) {
+        let tree = context.scoping();
+        for reference in tree.global_references() {
+            let name = tree.name(reference.name);
+            let is_environment = match name {
                 "_G" => true,
                 // Roblox.
                 "shared" => is_roblox,
                 _ => false,
-            })
-            .map(|reference| {
-                Finding::new(
-                    format!("global environment `{}` used", tree.name(reference.name)),
-                    reference.span,
-                )
-                .with_help("prefer a module or an explicitly passed dependency")
-            })
-            .collect()
+            };
+            if is_environment {
+                context.diagnostic(
+                    Finding::new(format!("global environment `{name}` used"), reference.span)
+                        .with_help("prefer a module or an explicitly passed dependency"),
+                );
+            }
+        }
     }
 }
 

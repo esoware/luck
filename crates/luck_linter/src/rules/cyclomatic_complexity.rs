@@ -1,10 +1,10 @@
-use luck_ast::{Expression, Statement};
+use luck_semantic::{AstNode, AstTypesBitset};
 
 use crate::cfg::decision_points;
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
-use crate::node_type::NodeTypeSet;
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CyclomaticComplexity;
@@ -18,50 +18,46 @@ impl_rule!(
     "function exceeds the configured cyclomatic complexity threshold"
 );
 
-impl NodeRule for CyclomaticComplexity {
-    fn node_types(&self) -> NodeTypeSet {
+impl RuleRunner for CyclomaticComplexity {
+    fn node_types(&self) -> AstTypesBitset {
         FunctionNode::NODE_TYPES
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        findings.extend(
-            FunctionNode::of_stmt(stmt).and_then(|function| check_function(function, context)),
-        );
-    }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        findings.extend(
-            FunctionNode::of_expr(expr).and_then(|function| check_function(function, context)),
-        );
-    }
-}
 
-fn check_function(function: FunctionNode<'_>, context: &LintContext<'_>) -> Option<Finding> {
-    let threshold = context.config.rules.cyclomatic_complexity.as_ref()?.options()?.max;
-    // McCabe: one straight-line path plus one per decision point.
-    let complexity = decision_points(&function.body.block).saturating_add(1);
-    (complexity > threshold).then(|| {
+    fn should_run(&self, host: &ContextHost<'_>) -> bool {
+        threshold(host).is_some()
+    }
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let (Some(threshold), Some(function)) =
+            (threshold(context), FunctionNode::of(node, context.nodes))
+        else {
+            return;
+        };
+        // McCabe: one straight-line path plus one per decision point.
+        let complexity = decision_points(&function.body.block).saturating_add(1);
+        if complexity <= threshold {
+            return;
+        }
         // Slice the name from source so `mod.f` and `a.b:c` appear whole.
         let label = function.name_span.map_or_else(
             || "(anonymous)".to_owned(),
             |name_span| format!("`{}`", String::from_utf8_lossy(name_span.text(context.source))),
         );
-        Finding::new(
-            format!(
-                "function {label} has cyclomatic complexity {complexity} (threshold: {threshold})"
-            ),
-            function.span,
-        )
-        .with_help("split this function into smaller helpers")
-    })
+        context.diagnostic(
+            Finding::new(
+                format!(
+                    "function {label} has cyclomatic complexity {complexity} (threshold: {threshold})"
+                ),
+                function.span,
+            )
+            .with_help("split this function into smaller helpers"),
+        );
+    }
+}
+
+/// The configured threshold. With none, the rule checks nothing.
+fn threshold(host: &ContextHost<'_>) -> Option<u32> {
+    Some(host.config.rules.cyclomatic_complexity.as_ref()?.options()?.max)
 }
 
 #[cfg(test)]

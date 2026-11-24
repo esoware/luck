@@ -1,10 +1,10 @@
 gen_full_lua54.lua:
   file size: 376750 # 376.75 kB
-  sys allocs: 498
-  sys reallocs: 14
-  sys deallocs: 498
-  sys alloc bytes: 3234500 # 3.23 MB
-  sys peak growth: 3189880 # 3.19 MB
+  sys allocs: 32
+  sys reallocs: 23
+  sys deallocs: 32
+  sys alloc bytes: 3264760 # 3.26 MB
+  sys peak growth: 3255864 # 3.26 MB
   arena allocs: 0
   arena reallocs: 0
   arena size: 2275872 # 2.28 MB
@@ -22,9 +22,9 @@ gen_full_luau.luau:
 
 idiomatic.lua:
   file size: 2124 # 2.12 kB
-  sys allocs: 20
-  sys reallocs: 3
-  sys deallocs: 20
+  sys allocs: 25
+  sys reallocs: 4
+  sys deallocs: 25
   sys alloc bytes: 21188 # 21.19 kB
   sys peak growth: 21188 # 21.19 kB
   arena allocs: 0

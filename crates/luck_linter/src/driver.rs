@@ -1,18 +1,35 @@
+use alloc::rc::Rc;
+use core::cell::RefCell;
+
 use luck_allocator::Allocator;
+use luck_ast::{AST_TYPE_MAX, AstType};
 use luck_diagnostics::{Diagnostic, Severity};
 use luck_parser::ParseResult;
+use luck_semantic::AstTypesBitset;
 use luck_stdlib::SemanticAnalysis;
 use luck_token::{LintVerb, LuaTarget};
-use rayon::prelude::*;
 
-use crate::bus;
 use crate::config::{LintConfig, RuleLevel};
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::{Category, Finding, Message};
 use crate::directives::Directives;
 use crate::fix::FixKind;
-use crate::nodes::Nodes;
-use crate::rule::{LintContext, NodeRule, Rule, WholeRule};
+use crate::rule::{Rule, RuleRunner};
 use crate::rules::{RULES, RuleEntry};
+
+/// How many nodes the pass hands its rules between asking whether the lint
+/// was cancelled.
+const NODES_PER_CANCEL_CHECK: usize = 1024;
+
+#[expect(clippy::as_conversions, reason = "a const has no other way to widen a `u8`")]
+const AST_TYPE_COUNT: usize = (AST_TYPE_MAX as usize).saturating_add(1);
+
+thread_local! {
+    /// For each type of node, the rules that run on it. Kept per thread and
+    /// reused across files, so a pass allocates no buckets.
+    static RULE_BUCKETS: RefCell<Box<[Vec<usize>; AST_TYPE_COUNT]>> =
+        RefCell::new(Box::new([const { Vec::new() }; AST_TYPE_COUNT]));
+}
 
 /// Parses `source` into `allocator` and lints it for `target`, whose stdlib
 /// decides which globals exist. A diagnostic carries a fix only of the kinds
@@ -39,7 +56,7 @@ pub fn lint(
 /// A parse with errors yields its errors, each an E008, and no rules run, so
 /// neither config nor a directive turns one off. So does a clean parse of a
 /// chunk Lua refuses to compile, with the errors semantic analysis finds, such
-/// as a write to a `<const>` local.
+/// as a write to a `<const>` local or more locals than a function holds.
 ///
 /// # Panics
 ///
@@ -63,12 +80,12 @@ pub fn lint_parsed(
 /// must be the one `analysis` was built with.
 ///
 /// A parse with errors, or an analysis with errors, yields them, as
-/// [`lint_parsed`] does. `is_cancelled` is asked between rules and between runs of nodes, and once
-/// it says so, the lint stops and returns `None`.
+/// [`lint_parsed`] does. `is_cancelled` is asked between rules and between
+/// runs of nodes, and once it says so, the lint stops and returns `None`.
 ///
 /// # Panics
 ///
-/// In debug builds, when a rule's `node_types()` omits a type its hooks act
+/// In debug builds, when a rule's `node_types()` omits a type its `run` acts
 /// on, or when a rule offers a fix of a kind its `fix_kind()` leaves out.
 #[must_use]
 pub fn lint_analyzed(
@@ -76,7 +93,7 @@ pub fn lint_analyzed(
     analysis: &Analysis<'_>,
     config: &LintConfig,
     fixes: FixKind,
-    is_cancelled: &(dyn Fn() -> bool + Sync),
+    is_cancelled: &dyn Fn() -> bool,
 ) -> Option<Vec<Message>> {
     if !parse.errors.is_empty() {
         return Some(error_messages(&parse.errors));
@@ -84,18 +101,18 @@ pub fn lint_analyzed(
     if !analysis.errors.is_empty() {
         return Some(error_messages(&analysis.errors));
     }
-    let mut messages = run_rules(&LintContext::new(parse, analysis, config, fixes), is_cancelled)?;
+    let host = ContextHost::new(parse, analysis, config, fixes);
+    let mut messages = run_rules(&Rc::new(host), is_cancelled)?;
     messages.sort_by_key(|message| message.span().start);
     Some(messages)
 }
 
-/// A parse's semantic analysis and the compile-time errors it found, the
-/// linter's table of its nodes, and its lint directives.
+/// A parse's semantic analysis, with the compile-time errors it found, and
+/// its lint directives.
 #[derive(Debug)]
 pub struct Analysis<'ast> {
     semantic: SemanticAnalysis<'ast>,
     errors: Vec<Diagnostic>,
-    nodes: Nodes<'ast>,
     directives: Directives,
 }
 
@@ -105,10 +122,6 @@ impl<'ast> Analysis<'ast> {
         &self.semantic
     }
 
-    pub(crate) const fn nodes(&self) -> &Nodes<'ast> {
-        &self.nodes
-    }
-
     pub(crate) const fn directives(&self) -> &Directives {
         &self.directives
     }
@@ -116,10 +129,6 @@ impl<'ast> Analysis<'ast> {
 
 /// `parse`'s analysis for `target`, the dialect it was parsed as, with
 /// `config`'s extra globals defined.
-///
-/// Every rule reads the node table, so a file where neither config nor a
-/// `deny` or `warn` runs a rule, as under the language server's default
-/// config, gets an empty one and skips building it.
 #[must_use]
 pub fn analyze<'ast>(
     parse: &'ast ParseResult<'_>,
@@ -129,106 +138,68 @@ pub fn analyze<'ast>(
     let chunk = &parse.chunk;
     let mut directives = Directives::new(&parse.comments, parse.source);
     let (mut semantic, errors) = luck_stdlib::analyze(chunk, parse.counts, target);
-    let nodes = if RULES.iter().enumerate().any(|(slot, entry)| {
-        rule_severity(entry.rule(), config).is_some() || directives.enables(slot)
-    }) {
-        Nodes::collect(chunk)
-    } else {
-        Nodes::default()
-    };
-    directives.cover_statements(&nodes, parse.source, chunk.version);
+    directives.cover_statements(semantic.semantic().nodes(), parse.source, chunk.version);
     semantic.add_extra_globals(config.extra_globals.iter().map(String::as_str));
-    Analysis { semantic, errors, nodes, directives }
+    Analysis { semantic, errors, directives }
 }
 
 fn error_messages(errors: &[Diagnostic]) -> Vec<Message> {
     errors.iter().map(|error| Message { diagnostic: error.clone(), fix: None }).collect()
 }
 
-/// Node rules share one bus pass while whole-tree rules run beside it, on
-/// the rayon pool for a file large enough to gain from it. A rule runs where
-/// config turns it on, or where a `deny` or `warn` names it.
+/// Runs the rules config turns on, or a `deny` or `warn` names.
+///
+/// They run together in one pass over the node table, as oxlint runs them. A
+/// rule is skipped where it says it can't report, and where the file holds
+/// none of the node types it runs on.
 ///
 /// Results go back into registry order, so the caller's stable sort breaks
-/// ties the way a sequential run would. A node rule is skipped when none of
-/// its node types occur in this file.
+/// ties the same way on every run.
 ///
-/// `None` once `is_cancelled` says so, which it's asked before each
-/// whole-tree rule, between runs of nodes, and before `unused_lint_filter`,
-/// so a stopped lint never passes for a whole one.
-fn run_rules(
-    context: &LintContext<'_>,
-    is_cancelled: &(dyn Fn() -> bool + Sync),
-) -> Option<Vec<Message>> {
-    let (config, directives, nodes) = (context.config, context.directives, context.nodes);
+/// `None` once `is_cancelled` says so, which it's asked before each rule's
+/// `run_once`, between runs of nodes, and before `unused_lint_filter`, so a
+/// stopped lint never passes for a whole one.
+fn run_rules(host: &Rc<ContextHost<'_>>, is_cancelled: &dyn Fn() -> bool) -> Option<Vec<Message>> {
+    let (config, directives) = (host.config, host.directives);
     let severities: Vec<Option<Severity>> =
         RULES.iter().map(|entry| rule_severity(entry.rule(), config)).collect();
     let runs =
         |slot: usize| severities.get(slot).copied().flatten().is_some() || directives.enables(slot);
-    let mut whole_rules: Vec<(usize, &dyn WholeRule)> = Vec::new();
-    let mut node_slots: Vec<usize> = Vec::new();
-    let mut node_rules: Vec<&dyn NodeRule> = Vec::new();
+    let mut slots: Vec<usize> = Vec::new();
+    let mut rules: Vec<&dyn RuleRunner> = Vec::new();
     let mut unused_lint_filter = None;
     #[cfg(debug_assertions)]
-    let mut skipped_node_rules: Vec<&dyn NodeRule> = Vec::new();
+    let mut skipped_rules: Vec<&dyn RuleRunner> = Vec::new();
     for (slot, entry) in RULES.iter().enumerate() {
         if !runs(slot) {
             continue;
         }
         match *entry {
-            RuleEntry::Whole(rule) => whole_rules.push((slot, rule)),
-            RuleEntry::Node(rule) => {
-                if !nodes.contains_any(rule.node_types()) {
-                    #[cfg(debug_assertions)]
-                    skipped_node_rules.push(rule);
+            RuleEntry::Rule(rule) => {
+                if !rule.should_run(host) {
                     continue;
                 }
-                node_slots.push(slot);
-                node_rules.push(rule);
+                let node_types = rule.node_types();
+                if node_types != AstTypesBitset::new() && !host.nodes.contains_any(node_types) {
+                    #[cfg(debug_assertions)]
+                    skipped_rules.push(rule);
+                    continue;
+                }
+                slots.push(slot);
+                rules.push(rule);
             }
             RuleEntry::UnusedLintFilter(rule) => unused_lint_filter = Some((slot, rule)),
         }
     }
 
-    let check_whole = |&(slot, rule): &(usize, &dyn WholeRule)| {
-        (!is_cancelled()).then(|| (slot, rule.check(context)))
-    };
-    let ast_nodes = nodes.as_slice();
-    let (bus_results, whole_rule_results): (_, Option<Vec<_>>) =
-        if ast_nodes.len() < bus::MIN_PARALLEL_NODES {
-            (
-                bus::run(&node_rules, ast_nodes, context, is_cancelled),
-                whole_rules.iter().map(check_whole).collect(),
-            )
-        } else {
-            rayon::join(
-                || bus::run_in_parallel(&node_rules, ast_nodes, context, is_cancelled),
-                || whole_rules.par_iter().map(check_whole).collect(),
-            )
-        };
-    let (node_results, whole_results) = (bus_results?, whole_rule_results?);
+    let findings = execute(&rules, host, is_cancelled)?;
 
     #[cfg(debug_assertions)]
-    bus::assert_dispatch_is_pure(
-        &node_rules,
-        &skipped_node_rules,
-        &node_results,
-        ast_nodes,
-        context,
-    );
-
-    let mut findings_by_slot = vec![Vec::new(); RULES.len()];
-    for (slot, rule_findings) in
-        whole_results.into_iter().chain(node_slots.into_iter().zip(node_results))
-    {
-        if let Some(slot_findings) = findings_by_slot.get_mut(slot) {
-            *slot_findings = rule_findings;
-        }
-    }
+    assert_dispatch_is_pure(&rules, &skipped_rules, &findings, host);
 
     let mut used = vec![false; directives.entries().len()];
-    let mut messages = Vec::with_capacity(findings_by_slot.iter().map(Vec::len).sum());
-    for (slot, rule_findings) in findings_by_slot.into_iter().enumerate() {
+    let mut messages = Vec::with_capacity(findings.iter().map(Vec::len).sum());
+    for (slot, rule_findings) in slots.into_iter().zip(findings) {
         if !rule_findings.is_empty() {
             let severity = severities.get(slot).copied().flatten();
             report(slot, rule_findings, severity, directives, Some(&mut used), &mut messages);
@@ -240,11 +211,112 @@ fn run_rules(
         if is_cancelled() {
             return None;
         }
-        let rule_findings = rule.check(context, &used, runs);
+        let rule_findings = rule.check(host, &used, runs);
         let severity = severities.get(slot).copied().flatten();
         report(slot, rule_findings, severity, directives, None, &mut messages);
     }
     Some(messages)
+}
+
+/// Each rule's findings, in the order it reported them, or `None` once
+/// `is_cancelled` says so.
+///
+/// Each rule's `run_once` runs first, and then one pass over the node table
+/// hands each node to the rules that run on its type.
+pub(crate) fn execute(
+    rules: &[&dyn RuleRunner],
+    host: &Rc<ContextHost<'_>>,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Option<Vec<Vec<Finding>>> {
+    let contexts: Vec<LintContext<'_>> =
+        rules.iter().map(|_| LintContext::new(Rc::clone(host))).collect();
+    let is_finished = RULE_BUCKETS.with_borrow_mut(|buckets| {
+        for bucket in buckets.iter_mut() {
+            bucket.clear();
+        }
+        for (slot, rule) in rules.iter().enumerate() {
+            for ty in rule.node_types().indices() {
+                if let Some(bucket) = buckets.get_mut(ty) {
+                    bucket.push(slot);
+                }
+            }
+        }
+        for (rule, context) in rules.iter().zip(&contexts) {
+            if is_cancelled() {
+                return false;
+            }
+            rule.run_once(context);
+        }
+        for (i, node) in host.nodes.iter().enumerate() {
+            if i.is_multiple_of(NODES_PER_CANCEL_CHECK) && is_cancelled() {
+                return false;
+            }
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "hot loop; every bucket and rule index is in bounds by construction"
+            )]
+            for &slot in &buckets[bucket_of(node.kind().ty())] {
+                rules[slot].run(node, &contexts[slot]);
+            }
+        }
+        true
+    });
+    is_finished.then(|| contexts.into_iter().map(LintContext::into_findings).collect())
+}
+
+#[expect(clippy::as_conversions, reason = "a type's discriminant is its bucket")]
+const fn bucket_of(ty: AstType) -> usize {
+    ty as usize
+}
+
+/// Re-runs every rule on every node and checks that bucketed dispatch and
+/// the per-file skipping changed nothing, as oxlint's debug builds do.
+///
+/// # Panics
+///
+/// On a mismatch, which means a rule's `node_types()` misses a type its `run`
+/// acts on.
+#[cfg(debug_assertions)]
+fn assert_dispatch_is_pure(
+    rules: &[&dyn RuleRunner],
+    skipped_rules: &[&dyn RuleRunner],
+    findings: &[Vec<Finding>],
+    host: &Rc<ContextHost<'_>>,
+) {
+    for ((rule, bucketed), reference) in
+        rules.iter().zip(findings).zip(run_on_every_node(rules, host))
+    {
+        assert_eq!(
+            bucketed,
+            &reference,
+            "rule `{}`: bucketed dispatch diverged from every-node dispatch; \
+             its `node_types()` declaration is missing a type",
+            rule.name()
+        );
+    }
+    for (rule, reference) in skipped_rules.iter().zip(run_on_every_node(skipped_rules, host)) {
+        assert!(
+            reference.is_empty(),
+            "rule `{}` was skipped for this file but produces findings; \
+             its `node_types()` declaration is missing a type",
+            rule.name()
+        );
+    }
+}
+
+#[cfg(debug_assertions)]
+fn run_on_every_node(rules: &[&dyn RuleRunner], host: &Rc<ContextHost<'_>>) -> Vec<Vec<Finding>> {
+    rules
+        .iter()
+        .map(|rule| {
+            let context = LintContext::new(Rc::clone(host));
+            rule.run_once(&context);
+            for node in host.nodes.iter() {
+                rule.run(node, &context);
+            }
+            context.into_findings()
+        })
+        .collect()
 }
 
 /// Makes the findings of the rule at `slot` its messages.
@@ -321,26 +393,6 @@ mod tests {
     }
 
     #[test]
-    fn a_config_that_runs_no_rule_builds_no_node_table() {
-        let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, b"local x = nil print(x)", LuaVersion::Lua54);
-        let silent = silent();
-        let unlinted = analyze(&parse, LuaTarget::Lua54, &silent);
-        assert!(unlinted.nodes().as_slice().is_empty());
-        assert_eq!(
-            lint_analyzed(&parse, &unlinted, &silent, FixKind::all(), &|| false),
-            Some(Vec::new())
-        );
-        let mut one_rule = silent;
-        one_rule.rules.set_level("redundant_nil_init", RuleLevel::Warn);
-        let linted = analyze(&parse, LuaTarget::Lua54, &one_rule);
-        assert!(!linted.nodes().as_slice().is_empty());
-        let diags = lint_analyzed(&parse, &linted, &one_rule, FixKind::all(), &|| false)
-            .expect("nothing cancels it");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
     fn a_deny_runs_its_rule_where_config_runs_none() {
         let allocator = Allocator::new();
         let source = "\
@@ -350,7 +402,6 @@ print(x, y)";
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let silent = silent();
         let analysis = analyze(&parse, LuaTarget::Lua54, &silent);
-        assert!(!analysis.nodes().as_slice().is_empty());
         let diags = lint_analyzed(&parse, &analysis, &silent, FixKind::empty(), &|| false)
             .expect("nothing cancels it");
         let found: Vec<(&str, u32, Severity)> =
@@ -398,5 +449,19 @@ print(x)";
         let cancels_last = || answered.fetch_add(1, Ordering::Relaxed).saturating_add(1) == asked;
         let stopped = lint_analyzed(&parse, &analysis, &config, FixKind::empty(), &cancels_last);
         assert_eq!(stopped, None, "diagnostics missing the unused `allow` would pass for whole");
+    }
+
+    #[test]
+    fn a_rule_runs_only_where_the_file_holds_a_node_it_runs_on() {
+        let allocator = Allocator::new();
+        let mut config = silent();
+        config.rules.set_level("compare_nan", RuleLevel::Warn);
+        for (source, expected) in [("print(1)", 0), ("print(x == 0/0)", 1)] {
+            let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+            let analysis = analyze(&parse, LuaTarget::Lua54, &config);
+            let diags = lint_analyzed(&parse, &analysis, &config, FixKind::empty(), &|| false)
+                .expect("nothing cancels it");
+            assert_eq!(diags.len(), expected, "{source}: {diags:?}");
+        }
     }
 }

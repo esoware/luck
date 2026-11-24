@@ -1,11 +1,11 @@
-use luck_ast::{Call, GetSpan as _};
+use luck_ast::{AstKind, AstType, Call, GetSpan as _};
 use luck_diagnostics::Tag;
-use luck_stdlib::SemanticAnalysis;
+use luck_semantic::{AstNode, AstTypesBitset};
 
-use crate::call::{CallArgs, is_global_call};
+use crate::call::{CallArgs, calls_in, is_global_call};
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnnecessaryAssert;
@@ -18,21 +18,28 @@ impl_rule!(
     "`assert` on a constant value always passes or always errors"
 );
 
-impl NodeRule for UnnecessaryAssert {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
+impl RuleRunner for UnnecessaryAssert {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let call = site.call;
-        findings.extend(check_call(call, context.semantic));
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        for (_, call) in calls_in(chain) {
+            if let Some(finding) = check_call(call, context) {
+                context.diagnostic(finding);
+            }
+        }
     }
 }
 
-fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding> {
-    if !is_global_call(call, "assert", semantic) {
+fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
+    if !is_global_call(call, "assert", context.semantic) {
         return None;
     }
-    let is_truthy = CallArgs::new(call.args).next()?.to_boolean(semantic.version())?;
+    let is_truthy = CallArgs::new(call.args).next()?.to_boolean(context)?;
     let finding = if is_truthy {
         Finding::new("`assert` on a constant value always passes", call.span())
             .with_tag(Tag::Unnecessary)

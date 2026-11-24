@@ -29,5 +29,4 @@ luck_semantic        = { workspace = true }
 
 humansize     = { workspace = true }
 mimalloc-safe = { workspace = true }
-rayon         = { workspace = true }
 saphyr        = { workspace = true }

@@ -1,10 +1,13 @@
-use luck_ast::Expression;
+use core::ptr;
+
+use luck_ast::{AstKind, AstType, BinaryOp, Expression, UnaryOp};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::{BinOp, Span, UnOp};
 
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnnecessaryNegation;
@@ -18,17 +21,13 @@ impl_rule!(
     Fix
 );
 
-impl NodeRule for UnnecessaryNegation {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::UnaryOp])
+impl RuleRunner for UnnecessaryNegation {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::UnaryOp])
     }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Expression::UnaryOp(unary) = expr else {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::UnaryOp(unary) = node.kind() else {
             return;
         };
         if unary.op != UnOp::Not {
@@ -56,7 +55,7 @@ impl NodeRule for UnnecessaryNegation {
         // `not (a == b)`. Flipping `<` or `<=` changes the result for NaN
         // and can call a different metamethod.
         let is_equality = matches!(last.op, BinOp::Eq | BinOp::Ne);
-        findings.push(
+        context.diagnostic(
             Finding::new(
                 format!(
                     "negated comparison, consider `{} {op_text} {}`",
@@ -66,15 +65,11 @@ impl NodeRule for UnnecessaryNegation {
                 unary.span,
             )
             .with_fix(context, FixKind::Fix, |fixer| {
-                // This node can't see its parent, and a bare comparison could
-                // regroup with a neighboring `..`, arithmetic, or comparison
-                // operator, so it takes parentheses unless the `not` already
-                // sits in some.
                 let inverted = [lhs, b" ", op_text.as_bytes(), b" ", rhs].concat();
-                let replacement = if context.groupings.around(unary.span).is_some() {
-                    inverted
-                } else {
+                let replacement = if needs_parentheses(node, unary, context) {
                     [&b"("[..], &inverted, b")"].concat()
+                } else {
+                    inverted
                 };
                 is_equality.then(|| {
                     fixer.replace("invert the comparison operator", unary.span, replacement)
@@ -82,6 +77,44 @@ impl NodeRule for UnnecessaryNegation {
             }),
         );
     }
+}
+
+/// Whether a comparison written where `node`, the `not` `unary`, stands
+/// would group with what's beside it.
+///
+/// It would as an operand of an operator that binds tighter than `and` and
+/// `or`, of a unary operator, or of a cast, or as a chain's prefix.
+/// An operand's neighbors are its run's operators, and a run is never
+/// followed or preceded by one that binds tighter, or that one would have
+/// taken the operand.
+fn needs_parentheses(node: &AstNode<'_>, unary: &UnaryOp<'_>, context: &ContextHost<'_>) -> bool {
+    if context.groupings.around(unary.span).is_some() {
+        return false;
+    }
+    let nodes = context.nodes;
+    let Some(parent) = nodes.parent_node(node.id()) else {
+        return false;
+    };
+    let binds_tighter_than_and_or =
+        |run: &BinaryOp<'_>| !matches!(run.links.first().op, BinOp::And | BinOp::Or);
+    let kind = parent.kind();
+    if let AstKind::BinaryOp(run) = kind {
+        return binds_tighter_than_and_or(run);
+    }
+    if let AstKind::BinaryLink(_) = kind {
+        return nodes
+            .parent_kind(parent.id())
+            .and_then(AstKind::as_binary_op)
+            .is_some_and(binds_tighter_than_and_or);
+    }
+    if let AstKind::SuffixedExpression(chain) = kind {
+        return matches!(
+            &chain.prefix,
+            Expression::UnaryOp(prefix) if ptr::eq(&raw const **prefix, unary)
+        );
+    }
+    // Luau: a cast's operand.
+    matches!(kind, AstKind::UnaryOp(_) | AstKind::TypeCast(_))
 }
 
 /// The comparison that holds exactly when `op` doesn't, NaN aside.
@@ -180,7 +213,7 @@ mod tests {
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local r = (a ~= b)");
+        assert_eq!(fixed, "local r = a ~= b");
     }
 
     #[test]
@@ -189,16 +222,20 @@ mod tests {
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local r = (x.y == f(1))");
+        assert_eq!(fixed, "local r = x.y == f(1)");
     }
 
     #[test]
-    fn flags_and_fixes_keeping_one_pair_of_parentheses() {
+    fn flags_and_fixes_with_parentheses_only_where_the_comparison_would_regroup() {
         for (source, expected) in [
             ("local r = (not (a == b))", "local r = (a ~= b)"),
             ("local r = not (not (a == b))", "local r = not (a ~= b)"),
-            ("local r = not (a == (b == c))", "local r = (a ~= (b == c))"),
-            ("local r = not ((a == b) == c)", "local r = ((a == b) ~= c)"),
+            ("local r = not (a == (b == c))", "local r = a ~= (b == c)"),
+            ("local r = not ((a == b) == c)", "local r = (a == b) ~= c"),
+            ("local r = x and not (a == b)", "local r = x and a ~= b"),
+            ("local r = not (a == b) == c", "local r = (a ~= b) == c"),
+            ("local r = c == not (a == b)", "local r = c == (a ~= b)"),
+            ("local r = x .. not (a == b)", "local r = x .. (a ~= b)"),
         ] {
             let diags = run(source);
             assert_eq!(diags.len(), 1, "{source}: {diags:?}");
@@ -219,6 +256,6 @@ mod tests {
         let diags = run(source);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local r = (f(--[[why]] a) ~= b)");
+        assert_eq!(fixed, "local r = f(--[[why]] a) ~= b");
     }
 }

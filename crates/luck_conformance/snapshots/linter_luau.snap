@@ -1,6 +1,6 @@
 linter_luau Summary:
 Files Linted   : 55/55
-Diagnostics    : 16663
+Diagnostics    : 16666
  12790 no_implicit_globals
    765 multiple_statements_per_line
    513 shadowing
@@ -38,6 +38,7 @@ Diagnostics    : 16663
      4 table_operations
      3 parenthesized_conditions
      3 redundant_return
+     3 unreachable_code
      2 format_string
      2 manual_table_clone
      2 reversed_for_loop
@@ -3777,6 +3778,7 @@ luau-0.740/calls.luau
 83:10 no_implicit_globals: global variable `err_on_n` used
 84:16 no_implicit_globals: global variable `error` used
 84:25 undefined_variable: undefined variable `exit`
+84:25 unreachable_code: unreachable code
 84:25 multiple_statements_per_line: statement starts on the same line as the previous statement
 84:25 no_implicit_globals: global variable `exit` used
 85:8 no_implicit_globals: global variable `err_on_n` used
@@ -6104,6 +6106,7 @@ luau-0.740/debugger.luau
 87:13 no_implicit_globals: global variable `tostring` used
 87:22 undefined_variable: undefined variable `game`
 87:22 no_implicit_globals: global variable `game` used
+89:3 unreachable_code: unreachable code
 89:9 unused_variable: unused variable `a1`
 89:13 unused_variable: unused variable `a2`
 89:17 unused_variable: unused variable `a3`
@@ -10718,6 +10721,7 @@ luau-0.740/native.luau
 17:1 no_implicit_globals: global variable `assert` used
 23:13 no_implicit_globals: global variable `math` used
 28:16 unused_variable: unused function `fuzzfail1`
+32:3 unreachable_code: unreachable code
 32:3 loop_executes_once: generic `for` loop body always returns, so the loop executes at most once
 33:5 empty_block: empty numeric `for` loop body
 33:9 unused_loop_variable: unused loop variable `l0`

@@ -1,8 +1,9 @@
 use luck_diagnostics::Tag;
 use luck_semantic::SymbolKind;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags a local that's assigned after its declaration but never read
 /// (Luacheck 231).
@@ -21,10 +22,9 @@ impl_rule!(
     "local is written to but its value is never read"
 );
 
-impl WholeRule for SetButNeverRead {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scoping();
-        let mut findings = Vec::new();
+impl RuleRunner for SetButNeverRead {
+    fn run_once(&self, context: &LintContext<'_>) {
+        let tree = context.scoping();
 
         for symbol in tree.symbols() {
             if symbol.kind != SymbolKind::Local {
@@ -52,7 +52,7 @@ impl WholeRule for SetButNeverRead {
                 continue;
             }
 
-            findings.push(
+            context.diagnostic(
                 Finding::new(
                     format!("value assigned to `{name}` is never read"),
                     symbol.definition_span,
@@ -61,8 +61,6 @@ impl WholeRule for SetButNeverRead {
                 .with_help("remove the assignment or use the value somewhere"),
             );
         }
-
-        findings
     }
 }
 

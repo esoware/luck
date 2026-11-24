@@ -1,9 +1,10 @@
-use luck_ast::GetSpan as _;
+use luck_ast::{AstKind, AstType, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::{ResolvedCallee, StdlibEntry};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MustUse;
@@ -16,21 +17,25 @@ impl_rule!(
     "return value of a must-use function is discarded"
 );
 
-impl NodeRule for MustUse {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt])
+/// A call statement drops the results of its chain's last call.
+impl RuleRunner for MustUse {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_call(
-        &self,
-        site: &CallSite<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let CallSite { call, position, callee } = *site;
-        if position == CallPosition::Statement
-            && let Some(name) = callee.and_then(must_use_name)
-        {
-            findings.push(
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        if !context.is_statement(node) {
+            return;
+        }
+        let Some(call) = chain.last_call() else {
+            return;
+        };
+        let last = chain.suffixes.len().saturating_sub(1);
+        if let Some(name) = context.callee(node, last).and_then(must_use_name) {
+            context.diagnostic(
                 Finding::new(format!("return value of `{name}` is discarded"), call.span())
                     .with_help("assign the result or remove the call"),
             );

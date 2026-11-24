@@ -1,10 +1,12 @@
-use luck_ast::Call;
-
-use crate::call::{CallArgs, is_global_call};
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
+/// Checks each `require` site semantic analysis finds by its module path.
+///
+/// The path's value counts, however it's spelled. A computed path like
+/// `require(x .. y)` can't be checked, and a call of a `require` the chunk
+/// shadows or rebinds loads nothing the chunk can know of.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RestrictedModulePaths;
 
@@ -16,35 +18,31 @@ impl_rule!(
     "`require` of a module listed in `restricted_module_paths`"
 );
 
-impl NodeRule for RestrictedModulePaths {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
+impl RuleRunner for RestrictedModulePaths {
+    fn should_run(&self, host: &ContextHost<'_>) -> bool {
+        restricted_paths(host).is_some_and(|paths| !paths.is_empty())
     }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let call = site.call;
-        findings.extend(check_call(call, context));
+
+    fn run_once(&self, context: &LintContext<'_>) {
+        let Some(paths) = restricted_paths(context) else {
+            return;
+        };
+        for literal in context.semantic.semantic().requires().iter().filter_map(|site| site.path) {
+            let Some(path) = literal.as_str() else {
+                continue;
+            };
+            if let Some(pattern) = paths.iter().find(|pattern| path_matches(path, pattern)) {
+                context.diagnostic(
+                    Finding::new(format!("`require` of restricted module `{path}`"), literal.span)
+                        .with_help(format!("`{pattern}` is listed in `restricted_module_paths`")),
+                );
+            }
+        }
     }
 }
 
-fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
-    let restricted_paths = &context.config.rules.restricted_module_paths.as_ref()?.options()?.paths;
-    if restricted_paths.is_empty() {
-        return None;
-    }
-    // `obj:require(...)` and a shadowed `require` are user functions, not
-    // the loader.
-    if !is_global_call(call, "require", context.semantic) {
-        return None;
-    }
-    // A computed path like `require(x .. y)` can't be checked, and a literal
-    // one is checked by its value, however it's spelled.
-    let literal = CallArgs::new(call.args).next()?.string_literal()?;
-    let path = literal.as_str()?;
-    let pattern = restricted_paths.iter().find(|pattern| path_matches(path, pattern))?;
-    Some(
-        Finding::new(format!("`require` of restricted module `{path}`"), literal.span)
-            .with_help(format!("`{pattern}` is listed in `restricted_module_paths`")),
-    )
+fn restricted_paths<'host>(host: &'host ContextHost<'_>) -> Option<&'host [String]> {
+    Some(&host.config.rules.restricted_module_paths.as_ref()?.options()?.paths)
 }
 
 /// Exact match, except that a pattern ending in `.*` matches the module and
@@ -98,6 +96,14 @@ mod tests {
         // `require"x"` parses as a single-string-arg call (no parens).
         let diags = run("require\"forbidden.lib\"", vec!["forbidden.lib".to_owned()]);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_a_require_through_the_global_table() {
+        for source in ["_G.require(\"forbidden.lib\")", "_ENV[\"require\"](\"forbidden.lib\")"] {
+            let diags = run(source, vec!["forbidden.lib".to_owned()]);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+        }
     }
 
     #[test]

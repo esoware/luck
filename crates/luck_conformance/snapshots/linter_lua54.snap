@@ -1,6 +1,6 @@
 linter_lua54 Summary:
 Files Linted   : 31/31
-Diagnostics    : 10898
+Diagnostics    : 10910
   6942 no_implicit_globals
   1239 shadowing
    562 multiple_statements_per_line
@@ -28,6 +28,7 @@ Diagnostics    : 10898
     15 redundant_nil_init
     14 loop_executes_once
     13 duplicate_function
+    12 unreachable_code
     11 deprecated
      8 parenthesized_conditions
      6 string_index_to_field
@@ -2006,6 +2007,7 @@ lua-5.4.9-tests/calls.lua
 89:1 no_implicit_globals: global variable `print` used
 92:16 no_implicit_globals: global variable `error` used
 92:25 undefined_variable: undefined variable `exit`
+92:25 unreachable_code: unreachable code
 92:25 multiple_statements_per_line: statement starts on the same line as the previous statement
 92:25 no_implicit_globals: global variable `exit` used
 93:24 undefined_variable: undefined variable `exit`
@@ -2376,6 +2378,7 @@ lua-5.4.9-tests/closure.lua
 201:31 shadowing: variable `t` shadows outer variable
 201:38 multiple_statements_per_line: statement starts on the same line as the previous statement
 201:45 multiple_statements_per_line: statement starts on the same line as the previous statement
+204:5 unreachable_code: unreachable code
 204:5 no_implicit_globals: global variable `error` used
 206:11 shadowing: variable `y` shadows outer variable
 207:22 shadowing: variable `x` shadows outer variable
@@ -2385,12 +2388,14 @@ lua-5.4.9-tests/closure.lua
 209:11 shadowing: variable `t` shadows outer variable
 211:13 multiple_statements_per_line: statement starts on the same line as the previous statement
 211:23 multiple_statements_per_line: statement starts on the same line as the previous statement
+212:5 unreachable_code: unreachable code
 212:5 no_implicit_globals: global variable `error` used
 214:11 shadowing: variable `y` shadows outer variable
 215:19 shadowing: variable `x` shadows outer variable
 215:28 shadowing: variable `t` shadows outer variable
 215:35 multiple_statements_per_line: statement starts on the same line as the previous statement
 215:42 multiple_statements_per_line: statement starts on the same line as the previous statement
+217:5 unreachable_code: unreachable code
 217:5 no_implicit_globals: global variable `error` used
 222:5 shadowing: variable `i` shadows outer variable
 223:3 no_implicit_globals: global variable `assert` used
@@ -6949,12 +6954,15 @@ lua-5.4.9-tests/goto.lua
 68:3 no_implicit_globals: global variable `assert` used
 68:10 no_implicit_globals: global variable `assert` used
 68:17 no_implicit_globals: global variable `load` used
+75:3 unreachable_code: unreachable code
 80:1 loop_executes_once: `while` loop body always breaks, so the loop executes at most once
+82:3 unreachable_code: unreachable code
 84:9 unused_variable: unused variable `x`
 84:9 shadowing: variable `x` shadows outer variable
 87:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 87:8 no_implicit_globals: global variable `assert` used
 89:4 no_implicit_globals: global variable `print` used
+91:3 unreachable_code: unreachable code
 91:3 no_implicit_globals: global variable `error` used
 93:9 unused_variable: unused variable `x`
 93:9 shadowing: variable `x` shadows outer variable
@@ -6981,6 +6989,7 @@ lua-5.4.9-tests/goto.lua
 127:3 no_implicit_globals: global variable `assert` used
 132:3 merge_adjacent_locals: adjacent `local` declarations can be merged
 144:3 no_implicit_globals: global variable `assert` used
+149:3 unreachable_code: unreachable code
 149:9 multiple_statements_per_line: statement starts on the same line as the previous statement
 150:9 multiple_statements_per_line: statement starts on the same line as the previous statement
 151:9 multiple_statements_per_line: statement starts on the same line as the previous statement
@@ -7005,13 +7014,17 @@ lua-5.4.9-tests/goto.lua
 209:3 no_implicit_globals: global variable `assert` used
 215:5 no_implicit_globals: global variable `assert` used
 223:23 shadowing: variable `a` shadows outer variable
+226:5 unreachable_code: unreachable code
 226:5 no_implicit_globals: global variable `error` used
+231:5 unreachable_code: unreachable code
 231:5 no_implicit_globals: global variable `error` used
 232:12 multiple_statements_per_line: statement starts on the same line as the previous statement
 235:13 multiple_statements_per_line: statement starts on the same line as the previous statement
 235:24 multiple_statements_per_line: statement starts on the same line as the previous statement
+236:5 unreachable_code: unreachable code
 236:5 no_implicit_globals: global variable `error` used
 237:12 multiple_statements_per_line: statement starts on the same line as the previous statement
+238:5 unreachable_code: unreachable code
 238:5 no_implicit_globals: global variable `error` used
 242:10 multiple_statements_per_line: statement starts on the same line as the previous statement
 243:10 multiple_statements_per_line: statement starts on the same line as the previous statement

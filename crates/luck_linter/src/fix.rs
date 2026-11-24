@@ -374,7 +374,7 @@ return a, b"
         // overlaps it, and the outer one applies in the second.
         let config = enable(&["unnecessary_negation"]);
         let source = "return not (a == (not (b == c)))";
-        assert_eq!(fixed_within(source, &config, 3), Ok("return (a ~= (b ~= c))".to_owned()));
+        assert_eq!(fixed_within(source, &config, 3), Ok("return a ~= (b ~= c)".to_owned()));
         assert_eq!(
             fixed_within(source, &config, 2),
             Err(FixError::BudgetExhausted { rounds: 2 }),

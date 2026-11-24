@@ -1,54 +1,54 @@
 gen_full_lua54.lua:
   file size: 376750 # 376.75 kB
-  sys allocs: 44093
-  sys reallocs: 8682
-  sys deallocs: 44093
-  sys alloc bytes: 14129171 # 14.13 MB
-  sys peak growth: 8958296 # 8.96 MB
+  sys allocs: 41526
+  sys reallocs: 6002
+  sys deallocs: 41526
+  sys alloc bytes: 12617096 # 12.62 MB
+  sys peak growth: 9405752 # 9.41 MB
   arena allocs: 0
   arena reallocs: 0
   arena size: 2275872 # 2.28 MB
 
 gen_full_luau.luau:
   file size: 441060 # 441.06 kB
-  sys allocs: 46573
-  sys reallocs: 8535
-  sys deallocs: 46573
-  sys alloc bytes: 15350870 # 15.35 MB
-  sys peak growth: 10256540 # 10.26 MB
+  sys allocs: 45503
+  sys reallocs: 6162
+  sys deallocs: 45503
+  sys alloc bytes: 13719545 # 13.72 MB
+  sys peak growth: 10525787 # 10.53 MB
   arena allocs: 0
   arena reallocs: 0
   arena size: 2662696 # 2.66 MB
 
 idiomatic.lua:
   file size: 2124 # 2.12 kB
-  sys allocs: 189
-  sys reallocs: 97
-  sys deallocs: 189
-  sys alloc bytes: 57603 # 57.60 kB
-  sys peak growth: 40199 # 40.20 kB
+  sys allocs: 204
+  sys reallocs: 79
+  sys deallocs: 204
+  sys alloc bytes: 52110 # 52.11 kB
+  sys peak growth: 44369 # 44.37 kB
   arena allocs: 0
   arena reallocs: 0
   arena size: 12176 # 12.18 kB
 
 infinite_yield.luau:
   file size: 482971 # 482.97 kB
-  sys allocs: 37879
-  sys reallocs: 8393
-  sys deallocs: 37879
-  sys alloc bytes: 17583969 # 17.58 MB
-  sys peak growth: 14049790 # 14.05 MB
+  sys allocs: 37630
+  sys reallocs: 6123
+  sys deallocs: 37630
+  sys alloc bytes: 14314897 # 14.31 MB
+  sys peak growth: 12201607 # 12.20 MB
   arena allocs: 0
   arena reallocs: 0
   arena size: 3532400 # 3.53 MB
 
 obfuscated_vm.luau:
   file size: 2290215 # 2.29 MB
-  sys allocs: 2925
-  sys reallocs: 584
-  sys deallocs: 2925
-  sys alloc bytes: 5802452 # 5.80 MB
-  sys peak growth: 5057140 # 5.06 MB
+  sys allocs: 2865
+  sys reallocs: 317
+  sys deallocs: 2865
+  sys alloc bytes: 2115900 # 2.12 MB
+  sys peak growth: 1746228 # 1.75 MB
   arena allocs: 0
   arena reallocs: 0
   arena size: 638512 # 638.51 kB

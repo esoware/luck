@@ -1,10 +1,12 @@
-use luck_ast::{Call, Expression, FunctionBody, GetSpan as _, Statement};
-use luck_semantic::Scoping;
-use rustc_hash::FxHashMap;
+use core::ptr;
 
-use crate::call::{CallArg, CallArgs};
+use luck_ast::{AstKind, AstType, Call, Expression, FunctionBody, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset, Symbol};
+
+use crate::call::{CallArg, CallArgs, calls_in};
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MismatchedArgCount;
@@ -17,114 +19,78 @@ impl_rule!(
     "call passes more arguments than the called function accepts"
 );
 
-impl WholeRule for MismatchedArgCount {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let signatures = function_signatures(context);
-        if signatures.is_empty() {
-            return Vec::new();
-        }
-        let tree = context.semantic.scoping();
-        context
-            .nodes
-            .as_slice()
-            .iter()
-            .filter_map(|node| check_call(node.call()?, tree, &signatures))
-            .collect()
+impl RuleRunner for MismatchedArgCount {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-}
 
-#[derive(Clone, Copy)]
-struct FunctionSignature {
-    param_count: usize,
-    has_vararg: bool,
-}
-
-impl FunctionSignature {
-    fn of(body: &FunctionBody<'_>) -> Self {
-        Self { param_count: body.params.len(), has_vararg: body.vararg.is_some() }
-    }
-}
-
-/// Each local bound to a function literal, by where its name starts, with
-/// that function's signature.
-fn function_signatures(context: &LintContext<'_>) -> FxHashMap<u32, FunctionSignature> {
-    let mut signatures = FxHashMap::default();
-    for block in context.nodes.blocks() {
-        for stmt in &block.stmts {
-            match stmt {
-                Statement::LocalFunction(local_function) => {
-                    let signature = FunctionSignature::of(&local_function.body);
-                    signatures.insert(local_function.name.span.start, signature);
-                }
-                Statement::LocalAssignment(local) => {
-                    for (attributed, value) in local.names.iter().zip(&local.exprs) {
-                        if let Expression::FunctionDef(function) = value {
-                            let signature = FunctionSignature::of(&function.body);
-                            signatures.insert(attributed.name.span.start, signature);
-                        }
-                    }
-                }
-                Statement::Assignment(_)
-                | Statement::FunctionCall(_)
-                | Statement::DoBlock(_)
-                | Statement::WhileLoop(_)
-                | Statement::RepeatLoop(_)
-                | Statement::IfStatement(_)
-                | Statement::NumericFor(_)
-                | Statement::GenericFor(_)
-                | Statement::FunctionDecl(_)
-                | Statement::Return(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_)
-                | Statement::GlobalStar(_)
-                | Statement::Break(_)
-                | Statement::Continue(_)
-                | Statement::CompoundAssignment(_)
-                | Statement::TypeDeclaration(_)
-                | Statement::Error(_) => {}
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        for (_, call) in calls_in(chain) {
+            if let Some(finding) = check_call(call, context) {
+                context.diagnostic(finding);
             }
         }
     }
-    signatures
+}
+
+/// The function a local is bound to where it's declared: a `local function`,
+/// or a function literal its `local` gives it.
+fn declared_function<'ast>(
+    symbol: &Symbol,
+    context: &LintContext<'ast>,
+) -> Option<&'ast FunctionBody<'ast>> {
+    let nodes = context.nodes;
+    let declaration = nodes.kind(symbol.declaration);
+    if let AstKind::LocalFunction(local_function) = declaration {
+        return Some(&local_function.body);
+    }
+    let (AstKind::AttributedName(attributed), Some(AstKind::LocalAssignment(local))) =
+        (declaration, nodes.parent_kind(symbol.declaration))
+    else {
+        return None;
+    };
+    let position = local.names.iter().position(|name| ptr::eq(name, attributed))?;
+    let Some(Expression::FunctionDef(function)) = local.exprs.get(position) else {
+        return None;
+    };
+    Some(&function.body)
 }
 
 /// A local that's ever reassigned is left out, since it could hold any
 /// function by the time a call runs.
-fn check_call(
-    call: Call<'_>,
-    tree: &Scoping,
-    signatures: &FxHashMap<u32, FunctionSignature>,
-) -> Option<Finding> {
+fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
     if call.method.is_some() {
         return None;
     }
+    let tree = context.scoping();
     let callee = call.callee.as_name()?;
     let symbol = tree.symbol(tree.reference(tree.reference_of(callee)?).resolved?);
     if symbol.is_modified {
         return None;
     }
-    let definition_start = symbol.definition_span.start;
-    let signature = signatures.get(&definition_start)?;
-    if signature.has_vararg {
+    let body = declared_function(symbol, context)?;
+    if body.vararg.is_some() {
         return None;
     }
+    let param_count = body.params.len();
     let args = CallArgs::new(call.args);
     let arg_count = args.len();
     // A trailing call or `...` can expand to nothing, so only the args
     // before it are sure to be passed.
     let has_multi_value_tail = args.last().is_some_and(CallArg::is_multi_value);
     let guaranteed_arg_count = arg_count.saturating_sub(usize::from(has_multi_value_tail));
-    if guaranteed_arg_count <= signature.param_count {
+    if guaranteed_arg_count <= param_count {
         return None;
     }
     Some(
         Finding::new(
             format!(
                 "call passes {guaranteed_arg_count} arguments to function `{}`, \
-                 which accepts only {}",
-                callee.text, signature.param_count
+                 which accepts only {param_count}",
+                callee.text
             ),
             call.span(),
         )

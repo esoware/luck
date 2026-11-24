@@ -47,7 +47,7 @@ use self::inline_locals::Held;
 use self::remove_dead_code::{UnusedLocalAction, unused_local_action};
 use self::simplify_parens::Place;
 use crate::binding::{NameIndexes, ResolvedNames, is_droppable_function};
-use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
+use crate::limits::{GENERIC_FOR_STATE_REGISTERS, NUMERIC_FOR_STATE_REGISTERS, parameter_locals};
 use crate::transform_config::TransformConfig;
 
 /// A pass leaves another only for what its own rewrites exposed, so a
@@ -374,8 +374,9 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     self.has_changed = true;
                 }
                 let outer_registers = self.live_registers;
-                self.live_registers =
-                    self.live_registers.saturating_add(NUMERIC_FOR_STATE_LOCALS.saturating_add(1));
+                self.live_registers = self
+                    .live_registers
+                    .saturating_add(NUMERIC_FOR_STATE_REGISTERS.saturating_add(1));
                 self.walk_stmt(stmt);
                 self.live_registers = outer_registers;
                 return true;
@@ -383,7 +384,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Statement::GenericFor(generic_for) => {
                 let outer_registers = self.live_registers;
                 let loop_registers =
-                    GENERIC_FOR_STATE_LOCALS.saturating_add(generic_for.names.len());
+                    GENERIC_FOR_STATE_REGISTERS.saturating_add(generic_for.names.len());
                 self.live_registers = self.live_registers.saturating_add(loop_registers);
                 self.walk_stmt(stmt);
                 self.live_registers = outer_registers;

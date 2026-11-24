@@ -842,7 +842,6 @@ dependencies = [
  "luck_parser",
  "luck_semantic",
  "mimalloc-safe",
- "rayon",
  "saphyr",
 ]
 
@@ -1074,7 +1073,6 @@ dependencies = [
  "luck_token",
  "luck_value",
  "memchr",
- "rayon",
  "rustc-hash",
  "schemars",
  "serde",

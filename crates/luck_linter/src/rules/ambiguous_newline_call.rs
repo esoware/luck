@@ -1,9 +1,11 @@
-use luck_ast::{Call, FunctionArgs, GetSpan as _};
+use luck_ast::{AstKind, AstType, Call, FunctionArgs, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::{LuaVersion, Span, has_line_break};
 
+use crate::call::calls_in;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AmbiguousNewlineCall;
@@ -16,13 +18,20 @@ impl_rule!(
     "call arguments open on a new line, which reads ambiguously"
 );
 
-impl NodeRule for AmbiguousNewlineCall {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
+impl RuleRunner for AmbiguousNewlineCall {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let call = site.call;
-        findings.extend(check_call(call, context.source, context.semantic.version()));
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        for (_, call) in calls_in(chain) {
+            if let Some(finding) = check_call(call, context.source, context.semantic.version()) {
+                context.diagnostic(finding);
+            }
+        }
     }
 }
 

@@ -1,7 +1,8 @@
 use luck_semantic::SymbolKind;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Shadowing;
@@ -14,10 +15,9 @@ impl_rule!(
     "variable shadows an outer variable with the same name"
 );
 
-impl WholeRule for Shadowing {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scoping();
-        let mut findings = Vec::new();
+impl RuleRunner for Shadowing {
+    fn run_once(&self, context: &LintContext<'_>) {
+        let tree = context.scoping();
 
         for symbol in tree.symbols() {
             let Some(shadowed_id) = symbol.shadows else {
@@ -34,7 +34,7 @@ impl WholeRule for Shadowing {
             {
                 continue;
             }
-            findings.push(
+            context.diagnostic(
                 Finding::new(
                     format!("variable `{name}` shadows outer variable"),
                     symbol.definition_span,
@@ -45,8 +45,6 @@ impl WholeRule for Shadowing {
                 ),
             );
         }
-
-        findings
     }
 }
 

@@ -1,79 +1,54 @@
-use luck_ast::{Block, Statement};
-use luck_token::Span;
+use luck_ast::{AstKind, AstType};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EmptyBlock;
 
 impl_rule!(EmptyBlock, "empty_block", Suspicious, Warning, "block body is empty");
 
-impl NodeRule for EmptyBlock {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[
-            NodeType::IfStatement,
-            NodeType::WhileLoop,
-            NodeType::DoBlock,
-            NodeType::NumericFor,
-            NodeType::GenericFor,
-            NodeType::RepeatLoop,
+impl RuleRunner for EmptyBlock {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[
+            AstType::IfStatement,
+            AstType::ElseIfClause,
+            AstType::ElseClause,
+            AstType::WhileLoop,
+            AstType::DoBlock,
+            AstType::NumericFor,
+            AstType::GenericFor,
+            AstType::RepeatLoop,
         ])
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let (block, message, span) = match stmt {
-            Statement::IfStatement(if_stmt) => {
-                findings.extend(check_body(&if_stmt.block, "empty `if` block", if_stmt.span));
-                for clause in &if_stmt.elseif_clauses {
-                    findings.extend(check_body(&clause.block, "empty `elseif` block", clause.span));
-                }
-                if let Some(else_clause) = &if_stmt.else_clause {
-                    findings.extend(check_body(
-                        &else_clause.block,
-                        "empty `else` block",
-                        else_clause.span,
-                    ));
-                }
-                return;
-            }
-            Statement::WhileLoop(node) => (&node.block, "empty `while` loop body", node.span),
-            Statement::DoBlock(node) => (&node.block, "empty `do` block", node.span),
-            Statement::NumericFor(node) => {
-                (&node.block, "empty numeric `for` loop body", node.span)
-            }
-            Statement::GenericFor(node) => {
-                (&node.block, "empty generic `for` loop body", node.span)
-            }
-            Statement::RepeatLoop(node) => (&node.block, "empty `repeat` loop body", node.span),
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::Return(_)
-            | Statement::Break(_)
-            | Statement::Continue(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => return,
-        };
-        findings.extend(check_body(block, message, span));
-    }
-}
 
-fn check_body(block: &Block<'_>, message: &'static str, span: Span) -> Option<Finding> {
-    block.stmts.is_empty().then(|| Finding::new(message, span))
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let kind = node.kind();
+        let (block, message, span) = if let AstKind::IfStatement(if_stmt) = kind {
+            (&if_stmt.block, "empty `if` block", if_stmt.span)
+        } else if let AstKind::ElseIfClause(clause) = kind {
+            (&clause.block, "empty `elseif` block", clause.span)
+        } else if let AstKind::ElseClause(clause) = kind {
+            (&clause.block, "empty `else` block", clause.span)
+        } else if let AstKind::WhileLoop(while_loop) = kind {
+            (&while_loop.block, "empty `while` loop body", while_loop.span)
+        } else if let AstKind::DoBlock(do_block) = kind {
+            (&do_block.block, "empty `do` block", do_block.span)
+        } else if let AstKind::NumericFor(numeric_for) = kind {
+            (&numeric_for.block, "empty numeric `for` loop body", numeric_for.span)
+        } else if let AstKind::GenericFor(generic_for) = kind {
+            (&generic_for.block, "empty generic `for` loop body", generic_for.span)
+        } else if let AstKind::RepeatLoop(repeat_loop) = kind {
+            (&repeat_loop.block, "empty `repeat` loop body", repeat_loop.span)
+        } else {
+            return;
+        };
+        if block.stmts.is_empty() {
+            context.diagnostic(Finding::new(message, span));
+        }
+    }
 }
 
 #[cfg(test)]

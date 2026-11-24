@@ -16,6 +16,9 @@ use crate::{
     TypeofType, UnaryOp, UnionType, VarArgParam, VariadicType, WhileLoop,
 };
 
+/// The largest discriminant of an [`AstType`].
+pub const AST_TYPE_MAX: u8 = 60;
+
 /// Which kind of node an [`AstKind`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]

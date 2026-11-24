@@ -1,11 +1,12 @@
-use luck_ast::{Call, Expression, FunctionArgs, GetSpan as _};
+use luck_ast::{AstKind, AstType, Call, Expression, FunctionArgs, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::SemanticAnalysis;
 use luck_token::BinOp;
 
-use crate::call::is_global_call;
+use crate::call::{calls_in, is_global_call};
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags `type(x == "string")` written for `type(x) == "string"`.
 #[derive(Debug, Clone, Copy)]
@@ -19,13 +20,20 @@ impl_rule!(
     "type comparison is inside the call instead of outside"
 );
 
-impl NodeRule for TypeCheckInsideCall {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
+impl RuleRunner for TypeCheckInsideCall {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let call = site.call;
-        findings.extend(check_call(call, context.semantic));
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        for (_, call) in calls_in(chain) {
+            if let Some(finding) = check_call(call, context.semantic) {
+                context.diagnostic(finding);
+            }
+        }
     }
 }
 

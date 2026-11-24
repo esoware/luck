@@ -1,10 +1,12 @@
-use luck_ast::GetSpan as _;
+use luck_ast::{AstKind, AstType, Call, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::call::calls_in;
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::number_value;
 use crate::roblox::global_new_call;
-use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RobloxSuspiciousUdim2New;
@@ -17,36 +19,49 @@ impl_rule!(
     "`UDim2.new` called with fewer components than expected"
 );
 
-impl NodeRule for RobloxSuspiciousUdim2New {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallExpr])
+impl RuleRunner for RobloxSuspiciousUdim2New {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let CallSite { call, position, .. } = *site;
-        if position == CallPosition::Statement {
-            return;
-        }
-        let Some(args) = global_new_call(call, "UDim2", context.semantic) else {
+
+    fn should_run(&self, host: &ContextHost<'_>) -> bool {
+        host.semantic.target().is_roblox()
+    }
+
+    /// A call statement's value goes unused, so it isn't checked.
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        if args.is_empty() || args.len() >= 4 {
-            return;
+        let last = if context.is_statement(node) { chain.suffixes.len() } else { usize::MAX };
+        for (index, call) in calls_in(chain) {
+            if index.saturating_add(1) != last {
+                check_call(call, context);
+            }
         }
-        let version = context.semantic.version();
-        let values: Vec<f64> = args.iter().filter_map(|arg| number_value(arg, version)).collect();
-        if values.len() != args.len() {
-            return;
-        }
-        let is_scale_sized = values.iter().all(|v| (-1.0f64..=1.0f64).contains(v));
-        let suggestion = if is_scale_sized { "UDim2.fromScale" } else { "UDim2.fromOffset" };
-        findings.push(
-            Finding::new(
-                "`UDim2.new` takes 4 components (`xScale`, `xOffset`, `yScale`, `yOffset`)",
-                call.span(),
-            )
-            .with_help(format!("did you mean to use `{suggestion}`?")),
-        );
     }
+}
+
+fn check_call(call: Call<'_>, context: &LintContext<'_>) {
+    let Some(args) = global_new_call(call, "UDim2", context.semantic) else {
+        return;
+    };
+    if args.is_empty() || args.len() >= 4 {
+        return;
+    }
+    let values: Vec<f64> = args.iter().filter_map(|arg| number_value(arg, context)).collect();
+    if values.len() != args.len() {
+        return;
+    }
+    let is_scale_sized = values.iter().all(|v| (-1.0f64..=1.0f64).contains(v));
+    let suggestion = if is_scale_sized { "UDim2.fromScale" } else { "UDim2.fromOffset" };
+    context.diagnostic(
+        Finding::new(
+            "`UDim2.new` takes 4 components (`xScale`, `xOffset`, `yScale`, `yOffset`)",
+            call.span(),
+        )
+        .with_help(format!("did you mean to use `{suggestion}`?")),
+    );
 }
 
 #[cfg(test)]

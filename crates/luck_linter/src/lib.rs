@@ -31,10 +31,10 @@
 extern crate alloc;
 
 mod binary;
-mod bus;
 mod call;
 mod cfg;
 mod config;
+mod context;
 mod diagnostic;
 mod directives;
 mod driver;
@@ -44,15 +44,12 @@ mod fixtures;
 mod format_pattern;
 mod function_node;
 mod local_flow;
-mod node_type;
-mod nodes;
 mod number;
 mod roblox;
 mod rule;
 mod rules;
 mod suggest;
 mod underscore_fix;
-mod uninitialized;
 
 pub use config::{
     CategoryLevels, CyclomaticComplexityOptions, LintConfig, RestrictedModulePathsOptions,

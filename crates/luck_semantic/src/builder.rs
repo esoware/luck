@@ -1,20 +1,22 @@
 mod gotos;
+mod limits;
 
 use core::mem;
 
 use luck_ast::{
     Assignment, AstKind, Attribute, Block, Call, Chunk, CompoundAssignment, DoBlock, Expression,
-    FunctionArgs, FunctionBody, FunctionDecl, GenericFor, GetSpan as _, GlobalDeclaration,
-    GlobalFunction, GlobalStar, GotoStatement, IfStatement, LabelStatement, LocalAssignment,
-    LocalFunction, LocalFunctionKind, Name, NumericFor, RepeatLoop, Statement, StringLiteral,
-    Suffix, SuffixedExpression, TreeCounts, Type, TypeDeclaration, TypeDeclarationValue, Var,
-    Visit, WhileLoop,
+    FunctionArgs, FunctionBody, FunctionDecl, FunctionDef, GenericFor, GetSpan as _,
+    GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfStatement, LabelStatement,
+    LocalAssignment, LocalFunction, LocalFunctionKind, Name, NumericFor, RepeatLoop, Statement,
+    StringLiteral, Suffix, SuffixedExpression, TreeCounts, Type, TypeDeclaration,
+    TypeDeclarationValue, Var, Visit, WhileLoop,
 };
 use luck_diagnostics::Diagnostic;
 use luck_token::{LuaVersion, Span, offset_to_index};
 use rustc_hash::FxHashSet;
 
-use self::gotos::{BlockStart, FunctionGotos, Gotos, Sink};
+use self::gotos::{BlockStart, FunctionStart, Gotos, Sink};
+use self::limits::{Limits, Upvalue};
 use crate::checker::{
     assignment_to_read_only, type_function_outer_local, undeclared_global,
     until_reads_skipped_local,
@@ -73,8 +75,9 @@ impl SemanticBuilder {
     /// grammar: a write to a read-only binding, a free name no Lua 5.5
     /// `global` declaration covers, a `goto` no label takes or one that jumps
     /// into the scope of a local, a duplicate label, a Luau type function that
-    /// reads a local from outside it, and a Luau `until` that reads a local a
-    /// `continue` skips.
+    /// reads a local from outside it, a Luau `until` that reads a local a
+    /// `continue` skips, and in Lua 5.1 to 5.5, a function with more active
+    /// locals or upvalues than its compiler allows.
     ///
     /// On a tree that parsed with errors, they may only echo them.
     #[must_use]
@@ -107,6 +110,11 @@ impl SemanticBuilder {
         let mut builder = Builder {
             version: chunk.version,
             is_checking: self.is_checking,
+            limits: if self.is_checking {
+                Limits::new(chunk.version, offset_to_index(counts.declarations))
+            } else {
+                None
+            },
             scoping: Scoping::with_capacity(chunk.version, counts),
             // A chunk has about four nodes for each name.
             nodes: self.is_building_nodes.then(|| AstNodes::with_capacity(names.saturating_mul(4))),
@@ -201,6 +209,9 @@ struct OwnName<'ast> {
 struct Builder<'ast> {
     version: LuaVersion,
     is_checking: bool,
+    /// Lua 5.1 to 5.5: what counts toward each function's limits, while
+    /// checking.
+    limits: Option<Limits>,
     scoping: Scoping,
     nodes: Option<AstNodes<'ast>>,
     /// The nodes the walk is in, innermost last, while it builds the table.
@@ -345,7 +356,7 @@ impl<'ast> Builder<'ast> {
         let id = self.next_node;
         self.next_node = id.next();
         if let Some(nodes) = &mut self.nodes {
-            nodes.push(kind, self.current_scope, self.node_stack.last().copied());
+            nodes.push(id, kind, self.current_scope, self.node_stack.last().copied());
             self.node_stack.push(id);
         }
         id
@@ -414,12 +425,18 @@ impl<'ast> Builder<'ast> {
             active_vars: self.active_vars,
             gotos,
         });
+        if let Some(limits) = &mut self.limits {
+            limits.enter_scope();
+        }
     }
 
     fn pop_scope(&mut self) {
         let Some(outer) = self.outer_scopes.pop() else {
             return;
         };
+        if let Some(limits) = &mut self.limits {
+            limits.leave_scope();
+        }
         self.current_scope = outer.scope;
         self.current_function = outer.function;
         self.global_star = outer.global_star;
@@ -445,12 +462,15 @@ impl<'ast> Builder<'ast> {
         self.outer_scopes.last().map_or(0, |outer| outer.active_vars)
     }
 
+    /// Declares a local, which is a Lua 5.4+ compile-time constant when
+    /// `is_constant`.
     fn declare(
         &mut self,
         text: &str,
         span: Span,
         kind: SymbolKind,
         declaration: NodeId,
+        is_constant: bool,
     ) -> SymbolId {
         let name = self.intern(text);
         let shadows = self.binding(name).local();
@@ -461,6 +481,9 @@ impl<'ast> Builder<'ast> {
         if self.version.has_env_upvalue() && text == "_ENV" {
             self.env_name = Some(name);
         }
+        if let Some(limits) = &mut self.limits {
+            limits.local(id, span, is_constant, &mut self.diagnostics);
+        }
         id
     }
 
@@ -470,13 +493,22 @@ impl<'ast> Builder<'ast> {
         name: &Name<'_>,
         kind: SymbolKind,
         declaration: NodeId,
+        is_constant: bool,
     ) -> Option<&mut Symbol> {
         if name.text.is_empty() {
             return None;
         }
-        let id = self.declare(name.text.as_str(), name.span, kind, declaration);
+        let id = self.declare(name.text.as_str(), name.span, kind, declaration, is_constant);
         self.scoping.set_role(name.index, NameRole::Symbol(id));
         self.scoping.symbol_mut(id)
+    }
+
+    /// `count` locals no name spells, which the construct at `span` declares,
+    /// as a `for` loop's state.
+    fn hidden_locals(&mut self, count: usize, span: Span) {
+        if let Some(limits) = &mut self.limits {
+            limits.hidden(count, span, &mut self.diagnostics);
+        }
     }
 
     /// Lua 5.5: a `global` declaration of `name`, which a value assigns when
@@ -536,7 +568,7 @@ impl<'ast> Builder<'ast> {
         if kind.is_write() && resolved.is_none() && env.is_none() {
             self.scoping.mark_assigned_global(name_id);
         }
-        if let Some(symbol_id) = resolved.or(env) {
+        let captured = if let Some(symbol_id) = resolved.or(env) {
             let is_captured = self.type_depth == 0
                 && self.scoping.scope(self.scoping.symbol(symbol_id).scope).function
                     != self.current_function;
@@ -544,6 +576,14 @@ impl<'ast> Builder<'ast> {
                 symbol.is_upvalue |= is_captured;
                 symbol.is_modified |= resolved.is_some() && kind.is_write();
             }
+            is_captured.then_some(Upvalue::Symbol(symbol_id))
+        } else {
+            (self.version.has_env_upvalue() && self.type_depth == 0).then_some(Upvalue::Env)
+        };
+        if let Some(upvalue) = captured
+            && let Some(limits) = &mut self.limits
+        {
+            limits.capture(upvalue, name.span, &mut self.diagnostics);
         }
         let reference = Reference {
             span: name.span,
@@ -754,11 +794,15 @@ impl<'ast> Builder<'ast> {
     /// Luau binds the parameters, and a `local function`'s own name, after
     /// the whole signature parses, so a `typeof` in it reads the enclosing
     /// scope.
+    ///
+    /// `header` is what spells the function before its parameters, which
+    /// the checker's errors about the whole function point at.
     fn function(
         &mut self,
         body: &'ast FunctionBody<'ast>,
         own_name: Option<OwnName<'ast>>,
         is_method: bool,
+        header: Span,
     ) {
         let body_node = self.enter(AstKind::FunctionBody(body));
         if let Some(generics) = &body.generics {
@@ -789,7 +833,8 @@ impl<'ast> Builder<'ast> {
             self.visit_type(annotation);
         }
         let own_symbol = own_name.and_then(|own| {
-            let symbol = self.declare_name(own.name, SymbolKind::FunctionName, own.declaration)?;
+            let symbol =
+                self.declare_name(own.name, SymbolKind::FunctionName, own.declaration, false)?;
             symbol.is_exported = own.kind.is_exported(); // Luau
             symbol.is_read_only = own.kind.is_const(); // Luau
             Some(symbol.id)
@@ -799,35 +844,45 @@ impl<'ast> Builder<'ast> {
         let enclosing_gotos = if self.version.has_goto() {
             self.gotos.enter_function()
         } else {
-            FunctionGotos::default()
+            FunctionStart::default()
         };
         let enclosing_loop_base = mem::replace(&mut self.loop_base, self.loops.len());
+        if let Some(limits) = &mut self.limits {
+            limits.enter_function(header);
+        }
         self.push_scope(ScopeKind::Function, body_node);
         if is_method {
             let span = Span::new(body.span.start, body.span.start);
-            self.declare("self", span, SymbolKind::ImplicitSelf, body_node);
+            self.declare("self", span, SymbolKind::ImplicitSelf, body_node, false);
         }
         for (i, param) in body.params.iter().enumerate() {
             let node = self.scratch_nodes.get(first_param.saturating_add(i)).copied();
-            self.declare_name(&param.name, SymbolKind::Parameter, node.unwrap_or(body_node));
+            self.declare_name(&param.name, SymbolKind::Parameter, node.unwrap_or(body_node), false);
         }
         self.scratch_nodes.truncate(first_param);
         if let (Some(vararg), Some(node)) = (body.vararg.as_deref(), vararg_node) {
-            // Lua 5.5: `...name` binds the vararg table to a read-only local.
+            // Lua 5.5: `...name` binds the vararg table to a read-only local,
+            // and a plain `...` to a hidden one.
             if let Some(name) = &vararg.name
-                && let Some(symbol) = self.declare_name(name, SymbolKind::Parameter, node)
+                && let Some(symbol) = self.declare_name(name, SymbolKind::Parameter, node, false)
             {
                 symbol.is_read_only = true;
+            }
+            if vararg.name.is_none() && self.version.has_hidden_vararg_table() {
+                self.hidden_locals(1, vararg.span);
             }
             // Lua 5.1: a vararg function binds its extra arguments' table to
             // `arg`, after its parameters, as `parlist` declares it.
             if self.version.has_implicit_vararg_table() {
                 let span = Span::new(vararg.span.start, vararg.span.start);
-                self.declare("arg", span, SymbolKind::ImplicitArg, node);
+                self.declare("arg", span, SymbolKind::ImplicitArg, node, false);
             }
         }
         self.block(&body.block, false);
         self.pop_scope();
+        if let Some(limits) = &mut self.limits {
+            limits.leave_function();
+        }
         if own_symbol.is_some() {
             self.local_functions.pop();
         }
@@ -869,7 +924,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             let mut gotos = mem::take(&mut self.gotos);
             let mut sink = self.goto_sink();
             gotos.close_block(start, &mut sink);
-            gotos.leave_function(FunctionGotos::default(), &mut sink);
+            gotos.leave_function(FunctionStart::default(), &mut sink);
         }
         self.leave();
     }
@@ -885,8 +940,14 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         self.type_depth = self.type_depth.saturating_sub(1);
     }
 
-    fn visit_function_body(&mut self, function_body: &'ast FunctionBody<'ast>) {
-        self.function(function_body, None, false);
+    fn visit_function_def(&mut self, function_def: &'ast FunctionDef<'ast>) {
+        self.enter(AstKind::FunctionDef(function_def));
+        for attribute in &function_def.attributes {
+            self.visit_function_attribute(attribute);
+        }
+        let body = &function_def.body;
+        self.function(body, None, false, Span::new(function_def.span.start, body.span.start));
+        self.leave();
     }
 
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
@@ -992,11 +1053,24 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             self.visit_expr(expr);
         }
         let kind = local_assignment.kind;
+        let last = local_assignment.names.len().saturating_sub(1);
+        // Lua 5.4+: only the last of as many names as values can be one.
+        let is_last_constant = self.version.has_compile_time_constants()
+            && local_assignment.names.len() == local_assignment.exprs.len()
+            && local_assignment.names.last().is_some_and(|attributed| {
+                attributed.attribute_or(leading).is_some_and(|given| given.name.text == "const")
+            })
+            && local_assignment.exprs.last().is_some_and(|expr| {
+                self.limits.as_ref().is_some_and(|limits| limits.is_constant(expr, &self.scoping))
+            });
         for (i, attributed) in local_assignment.names.iter().enumerate() {
             let Some(&node) = self.scratch_nodes.get(first_name.saturating_add(i)) else {
                 continue;
             };
-            let Some(symbol) = self.declare_name(&attributed.name, SymbolKind::Local, node) else {
+            let is_constant = is_last_constant && i == last;
+            let Some(symbol) =
+                self.declare_name(&attributed.name, SymbolKind::Local, node, is_constant)
+            else {
                 continue;
             };
             let attribute = attributed.attribute_or(leading);
@@ -1015,7 +1089,8 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         }
         self.name_node(&local_function.name);
         let own = OwnName { name: &local_function.name, declaration, kind: local_function.kind };
-        self.function(&local_function.body, Some(own), false);
+        let header = Span::new(local_function.span.start, local_function.body.span.start);
+        self.function(&local_function.body, Some(own), false, header);
         self.leave();
     }
 
@@ -1043,7 +1118,8 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             self.name_node(method);
         }
         self.leave();
-        self.function(&function_decl.body, None, name.method.is_some());
+        let header = Span::new(function_decl.span.start, function_decl.body.span.start);
+        self.function(&function_decl.body, None, name.method.is_some(), header);
         self.leave();
     }
 
@@ -1113,9 +1189,10 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             self.visit_expr(step);
         }
         self.push_scope(ScopeKind::Loop, node);
+        self.hidden_locals(self.version.numeric_for_state_locals(), numeric_for.name.span);
         let is_read_only = self.version.has_const_for_variables();
         if let Some(symbol) =
-            self.declare_name(&numeric_for.name, SymbolKind::NumericForVariable, node)
+            self.declare_name(&numeric_for.name, SymbolKind::NumericForVariable, node, false)
         {
             symbol.is_read_only = is_read_only; // Lua 5.5
         }
@@ -1141,6 +1218,9 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             self.visit_expr(expr);
         }
         self.push_scope(ScopeKind::Loop, node);
+        let first_name_span =
+            generic_for.names.first().map_or(generic_for.span, |first| first.name.span);
+        self.hidden_locals(self.version.generic_for_state_locals(), first_name_span);
         let has_const_control = self.version.has_const_for_variables();
         for (i, binding) in generic_for.names.iter().enumerate() {
             let declaration = self.scratch_nodes.get(first_name.saturating_add(i)).copied();
@@ -1148,6 +1228,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
                 &binding.name,
                 SymbolKind::IteratorVariable,
                 declaration.unwrap_or(node),
+                false,
             ) {
                 // Lua 5.5: only the first variable is the control variable.
                 symbol.is_read_only = i == 0 && has_const_control;
@@ -1186,7 +1267,8 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         self.enter(AstKind::GlobalFunction(global_function));
         self.name_node(&global_function.name);
         self.declare_global(&global_function.name, true, false);
-        self.function(&global_function.body, None, false);
+        let header = Span::new(global_function.span.start, global_function.body.span.start);
+        self.function(&global_function.body, None, false, header);
         self.leave();
     }
 
@@ -1210,7 +1292,8 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             TypeDeclarationValue::TypeFunction(body) => {
                 let floor = Some(self.scoping.scopes().len());
                 let enclosing = mem::replace(&mut self.type_function_floor, floor);
-                self.function(body, None, false);
+                let header = Span::new(type_declaration.span.start, body.span.start);
+                self.function(body, None, false, header);
                 self.type_function_floor = enclosing;
             }
         }
@@ -1228,6 +1311,7 @@ mod tests {
     use super::*;
     use crate::fixtures::parse;
     use crate::id::LabelId;
+    use crate::node::AstNode;
 
     fn semantic_for<'ast>(
         allocator: &'ast Allocator,
@@ -1278,7 +1362,7 @@ mod tests {
         semantic
             .nodes()
             .iter()
-            .filter_map(|(_, node)| node.kind().as_name())
+            .filter_map(|node| node.kind().as_name())
             .filter(|name| name.text == text)
             .collect()
     }
@@ -2068,13 +2152,13 @@ for i = 1, 2 do goto done end
         let tree = semantic.scoping();
         let mut found = vec![0usize; tree.references().len()];
         let mut declared = Vec::new();
-        for (node, row) in semantic.nodes().iter() {
-            let Some(name) = row.kind().as_name() else {
+        for node in semantic.nodes().iter() {
+            let Some(name) = node.kind().as_name() else {
                 continue;
             };
             if let Some(id) = tree.reference_of(name) {
                 let reference = tree.reference(id);
-                assert_eq!((reference.node, reference.span), (node, name.span), "{name:?}");
+                assert_eq!((reference.node, reference.span), (node.id(), name.span), "{name:?}");
                 found[id.index()] += 1;
             }
             if let Some(id) = tree.symbol_of(name) {
@@ -2173,8 +2257,8 @@ return arg";
         assert!(matches!(nodes.kind(NodeId::from_index(0)), AstKind::Chunk(_)));
         assert_eq!(nodes.parent_id(NodeId::from_index(0)), None);
         let mut previous_start = 0;
-        for (id, node) in nodes.iter().skip(1) {
-            let span = node.span();
+        for node in nodes.iter().skip(1) {
+            let (id, span) = (node.id(), node.span());
             assert!(previous_start <= span.start, "{id:?} starts before the node before it");
             previous_start = span.start;
             let parent = nodes.parent_id(id).expect("every node but the chunk has a parent");
@@ -2253,10 +2337,10 @@ do end",
             ScopeId::from_index(0),
             "a node is in the scope around it"
         );
-        let body_block = nodes.iter().find(|&(id, _)| {
-            nodes.parent_id(id) == Some(body) && matches!(nodes.kind(id), AstKind::Block(_))
+        let body_block = nodes.iter().find(|node| {
+            nodes.parent_id(node.id()) == Some(body) && matches!(node.kind(), AstKind::Block(_))
         });
-        assert_eq!(body_block.map(|(_, node)| node.scope()), Some(ScopeId::from_index(1)));
+        assert_eq!(body_block.map(AstNode::scope), Some(ScopeId::from_index(1)));
         assert_eq!(
             nodes.ancestor_kinds(body).map(AstKind::ty).collect::<Vec<_>>(),
             [AstType::LocalFunction, AstType::Block, AstType::Chunk,]

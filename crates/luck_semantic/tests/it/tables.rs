@@ -23,8 +23,8 @@ fn assert_tables_agree(source: &str, version: LuaVersion) {
     let semantic = built.semantic;
     let (tree, nodes) = (semantic.scoping(), semantic.nodes());
     let mut previous_start = 0;
-    for (id, node) in nodes.iter() {
-        let span = node.span();
+    for node in nodes.iter() {
+        let (id, span) = (node.id(), node.span());
         assert!(previous_start <= span.start, "{id:?} starts before the node before it\n{source}");
         previous_start = span.start;
         let Some(parent) = nodes.parent_id(id) else {

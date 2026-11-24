@@ -2,9 +2,10 @@ use alloc::borrow::Cow;
 
 use luck_token::{DirectiveError, DirectiveErrorKind};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::directives::{DirectiveProblem, Target};
-use crate::rule::{LintContext, Rule, WholeRule, impl_rule};
+use crate::rule::{Rule, RuleRunner, impl_rule};
 use crate::rules::{closest_rule_name, rules};
 
 /// Flags a `luck:` comment that's no directive, and a directive's rule name
@@ -21,8 +22,8 @@ impl_rule!(
     "malformed `luck:` directive, or a rule name in one that no rule has"
 );
 
-impl WholeRule for InvalidLintFilter {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+impl RuleRunner for InvalidLintFilter {
+    fn run_once(&self, context: &LintContext<'_>) {
         let directives = context.directives;
         let malformed = directives.errors().iter().map(|problem| match *problem {
             DirectiveProblem::Malformed(error) => {
@@ -60,7 +61,9 @@ impl WholeRule for InvalidLintFilter {
                     );
                 Finding::new(message, entry.name).with_help(help)
             });
-        malformed.chain(unknown).collect()
+        for finding in malformed.chain(unknown) {
+            context.diagnostic(finding);
+        }
     }
 }
 

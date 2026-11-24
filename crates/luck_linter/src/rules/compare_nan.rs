@@ -1,11 +1,12 @@
-use luck_ast::Expression;
+use luck_ast::{AstKind, AstType, Expression};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::BinOp;
 
 use crate::binary::operator_pairs;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::number_value;
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CompareNan;
@@ -18,29 +19,24 @@ impl_rule!(
     "comparison with NaN (`0/0`) always has the same result"
 );
 
-impl NodeRule for CompareNan {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp])
+impl RuleRunner for CompareNan {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::BinaryOp])
     }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Expression::BinaryOp(run) = expr else {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::BinaryOp(run) = node.kind() else {
             return;
         };
         if !run.links.first().op.is_comparison() {
             return;
         }
-        let version = context.semantic.version();
         let is_nan = |side: Option<&Expression<'_>>| {
-            side.and_then(|operand| number_value(operand, version)).is_some_and(f64::is_nan)
+            side.and_then(|operand| number_value(operand, context)).is_some_and(f64::is_nan)
         };
         for pair in operator_pairs(run) {
             if matches!(pair.op, BinOp::Eq | BinOp::Ne) && (is_nan(pair.lhs) || is_nan(pair.rhs)) {
-                findings.push(
+                context.diagnostic(
                     Finding::new(
                         "NaN (`0/0`) equals nothing, so this comparison always has the same result",
                         pair.span(context),

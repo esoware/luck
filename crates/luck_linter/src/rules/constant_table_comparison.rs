@@ -1,10 +1,11 @@
-use luck_ast::Expression;
+use luck_ast::{AstKind, AstType, Expression};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::BinOp;
 
 use crate::binary::operator_pairs;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ConstantTableComparison;
@@ -17,17 +18,13 @@ impl_rule!(
     "comparison with a table literal, which compares by identity"
 );
 
-impl NodeRule for ConstantTableComparison {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp])
+impl RuleRunner for ConstantTableComparison {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::BinaryOp])
     }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Expression::BinaryOp(run) = expr else {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::BinaryOp(run) = node.kind() else {
             return;
         };
         if !run.links.first().op.is_comparison() {
@@ -40,7 +37,7 @@ impl NodeRule for ConstantTableComparison {
             if matches!(pair.op, BinOp::Eq | BinOp::Ne)
                 && (is_table(pair.lhs) || is_table(pair.rhs))
             {
-                findings.push(
+                context.diagnostic(
                     Finding::new(
                         "tables compare by identity, so a table literal never equals another value",
                         pair.span(context),

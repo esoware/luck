@@ -1,8 +1,9 @@
-use luck_ast::{GetSpan as _, Statement};
-use luck_token::Span;
+use luck_ast::{AstKind, AstType, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags a statement that starts on the line where the previous one ends
 /// (Luau's `SameLineStatement` lint).
@@ -21,32 +22,31 @@ impl_rule!(
     "multiple statements on the same line"
 );
 
-impl WholeRule for MultipleStatementsPerLine {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let lines = context.line_index();
-        let mut findings = Vec::new();
-        let mut spans: Vec<Span> = Vec::new();
-        for block in context.nodes.blocks() {
-            spans.clear();
-            spans.extend(block.stmts.iter().map(Statement::span));
+impl RuleRunner for MultipleStatementsPerLine {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::Block])
+    }
 
-            for (previous, next) in spans.iter().zip(spans.iter().skip(1)) {
-                // `end` is exclusive, so step back one byte to stay on the
-                // line where `previous` ends.
-                let previous_line = lines.line(previous.end.saturating_sub(1));
-                if previous_line == lines.line(next.start) {
-                    findings.push(
-                        Finding::new(
-                            "statement starts on the same line as the previous statement",
-                            *next,
-                        )
-                        .with_label(*previous, "the previous statement")
-                        .with_help("put each statement on its own line"),
-                    );
-                }
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
+        };
+        for (previous_stmt, next_stmt) in block.stmts.iter().zip(block.stmts.iter().skip(1)) {
+            let (previous, next) = (previous_stmt.span(), next_stmt.span());
+            let lines = context.line_index();
+            // `end` is exclusive, so step back one byte to stay on the line
+            // where `previous` ends.
+            if lines.line(previous.end.saturating_sub(1)) == lines.line(next.start) {
+                context.diagnostic(
+                    Finding::new(
+                        "statement starts on the same line as the previous statement",
+                        next,
+                    )
+                    .with_label(previous, "the previous statement")
+                    .with_help("put each statement on its own line"),
+                );
             }
         }
-        findings
     }
 }
 

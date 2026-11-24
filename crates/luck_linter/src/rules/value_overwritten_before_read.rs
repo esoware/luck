@@ -1,7 +1,8 @@
 use luck_diagnostics::Tag;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags a value written to a local that some path overwrites and no path
 /// reads first (Luacheck 311).
@@ -18,14 +19,11 @@ impl_rule!(
     "value assigned to a local is overwritten before it is read"
 );
 
-impl WholeRule for ValueOverwrittenBeforeRead {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scoping();
-        context
-            .local_flow()
-            .overwritten_values
-            .iter()
-            .map(|&(symbol_id, span)| {
+impl RuleRunner for ValueOverwrittenBeforeRead {
+    fn run_once(&self, context: &LintContext<'_>) {
+        let tree = context.scoping();
+        for &(symbol_id, span) in &context.local_flow().overwritten_values {
+            context.diagnostic(
                 Finding::new(
                     format!(
                         "value assigned to `{}` is overwritten before it is read",
@@ -34,9 +32,9 @@ impl WholeRule for ValueOverwrittenBeforeRead {
                     span,
                 )
                 .with_tag(Tag::Unnecessary)
-                .with_help("remove the earlier assignment or read it first")
-            })
-            .collect()
+                .with_help("remove the earlier assignment or read it first"),
+            );
+        }
     }
 }
 

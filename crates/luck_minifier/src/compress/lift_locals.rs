@@ -42,7 +42,7 @@ use crate::binding::{
     is_env_binding,
 };
 use crate::limits::{
-    GENERIC_FOR_STATE_LOCALS, MAX_REGISTERS, NUMERIC_FOR_STATE_LOCALS, parameter_locals,
+    GENERIC_FOR_STATE_REGISTERS, MAX_REGISTERS, NUMERIC_FOR_STATE_REGISTERS, parameter_locals,
 };
 use crate::transform_config::TransformConfig;
 
@@ -411,8 +411,9 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
     fn lift(&mut self, body: &mut FunctionBody<'ast>) {
         if let Some(hoisted_count) = self.collect(body) {
             let parameters = parameter_locals(body);
-            let mut pressure = Pressure { locals: parameters, registers: parameters };
-            pressure.measure(&body.block, parameters);
+            let mut pressure =
+                Pressure { version: self.version, locals: parameters, registers: parameters };
+            pressure.measure(&body.block, Active { locals: parameters, registers: parameters });
             if pressure.fits(hoisted_count) {
                 self.rewrite(body);
             }
@@ -590,11 +591,20 @@ impl<'ast> VisitMut<'ast> for Retexter<'_, 'ast> {
 
 /// The most locals and registers a body can hold at once.
 ///
-/// Registers are the locals active where the body evaluates something, and
-/// at most one for each expression evaluated together, outside closures,
-/// types, and parentheses.
+/// Registers are the ones active locals and `for` loops' state take where
+/// the body evaluates something, and at most one for each expression
+/// evaluated together, outside closures, types, and parentheses.
 #[derive(Clone, Copy)]
 struct Pressure {
+    version: LuaVersion,
+    locals: usize,
+    registers: usize,
+}
+
+/// The locals active at a point of a body, and the registers they and the
+/// state of the `for` loops around it take.
+#[derive(Clone, Copy)]
+struct Active {
     locals: usize,
     registers: usize,
 }
@@ -607,17 +617,17 @@ impl Pressure {
             && self.registers.saturating_add(hoisted) <= MAX_REGISTERS
     }
 
-    fn evaluate(&mut self, active: usize, exprs: &[&Expression<'_>]) {
+    fn evaluate(&mut self, active: Active, exprs: &[&Expression<'_>]) {
         let mut counter = ExprCounter(0);
         for expr in exprs {
             counter.visit_expr(expr);
         }
-        self.registers = self.registers.max(active.saturating_add(counter.0));
+        self.registers = self.registers.max(active.registers.saturating_add(counter.0));
     }
 
-    /// Measures `block` with `active` locals around it, and returns how many
-    /// are active at its end.
-    fn measure(&mut self, block: &Block<'_>, mut active: usize) -> usize {
+    /// Measures `block` with `active` around it, and returns what's active
+    /// at its end.
+    fn measure(&mut self, block: &Block<'_>, mut active: Active) -> Active {
         for stmt in &block.stmts {
             match stmt {
                 Statement::Assignment(_)
@@ -631,7 +641,7 @@ impl Pressure {
                 | Statement::GlobalFunction(_) => {
                     let mut counter = ExprCounter(0);
                     counter.visit_stmt(stmt);
-                    self.registers = self.registers.max(active.saturating_add(counter.0));
+                    self.registers = self.registers.max(active.registers.saturating_add(counter.0));
                 }
                 Statement::DoBlock(do_block) => {
                     self.measure(&do_block.block, active);
@@ -659,18 +669,29 @@ impl Pressure {
                     let mut bounds = vec![&numeric_for.start, &numeric_for.limit];
                     bounds.extend(&numeric_for.step);
                     self.evaluate(active, &bounds);
-                    let loop_active =
-                        active.saturating_add(NUMERIC_FOR_STATE_LOCALS.saturating_add(1));
-                    self.locals = self.locals.max(loop_active);
+                    let state_locals = self.version.numeric_for_state_locals();
+                    let loop_active = Active {
+                        locals: active.locals.saturating_add(state_locals.saturating_add(1)),
+                        registers: active
+                            .registers
+                            .saturating_add(NUMERIC_FOR_STATE_REGISTERS.saturating_add(1)),
+                    };
+                    self.locals = self.locals.max(loop_active.locals);
                     self.measure(&numeric_for.block, loop_active);
                 }
                 Statement::GenericFor(generic_for) => {
                     let exprs: Vec<&Expression<'_>> = generic_for.exprs.iter().collect();
                     self.evaluate(active, &exprs);
-                    let loop_active = active
-                        .saturating_add(GENERIC_FOR_STATE_LOCALS)
-                        .saturating_add(generic_for.names.len());
-                    self.locals = self.locals.max(loop_active);
+                    let names = generic_for.names.len();
+                    let state_locals = self.version.generic_for_state_locals();
+                    let loop_active = Active {
+                        locals: active.locals.saturating_add(state_locals).saturating_add(names),
+                        registers: active
+                            .registers
+                            .saturating_add(GENERIC_FOR_STATE_REGISTERS)
+                            .saturating_add(names),
+                    };
+                    self.locals = self.locals.max(loop_active.locals);
                     self.measure(&generic_for.block, loop_active);
                 }
                 Statement::Break(_)
@@ -681,8 +702,12 @@ impl Pressure {
                 | Statement::TypeDeclaration(_)
                 | Statement::Error(_) => {}
             }
-            active = active.saturating_add(declared_count(stmt));
-            self.locals = self.locals.max(active);
+            let declared = declared_count(stmt);
+            active = Active {
+                locals: active.locals.saturating_add(declared),
+                registers: active.registers.saturating_add(declared),
+            };
+            self.locals = self.locals.max(active.locals);
         }
         active
     }

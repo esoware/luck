@@ -107,7 +107,7 @@ pub use expr::{
     Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
-pub use generated::{AstKind, AstType, Visit, VisitMut};
+pub use generated::{AST_TYPE_MAX, AstKind, AstType, Visit, VisitMut};
 pub use leaf::{IntegerLiteral, Name, NameIndex, NumberLiteral, StringLiteral};
 pub use one_or_more::OneOrMore;
 pub use parens::{Follower, Slot};

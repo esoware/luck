@@ -1,8 +1,10 @@
-use luck_ast::{Block, Name, Statement};
+use luck_ast::{AstKind, AstType, Name, Statement};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::{MAX_ACTIVE_LOCALS, Span};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags a local declared again in the same block (Luacheck 411), which
 /// hides the first one from all the code after it.
@@ -21,80 +23,48 @@ impl_rule!(
     "local redeclared with the same name in the same block"
 );
 
-impl WholeRule for RedefiningLocal {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut checker = RedefineChecker { declarations: Vec::new(), findings: Vec::new() };
-        for block in context.nodes.blocks() {
-            checker.check_block(block);
-        }
-        checker.findings
+impl RuleRunner for RedefiningLocal {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::Block])
     }
-}
 
-struct RedefineChecker<'ast> {
-    /// Each name the block declares, in order. Every one stays active until
-    /// the block ends, so no Lua compiles a block with more than
-    /// [`MAX_ACTIVE_LOCALS`], and the rest of one isn't checked.
-    declarations: Vec<(&'ast str, Span)>,
-    findings: Vec<Finding>,
-}
-
-impl<'ast> RedefineChecker<'ast> {
-    fn check_block(&mut self, block: &'ast Block<'ast>) {
-        self.declarations.clear();
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
+        };
+        // Each name the block declares, in order. Every one stays active
+        // until the block ends, so no Lua compiles a block with more than
+        // `MAX_ACTIVE_LOCALS`, and the rest of one isn't checked.
+        let mut declarations: Vec<(&str, Span)> = Vec::new();
+        let mut declare = |declared: &'ast Name<'ast>| {
+            let name = declared.text.as_str();
+            // A leading `_` marks a name as deliberately unused.
+            if declarations.len() > MAX_ACTIVE_LOCALS || name.starts_with('_') {
+                return;
+            }
+            if let Some(&(_, first_span)) =
+                declarations.iter().find(|(declared_name, _)| *declared_name == name)
+            {
+                context.diagnostic(
+                    Finding::new(
+                        format!("local `{name}` is redeclared in the same block"),
+                        declared.span,
+                    )
+                    .with_label(first_span, "first declared here"),
+                );
+            }
+            declarations.push((name, declared.span));
+        };
         for stmt in &block.stmts {
-            match stmt {
-                Statement::LocalAssignment(local) => {
-                    for attributed in &local.names {
-                        self.declare(&attributed.name);
-                    }
+            if let Statement::LocalFunction(local_function) = stmt {
+                declare(&local_function.name);
+            }
+            if let Statement::LocalAssignment(local) = stmt {
+                for attributed in &local.names {
+                    declare(&attributed.name);
                 }
-                Statement::LocalFunction(local_function) => self.declare(&local_function.name),
-                Statement::Assignment(_)
-                | Statement::FunctionCall(_)
-                | Statement::DoBlock(_)
-                | Statement::WhileLoop(_)
-                | Statement::RepeatLoop(_)
-                | Statement::IfStatement(_)
-                | Statement::NumericFor(_)
-                | Statement::GenericFor(_)
-                | Statement::FunctionDecl(_)
-                | Statement::Return(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_)
-                | Statement::GlobalStar(_)
-                | Statement::Break(_)
-                | Statement::Continue(_)
-                | Statement::CompoundAssignment(_)
-                | Statement::TypeDeclaration(_)
-                | Statement::Error(_) => {}
             }
         }
-    }
-
-    fn declare(&mut self, declared: &Name<'ast>) {
-        let name = declared.text.as_str();
-        if self.declarations.len() > MAX_ACTIVE_LOCALS {
-            return;
-        }
-        // A leading `_` marks a name as deliberately unused.
-        if name.starts_with('_') {
-            return;
-        }
-        if let Some(&(_, first_span)) =
-            self.declarations.iter().find(|(declared_name, _)| *declared_name == name)
-        {
-            self.findings.push(
-                Finding::new(
-                    format!("local `{name}` is redeclared in the same block"),
-                    declared.span,
-                )
-                .with_label(first_span, "first declared here"),
-            );
-        }
-        self.declarations.push((name, declared.span));
     }
 }
 

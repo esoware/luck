@@ -1,10 +1,11 @@
-use luck_ast::{Expression, GetSpan as _, Statement};
+use luck_ast::{AstKind, AstType, Expression, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::{Span, offset_to_index};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::{FixKind, TextEdit};
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ParenthesizedConditions;
@@ -18,66 +19,44 @@ impl_rule!(
     Fix
 );
 
-impl NodeRule for ParenthesizedConditions {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::IfStatement, NodeType::WhileLoop])
+impl RuleRunner for ParenthesizedConditions {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[
+            AstType::IfStatement,
+            AstType::ElseIfClause,
+            AstType::WhileLoop,
+        ])
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        match stmt {
-            Statement::IfStatement(if_stmt) => {
-                findings.extend(
-                    check_condition(
-                        &if_stmt.condition,
-                        "unnecessary parentheses around `if` condition",
-                        if_stmt.span,
-                        context,
-                    )
-                    .map(|finding| {
-                        finding.with_help("Lua doesn't need parentheses around conditions")
-                    }),
-                );
-                for clause in &if_stmt.elseif_clauses {
-                    findings.extend(check_condition(
-                        &clause.condition,
-                        "unnecessary parentheses around `elseif` condition",
-                        clause.span,
-                        context,
-                    ));
-                }
-            }
-            Statement::WhileLoop(while_loop) => {
-                findings.extend(check_condition(
-                    &while_loop.condition,
-                    "unnecessary parentheses around `while` condition",
-                    while_loop.span,
-                    context,
-                ));
-            }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::RepeatLoop(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::Return(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::Continue(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let kind = node.kind();
+        let found = if let AstKind::IfStatement(if_stmt) = kind {
+            check_condition(
+                &if_stmt.condition,
+                "unnecessary parentheses around `if` condition",
+                if_stmt.span,
+                context,
+            )
+            .map(|finding| finding.with_help("Lua doesn't need parentheses around conditions"))
+        } else if let AstKind::ElseIfClause(clause) = kind {
+            check_condition(
+                &clause.condition,
+                "unnecessary parentheses around `elseif` condition",
+                clause.span,
+                context,
+            )
+        } else if let AstKind::WhileLoop(while_loop) = kind {
+            check_condition(
+                &while_loop.condition,
+                "unnecessary parentheses around `while` condition",
+                while_loop.span,
+                context,
+            )
+        } else {
+            None
+        };
+        if let Some(finding) = found {
+            context.diagnostic(finding);
         }
     }
 }

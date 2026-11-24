@@ -1,16 +1,16 @@
 use luck_ast::{
-    Block, Expression, GenericFor, GetSpan as _, LocalAssignment, Name, NumericFor, Statement,
-    Suffix, Var,
+    AstKind, AstType, Block, Expression, GenericFor, GetSpan as _, LocalAssignment, Name,
+    NumericFor, Statement, Suffix, Var,
 };
-use luck_semantic::Scoping;
+use luck_semantic::{AstNode, AstTypesBitset, Scoping};
 use luck_stdlib::SemanticAnalysis;
 use luck_token::{Span, UnOp};
 
 use crate::call::is_global_call;
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
-use crate::nodes::adjacent_stmts;
 use crate::number::has_number_value;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// The help suggests `table.clone(src)` where the target's stdlib has it, and
 /// `table.move(src, 1, #src, 1, {})` otherwise. A target with neither gets no
@@ -27,23 +27,29 @@ impl_rule!(
     "manual table copy; use `table.clone` or `table.move`"
 );
 
-impl WholeRule for ManualTableClone {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let semantic = context.semantic;
-        let Some(suggestion) = Suggestion::for_target(semantic) else {
-            return Vec::new();
+impl RuleRunner for ManualTableClone {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::Block])
+    }
+
+    fn should_run(&self, host: &ContextHost<'_>) -> bool {
+        Suggestion::for_target(host.semantic).is_some()
+    }
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let (AstKind::Block(block), Some(suggestion)) =
+            (node.kind(), Suggestion::for_target(context.semantic))
+        else {
+            return;
         };
-        context
-            .nodes
-            .blocks()
-            .iter()
-            .flat_map(|block| adjacent_stmts(block))
-            .filter_map(|(first, second)| manual_copy_span(first, second, suggestion, semantic))
-            .map(|span| {
-                Finding::new("manual table copy can be replaced with a stdlib call", span)
-                    .with_help(suggestion.help())
-            })
-            .collect()
+        for (first, second) in block.stmts.iter().zip(block.stmts.iter().skip(1)) {
+            if let Some(span) = manual_copy_span(first, second, suggestion, context) {
+                context.diagnostic(
+                    Finding::new("manual table copy can be replaced with a stdlib call", span)
+                        .with_help(suggestion.help()),
+                );
+            }
+        }
     }
 }
 
@@ -81,8 +87,9 @@ fn manual_copy_span(
     stmt: &Statement<'_>,
     next: &Statement<'_>,
     suggestion: Suggestion,
-    semantic: &SemanticAnalysis<'_>,
+    context: &LintContext<'_>,
 ) -> Option<Span> {
+    let semantic = context.semantic;
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
@@ -94,9 +101,7 @@ fn manual_copy_span(
             is_generic_clone(loop_node, destination, semantic)
                 && !matches!(suggestion, Suggestion::TableMove)
         }
-        Statement::NumericFor(loop_node) => {
-            is_numeric_clone(loop_node, destination, semantic.scoping())
-        }
+        Statement::NumericFor(loop_node) => is_numeric_clone(loop_node, destination, context),
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::DoBlock(_)
@@ -150,11 +155,16 @@ fn is_generic_clone(
 }
 
 /// Is this `for i = 1, #src do out[i] = src[i] end`?
-fn is_numeric_clone(loop_node: &NumericFor<'_>, destination: &Name<'_>, tree: &Scoping) -> bool {
+fn is_numeric_clone(
+    loop_node: &NumericFor<'_>,
+    destination: &Name<'_>,
+    context: &LintContext<'_>,
+) -> bool {
+    let tree = context.scoping();
     let Some(source_table) = length_of_name(&loop_node.limit) else {
         return false;
     };
-    let is_one = |expr: &Expression<'_>| has_number_value(expr, tree.version(), 1.0);
+    let is_one = |expr: &Expression<'_>| has_number_value(expr, context, 1.0);
     let has_unit_step = loop_node.step.as_ref().is_none_or(is_one);
     is_one(&loop_node.start)
         && has_unit_step

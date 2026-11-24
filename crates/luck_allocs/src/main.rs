@@ -24,7 +24,6 @@ use luck_formatter::FormatOptions;
 use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
 use luck_minifier::TransformConfig;
 use luck_semantic::SemanticBuilder;
-use rayon::ThreadPoolBuilder;
 
 use crate::heap::{HEAP, TrackedAllocator};
 use crate::snapshot::write_snapshot;
@@ -65,14 +64,6 @@ fn main() -> io::Result<()> {
 ///
 /// Fails when a snapshot can't be written or the thread pool can't start.
 fn run(is_rules: bool) -> io::Result<()> {
-    // The linter splits a large file's work across rayon's pool, and a pool
-    // of only this thread runs it inline, so the counts don't depend on how
-    // the work was stolen.
-    ThreadPoolBuilder::new()
-        .num_threads(1)
-        .use_current_thread()
-        .build_global()
-        .map_err(io::Error::other)?;
     let files = test_files();
 
     // Running everything once first grows the arena to the size the largest

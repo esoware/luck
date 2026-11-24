@@ -1,6 +1,6 @@
 linter_lua51 Summary:
 Files Linted   : 22/22
-Diagnostics    : 6909
+Diagnostics    : 6910
   5024 no_implicit_globals
    421 setting_global
    313 shadowing
@@ -38,6 +38,7 @@ Diagnostics    : 6909
      1 placeholder_read
      1 redundant_return
      1 reversed_for_loop
+     1 unreachable_code
 
 lua5.1-tests/api.lua
 2:4 undefined_variable: undefined variable `T`
@@ -1828,6 +1829,7 @@ lua5.1-tests/calls.lua
 79:10 no_implicit_globals: global variable `err_on_n` used
 80:16 no_implicit_globals: global variable `error` used
 80:25 undefined_variable: undefined variable `exit`
+80:25 unreachable_code: unreachable code
 80:25 multiple_statements_per_line: statement starts on the same line as the previous statement
 80:25 no_implicit_globals: global variable `exit` used
 81:8 no_implicit_globals: global variable `err_on_n` used

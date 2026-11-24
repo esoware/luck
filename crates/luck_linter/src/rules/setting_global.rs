@@ -1,5 +1,6 @@
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SettingGlobal;
@@ -12,11 +13,10 @@ impl_rule!(
     "implicit global variable assignment (missing `local`?)"
 );
 
-impl WholeRule for SettingGlobal {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+impl RuleRunner for SettingGlobal {
+    fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
-        let mut findings = Vec::new();
 
         for reference in tree.global_references() {
             if !reference.kind.is_write() {
@@ -32,7 +32,7 @@ impl WholeRule for SettingGlobal {
                 continue;
             }
 
-            findings.push(
+            context.diagnostic(
                 Finding::new(
                     format!("setting global variable `{name}` (missing `local`?)"),
                     reference.span,
@@ -40,8 +40,6 @@ impl WholeRule for SettingGlobal {
                 .with_help("add `local` before the first assignment"),
             );
         }
-
-        findings
     }
 }
 

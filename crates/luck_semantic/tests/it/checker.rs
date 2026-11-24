@@ -278,6 +278,8 @@ fn goto_resolves_against_enclosing_blocks_when_it_leaves_them() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         assert_no_errors(&check("::l:: do do goto l end end", version));
         assert_no_errors(&check("::l:: local x do goto l end", version));
+        // Gotos of several names wait together, some taken inside the block.
+        assert_no_errors(&check("do goto x goto z ::z:: do goto x end goto x end ::x::", version));
     }
     // The inner `::l::` takes the goto first, before 5.4 banned shadowing.
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {

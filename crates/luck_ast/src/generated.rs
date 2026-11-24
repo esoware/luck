@@ -7,6 +7,6 @@ mod derive_get_span;
 mod visit;
 mod visit_mut;
 
-pub use ast_kind::{AstKind, AstType};
+pub use ast_kind::{AST_TYPE_MAX, AstKind, AstType};
 pub use visit::Visit;
 pub use visit_mut::VisitMut;

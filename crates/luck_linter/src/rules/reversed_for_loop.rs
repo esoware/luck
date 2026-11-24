@@ -1,9 +1,10 @@
-use luck_ast::Statement;
+use luck_ast::{AstKind, AstType};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::number_value;
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ReversedForLoop;
@@ -16,24 +17,19 @@ impl_rule!(
     "numeric `for` loop counts down without a negative step"
 );
 
-impl NodeRule for ReversedForLoop {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::NumericFor])
+impl RuleRunner for ReversedForLoop {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::NumericFor])
     }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let version = context.semantic.version();
-        if let Statement::NumericFor(numeric_for) = stmt
-            && let Some(start) = number_value(&numeric_for.start, version)
-            && let Some(limit) = number_value(&numeric_for.limit, version)
-            && start > limit
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        if let AstKind::NumericFor(numeric_for) = node.kind()
             && numeric_for.step.is_none()
+            && let Some(start) = number_value(&numeric_for.start, context)
+            && let Some(limit) = number_value(&numeric_for.limit, context)
+            && start > limit
         {
-            findings.push(
+            context.diagnostic(
                 Finding::new(
                     format!(
                         "`for` loop from {start} to {limit} without a negative step never runs"

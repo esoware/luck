@@ -1,11 +1,12 @@
-use luck_ast::{Expression, Statement};
+use luck_ast::{AstKind, AstType};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::{BinOp, CompoundOp, Span};
 
 use crate::binary::operator_pairs;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
 use crate::number::has_number_value;
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Float division by zero gives `inf` or `nan`, and from Lua 5.3 integer
 /// `%` and `//` by zero raise an error. Either way a divisor that's always
@@ -21,44 +22,35 @@ impl_rule!(
     "division or modulo by a constant zero"
 );
 
-impl NodeRule for DivideByZero {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp, NodeType::CompoundAssignment])
+impl RuleRunner for DivideByZero {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::BinaryOp, AstType::CompoundAssignment])
     }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Expression::BinaryOp(run) = expr else {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let kind = node.kind();
+        // Luau
+        if let AstKind::CompoundAssignment(compound) = kind {
+            if let Some(op_name) = compound_divisive_op_name(compound.op)
+                && has_number_value(&compound.expr, context, 0.0)
+            {
+                context.diagnostic(zero_divisor_finding(op_name, compound.span));
+            }
+            return;
+        }
+        let AstKind::BinaryOp(run) = kind else {
             return;
         };
         if run.precedence() != BinOp::Div.precedence() {
             return;
         }
-        let version = context.semantic.version();
         for pair in operator_pairs(run) {
             if let Some(op_name) = divisive_op_name(pair.op)
                 && let Some(divisor) = pair.rhs
-                && has_number_value(divisor, version, 0.0)
+                && has_number_value(divisor, context, 0.0)
             {
-                findings.push(zero_divisor_finding(op_name, pair.span(context)));
+                context.diagnostic(zero_divisor_finding(op_name, pair.span(context)));
             }
-        }
-    }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        // Luau
-        if let Statement::CompoundAssignment(compound) = stmt
-            && let Some(op_name) = compound_divisive_op_name(compound.op)
-            && has_number_value(&compound.expr, context.semantic.version(), 0.0)
-        {
-            findings.push(zero_divisor_finding(op_name, compound.span));
         }
     }
 }

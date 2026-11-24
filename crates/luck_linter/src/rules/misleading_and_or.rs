@@ -1,11 +1,12 @@
-use luck_ast::Expression;
+use luck_ast::{AstKind, AstType, Expression};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::BinOp;
 use luck_value::ToBoolean as _;
 
 use crate::binary::operator_pairs;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags the `(cond and a) or b` ternary idiom when `a` is a literal `false`
 /// or `nil`, which makes it always evaluate to `b`.
@@ -20,31 +21,26 @@ impl_rule!(
     "`and`/`or` ternary with a falsy middle operand always returns the right-hand value"
 );
 
-impl NodeRule for MisleadingAndOr {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp])
+impl RuleRunner for MisleadingAndOr {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::BinaryOp])
     }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Expression::BinaryOp(run) = expr else {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::BinaryOp(run) = node.kind() else {
             return;
         };
         if run.links.first().op != BinOp::Or {
             return;
         }
-        let version = context.semantic.version();
         for pair in operator_pairs(run) {
             if pair.op == BinOp::Or
                 && let Some(lhs) = pair.lhs
                 && let Expression::BinaryOp(inner) = lhs
                 && inner.links.first().op == BinOp::And
-                && inner.links.last().operand.to_boolean(&version) == Some(false)
+                && inner.links.last().operand.to_boolean(context) == Some(false)
             {
-                findings.push(
+                context.diagnostic(
                     Finding::new(
                         "`(x and FALSY) or y` always evaluates to `y`",
                         pair.span(context),

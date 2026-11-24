@@ -99,8 +99,7 @@ impl LspRequest for FixAllWorkspace {
 /// Serves one client over `connection` until it sends `exit`.
 ///
 /// Every job runs on threads this starts with
-/// [`luck_ast::MIN_STACK_BYTES`] of stack, and a large file's lint on rayon's
-/// global pool, which the caller builds with that stack.
+/// [`luck_ast::MIN_STACK_BYTES`] of stack.
 ///
 /// # Errors
 ///

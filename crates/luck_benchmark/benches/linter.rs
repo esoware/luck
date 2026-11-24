@@ -1,23 +1,11 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
 use luck_allocator::Allocator;
 use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use luck_benchmark_files::{test_files, test_projects};
 use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
-use rayon::ThreadPoolBuilder;
 
 /// Each iteration analyzes and lints a parse made once, since the linter's
 /// node table is built in the analysis walk.
 fn bench_linter(criterion: &mut Criterion) {
-    // A pool of only the bench thread runs the large-file joins and chunks
-    // inline, so no work waits on another thread or depends on the runner's
-    // core count.
-    let pool = ThreadPoolBuilder::new().num_threads(1).use_current_thread().build_global();
-    assert!(pool.is_ok(), "{:?}", pool.err());
-
     let config = LintConfig {
         categories: CategoryLevels {
             correctness: Some(RuleLevel::Warn),

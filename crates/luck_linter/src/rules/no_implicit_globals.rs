@@ -1,5 +1,6 @@
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags every read or write of a global, stdlib names like `print`
 /// included, unless it's listed in `extra_globals`.
@@ -17,11 +18,10 @@ impl_rule!(
     "implicit global reference, including standard-library globals"
 );
 
-impl WholeRule for NoImplicitGlobals {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+impl RuleRunner for NoImplicitGlobals {
+    fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
-        let mut findings = Vec::new();
 
         for reference in tree.global_references() {
             let name = tree.name(reference.name);
@@ -33,12 +33,11 @@ impl WholeRule for NoImplicitGlobals {
                 continue;
             }
 
-            findings.push(
+            context.diagnostic(
                 Finding::new(format!("global variable `{name}` used"), reference.span)
                     .with_help("pass it in explicitly, or add it to `extra_globals`"),
             );
         }
-        findings
     }
 }
 

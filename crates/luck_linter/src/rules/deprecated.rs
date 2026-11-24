@@ -1,16 +1,19 @@
 use luck_allocator::Allocator;
-use luck_ast::{Call, Expression, GetSpan as _, Statement, Suffix, SuffixedExpression};
+use luck_ast::{
+    AstKind, AstType, Call, Expression, GetSpan as _, Statement, Suffix, SuffixedExpression,
+};
 use luck_diagnostics::Tag;
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::{
     ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction, expand_replace_template,
 };
 use luck_token::{index_to_offset, is_lua_whitespace, offset_to_index};
 
-use crate::call::{CallArgs, string_literal_value};
+use crate::call::{CallArgs, calls_in, string_literal_value};
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, FixKind, RuleFixer};
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, CallSite, ChainPosition, LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// A replacement the catalog marks exact is a fix, and any other one a
 /// suggestion.
@@ -26,32 +29,33 @@ impl_rule!(
     Fix | Suggestion
 );
 
-impl NodeRule for Deprecated {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[
-            NodeType::FunctionCallStmt,
-            NodeType::FunctionCallExpr,
-            NodeType::Suffixed,
-        ])
+impl RuleRunner for Deprecated {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
     }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        check_call(site, context, findings);
-    }
-    fn on_chain(
-        &self,
-        chain: &SuffixedExpression<'_>,
-        position: ChainPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        check_field_accesses(chain, position, context.semantic, findings);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        // A call statement's call is its chain's last.
+        let statement_call =
+            context.is_statement(node).then(|| chain.suffixes.len().saturating_sub(1));
+        for (index, call) in calls_in(chain) {
+            if let Some(callee) = context.callee(node, index) {
+                check_call(call, callee, statement_call == Some(index), context);
+            }
+        }
+        check_field_accesses(node, chain, context);
     }
 }
 
-fn check_call(site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-    let CallSite { call, position, callee: Some(callee) } = *site else {
-        return;
-    };
+fn check_call(
+    call: Call<'_>,
+    callee: ResolvedCallee<'_>,
+    is_statement: bool,
+    context: &LintContext<'_>,
+) {
     let entry = callee.entry();
 
     if let Some(deprecation) = entry.deprecation() {
@@ -59,7 +63,7 @@ fn check_call(site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec
         let finding = Finding::new(format!("`{name}` is deprecated"), call.span())
             .with_tag(Tag::Deprecated)
             .with_help(deprecation.message);
-        findings.push(match deprecation.replacement {
+        context.diagnostic(match deprecation.replacement {
             Some(replacement) => {
                 let kind = if replacement.is_exact { FixKind::Fix } else { FixKind::Suggestion };
                 finding.with_fix(context, kind, |fixer| {
@@ -67,7 +71,7 @@ fn check_call(site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec
                         fixer,
                         call,
                         entry,
-                        position,
+                        is_statement,
                         &name,
                         replacement.template,
                         context,
@@ -80,8 +84,11 @@ fn check_call(site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec
     }
 
     if let StdlibEntry::Function(function) = entry {
-        findings.extend(deprecated_constants(call, &callee, function));
-        findings.extend(deprecated_params(call, &callee, function));
+        for finding in deprecated_constants(call, &callee, function)
+            .chain(deprecated_params(call, &callee, function))
+        {
+            context.diagnostic(finding);
+        }
     }
 }
 
@@ -152,10 +159,10 @@ fn replacement_fix(
     fixer: RuleFixer,
     call: Call<'_>,
     entry: &StdlibEntry,
-    position: CallPosition,
+    is_statement: bool,
     name: &str,
     template: &str,
-    context: &LintContext<'_>,
+    context: &ContextHost<'_>,
 ) -> Option<Fix> {
     let StdlibEntry::Function(function) = entry else {
         return None;
@@ -171,7 +178,7 @@ fn replacement_fix(
     if starts_with_rebound_name(&expanded, call.span().start, context.semantic) {
         return None;
     }
-    let replacement = fit_to_position(expanded, call.span().end, position, context)?;
+    let replacement = fit_to_position(expanded, call.span().end, is_statement, context)?;
     let message =
         format!("replace deprecated `{name}` with `{}`", String::from_utf8_lossy(&replacement));
     Some(fixer.replace(message, call.span(), replacement))
@@ -191,18 +198,18 @@ fn starts_with_rebound_name(expanded: &[u8], offset: u32, semantic: &SemanticAna
             || tree.name_id(name).is_some_and(|id| tree.is_assigned_global(id)))
 }
 
-/// `expanded` as it must read where the call stood, or `None` if it doesn't
-/// parse there. Parsing inside a block keeps a leading `#` from reading as a
+/// `expanded` as it must read where the call stood, a statement when
+/// `is_statement`, or `None` if it doesn't parse there. Parsing inside a block keeps a leading `#` from reading as a
 /// shebang line.
 fn fit_to_position(
     expanded: Vec<u8>,
     call_end: u32,
-    position: CallPosition,
-    context: &LintContext<'_>,
+    is_statement: bool,
+    context: &ContextHost<'_>,
 ) -> Option<Vec<u8>> {
     let version = context.semantic.version();
     let allocator = Allocator::new();
-    if position == CallPosition::Statement {
+    if is_statement {
         let statement = [&b"do "[..], &expanded, b" end"].concat();
         let parse = luck_parser::parse(&allocator, &statement, version);
         return parse.errors.is_empty().then_some(expanded);
@@ -225,7 +232,7 @@ fn fit_to_position(
 
 /// Whether the next token after `offset` binds tighter than a unary operator:
 /// `^`, or a suffix that continues the expression.
-fn is_followed_by_tighter_binding(offset: u32, context: &LintContext<'_>) -> bool {
+fn is_followed_by_tighter_binding(offset: u32, context: &ContextHost<'_>) -> bool {
     let bytes = context.source;
     let mut index = offset_to_index(offset);
     loop {
@@ -262,25 +269,28 @@ fn is_followed_by_tighter_binding(offset: u32, context: &LintContext<'_>) -> boo
 /// own entry, so a chain whose prefix is deprecated warns once. Functions are
 /// skipped because `check_call` reports them at the call.
 fn check_field_accesses(
+    node: &AstNode<'_>,
     chain: &SuffixedExpression<'_>,
-    position: ChainPosition,
-    semantic: &SemanticAnalysis<'_>,
-    findings: &mut Vec<Finding>,
+    context: &LintContext<'_>,
 ) {
+    let semantic = context.semantic;
+    let (Expression::Name(root), Suffix::Field(_)) = (&chain.prefix, chain.suffixes.first()) else {
+        return;
+    };
+    if semantic.scoping().resolves_to_local(root) {
+        return;
+    }
+    let stdlib = semantic.stdlib();
+    let Some(mut entry) = stdlib.globals.get(root.text.as_str()) else {
+        return;
+    };
     // A target's last field is stored to, not read.
-    let read_count = match position {
-        ChainPosition::Value => chain.suffixes.len(),
-        ChainPosition::AssignmentTarget => chain.suffixes.len().saturating_sub(1),
+    let read_count = if context.is_assignment_target(node) {
+        chain.suffixes.len().saturating_sub(1)
+    } else {
+        chain.suffixes.len()
     };
     let reads = chain.suffixes.get(..read_count).unwrap_or_default();
-    let (Expression::Name(root), Some(Suffix::Field(_))) = (&chain.prefix, reads.first()) else {
-        return;
-    };
-    let root_name = root.text;
-    let stdlib = semantic.stdlib();
-    let Some(mut entry) = stdlib.globals.get(root_name.as_str()) else {
-        return;
-    };
     for (read_index, suffix) in (1usize..).zip(reads) {
         let Suffix::Field(name) = suffix else {
             return;
@@ -293,11 +303,9 @@ fn check_field_accesses(
         if matches!(entry, StdlibEntry::Function(_)) {
             continue;
         }
-        if let Some(deprecation) = entry.deprecation()
-            && !semantic.scoping().resolves_to_local(root)
-        {
+        if let Some(deprecation) = entry.deprecation() {
             let path = chain.head(read_index).dotted_path().map(|path| path.to_string());
-            findings.push(
+            context.diagnostic(
                 Finding::new(format!("`{}` is deprecated", path.unwrap_or_default()), name.span)
                     .with_tag(Tag::Deprecated)
                     .with_help(deprecation.message),

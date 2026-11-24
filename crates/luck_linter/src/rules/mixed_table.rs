@@ -1,8 +1,9 @@
-use luck_ast::{Field, TableConstructor};
+use luck_ast::{AstKind, AstType, Field};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
 /// Flags table constructors that mix positional fields with `name = value`
 /// fields, which `ipairs` skips.
@@ -17,16 +18,15 @@ impl_rule!(
     "table constructor mixes positional and record-style fields"
 );
 
-impl NodeRule for MixedTable {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::TableConstructor])
+impl RuleRunner for MixedTable {
+    fn node_types(&self) -> AstTypesBitset {
+        AstTypesBitset::from_types(&[AstType::TableConstructor])
     }
-    fn on_table(
-        &self,
-        table: &TableConstructor<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+        let AstKind::TableConstructor(table) = node.kind() else {
+            return;
+        };
         let mut has_positional = false;
         let mut has_named = false;
         for field in &table.fields {
@@ -39,7 +39,7 @@ impl NodeRule for MixedTable {
             }
         }
         if has_positional && has_named {
-            findings.push(
+            context.diagnostic(
                 Finding::new(
                     "table mixes positional and record fields, so iteration with `ipairs` will \
                      skip the record fields",

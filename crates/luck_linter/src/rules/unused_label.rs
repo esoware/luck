@@ -1,13 +1,11 @@
-use luck_ast::{Block, FunctionBody, GotoStatement, LabelStatement, Visit};
 use luck_diagnostics::Tag;
-use luck_token::Span;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{RuleRunner, impl_rule};
 
-/// A `goto` can't leave its function, so each function body, and the chunk
-/// itself, is checked on its own.
+/// Semantic analysis resolves each `goto` to the label it jumps to, as
+/// `lparser.c` does, so a label is used exactly when one reaches it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UnusedLabel;
 
@@ -19,59 +17,19 @@ impl_rule!(
     "label declared but never targeted by a `goto` in the same function"
 );
 
-impl WholeRule for UnusedLabel {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut findings = Vec::new();
-        if context.nodes.contains_any(NodeTypeSet::from_types(&[NodeType::Label])) {
-            check_scope(context.block, &mut findings);
-        }
-        findings
-    }
-}
-
-fn check_scope(block: &Block<'_>, findings: &mut Vec<Finding>) {
-    let mut scope = LabelScope::default();
-    scope.visit_block(block);
-
-    for (name, span) in &scope.labels {
-        // Any `goto` with this name in the same function counts. The parser
-        // already enforces label visibility, so matching by name alone
-        // avoids false positives on jumps between blocks.
-        if !scope.goto_names.iter().any(|goto_name| goto_name == name) {
-            findings.push(
-                Finding::new(format!("label `{name}` is never targeted by a `goto`"), *span)
-                    .with_tag(Tag::Unnecessary)
-                    .with_help("remove the label or add a `goto` that targets it"),
+impl RuleRunner for UnusedLabel {
+    fn run_once(&self, context: &LintContext<'_>) {
+        let tree = context.scoping();
+        for label in tree.labels().iter().filter(|label| !label.is_used) {
+            context.diagnostic(
+                Finding::new(
+                    format!("label `{}` is never targeted by a `goto`", tree.name(label.name)),
+                    label.span,
+                )
+                .with_tag(Tag::Unnecessary)
+                .with_help("remove the label or add a `goto` that targets it"),
             );
         }
-    }
-
-    for body in scope.nested_bodies {
-        check_scope(&body.block, findings);
-    }
-}
-
-#[derive(Default)]
-struct LabelScope<'ast> {
-    labels: Vec<(&'ast str, Span)>,
-    goto_names: Vec<&'ast str>,
-    nested_bodies: Vec<&'ast FunctionBody<'ast>>,
-}
-
-impl<'ast> Visit<'ast> for LabelScope<'ast> {
-    // Lua 5.2+
-    fn visit_label_stmt(&mut self, label_stmt: &'ast LabelStatement<'ast>) {
-        self.labels.push((label_stmt.name.text.as_str(), label_stmt.span));
-    }
-
-    // Lua 5.2+
-    fn visit_goto_stmt(&mut self, goto_stmt: &'ast GotoStatement<'ast>) {
-        self.goto_names.push(goto_stmt.name.text.as_str());
-    }
-
-    // A nested function gets its own `check_scope` pass.
-    fn visit_function_body(&mut self, function_body: &'ast FunctionBody<'ast>) {
-        self.nested_bodies.push(function_body);
     }
 }
 
