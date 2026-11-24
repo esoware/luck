@@ -8,3 +8,4 @@
 
 mod common;
 mod server;
+mod workspace;

@@ -1,19 +1,46 @@
-//! A name finds the local it declares or refers to by its symbol, so
-//! shadowed names never bleed into each other, and a local can't be
-//! referenced from another file, so one document is the whole answer.
+//! A member's references span the workspace, and a local's its document.
+//!
+//! A member of a module's table is found in every file of the workspace that
+//! names it, through the module's own table or a require of the module. A
+//! name finds the local it declares or refers to by its symbol, so shadowed
+//! names never bleed into each other, and a local can't be referenced from
+//! another file, so one document is the whole answer.
 
-use ls_types::{Location, ReferenceParams};
+use ls_types::{Location, ReferenceParams, Uri};
 use luck_token::Span;
 
 use crate::document::DocumentState;
 use crate::providers::cursor::local_at;
+use crate::workspace::{Source, WorkspaceView};
 
-pub(crate) fn references(document: &DocumentState, params: &ReferenceParams) -> Vec<Location> {
-    let uri = &params.text_document_position.text_document.uri;
-    let offset = document.offset(params.text_document_position.position);
+/// `None` once the request is cancelled.
+pub(crate) fn references(
+    workspace: &WorkspaceView<'_>,
+    uri: &Uri,
+    document: &DocumentState,
+    params: &ReferenceParams,
+) -> Option<Vec<Location>> {
+    let position = params.text_document_position.position;
+    let include_declaration = params.context.include_declaration;
+    if let Some((member, module)) =
+        Source::of_document(uri, document).and_then(|source| source.member_at(position))
+    {
+        let mut locations = Vec::new();
+        workspace.for_each_source(|source| {
+            let found = source.record.members().iter().filter(|named| {
+                named.name == member.name
+                    && (include_declaration || !named.is_definition)
+                    && source.is_table_of(named.table, &module)
+            });
+            locations.extend(
+                found.map(|named| Location { uri: source.uri.clone(), range: named.range }),
+            );
+        })?;
+        return Some(locations);
+    }
     let tree = document.tree();
-    let Some((symbol_id, _)) = local_at(document, offset) else {
-        return Vec::new();
+    let Some((symbol_id, _)) = local_at(document, document.offset(position)) else {
+        return Some(Vec::new());
     };
     let symbol = tree.symbol(symbol_id);
 
@@ -23,17 +50,19 @@ pub(crate) fn references(document: &DocumentState, params: &ReferenceParams) -> 
         .map(|&reference_id| tree.reference(reference_id).span)
         .collect();
     // The implicit `self`'s declaration has no token, only an empty span.
-    if params.context.include_declaration && !symbol.kind.is_implicit() {
+    if include_declaration && !symbol.kind.is_implicit() {
         spans.push(symbol.definition_span);
     }
     spans.sort_by_key(|span| span.start);
     spans.dedup();
 
     let mut positions = document.positions();
-    spans
-        .into_iter()
-        .map(|span| Location { uri: uri.clone(), range: positions.range(span) })
-        .collect()
+    Some(
+        spans
+            .into_iter()
+            .map(|span| Location { uri: uri.clone(), range: positions.range(span) })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -45,7 +74,7 @@ mod tests {
     use luck_token::LuaTarget;
 
     use super::*;
-    use crate::fixtures::document;
+    use crate::fixtures::{document, session};
 
     #[test]
     fn the_implicit_self_declaration_is_no_location() {
@@ -58,18 +87,20 @@ end
 ",
             LuaTarget::Lua54,
         );
+        let uri: Uri = "file:///main.lua".parse().expect("valid URI");
         let params = ReferenceParams {
             text_document_position: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier {
-                    uri: "file:///main.lua".parse().expect("valid URI"),
-                },
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
                 position: Position::new(2, 10),
             },
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
             context: ReferenceContext { include_declaration: true },
         };
-        let locations = references(&document, &params);
+        let session = session();
+        let workspace = WorkspaceView::new(&session, &[], &|| false);
+        let locations =
+            references(&workspace, &uri, &document, &params).expect("nothing cancels it");
         assert_eq!(locations.len(), 1, "only the read of `self`: {locations:?}");
         assert_eq!(locations[0].range.start, Position::new(2, 9), "{locations:?}");
     }

@@ -7,9 +7,7 @@ use std::thread;
 
 use luck_allocator::{Allocator, ThreadAllocators};
 use luck_diagnostics::Diagnostic;
-use luck_resolver::{
-    FileSystem as _, FileSystemOs, Resolution, ResolveError, Resolver, to_slash_lossy,
-};
+use luck_resolver::{FileSystem as _, FileSystemOs, Resolution, Resolver, to_slash_lossy};
 use luck_token::{CommentKind, LuaVersion, leading_hot_comments};
 use memchr::memmem;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -50,38 +48,6 @@ pub(crate) struct ParsedModule<'ast> {
     /// Parse errors, then the analysis's.
     pub errors: Vec<Diagnostic>,
     pub warnings: Vec<Diagnostic>,
-}
-
-/// What reports `error`, which stopped `require` from resolving.
-fn resolve_error_diagnostic(require: &StaticRequire<'_>, error: &ResolveError) -> Diagnostic {
-    let (span, module) = (require.call_span, require.require_string);
-    match error {
-        ResolveError::NotFound(searched) => {
-            let tried_paths: Vec<String> =
-                searched.iter().map(|path| to_slash_lossy(path).into_owned()).collect();
-            Diagnostic::e004(span, module, &tried_paths)
-        }
-        ResolveError::MissingPrefix => Diagnostic::e004_missing_prefix(span, module),
-        ResolveError::BareSelfAlias => Diagnostic::e004_bare_self_alias(span),
-        ResolveError::UnknownAlias(alias) => Diagnostic::e004_unknown_alias(span, module, alias),
-        ResolveError::MalformedLuaurc(luaurc) => {
-            Diagnostic::e004_malformed_luaurc(span, module, &to_slash_lossy(luaurc))
-        }
-        ResolveError::AliasCycle(cycle) => Diagnostic::e004_alias_cycle(span, module, cycle),
-        ResolveError::BothExtensions { luau, lua } => {
-            Diagnostic::e007_both_extensions(span, &to_slash_lossy(luau), &to_slash_lossy(lua))
-        }
-        ResolveError::FileAndDirectory { file, init } => {
-            Diagnostic::e007_file_and_directory(span, &to_slash_lossy(file), &to_slash_lossy(init))
-        }
-        ResolveError::FileBesideDirectory { file, directory } => {
-            Diagnostic::e007_file_beside_directory(
-                span,
-                &to_slash_lossy(file),
-                &to_slash_lossy(directory),
-            )
-        }
-    }
 }
 
 /// Parses `source`, the module at `path`, into `allocator` and analyzes its
@@ -208,12 +174,12 @@ impl<'input> Reader<'input> {
             .map(|require| match self.resolver.resolve(path, require.require_string) {
                 Ok(Resolution { path: target, is_self_alias_shadowed }) => {
                     if is_self_alias_shadowed {
-                        warnings.push(Diagnostic::w004(require.call_span));
+                        warnings.push(Diagnostic::w004(require.path_span));
                     }
                     (require, Some(target))
                 }
                 Err(error) => {
-                    errors.push(resolve_error_diagnostic(&require, &error));
+                    errors.push(error.to_diagnostic(require.path_span, require.require_string));
                     (require, None)
                 }
             })

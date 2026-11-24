@@ -14,17 +14,37 @@ use crate::line_index::{LineIndex, PositionEncoding};
 /// The source string in `Diagnostic.source`; VS Code shows it in tooltips.
 const DIAGNOSTIC_SOURCE: &str = "luck";
 
-/// The diagnostics of `messages`, the lints of the document at `uri`, which
-/// come sorted by where they start, as the linter returns them.
-pub(crate) fn to_lsp(
-    uri: &Uri,
-    document: &DocumentState,
-    messages: &[Message],
-) -> Vec<LspDiagnostic> {
+/// The diagnostics of the document at `uri`: `lints`, sorted by where they
+/// start, as the linter returns them, and then what stops each of its
+/// requires from resolving, which the resolver reads the disk for.
+pub(crate) fn to_lsp(uri: &Uri, document: &DocumentState, lints: &[Message]) -> Vec<LspDiagnostic> {
+    let unresolved = unresolved(document);
     let mut positions = document.positions();
-    messages
+    lints
         .iter()
-        .map(|message| converted(uri, &message.diagnostic, |span| positions.range(span)))
+        .map(|message| &message.diagnostic)
+        .chain(&unresolved)
+        .map(|diag| converted(uri, diag, |span| positions.range(span)))
+        .collect()
+}
+
+/// What `luck build` reports of how `document`'s requires resolve.
+///
+/// That's each that resolves to no module or more than one, or through a
+/// shadowed `@self`. A document the project leaves out, one that doesn't
+/// parse, and one with no file have none.
+fn unresolved(document: &DocumentState) -> Vec<Diagnostic> {
+    if !document.settings().is_included || !document.parse().errors.is_empty() {
+        return Vec::new();
+    }
+    let requires = document.record().requires().iter();
+    requires
+        .filter_map(|require| match document.resolve(require)? {
+            Ok(resolution) => {
+                resolution.is_self_alias_shadowed.then(|| Diagnostic::w004(require.span))
+            }
+            Err(error) => Some(error.to_diagnostic(require.span, &require.module)),
+        })
         .collect()
 }
 

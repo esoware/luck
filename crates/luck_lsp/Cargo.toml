@@ -28,6 +28,7 @@ luck_stdlib      = { workspace = true }
 luck_token       = { workspace = true }
 
 crossbeam-channel = { workspace = true }
+ignore            = { workspace = true }
 ls-types          = { workspace = true }
 lsp-server        = { workspace = true }
 memchr            = { workspace = true }

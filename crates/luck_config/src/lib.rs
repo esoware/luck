@@ -61,7 +61,6 @@ mod fixtures;
 mod format_config;
 mod glob;
 mod load;
-mod path;
 mod project;
 
 pub use build::{BuildConfig, check_output_paths};

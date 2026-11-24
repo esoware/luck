@@ -5,7 +5,8 @@
 //! what a chunk's names and calls reach in it.
 //!
 //! [`library_for`] returns a target's built-in [`StdlibLibrary`], a static
-//! library with signatures, overloads, value shapes, and deprecations.
+//! library with signatures, overloads, value shapes, and deprecations, and
+//! [`is_preloaded_module`] whether a `require` returns one of its libraries.
 //! A [`StdlibDefinition`] is one std definition file, which describes a
 //! library such as LOVE's or Neovim's in the format the built-in libraries
 //! are written in, and [`Stdlib::layer`] layers it over a library. [`analyze`]
@@ -69,7 +70,7 @@ mod stdlib_model;
 pub use analysis::{SemanticAnalysis, analyze};
 pub use resolve::{ChainCallees, ResolvedCallee};
 pub use stdlib::Stdlib;
-pub use stdlib_catalog::library_for;
+pub use stdlib_catalog::{is_preloaded_module, library_for};
 pub use stdlib_definition::StdlibDefinition;
 pub use stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,

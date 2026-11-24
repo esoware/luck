@@ -1,4 +1,5 @@
-//! There's no on-disk index, so only open documents are searched.
+//! Only open documents are searched, since a closed file's record keeps
+//! what other files see of it, not its outline.
 
 #![expect(
     deprecated,

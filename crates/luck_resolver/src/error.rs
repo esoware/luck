@@ -1,5 +1,10 @@
 use std::path::PathBuf;
 
+use luck_diagnostics::Diagnostic;
+use luck_token::Span;
+
+use crate::path::to_slash_lossy;
+
 /// Why a require names no module, or more than one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveError {
@@ -27,4 +32,40 @@ pub enum ResolveError {
     /// Luau: the module, or a directory on the way to it, is both a file and
     /// a directory without an `init` file.
     FileBesideDirectory { file: PathBuf, directory: PathBuf },
+}
+
+impl ResolveError {
+    /// The E004 or E007 that reports this error for `module`, the require
+    /// string at `span`.
+    pub fn to_diagnostic(&self, span: Span, module: &str) -> Diagnostic {
+        match self {
+            Self::NotFound(searched) => {
+                let tried_paths: Vec<String> =
+                    searched.iter().map(|path| to_slash_lossy(path).into_owned()).collect();
+                Diagnostic::e004(span, module, &tried_paths)
+            }
+            Self::MissingPrefix => Diagnostic::e004_missing_prefix(span, module),
+            Self::BareSelfAlias => Diagnostic::e004_bare_self_alias(span),
+            Self::UnknownAlias(alias) => Diagnostic::e004_unknown_alias(span, module, alias),
+            Self::MalformedLuaurc(luaurc) => {
+                Diagnostic::e004_malformed_luaurc(span, module, &to_slash_lossy(luaurc))
+            }
+            Self::AliasCycle(cycle) => Diagnostic::e004_alias_cycle(span, module, cycle),
+            Self::BothExtensions { luau, lua } => {
+                Diagnostic::e007_both_extensions(span, &to_slash_lossy(luau), &to_slash_lossy(lua))
+            }
+            Self::FileAndDirectory { file, init } => Diagnostic::e007_file_and_directory(
+                span,
+                &to_slash_lossy(file),
+                &to_slash_lossy(init),
+            ),
+            Self::FileBesideDirectory { file, directory } => {
+                Diagnostic::e007_file_beside_directory(
+                    span,
+                    &to_slash_lossy(file),
+                    &to_slash_lossy(directory),
+                )
+            }
+        }
+    }
 }

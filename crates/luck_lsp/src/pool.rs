@@ -2,20 +2,25 @@ use core::iter;
 use std::io;
 use std::thread::{self, JoinHandle};
 
-use crossbeam_channel::{Receiver, Sender, select_biased, unbounded};
+use crossbeam_channel::{Receiver, RecvError, Sender, select_biased, unbounded};
 use luck_ast::MIN_STACK_BYTES;
 
 type Job = Box<dyn FnOnce() + Send>;
 
-/// Which queue a job waits in. A worker takes a request before any
-/// background job, so a lint of every open document doesn't keep a hover
-/// waiting.
+/// Which queue a job waits in.
+///
+/// A worker takes a request before any background job, and either before an
+/// idle one, so a lint of every open document doesn't keep a hover waiting,
+/// and reading the workspace keeps neither waiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Priority {
     /// An answer the client is waiting for.
     Request,
     /// Diagnostics, which the server pushes when they're ready.
     Background,
+    /// Reading the workspace's files ahead of the first request that needs
+    /// them.
+    Idle,
 }
 
 /// The threads every job runs on, each with the stack any stage needs.
@@ -28,7 +33,15 @@ pub(crate) enum Priority {
 pub(crate) struct Pool {
     requests: Sender<Job>,
     background: Sender<Job>,
+    idle: Sender<Job>,
     workers: Vec<JoinHandle<()>>,
+}
+
+/// What a worker takes jobs from, in the order it prefers them.
+struct Queues {
+    requests: Receiver<Job>,
+    background: Receiver<Job>,
+    idle: Receiver<Job>,
 }
 
 impl Pool {
@@ -38,17 +51,21 @@ impl Pool {
     pub(crate) fn new(threads: usize) -> io::Result<Self> {
         let (requests, request_jobs) = unbounded::<Job>();
         let (background, background_jobs) = unbounded::<Job>();
+        let (idle, idle_jobs) = unbounded::<Job>();
         let workers = iter::repeat_with(|| {
-            let (takes_requests, takes_background) =
-                (request_jobs.clone(), background_jobs.clone());
+            let queues = Queues {
+                requests: request_jobs.clone(),
+                background: background_jobs.clone(),
+                idle: idle_jobs.clone(),
+            };
             thread::Builder::new()
                 .name("luck-lsp-worker".to_owned())
                 .stack_size(MIN_STACK_BYTES)
-                .spawn(move || work(&takes_requests, &takes_background))
+                .spawn(move || queues.work())
         })
         .take(threads.max(1))
         .collect::<io::Result<_>>()?;
-        Ok(Self { requests, background, workers })
+        Ok(Self { requests, background, idle, workers })
     }
 
     pub(crate) fn spawn<F>(&self, priority: Priority, job: F)
@@ -58,17 +75,18 @@ impl Pool {
         let queue = match priority {
             Priority::Request => &self.requests,
             Priority::Background => &self.background,
+            Priority::Idle => &self.idle,
         };
-        // A worker holds each receiver until both queues close, which only
+        // A worker holds each receiver until every queue closes, which only
         // `join` does.
         let _queued = queue.send(Box::new(job));
     }
 
-    /// Closes both queues, and waits for the workers to run what's queued
+    /// Closes every queue, and waits for the workers to run what's queued
     /// and stop.
     pub(crate) fn join(self) {
-        let Self { requests, background, workers } = self;
-        drop((requests, background));
+        let Self { requests, background, idle, workers } = self;
+        drop((requests, background, idle));
         for worker in workers {
             // A worker that panicked has nothing left to stop.
             let _stopped = worker.join();
@@ -76,16 +94,28 @@ impl Pool {
     }
 }
 
-/// Runs jobs until both queues are closed and empty.
-fn work(requests: &Receiver<Job>, background: &Receiver<Job>) {
-    loop {
-        let next = select_biased! {
-            recv(requests) -> request => request.or_else(|_| background.recv()),
-            recv(background) -> queued => queued.or_else(|_| requests.recv()),
-        };
-        match next {
-            Ok(job) => job(),
-            Err(_) => return,
+impl Queues {
+    /// Runs jobs until every queue is closed and empty.
+    fn work(&self) {
+        while let Ok(job) = self.next() {
+            job();
+        }
+    }
+
+    /// The first job of the queue it prefers that holds one, waiting for
+    /// one when none does.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error once every queue is closed and empty. They all close
+    /// at once, after which each still gives what it holds.
+    fn next(&self) -> Result<Job, RecvError> {
+        let Self { requests, background, idle } = self;
+        let drained = || requests.recv().or_else(|_| background.recv()).or_else(|_| idle.recv());
+        select_biased! {
+            recv(requests) -> request => request.or_else(|_| drained()),
+            recv(background) -> queued => queued.or_else(|_| drained()),
+            recv(idle) -> waiting => waiting.or_else(|_| drained()),
         }
     }
 }
@@ -99,7 +129,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_request_goes_before_queued_background_jobs() {
+    fn a_request_goes_before_queued_background_jobs_and_both_before_idle_ones() {
         let pool = Pool::new(1).expect("a worker starts");
         let (started, is_started) = bounded(0);
         let (release, is_released) = bounded::<()>(0);
@@ -109,13 +139,15 @@ mod tests {
         });
         is_started.recv_timeout(Duration::from_secs(30)).expect("the worker is busy");
         let (order, ran) = unbounded();
-        let background_order = order.clone();
-        pool.spawn(Priority::Background, move || {
-            background_order.send(Priority::Background).expect("the test reads it");
-        });
-        pool.spawn(Priority::Request, move || order.send(Priority::Request).expect("read"));
+        for priority in [Priority::Idle, Priority::Background, Priority::Request] {
+            let sender = order.clone();
+            pool.spawn(priority, move || sender.send(priority).expect("the test reads it"));
+        }
         release.send(()).expect("the first job waits");
         pool.join();
-        assert_eq!(ran.try_iter().collect::<Vec<_>>(), [Priority::Request, Priority::Background]);
+        assert_eq!(
+            ran.try_iter().collect::<Vec<_>>(),
+            [Priority::Request, Priority::Background, Priority::Idle]
+        );
     }
 }

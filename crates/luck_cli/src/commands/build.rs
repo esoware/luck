@@ -418,6 +418,8 @@ fn print_build_footer(total_duration: Duration) {
 mod tests {
     use std::fs;
 
+    use luck_resolver::{FileSystem as _, FileSystemOs};
+
     use super::*;
 
     fn watching(config: PathBuf) -> BuildArgs {
@@ -437,7 +439,7 @@ mod tests {
             args.build_for_watch(&mut bundle_arenas(), Verbosity::Quiet).expect("watch goes on");
         watched_directories(&read_files)
             .iter()
-            .filter_map(|directory| directory.canonicalize().ok())
+            .map(|directory| FileSystemOs.canonicalize_existing(directory))
             .collect()
     }
 
@@ -459,7 +461,7 @@ mod tests {
             .expect("write luck.json");
 
         let directories = watched_for(&watching(config));
-        let canonical_sources = sources.canonicalize().expect("canonicalize sources");
+        let canonical_sources = FileSystemOs.canonicalize_existing(&sources);
         assert!(
             directories.contains(&canonical_sources),
             "fixing the broken entry must trigger a rebuild, but only {directories:?} are watched"
@@ -481,7 +483,7 @@ mod tests {
         let extending =
             r#"{"extends":["../shared/base.json"],"entry":"main.lua","output":"out.lua"}"#;
         fs::write(&config, extending).expect("write luck.json");
-        let canonical_shared = shared.canonicalize().expect("canonicalize shared");
+        let canonical_shared = FileSystemOs.canonicalize_existing(&shared);
 
         let loading = watched_for(&watching(config.clone()));
         assert!(loading.contains(&canonical_shared), "{loading:?}");

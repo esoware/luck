@@ -8,6 +8,7 @@ use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::FormatOptions;
 use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
+use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_stdlib::Stdlib;
 use luck_token::{LuaTarget, LuaVersion};
 use parking_lot::Mutex;
@@ -20,7 +21,6 @@ use crate::filter::ProjectFilter;
 use crate::format_config::FormatConfig;
 use crate::glob::compiled;
 use crate::load::{self, Loaded, config_directory, in_file, read_std_definition};
-use crate::path::canonicalize_existing;
 
 /// A `luck.json` loaded through its `extends` chain and validated, or the
 /// defaults where there's none, and the settings it gives each file.
@@ -317,7 +317,7 @@ impl Project {
         let Some(file) = path.filter(|_| !self.overrides.is_empty()) else {
             return Vec::new();
         };
-        let canonical = canonicalize_existing(file);
+        let canonical = FileSystemOs.canonicalize_existing(file);
         let candidate = Candidate::new(self.filter.relative(&canonical));
         self.overrides
             .iter()

@@ -91,7 +91,7 @@ pub(crate) fn one_shot_project(config_path: Option<&Path>, input: &Path) -> Resu
         input.parent().filter(|parent| !parent.as_os_str().is_empty())
     };
     let start_directory = match input_directory {
-        Some(directory) => match directory.canonicalize() {
+        Some(directory) => match FileSystemOs.canonicalize(directory) {
             Ok(canonical) => canonical,
             Err(_) => current_directory()?.join(directory),
         },
@@ -544,7 +544,9 @@ impl TreeWalk<'_> {
 fn canonical_directory(directory: &Path) -> Result<PathBuf, Exit> {
     // Walking up a `..`, which `path::absolute` keeps on Unix, would leave
     // this directory's ancestors.
-    directory.canonicalize().map_err(|e| usage_error(format!("`{}`: {e}", directory.display())))
+    FileSystemOs
+        .canonicalize(directory)
+        .map_err(|e| usage_error(format!("`{}`: {e}", directory.display())))
 }
 
 /// Runs `work` over `files` on the rayon pool and hands `take` each outcome
@@ -664,7 +666,8 @@ mod tests {
 
         let project = one_shot_project(None, &entry).expect("defaults");
         assert_eq!(project.target_for(Some(&entry)), LuaTarget::Luau);
-        let canonical_sources = entry.parent().and_then(|parent| parent.canonicalize().ok());
+        let canonical_sources =
+            entry.parent().and_then(|parent| FileSystemOs.canonicalize(parent).ok());
         if find_config(directory.path()).is_none() {
             assert_eq!(Some(project.root()), canonical_sources.as_deref());
         }

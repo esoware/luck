@@ -5,7 +5,7 @@
 //! the result, so nothing is parsed or checked at runtime. It names what it
 //! uses from this module.
 
-use luck_token::LuaTarget;
+use luck_token::{LuaTarget, LuaVersion};
 
 use crate::stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
@@ -32,6 +32,21 @@ pub const fn library_for(target: LuaTarget) -> &'static StdlibLibrary<'static> {
         LuaTarget::Luau => &LUAU,
         LuaTarget::LuauRoblox => &LUAU_ROBLOX,
     }
+}
+
+/// Whether `require(name)` under `version` returns a standard library.
+///
+/// The real `require` finds one in `package.loaded` before any searcher, so
+/// no file can stand in for it. Luau has no `package` table, so its
+/// `require` always resolves a path.
+#[must_use]
+pub fn is_preloaded_module(name: &str, version: LuaVersion) -> bool {
+    !version.is_luau()
+        && (name == "_G"
+            || matches!(
+                library_for(version.into()).globals.get(name),
+                Some(StdlibEntry::Namespace(_))
+            ))
 }
 
 pub(crate) const FUNCTION: StdlibFunction<'static> = StdlibFunction {

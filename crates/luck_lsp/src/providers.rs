@@ -1,6 +1,6 @@
 pub(crate) mod code_action;
 pub(crate) mod completion;
-mod cursor;
+pub(crate) mod cursor;
 pub(crate) mod definition;
 pub(crate) mod diagnostics;
 pub(crate) mod document_highlight;
@@ -24,23 +24,30 @@ pub(crate) mod workspace_symbol;
 /// past it, broken at every level, or holding long runs and lists.
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use ls_types::{
-        CodeActionContext, CodeActionParams, GotoDefinitionParams, PartialResultParams,
-        ReferenceContext, ReferenceParams, RenameParams, TextDocumentIdentifier,
-        TextDocumentPositionParams, Uri, WorkDoneProgressParams,
+        CodeActionContext, CodeActionParams, PartialResultParams, ReferenceContext,
+        ReferenceParams, RenameParams, TextDocumentIdentifier, TextDocumentPositionParams, Uri,
+        WorkDoneProgressParams,
     };
+    use luck_config::Project;
     use luck_testgen::{
         broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
     };
     use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
-    use crate::fixtures::document;
+    use crate::fixtures::{document_at, session};
+    use crate::workspace::WorkspaceView;
 
     fn serve_every_request(source: &str, version: LuaVersion) {
         let target = if version.is_luau() { LuaTarget::LuauRoblox } else { LuaTarget::Lua54 };
         let uri: Uri = "file:///main.lua".parse().expect("a valid URI");
-        let document = document(source, target);
+        let project = Project::defaults(PathBuf::from("."));
+        let document = document_at(source, target, project, Path::new("main.lua"));
+        let session = session();
+        let workspace = WorkspaceView::new(&session, &[], &|| false);
         let lints = document.lint(&|| false).expect("nothing cancels it");
         let diagnostics = diagnostics::to_lsp(&uri, &document, &lints);
         let full_range = document.full_range();
@@ -66,8 +73,10 @@ mod tests {
             let _completion = completion::completion(&document, position);
             let _signature = signature_help::signature_help(&document, position);
             let _highlights = document_highlight::document_highlights(&document, position);
-            let _prepared = rename::prepare(&document, position);
+            let _prepared = rename::prepare(&workspace, &uri, &document, position);
             let _renamed = rename::rename(
+                &workspace,
+                &uri,
                 &document,
                 &RenameParams {
                     text_document_position: at.clone(),
@@ -76,29 +85,24 @@ mod tests {
                 },
             );
             let _references = references::references(
+                &workspace,
+                &uri,
                 &document,
                 &ReferenceParams {
-                    text_document_position: at.clone(),
+                    text_document_position: at,
                     work_done_progress_params: WorkDoneProgressParams::default(),
                     partial_result_params: PartialResultParams::default(),
                     context: ReferenceContext { include_declaration: true },
                 },
             );
-            let _definition = definition::goto(
-                &document,
-                &GotoDefinitionParams {
-                    text_document_position_params: at,
-                    work_done_progress_params: WorkDoneProgressParams::default(),
-                    partial_result_params: PartialResultParams::default(),
-                },
-            );
+            let _definition = definition::goto(&workspace, &uri, &document, position);
         }
         let _selections = selection_range::selection_ranges(&document, &positions);
         let _folds = folding_range::folding_ranges(&document);
         let _symbols = document_symbol::document_symbols(&document);
         let _tokens = semantic_tokens::semantic_tokens(&document);
         let _ranged_tokens = semantic_tokens::in_range(&document, full_range);
-        let _links = document_link::document_links(&document, &uri);
+        let _links = document_link::document_links(&document);
         let _formatted = document.format(None);
         let _range_formatted = document.format(Some(0..source.len()));
         let _workspace_symbols = workspace_symbol::workspace_symbols([(&uri, &document)], "a");

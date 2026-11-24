@@ -1,10 +1,10 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use luck_bundler::DynamicRequire;
 use luck_config::{Editorconfigs, Project};
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_linter::{Category, LintConfig, RuleId, RuleLevel};
+use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_token::{LuaTarget, LuaVersion};
 
 use crate::common::{load_error, loaded, project_with};
@@ -171,7 +171,8 @@ max_line_length = 90
 fn records_every_config_file_it_read() {
     let (directory, project) =
         loaded(&[("base.json", "{}"), ("luck.json", r#"{ "extends": ["base.json"] }"#)]);
-    let canonical = |name: &str| directory.path().join(name).canonicalize().expect("exists");
+    let canonical =
+        |name: &str| FileSystemOs.canonicalize(&directory.path().join(name)).expect("exists");
     assert_eq!(project.files(), [canonical("luck.json"), canonical("base.json")]);
 }
 
@@ -196,7 +197,8 @@ fn std_definitions_layer_over_the_library_of_each_dialect() {
         assert!(stdlib.library().lookup(["love", "draw"]).is_some(), "{file}");
         assert!(stdlib.library().lookup(["print"]).is_some(), "{file}");
     }
-    let std_file = directory.path().join("std/love.toml").canonicalize().expect("exists");
+    let std_file =
+        FileSystemOs.canonicalize(&directory.path().join("std/love.toml")).expect("exists");
     assert!(project.files().contains(&std_file), "{:?}", project.files());
 }
 
@@ -312,7 +314,7 @@ fn bundle_options_carry_the_root_and_search_paths() {
     assert_eq!(options.search_paths, ["src/?.lua"]);
     assert_eq!(options.dynamic_require, DynamicRequire::Error);
     assert_eq!(
-        fs::canonicalize(options.project_root).expect("root exists"),
-        directory.path().canonicalize().expect("exists")
+        FileSystemOs.canonicalize_existing(options.project_root),
+        FileSystemOs.canonicalize_existing(directory.path())
     );
 }

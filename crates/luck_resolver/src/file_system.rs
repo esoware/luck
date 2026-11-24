@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{self, Component, Path, PathBuf};
 
 #[cfg(windows)]
 use crate::path::strip_verbatim_prefix;
@@ -37,6 +37,34 @@ pub trait FileSystem: Send + Sync {
     ///
     /// Returns what [`fs::canonicalize`] does, such as `NotFound`.
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
+
+    /// `path` canonicalized as far as it exists, with the rest resolved
+    /// lexically, so a file not on disk yet, or just deleted, compares
+    /// against real paths.
+    fn canonicalize_existing(&self, path: &Path) -> PathBuf {
+        let absolute = path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let mut missing = Vec::new();
+        for ancestor in absolute.ancestors() {
+            if let Ok(mut canonical) = self.canonicalize(ancestor) {
+                for component in missing.into_iter().rev() {
+                    match component {
+                        Component::CurDir => {}
+                        Component::ParentDir => {
+                            canonical.pop();
+                        }
+                        named @ (Component::Normal(_)
+                        | Component::Prefix(_)
+                        | Component::RootDir) => {
+                            canonical.push(named);
+                        }
+                    }
+                }
+                return canonical;
+            }
+            missing.extend(ancestor.components().next_back());
+        }
+        absolute
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,5 +161,16 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let missing = FileSystemOs.read(&directory.path().join("does_not_exist.lua")).unwrap_err();
         assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn canonicalize_existing_resolves_only_the_part_that_is_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let canonical_root = FileSystemOs.canonicalize(directory.path()).unwrap();
+        assert_eq!(
+            FileSystemOs.canonicalize_existing(&directory.path().join("gone/../out/bundle.lua")),
+            canonical_root.join("out").join("bundle.lua")
+        );
+        assert_eq!(FileSystemOs.canonicalize_existing(directory.path()), canonical_root);
     }
 }

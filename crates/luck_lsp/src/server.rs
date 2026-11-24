@@ -6,16 +6,18 @@
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use core::mem;
 use core::num::NonZero;
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use ls_types::notification::{
-    Cancel, DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument,
-    DidOpenTextDocument, Exit, Notification as _, PublishDiagnostics, ShowMessage,
+    Cancel, DidChangeTextDocument, DidChangeWatchedFiles, DidChangeWorkspaceFolders,
+    DidCloseTextDocument, DidOpenTextDocument, Exit, Notification as _, PublishDiagnostics,
+    ShowMessage,
 };
 use ls_types::request::{
     CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
@@ -27,17 +29,18 @@ use ls_types::request::{
 use ls_types::{
     CodeActionKind, CodeActionOptions, CodeActionProviderCapability, CompletionOptions, Diagnostic,
     DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
-    DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentLinkOptions, DocumentSymbolResponse, FileChangeType,
-    FileSystemWatcher, FoldingRangeProviderCapability, GlobPattern, HoverProviderCapability,
-    InitializeParams, InitializeResult, MessageType, NumberOrString, OneOf,
-    PublishDiagnosticsParams, Range, Registration, RegistrationParams, RenameOptions,
-    SelectionRangeProviderCapability, SemanticTokensFullOptions, SemanticTokensOptions,
-    SemanticTokensRegistrationOptions, SemanticTokensServerCapabilities, ServerCapabilities,
-    ServerInfo, ShowMessageParams, SignatureHelpOptions, StaticRegistrationOptions,
-    TextDocumentRegistrationOptions, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextEdit, Uri, WatchKind, WorkDoneProgressOptions, WorkspaceEdit,
-    WorkspaceSymbolResponse,
+    DidChangeWatchedFilesRegistrationOptions, DidChangeWorkspaceFoldersParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentLinkOptions,
+    DocumentSymbolResponse, FileChangeType, FileSystemWatcher, FoldingRangeProviderCapability,
+    GlobPattern, HoverProviderCapability, InitializeParams, InitializeResult, MessageType,
+    NumberOrString, OneOf, PublishDiagnosticsParams, Range, Registration, RegistrationParams,
+    RenameOptions, SelectionRangeProviderCapability, SemanticTokensFullOptions,
+    SemanticTokensOptions, SemanticTokensRegistrationOptions, SemanticTokensServerCapabilities,
+    ServerCapabilities, ServerInfo, ShowMessageParams, SignatureHelpOptions,
+    StaticRegistrationOptions, TextDocumentRegistrationOptions, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextEdit, Uri, WorkDoneProgressOptions,
+    WorkspaceEdit, WorkspaceFoldersChangeEvent, WorkspaceFoldersServerCapabilities,
+    WorkspaceServerCapabilities, WorkspaceSymbolResponse,
 };
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response, ResponseError};
 
@@ -50,6 +53,7 @@ use crate::providers::{
     syntax_tree, workspace_symbol,
 };
 use crate::session::Session;
+use crate::workspace::{Walk, WorkspaceView};
 
 /// JSON-RPC's error codes, and LSP's for a request the client or a change
 /// made moot.
@@ -71,11 +75,15 @@ pub(crate) enum Task {
     /// A message for the user, such as why formatting failed.
     Notify(Notification),
     /// One version's diagnostics, unless a newer version or a close
-    /// replaced it.
-    Publish { uri: Uri, document: Arc<Document>, diags: Vec<Diagnostic> },
+    /// replaced it, or a change to what its requires resolve to started
+    /// another publish of it.
+    Publish { uri: Uri, document: Arc<Document>, diags: Vec<Diagnostic>, resolutions: u64 },
     /// Why a `luck.json` doesn't load, unless the settings were reloaded
     /// since the lookup read it.
     ConfigError { generation: u64, notifications: Vec<Notification> },
+    /// The files of a walk not yet read, which jobs read ahead of the first
+    /// request that needs them, unless a new walk replaced it.
+    Walked { walk: Arc<Walk>, unread: Vec<PathBuf> },
 }
 
 /// `luck/syntaxTree`: the open document's tree, dumped.
@@ -109,7 +117,7 @@ impl LspRequest for FixAllWorkspace {
 /// server exit with an error.
 pub fn serve(connection: Connection) -> io::Result<()> {
     let (id, params) = connection.initialize_start().map_err(io::Error::other)?;
-    let InitializeParams { capabilities, .. } =
+    let InitializeParams { capabilities, workspace_folders, .. } =
         match serde_json::from_value::<InitializeParams>(params) {
             Ok(parsed) => parsed,
             Err(error) => {
@@ -127,18 +135,23 @@ pub fn serve(connection: Connection) -> io::Result<()> {
     let Connection { sender, receiver } = connection;
     let (tasks, finished) = unbounded();
     let threads = thread::available_parallelism().map_or(1, NonZero::get);
-    let server = Server {
+    let mut server = Server {
         sender,
-        session: Arc::new(Session::new(encoding, tasks)),
+        session: Arc::new(Session::new(encoding, tasks, threads)),
         pool: Pool::new(threads)?,
         pending: BTreeMap::new(),
         documents: BTreeMap::new(),
+        workspace_folders: Vec::new(),
+        resolutions: 0,
         is_shutting_down: false,
     };
-    // Without file watchers, cached settings and resolutions, cached misses
-    // included, would live until a restart, so creating or editing a config
-    // file or a module would do nothing for open documents. LSP has no
-    // static form of them.
+    server.set_workspace_folders(
+        workspace_folders.into_iter().flatten().map(|folder| folder.uri).collect(),
+    );
+    // Without file watchers, cached settings, resolutions, cached misses
+    // included, and the workspace's files would live until a restart, so
+    // creating or editing a config file or a module would do nothing. LSP
+    // has no static form of them.
     let can_watch_files = capabilities
         .workspace
         .as_ref()
@@ -205,6 +218,13 @@ fn initialize_result(encoding: PositionEncoding) -> InitializeResult {
                 work_done_progress_options: WorkDoneProgressOptions::default(),
             })),
             workspace_symbol_provider: Some(OneOf::Left(true)),
+            workspace: Some(WorkspaceServerCapabilities {
+                workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                    supported: Some(true),
+                    change_notifications: Some(OneOf::Left(true)),
+                }),
+                file_operations: None,
+            }),
             folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
             selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
             document_link_provider: Some(DocumentLinkOptions {
@@ -234,6 +254,11 @@ struct Server {
     pending: BTreeMap<RequestId, Arc<AtomicBool>>,
     /// The current version of each open document.
     documents: BTreeMap<Uri, Arc<Document>>,
+    /// The client's, which the workspace walks.
+    workspace_folders: Vec<Uri>,
+    /// Bumped by each change to what a require can resolve to, which starts
+    /// a new publish of every open document's diagnostics.
+    resolutions: u64,
     is_shutting_down: bool,
 }
 
@@ -294,15 +319,15 @@ impl Server {
             // Any JSON or TOML file, since a `luck.json` can extend a file,
             // or name a std definition, of any name. A change touching none
             // the projects read is ignored.
-            ("**/*.json", None),
-            ("**/*.toml", None),
-            ("**/.editorconfig", None),
-            ("**/.luaurc", None),
-            ("**/*.{lua,luau}", Some(WatchKind::Create | WatchKind::Delete)),
+            "**/*.json",
+            "**/*.toml",
+            "**/.editorconfig",
+            "**/.luaurc",
+            "**/*.{lua,luau}",
         ]
-        .map(|(glob, kind)| FileSystemWatcher {
+        .map(|glob| FileSystemWatcher {
             glob_pattern: GlobPattern::String(glob.to_owned()),
-            kind,
+            kind: None,
         });
         let options = DidChangeWatchedFilesRegistrationOptions { watchers: watchers.into() };
         let registration = Registration {
@@ -335,10 +360,10 @@ impl Server {
                 }
             }
             Task::Notify(notification) => self.send(notification),
-            Task::Publish { uri, document, diags } => {
+            Task::Publish { uri, document, diags, resolutions } => {
                 let is_current =
                     self.documents.get(&uri).is_some_and(|current| Arc::ptr_eq(current, &document));
-                if is_current && !self.is_shutting_down {
+                if is_current && resolutions == self.resolutions && !self.is_shutting_down {
                     self.publish(uri, diags, Some(document.version()));
                 }
             }
@@ -347,6 +372,20 @@ impl Server {
                     for notification in notifications {
                         self.send(notification);
                     }
+                }
+            }
+            Task::Walked { walk, unread } => {
+                if !self.session.workspace().is_current(&walk) || self.is_shutting_down {
+                    return;
+                }
+                for path in unread {
+                    let (session, read_walk) = (Arc::clone(&self.session), Arc::clone(&walk));
+                    self.pool.spawn(Priority::Idle, move || {
+                        let workspace = session.workspace();
+                        if !session.is_stopping() && workspace.is_current(&read_walk) {
+                            workspace.file(&path).source(&session);
+                        }
+                    });
                 }
             }
         }
@@ -359,7 +398,14 @@ impl Server {
         if let Some(replaced) = self.documents.insert(uri.clone(), Arc::clone(&document)) {
             replaced.mark_stale();
         }
+        self.publish_diagnostics(uri, document);
+    }
+
+    /// Publishes the diagnostics of `document`, the version open at `uri`,
+    /// unless it goes stale first.
+    fn publish_diagnostics(&self, uri: Uri, document: Arc<Document>) {
         let session = Arc::clone(&self.session);
+        let resolutions = self.resolutions;
         self.pool.spawn(Priority::Background, move || {
             if document.is_stale() {
                 return;
@@ -370,7 +416,38 @@ impl Server {
                 };
                 diagnostics::to_lsp(&uri, document.state(&session), lints)
             };
-            session.send(Task::Publish { uri, document, diags });
+            session.send(Task::Publish { uri, document, diags, resolutions });
+        });
+    }
+
+    /// Makes `folders` the workspace and walks it.
+    fn set_workspace_folders(&mut self, folders: Vec<Uri>) {
+        let paths = folders.iter().filter_map(file_path).collect();
+        self.workspace_folders = folders;
+        self.session.workspace().set_folders(paths);
+        self.walk_workspace();
+    }
+
+    /// Walks the workspace's folders ahead of the first request that needs
+    /// their files, and then reads each file not read since it changed.
+    fn walk_workspace(&self) {
+        let walk = self.session.workspace().walk();
+        if !walk.has_folders() {
+            return;
+        }
+        let session = Arc::clone(&self.session);
+        self.pool.spawn(Priority::Idle, move || {
+            let workspace = session.workspace();
+            if session.is_stopping() || !workspace.is_current(&walk) {
+                return;
+            }
+            let unread = walk
+                .files(&session)
+                .iter()
+                .filter(|path| !workspace.is_read(path))
+                .cloned()
+                .collect();
+            session.send(Task::Walked { walk, unread });
         });
     }
 
@@ -400,6 +477,11 @@ impl Server {
             DidChangeWatchedFiles::METHOD => {
                 if let Ok(watched) = serde_json::from_value(params) {
                     self.watched_files_changed(&watched);
+                }
+            }
+            DidChangeWorkspaceFolders::METHOD => {
+                if let Ok(changed) = serde_json::from_value(params) {
+                    self.workspace_folders_changed(changed);
                 }
             }
             Cancel::METHOD => {
@@ -450,33 +532,65 @@ impl Server {
         if let Some(closed) = self.documents.remove(&uri) {
             closed.mark_stale();
         }
+        // What's on disk may not be what the document last held, which a
+        // client that watches no files never says.
+        if let Some(path) = file_path(&uri) {
+            self.session.workspace().forget(path);
+        }
         self.session.spare_arena().clear();
         // LSP has a server clear a closed file's diagnostics.
         self.publish(uri, Vec::new(), None);
     }
 
     fn watched_files_changed(&mut self, params: &DidChangeWatchedFilesParams) {
-        let settings = self.session.settings();
-        let (mut is_settings_change, mut is_resolution_change) = (false, false);
+        let session = Arc::clone(&self.session);
+        let (mut is_settings_change, mut is_resolution_change, mut is_file_added_or_removed) =
+            (false, false, false);
         for change in &params.changes {
             let Some(path) = file_path(&change.uri) else {
                 continue;
             };
-            is_settings_change |= settings.is_settings_file(&path);
+            is_settings_change |= session.settings().is_settings_file(&path);
+            let is_module =
+                path.extension().is_some_and(|extension| extension == "lua" || extension == "luau");
+            let is_module_added_or_removed = is_module && change.typ != FileChangeType::CHANGED;
             // A `.luaurc` edited, or a module created or deleted, can change
             // what a require resolves to.
-            is_resolution_change |= path.file_name().is_some_and(|name| name == ".luaurc")
-                || (change.typ != FileChangeType::CHANGED
-                    && path
-                        .extension()
-                        .is_some_and(|extension| extension == "lua" || extension == "luau"));
+            is_resolution_change |= is_module_added_or_removed
+                || path.file_name().is_some_and(|name| name == ".luaurc");
+            is_file_added_or_removed |= is_module_added_or_removed;
+            if is_module {
+                session.workspace().forget(path);
+            }
         }
         if is_settings_change {
             self.reload_settings();
             return;
         }
+        if is_file_added_or_removed {
+            session.workspace().walk_again();
+            self.walk_workspace();
+        }
         if is_resolution_change {
-            settings.clear_resolvers();
+            session.settings().clear_resolvers();
+            self.republish();
+        }
+    }
+
+    fn workspace_folders_changed(&mut self, params: DidChangeWorkspaceFoldersParams) {
+        let WorkspaceFoldersChangeEvent { added, removed } = params.event;
+        let mut folders = mem::take(&mut self.workspace_folders);
+        folders.retain(|folder| removed.iter().all(|gone| gone.uri != *folder));
+        folders.extend(added.into_iter().map(|folder| folder.uri));
+        self.set_workspace_folders(folders);
+    }
+
+    /// Publishes every open document's diagnostics again, as a change to
+    /// what their requires resolve to needs.
+    fn republish(&mut self) {
+        self.resolutions = self.resolutions.wrapping_add(1);
+        for (uri, document) in self.open_documents() {
+            self.publish_diagnostics(uri, document);
         }
     }
 
@@ -487,6 +601,8 @@ impl Server {
                 self.publish(uri, Vec::new(), None);
             }
         }
+        self.session.workspace().clear();
+        self.walk_workspace();
         // Every open document gets a new version of the same text under the
         // new settings, whether or not its dialect or extra globals changed,
         // so a lint under the old ones has nothing to publish.
@@ -583,6 +699,38 @@ impl Server {
         let document = self.document(uri(&params));
         self.spawn::<R, _>(id, move |session, _| {
             document.map_or(Ok(None), |open| answer(session, open.state(session), params))
+        });
+    }
+
+    /// Answers `request` as [`Self::spawn_on_document`] does, with what
+    /// `answer` gives for the document at the URI `uri_of` picks and the
+    /// workspace as every open document stood when the request came.
+    fn spawn_on_workspace<R, U, A, T>(&mut self, request: Request, uri_of: U, answer: A)
+    where
+        R: LspRequest<Result = Option<T>>,
+        U: FnOnce(&R::Params) -> &Uri,
+        A: FnOnce(
+                &WorkspaceView<'_>,
+                &Uri,
+                &DocumentState,
+                R::Params,
+            ) -> Result<Option<T>, ResponseError>
+            + Send
+            + 'static,
+        T: 'static,
+    {
+        let Some((id, params)) = self.params::<R>(request) else {
+            return;
+        };
+        let uri = uri_of(&params).clone();
+        let document = self.document(&uri);
+        let documents = self.open_documents();
+        self.spawn::<R, _>(id, move |session, is_cancelled| {
+            let Some(open) = document else {
+                return Ok(None);
+            };
+            let workspace = WorkspaceView::new(session, &documents, is_cancelled);
+            answer(&workspace, &uri, open.state(session), params)
         });
     }
 
@@ -688,30 +836,35 @@ impl Server {
                         Ok(Some(document_highlight::document_highlights(document, position)))
                     },
                 ),
-            GotoDefinition::METHOD => self.spawn_on_document::<GotoDefinition, _, _, _>(
+            GotoDefinition::METHOD => self.spawn_on_workspace::<GotoDefinition, _, _, _>(
                 request,
                 |params| &params.text_document_position_params.text_document.uri,
-                |_, document, params| Ok(definition::goto(document, &params)),
+                |workspace, uri, document, params| {
+                    let position = params.text_document_position_params.position;
+                    Ok(definition::goto(workspace, uri, document, position))
+                },
             ),
-            References::METHOD => self.spawn_on_document::<References, _, _, _>(
+            References::METHOD => self.spawn_on_workspace::<References, _, _, _>(
                 request,
                 |params| &params.text_document_position.text_document.uri,
-                |_, document, params| Ok(Some(references::references(document, &params))),
+                |workspace, uri, document, params| {
+                    Ok(references::references(workspace, uri, document, &params))
+                },
             ),
             PrepareRenameRequest::METHOD => self
-                .spawn_on_document::<PrepareRenameRequest, _, _, _>(
+                .spawn_on_workspace::<PrepareRenameRequest, _, _, _>(
                     request,
                     |params| &params.text_document.uri,
-                    |_, document, params| Ok(rename::prepare(document, params.position)),
+                    |workspace, uri, document, params| {
+                        Ok(rename::prepare(workspace, uri, document, params.position))
+                    },
                 ),
-            Rename::METHOD => self.spawn_on_document::<Rename, _, _, _>(
+            Rename::METHOD => self.spawn_on_workspace::<Rename, _, _, _>(
                 request,
                 |params| &params.text_document_position.text_document.uri,
-                |_, document, params| {
-                    rename::rename(document, &params).map_err(|refusal| ResponseError {
-                        code: INVALID_PARAMS,
-                        message: refusal,
-                        data: None,
+                |workspace, uri, document, params| {
+                    rename::rename(workspace, uri, document, &params).map_err(|refusal| {
+                        ResponseError { code: INVALID_PARAMS, message: refusal, data: None }
                     })
                 },
             ),
@@ -731,9 +884,7 @@ impl Server {
             DocumentLinkRequest::METHOD => self.spawn_on_document::<DocumentLinkRequest, _, _, _>(
                 request,
                 |params| &params.text_document.uri,
-                |_, document, params| {
-                    Ok(Some(document_link::document_links(document, &params.text_document.uri)))
-                },
+                |_, document, _| Ok(Some(document_link::document_links(document))),
             ),
             WorkspaceSymbolRequest::METHOD => {
                 let Some((id, params)) = self.params::<WorkspaceSymbolRequest>(request) else {

@@ -53,7 +53,7 @@ pub(crate) struct Loaded {
 /// the chain isn't a valid config or names a file it can't extend, in the
 /// file at fault.
 pub(crate) fn load(config_path: &Path) -> Result<Loaded, FileDiagnostics> {
-    let canonical = config_path.canonicalize().map_err(|e| {
+    let canonical = FileSystemOs.canonicalize(config_path).map_err(|e| {
         in_file(config_path, Diagnostic::e010(&display(config_path), &e.to_string()))
     })?;
     let mut walk = ExtendsWalk::default();
@@ -99,7 +99,7 @@ impl ExtendsWalk {
         let directory = config_directory(path);
         for std_path in config.std.iter_mut().flatten() {
             let named = std_path.to_string_lossy().into_owned();
-            *std_path = directory.join(&*std_path).canonicalize().map_err(|e| {
+            *std_path = FileSystemOs.canonicalize(&directory.join(&*std_path)).map_err(|e| {
                 in_file(
                     path,
                     Diagnostic::e014(
@@ -110,7 +110,7 @@ impl ExtendsWalk {
             })?;
         }
         let own_boundary = if config.root == Some(true) {
-            Some(directory.canonicalize().map_err(|e| {
+            Some(FileSystemOs.canonicalize(&directory).map_err(|e| {
                 in_file(path, Diagnostic::e010(&display(&directory), &e.to_string()))
             })?)
         } else {
@@ -130,7 +130,7 @@ impl ExtendsWalk {
                 ));
             }
             let extended = directory.join(name);
-            let extended_canonical = extended.canonicalize().map_err(|e| {
+            let extended_canonical = FileSystemOs.canonicalize(&extended).map_err(|e| {
                 extends_error(name, format!("`extends` names `{name}`, which can't be read: {e}"))
             })?;
             if self.chain.contains(&extended_canonical) {

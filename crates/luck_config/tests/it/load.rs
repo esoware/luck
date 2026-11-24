@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use luck_config::{Project, find_config};
+use luck_resolver::{FileSystem as _, FileSystemOs};
 use tempfile::TempDir;
 
 use crate::common::{finishes_within, in_directory, load_error, project_with};
@@ -85,7 +86,7 @@ fn find_config_walks_above_a_relative_start_directory() {
     let found = in_directory(&project.path().join("sub"), || find_config(Path::new(".")))
         .expect("discovery from `.` must find the `luck.json` in its parent");
     assert_eq!(
-        found.canonicalize().expect("exists"),
-        project.path().join("luck.json").canonicalize().expect("exists")
+        FileSystemOs.canonicalize_existing(&found),
+        FileSystemOs.canonicalize_existing(&project.path().join("luck.json"))
     );
 }

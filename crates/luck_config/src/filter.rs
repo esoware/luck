@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use globset::{Candidate, GlobSet};
+use luck_resolver::{FileSystem as _, FileSystemOs};
 
 use crate::glob::{Glob, compiled, glob_set};
-use crate::path::canonicalize_existing;
 
 /// Decides whether a file belongs to the project from `include` and `exclude`
 /// globs, matched relative to the config directory. Exclude wins.
@@ -23,7 +23,7 @@ impl ProjectFilter {
     /// Every `.lua` and `.luau` file.
     pub(crate) fn everything(root: &Path) -> Self {
         Self {
-            root: canonicalize_existing(root),
+            root: FileSystemOs.canonicalize_existing(root),
             include: None,
             exclude: GlobSet::empty(),
             excluded_trees: GlobSet::empty(),
@@ -48,10 +48,10 @@ impl ProjectFilter {
             .map(str::to_owned)
             .collect();
         Ok(Self {
-            // The paths matched against it are canonical, `\\?\C:\...` on
-            // Windows, so a root that isn't would make `strip_prefix` fail and
-            // every glob see the absolute path.
-            root: canonicalize_existing(root),
+            // The paths matched against it are canonical, so a root that
+            // isn't would make `strip_prefix` fail and every glob see the
+            // absolute path.
+            root: FileSystemOs.canonicalize_existing(root),
             include: include.map(compiled).transpose()?,
             exclude: compiled(exclude)?,
             // A directory part that doesn't compile alone only costs the pruning.
@@ -64,7 +64,7 @@ impl ProjectFilter {
     #[must_use]
     pub fn excludes_tree(&self, directory: &Path) -> bool {
         !self.excluded_trees.is_empty()
-            && self.excludes_canonical_tree(&canonicalize_existing(directory))
+            && self.excludes_canonical_tree(&FileSystemOs.canonicalize_existing(directory))
     }
 
     /// [`excludes_tree`](Self::excludes_tree) for a canonical path, such as a
@@ -76,7 +76,7 @@ impl ProjectFilter {
 
     #[must_use]
     pub fn is_included(&self, path: &Path) -> bool {
-        self.includes_canonical(&canonicalize_existing(path))
+        self.includes_canonical(&FileSystemOs.canonicalize_existing(path))
     }
 
     /// [`is_included`](Self::is_included) for a canonical path, such as a
@@ -96,7 +96,7 @@ impl ProjectFilter {
     #[must_use]
     pub fn is_excluded(&self, path: &Path) -> bool {
         !self.exclude.is_empty()
-            && self.exclude.is_match(self.relative(&canonicalize_existing(path)))
+            && self.exclude.is_match(self.relative(&FileSystemOs.canonicalize_existing(path)))
     }
 
     /// `canonical` as the globs see it, relative to the root when it's under

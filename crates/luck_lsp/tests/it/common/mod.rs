@@ -17,7 +17,7 @@ use ls_types::{
     DidOpenTextDocumentParams, FileChangeType, FileEvent, InitializeParams, InitializeResult,
     InitializedParams, MessageType, Position, PublishDiagnosticsParams, ShowMessageParams,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, Uri, VersionedTextDocumentIdentifier,
+    TextDocumentPositionParams, Uri, VersionedTextDocumentIdentifier, WorkspaceFolder,
 };
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response, ResponseError};
 
@@ -44,7 +44,24 @@ impl Client {
         Self::start_with(ClientCapabilities::default()).0
     }
 
+    /// A server whose workspace is `folder`.
+    pub(crate) fn start_in(folder: &Path) -> Self {
+        let workspace_folders = vec![WorkspaceFolder {
+            uri: Uri::from_file_path(folder).expect("file path URI"),
+            name: "workspace".to_owned(),
+        }];
+        let params = InitializeParams {
+            workspace_folders: Some(workspace_folders),
+            ..InitializeParams::default()
+        };
+        Self::initialized(params).0
+    }
+
     pub(crate) fn start_with(capabilities: ClientCapabilities) -> (Self, InitializeResult) {
+        Self::initialized(InitializeParams { capabilities, ..InitializeParams::default() })
+    }
+
+    fn initialized(params: InitializeParams) -> (Self, InitializeResult) {
         let (client, server) = Connection::memory();
         let serving = thread::Builder::new()
             .name("luck-lsp-test-server".to_owned())
@@ -58,7 +75,6 @@ impl Client {
             stray_responses: Vec::new(),
             server_requests: Vec::new(),
         };
-        let params = InitializeParams { capabilities, ..InitializeParams::default() };
         let result = started.request::<Initialize>(params);
         started.notify::<Initialized>(InitializedParams {});
         (started, result)

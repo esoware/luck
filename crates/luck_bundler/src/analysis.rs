@@ -1,8 +1,7 @@
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, GetSpan as _, StringLiteral, TreeCounts};
+use luck_ast::{Chunk, GetSpan as _, TreeCounts};
 use luck_diagnostics::Diagnostic;
 use luck_semantic::{ScopeId, ScopeKind, Scoping, SemanticBuilder, SymbolId};
-use luck_stdlib::StdlibEntry;
 use luck_token::{LuaVersion, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -16,6 +15,9 @@ pub(crate) struct StaticRequire<'ast> {
     /// The module path with escapes decoded, as real `require` receives it.
     pub require_string: &'ast str,
     pub call_span: Span,
+    /// The string literal that names the module, where a failure to resolve
+    /// it is reported.
+    pub path_span: Span,
 }
 
 /// What bundling needs from a module.
@@ -73,17 +75,15 @@ pub(crate) fn analyze<'ast>(
     let mut first_requires: FxHashMap<&str, Span> = FxHashMap::default();
     for site in semantic.requires() {
         let call_span = site.call.span();
-        match site.path.and_then(StringLiteral::as_str) {
-            // The real `require` finds a standard library in `package.loaded`
-            // before any searcher, so no file can stand in for it.
-            Some(path) if is_standard_library(path, version) => {}
-            Some(path) => {
+        match site.path.and_then(|literal| Some((literal.as_str()?, literal.span))) {
+            Some((path, _)) if luck_stdlib::is_preloaded_module(path, version) => {}
+            Some((path, path_span)) => {
                 let first = *first_requires.entry(path).or_insert(call_span);
                 if first != call_span {
                     diags.push(Diagnostic::w001(call_span, path, first));
                 }
                 let require_string = allocator.alloc_str(path);
-                requires.push(StaticRequire { require_string, call_span });
+                requires.push(StaticRequire { require_string, call_span, path_span });
             }
             // `require(expr)` can't be resolved statically. Aborting the whole
             // bundle over one such call is rarely what the author wants, so by
@@ -196,17 +196,6 @@ fn max_function_upvalues(tree: &Scoping) -> usize {
         }
     }
     counts.into_iter().max().unwrap_or(0)
-}
-
-/// Whether the real `require` serves `name` straight from `package.loaded`.
-/// Luau has no `package` table, so its `require` always resolves a path.
-fn is_standard_library(name: &str, version: LuaVersion) -> bool {
-    !version.is_luau()
-        && (name == "_G"
-            || matches!(
-                luck_stdlib::library_for(version.into()).globals.get(name),
-                Some(StdlibEntry::Namespace(_))
-            ))
 }
 
 #[cfg(test)]

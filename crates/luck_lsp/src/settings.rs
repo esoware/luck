@@ -14,7 +14,7 @@ use luck_config::{CONFIG_FILE_NAME, Editorconfigs, Project, find_config};
 use luck_diagnostics::FileDiagnostics;
 use luck_formatter::FormatOptions;
 use luck_linter::Linter;
-use luck_resolver::{ResolveOptions, Resolver};
+use luck_resolver::{FileSystem as _, FileSystemOs, ResolveOptions, Resolver};
 use luck_stdlib::Stdlib;
 use luck_token::LuaVersion;
 use parking_lot::RwLock;
@@ -27,6 +27,8 @@ const EDITORCONFIG_FILE_NAME: &str = ".editorconfig";
 /// version of the document shares until the settings change.
 #[derive(Debug)]
 pub(crate) struct DocumentSettings {
+    /// Canonical, or `None` for a document with no file.
+    pub path: Option<PathBuf>,
     pub project: Arc<LoadedProject>,
     /// The standard library of the document's dialect, with the project's
     /// std definitions over it.
@@ -170,33 +172,39 @@ impl Lookups {
 }
 
 impl SettingsCache {
-    /// The settings of the document at `path`, or of an untitled document,
-    /// and why its `luck.json` doesn't load, if this is the first document
-    /// to ask.
+    /// The settings of the document at `path`, a canonical path, or of an
+    /// untitled document, under `project`, the one [`Self::project_for`]
+    /// gives it.
     pub(crate) fn document_settings(
         &self,
-        path: Option<&Path>,
-    ) -> (DocumentSettings, Option<ConfigError>) {
-        let (project, error) = self.project_for(path);
+        project: Arc<LoadedProject>,
+        path: Option<PathBuf>,
+    ) -> DocumentSettings {
         let editorconfigs = Arc::clone(&self.lookups.read().editorconfigs);
         let loaded = project.project();
-        let settings = DocumentSettings {
-            project: Arc::clone(&project),
-            stdlib: loaded.stdlib_for(path).clone(),
-            linter: loaded.linter_for(path),
-            format: loaded.format_options(path, Some(&editorconfigs)),
-            is_included: path.is_none_or(|file| loaded.filter().is_included(file)),
-        };
-        (settings, error)
+        let file = path.as_deref();
+        let stdlib = loaded.stdlib_for(file).clone();
+        let linter = loaded.linter_for(file);
+        let format = loaded.format_options(file, Some(&editorconfigs));
+        let is_included =
+            file.is_none_or(|canonical| loaded.filter().includes_canonical(canonical));
+        DocumentSettings { path, project, stdlib, linter, format, is_included }
     }
 
-    /// The project of the nearest `luck.json` above the document at
-    /// `document_path`, or the defaults rooted at its directory when there's
-    /// none. A `luck.json` that doesn't load gives the defaults rooted at its
-    /// directory, with the error.
-    fn project_for(
+    /// The project of the nearest `luck.json` above the file at
+    /// `document_path`, a canonical path, so each directory and config has
+    /// one spelling, or the defaults rooted at its directory when there's
+    /// none, and why that `luck.json` doesn't load, if this is the first
+    /// lookup to find it. A `luck.json` that doesn't load gives the defaults
+    /// rooted at its directory.
+    ///
+    /// `spelled` is the document's path as the client spells it. A load error
+    /// names its file under the same directories, since a client knows a file
+    /// only by its own spelling.
+    pub(crate) fn project_for(
         &self,
         document_path: Option<&Path>,
+        spelled: Option<&Path>,
     ) -> (Arc<LoadedProject>, Option<ConfigError>) {
         let directory = document_path.and_then(Path::parent);
         let generation = {
@@ -217,7 +225,10 @@ impl SettingsCache {
             (Some(project), _) => (project, None),
             (None, Some(config)) => match Project::load(config) {
                 Ok(loaded) => (Arc::new(LoadedProject::new(loaded)), None),
-                Err(problem) => {
+                Err(mut problem) => {
+                    if let Some(document) = spelled {
+                        problem.path = spelled_beside(&problem.path, document);
+                    }
                     let root = config.parent().map_or_else(PathBuf::new, Path::to_path_buf);
                     (Arc::new(LoadedProject::new(Project::defaults(root))), Some(problem))
                 }
@@ -276,6 +287,22 @@ impl SettingsCache {
     }
 }
 
+/// `path`, a canonical path, as the client spells the files near `document`.
+///
+/// That's under the deepest directory above `document` whose canonical path
+/// holds it, so a client that reached `document` through a symlink or a
+/// short name knows the file, or `path` itself when none holds it.
+fn spelled_beside(path: &Path, document: &Path) -> PathBuf {
+    document
+        .ancestors()
+        .skip(1)
+        .find_map(|directory| {
+            let inside = path.strip_prefix(FileSystemOs.canonicalize_existing(directory)).ok()?;
+            Some(directory.join(inside))
+        })
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
     use core::ptr;
@@ -290,15 +317,15 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let file = directory.path().join("foo.lua");
         let cache = SettingsCache::default();
-        let (project, error) = cache.project_for(Some(&file));
+        let (project, error) = cache.project_for(Some(&file), None);
         assert!(error.is_none());
         assert_eq!(project.project().target_for(Some(&file)), LuaTarget::Lua54);
         if find_config(directory.path()).is_none() {
             assert_eq!(project.project().root(), directory.path());
         }
-        let (untitled, _) = cache.project_for(None);
+        let (untitled, _) = cache.project_for(None, None);
         assert_eq!(untitled.project().target_for(None), LuaTarget::Lua54);
-        assert!(Arc::ptr_eq(&untitled, &cache.project_for(None).0));
+        assert!(Arc::ptr_eq(&untitled, &cache.project_for(None, None).0));
     }
 
     #[test]
@@ -311,17 +338,17 @@ mod tests {
         let nested = directory.path().join("sub/nested.lua");
         let cache = SettingsCache::default();
 
-        let (project, _) = cache.project_for(Some(&first));
+        let (project, _) = cache.project_for(Some(&first), None);
         assert_eq!(project.project().target_for(Some(&first)), LuaTarget::Lua53);
-        assert!(Arc::ptr_eq(&project, &cache.project_for(Some(&nested)).0));
+        assert!(Arc::ptr_eq(&project, &cache.project_for(Some(&nested), None).0));
 
         fs::write(&config_path, r#"{ "lua": "lua51" }"#).expect("rewrite luck.json");
-        let (cached, _) = cache.project_for(Some(&first));
+        let (cached, _) = cache.project_for(Some(&first), None);
         assert_eq!(cached.project().target_for(Some(&first)), LuaTarget::Lua53);
         let generation = cache.generation();
         cache.clear();
         assert_ne!(cache.generation(), generation, "a clear starts a new generation");
-        let (reloaded, _) = cache.project_for(Some(&first));
+        let (reloaded, _) = cache.project_for(Some(&first), None);
         assert_eq!(reloaded.project().target_for(Some(&first)), LuaTarget::Lua51);
     }
 
@@ -333,12 +360,12 @@ mod tests {
         let file = directory.path().join("a.lua");
         let cache = SettingsCache::default();
 
-        let (project, first_error) = cache.project_for(Some(&file));
+        let (project, first_error) = cache.project_for(Some(&file), None);
         let error = first_error.expect("the error comes with the first lookup");
         assert_eq!(error.file.diags[0].code, "E014");
         assert_eq!(error.generation, cache.generation());
         assert_eq!(project.project().target_for(Some(&file)), LuaTarget::Lua54);
-        assert!(cache.project_for(Some(&file)).1.is_none(), "reported once");
+        assert!(cache.project_for(Some(&file), None).1.is_none(), "reported once");
 
         assert!(cache.is_settings_file(&directory.path().join("other.json")));
         let broken = cache.clear();
@@ -357,7 +384,7 @@ mod tests {
         let shared = directory.path().join("shared.json");
         assert!(!cache.is_settings_file(&shared));
 
-        let _discovered = cache.project_for(Some(&directory.path().join("a.lua")));
+        let _discovered = cache.project_for(Some(&directory.path().join("a.lua")), None);
         assert!(cache.is_settings_file(&shared));
         assert!(cache.is_settings_file(&directory.path().join("luck.json")));
         assert!(cache.is_settings_file(&directory.path().join(".editorconfig")));
@@ -374,7 +401,7 @@ mod tests {
         fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
         let main = directory.path().join("main.lua");
         let cache = SettingsCache::default();
-        let (project, _) = cache.project_for(Some(&main));
+        let (project, _) = cache.project_for(Some(&main), None);
         let resolver = project.resolver(LuaVersion::Lua54);
         assert!(ptr::eq(resolver, project.resolver(LuaVersion::Lua51)));
         assert!(resolver.resolve(&main, "late").is_err(), "nothing named `late` exists yet");

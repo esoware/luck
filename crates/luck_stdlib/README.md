@@ -13,6 +13,7 @@ A `StdlibDefinition` is one std definition file, in the format below, which desc
 ## Usage
 
 - `library_for(target)` returns the built-in library, a `StdlibLibrary`.
+- `is_preloaded_module(name, version)` says whether `require(name)` returns one of the version's built-in libraries from `package.loaded`, so no file resolves for it, which the bundler and the language server both skip.
 - `StdlibDefinition::parse(text)` reads a std definition, and `Stdlib::new(target).layer(&definition)` layers it over the built-in library.
 - `analyze(chunk, counts, library)` returns a `SemanticAnalysis` of a tree parsed as the library's target's version, and beside it the semantic checker's errors. `SemanticAnalysis` answers `is_known_global`, `resolve_callee`, and `resolve_stdlib_path`, takes the configured extra globals with `add_extra_globals`, and holds the `Semantic`.
 

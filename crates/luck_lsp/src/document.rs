@@ -10,12 +10,14 @@ use luck_allocator::Allocator;
 use luck_formatter::FormatResult;
 use luck_linter::{Analysis, FixKind, Message};
 use luck_parser::ParseResult;
+use luck_resolver::{FileSystem as _, FileSystemOs, Resolution, ResolveError};
 use luck_semantic::{AstNodes, Scoping};
 use luck_stdlib::SemanticAnalysis;
 use luck_token::{LuaVersion, Span, Token};
 
 use crate::analyzed::{Analyzed, Arena};
 use crate::line_index::{LineIndex, PositionEncoding, Positions};
+use crate::module_record::{ModuleRecord, Require};
 use crate::providers::document_symbol;
 use crate::providers::semantic_tokens::{self, Highlights};
 use crate::session::Session;
@@ -41,11 +43,9 @@ impl LazySettings {
 
     fn resolve(&self, session: &Session) -> &Arc<DocumentSettings> {
         self.resolved.get_or_init(|| {
-            let (settings, error) = session.settings().document_settings(self.path());
-            if let Some(config_error) = error {
-                session.report_config_error(settings.project.project(), config_error);
-            }
-            Arc::new(settings)
+            let canonical = self.path().map(|path| FileSystemOs.canonicalize_existing(path));
+            let project = session.project_for(canonical.as_deref(), self.path());
+            Arc::new(session.settings().document_settings(project, canonical))
         })
     }
 }
@@ -92,6 +92,11 @@ impl Document {
 
     pub(crate) const fn settings(&self) -> &Arc<LazySettings> {
         &self.settings
+    }
+
+    /// The canonical path of its file, or `None` when it has none.
+    pub(crate) fn path(&self, session: &Session) -> Option<&Path> {
+        self.settings.resolve(session).path.as_deref()
     }
 
     pub(crate) fn mark_stale(&self) {
@@ -175,6 +180,9 @@ pub(crate) struct DocumentState {
     /// The outline, built on first use, which the outline and every
     /// workspace symbol query read.
     symbols: OnceLock<Vec<DocumentSymbol>>,
+    /// Built on first use, which links, diagnostics, and every cross-file
+    /// request read.
+    record: OnceLock<ModuleRecord>,
 }
 
 impl DocumentState {
@@ -191,6 +199,7 @@ impl DocumentState {
             analyzed,
             highlights: OnceLock::new(),
             symbols: OnceLock::new(),
+            record: OnceLock::new(),
         }
     }
 
@@ -241,6 +250,23 @@ impl DocumentState {
 
     pub(crate) fn symbols(&self) -> &[DocumentSymbol] {
         self.symbols.get_or_init(|| document_symbol::document_symbols(self))
+    }
+
+    /// What the other files see of this one: its requires and where it
+    /// names a member of a module's table.
+    pub(crate) fn record(&self) -> &ModuleRecord {
+        self.record.get_or_init(|| {
+            let mut positions = self.positions();
+            let semantic = self.semantic().semantic();
+            ModuleRecord::new(&self.parse().chunk, semantic, |span| positions.range(span))
+        })
+    }
+
+    /// What `require` loads, through the project's resolver, or `None` for
+    /// a document with no file, which no relative path starts from.
+    pub(crate) fn resolve(&self, require: &Require) -> Option<Result<Resolution, ResolveError>> {
+        let path = self.settings.path.as_deref()?;
+        Some(self.settings.project.resolver(self.version()).resolve(path, &require.module))
     }
 
     pub(crate) fn position(&self, offset: u32) -> Position {

@@ -16,7 +16,9 @@
 //! caches the directory listings it reads, what each Lua require string
 //! resolved to, `.luaurc` aliases, and Luau's file probes, which its threads
 //! share, until [`ResolverGeneric::clear_cache`]. A require that names no
-//! file, or more than one, gets a [`ResolveError`] saying why.
+//! file, or more than one, gets a [`ResolveError`] saying why, which
+//! [`ResolveError::to_diagnostic`] turns into the diagnostic luck reports it
+//! with.
 //!
 //! This is the lowest crate that touches the file system, so the crates above
 //! it read Lua sources and canonicalize paths through its [`FileSystemOs`].

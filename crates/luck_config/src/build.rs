@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use luck_minifier::TransformConfig;
+use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_token::LuaTarget;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::{EntryConfig, ProfileOverrides};
 use crate::load::CONFIG_FILE_NAME;
-use crate::path::canonicalize_existing;
 
 /// One bundle `luck build` writes, with the settings its profile gives it.
 #[derive(Debug, Clone)]
@@ -121,12 +121,14 @@ where
     Outputs: IntoIterator,
     Outputs::Item: AsRef<Path>,
 {
-    let read_paths: FxHashSet<PathBuf> =
-        inputs.into_iter().map(|input| canonicalize_existing(input.as_ref())).collect();
+    let read_paths: FxHashSet<PathBuf> = inputs
+        .into_iter()
+        .map(|input| FileSystemOs.canonicalize_existing(input.as_ref()))
+        .collect();
     let mut written_paths = FxHashSet::default();
     for output in outputs {
         let output_path = output.as_ref();
-        let canonical = canonicalize_existing(output_path);
+        let canonical = FileSystemOs.canonicalize_existing(output_path);
         if read_paths.contains(&canonical) {
             return Err(format!(
                 "output `{}` would overwrite a source file of the build",

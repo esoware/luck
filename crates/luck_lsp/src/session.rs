@@ -1,35 +1,43 @@
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::fs;
+use std::path::Path;
 
 use crossbeam_channel::Sender;
 use ls_types::notification::{Notification as _, PublishDiagnostics, ShowMessage};
 use ls_types::{MessageType, PublishDiagnosticsParams, ShowMessageParams, Uri};
 use lsp_server::Notification;
+use luck_allocator::AllocatorPool;
 use luck_config::Project;
 
 use crate::analyzed::SpareArena;
 use crate::line_index::PositionEncoding;
 use crate::providers::diagnostics;
 use crate::server::Task;
-use crate::settings::{ConfigError, SettingsCache};
+use crate::settings::{ConfigError, LoadedProject, SettingsCache};
+use crate::workspace::Workspace;
 
 /// What the main loop shares with every job.
 #[derive(Debug)]
 pub(crate) struct Session {
     encoding: PositionEncoding,
     settings: SettingsCache,
+    workspace: Workspace,
     spare_arena: Arc<SpareArena>,
+    /// The arenas files read from disk parse in, one at a time per worker.
+    allocators: AllocatorPool,
     tasks: Sender<Task>,
     is_stopping: AtomicBool,
 }
 
 impl Session {
-    pub(crate) fn new(encoding: PositionEncoding, tasks: Sender<Task>) -> Self {
+    pub(crate) fn new(encoding: PositionEncoding, tasks: Sender<Task>, threads: usize) -> Self {
         Self {
             encoding,
             settings: SettingsCache::default(),
+            workspace: Workspace::default(),
             spare_arena: Arc::default(),
+            allocators: AllocatorPool::new(threads),
             tasks,
             is_stopping: AtomicBool::new(false),
         }
@@ -43,8 +51,32 @@ impl Session {
         &self.settings
     }
 
+    pub(crate) const fn workspace(&self) -> &Workspace {
+        &self.workspace
+    }
+
     pub(crate) const fn spare_arena(&self) -> &Arc<SpareArena> {
         &self.spare_arena
+    }
+
+    pub(crate) const fn allocators(&self) -> &AllocatorPool {
+        &self.allocators
+    }
+
+    /// The project of the file at `path`, a canonical path, or of an
+    /// untitled document, which reports why its `luck.json` doesn't load if
+    /// this is the first lookup to find it, under the directories of
+    /// `spelled`, the path as the client spells it.
+    pub(crate) fn project_for(
+        &self,
+        path: Option<&Path>,
+        spelled: Option<&Path>,
+    ) -> Arc<LoadedProject> {
+        let (project, error) = self.settings.project_for(path, spelled);
+        if let Some(config_error) = error {
+            self.report_config_error(project.project(), config_error);
+        }
+        project
     }
 
     /// Hands `task` to the main loop.
@@ -64,7 +96,7 @@ impl Session {
 
     /// Shows why the `luck.json` that `defaults` stand in for doesn't load,
     /// and publishes the problem on the file at fault.
-    pub(crate) fn report_config_error(&self, defaults: &Project, error: ConfigError) {
+    fn report_config_error(&self, defaults: &Project, error: ConfigError) {
         let ConfigError { file, generation } = error;
         let problems: Vec<&str> = file.diags.iter().map(|diag| &*diag.message).collect();
         let message = format!(

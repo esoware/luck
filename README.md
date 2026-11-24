@@ -34,7 +34,7 @@ Configuration lives in `luck.json`. `lint`, `fmt`, `check`, and the language ser
 - **Minifier.** Eleven AST transforms that rewrite the tree in place, in three phases: Luau type stripping, compression passes that repeat until one changes nothing, and renaming, each reading the scopes and references semantic analysis finds. Dead code removal, constant folding, and local renaming do most of the work. Config flags turn each transform on and off, and every transform assumes metamethods can fire.
 - **Formatter.** Prettier-style layout that breaks on line width and handles the full Luau type grammar. `format(format(x)) == format(x)` and the output re-parses, both enforced by tests.
 - **Linter.** 66 rules across correctness, suspicious, style, and performance categories, with inline suppressions and `--fix`.
-- **Language server.** Hover, completions, diagnostics, go-to-definition, rename, and semantic tokens, served by `luck lsp` and consumed by the [VS Code extension](editors/vscode).
+- **Language server.** Hover, completions, diagnostics, go-to-definition, references, rename, and semantic tokens, with a module's members followed across the workspace, served by `luck lsp` and consumed by the [VS Code extension](editors/vscode).
 
 Every tool is also a library crate (`luck_parser`, `luck_formatter`, `luck_linter`, ...). The `luck` facade crate, published as `luck_lua`, re-exports all of them except the language server, so you can build on the same pieces the CLI uses.
 
