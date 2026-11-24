@@ -49,7 +49,7 @@ fn check_call(call: Call<'_>, source: &[u8], version: LuaVersion) -> Option<Find
     Some(
         Finding::new(
             "call arguments start on a new line, but Lua joins this with the previous expression",
-            Span::new(open_start, open_start.saturating_add(1)),
+            Span::new(open_start, open_start + 1),
         )
         .with_help(
             "keep `(` on the same line as the callee, or add a semicolon if a new statement was \

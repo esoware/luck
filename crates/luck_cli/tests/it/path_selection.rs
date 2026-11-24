@@ -143,7 +143,7 @@ fn glob_that_matches_nothing_is_an_error_beside_one_that_matches() {
     luck_in(root)
         .args(["fmt", "--check", "src", "srcc/**/*.lua"])
         .assert()
-        .code(2i32)
+        .code(2)
         .stderr(predicate::str::contains("no `.lua` or `.luau` files matched `srcc/**/*.lua`"));
     assert_eq!(
         listed(root, &["src", "srcc/**/*.lua", "--no-error-on-unmatched-pattern"]),
@@ -201,14 +201,14 @@ fn no_matching_file_is_a_usage_error() {
         luck_in(root)
             .arg(command)
             .assert()
-            .code(2i32)
+            .code(2)
             .stderr(predicate::str::contains("no `.lua` or `.luau` files matched `.`"));
         luck_in(root)
             .args([command, "src/*.lua"])
             .assert()
-            .code(2i32)
+            .code(2)
             .stderr(predicate::str::contains("matched `src/*.lua`"));
-        luck_in(root).args([command, "--no-error-on-unmatched-pattern"]).assert().code(0i32);
+        luck_in(root).args([command, "--no-error-on-unmatched-pattern"]).assert().code(0);
     }
 }
 
@@ -218,6 +218,6 @@ fn missing_path_without_a_wildcard_is_not_a_glob() {
     luck_in(project.path())
         .args(["check", "missing.lua"])
         .assert()
-        .code(2i32)
+        .code(2)
         .stderr(predicate::str::contains("path not found: `missing.lua`"));
 }

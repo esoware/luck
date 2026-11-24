@@ -22,7 +22,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn function_attribute(&self, name: &str) -> FunctionAttribute<'ast> {
         FunctionAttribute::new(self.next_span(), self.name(name), None)
     }
@@ -32,7 +31,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn function_attribute_with_args<Args>(
         &self,
         name: &str,
@@ -63,7 +61,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn param(&self, name: &str) -> Parameter<'ast> {
         Parameter::new(self.name(name), None)
     }
@@ -71,13 +68,11 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn param_typed(&self, name: &str, ty: Type<'ast>) -> Parameter<'ast> {
         Parameter::new(self.name(name), Some(self.boxed(ty)))
     }
 
     /// Lua 5.5's named `...name` form isn't supported, so `name` is `None`.
-    #[must_use]
     pub fn vararg_param(&self, type_annotation: Option<Type<'ast>>) -> VarArgParam<'ast> {
         VarArgParam::new(self.next_span(), None, type_annotation.map(|ty| self.boxed(ty)))
     }

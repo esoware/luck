@@ -6,8 +6,8 @@ mod function;
 mod stmt;
 mod types;
 
-use alloc::borrow::Cow;
-use core::mem;
+use std::borrow::Cow;
+use std::mem;
 
 use luck_allocator::{Allocator, Box, List, ThinBytes, ThinStr};
 use luck_ast::{
@@ -33,7 +33,6 @@ use crate::{Groupings, ParseResult};
 ///
 /// `source` is bytes, as Lua reads it, so a string or a comment in it may
 /// hold any byte.
-#[must_use]
 pub fn parse<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
@@ -45,7 +44,6 @@ pub fn parse<'ast>(
 /// [`parse`], keeping every token the parse read in
 /// [`ParseResult::tokens`], for a host that needs both, such as the
 /// formatter, so it lexes the source once.
-#[must_use]
 pub fn parse_with_tokens<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
@@ -236,16 +234,12 @@ struct OpenConstructs {
 }
 
 impl OpenConstructs {
-    /// Each open pairs with a later close, and no more constructs nest than
-    /// the source has tokens, so a count never wraps.
     const fn open(&mut self, closer: Closer) {
-        let count = self.count_mut(closer);
-        *count = count.wrapping_add(1);
+        *self.count_mut(closer) += 1;
     }
 
     const fn close(&mut self, closer: Closer) {
-        let count = self.count_mut(closer);
-        *count = count.wrapping_sub(1);
+        *self.count_mut(closer) -= 1;
     }
 
     const fn count_mut(&mut self, closer: Closer) -> &mut u32 {
@@ -352,7 +346,8 @@ impl<'ast> Parser<'ast> {
     /// ASCII.
     #[inline]
     fn ascii_text(&self, span: Span) -> ThinStr<'ast> {
-        ThinStr::from_ascii(span.text(self.source)).unwrap_or_else(|| ThinStr::new(""))
+        ThinStr::from_ascii(span.text(self.source))
+            .expect("the lexer reads names and numerals as ASCII")
     }
 
     /// Consume the current token and return its span. Out of line, so the
@@ -396,7 +391,7 @@ impl<'ast> Parser<'ast> {
     fn advance_integer(&mut self) -> Box<'ast, IntegerLiteral<'ast>> {
         let span = self.advance();
         let raw = self.ascii_text(span);
-        let value = read_integer(raw.as_str()).unwrap_or_default();
+        let value = read_integer(raw.as_str()).expect("the lexer checked the integer fits 64 bits");
         self.alloc(IntegerLiteral::new(value, Some(raw), span))
     }
 
@@ -451,7 +446,7 @@ impl<'ast> Parser<'ast> {
     fn advance_name(&mut self) -> Name<'ast> {
         let span = self.advance();
         let index = self.counts.names;
-        self.counts.names = index.wrapping_add(1);
+        self.counts.names = index + 1;
         Name::new(self.ascii_text(span), Some(NameIndex::new(index)), span)
     }
 
@@ -622,7 +617,6 @@ impl<'ast> Parser<'ast> {
 
     /// Count one more level of nesting, or at [`MAX_NESTING_DEPTH`], stop
     /// the parse there and return false, leaving the count unchanged.
-    #[must_use]
     #[inline]
     fn enter_depth(&mut self) -> bool {
         // A host-stack budget, independent of target VM compiler limits.
@@ -630,7 +624,7 @@ impl<'ast> Parser<'ast> {
             self.stop_at_depth_limit();
             return false;
         }
-        self.nesting_depth = self.nesting_depth.wrapping_add(1);
+        self.nesting_depth += 1;
         self.deepest_level = self.deepest_level.max(self.nesting_depth);
         true
     }
@@ -641,20 +635,19 @@ impl<'ast> Parser<'ast> {
     /// The tree leaves them out, so they have a cap of their own: a tree
     /// within its cap prints with at most a pair at each of its levels, and
     /// reads back.
-    #[must_use]
     #[inline]
     fn enter_grouping(&mut self) -> bool {
         if self.grouping_depth >= MAX_NESTING_DEPTH {
             self.stop_at_depth_limit();
             return false;
         }
-        self.grouping_depth = self.grouping_depth.wrapping_add(1);
+        self.grouping_depth += 1;
         true
     }
 
     #[inline]
     const fn exit_depth(&mut self) {
-        self.nesting_depth = self.nesting_depth.wrapping_sub(1);
+        self.nesting_depth -= 1;
     }
 
     /// The cap is fatal: one error at the current token, and the rest of the
@@ -697,15 +690,14 @@ impl<'ast> Parser<'ast> {
     ///
     /// On success the parser stands one level in, where the wrapper's other
     /// children go, and the caller steps back to `level` after them.
-    #[must_use]
     #[inline]
     fn enter_wrapper(&mut self, level: usize) -> bool {
         if self.deepest_level >= MAX_NESTING_DEPTH {
             self.stop_at_depth_limit();
             return false;
         }
-        self.deepest_level = self.deepest_level.wrapping_add(1);
-        self.nesting_depth = level.wrapping_add(1);
+        self.deepest_level += 1;
+        self.nesting_depth = level + 1;
         true
     }
 
@@ -823,7 +815,7 @@ mod tests {
     fn counts_the_depth_of_fixtures_as_the_tree_measures_it() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
         let files = collect_fixture_files(&root).expect("fixture tree is readable");
-        let mut checked = 0usize;
+        let mut checked = 0;
         for path in files {
             let relative = path.strip_prefix(&root).expect("fixture is under the root");
             let is_source =
@@ -834,7 +826,7 @@ mod tests {
             let source = fs::read_to_string(&path).expect("fixture is readable");
             let (counted, built) = counted_and_built(&source, detect_version(relative));
             assert_eq!(counted, built, "{}", path.display());
-            checked = checked.saturating_add(1);
+            checked += 1;
         }
         assert!(checked > 0, "no fixtures found under {}", root.display());
     }

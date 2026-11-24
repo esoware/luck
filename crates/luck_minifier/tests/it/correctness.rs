@@ -1,4 +1,4 @@
-use core::fmt::Write as _;
+use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
 use luck_ast::{Chunk, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
@@ -278,12 +278,12 @@ fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
 fn an_if_return_run_stops_at_a_guard_whose_value_would_nest_past_the_cap() {
     with_the_smallest_stack(|| {
         let mut source = String::new();
-        for guard in 0..30u32 {
+        for guard in 0..30 {
             writeln!(source, "if a{guard} then return {{}} end").unwrap();
         }
         let deep = nested("{", MAX_NESTING_DEPTH - 2, "1", "}");
         writeln!(source, "if deep then return {deep} end").unwrap();
-        for guard in 30..60u32 {
+        for guard in 30..60 {
             writeln!(source, "if a{guard} then return {{}} end").unwrap();
         }
         source.push_str("return 0\n");
@@ -298,11 +298,11 @@ fn an_if_return_run_stops_at_a_guard_whose_value_would_nest_past_the_cap() {
 fn if_return_chains_in_nested_functions_do_not_compound_past_the_cap() {
     // Each function's chain nests the function inside it 30 levels deeper.
     let mut guards = String::new();
-    for guard in 0..30u32 {
+    for guard in 0..30 {
         write!(guards, "if a{guard} then return 1 end ").unwrap();
     }
     let mut source = String::from("return 0");
-    for _ in 0..12u32 {
+    for _ in 0..12 {
         source = format!("{guards}if b then return function() {source} end end return 0");
     }
     assert_minifies_within_the_depth_cap(&source);

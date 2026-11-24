@@ -1,5 +1,5 @@
-use core::fmt::Write as _;
-use core::ops::Range;
+use std::fmt::Write as _;
+use std::ops::Range;
 
 use luck_formatter::{CollapseSimpleStatement, FormatOptions, LineEndings};
 use luck_token::LuaVersion;
@@ -1654,8 +1654,8 @@ local   x  =  1
 }
 
 fn range_of(input: &str, needle: &str) -> Range<usize> {
-    let start = input.find(needle).unwrap_or(input.len());
-    start..start.saturating_add(needle.len())
+    let start = input.find(needle).unwrap();
+    start..start + needle.len()
 }
 
 #[test]
@@ -1941,10 +1941,10 @@ fn unix_line_endings_normalize_a_block_comment() {
 fn a_long_commented_argument_list_formats_without_rescanning_its_comments() {
     // Each argument looks for its leading and trailing comments. Answered by
     // counting every comment left before the call's end, this takes minutes.
-    let count = 450_000u32;
+    let count = 450_000;
     let arguments: Vec<String> =
         (0..count).map(|index| format!("--[[c{index}]] {index}")).collect();
-    let last = count.saturating_sub(1);
+    let last = count - 1;
     let mut expected = String::from("f(\n");
     for index in 0..last {
         writeln!(expected, "\t--[[c{index}]] {index},").unwrap();
@@ -1964,7 +1964,7 @@ fn a_long_table_closing_on_a_comment_formats_without_rescanning_its_fields() {
     // Each field looks for a comment trailing it, and the one before the
     // closer is past every later field. Answered by reading every token
     // between, rather than stopping at the next field, this takes minutes.
-    let count = 300_000u32;
+    let count = 300_000;
     let fields: Vec<String> = (0..count).map(|index| index.to_string()).collect();
     let mut expected = String::from("local t = {\n");
     for field in &fields {

@@ -1,4 +1,4 @@
-use core::alloc::{GlobalAlloc, Layout};
+use std::alloc::{GlobalAlloc, Layout};
 
 use mimalloc_safe::MiMalloc;
 

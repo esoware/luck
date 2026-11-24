@@ -100,7 +100,7 @@ fn invalid_constant_args(
         } else {
             String::new()
         };
-        let arg_number = index.saturating_add(1);
+        let arg_number = index + 1;
         Some(Finding::new(
             format!(
                 "`{}` argument {arg_number} must be one of \

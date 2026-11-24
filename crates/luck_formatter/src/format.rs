@@ -1,10 +1,10 @@
-use core::ops::Range;
+use std::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_diagnostics::Diagnostic;
 use luck_parser::{Groupings, ParseResult};
-use luck_token::{LuaVersion, index_to_offset, is_lua_whitespace, offset_to_index};
+use luck_token::{LuaVersion, index_to_offset, is_lua_whitespace};
 
 use crate::comments::Comments;
 use crate::format_block::{first_item_start, format_selection};
@@ -41,10 +41,8 @@ fn print_chunk<'ast>(
     f.write_remaining_comments(has_stmts);
     let mut output = f.print(b"");
 
-    let trimmed_length = output
-        .iter()
-        .rposition(|&b| !is_lua_whitespace(b))
-        .map_or(0, |last| last.saturating_add(1));
+    let trimmed_length =
+        output.iter().rposition(|&b| !is_lua_whitespace(b)).map_or(0, |last| last + 1);
     output.truncate(trimmed_length);
     output.extend_from_slice(match options.line_endings {
         LineEndings::Unix => b"\n",
@@ -85,7 +83,6 @@ pub fn format_chunk<'ast>(
 ///
 /// `source` is bytes, as Lua reads it, and the formatter copies a comment or
 /// a string that isn't UTF-8 as written.
-#[must_use]
 pub fn format(
     allocator: &Allocator,
     source: &[u8],
@@ -108,7 +105,6 @@ pub fn format(
 ///
 /// In debug builds, when `parse` kept no tokens, as `luck_parser::parse`
 /// keeps none.
-#[must_use]
 pub fn format_parsed<'ast>(
     allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
@@ -133,7 +129,6 @@ pub fn format_parsed<'ast>(
 /// # Panics
 ///
 /// As [`format_parsed`] does.
-#[must_use]
 pub fn format_range<'ast>(
     allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
@@ -146,13 +141,13 @@ pub fn format_range<'ast>(
     let source = parse.source;
     let offsets = index_to_offset(range.start)..index_to_offset(range.end);
     let comments = Comments::from_parse(parse);
-    let output = format_selection(allocator, parse, comments, options, &offsets).map_or_else(
-        || source.to_owned(),
-        |(span, selected)| {
-            let before = source.get(..offset_to_index(span.start)).unwrap_or_default();
-            let after = source.get(offset_to_index(span.end)..).unwrap_or_default();
+    let output = match format_selection(allocator, parse, comments, options, &offsets) {
+        Some((span, selected)) => {
+            let before = &source[..span.start as usize];
+            let after = &source[span.end as usize..];
             [before, &selected, after].concat()
-        },
-    );
+        }
+        None => source.to_owned(),
+    };
     FormatResult { output, errors: Vec::new() }
 }

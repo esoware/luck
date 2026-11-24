@@ -48,10 +48,8 @@ pub(crate) fn make_relative(path: &Path, root: &Path) -> String {
             .unwrap_or_default();
     }
 
-    let mut relative = "../".repeat(root_components.len().saturating_sub(shared));
-    let rest: Vec<_> = path_components
-        .get(shared..)
-        .unwrap_or_default()
+    let mut relative = "../".repeat(root_components.len() - shared);
+    let rest: Vec<_> = path_components[shared..]
         .iter()
         .map(|component| component.as_os_str().to_string_lossy())
         .collect();

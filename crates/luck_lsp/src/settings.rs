@@ -4,10 +4,10 @@
 //! watched config file changes. A lookup reads the disk, so only workers make
 //! one.
 
-use alloc::sync::Arc;
-use core::mem;
 use std::ffi::OsString;
+use std::mem;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use luck_config::{CONFIG_FILE_NAME, Editorconfigs, Project, find_config};
@@ -243,7 +243,6 @@ impl SettingsCache {
             return (project, None);
         }
         let (kept, reported) = lookups.keep(directory, config_path, project, error);
-        drop(lookups);
         (kept, reported.map(|file| ConfigError { file, generation }))
     }
 
@@ -272,7 +271,7 @@ impl SettingsCache {
     /// and returns each config file a load error was reported in.
     pub(crate) fn clear(&self) -> Vec<PathBuf> {
         let mut lookups = self.lookups.write();
-        let generation = lookups.generation.wrapping_add(1);
+        let generation = lookups.generation + 1;
         let Lookups { broken, .. } =
             mem::replace(&mut *lookups, Lookups { generation, ..Lookups::default() });
         broken
@@ -305,8 +304,8 @@ fn spelled_beside(path: &Path, document: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use core::ptr;
     use std::fs;
+    use std::ptr;
 
     use luck_token::LuaTarget;
 
@@ -384,7 +383,7 @@ mod tests {
         let shared = directory.path().join("shared.json");
         assert!(!cache.is_settings_file(&shared));
 
-        let _discovered = cache.project_for(Some(&directory.path().join("a.lua")), None);
+        let _ = cache.project_for(Some(&directory.path().join("a.lua")), None);
         assert!(cache.is_settings_file(&shared));
         assert!(cache.is_settings_file(&directory.path().join("luck.json")));
         assert!(cache.is_settings_file(&directory.path().join(".editorconfig")));

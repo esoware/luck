@@ -1,4 +1,4 @@
-use alloc::borrow::Cow;
+use std::borrow::Cow;
 
 use luck_token::{DirectiveError, DirectiveErrorKind};
 
@@ -41,21 +41,19 @@ impl Rule for InvalidLintFilter {
             directives.entries().iter().filter(|entry| entry.target == Target::Unknown).map(
                 |entry| {
                     let name = String::from_utf8_lossy(entry.name.text(context.source));
-                    let (message, help) = closest_rule_name(&name).map_or_else(
-                        || {
-                            (
-                                format!("unknown lint rule `{name}`"),
-                                "no lint rule has this name".to_owned(),
-                            )
-                        },
-                        |rule| {
+                    let (message, help) = match closest_rule_name(&name) {
+                        Some(rule) => {
                             let suggestion = rule.name();
                             (
                                 format!("unknown lint rule `{name}`, did you mean `{suggestion}`?"),
                                 format!("rename it to `{suggestion}`"),
                             )
-                        },
-                    );
+                        }
+                        None => (
+                            format!("unknown lint rule `{name}`"),
+                            "no lint rule has this name".to_owned(),
+                        ),
+                    };
                     Finding::new(message, entry.name).with_help(help)
                 },
             );

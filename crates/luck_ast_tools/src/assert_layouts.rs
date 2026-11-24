@@ -7,7 +7,7 @@
 //! keep the compiler's layout, which packs them tighter, so the compiler
 //! measures them and the snapshot records what it found.
 
-use alloc::collections::BTreeSet;
+use std::collections::BTreeSet;
 
 use proc_macro2::{Literal, TokenStream};
 use quote::quote;
@@ -36,7 +36,8 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
                     .replace("'ast", "")
                     .replace(' ', "")
                     .replace("<>", "");
-                let anonymous = written.replace("'ast", "'_").parse().unwrap_or_default();
+                let anonymous =
+                    written.replace("'ast", "'_").parse().expect("a field type reparses");
                 rows.push((label, anonymous));
             }
         }

@@ -11,9 +11,9 @@
 //! it changed. A cross-file request reads every open document as it stood
 //! when the request came, and every other file's record.
 
-use alloc::sync::Arc;
-use core::mem;
+use std::mem;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use ignore::{WalkBuilder, WalkState};
@@ -197,10 +197,6 @@ fn walk(folders: &[PathBuf], session: &Session) -> Vec<PathBuf> {
             let canonical = if entry.path_is_symlink() {
                 FileSystemOs.canonicalize(path).ok().filter(|target| target.is_file())
             } else {
-                #[expect(
-                    clippy::filetype_is_file,
-                    reason = "a pipe or device named like a source file is no file to read"
-                )]
                 let is_file = file_type.is_file();
                 is_file.then(|| path.to_path_buf())
             };
@@ -261,9 +257,6 @@ impl<'file> Source<'file> {
         })
     }
 
-    /// # Errors
-    ///
-    /// Returns why `require` resolves to no module, or to more than one.
     pub(crate) fn resolve(&self, require: &Require) -> Result<Resolution, ResolveError> {
         self.project.resolver(self.version).resolve(self.path, &require.module)
     }
@@ -273,7 +266,7 @@ impl<'file> Source<'file> {
     pub(crate) fn module_of(&self, table: Table) -> Option<PathBuf> {
         match table {
             Table::Returned | Table::Exported => Some(self.path.to_path_buf()),
-            Table::Required(i) => Some(self.resolve(self.record.requires().get(i)?).ok()?.path),
+            Table::Required(i) => Some(self.resolve(&self.record.requires()[i]).ok()?.path),
         }
     }
 

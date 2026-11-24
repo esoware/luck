@@ -45,7 +45,7 @@ impl<'ast> Parser<'ast> {
 
     fn parse_function_name(&mut self) -> FunctionName<'ast> {
         let first = self.expect_identifier_recover();
-        self.counts.name_uses = self.counts.name_uses.wrapping_add(1);
+        self.counts.name_uses += 1;
         let names = if self.is_at(TokenKind::Dot) {
             let start = self.scratch.names.len();
             self.scratch.names.push(first);
@@ -59,11 +59,13 @@ impl<'ast> Parser<'ast> {
         };
         // A method declares `self`.
         let method = self.eat(TokenKind::Colon).then(|| {
-            self.counts.declarations = self.counts.declarations.wrapping_add(1);
+            self.counts.declarations += 1;
             self.expect_identifier_recover()
         });
-        let end_span = method
-            .map_or_else(|| names.last().map_or(first.span, |name| name.span), |name| name.span);
+        let end_span = match method {
+            Some(method) => method.span,
+            None => names.last().map_or(first.span, |name| name.span),
+        };
         FunctionName::new(first.span.merge(end_span), names, method)
     }
 
@@ -104,7 +106,7 @@ impl<'ast> Parser<'ast> {
         let start_span = attributes.first().map_or(keyword, |attribute| attribute.span);
         let function_span = self.advance();
         let name = self.expect_identifier_recover();
-        self.counts.declarations = self.counts.declarations.wrapping_add(1);
+        self.counts.declarations += 1;
         let Some(body) = self.parse_function_body(function_span) else {
             return Statement::Error(start_span);
         };
@@ -184,7 +186,7 @@ impl<'ast> Parser<'ast> {
     /// the name is missing.
     fn parse_attributed_name(&mut self) -> Option<AttributedName<'ast>> {
         let name = self.expect_identifier()?;
-        self.counts.declarations = self.counts.declarations.wrapping_add(1);
+        self.counts.declarations += 1;
         // Luau: type annotation after the name.
         let type_annotation = self.try_parse_type_annotation();
         let attribute = self.try_parse_attribute().map(|attribute| self.alloc(attribute));

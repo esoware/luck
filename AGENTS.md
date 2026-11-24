@@ -37,7 +37,7 @@ Closes #24
 ### Output keeps the input's meaning
 
 - Purity analysis assumes metamethods. Reading a local or an upvalue runs nothing, but reading a global indexes the environment, which can call `__index` as any index can, and an operator can call one or raise unless its operands' types rule that out, as two numbers do for `+` and a `nil` does for `==`. `luck_value` holds these rules.
-- Constant evaluation reproduces the target's arithmetic exactly, so it never fuses or reorders an operation, as `mul_add` would.
+- Constant evaluation reproduces the target's arithmetic exactly, so it never fuses or reorders an operation.
 - `minify(minify(x)) == minify(x)` and `format(format(x)) == format(x)`, and both outputs reparse with no errors. Tests check both.
 - Emitters never read source text. Codegen and the formatter read it only for trivia and verbatim regions, and work without it, because a synthetic AST must still print.
 - A bundle names no host path. Every path the bundle carries comes from `ModuleInfo::relative_path`. `ModuleInfo::path`, `source_files`, and the line map stay canonical. They're local build data and never reach the output.
@@ -51,8 +51,7 @@ If you can't fix a lint, suppress it on that one line with a reason:
 
 ### Naming
 
-- Prefer descriptive names, and use a single letter when a binding's scope is small and its role is obvious, such as `i` for an index, `b` for a byte, `c` for a char, `e` for a closure's error, `f` for a formatter, or `T` for a type parameter.
-- Don't use clipped names like `val`, `tmp`, `res`, `buf`, `ctx`, `cfg`, `req`, `resp`, `msg`, `err`, `addr`, `prev`, `len`, or `idx`, in tests either.
+- Prefer descriptive names, and use a single letter only when a binding's scope is small and its role is obvious.
 - Use these domain abbreviations instead of the long form: `ast`, `ir`, `expr`, `stmt`, `op`, `ty`, `lhs`, `rhs`, `diag`, `diags`, `id`, `url`, `params`, and `args`. `cfg` always means the control-flow graph in `luck_linter`'s `cfg.rs`, never config.
 - A bool starts with `is`, `has`, `should`, or `can`: `is_open` in Rust, `isOpen` in TypeScript.
 - A raw integer that carries a unit names it: `utf16_column` or `timeout_millis` in Rust, `TICK_MS` or `unixSeconds` in TypeScript. A byte offset, a `Span`, or a `Duration` doesn't need to.
@@ -90,30 +89,27 @@ Copy is any text a user reads. That means every string the extension shows, plus
 
 ### Crates and modules
 
-- `luck_allocator`, `luck_token`, `luck_data_structures`, `luck_ast_macros`, and `luck_ast_tools` depend on nothing in the workspace. `luck_diagnostics` depends on `luck_token` only, `luck_resolver` and `luck_lexer` on `luck_token` and `luck_diagnostics`, `luck_ast` on `luck_token`, `luck_allocator`, and `luck_ast_macros`, `luck_testgen` on `luck_token` and `luck_ast`, `luck_parser` on `luck_token`, `luck_diagnostics`, `luck_lexer`, `luck_ast`, and `luck_allocator`, `luck_codegen` on `luck_token`, `luck_ast`, and `luck_data_structures`, `luck_semantic` on `luck_token`, `luck_diagnostics`, and `luck_ast`, `luck_value` on `luck_token` and `luck_ast`, and `luck_stdlib` on `luck_token`, `luck_diagnostics`, `luck_ast`, `luck_allocator`, and `luck_semantic`.
+- `luck_allocator`, `luck_token`, `luck_data_structures`, `luck_ast_macros`, and `luck_ast_tools` depend on nothing in the workspace, and `luck_diagnostics` on `luck_token` only.
 - `luck_codegen` and `luck_formatter` never depend on `luck_semantic`, and neither they nor `luck_minifier` depend on `luck_stdlib`, `luck_resolver`, `luck_linter`, `luck_bundler`, or `luck_config`.
 - `luck_cli` is the only crate that depends on `luck_lsp`, only `luck_cli`, `luck_lsp`, and the `luck` facade's opt-in `config` feature depend on `luck_config`, nothing depends on `luck_cli` or on the `luck` facade, and only `luck_allocs` turns on `luck_allocator`'s `track_allocations` feature.
 - Only `luck_allocator`, `luck_data_structures`'s `code_buffer.rs`, `luck_lexer`'s `cursor.rs`, `luck_benchmark`, `luck_allocs`'s `heap.rs`, and `luck_conformance`'s `execute.rs` may use `unsafe`.
 - `luck_allocator` is a port of `oxc_allocator`, kept close enough to diff against the commit its `lib.rs` names. It keeps oxc's lints and style, so the naming, comment, lint, copy, and test rules here bind only the files luck added to it, such as `list.rs`.
 - `LuaTarget` in `luck_token` is the dialect a user names, and the only valid pairs of a `LuaVersion` and a host. Whatever needs the stdlib, such as `luck_stdlib`'s analysis and the linter, takes a `StdlibLibrary`, the target's or one with a project's std definitions layered over it, whatever else needs the host takes a `LuaTarget`, and whatever reads only syntax or scoping takes its `version()`. The parser, codegen, formatter, and minifier read only `LuaVersion`, so `-t roblox` and `-t luau` minify identically.
 - Check a version's syntax with a `LuaVersion::has_<feature>` predicate, never by comparing `LuaVersion` variants. The only `is_` forms are `is_luau` and `is_roblox`.
-- Adding a Lua version is a `LuaVersion` variant, a `LuaTarget` variant, and an arm in every `has_<feature>` predicate.
 - Modules are private, and each crate re-exports its public items from `lib.rs`, so every item has exactly one path. No `pub mod`. `lib.rs` holds the crate doc, the crate attributes, the module list, and the re-exports, and no other code.
 - Types that two crates share when neither depends on the other live in `luck_token`, diagnostics in `luck_diagnostics`, and data structures that know nothing of Lua in `luck_data_structures`.
 - Every crate in the workspace and the extension share one version. Don't change it by hand, because the Prepare release workflow bumps it.
 
 ### Types and errors
 
-- A transform or visitor matches every variant with no wildcard arm, so a new variant makes the compiler point at every consumer. The same goes for a helper that classifies its own enum, such as `category()` or a `has_<feature>` predicate. List every variant, so a new one has to pick its own answer. Where only one variant matters, use `if let` or `matches!` rather than a `match` with a wildcard.
 - Every problem reaches the user as a `luck_diagnostics::Diagnostic`, built with a numbered constructor such as `Diagnostic::e008`, never with an inline code, or with `Diagnostic::lint` and its rule's name. A lex or parse failure is always E008. A diagnostic names no file: one leaving the crate that knows its file goes in a `FileDiagnostics`. It points at other places with labels, never by writing a line number into its text.
-- A token holds no text. No global string interner, because its lock would serialize rayon's workers.
+- No global string interner, because its lock would serialize rayon's workers.
 - Every thread the code starts has an owner that joins it, through a `JoinHandle` or a scope, and every job on the language server's pool stops once its version goes stale or the client cancels its request. Only a test that times a call out leaves a thread behind.
 
 ### Imports
 
-- Group them by hand in three blocks: `std`, `core`, and `alloc`, then external crates with `luck_*` among them, then `crate` and `super`.
+- Group them by hand in three blocks: `std`, then external crates with `luck_*` among them, then `crate` and `super`.
 - Write one `use luck_x::{A, B};` per crate per scope.
-- rustfmt's grouping options are nightly-only, so keep them out of `rustfmt.toml`.
 
 ### Tests
 
@@ -122,13 +118,10 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - A crate's integration tests are one binary. `tests/it/main.rs` declares a module per file, and shared helpers live in `tests/it/common/mod.rs`. Declare `mod common;`, never `pub mod common;`, and give its items `pub(crate)`. A `pub` module hides a helper nothing calls from the dead-code lint.
 - A test that rewrites a committed file is `#[ignore]`d and named `regenerate_*`, so it runs only when asked for with `--ignored`.
 - Lua fixtures that several crates' tests read live in `tests/fixtures/`, whose `idiomatic/` must stay lint-clean.
-- A lint rule's tests are one `#[test] fn test()` that hands the `PASS` and `FAIL` consts of its test module to `crate::fixtures::Tester`, as oxlint's tests hand their pass and fail lists to its `Tester`. It checks that each passing case finds nothing, applies each fix and checks that the result reparses, and snapshots every finding of the failing cases in `src/snapshots/<rule>.snap`. Suppression has its own tests in `luck_linter`, so a rule's cases leave it out.
+- A lint rule's tests are its `PASS` and `FAIL` cases run through `crate::fixtures::Tester`. Suppression has its own tests in `luck_linter`, so a rule's cases leave it out.
 - A fix test applies the edit and asserts that the result reparses.
-- Formatter tests go through `assert_format`, `assert_format_with`, `assert_format_range`, or, for a tree built in code, `assert_format_block`.
 - An error path asserts on the returned errors, never with `#[should_panic]`.
 - Test source or output that spans lines, or reads better across lines, is a multi-line string literal, never one with `\n` escapes. Text that reads fine on one line stays on one line.
-- Tests need the exact directive syntax. `-- luck: allow(rule_a, rule_b)`, `deny(...)`, or `warn(...)` applies to the next statement, `start` or `end` after it marks a region, and `-- #luck: allow(foo)` applies to the whole file. `-- luck: format off` and `-- luck: format on` turn the formatter off for a region, and `-- luck: ignore`, or its alias `-- luck: format ignore`, skips one statement.
-
 ## Extension
 
 - Split a file only once it passes about 700 lines, and only into parts that make sense on their own.

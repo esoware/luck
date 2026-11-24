@@ -1,6 +1,6 @@
-use core::fmt::Display;
-use core::slice;
+use std::fmt::Display;
 use std::process::ExitCode;
+use std::slice;
 
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_token::LuaVersion;
@@ -23,8 +23,8 @@ pub(crate) enum Exit {
 impl From<Exit> for ExitCode {
     fn from(exit: Exit) -> Self {
         match exit {
-            Exit::Failure => Self::from(1u8),
-            Exit::Usage => Self::from(2u8),
+            Exit::Failure => Self::from(1),
+            Exit::Usage => Self::from(2),
         }
     }
 }

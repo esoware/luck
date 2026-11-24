@@ -31,13 +31,6 @@
 //! assert_eq!(result.chunk.block.stmts.len(), 1);
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(clippy::missing_panics_doc, reason = "a Panics section says nothing about a test")
-)]
-
-extern crate alloc;
-
 mod groupings;
 mod parse_result;
 mod parser;

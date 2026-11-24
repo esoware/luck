@@ -1,4 +1,4 @@
-use core::mem;
+use std::mem;
 
 use luck_allocator::{Allocator, Box, List, ThinBytes};
 use luck_ast::{
@@ -21,20 +21,12 @@ use crate::module::ModuleInfo;
 /// splices, and everything around them is the tree the text parses to, which
 /// goes in `allocator` with every node the rewrites build. A module's spans
 /// index its own source, so two modules' spans can overlap.
-///
-/// # Errors
-///
-/// Returns an E013 for each construct a wrapper would nest past
-/// [`MAX_NESTING_DEPTH`], as [`emitter::emit`] does.
 pub(crate) fn emit_chunk<'ast>(
     allocator: &'ast Allocator,
     mut graph: DependencyGraph<'ast>,
     version: LuaVersion,
 ) -> Result<(Chunk<'ast>, Vec<u8>), Vec<FileDiagnostics>> {
-    let Some(entry) = graph.modules.get(graph.entry_id.0) else {
-        let empty = Block::new(Span::default(), List::new());
-        return Ok((Chunk::new(version, empty), Vec::new()));
-    };
+    let entry = &graph.modules[graph.entry_id.0];
     let header = chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied());
     if graph.modules.len() == 1 && entry.dependencies.is_empty() {
         let block = graph.modules.swap_remove(graph.entry_id.0).block;
@@ -46,14 +38,13 @@ pub(crate) fn emit_chunk<'ast>(
     let mut bodies = Vec::with_capacity(graph.modules.len());
     let mut errors = Vec::new();
     for wrapped in plan.wrapped_modules() {
-        if let Some(module) = graph.modules.get_mut(wrapped.id.0) {
-            let mut block = module.block.take();
-            rewrite_module(allocator, &mut block, module, &plan, &names, version);
-            if wrapped.wrapper.may_overflow(module) {
-                errors.extend(overflow_errors(&block, module, wrapped.wrapper));
-            }
-            bodies.push(block);
+        let module = &mut graph.modules[wrapped.id.0];
+        let mut block = module.block.take();
+        rewrite_module(allocator, &mut block, module, &plan, &names, version);
+        if wrapped.wrapper.may_overflow(module) {
+            errors.extend(overflow_errors(&block, module, wrapped.wrapper));
         }
+        bodies.push(block);
     }
     if !errors.is_empty() {
         return Err(errors);
@@ -95,10 +86,8 @@ where
         let Some(hole) = block.stmts.iter().position(|stmt| self.is_hole(stmt)) else {
             return;
         };
-        let Some(mut body) = self.bodies.next() else {
-            return;
-        };
-        let capacity = block.stmts.len().saturating_add(body.stmts.len());
+        let mut body = self.bodies.next().expect("each hole has its module's body");
+        let capacity = block.stmts.len() + body.stmts.len();
         let mut stmts = List::with_capacity_in(capacity, self.allocator);
         for (i, stmt) in mem::take(&mut block.stmts).into_iter().enumerate() {
             if i != hole {
@@ -214,7 +203,7 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
         let (entry_point, key) = match dependencies
             .binary_search_by_key(&call_span.start, |dependency| dependency.call_span.start)
             .ok()
-            .and_then(|i| dependencies.get(i))
+            .map(|i| &dependencies[i])
             .filter(|dependency| dependency.call_span == call_span)
         {
             Some(dependency) => {
@@ -252,7 +241,8 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
         match key {
             // Luau, where every number is a float.
             Key::Slot(slot) => {
-                let value = LuaNumber::Float(f64::from(u32::try_from(slot).unwrap_or(u32::MAX)));
+                let slot = u32::try_from(slot).expect("a slot is at most the module limit");
+                let value = LuaNumber::Float(f64::from(slot));
                 Expression::new_number(value, None, span, true, self.allocator)
             }
             Key::Name(name) => {

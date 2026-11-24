@@ -72,7 +72,6 @@ impl Statement<'_> {
     /// Whether `version`'s grammar takes the statement only as the last of
     /// its block: a `return`, a `continue`, or a `break` where it has
     /// [`has_last_stmt_break`](LuaVersion::has_last_stmt_break).
-    #[must_use]
     pub const fn has_to_end_block(&self, version: LuaVersion) -> bool {
         match self {
             Self::Return(_) | Self::Continue(_) => true,
@@ -211,7 +210,6 @@ pub enum LocalFunctionKind {
 }
 
 impl LocalFunctionKind {
-    #[must_use]
     pub const fn is_const(self) -> bool {
         match self {
             Self::Local => false,
@@ -219,7 +217,6 @@ impl LocalFunctionKind {
         }
     }
 
-    #[must_use]
     pub const fn is_exported(self) -> bool {
         match self {
             Self::Local | Self::Const => false,
@@ -249,7 +246,6 @@ pub struct AttributedName<'ast> {
 impl<'ast> AttributedName<'ast> {
     /// The attribute that applies to the name: its own, or else `leading`,
     /// the one before the first name of its list.
-    #[must_use]
     pub fn attribute_or(
         &'ast self,
         leading: Option<&'ast Attribute<'ast>>,
@@ -284,7 +280,6 @@ pub enum LocalAssignmentKind {
 }
 
 impl LocalAssignmentKind {
-    #[must_use]
     pub const fn is_const(self) -> bool {
         match self {
             Self::Local | Self::ExportLocal => false,
@@ -292,7 +287,6 @@ impl LocalAssignmentKind {
         }
     }
 
-    #[must_use]
     pub const fn is_exported(self) -> bool {
         match self {
             Self::Local | Self::Const => false,

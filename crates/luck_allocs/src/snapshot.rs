@@ -1,4 +1,4 @@
-use core::fmt::{self, Write as _};
+use std::fmt::{self, Write as _};
 use std::path::Path;
 use std::{fs, io};
 
@@ -13,10 +13,6 @@ use crate::stats::{Metric, MetricKind, StageStats};
 /// It's YAML so the committed values can be read back for
 /// [`Metric::snapshot_value`], and written by hand to keep the layout's git
 /// diffs small.
-///
-/// # Errors
-///
-/// Fails when the snapshot can't be written.
 pub(crate) fn write_snapshot(path: &Path, entries: &[(&TestFile, StageStats)]) -> io::Result<()> {
     let committed = fs::read_to_string(path).unwrap_or_default();
     let committed_documents = Yaml::load_from_str(&committed).unwrap_or_default();
@@ -40,10 +36,6 @@ pub(crate) fn write_snapshot(path: &Path, entries: &[(&TestFile, StageStats)]) -
 /// diff and a new metric reformats nothing. The name sits at column 0, so it
 /// heads git's hunks. A byte count is the exact number, which is what diffs,
 /// with its readable size in a comment.
-///
-/// # Errors
-///
-/// Fails when `snapshot` can't be written to.
 pub(crate) fn render_entry(
     snapshot: &mut String,
     name: &str,

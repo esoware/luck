@@ -1,5 +1,5 @@
-use core::time::Duration;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::{fs, io, thread};
 
 use flate2::read::GzDecoder;
@@ -135,10 +135,6 @@ pub(crate) struct SuiteFile {
 impl Suite {
     /// The suite of the interpreter this binary links. mlua builds only with
     /// exactly one dialect's feature.
-    ///
-    /// # Errors
-    ///
-    /// Fails when no suite names the feature that's on.
     pub(crate) fn linked() -> io::Result<&'static Self> {
         SUITES
             .iter()
@@ -146,10 +142,6 @@ impl Suite {
             .ok_or_else(|| io::Error::other("no suite names the dialect feature that's on"))
     }
 
-    /// # Errors
-    ///
-    /// Fails when the linked interpreter isn't the release the suite is
-    /// pinned to, as when mlua's vendored Luau moves past the pinned tag.
     pub(crate) fn check_interpreter(&self, interpreter: &str) -> io::Result<()> {
         if interpreter == self.interpreter {
             Ok(())
@@ -162,10 +154,6 @@ impl Suite {
     }
 
     /// The suite's directory in the cache, downloaded into it on first use.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the tarball can't be fetched or unpacked.
     pub(crate) fn fetch(&self) -> io::Result<PathBuf> {
         let cache = Path::new(env!("CARGO_MANIFEST_DIR")).join("cache");
         let root = cache.join(self.directory);
@@ -176,7 +164,7 @@ impl Suite {
         // Unpacking aside and renaming keeps `root` absent until it's whole.
         // An interrupted run's leftovers go first.
         let partial = cache.join(format!("{}.partial", self.directory));
-        let _stale_partial = fs::remove_dir_all(&partial);
+        let _ = fs::remove_dir_all(&partial);
         fs::create_dir_all(&partial)?;
         for read in Archive::new(GzDecoder::new(bytes.as_slice())).entries()? {
             let mut entry = read?;
@@ -191,10 +179,6 @@ impl Suite {
 
     /// The suite's test files in `root`, in name order, or only those whose
     /// path contains `filter`.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the directory or a file can't be read.
     pub(crate) fn files(&self, root: &Path, filter: Option<&str>) -> io::Result<Vec<SuiteFile>> {
         let mut files = Vec::new();
         for entry in fs::read_dir(root)? {
@@ -221,10 +205,6 @@ impl Suite {
 }
 
 /// Retried, because CI runners see transient connection resets.
-///
-/// # Errors
-///
-/// Fails when every attempt does.
 fn fetch_bytes(url: &str) -> io::Result<Vec<u8>> {
     let mut last_error = String::new();
     for delay in [Duration::ZERO, Duration::from_secs(1), Duration::from_secs(2)] {

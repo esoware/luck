@@ -65,16 +65,6 @@
 //! assert!(matches!(expr, Expression::Number(literal) if literal.value.to_f64() == 0.5));
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
-
 mod chain;
 mod content_eq;
 mod counts;

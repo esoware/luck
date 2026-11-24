@@ -23,19 +23,16 @@ impl<'ast> Semantic<'ast> {
         Self { scoping, nodes, requires }
     }
 
-    #[must_use]
     pub const fn version(&self) -> LuaVersion {
         self.scoping.version()
     }
 
-    #[must_use]
     pub const fn scoping(&self) -> &Scoping {
         &self.scoping
     }
 
     /// Empty unless [`SemanticBuilder::with_nodes`](crate::SemanticBuilder::with_nodes)
     /// asked for it.
-    #[must_use]
     pub const fn nodes(&self) -> &AstNodes<'ast> {
         &self.nodes
     }
@@ -43,14 +40,12 @@ impl<'ast> Semantic<'ast> {
     /// In source order. Empty unless
     /// [`SemanticBuilder::with_requires`](crate::SemanticBuilder::with_requires)
     /// asked for them.
-    #[must_use]
     pub fn requires(&self) -> &[RequireSite<'ast>] {
         &self.requires
     }
 
     /// The scoping alone, which borrows nothing from the tree, so a pass can
     /// keep it while it rewrites the tree.
-    #[must_use]
     pub fn into_scoping(self) -> Scoping {
         self.scoping
     }

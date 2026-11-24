@@ -1,6 +1,6 @@
 use luck_ast::{AstKind, AstType, Expression, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};
-use luck_token::{Span, offset_to_index};
+use luck_token::Span;
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
@@ -74,17 +74,17 @@ fn check_condition(
     };
     Some(Finding::new(message, span).with_fix(context, FixKind::Fix, |fixer| {
         let bytes = context.source;
-        let before = offset_to_index(start).checked_sub(1).and_then(|i| bytes.get(i));
-        let after = bytes.get(offset_to_index(end));
+        let before = bytes[..start as usize].last();
+        let after = bytes.get(end as usize);
         fixer.fix(
             "remove unnecessary parentheses",
             [
                 TextEdit {
-                    span: Span::new(start, start.saturating_add(1)),
+                    span: Span::new(start, start + 1),
                     replacement: replacement_beside(before).into(),
                 },
                 TextEdit {
-                    span: Span::new(end.saturating_sub(1), end),
+                    span: Span::new(end - 1, end),
                     replacement: replacement_beside(after).into(),
                 },
             ],

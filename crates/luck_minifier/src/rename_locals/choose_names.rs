@@ -1,7 +1,7 @@
 //! Choosing each binding's name from what the renamer read of the scoping,
 //! as `oxc_mangler` chooses them.
 
-use core::cmp::Reverse;
+use std::cmp::Reverse;
 
 use luck_semantic::NameId;
 
@@ -52,9 +52,7 @@ impl<'ast> Renamer<'_, 'ast> {
         let Self { choice, new_names, .. } = self;
         new_names.clear();
         new_names.extend(choice.slot_of.iter().map(|binding_slot| {
-            binding_slot
-                .and_then(|slot| choice.slot_candidates.get(slot))
-                .map_or("", |&candidate| pool.get(candidate).name)
+            binding_slot.map_or("", |slot| pool.get(choice.slot_candidates[slot]).name)
         }));
     }
 
@@ -66,46 +64,35 @@ impl<'ast> Renamer<'_, 'ast> {
         ranges.clear();
         ranges.resize(scoping.names().len(), (0, 0));
         for &(name_id, _) in &*global_reads {
-            if let Some(range) = ranges.get_mut(name_id) {
-                range.1 = range.1.saturating_add(1);
-            }
+            ranges[name_id].1 += 1;
         }
         // Each range starts where the last ends, and its end moves up from
         // its start as its reads go in.
-        let mut total = 0usize;
+        let mut total = 0;
         for range in ranges.iter_mut() {
             let count = range.1;
             *range = (total, total);
-            total = total.saturating_add(count);
+            total += count;
         }
         choice.read_scopes.clear();
         choice.read_scopes.resize(total, 0);
         for &(name_id, scope) in &*global_reads {
-            if let Some(range) = ranges.get_mut(name_id) {
-                if let Some(slot) = choice.read_scopes.get_mut(range.1) {
-                    *slot = scope;
-                }
-                range.1 = range.1.saturating_add(1);
-            }
+            let range = &mut ranges[name_id];
+            choice.read_scopes[range.1] = scope;
+            range.1 += 1;
         }
         for range in ranges.iter_mut() {
-            let Some(group) = choice.read_scopes.get_mut(range.0..range.1) else {
-                continue;
-            };
+            let group = &mut choice.read_scopes[range.0..range.1];
             group.sort_unstable();
-            let mut kept = 0usize;
+            let mut kept = 0;
             for index in 0..group.len() {
-                let Some(&scope) = group.get(index) else {
-                    break;
-                };
-                if kept == 0 || group.get(kept.saturating_sub(1)) != Some(&scope) {
-                    if let Some(slot) = group.get_mut(kept) {
-                        *slot = scope;
-                    }
-                    kept = kept.saturating_add(1);
+                let scope = group[index];
+                if kept == 0 || group[kept - 1] != scope {
+                    group[kept] = scope;
+                    kept += 1;
                 }
             }
-            range.1 = range.0.saturating_add(kept);
+            range.1 = range.0 + kept;
         }
     }
 
@@ -117,26 +104,21 @@ impl<'ast> Renamer<'_, 'ast> {
         // Group the reference scopes by binding, keeping walk order.
         let starts = &mut choice.group_starts;
         starts.clear();
-        starts.resize(binding_count.saturating_add(1), 0);
+        starts.resize(binding_count + 1, 0);
         for &(binding, _) in &*reference_scopes {
-            if let Some(count) = starts.get_mut(binding) {
-                *count = count.saturating_add(1);
-            }
+            starts[binding] += 1;
         }
-        let mut end = 0usize;
+        let mut end = 0;
         for start in starts.iter_mut() {
-            end = end.saturating_add(*start);
+            end += *start;
             *start = end;
         }
         choice.grouped_scopes.clear();
         choice.grouped_scopes.resize(reference_scopes.len(), 0);
         for &(binding, scope) in reference_scopes.iter().rev() {
-            if let Some(start) = starts.get_mut(binding) {
-                *start = start.saturating_sub(1);
-                if let Some(slot) = choice.grouped_scopes.get_mut(*start) {
-                    *slot = scope;
-                }
-            }
+            let start = &mut starts[binding];
+            *start -= 1;
+            choice.grouped_scopes[*start] = scope;
         }
         choice.marks.clear();
         choice.marks.resize(scopes.len(), UNRESOLVED);
@@ -147,21 +129,16 @@ impl<'ast> Renamer<'_, 'ast> {
             if binding.is_fixed {
                 continue;
             }
-            if let Some(mark) = choice.marks.get_mut(binding.scope) {
-                *mark = id;
-            }
+            choice.marks[binding.scope] = id;
             choice.live_scopes.push(binding.scope);
-            let group_start = starts.get(id).copied().unwrap_or(0);
-            let group_end = starts.get(id.saturating_add(1)).copied().unwrap_or(group_start);
-            for &reading in choice.grouped_scopes.get(group_start..group_end).unwrap_or_default() {
+            for &reading in &choice.grouped_scopes[starts[id]..starts[id + 1]] {
                 let mut next_scope = Some(reading);
                 while let Some(scope) = next_scope
-                    && let Some(mark) = choice.marks.get_mut(scope)
-                    && *mark != id
+                    && choice.marks[scope] != id
                 {
-                    *mark = id;
+                    choice.marks[scope] = id;
                     choice.live_scopes.push(scope);
-                    next_scope = scopes.get(scope).and_then(|node| node.parent);
+                    next_scope = scopes[scope].parent;
                 }
             }
         }
@@ -183,50 +160,38 @@ impl<'ast> Renamer<'_, 'ast> {
         starts.clear();
         starts.resize(scopes.len(), 0);
         for binding in &*bindings {
-            if let Some(count) = starts.get_mut(binding.scope) {
-                *count = count.saturating_add(1);
-            }
+            starts[binding.scope] += 1;
         }
-        let mut total = 0usize;
+        let mut total = 0;
         for start in starts.iter_mut() {
             let count = *start;
             *start = total;
-            total = total.saturating_add(count);
+            total += count;
         }
         let order = &mut choice.order;
         order.clear();
         order.resize(bindings.len(), 0);
         for (id, binding) in bindings.iter().enumerate() {
-            if let Some(start) = starts.get_mut(binding.scope) {
-                if let Some(slot) = order.get_mut(*start) {
-                    *slot = id;
-                }
-                *start = start.saturating_add(1);
-            }
+            let start = &mut starts[binding.scope];
+            order[*start] = id;
+            *start += 1;
         }
         choice.slot_of.clear();
         choice.slot_of.resize(bindings.len(), None);
         choice.claims.reset(scopes.len());
-        let mut slot_count = 0usize;
+        let mut slot_count = 0;
         for &id in &*order {
-            let Some(binding) = bindings.get(id) else {
-                continue;
-            };
+            let binding = &bindings[id];
             if binding.is_fixed {
                 continue;
             }
             // Reuse the first slot that isn't live in this scope.
             let slot = choice.claims.first_free(binding.scope);
-            slot_count = slot_count.max(slot.saturating_add(1));
-            let live_start = choice.live_starts.get(id).copied().unwrap_or(0);
-            let live_end =
-                choice.live_starts.get(id.saturating_add(1)).copied().unwrap_or(live_start);
-            choice
-                .claims
-                .claim(choice.live_scopes.get(live_start..live_end).unwrap_or_default(), slot);
-            if let Some(binding_slot) = choice.slot_of.get_mut(id) {
-                *binding_slot = Some(slot);
-            }
+            slot_count = slot_count.max(slot + 1);
+            let live_scopes =
+                &choice.live_scopes[choice.live_starts[id]..choice.live_starts[id + 1]];
+            choice.claims.claim(live_scopes, slot);
+            choice.slot_of[id] = Some(slot);
         }
         slot_count
     }
@@ -240,36 +205,28 @@ impl<'ast> Renamer<'_, 'ast> {
         let Self { renamed: bindings, scopes, choice, .. } = self;
         let starts = &mut choice.declared_starts;
         starts.clear();
-        starts.resize(slot_count.saturating_add(1), 0);
+        starts.resize(slot_count + 1, 0);
         choice.occurrences.clear();
         choice.occurrences.resize(slot_count, 0);
         for (binding, &binding_slot) in bindings.iter().zip(&choice.slot_of) {
             let Some(slot) = binding_slot else {
                 continue;
             };
-            if let Some(count) = starts.get_mut(slot) {
-                *count = count.saturating_add(1);
-            }
-            if let Some(occurrences) = choice.occurrences.get_mut(slot) {
-                *occurrences = occurrences.saturating_add(binding.occurrences);
-            }
+            starts[slot] += 1;
+            choice.occurrences[slot] += binding.occurrences;
         }
-        let mut total = 0usize;
+        let mut total = 0;
         for start in starts.iter_mut() {
-            total = total.saturating_add(*start);
+            total += *start;
             *start = total;
         }
         choice.declared_scopes.clear();
         choice.declared_scopes.resize(total, 0);
         for &id in choice.order.iter().rev() {
-            if let Some(Some(slot)) = choice.slot_of.get(id).copied()
-                && let Some(binding) = bindings.get(id)
-                && let Some(start) = starts.get_mut(slot)
-            {
-                *start = start.saturating_sub(1);
-                if let Some(entry) = choice.declared_scopes.get_mut(*start) {
-                    *entry = binding.scope;
-                }
+            if let Some(slot) = choice.slot_of[id] {
+                let start = &mut starts[slot];
+                *start -= 1;
+                choice.declared_scopes[*start] = bindings[id].scope;
             }
         }
         let reads =
@@ -278,19 +235,13 @@ impl<'ast> Renamer<'_, 'ast> {
         by_occurrences.clear();
         by_occurrences.extend(0..slot_count);
         let occurrences = &choice.occurrences;
-        by_occurrences.sort_unstable_by_key(|&slot| {
-            (Reverse(occurrences.get(slot).copied().unwrap_or(0)), slot)
-        });
+        by_occurrences.sort_unstable_by_key(|&slot| (Reverse(occurrences[slot]), slot));
         choice.slot_candidates.clear();
         choice.slot_candidates.resize(slot_count, 0);
         let mut picker = Picker::default();
         for &slot in &*by_occurrences {
-            let start = starts.get(slot).copied().unwrap_or(0);
-            let end = starts.get(slot.saturating_add(1)).copied().unwrap_or(start);
-            let declared_scopes = choice.declared_scopes.get(start..end).unwrap_or_default();
-            if let Some(candidate) = choice.slot_candidates.get_mut(slot) {
-                *candidate = picker.pick(declared_scopes, pool, &reads);
-            }
+            let declared_scopes = &choice.declared_scopes[starts[slot]..starts[slot + 1]];
+            choice.slot_candidates[slot] = picker.pick(declared_scopes, pool, &reads);
         }
     }
 }
@@ -306,13 +257,14 @@ impl Reads<'_> {
     /// Whether the chunk reads `name` as a global in or below one of
     /// `scopes`, where a binding named so would capture the read.
     fn is_read_below(&self, name: Option<NameId>, scopes: &[usize]) -> bool {
-        let Some(&(start, end)) = name.and_then(|id| self.ranges.get(id.index())) else {
+        let Some(name) = name else {
             return false;
         };
-        let reading_scopes = self.scopes.get(start..end).unwrap_or_default();
+        let (start, end) = self.ranges[name.index()];
+        let reading_scopes = &self.scopes[start..end];
         !reading_scopes.is_empty()
             && scopes.iter().any(|&scope| {
-                let scope_end = self.tree.get(scope).map_or(scope, |node| node.end);
+                let scope_end = self.tree[scope].end;
                 let first = reading_scopes.partition_point(|&reading| reading < scope);
                 reading_scopes.get(first).is_some_and(|&reading| reading < scope_end)
             })
@@ -347,7 +299,7 @@ impl Picker {
         }
         loop {
             let index = self.next;
-            self.next = index.saturating_add(1);
+            self.next = index + 1;
             let candidate = pool.get(index);
             if candidate.is_reserved {
                 continue;
@@ -363,7 +315,7 @@ impl Picker {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use std::fmt::Write as _;
 
     use luck_token::LuaVersion;
 
@@ -419,8 +371,8 @@ end
         // Each local needs a slot and a name of its own. Looking either up
         // from the first one every time takes minutes at this size.
         let mut source = String::new();
-        for local in 0..120_000u32 {
-            let _unused = writeln!(source, "local a{local} = f({local})");
+        for local in 0..120_000 {
+            writeln!(source, "local a{local} = f({local})").unwrap();
         }
         source.push_str("return a0, a119999");
         let result = apply(&source);
@@ -436,8 +388,8 @@ end
     #[test]
     fn many_sibling_scopes_share_one_name() {
         let mut source = String::new();
-        for scope in 0..20_000u32 {
-            let _unused = writeln!(source, "do local x{scope} = f() g(x{scope}) end");
+        for scope in 0..20_000 {
+            writeln!(source, "do local x{scope} = f() g(x{scope}) end").unwrap();
         }
         let result = apply(&source);
         assert_eq!(result, "do local e=f()g(e)end ".repeat(20_000).trim_end());

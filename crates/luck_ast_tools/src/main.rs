@@ -15,16 +15,6 @@
 //! one is stale. The tool reads the definitions as source text, so it runs
 //! however broken `luck_ast` is. Ported from oxc's `tasks/ast_tools`.
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
-
 mod arms;
 mod assert_layouts;
 mod ast_builder;
@@ -40,9 +30,6 @@ use std::{fs, io};
 
 use crate::schema::Schema;
 
-/// # Errors
-///
-/// Fails as [`generate`] does, or when a file can't be written.
 fn main() -> io::Result<()> {
     for (path, code) in generate()? {
         if read(&path)? != code {
@@ -53,10 +40,6 @@ fn main() -> io::Result<()> {
 }
 
 /// The path and contents of every generated file.
-///
-/// # Errors
-///
-/// Fails when the definitions can't be read, or `rustfmt` fails.
 fn generate() -> io::Result<Vec<(PathBuf, String)>> {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -83,10 +66,6 @@ fn generate() -> io::Result<Vec<(PathBuf, String)>> {
 }
 
 /// `path`'s contents, or nothing if there's no file.
-///
-/// # Errors
-///
-/// Fails when the file is there but can't be read.
 fn read(path: &Path) -> io::Result<String> {
     match fs::read_to_string(path) {
         Ok(contents) => Ok(contents),

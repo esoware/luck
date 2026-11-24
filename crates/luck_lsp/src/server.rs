@@ -4,13 +4,13 @@
 //! to the pool with the versions it reads, and sends on what the jobs give
 //! back unless it went stale first, as rust-analyzer's main loop does.
 
-use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
-use core::mem;
-use core::num::NonZero;
-use core::sync::atomic::{AtomicBool, Ordering};
+use std::collections::BTreeMap;
 use std::io;
+use std::mem;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use ls_types::notification::{
@@ -121,7 +121,7 @@ pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> 
             Ok(parsed) => parsed,
             Err(error) => {
                 let refusal = error_response(id, INVALID_PARAMS, error.to_string());
-                let _client_gone = connection.sender.send(refusal.into());
+                let _ = connection.sender.send(refusal.into());
                 return Err(io::Error::other(error));
             }
         };
@@ -264,10 +264,6 @@ impl Server {
     /// Takes each message from the client and each task a job finishes, in
     /// the order they come, until the client sends `exit`, then stops every
     /// job and waits for the workers.
-    ///
-    /// # Errors
-    ///
-    /// Returns why the session ended as LSP says it shouldn't.
     fn run(mut self, messages: &Receiver<Message>, tasks: &Receiver<Task>) -> io::Result<()> {
         let ended = loop {
             select! {
@@ -304,7 +300,7 @@ impl Server {
         M: Into<Message>,
     {
         // Only a client that has hung up stops reading.
-        let _client_gone = self.sender.send(message.into());
+        let _ = self.sender.send(message.into());
     }
 
     fn publish(&self, uri: Uri, diagnostics: Vec<Diagnostic>, version: Option<i32>) {
@@ -586,7 +582,7 @@ impl Server {
     /// Publishes every open document's diagnostics again, as a change to
     /// what their requires resolve to needs.
     fn republish(&mut self) {
-        self.resolutions = self.resolutions.wrapping_add(1);
+        self.resolutions += 1;
         for (uri, document) in self.open_documents() {
             self.publish_diagnostics(uri, document);
         }
@@ -732,10 +728,6 @@ impl Server {
         });
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one arm per request the server answers, each a line or two"
-    )]
     fn handle_request(&mut self, request: Request) {
         if self.is_shutting_down {
             let refusal = "the server is shutting down".to_owned();

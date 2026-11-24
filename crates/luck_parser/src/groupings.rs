@@ -20,23 +20,21 @@ struct Grouping {
 impl Groupings {
     /// The span of the parentheses around the expression at `expr`, from the
     /// outermost `(` to its `)`, if the source grouped it.
-    #[must_use]
     pub fn around(&self, expr: Span) -> Option<Span> {
         let index = self.0.binary_search_by_key(&key(expr), Grouping::key).ok()?;
-        self.0.get(index).map(|grouping| grouping.parens)
+        Some(self.0[index].parens)
     }
 
     /// [`Self::around`], searched for from `cursor`, where the search before
     /// left it, so a printer asking in source order takes a step or two.
-    #[must_use]
     #[inline]
     pub fn around_from(&self, expr: Span, cursor: &mut usize) -> Option<Span> {
         let wanted = key(expr);
         let mut index = (*cursor).min(self.0.len());
         while self.0.get(index).is_some_and(|grouping| grouping.key() < wanted) {
-            index = index.saturating_add(1);
+            index += 1;
         }
-        let before = self.0.get(..index).unwrap_or_default();
+        let before = &self.0[..index];
         if before.last().is_some_and(|grouping| grouping.key() >= wanted) {
             index = before.partition_point(|grouping| grouping.key() < wanted);
         }
@@ -58,9 +56,7 @@ impl Groupings {
 
     /// Records the parentheses `slot` opened around `expr`.
     pub(crate) fn record(&mut self, slot: usize, expr: Span, parens: Span) {
-        if let Some(grouping) = self.0.get_mut(slot) {
-            *grouping = Grouping { expr, parens };
-        }
+        self.0[slot] = Grouping { expr, parens };
     }
 
     pub(crate) const fn len(&self) -> usize {
@@ -70,8 +66,7 @@ impl Groupings {
     /// [`Self::around`] among the ones opened from `from` on, while the
     /// parse goes on.
     pub(crate) fn around_since(&self, from: usize, expr: Span) -> Option<Span> {
-        let opened = self.0.get(from..).unwrap_or_default();
-        opened
+        self.0[from..]
             .iter()
             .find(|grouping| grouping.expr == expr && !grouping.parens.is_empty())
             .map(|grouping| grouping.parens)
@@ -114,7 +109,7 @@ mod tests {
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let at = |text: &str| {
             let start = source.find(text).expect("text is in the source");
-            Span::new(index_to_offset(start), index_to_offset(start.saturating_add(text.len())))
+            Span::new(index_to_offset(start), index_to_offset(start + text.len()))
         };
         assert_eq!(parse.groupings.around(at("a")), Some(at("((a))")));
         assert_eq!(parse.groupings.around(at("b * (c)")), Some(at("(b * (c))")));
@@ -142,7 +137,7 @@ mod tests {
                 (start..=index_to_offset(source.len())).map(move |end| Span::new(start, end))
             })
             .collect();
-        for start_cursor in 0..=groupings.len().saturating_add(2) {
+        for start_cursor in 0..=groupings.len() + 2 {
             let mut cursor = start_cursor;
             for &expr in queries.iter().chain(queries.iter().rev()) {
                 assert_eq!(groupings.around_from(expr, &mut cursor), groupings.around(expr));

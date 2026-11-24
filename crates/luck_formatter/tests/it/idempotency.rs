@@ -179,7 +179,7 @@ fn nested_table_calls(levels: usize) -> String {
 /// [`nested_table_calls`] formatted, where no call is short enough to stay
 /// on one line.
 fn broken_table_calls(levels: usize) -> String {
-    let innermost = levels.saturating_sub(1);
+    let innermost = levels - 1;
     let mut output = String::from("return f({\n");
     for depth in 1..innermost {
         output.push_str(&"\t".repeat(depth));
@@ -201,7 +201,7 @@ fn call_parentheses_never_format_valid_input_past_the_nesting_cap() {
         // `f{...}` gains parentheses by default, so a bare table argument has to
         // count toward the cap as the parenthesized one it prints as does. Each
         // call and its table are two levels under the chunk's block.
-        let fitting = (MAX_NESTING_DEPTH - 1).div_euclid(2);
+        let fitting = (MAX_NESTING_DEPTH - 1) / 2;
         for levels in [100, fitting - 1, fitting] {
             assert_format(&nested_table_calls(levels), &broken_table_calls(levels));
         }

@@ -32,7 +32,7 @@ impl Rule for RobloxSuspiciousUdim2New {
         };
         let last = if context.is_statement(node) { chain.suffixes.len() } else { usize::MAX };
         for (index, call) in calls_in(chain) {
-            if index.saturating_add(1) != last {
+            if index + 1 != last {
                 check_call(call, context);
             }
         }
@@ -50,7 +50,7 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) {
     if values.len() != args.len() {
         return;
     }
-    let is_scale_sized = values.iter().all(|v| (-1.0f64..=1.0f64).contains(v));
+    let is_scale_sized = values.iter().all(|v| (-1.0..=1.0).contains(v));
     let suggestion = if is_scale_sized { "UDim2.fromScale" } else { "UDim2.fromOffset" };
     context.diagnostic(
         Finding::new(

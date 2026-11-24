@@ -56,8 +56,8 @@ mod tests {
     use super::*;
 
     fn needs_space_between(previous: &str, next: &str) -> bool {
-        let last = previous.as_bytes().last().copied().unwrap_or_default();
-        let first = next.as_bytes().first().copied().unwrap_or_default();
+        let last = previous.as_bytes()[previous.len() - 1];
+        let first = next.as_bytes()[0];
         class_of(last) & merges_after(first) != OTHER
     }
 

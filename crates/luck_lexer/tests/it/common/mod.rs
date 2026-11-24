@@ -14,9 +14,7 @@ pub(crate) fn tokens_in(source: &str, version: LuaVersion) -> Vec<(TokenKind, &s
         .tokens
         .into_iter()
         .filter(|token| token.kind != TokenKind::Eof)
-        .map(|token| {
-            (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap_or_default())
-        })
+        .map(|token| (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap()))
         .collect()
 }
 
@@ -31,9 +29,7 @@ pub(crate) fn kinds_in(source: &str, version: LuaVersion) -> Vec<TokenKind> {
 }
 
 pub(crate) fn first_kind_in(source: &str, version: LuaVersion) -> TokenKind {
-    let mut token_kinds = kinds_in(source, version);
-    assert!(!token_kinds.is_empty(), "no tokens produced");
-    token_kinds.swap_remove(0)
+    kinds_in(source, version)[0]
 }
 
 pub(crate) fn kinds(source: &str) -> Vec<TokenKind> {

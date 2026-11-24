@@ -61,9 +61,9 @@ impl RuntimeGenerator {
         // Print every top-level binding at the end so transforms that
         // wrongly eliminate or reorder assignments change stdout. A binding a
         // later one hides can't be named any more.
-        let bindings = self.scopes.pop().unwrap_or_default();
+        let bindings = self.scopes.pop().expect("the module scope is open");
         for (i, Binding { name, kind, .. }) in bindings.iter().enumerate() {
-            if bindings.iter().skip(i.saturating_add(1)).any(|later| later.name == *name) {
+            if bindings.iter().skip(i + 1).any(|later| later.name == *name) {
                 continue;
             }
             match kind {
@@ -80,7 +80,7 @@ impl RuntimeGenerator {
 
     fn line(&mut self, text: &str) {
         if self.scopes.len() == 1 && text.starts_with("local ") {
-            self.module_locals = self.module_locals.saturating_add(1);
+            self.module_locals += 1;
         }
         // The module scope adds no indentation.
         for _ in 1..self.scopes.len() {
@@ -93,7 +93,7 @@ impl RuntimeGenerator {
     /// A stem and that stem numbered, which never repeats.
     fn numbered_stem(&mut self) -> (&'static str, String) {
         let stem = self.rng.pick(&NAME_STEMS);
-        self.next_id = self.next_id.saturating_add(1);
+        self.next_id += 1;
         (stem, format!("{stem}{}", self.next_id))
     }
 
@@ -144,15 +144,13 @@ impl RuntimeGenerator {
     }
 
     fn declare(&mut self, name: String, kind: ValueKind) {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.push(Binding { name, kind, is_read_only: false });
-        }
+        let scope = self.scopes.last_mut().expect("the module scope is open");
+        scope.push(Binding { name, kind, is_read_only: false });
     }
 
     fn declare_read_only(&mut self, name: String, kind: ValueKind) {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.push(Binding { name, kind, is_read_only: true });
-        }
+        let scope = self.scopes.last_mut().expect("the module scope is open");
+        scope.push(Binding { name, kind, is_read_only: true });
     }
 
     fn number_expr(&mut self, depth: usize) -> String {
@@ -430,7 +428,6 @@ impl RuntimeGenerator {
     }
 }
 
-#[must_use]
 pub fn generate_runtime_safe(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
     RuntimeGenerator::new(seed, version).program(statement_budget)
 }

@@ -1,7 +1,6 @@
 use luck_diagnostics::Tag;
 use luck_token::{
-    LintExtent, LintVerb, LuaVersion, Span, index_to_offset, is_lua_whitespace, offset_to_index,
-    strip_line_break,
+    LintExtent, LintVerb, LuaVersion, Span, index_to_offset, is_lua_whitespace, strip_line_break,
 };
 
 use crate::context::ContextHost;
@@ -42,12 +41,12 @@ impl UnusedLintFilter {
         let runs_other = |rule: RuleId| rule != RuleId::UnusedLintFilter && runs(rule);
         let has_run_other = RuleId::ALL.into_iter().any(runs_other);
         let is_unused = |entry: usize| {
-            !used.get(entry).copied().unwrap_or(true)
-                && directives.entries().get(entry).is_some_and(|found| match found.target {
+            !used[entry]
+                && match directives.entries()[entry].target {
                     Target::Rule(rule) => runs_other(rule),
                     Target::Every => has_run_other,
                     Target::Unknown => false,
-                })
+                }
         };
         let mut findings = Vec::new();
         for directive in directives.directives() {
@@ -71,9 +70,7 @@ impl UnusedLintFilter {
                 continue;
             }
             for entry in unused {
-                let Some(found) = directives.entries().get(entry) else {
-                    continue;
-                };
+                let found = &directives.entries()[entry];
                 let name = String::from_utf8_lossy(found.name.text(context.source));
                 let help = if found.target == Target::Every {
                     "no rule reports anything where it applies"
@@ -105,21 +102,15 @@ fn removal(context: &ContextHost<'_>, removed: &[usize]) -> Vec<TextEdit> {
     let mut entries: Vec<usize> = removed
         .iter()
         .copied()
-        .chain(removed.iter().filter_map(|&entry| directives.entries().get(entry)?.end))
+        .chain(removed.iter().filter_map(|&entry| directives.entries()[entry].end))
         .collect();
     entries.sort_unstable();
     let mut edits = Vec::new();
     let mut remaining = entries.as_slice();
     while let Some(&first) = remaining.first() {
-        let Some(directive) = directives
-            .entries()
-            .get(first)
-            .and_then(|entry| directives.directives().get(entry.directive))
-        else {
-            break;
-        };
+        let directive = &directives.directives()[directives.entries()[first].directive];
         let count = remaining.partition_point(|&entry| entry < directive.entries.end);
-        let (taken, rest) = remaining.split_at_checked(count).unwrap_or((remaining, &[]));
+        let (taken, rest) = remaining.split_at(count);
         remaining = rest;
         edits.push(if taken.len() == directive.entries.len() {
             comment_removal(context.source, directive.span, context.semantic.version())
@@ -142,7 +133,7 @@ fn list_without(
         .entries
         .clone()
         .filter(|entry| !taken.contains(entry))
-        .filter_map(|entry| Some(directives.entries().get(entry)?.name.text(source)))
+        .map(|entry| directives.entries()[entry].name.text(source))
         .collect();
     TextEdit { span: directive.list, replacement: kept.join(&b", "[..]).into() }
 }
@@ -153,33 +144,33 @@ fn list_without(
 /// before it when it ends a line of code, and else the blanks after it,
 /// leaving a space between code on both sides.
 fn comment_removal(source: &[u8], span: Span, version: LuaVersion) -> TextEdit {
-    let (start, end) = (offset_to_index(span.start), offset_to_index(span.end));
-    let before = source.get(..start).unwrap_or_default();
-    let after = source.get(end..).unwrap_or_default();
+    let (start, end) = (span.start as usize, span.end as usize);
+    let before = &source[..start];
+    let after = &source[end..];
     let is_line_break = |b: u8| b == b'\n' || (b == b'\r' && version.has_lfcr_line_break());
     let line_before_length = before.iter().rev().take_while(|&&b| !is_line_break(b)).count();
     let line_after_length = after.iter().take_while(|&&b| !is_line_break(b)).count();
-    let line_before = before.get(start.saturating_sub(line_before_length)..).unwrap_or_default();
-    let line_after = after.get(..line_after_length).unwrap_or_default();
+    let line_before = &before[start - line_before_length..];
+    let line_after = &after[..line_after_length];
     let has_code_before = !line_before.iter().all(|&b| is_lua_whitespace(b));
     let has_code_after = !line_after.iter().all(|&b| is_lua_whitespace(b));
     let (removed_start, removed_end, replacement) = match (has_code_before, has_code_after) {
         (false, false) => {
-            let rest = after.get(line_after_length..).unwrap_or_default();
+            let rest = &after[line_after_length..];
             let line_break_length = strip_line_break(rest, version)
-                .map_or(0, |after_break| rest.len().saturating_sub(after_break.len()));
-            let line_end = end.saturating_add(line_after_length).saturating_add(line_break_length);
-            (start.saturating_sub(line_before_length), line_end, &b""[..])
+                .map_or(0, |after_break| rest.len() - after_break.len());
+            let line_end = end + line_after_length + line_break_length;
+            (start - line_before_length, line_end, &b""[..])
         }
         (true, false) => {
             let blanks_before =
                 line_before.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count();
-            (start.saturating_sub(blanks_before), end, &b""[..])
+            (start - blanks_before, end, &b""[..])
         }
         (_, true) => {
             let blanks_after = after.iter().take_while(|&&b| is_lua_whitespace(b)).count();
             let is_touching = line_before.last().is_some_and(|&b| !is_lua_whitespace(b));
-            (start, end.saturating_add(blanks_after), if is_touching { &b" "[..] } else { b"" })
+            (start, end + blanks_after, if is_touching { &b" "[..] } else { b"" })
         }
     };
     TextEdit {

@@ -1,4 +1,4 @@
-use core::ptr;
+use std::ptr;
 
 use luck_ast::{AstKind, AstType, BinaryOp, Expression, UnaryOp};
 use luck_semantic::{AstNode, AstTypesBitset};

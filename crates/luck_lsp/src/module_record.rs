@@ -158,7 +158,7 @@ impl ModuleRecord {
     /// The member named at `position`, either end included.
     pub(crate) fn member_at(&self, position: Position) -> Option<&Member> {
         let after = self.members.partition_point(|member| member.range.start <= position);
-        let member = self.members.get(after.checked_sub(1)?)?;
+        let member = self.members[..after].last()?;
         (position <= member.range.end).then_some(member)
     }
 }
@@ -229,15 +229,15 @@ impl<'ast> Collector<'ast> {
         {
             Some((table, 0))
         } else {
-            self.sites.get(&chain.span.start).map(|&(require, before_call)| {
-                (Table::Required(require), before_call.saturating_add(1))
-            })
+            self.sites
+                .get(&chain.span.start)
+                .map(|&(require, before_call)| (Table::Required(require), before_call + 1))
         };
         let Some((table, at)) = named else {
             return;
         };
         if let Some(name) = chain.suffixes.get(at).and_then(member_name) {
-            self.push(table, name, is_target && at.saturating_add(1) == chain.suffixes.len());
+            self.push(table, name, is_target && at + 1 == chain.suffixes.len());
         }
     }
 
@@ -280,7 +280,7 @@ impl<'ast> Collector<'ast> {
             }
             if let Expression::Suffixed(chain) = expr
                 && let Some(&(require, before_call)) = self.sites.get(&chain.span.start)
-                && before_call.saturating_add(1) == chain.suffixes.len()
+                && before_call + 1 == chain.suffixes.len()
             {
                 self.bindings.insert(symbol, require);
             }
@@ -346,9 +346,8 @@ mod tests {
             .members()
             .iter()
             .map(|member| {
-                let start = usize::try_from(member.range.start.character).expect("a small offset");
-                let end = start.saturating_add(member.name.len());
-                let name = source.get(start..end).expect("in the source");
+                let start = member.range.start.character as usize;
+                let name = &source[start..start + member.name.len()];
                 assert_eq!(name, &*member.name);
                 (member.table, name, member.is_definition)
             })

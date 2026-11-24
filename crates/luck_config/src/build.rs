@@ -36,12 +36,6 @@ pub(crate) struct BuildKeys {
 impl BuildKeys {
     /// The builds `profile` selects, with entries and outputs under `root`,
     /// and `project_transforms` where the profile sets none.
-    ///
-    /// # Errors
-    ///
-    /// Returns a message when `profile` isn't defined, when there's no entry
-    /// or output, when an entry isn't a file, or when an output collides with
-    /// an entry or another output.
     pub(crate) fn builds(
         &self,
         root: &Path,

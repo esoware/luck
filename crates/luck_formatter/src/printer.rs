@@ -27,13 +27,12 @@
 //! from the start of the next line, one indent deeper. If it fits there, the
 //! printer breaks the line before it and prints it flat.
 
-use core::cell::Cell;
-use core::ops::{ControlFlow, Range};
-use core::{iter, mem};
+use std::cell::Cell;
+use std::ops::{ControlFlow, Range};
+use std::{iter, mem};
 
 use luck_allocator::{Allocator, List};
 use luck_data_structures::CodeBuffer;
-use luck_token::{index_to_offset, offset_to_index};
 
 use crate::ir::{FormatElement, GroupId, LineMode, TextWidth, columns};
 use crate::{FormatOptions, IndentStyle, LineEndings};
@@ -136,15 +135,14 @@ impl<'ast> Layout<'ast> {
     }
 
     pub(crate) fn close(&mut self) {
-        let Some(closed) = self.open.pop() else {
-            return;
-        };
-        if closed.pending_hugs < self.pending.len()
-            && let Some(group) = self.groups.get_mut(closed.id.index())
-        {
-            group.hugs_start = index_to_offset(self.hugs.len());
+        let closed = self.open.pop().expect("every group closes after it opens");
+        if closed.pending_hugs < self.pending.len() {
+            let group = &mut self.groups[closed.id.index()];
+            group.hugs_start = u32::try_from(self.hugs.len())
+                .expect("a document holds fewer hugs than `u32::MAX`");
             self.hugs.extend(self.pending.drain(closed.pending_hugs..));
-            group.hugs_end = index_to_offset(self.hugs.len());
+            group.hugs_end = u32::try_from(self.hugs.len())
+                .expect("a document holds fewer hugs than `u32::MAX`");
         }
         if let Some((first_line, last_line)) = closed.hug_lines {
             self.pending.push(Hug { child: closed.id, first_line, last_line });
@@ -157,7 +155,7 @@ impl<'ast> Layout<'ast> {
         if let [.., parent, child] = self.open.as_mut_slice()
             && child.is_hugged
         {
-            let line = index.saturating_sub(parent.content_start);
+            let line = index - parent.content_start;
             let first_line = child.hug_lines.map_or(line, |(first_line, _)| first_line);
             child.hug_lines = Some((first_line, line));
         }
@@ -179,7 +177,8 @@ impl<'ast> Layout<'ast> {
     pub(crate) fn force_break(&mut self, index: usize) {
         let mut is_inner_hugged = false;
         for open in self.open.iter_mut().rev() {
-            if !is_inner_hugged && let Some(group) = self.groups.get_mut(open.id.index()) {
+            if !is_inner_hugged {
+                let group = &mut self.groups[open.id.index()];
                 if group.mode == Some(PrintMode::Expanded) {
                     return;
                 }
@@ -202,10 +201,8 @@ impl<'ast> Layout<'ast> {
 
     pub(crate) fn restore(&mut self, checkpoint: LayoutCheckpoint) {
         for open in &mut self.open {
-            if open.marked_at.is_some_and(|index| index >= checkpoint.element_count)
-                && let Some(group) = self.groups.get_mut(open.id.index())
-            {
-                group.mode = None;
+            if open.marked_at.is_some_and(|index| index >= checkpoint.element_count) {
+                self.groups[open.id.index()].mode = None;
                 open.marked_at = None;
             }
         }
@@ -229,10 +226,8 @@ pub(crate) fn print(
         IndentStyle::Tabs => (b'\t', 1),
         IndentStyle::Spaces => (b' ', columns_per_indent),
     };
-    let base_indent_columns = base_indent
-        .iter()
-        .map(|&b| if b == b'\t' { columns_per_indent } else { 1 })
-        .fold(0usize, usize::saturating_add);
+    let base_indent_columns =
+        base_indent.iter().map(|&b| if b == b'\t' { columns_per_indent } else { 1 }).sum();
     let mut printer = Printer {
         line_width: usize::from(options.line_width),
         indent_byte,
@@ -284,18 +279,15 @@ impl<'elements> MeasuredLine<'elements> {
     /// Adds a text, after the space pending before it, and returns whether
     /// the line still fits `line_width`.
     fn push_text(&mut self, width: TextWidth, line_width: usize) -> bool {
-        self.columns = self
-            .columns
-            .saturating_add(usize::from(self.is_pending_space))
-            .saturating_add(width.columns());
+        self.columns += usize::from(self.is_pending_space) + width.columns();
         self.is_pending_space = width.has_space_after();
         self.columns <= line_width
     }
 
     /// Adds a line suffix that counts toward the line, after the space it
     /// prints with, and returns whether the line still fits `line_width`.
-    fn push_suffix(&mut self, width: TextWidth, line_width: usize) -> bool {
-        self.columns = self.columns.saturating_add(1).saturating_add(width.columns());
+    const fn push_suffix(&mut self, width: TextWidth, line_width: usize) -> bool {
+        self.columns += 1 + width.columns();
         self.columns <= line_width
     }
 }
@@ -344,13 +336,11 @@ impl<'ast> Printer<'ast, '_> {
     }
 
     fn group_mode(&self, id: GroupId) -> Option<PrintMode> {
-        self.groups.get(id.index())?.mode
+        self.groups[id.index()].mode
     }
 
     fn set_group_mode(&mut self, id: GroupId, mode: PrintMode) {
-        if let Some(group) = self.groups.get_mut(id.index()) {
-            group.mode = Some(mode);
-        }
+        self.groups[id.index()].mode = Some(mode);
     }
 
     fn print_elements(&mut self, elements: &'ast [FormatElement<'ast>]) {
@@ -393,8 +383,7 @@ impl<'ast> Printer<'ast, '_> {
                 self.modes.push(mode);
             }
             FormatElement::StartNextLineGroup(id) => {
-                let next_line_indent =
-                    self.indent_columns().saturating_add(self.columns_per_indent);
+                let next_line_indent = self.indent_columns() + self.columns_per_indent;
                 let next_line = MeasuredLine::after_break(rest, next_line_indent);
                 let (mode, is_moved) = match self.group_mode(id) {
                     Some(forced) => (forced, false),
@@ -407,7 +396,7 @@ impl<'ast> Printer<'ast, '_> {
                 self.set_group_mode(id, mode);
                 if is_moved {
                     self.emit_newline(false);
-                    self.indent_level = self.indent_level.saturating_add(1);
+                    self.indent_level += 1;
                     // Written now, so an indent inside the flat content
                     // can't deepen this line.
                     self.flush_indent();
@@ -418,23 +407,23 @@ impl<'ast> Printer<'ast, '_> {
             FormatElement::EndNextLineGroup => {
                 self.modes.pop();
                 if self.next_line_moves.pop() == Some(true) {
-                    self.indent_level = self.indent_level.saturating_sub(1);
+                    self.indent_level -= 1;
                 }
             }
             FormatElement::StartFlat => self.modes.push(PrintMode::Flat),
             FormatElement::EndGroup | FormatElement::EndFlat => {
                 self.modes.pop();
             }
-            FormatElement::StartIndent => self.indent_level = self.indent_level.saturating_add(1),
-            FormatElement::EndIndent => self.indent_level = self.indent_level.saturating_sub(1),
+            FormatElement::StartIndent => self.indent_level += 1,
+            FormatElement::EndIndent => self.indent_level -= 1,
             FormatElement::StartIndentIfGroupBreaks(id) => {
                 if self.group_mode(id) == Some(PrintMode::Expanded) {
-                    self.indent_level = self.indent_level.saturating_add(1);
+                    self.indent_level += 1;
                 }
             }
             FormatElement::EndIndentIfGroupBreaks(id) => {
                 if self.group_mode(id) == Some(PrintMode::Expanded) {
-                    self.indent_level = self.indent_level.saturating_sub(1);
+                    self.indent_level -= 1;
                 }
             }
             FormatElement::StartIfGroupBreaks(id) => {
@@ -468,19 +457,15 @@ impl<'ast> Printer<'ast, '_> {
         if self.current_mode() == PrintMode::Flat || self.fits(rest) {
             return PrintMode::Flat;
         }
-        let hugs = self.groups.get(id.index()).map_or(0..0, |group| {
-            offset_to_index(group.hugs_start)..offset_to_index(group.hugs_end)
-        });
+        let group = self.groups[id.index()];
+        let hugs = group.hugs_start as usize..group.hugs_end as usize;
         if hugs.is_empty() {
             return PrintMode::Expanded;
         }
         // A hugged group left undecided here prints flat, like anything else
         // in a flat group. With none forced, that's the flat layout that just
         // failed.
-        let is_any_hug_forced = self
-            .hugs
-            .get(hugs.clone())
-            .unwrap_or_default()
+        let is_any_hug_forced = self.hugs[hugs.clone()]
             .iter()
             .any(|hug| self.group_mode(hug.child) == Some(PrintMode::Expanded));
         if is_any_hug_forced && self.fits_hugging(rest, hugs.clone(), false) {
@@ -488,9 +473,7 @@ impl<'ast> Printer<'ast, '_> {
         }
         if self.fits_hugging(rest, hugs.clone(), true) {
             for i in hugs {
-                if let Some(hug) = self.hugs.get(i).copied() {
-                    self.set_group_mode(hug.child, PrintMode::Expanded);
-                }
+                self.set_group_mode(self.hugs[i].child, PrintMode::Expanded);
             }
             return PrintMode::Flat;
         }
@@ -545,7 +528,7 @@ impl<'ast> Printer<'ast, '_> {
                             continue;
                         }
                     }
-                    let entry_content = rest.get(1..).unwrap_or_default();
+                    let entry_content = &rest[1..];
                     if !self.fits(entry_content) {
                         self.emit_newline(false);
                     }
@@ -565,7 +548,7 @@ impl<'ast> Printer<'ast, '_> {
                         entry_remaining = self.print_element(content, after_content);
                     }
                     self.modes.pop();
-                    remaining = entry_remaining.get(1..).unwrap_or_default();
+                    remaining = &entry_remaining[1..];
                 }
                 FormatElement::Text(..)
                 | FormatElement::Verbatim(..)
@@ -604,16 +587,14 @@ impl<'ast> Printer<'ast, '_> {
         let pending_indent_columns = if self.is_pending_indent { self.indent_columns() } else { 0 };
         MeasuredLine {
             remaining: elements,
-            columns: self.display_column.saturating_add(pending_indent_columns),
+            columns: self.display_column + pending_indent_columns,
             is_pending_space: self.is_pending_space,
             has_line_suffix: !self.suffixes.is_empty(),
         }
     }
 
     const fn indent_columns(&self) -> usize {
-        self.indent_level
-            .saturating_mul(self.columns_per_indent)
-            .saturating_add(self.base_indent_columns)
+        self.indent_level * self.columns_per_indent + self.base_indent_columns
     }
 
     /// Whether `elements`, the content of a group or fill entry about to
@@ -640,20 +621,20 @@ impl<'ast> Printer<'ast, '_> {
         let mut line = self.current_line(elements);
         let mut line_start = 0;
         let mut depth = 1;
-        for hug in self.hugs.get(hugs).unwrap_or_default() {
+        for hug in &self.hugs[hugs] {
             if !should_expand_all && self.group_mode(hug.child) != Some(PrintMode::Expanded) {
                 continue;
             }
-            line.remaining = elements.get(line_start..hug.first_line).unwrap_or_default();
+            line.remaining = &elements[line_start..hug.first_line];
             if !self.fits_from(line, depth) {
                 return false;
             }
-            line_start = hug.last_line.saturating_add(1);
+            line_start = hug.last_line + 1;
             line = MeasuredLine::after_break(&[], self.indent_columns());
             // The next line starts inside the child, two groups deep.
             depth = 2;
         }
-        line.remaining = elements.get(line_start..).unwrap_or_default();
+        line.remaining = &elements[line_start..];
         self.fits_from(line, depth)
     }
 
@@ -714,12 +695,12 @@ impl<'ast> Printer<'ast, '_> {
                 | FormatElement::StartHuggedGroup(_)
                 | FormatElement::StartNextLineGroup(_)
                 | FormatElement::StartFlat
-                | FormatElement::StartEntry => depth = depth.saturating_add(1),
+                | FormatElement::StartEntry => depth += 1,
                 FormatElement::EndGroup
                 | FormatElement::EndNextLineGroup
                 | FormatElement::EndFlat
                 | FormatElement::EndEntry => {
-                    depth = depth.saturating_sub(1);
+                    depth -= 1;
                     if depth == 0 {
                         return ControlFlow::Continue(line);
                     }
@@ -745,7 +726,7 @@ impl<'ast> Printer<'ast, '_> {
     fn measure_rest(&self, mut line: MeasuredLine<'_>) -> bool {
         let mut outer_modes =
             self.modes.iter().rev().copied().chain(iter::once(PrintMode::Expanded));
-        let mut mode = outer_modes.next().unwrap_or(PrintMode::Expanded);
+        let mut mode = outer_modes.next().expect("the top level ends the chain");
         // The modes of the regions around those opened since, innermost last.
         let mut around = self.measured_regions.take();
         around.clear();
@@ -834,14 +815,14 @@ impl<'ast> Printer<'ast, '_> {
         if self.is_pending_space {
             self.is_pending_space = false;
             self.output.print_byte(b' ');
-            self.display_column = self.display_column.saturating_add(1);
+            self.display_column += 1;
         }
         if self.crlf_end == Some(self.output.len()) {
             self.keep_lf_before_cr(content);
         }
         if !width.is_multiline() {
             self.output.print_bytes(content);
-            self.display_column = self.display_column.saturating_add(width.columns());
+            self.display_column += width.columns();
             return;
         }
         if self.is_crlf {
@@ -850,8 +831,11 @@ impl<'ast> Printer<'ast, '_> {
             self.output.print_bytes(content);
         }
         // The column restarts from the last line.
-        let last_line = content.rsplit(|&b| b == b'\n' || b == b'\r').next().unwrap_or(content);
-        self.line_start = self.output.len().saturating_sub(last_line.len());
+        let last_line = content
+            .rsplit(|&b| b == b'\n' || b == b'\r')
+            .next()
+            .expect("a split yields at least one piece");
+        self.line_start = self.output.len() - last_line.len();
         self.display_column = columns(last_line);
     }
 
@@ -870,7 +854,7 @@ impl<'ast> Printer<'ast, '_> {
     fn keep_lf_before_cr(&mut self, content: &[u8]) {
         if content.first() == Some(&b'\r') {
             self.crlf_end = None;
-            self.output.truncate(self.output.len().saturating_sub(2));
+            self.output.truncate(self.output.len() - 2);
             self.output.print_byte(b'\n');
             self.line_start = self.output.len();
         }
@@ -883,15 +867,15 @@ impl<'ast> Printer<'ast, '_> {
         let mut is_crlf_last = false;
         for i in memchr::memchr_iter(b'\n', content) {
             let previous =
-                i.checked_sub(1).map_or_else(|| self.output.as_bytes().last(), |j| content.get(j));
-            if previous != Some(&b'\r') && content.get(i.saturating_add(1)) != Some(&b'\r') {
-                self.output.print_bytes(content.get(written..i).unwrap_or_default());
+                if i == 0 { self.output.as_bytes().last() } else { Some(&content[i - 1]) };
+            if previous != Some(&b'\r') && content.get(i + 1) != Some(&b'\r') {
+                self.output.print_bytes(&content[written..i]);
                 self.output.print_byte(b'\r');
                 written = i;
-                is_crlf_last = i.saturating_add(1) == content.len();
+                is_crlf_last = i + 1 == content.len();
             }
         }
-        self.output.print_bytes(content.get(written..).unwrap_or_default());
+        self.output.print_bytes(&content[written..]);
         if is_crlf_last {
             self.crlf_end = Some(self.output.len());
         }
@@ -958,23 +942,18 @@ impl<'ast> Printer<'ast, '_> {
 
     fn trim_trailing_whitespace(&mut self) {
         let bytes = self.output.as_bytes();
-        let trailing_whitespace_bytes = bytes
-            .get(self.line_start..)
-            .unwrap_or_default()
-            .iter()
-            .rev()
-            .take_while(|b| matches!(b, b' ' | b'\t'))
-            .count();
-        let trimmed_end = bytes.len().saturating_sub(trailing_whitespace_bytes);
+        let trailing_whitespace_bytes =
+            bytes[self.line_start..].iter().rev().take_while(|b| matches!(b, b' ' | b'\t')).count();
+        let trimmed_end = bytes.len() - trailing_whitespace_bytes;
         self.output.truncate(trimmed_end);
     }
 
     fn flush_indent(&mut self) {
         self.is_pending_indent = false;
         self.output.print_bytes(self.base_indent);
-        let indent_bytes = self.indent_level.saturating_mul(self.bytes_per_indent);
+        let indent_bytes = self.indent_level * self.bytes_per_indent;
         self.output.print_repeat(self.indent_byte, indent_bytes);
-        self.display_column = self.display_column.saturating_add(self.indent_columns());
+        self.display_column += self.indent_columns();
     }
 }
 

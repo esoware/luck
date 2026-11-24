@@ -2,7 +2,7 @@
 //! than it, which every stage has to get through on
 //! [`luck_ast::MIN_STACK_BYTES`].
 
-use core::fmt::Write as _;
+use std::fmt::Write as _;
 use std::{panic, thread};
 
 use luck_ast::{MAX_NESTING_DEPTH, MIN_STACK_BYTES};
@@ -13,13 +13,12 @@ fn wrapped(open: &str, count: usize, innermost: &str, close: &str) -> String {
 }
 
 /// One source per construct, each nested as deep as the parser accepts.
-#[must_use]
 pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
     // How many times a construct that nests one, two, three, or four levels
     // fits under the chunk's own. Parentheses the tree leaves out open none,
     // and as many as the cap may be open at once over a tree at it.
     let one = MAX_NESTING_DEPTH - 1;
-    let (two, three, four) = (one.div_euclid(2), one.div_euclid(3), one.div_euclid(4));
+    let (two, three, four) = (one / 2, one / 3, one / 4);
     let groups = MAX_NESTING_DEPTH;
     let lua = [
         format!("return {}", wrapped("(", groups, "x", ")")),
@@ -113,8 +112,8 @@ fn long_lists() -> Vec<(LuaVersion, String)> {
     let live_arms = " elseif a then x()".repeat(ITEMS);
     let names = numbered("a#", ",");
     let mut dead_chain = String::from("local function f0() end\n");
-    for (i, previous) in (1..ITEMS).zip(0usize..) {
-        let _unused = writeln!(dead_chain, "local function f{i}() f{previous}() end");
+    for i in 1..ITEMS {
+        let _ = writeln!(dead_chain, "local function f{i}() f{}() end", i - 1);
     }
     let lua = [
         "x() ".repeat(ITEMS),
@@ -165,7 +164,6 @@ fn long_lists() -> Vec<(LuaVersion, String)> {
 
 /// One source per construct, each nested far past the cap, where the parser
 /// stops.
-#[must_use]
 pub fn sources_past_the_nesting_cap() -> Vec<(LuaVersion, String)> {
     const LEVELS: usize = 100_000;
     let lua = [
@@ -202,7 +200,6 @@ pub fn sources_past_the_nesting_cap() -> Vec<(LuaVersion, String)> {
 
 /// One source per way of breaking input at every level, far past the cap,
 /// which parse recovery reads in loops, in time linear in its length.
-#[must_use]
 pub fn broken_sources() -> Vec<(LuaVersion, String)> {
     const LEVELS: usize = 100_000;
     let lua = [
@@ -240,7 +237,6 @@ x()
 }
 
 /// Every source at the cap, every long run, and every long list.
-#[must_use]
 pub fn deep_and_long_sources() -> Vec<(LuaVersion, String)> {
     let mut sources = sources_at_the_nesting_cap();
     sources.extend(long_runs());
@@ -275,7 +271,6 @@ where
     Work: FnOnce() -> T + Send,
 {
     thread::scope(|scope| {
-        #[expect(clippy::expect_used, reason = "the work can't run without its thread")]
         let worker = thread::Builder::new()
             .stack_size(MIN_STACK_BYTES)
             .spawn_scoped(scope, work)

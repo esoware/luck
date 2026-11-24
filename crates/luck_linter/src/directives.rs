@@ -5,8 +5,8 @@
 //! those of `*`, in one walk in source order as they're reported, so matching
 //! is linear in both.
 
-use core::cmp::Reverse;
-use core::ops::Range;
+use std::cmp::Reverse;
+use std::ops::Range;
 
 use luck_ast::{GetSpan as _, Statement};
 use luck_semantic::AstNodes;
@@ -149,9 +149,7 @@ impl Directives {
         let entries = first..self.entries.len();
         self.list.push(Directive { span, verb, extent, list, entries: entries.clone() });
         for entry in entries {
-            let Some(name) = self.entries.get(entry).map(|found| found.name) else {
-                continue;
-            };
+            let name = self.entries[entry].name;
             let name_text = name.text(source);
             match extent {
                 LintExtent::File => self.cover(entry, 0, FILE_END),
@@ -165,9 +163,7 @@ impl Directives {
                         .rposition(|region| region.name == name_text && region.verb == verb);
                     match opened.map(|position| open_regions.remove(position)) {
                         Some(region) => {
-                            if let Some(start) = self.entries.get_mut(region.entry) {
-                                start.end = Some(entry);
-                            }
+                            self.entries[region.entry].end = Some(entry);
                             self.cover(region.entry, region.from, span.start);
                         }
                         None => self.errors.push(DirectiveProblem::UnopenedEnd { verb, name }),
@@ -186,12 +182,8 @@ impl Directives {
     }
 
     fn cover(&mut self, entry: usize, start: u32, end: u32) {
-        let Some(found) = self.entries.get(entry) else {
-            return;
-        };
-        let Some(verb) = self.list.get(found.directive).map(|directive| directive.verb) else {
-            return;
-        };
+        let found = &self.entries[entry];
+        let verb = self.list[found.directive].verb;
         if found.target != Target::Unknown {
             self.intervals.push(Interval { target: found.target, start, end, entry, verb });
         }
@@ -286,7 +278,7 @@ impl Directives {
     fn intervals_of(&self, target: Target) -> &[Interval] {
         let first = self.intervals.partition_point(|interval| interval.target < target);
         let end = self.intervals.partition_point(|interval| interval.target <= target);
-        self.intervals.get(first..end).unwrap_or_default()
+        &self.intervals[first..end]
     }
 }
 

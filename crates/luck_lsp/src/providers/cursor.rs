@@ -51,7 +51,7 @@ pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
             comment.span.start < offset && offset <= comment.span.end
         }
         CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => {
-            let is_last = index.saturating_add(1) == comments.len();
+            let is_last = index + 1 == comments.len();
             let is_cut_off = is_last && tokens.last().is_some_and(|eof| eof.is_unterminated);
             is_inside(comment.span, offset, is_cut_off)
         }
@@ -86,9 +86,7 @@ pub(crate) fn is_unterminated(document: &DocumentState, literal: &StringLiteral<
     let tokens = document.tokens();
     tokens
         .binary_search_by_key(&literal.span.start, |token| token.span.start)
-        .ok()
-        .and_then(|i| tokens.get(i))
-        .is_some_and(|token| token.is_unterminated)
+        .is_ok_and(|i| tokens[i].is_unterminated)
 }
 
 #[cfg(test)]
@@ -105,7 +103,7 @@ mod tests {
         let document = document(&text, target);
         let mut offsets = Vec::new();
         for (index, (position, _)) in marked.match_indices('|').enumerate() {
-            offsets.push(u32::try_from(position.saturating_sub(index)).expect("a small offset"));
+            offsets.push(u32::try_from(position - index).expect("a small offset"));
         }
         offsets.into_iter().map(|offset| text_kind_at(&document, offset)).collect()
     }

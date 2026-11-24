@@ -1,8 +1,7 @@
-use core::hash::BuildHasher as _;
+use std::hash::BuildHasher as _;
 
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
-use luck_token::{index_to_offset, offset_to_index};
 use rustc_hash::FxBuildHasher;
 
 use crate::id::NameId;
@@ -29,25 +28,19 @@ struct NameEntry {
 
 /// As bytes, so a comparison checks no char boundaries.
 fn entry_bytes<'names>(text: &'names str, entries: &[NameEntry], id: NameId) -> &'names [u8] {
-    entries
-        .get(id.index())
-        .and_then(|entry| {
-            text.as_bytes().get(offset_to_index(entry.start)..offset_to_index(entry.end))
-        })
-        .unwrap_or_default()
+    let entry = entries[id.index()];
+    &text.as_bytes()[entry.start as usize..entry.end as usize]
 }
 
 fn entry_text<'names>(text: &'names str, entries: &[NameEntry], id: NameId) -> &'names str {
-    entries
-        .get(id.index())
-        .and_then(|entry| text.get(offset_to_index(entry.start)..offset_to_index(entry.end)))
-        .unwrap_or_default()
+    let entry = entries[id.index()];
+    &text[entry.start as usize..entry.end as usize]
 }
 
 impl Names {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
-            text: String::with_capacity(capacity.saturating_mul(8)),
+            text: String::with_capacity(capacity * 8),
             entries: Vec::with_capacity(capacity),
             table: HashTable::with_capacity(capacity),
         }
@@ -70,11 +63,13 @@ impl Names {
             Entry::Occupied(occupied) => *occupied.get(),
             Entry::Vacant(vacant) => {
                 let id = NameId::from_index(entries.len());
-                let start = index_to_offset(text.len());
+                let start = u32::try_from(text.len())
+                    .expect("a chunk's names total fewer bytes than `u32::MAX`");
                 text.push_str(name);
                 entries.push(NameEntry {
                     start,
-                    end: index_to_offset(text.len()),
+                    end: u32::try_from(text.len())
+                        .expect("a chunk's names total fewer bytes than `u32::MAX`"),
                     is_assigned_global: false,
                     is_declared_global: false,
                 });
@@ -96,23 +91,19 @@ impl Names {
     }
 
     pub(crate) fn is_assigned_global(&self, id: NameId) -> bool {
-        self.entries.get(id.index()).is_some_and(|entry| entry.is_assigned_global)
+        self.entries[id.index()].is_assigned_global
     }
 
     pub(crate) fn is_declared_global(&self, id: NameId) -> bool {
-        self.entries.get(id.index()).is_some_and(|entry| entry.is_declared_global)
+        self.entries[id.index()].is_declared_global
     }
 
     pub(crate) fn mark_assigned_global(&mut self, id: NameId) {
-        if let Some(entry) = self.entries.get_mut(id.index()) {
-            entry.is_assigned_global = true;
-        }
+        self.entries[id.index()].is_assigned_global = true;
     }
 
     pub(crate) fn mark_declared_global(&mut self, id: NameId) {
-        if let Some(entry) = self.entries.get_mut(id.index()) {
-            entry.is_declared_global = true;
-        }
+        self.entries[id.index()].is_declared_global = true;
     }
 }
 
@@ -136,7 +127,7 @@ mod tests {
     #[test]
     fn a_table_that_grows_finds_every_name() {
         let mut names = Names::default();
-        let ids: Vec<NameId> = (0..1_000u32).map(|i| names.intern(&format!("n{i}"))).collect();
+        let ids: Vec<NameId> = (0..1_000).map(|i| names.intern(&format!("n{i}"))).collect();
         for (i, id) in ids.into_iter().enumerate() {
             assert_eq!(names.get(&format!("n{i}")), Some(id));
             assert_eq!(names.text(id), format!("n{i}"));

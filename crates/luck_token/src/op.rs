@@ -36,7 +36,6 @@ pub enum BinOp {
 impl BinOp {
     /// Bitwise operators exist only in Lua 5.3+. Luau still lexes `&` and `|`
     /// for its type grammar, so the parser checks this as well.
-    #[must_use]
     pub const fn is_bitwise(self) -> bool {
         match self {
             Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr => true,
@@ -62,7 +61,6 @@ impl BinOp {
     /// Version-gated operators (bitwise, floor div) map unconditionally. The
     /// lexer only produces them for versions that have them, except Luau's
     /// `&` and `|`, which belong to its type syntax (see [`Self::is_bitwise`]).
-    #[must_use]
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "None is the right answer for every non-operator token, present or future"
@@ -94,7 +92,6 @@ impl BinOp {
         })
     }
 
-    #[must_use]
     pub const fn static_text(self) -> &'static str {
         match self {
             Self::Add => "+",
@@ -124,7 +121,6 @@ impl BinOp {
     /// `(precedence, associativity)`, from the precedence table that the
     /// parser and the printers share, with [`UnOp::PRECEDENCE`] as its unary
     /// level.
-    #[must_use]
     pub const fn precedence(self) -> (u8, Associativity) {
         match self {
             Self::Or => (1, Associativity::Left),
@@ -143,7 +139,6 @@ impl BinOp {
         }
     }
 
-    #[must_use]
     pub const fn is_comparison(self) -> bool {
         match self {
             Self::Eq | Self::Ne | Self::Lt | Self::Le | Self::Gt | Self::Ge => true,
@@ -178,7 +173,6 @@ impl UnOp {
     /// Sits between multiplicative (10) and `^` (12), per the Lua reference manual.
     pub const PRECEDENCE: u8 = 11;
 
-    #[must_use]
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "None is the right answer for every non-operator token, present or future"
@@ -193,7 +187,6 @@ impl UnOp {
         })
     }
 
-    #[must_use]
     pub const fn static_text(self) -> &'static str {
         match self {
             Self::Not => "not",
@@ -217,7 +210,6 @@ pub enum CompoundOp {
 }
 
 impl CompoundOp {
-    #[must_use]
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "None is the right answer for every non-operator token, present or future"
@@ -236,7 +228,6 @@ impl CompoundOp {
         })
     }
 
-    #[must_use]
     pub const fn static_text(self) -> &'static str {
         match self {
             Self::Add => "+=",

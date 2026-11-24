@@ -1,4 +1,4 @@
-use core::mem;
+use std::mem;
 use std::path::{Path, PathBuf};
 
 use luck_allocator::ThreadAllocators;
@@ -77,11 +77,6 @@ pub fn bundle_minified(
     let source_files = graph.modules.iter().map(|module| module.path.clone()).collect();
     let source_byte_count = graph.modules.iter().map(|module| module.source.len()).sum();
     let (mut chunk, header) = block_emitter::emit_chunk(allocator, graph, options.version)?;
-    #[expect(
-        clippy::expect_used,
-        clippy::unwrap_in_result,
-        reason = "the emitter refuses a tree past the cap"
-    )]
     let output = luck_minifier::minify_chunk(allocator, &mut chunk, transforms, header)
         .expect("a bundle nests within the cap");
     Ok(MinifiedBundle { output, warnings, source_files, source_byte_count })

@@ -7,12 +7,12 @@
 //! region goes out byte for byte as one verbatim item, and a statement under
 //! `luck: ignore` keeps its layout, re-indented to its block.
 
-use core::iter::{self, Peekable};
-use core::ops::Range;
+use std::iter::{self, Peekable};
+use std::ops::Range;
 
 use luck_ast::{Block, GetSpan as _, Statement, Visit, leading_prefix};
 use luck_parser::{Groupings, ParseResult};
-use luck_token::{LuaVersion, Span, is_lua_whitespace, offset_to_index, strip_line_break};
+use luck_token::{LuaVersion, Span, is_lua_whitespace, strip_line_break};
 
 use crate::comments::own_line_start;
 use crate::ir::Formatter;
@@ -239,7 +239,7 @@ impl<'ast> Formatter<'ast> {
                 // The region goes out as written, so it starts as its source
                 // does, and every node starts at a token.
                 if absorbed.is_none() {
-                    has_leading_paren = source.get(offset_to_index(span.start)) == Some(&b'(');
+                    has_leading_paren = source[span.start as usize] == b'(';
                 }
                 run.start = run.start.min(own_line_start(source, span.start).unwrap_or(span.start));
                 run.end = run.end.max(span.end);
@@ -251,13 +251,13 @@ impl<'ast> Formatter<'ast> {
             }
         }
 
-        let stays_in_block = absorbed.map_or_else(
-            || comments.is_code_free(run.start, run.end),
-            |range| {
+        let stays_in_block = match absorbed {
+            Some(range) => {
                 comments.is_code_free(run.start, range.start)
                     && comments.is_code_free(range.end, run.end)
-            },
-        );
+            }
+            None => comments.is_code_free(run.start, run.end),
+        };
         if !stays_in_block {
             return items.next();
         }
@@ -270,9 +270,7 @@ impl<'ast> Formatter<'ast> {
     fn item_starts_with_paren(&self, item: BlockItem<'_, 'ast>, is_opted_out: bool) -> bool {
         match item {
             BlockItem::Stmt(stmt) => match self.comments().source_text() {
-                Some(source) if is_opted_out => {
-                    source.get(offset_to_index(stmt.span().start)) == Some(&b'(')
-                }
+                Some(source) if is_opted_out => source[stmt.span().start as usize] == b'(',
                 Some(_) | None => {
                     leading_prefix(stmt).is_some_and(|prefix| self.starts_with_paren(prefix))
                 }
@@ -306,13 +304,8 @@ impl<'ast> Formatter<'ast> {
     ) -> bool {
         let comments = self.comments();
         let version = self.version();
-        let is_blank = comments.source_text().map_or_else(
-            || {
-                previous.should_surround_with_blank
-                    || should_surround_next_with_blank
-                    || comments.has_synthetic_blank_before(next_start)
-            },
-            |source| {
+        let is_blank = match comments.source_text() {
+            Some(source) => {
                 // Stop at an intervening comment, so a blank line after it isn't
                 // counted as part of this gap.
                 let gap_end = comments.peek_next_start().unwrap_or(next_start).min(next_start);
@@ -321,8 +314,13 @@ impl<'ast> Formatter<'ast> {
                     .last_printed_end()
                     .map_or(previous.end, |printed_end| printed_end.max(previous.end));
                 has_blank_line(source, gap_start, gap_end, version)
-            },
-        );
+            }
+            None => {
+                previous.should_surround_with_blank
+                    || should_surround_next_with_blank
+                    || comments.has_synthetic_blank_before(next_start)
+            }
+        };
         self.line_break(is_blank);
         is_blank
     }
@@ -471,18 +469,17 @@ pub(crate) fn format_selection<'ast>(
 /// Whether the whitespace run immediately before `anchor` contains a blank
 /// line (the gap between a block opener and its first statement).
 pub(crate) fn has_leading_edge_blank(source: &[u8], anchor: u32, version: LuaVersion) -> bool {
-    let preceding = source.get(..offset_to_index(anchor)).unwrap_or(source);
+    let preceding = &source[..anchor as usize];
     let run_length = preceding.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count();
-    let run_start = preceding.len().saturating_sub(run_length);
-    run_has_blank(preceding.get(run_start..).unwrap_or_default(), version)
+    run_has_blank(&preceding[preceding.len() - run_length..], version)
 }
 
 /// Whether the whitespace and `;` run immediately after `end` contains a blank
 /// line (the gap between the last statement and the block closer).
 fn has_trailing_edge_blank(source: &[u8], end: u32, version: LuaVersion) -> bool {
-    let following = source.get(offset_to_index(end)..).unwrap_or_default();
+    let following = &source[end as usize..];
     let run_length = following.iter().take_while(|&&b| is_lua_whitespace(b) || b == b';').count();
-    run_has_blank(following.get(..run_length).unwrap_or_default(), version)
+    run_has_blank(&following[..run_length], version)
 }
 
 /// Whether `text` holds a blank line: two line breaks with no `;` between them,
@@ -522,7 +519,7 @@ mod tests {
         let pieces = ['\n', '\r', ';', ' ', 'x'];
         let mut gaps = vec![String::new()];
         let mut longest = gaps.clone();
-        for _ in 0..6u8 {
+        for _ in 0..6 {
             longest = longest
                 .iter()
                 .flat_map(|gap| pieces.iter().map(move |piece| format!("{gap}{piece}")))

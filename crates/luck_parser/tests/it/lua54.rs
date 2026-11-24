@@ -57,14 +57,8 @@ fn trailing_attribute_applies_only_to_its_name() {
     assert_no_errors(&result);
     if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert_eq!(local.names.len(), 2);
-        assert!(
-            local.names.first().expect("declared name").attribute.is_none(),
-            "a should have no attribute"
-        );
-        assert!(
-            local.names.get(1).expect("declared name").attribute.is_some(),
-            "b should have an attribute"
-        );
+        assert!(local.names[0].attribute.is_none(), "a should have no attribute");
+        assert!(local.names[1].attribute.is_some(), "b should have an attribute");
     } else {
         panic!("expected LocalAssignment");
     }
@@ -77,21 +71,9 @@ fn each_name_keeps_its_own_attribute() {
     assert_no_errors(&result);
     if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert_eq!(local.names.len(), 2);
-        let attribute_a = local
-            .names
-            .first()
-            .expect("declared name")
-            .attribute
-            .as_ref()
-            .expect("a should have attribute");
+        let attribute_a = local.names[0].attribute.as_ref().expect("a should have attribute");
         assert_eq!(attribute_a.name.text, "const");
-        let attribute_b = local
-            .names
-            .get(1)
-            .expect("declared name")
-            .attribute
-            .as_ref()
-            .expect("b should have attribute");
+        let attribute_b = local.names[1].attribute.as_ref().expect("b should have attribute");
         assert_eq!(attribute_b.name.text, "close");
     } else {
         panic!("expected LocalAssignment");

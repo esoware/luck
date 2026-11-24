@@ -1,6 +1,6 @@
-use core::time::Duration;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use luck_config::{Project, find_config};
 use luck_resolver::{FileSystem as _, FileSystemOs};

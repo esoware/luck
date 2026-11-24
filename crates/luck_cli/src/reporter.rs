@@ -9,7 +9,7 @@ use std::io::{self, Write as _};
 
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
-use luck_token::{LineIndex, LuaVersion, offset_to_index};
+use luck_token::{LineIndex, LuaVersion};
 
 pub(crate) use default::DefaultReporter;
 pub(crate) use github::GithubReporter;
@@ -44,7 +44,7 @@ pub(crate) fn print_files(files: &[FileDiagnostics], version: LuaVersion) {
         DefaultReporter.render(source, &file.diags, &mut output);
     }
     // A failed write has nowhere to be reported.
-    let _unused = io::stderr().write_all(&output);
+    let _ = io::stderr().write_all(&output);
 }
 
 /// Writes the diagnostics in `text`, a document that isn't on disk, such as
@@ -52,7 +52,7 @@ pub(crate) fn print_files(files: &[FileDiagnostics], version: LuaVersion) {
 pub(crate) fn print_document(label: &str, text: &[u8], diags: &[Diagnostic], version: LuaVersion) {
     let mut output = Vec::new();
     DefaultReporter.render(SourceFile { label, text: Some(text), version }, diags, &mut output);
-    let _unused = io::stderr().write_all(&output);
+    let _ = io::stderr().write_all(&output);
 }
 
 /// The 1-based line and character column of the byte at `offset` in
@@ -60,15 +60,15 @@ pub(crate) fn print_document(label: &str, text: &[u8], diags: &[Diagnostic], ver
 /// character of its own, as a one-byte encoding reads it.
 fn line_and_column(lines: &LineIndex, text: &[u8], offset: u32) -> (u32, usize) {
     let (line, byte_column) = lines.line_column(offset);
-    let index = offset_to_index(offset);
-    let line_start = index.saturating_sub(offset_to_index(byte_column.saturating_sub(1)));
+    let index = offset as usize;
+    let line_start = index - (byte_column - 1) as usize;
     let characters_before = text.get(line_start..index).map_or(0, |before| {
         before
             .utf8_chunks()
-            .map(|chunk| chunk.valid().chars().count().saturating_add(chunk.invalid().len()))
-            .fold(0, usize::saturating_add)
+            .map(|chunk| chunk.valid().chars().count() + chunk.invalid().len())
+            .sum()
     });
-    (line, characters_before.saturating_add(1))
+    (line, characters_before + 1)
 }
 
 #[cfg(test)]

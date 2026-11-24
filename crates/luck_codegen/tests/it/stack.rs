@@ -30,7 +30,7 @@ fn compacting_what_a_failed_parse_leaves_fits_the_smallest_stack() {
         let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert!(!parsed.errors.is_empty(), "{:?}", source.get(..20));
         for spelling in [LiteralSpelling::AsWritten, LiteralSpelling::Shortest] {
-            let _output = luck_codegen::compact(&parsed.chunk, spelling);
+            luck_codegen::compact(&parsed.chunk, spelling);
         }
     });
 }

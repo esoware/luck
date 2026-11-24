@@ -1,6 +1,6 @@
-use alloc::sync::Arc;
-use core::mem;
+use std::mem;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use globset::{Candidate, GlobSet};
 use luck_bundler::{BundleOptions, DynamicRequire};
@@ -67,10 +67,6 @@ impl Project {
     pub fn load(config_path: &Path) -> Result<Self, FileDiagnostics> {
         let Loaded { config, mut files } = load::load(config_path)?;
         let invalid = |problem: &str| in_file(config_path, Diagnostic::e014(None, problem));
-        #[expect(
-            clippy::unneeded_field_pattern,
-            reason = "every key is named, so one `luck.json` gains can't go unread here"
-        )]
         let LuckConfig {
             lua,
             luau,
@@ -163,7 +159,6 @@ impl Project {
 
     /// The defaults, for files with no `luck.json` above them, rooted at
     /// `root`.
-    #[must_use]
     pub fn defaults(root: PathBuf) -> Self {
         let filter = ProjectFilter::everything(&root);
         Self {
@@ -185,19 +180,16 @@ impl Project {
 
     /// The directory of the `luck.json`, which the project's relative paths
     /// and globs start from.
-    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
     /// The canonical path of every config file the project read: its
     /// `luck.json`, each file that extends, and each std definition.
-    #[must_use]
     pub fn files(&self) -> &[PathBuf] {
         &self.files
     }
 
-    #[must_use]
     pub const fn filter(&self) -> &ProjectFilter {
         &self.filter
     }
@@ -205,14 +197,12 @@ impl Project {
     /// The dialect of the file at `path`: the `luau` key's for a `.luau`
     /// file, and the `lua` key's for any other file or a document with no
     /// path.
-    #[must_use]
     pub fn target_for(&self, path: Option<&Path>) -> LuaTarget {
         self.stdlib_for(path).target()
     }
 
     /// The standard library of the file at `path`: its dialect's, with the
     /// `std` definitions layered over it.
-    #[must_use]
     pub fn stdlib_for(&self, path: Option<&Path>) -> &Stdlib {
         if path.and_then(Path::extension).is_some_and(|extension| extension == "luau") {
             &self.luau
@@ -223,7 +213,6 @@ impl Project {
 
     /// The linter of the `lint` section with the overrides `path` matches
     /// layered over it, which every file those overrides match shares.
-    #[must_use]
     pub fn linter_for(&self, path: Option<&Path>) -> Arc<Linter> {
         let (indices, layers): (Vec<usize>, Vec<&LintConfig>) = self
             .overrides_for(path)
@@ -243,7 +232,6 @@ impl Project {
     /// The defaults, then the `.editorconfig` files above `path` when there
     /// are `editorconfigs` to read them through, then the `format` section,
     /// then the overrides `path` matches.
-    #[must_use]
     pub fn format_options(
         &self,
         path: Option<&Path>,
@@ -275,18 +263,15 @@ impl Project {
         self.layered_linters.get_mut().clear();
     }
 
-    #[must_use]
     pub fn search_paths(&self) -> &[String] {
         &self.search_paths
     }
 
-    #[must_use]
     pub const fn transforms(&self) -> TransformConfig {
         self.transforms
     }
 
     /// How a bundle for `version` resolves and reads its modules.
-    #[must_use]
     pub fn bundle_options(&self, version: LuaVersion) -> BundleOptions<'_> {
         BundleOptions {
             version,

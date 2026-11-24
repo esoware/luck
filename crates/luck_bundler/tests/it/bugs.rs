@@ -1,8 +1,3 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
 use std::fs;
 use std::path::Path;
 
@@ -35,10 +30,6 @@ fn write_project(files: &[(&str, &[u8])]) -> TempDir {
     directory
 }
 
-/// # Errors
-///
-/// Returns the diagnostics that stopped the project at `directory` from
-/// bundling.
 fn bundle_project(
     directory: &Path,
     entry: &str,
@@ -167,7 +158,7 @@ print(arg[0]"
 
 #[test]
 fn entry_keeps_its_200_local_budget_on_vararg_slot_versions() {
-    let locals = (0..199usize).map(|i| format!("local v{i} = {i}\n")).collect::<Vec<_>>().concat();
+    let locals = (0..199).map(|i| format!("local v{i} = {i}\n")).collect::<Vec<_>>().concat();
     let main = format!(
         "\
 {locals}local d = require(\"util\")
@@ -272,7 +263,7 @@ impl<'ast> Visit<'ast> for EnvCalls {
     fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
         for call in suffixed_expr.calls() {
             if call.callee.as_name().is_some_and(|name| name.text == "_ENV") {
-                self.0 = self.0.saturating_add(1);
+                self.0 += 1;
             }
         }
         self.walk_suffixed_expr(suffixed_expr);
@@ -589,8 +580,8 @@ animal = \"bird\"
         .filter(|reference| tree.name(reference.name) == "animal" && reference.kind.is_read())
         .filter_map(|reference| reference.resolved)
         .any(|symbol| {
-            luck_token::offset_to_index(tree.symbol(symbol).definition_span.start)
-                > shadow_start.saturating_sub("local animal = ".len())
+            tree.symbol(symbol).definition_span.start as usize
+                > shadow_start - "local animal = ".len()
         });
     assert!(
         !has_shadow_read,
@@ -612,13 +603,19 @@ export local value = table
     );
     let allocator = Allocator::new();
     let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Luau);
-    let freeze_start = text(&result.output).find("table.freeze(").unwrap_or(usize::MAX);
-    let is_captured = tree.references().iter().any(|reference| {
-        tree.name(reference.name) == "table"
-            && luck_token::offset_to_index(reference.span.start) == freeze_start
-            && reference.resolved.is_some()
-    });
-    assert!(!is_captured, "freeze must reach the library table:\n{}", text(&result.output));
+    let freeze_start =
+        text(&result.output).find("table.freeze").expect("the bundle reads `table.freeze`");
+    let freeze_read = tree
+        .references()
+        .iter()
+        .find(|reference| reference.span.start as usize == freeze_start)
+        .expect("a name is read where `table.freeze` starts");
+    assert_eq!(tree.name(freeze_read.name), "table");
+    assert!(
+        freeze_read.resolved.is_none(),
+        "freeze must reach the library table:\n{}",
+        text(&result.output)
+    );
 }
 
 #[test]
@@ -667,7 +664,7 @@ fn luau_export_function_attribute_lowering_keeps_lines_one_to_one() {
 @native export function f() return 1 end
 local marker = 1
 ",
-            2usize,
+            2,
         ),
         (
             "\

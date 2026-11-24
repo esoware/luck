@@ -1,11 +1,11 @@
-use alloc::sync::Arc;
-use core::num::NonZero;
-use core::panic::AssertUnwindSafe;
-use core::{iter, mem};
+use std::num::NonZero;
 use std::panic;
+use std::panic::AssertUnwindSafe;
 use std::path::{Component, MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::{env, thread};
+use std::{iter, mem};
 
 use globset::GlobSet;
 use ignore::{DirEntry, WalkBuilder, WalkState};
@@ -21,17 +21,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::exit::{Exit, config_error, operation_error, usage_error};
 
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Usage`] when the working
-/// directory can't be read.
 pub(crate) fn current_directory() -> Result<PathBuf, Exit> {
     env::current_dir().map_err(|e| usage_error(format!("failed to get current directory: {e}")))
 }
 
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Usage`] when it doesn't.
 pub(crate) fn existing_file(input: &str) -> Result<&Path, Exit> {
     let path = Path::new(input);
     if path.is_file() { Ok(path) } else { Err(usage_error(format!("file not found: `{input}`"))) }
@@ -39,11 +32,6 @@ pub(crate) fn existing_file(input: &str) -> Result<&Path, Exit> {
 
 /// Builds rayon's global pool, which a command that works on many files runs
 /// them on, with `threads` threads, each with the stack a deep file needs.
-///
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Failure`] when a thread can't
-/// start.
 pub(crate) fn start_thread_pool(threads: NonZero<usize>) -> Result<(), Exit> {
     ThreadPoolBuilder::new()
         .num_threads(threads.get())
@@ -69,10 +57,6 @@ pub(crate) fn bundle_options<'project>(
     }
 }
 
-/// # Errors
-///
-/// Reports the config's problem and returns [`Exit::Usage`] when it doesn't
-/// load.
 pub(crate) fn load_project(config_path: &Path) -> Result<Project, Exit> {
     Project::load(config_path).map_err(|error| config_error(&error))
 }
@@ -84,11 +68,6 @@ pub(crate) fn load_project(config_path: &Path) -> Result<Project, Exit> {
 /// directory, not cwd, so `luck bundle path/to/project/src/main.lua` sees that
 /// project's config. With none, it's the defaults rooted where discovery
 /// started, so a bundle resolves its modules from the entry's directory.
-///
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Usage`] when the working directory
-/// is unavailable or the config doesn't load.
 pub(crate) fn one_shot_project(config_path: Option<&Path>, input: &Path) -> Result<Project, Exit> {
     if let Some(path) = config_path {
         return load_project(path);
@@ -106,23 +85,20 @@ pub(crate) fn one_shot_project(config_path: Option<&Path>, input: &Path) -> Resu
         // A bare file name, or `-` for stdin: cwd is the only context there is.
         None => current_directory()?,
     };
-    find_config(&start_directory)
-        .map_or_else(|| Ok(Project::defaults(start_directory)), |found| load_project(&found))
+    match find_config(&start_directory) {
+        Some(found) => load_project(&found),
+        None => Ok(Project::defaults(start_directory)),
+    }
 }
 
 /// The project of `-c` when given, or else of the first `luck.json` found
 /// walking up from cwd, or else the defaults rooted at cwd.
-///
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Usage`] when the working directory
-/// is unavailable or the config doesn't load.
 pub(crate) fn working_project(config_path: Option<&Path>) -> Result<Project, Exit> {
     let working_directory = current_directory()?;
-    config_path
-        .map(Path::to_path_buf)
-        .or_else(|| find_config(&working_directory))
-        .map_or_else(|| Ok(Project::defaults(working_directory)), |found| load_project(&found))
+    match config_path.map(Path::to_path_buf).or_else(|| find_config(&working_directory)) {
+        Some(found) => load_project(&found),
+        None => Ok(Project::defaults(working_directory)),
+    }
 }
 
 /// A file a path command works on, under the project that governs it.
@@ -147,13 +123,6 @@ pub(crate) struct ProjectFile {
 /// loads here, before the parallel commands' locked output sections, which
 /// hold the stdio locks on the main thread while rayon workers run, so a
 /// worker reporting a config error would deadlock.
-///
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Usage`] on a config that doesn't
-/// load, a bad glob, a path that doesn't exist, or, unless
-/// `can_match_nothing`, a glob that selects no file or no file left to work
-/// on, and [`Exit::Failure`] when a directory can't be walked.
 pub(crate) fn project_files(
     config_path: Option<&Path>,
     paths: &[String],
@@ -301,10 +270,6 @@ struct Projects<'overlay> {
 }
 
 impl<'overlay> Projects<'overlay> {
-    /// # Errors
-    ///
-    /// Reports the failure and returns [`Exit::Usage`] when `config_path`
-    /// doesn't load.
     fn new(
         config_path: Option<&Path>,
         working_directory: &Path,
@@ -332,11 +297,6 @@ impl<'overlay> Projects<'overlay> {
     }
 
     /// The project of the nearest `luck.json` at or above `directory`.
-    ///
-    /// # Errors
-    ///
-    /// Reports the failure and returns [`Exit::Usage`] when that config
-    /// doesn't load.
     fn for_directory(&mut self, directory: &Path) -> Result<Arc<Project>, Exit> {
         if let Some(explicit) = &self.explicit {
             return Ok(Arc::clone(explicit));
@@ -345,10 +305,6 @@ impl<'overlay> Projects<'overlay> {
     }
 
     /// [`for_directory`](Self::for_directory) for a canonical `directory`.
-    ///
-    /// # Errors
-    ///
-    /// As for [`for_directory`](Self::for_directory).
     fn for_canonical_directory(&mut self, directory: &Path) -> Result<Arc<Project>, Exit> {
         if let Some(explicit) = &self.explicit {
             return Ok(Arc::clone(explicit));
@@ -378,12 +334,6 @@ impl<'overlay> Projects<'overlay> {
 
     /// Appends the Lua files under `directory` that their project's filter
     /// takes and `selection` matches relative to `directory`, sorted by path.
-    ///
-    /// # Errors
-    ///
-    /// Reports the failure and returns [`Exit::Failure`] when part of
-    /// `directory` outside any excluded tree can't be walked, since the files
-    /// in it would go unprocessed.
     fn collect_tree(
         &mut self,
         directory: &Path,
@@ -449,15 +399,11 @@ struct WalkerShare {
 
 impl Drop for WalkerShare {
     fn drop(&mut self) {
-        let _unused = self.sender.send(mem::take(&mut self.walked));
+        let _ = self.sender.send(mem::take(&mut self.walked));
     }
 }
 
 impl TreeWalk<'_> {
-    /// # Errors
-    ///
-    /// Reports the failure and returns [`Exit::Failure`] when part of the
-    /// tree outside any excluded directory can't be walked.
     fn run(&self) -> Result<Walked, Exit> {
         let (sender, receiver) = mpsc::channel();
         WalkBuilder::new(self.tree)
@@ -503,7 +449,7 @@ impl TreeWalk<'_> {
                 && entry.depth() > 0
                 && path.join(CONFIG_FILE_NAME).is_file()
             {
-                let max_depth = self.max_depth.map(|depth| depth.saturating_sub(entry.depth()));
+                let max_depth = self.max_depth.map(|depth| depth - entry.depth());
                 walked.nested_trees.push((entry.into_path(), max_depth));
                 return WalkState::Skip;
             }
@@ -522,10 +468,6 @@ impl TreeWalk<'_> {
         let is_included = if entry.path_is_symlink() {
             path.is_file() && self.filter.is_included(path)
         } else {
-            #[expect(
-                clippy::filetype_is_file,
-                reason = "a pipe or device named like a source file is no file to read"
-            )]
             let is_file = entry.file_type().is_some_and(|file_type| file_type.is_file());
             is_file && self.filter.includes_canonical(&self.canonical(path))
         };
@@ -545,10 +487,6 @@ impl TreeWalk<'_> {
     }
 }
 
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Usage`] when `directory` can't be
-/// resolved.
 fn canonical_directory(directory: &Path) -> Result<PathBuf, Exit> {
     // Walking up a `..`, which `path::absolute` keeps on Unix, would leave
     // this directory's ancestors.
@@ -566,10 +504,6 @@ fn canonical_directory(directory: &Path) -> Result<PathBuf, Exit> {
 /// thread is free and is less than a window of files past the outcome `take`
 /// waits for, which keeps memory flat on huge projects without a thread ever
 /// waiting for a batch to finish.
-///
-/// # Errors
-///
-/// Returns the first error `take` returns.
 pub(crate) fn for_each_outcome_in_order<Outcome>(
     files: &[ProjectFile],
     work: impl Fn(&ProjectFile, &Allocator) -> Outcome + Sync,
@@ -582,17 +516,17 @@ where
     let pool = AllocatorPool::new(thread_count);
     // A smaller window leaves threads idle behind a slow file, and a larger
     // one gains nothing.
-    let window = NonZero::new(thread_count.saturating_mul(16)).unwrap_or(NonZero::<usize>::MIN);
+    let window = thread_count * 16;
     let (sender, receiver) = mpsc::channel::<(usize, thread::Result<Outcome>)>();
-    let mut ready: Vec<Option<Outcome>> = iter::repeat_with(|| None).take(window.get()).collect();
+    let mut ready: Vec<Option<Outcome>> = iter::repeat_with(|| None).take(window).collect();
     let mut next_outcome = |index: usize| loop {
-        if let Some(outcome) = ready.get_mut(index % window)?.take() {
-            return Some(outcome);
+        if let Some(outcome) = ready[index % window].take() {
+            return outcome;
         }
-        // `sender` outlives this, so a job still out always arrives.
-        let (finished, result) = receiver.recv().ok()?;
+        let (finished, result) =
+            receiver.recv().expect("`sender` outlives this, so a job still out always arrives");
         let outcome = result.unwrap_or_else(|payload| panic::resume_unwind(payload));
-        *ready.get_mut(finished % window)? = Some(outcome);
+        ready[finished % window] = Some(outcome);
     };
     // Spawned from outside the pool, the jobs queue in file order.
     rayon::in_place_scope(|scope| {
@@ -603,16 +537,14 @@ where
                     // A panic would otherwise leave the caller waiting forever.
                     let result =
                         panic::catch_unwind(AssertUnwindSafe(|| job_work(file, &job_pool.get())));
-                    let _unused = job_sender.send((index, result));
+                    let _ = job_sender.send((index, result));
                 });
             }
         };
-        (0..window.get()).for_each(start);
+        (0..window).for_each(start);
         for index in 0..files.len() {
-            let Some(outcome) = next_outcome(index) else {
-                break;
-            };
-            start(index.saturating_add(window.get()));
+            let outcome = next_outcome(index);
+            start(index + window);
             take(outcome)?;
         }
         Ok(())

@@ -20,7 +20,6 @@ use crate::{
 };
 
 impl<'ast> Expression<'ast> {
-    #[must_use]
     #[inline]
     pub fn new_number(
         value: LuaNumber,
@@ -32,7 +31,6 @@ impl<'ast> Expression<'ast> {
         Self::Number(NumberLiteral::boxed(value, raw, span, is_exact, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_integer(
         value: i64,
@@ -43,7 +41,6 @@ impl<'ast> Expression<'ast> {
         Self::Integer(IntegerLiteral::boxed(value, raw, span, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_string_literal(
         value: ThinBytes<'ast>,
@@ -54,7 +51,6 @@ impl<'ast> Expression<'ast> {
         Self::StringLiteral(StringLiteral::boxed(value, raw, span, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_function_def(
         span: Span,
@@ -65,7 +61,6 @@ impl<'ast> Expression<'ast> {
         Self::FunctionDef(FunctionDef::boxed(span, attributes, body, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_name(
         text: ThinStr<'ast>,
@@ -76,7 +71,6 @@ impl<'ast> Expression<'ast> {
         Self::Name(Name::boxed(text, index, span, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_suffixed(
         span: Span,
@@ -87,13 +81,11 @@ impl<'ast> Expression<'ast> {
         Self::Suffixed(SuffixedExpression::boxed(span, prefix, suffixes, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_parenthesized(span: Span, expr: Self, allocator: &'ast Allocator) -> Self {
         Self::Parenthesized(ParenthesizedExpression::boxed(span, expr, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_table_constructor(
         span: Span,
@@ -109,7 +101,6 @@ impl<'ast> Expression<'ast> {
         ))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_binary_op(
         span: Span,
@@ -120,13 +111,11 @@ impl<'ast> Expression<'ast> {
         Self::BinaryOp(BinaryOp::boxed(span, first, links, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_unary_op(span: Span, op: UnOp, operand: Self, allocator: &'ast Allocator) -> Self {
         Self::UnaryOp(UnaryOp::boxed(span, op, operand, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_if_expr(
         span: Span,
@@ -146,7 +135,6 @@ impl<'ast> Expression<'ast> {
         ))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_interpolated_string(
         span: Span,
@@ -157,7 +145,6 @@ impl<'ast> Expression<'ast> {
         Self::InterpolatedString(InterpolatedString::boxed(span, segments, tail, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_type_cast(
         span: Span,
@@ -170,7 +157,6 @@ impl<'ast> Expression<'ast> {
 }
 
 impl<'ast> Var<'ast> {
-    #[must_use]
     #[inline]
     pub fn new_name(
         text: ThinStr<'ast>,
@@ -181,7 +167,6 @@ impl<'ast> Var<'ast> {
         Self::Name(Name::boxed(text, index, span, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_suffixed(
         span: Span,
@@ -194,7 +179,6 @@ impl<'ast> Var<'ast> {
 }
 
 impl<'ast> SuffixedExpression<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -204,7 +188,6 @@ impl<'ast> SuffixedExpression<'ast> {
         Self { span, prefix, suffixes }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -217,13 +200,11 @@ impl<'ast> SuffixedExpression<'ast> {
 }
 
 impl<'ast> Suffix<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new_field(text: ThinStr<'ast>, index: Option<NameIndex>, span: Span) -> Self {
         Self::Field(Name::new(text, index, span))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_method_call(
         name: Name<'ast>,
@@ -236,7 +217,6 @@ impl<'ast> Suffix<'ast> {
 }
 
 impl<'ast> MethodCall<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         name: Name<'ast>,
@@ -246,7 +226,6 @@ impl<'ast> MethodCall<'ast> {
         Self { name, type_args, args }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         name: Name<'ast>,
@@ -259,7 +238,6 @@ impl<'ast> MethodCall<'ast> {
 }
 
 impl<'ast> FunctionArgs<'ast> {
-    #[must_use]
     #[inline]
     pub fn new_table_constructor(
         span: Span,
@@ -275,7 +253,6 @@ impl<'ast> FunctionArgs<'ast> {
         ))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_string_literal(
         value: ThinBytes<'ast>,
@@ -288,7 +265,6 @@ impl<'ast> FunctionArgs<'ast> {
 }
 
 impl<'ast> BinaryOp<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -298,7 +274,6 @@ impl<'ast> BinaryOp<'ast> {
         Self { span, first, links }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -311,7 +286,6 @@ impl<'ast> BinaryOp<'ast> {
 }
 
 impl<'ast> BinaryLink<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(op: BinOp, operand: Expression<'ast>) -> Self {
         Self { op, operand }
@@ -319,13 +293,11 @@ impl<'ast> BinaryLink<'ast> {
 }
 
 impl<'ast> UnaryOp<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, op: UnOp, operand: Expression<'ast>) -> Self {
         Self { span, op, operand }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -338,13 +310,11 @@ impl<'ast> UnaryOp<'ast> {
 }
 
 impl<'ast> ParenthesizedExpression<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, expr: Expression<'ast>) -> Self {
         Self { span, expr }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -356,7 +326,6 @@ impl<'ast> ParenthesizedExpression<'ast> {
 }
 
 impl<'ast> TableConstructor<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -366,7 +335,6 @@ impl<'ast> TableConstructor<'ast> {
         Self { span, fields, has_trailing_separator }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -379,7 +347,6 @@ impl<'ast> TableConstructor<'ast> {
 }
 
 impl<'ast> FunctionDef<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -389,7 +356,6 @@ impl<'ast> FunctionDef<'ast> {
         Self { span, attributes, body }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -402,7 +368,6 @@ impl<'ast> FunctionDef<'ast> {
 }
 
 impl<'ast> IfExpression<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -414,7 +379,6 @@ impl<'ast> IfExpression<'ast> {
         Self { span, condition, then_expr, elseif_clauses, else_expr }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -429,7 +393,6 @@ impl<'ast> IfExpression<'ast> {
 }
 
 impl<'ast> ElseIfExprClause<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, condition: Expression<'ast>, expr: Expression<'ast>) -> Self {
         Self { span, condition, expr }
@@ -437,7 +400,6 @@ impl<'ast> ElseIfExprClause<'ast> {
 }
 
 impl<'ast> InterpolatedString<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -447,7 +409,6 @@ impl<'ast> InterpolatedString<'ast> {
         Self { span, segments, tail }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -460,7 +421,6 @@ impl<'ast> InterpolatedString<'ast> {
 }
 
 impl<'ast> InterpolatedSegment<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(text: StringLiteral<'ast>, expr: Expression<'ast>) -> Self {
         Self { text, expr }
@@ -468,13 +428,11 @@ impl<'ast> InterpolatedSegment<'ast> {
 }
 
 impl<'ast> TypeCast<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, expr: Expression<'ast>, ty: Type<'ast>) -> Self {
         Self { span, expr, ty }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -487,7 +445,6 @@ impl<'ast> TypeCast<'ast> {
 }
 
 impl<'ast> FunctionBody<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -500,7 +457,6 @@ impl<'ast> FunctionBody<'ast> {
         Self { span, generics, params, vararg, return_type, block }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -516,7 +472,6 @@ impl<'ast> FunctionBody<'ast> {
 }
 
 impl<'ast> Parameter<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(name: Name<'ast>, type_annotation: Option<Box<'ast, Type<'ast>>>) -> Self {
         Self { name, type_annotation }
@@ -524,7 +479,6 @@ impl<'ast> Parameter<'ast> {
 }
 
 impl<'ast> VarArgParam<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -534,7 +488,6 @@ impl<'ast> VarArgParam<'ast> {
         Self { span, name, type_annotation }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -547,7 +500,6 @@ impl<'ast> VarArgParam<'ast> {
 }
 
 impl<'ast> FunctionAttribute<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -559,13 +511,11 @@ impl<'ast> FunctionAttribute<'ast> {
 }
 
 impl<'ast> Name<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(text: ThinStr<'ast>, index: Option<NameIndex>, span: Span) -> Self {
         Self { text, index, span }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         text: ThinStr<'ast>,
@@ -578,7 +528,6 @@ impl<'ast> Name<'ast> {
 }
 
 impl<'ast> NumberLiteral<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         value: LuaNumber,
@@ -589,7 +538,6 @@ impl<'ast> NumberLiteral<'ast> {
         Self { value, raw, span, is_exact }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         value: LuaNumber,
@@ -603,13 +551,11 @@ impl<'ast> NumberLiteral<'ast> {
 }
 
 impl<'ast> IntegerLiteral<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(value: i64, raw: Option<ThinStr<'ast>>, span: Span) -> Self {
         Self { value, raw, span }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         value: i64,
@@ -622,13 +568,11 @@ impl<'ast> IntegerLiteral<'ast> {
 }
 
 impl<'ast> StringLiteral<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(value: ThinBytes<'ast>, raw: Option<ThinBytes<'ast>>, span: Span) -> Self {
         Self { value, raw, span }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         value: ThinBytes<'ast>,
@@ -641,7 +585,6 @@ impl<'ast> StringLiteral<'ast> {
 }
 
 impl<'ast> Chunk<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(version: LuaVersion, block: Block<'ast>) -> Self {
         Self { version, block }
@@ -649,7 +592,6 @@ impl<'ast> Chunk<'ast> {
 }
 
 impl<'ast> Block<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, stmts: List<'ast, Statement<'ast>>) -> Self {
         Self { span, stmts }
@@ -657,7 +599,6 @@ impl<'ast> Block<'ast> {
 }
 
 impl<'ast> Statement<'ast> {
-    #[must_use]
     #[inline]
     pub fn new_assignment(
         span: Span,
@@ -668,7 +609,6 @@ impl<'ast> Statement<'ast> {
         Self::Assignment(Assignment::boxed(span, targets, values, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_function_call(
         span: Span,
@@ -679,13 +619,11 @@ impl<'ast> Statement<'ast> {
         Self::FunctionCall(SuffixedExpression::boxed(span, prefix, suffixes, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_do_block(span: Span, block: Block<'ast>, allocator: &'ast Allocator) -> Self {
         Self::DoBlock(DoBlock::boxed(span, block, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_while_loop(
         span: Span,
@@ -696,7 +634,6 @@ impl<'ast> Statement<'ast> {
         Self::WhileLoop(WhileLoop::boxed(span, condition, block, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_repeat_loop(
         span: Span,
@@ -707,7 +644,6 @@ impl<'ast> Statement<'ast> {
         Self::RepeatLoop(RepeatLoop::boxed(span, block, condition, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_if_stmt(
         span: Span,
@@ -727,7 +663,6 @@ impl<'ast> Statement<'ast> {
         ))
     }
 
-    #[must_use]
     #[inline]
     #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
     pub fn new_numeric_for(
@@ -752,7 +687,6 @@ impl<'ast> Statement<'ast> {
         ))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_generic_for(
         span: Span,
@@ -764,7 +698,6 @@ impl<'ast> Statement<'ast> {
         Self::GenericFor(GenericFor::boxed(span, names, exprs, block, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_function_decl(
         span: Span,
@@ -776,7 +709,6 @@ impl<'ast> Statement<'ast> {
         Self::FunctionDecl(FunctionDecl::boxed(span, attributes, name, body, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_local_function(
         span: Span,
@@ -798,7 +730,6 @@ impl<'ast> Statement<'ast> {
         ))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_local_assignment(
         span: Span,
@@ -813,7 +744,6 @@ impl<'ast> Statement<'ast> {
         ))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_return(
         span: Span,
@@ -823,19 +753,16 @@ impl<'ast> Statement<'ast> {
         Self::Return(ReturnStatement::boxed(span, exprs, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_goto(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Self {
         Self::Goto(GotoStatement::boxed(span, name, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_label(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Self {
         Self::Label(LabelStatement::boxed(span, name, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_global_declaration(
         span: Span,
@@ -847,7 +774,6 @@ impl<'ast> Statement<'ast> {
         Self::GlobalDeclaration(GlobalDeclaration::boxed(span, attribute, names, exprs, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_global_function(
         span: Span,
@@ -858,7 +784,6 @@ impl<'ast> Statement<'ast> {
         Self::GlobalFunction(GlobalFunction::boxed(span, name, body, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_global_star(
         span: Span,
@@ -868,7 +793,6 @@ impl<'ast> Statement<'ast> {
         Self::GlobalStar(GlobalStar::boxed(span, attribute, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_compound_assignment(
         span: Span,
@@ -880,7 +804,6 @@ impl<'ast> Statement<'ast> {
         Self::CompoundAssignment(CompoundAssignment::boxed(span, var, op, expr, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_type_declaration(
         span: Span,
@@ -902,7 +825,6 @@ impl<'ast> Statement<'ast> {
 }
 
 impl<'ast> Assignment<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -912,7 +834,6 @@ impl<'ast> Assignment<'ast> {
         Self { span, targets, values }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -925,13 +846,11 @@ impl<'ast> Assignment<'ast> {
 }
 
 impl<'ast> DoBlock<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, block: Block<'ast>) -> Self {
         Self { span, block }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(span: Span, block: Block<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, block), allocator)
@@ -939,13 +858,11 @@ impl<'ast> DoBlock<'ast> {
 }
 
 impl<'ast> WhileLoop<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, condition: Expression<'ast>, block: Block<'ast>) -> Self {
         Self { span, condition, block }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -958,13 +875,11 @@ impl<'ast> WhileLoop<'ast> {
 }
 
 impl<'ast> RepeatLoop<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, block: Block<'ast>, condition: Expression<'ast>) -> Self {
         Self { span, block, condition }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -977,7 +892,6 @@ impl<'ast> RepeatLoop<'ast> {
 }
 
 impl<'ast> IfStatement<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -989,7 +903,6 @@ impl<'ast> IfStatement<'ast> {
         Self { span, condition, block, elseif_clauses, else_clause }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1004,7 +917,6 @@ impl<'ast> IfStatement<'ast> {
 }
 
 impl<'ast> ElseIfClause<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, condition: Expression<'ast>, block: Block<'ast>) -> Self {
         Self { span, condition, block }
@@ -1012,13 +924,11 @@ impl<'ast> ElseIfClause<'ast> {
 }
 
 impl<'ast> ElseClause<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, block: Block<'ast>) -> Self {
         Self { span, block }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(span: Span, block: Block<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, block), allocator)
@@ -1026,7 +936,6 @@ impl<'ast> ElseClause<'ast> {
 }
 
 impl<'ast> NumericFor<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1040,7 +949,6 @@ impl<'ast> NumericFor<'ast> {
         Self { span, name, type_annotation, start, limit, step, block }
     }
 
-    #[must_use]
     #[inline]
     #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
     pub fn boxed(
@@ -1058,7 +966,6 @@ impl<'ast> NumericFor<'ast> {
 }
 
 impl<'ast> GenericFor<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1069,7 +976,6 @@ impl<'ast> GenericFor<'ast> {
         Self { span, names, exprs, block }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1083,7 +989,6 @@ impl<'ast> GenericFor<'ast> {
 }
 
 impl<'ast> FunctionName<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1095,7 +1000,6 @@ impl<'ast> FunctionName<'ast> {
 }
 
 impl<'ast> FunctionDecl<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1106,7 +1010,6 @@ impl<'ast> FunctionDecl<'ast> {
         Self { span, attributes, name, body }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1120,7 +1023,6 @@ impl<'ast> FunctionDecl<'ast> {
 }
 
 impl<'ast> LocalFunction<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1133,7 +1035,6 @@ impl<'ast> LocalFunction<'ast> {
         Self { span, attributes, name, body, keyword_start, kind }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1149,13 +1050,11 @@ impl<'ast> LocalFunction<'ast> {
 }
 
 impl<'ast> Attribute<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, name: Name<'ast>) -> Self {
         Self { span, name }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, name), allocator)
@@ -1163,7 +1062,6 @@ impl<'ast> Attribute<'ast> {
 }
 
 impl<'ast> AttributedName<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         name: Name<'ast>,
@@ -1175,7 +1073,6 @@ impl<'ast> AttributedName<'ast> {
 }
 
 impl<'ast> LocalAssignment<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1187,7 +1084,6 @@ impl<'ast> LocalAssignment<'ast> {
         Self { span, attribute, names, exprs, kind }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1202,13 +1098,11 @@ impl<'ast> LocalAssignment<'ast> {
 }
 
 impl<'ast> GotoStatement<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, name: Name<'ast>) -> Self {
         Self { span, name }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, name), allocator)
@@ -1216,13 +1110,11 @@ impl<'ast> GotoStatement<'ast> {
 }
 
 impl<'ast> LabelStatement<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, name: Name<'ast>) -> Self {
         Self { span, name }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, name), allocator)
@@ -1230,13 +1122,11 @@ impl<'ast> LabelStatement<'ast> {
 }
 
 impl<'ast> ReturnStatement<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, exprs: List<'ast, Expression<'ast>>) -> Self {
         Self { span, exprs }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1248,13 +1138,11 @@ impl<'ast> ReturnStatement<'ast> {
 }
 
 impl<'ast> CompoundAssignment<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, var: Var<'ast>, op: CompoundOp, expr: Expression<'ast>) -> Self {
         Self { span, var, op, expr }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1268,7 +1156,6 @@ impl<'ast> CompoundAssignment<'ast> {
 }
 
 impl<'ast> TypeDeclaration<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1280,7 +1167,6 @@ impl<'ast> TypeDeclaration<'ast> {
         Self { span, is_exported, name, generics, value }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1295,7 +1181,6 @@ impl<'ast> TypeDeclaration<'ast> {
 }
 
 impl<'ast> TypeDeclarationValue<'ast> {
-    #[must_use]
     #[inline]
     pub fn new_type_function(
         span: Span,
@@ -1319,7 +1204,6 @@ impl<'ast> TypeDeclarationValue<'ast> {
 }
 
 impl<'ast> GlobalDeclaration<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1330,7 +1214,6 @@ impl<'ast> GlobalDeclaration<'ast> {
         Self { span, attribute, names, exprs }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1344,13 +1227,11 @@ impl<'ast> GlobalDeclaration<'ast> {
 }
 
 impl<'ast> GlobalFunction<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, name: Name<'ast>, body: FunctionBody<'ast>) -> Self {
         Self { span, name, body }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1363,13 +1244,11 @@ impl<'ast> GlobalFunction<'ast> {
 }
 
 impl<'ast> GlobalStar<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, attribute: Option<Attribute<'ast>>) -> Self {
         Self { span, attribute }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1381,7 +1260,6 @@ impl<'ast> GlobalStar<'ast> {
 }
 
 impl<'ast> Type<'ast> {
-    #[must_use]
     #[inline]
     pub fn new_name(
         text: ThinStr<'ast>,
@@ -1392,7 +1270,6 @@ impl<'ast> Type<'ast> {
         Self::Name(Name::boxed(text, index, span, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_named(
         span: Span,
@@ -1404,13 +1281,11 @@ impl<'ast> Type<'ast> {
         Self::Named(NamedType::boxed(span, prefix, name, generics, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_typeof(span: Span, expr: Expression<'ast>, allocator: &'ast Allocator) -> Self {
         Self::Typeof(TypeofType::boxed(span, expr, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_table(
         span: Span,
@@ -1421,7 +1296,6 @@ impl<'ast> Type<'ast> {
         Self::Table(TableType::boxed(span, fields, has_trailing_separator, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_function(
         span: Span,
@@ -1433,7 +1307,6 @@ impl<'ast> Type<'ast> {
         Self::Function(FunctionType::boxed(span, generics, params, return_type, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_optional(
         span: Span,
@@ -1444,7 +1317,6 @@ impl<'ast> Type<'ast> {
         Self::Optional(OptionalType::boxed(span, ty, question_count, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_union(
         span: Span,
@@ -1455,7 +1327,6 @@ impl<'ast> Type<'ast> {
         Self::Union(UnionType::boxed(span, has_leading_pipe, types, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_intersection(
         span: Span,
@@ -1466,19 +1337,16 @@ impl<'ast> Type<'ast> {
         Self::Intersection(IntersectionType::boxed(span, has_leading_ampersand, types, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_parenthesized(span: Span, ty: Self, allocator: &'ast Allocator) -> Self {
         Self::Parenthesized(ParenthesizedType::boxed(span, ty, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_pack(span: Span, types: List<'ast, Self>, allocator: &'ast Allocator) -> Self {
         Self::Pack(TypePack::boxed(span, types, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_string_literal(
         value: ThinBytes<'ast>,
@@ -1489,13 +1357,11 @@ impl<'ast> Type<'ast> {
         Self::StringLiteral(StringLiteral::boxed(value, raw, span, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_variadic(span: Span, ty: Self, allocator: &'ast Allocator) -> Self {
         Self::Variadic(VariadicType::boxed(span, ty, allocator))
     }
 
-    #[must_use]
     #[inline]
     pub fn new_generic_pack(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Self {
         Self::GenericPack(GenericPackType::boxed(span, name, allocator))
@@ -1503,7 +1369,6 @@ impl<'ast> Type<'ast> {
 }
 
 impl<'ast> NamedType<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1514,7 +1379,6 @@ impl<'ast> NamedType<'ast> {
         Self { span, prefix, name, generics }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1528,13 +1392,11 @@ impl<'ast> NamedType<'ast> {
 }
 
 impl<'ast> TypeArgs<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, args: List<'ast, Type<'ast>>) -> Self {
         Self { span, args }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1546,13 +1408,11 @@ impl<'ast> TypeArgs<'ast> {
 }
 
 impl<'ast> TypeofType<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, expr: Expression<'ast>) -> Self {
         Self { span, expr }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1564,7 +1424,6 @@ impl<'ast> TypeofType<'ast> {
 }
 
 impl<'ast> TableType<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1574,7 +1433,6 @@ impl<'ast> TableType<'ast> {
         Self { span, fields, has_trailing_separator }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1587,7 +1445,6 @@ impl<'ast> TableType<'ast> {
 }
 
 impl<'ast> FunctionType<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1598,7 +1455,6 @@ impl<'ast> FunctionType<'ast> {
         Self { span, generics, params, return_type }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1612,7 +1468,6 @@ impl<'ast> FunctionType<'ast> {
 }
 
 impl<'ast> FunctionTypeParam<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(name: Option<Name<'ast>>, ty: Type<'ast>) -> Self {
         Self { name, ty }
@@ -1620,13 +1475,11 @@ impl<'ast> FunctionTypeParam<'ast> {
 }
 
 impl<'ast> OptionalType<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, ty: Type<'ast>, question_count: u32) -> Self {
         Self { span, ty, question_count }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1639,13 +1492,11 @@ impl<'ast> OptionalType<'ast> {
 }
 
 impl<'ast> UnionType<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, has_leading_pipe: bool, types: List<'ast, Type<'ast>>) -> Self {
         Self { span, has_leading_pipe, types }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1658,7 +1509,6 @@ impl<'ast> UnionType<'ast> {
 }
 
 impl<'ast> IntersectionType<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,
@@ -1668,7 +1518,6 @@ impl<'ast> IntersectionType<'ast> {
         Self { span, has_leading_ampersand, types }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1681,13 +1530,11 @@ impl<'ast> IntersectionType<'ast> {
 }
 
 impl<'ast> ParenthesizedType<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, ty: Type<'ast>) -> Self {
         Self { span, ty }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(span: Span, ty: Type<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, ty), allocator)
@@ -1695,13 +1542,11 @@ impl<'ast> ParenthesizedType<'ast> {
 }
 
 impl<'ast> TypePack<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, types: List<'ast, Type<'ast>>) -> Self {
         Self { span, types }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1713,13 +1558,11 @@ impl<'ast> TypePack<'ast> {
 }
 
 impl<'ast> VariadicType<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, ty: Type<'ast>) -> Self {
         Self { span, ty }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(span: Span, ty: Type<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, ty), allocator)
@@ -1727,13 +1570,11 @@ impl<'ast> VariadicType<'ast> {
 }
 
 impl<'ast> GenericPackType<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, name: Name<'ast>) -> Self {
         Self { span, name }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, name), allocator)
@@ -1741,13 +1582,11 @@ impl<'ast> GenericPackType<'ast> {
 }
 
 impl<'ast> GenericTypeList<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(span: Span, params: List<'ast, GenericTypeParam<'ast>>) -> Self {
         Self { span, params }
     }
 
-    #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
@@ -1759,7 +1598,6 @@ impl<'ast> GenericTypeList<'ast> {
 }
 
 impl<'ast> GenericTypeParam<'ast> {
-    #[must_use]
     #[inline]
     pub const fn new(
         span: Span,

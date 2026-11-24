@@ -29,10 +29,6 @@ pub(crate) struct CheckArgs {
 }
 
 impl CheckArgs {
-    /// # Errors
-    ///
-    /// Returns [`Exit::Failure`] if any file can't be read or has errors, and
-    /// [`Exit::Usage`] on a bad config or path, or when no file matches.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let files = project_files(
             self.config.as_deref(),
@@ -51,7 +47,7 @@ impl CheckArgs {
                 |outcome| {
                     if let Some(rendered) = outcome {
                         has_errors = true;
-                        let _unused = stderr.write_all(&rendered);
+                        let _ = stderr.write_all(&rendered);
                     }
                     Ok(())
                 },

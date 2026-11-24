@@ -1,11 +1,6 @@
-#![expect(
-    clippy::mem_forget,
-    reason = "`self_cell!`'s builders forget their drop guard once the cell is built"
-)]
-
-use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
-use core::fmt;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
@@ -54,12 +49,10 @@ self_cell!(
 
 impl Stdlib {
     /// `target`'s built-in library.
-    #[must_use]
     pub const fn new(target: LuaTarget) -> Self {
         Self(Layers::BuiltIn(library_for(target)))
     }
 
-    #[must_use]
     pub fn library(&self) -> &StdlibLibrary<'_> {
         match &self.0 {
             Layers::BuiltIn(library) => library,
@@ -67,7 +60,6 @@ impl Stdlib {
         }
     }
 
-    #[must_use]
     pub fn target(&self) -> LuaTarget {
         self.library().target
     }
@@ -102,7 +94,7 @@ impl fmt::Debug for Stdlib {
         let mut layer_count = 0usize;
         let mut current = self;
         while let Layers::Layered(layered) = &current.0 {
-            layer_count = layer_count.saturating_add(1);
+            layer_count += 1;
             current = &layered.borrow_owner().base;
         }
         f.debug_struct("Stdlib")
@@ -114,10 +106,6 @@ impl fmt::Debug for Stdlib {
 
 /// `definition` layered over `base`, as [`Stdlib::layer`] describes, in
 /// `allocator`.
-///
-/// # Errors
-///
-/// As for [`Stdlib::layer`].
 pub(crate) fn layer<'lib>(
     allocator: &'lib Allocator,
     base: &StdlibLibrary<'lib>,
@@ -167,11 +155,6 @@ struct Layering<'lib, 'layering> {
 impl<'lib> Layering<'lib, '_> {
     /// `below`'s members with `layer`'s over them, where `prefix` begins the
     /// path of each.
-    ///
-    /// # Errors
-    ///
-    /// Fails on a member that names a shape or a constant set no library
-    /// declares, or on more members than a map holds.
     fn members(
         &self,
         below: StdlibMap<'lib, StdlibEntry<'lib>>,
@@ -239,9 +222,6 @@ impl<'lib> Layering<'lib, '_> {
         }
     }
 
-    /// # Errors
-    ///
-    /// Fails when there are more entries than a map holds.
     fn map<V>(&self, entries: BTreeMap<&'lib str, V>) -> Result<StdlibMap<'lib, V>, Diagnostic>
     where
         V: Copy,
@@ -257,10 +237,6 @@ impl<'lib> Layering<'lib, '_> {
         Ok(StdlibMap::new_in(self.allocator, &sorted))
     }
 
-    /// # Errors
-    ///
-    /// Fails when the function, at `path`, names a shape or a constant set
-    /// no library declares.
     fn function(
         &self,
         function: &Function,
@@ -312,10 +288,6 @@ impl<'lib> Layering<'lib, '_> {
     }
 
     /// What a param at `path` that takes the constant set `name` takes.
-    ///
-    /// # Errors
-    ///
-    /// Fails when no library declares the set.
     fn constant_set(
         &self,
         name: &Reference,
@@ -339,10 +311,6 @@ impl<'lib> Layering<'lib, '_> {
 
     /// `name`, a shape `path` names, checked against every shape a library
     /// declares.
-    ///
-    /// # Errors
-    ///
-    /// Fails when no library declares the shape.
     fn shape_name(
         &self,
         name: Option<&Reference>,
@@ -366,9 +334,6 @@ impl<'lib> Layering<'lib, '_> {
         Ok(Some(self.allocator.alloc_str(shape)))
     }
 
-    /// # Errors
-    ///
-    /// Fails when the value, at `path`, names a shape no library declares.
     fn value(&self, value: &Value, path: &str) -> Result<StdlibValue<'lib>, Diagnostic> {
         Ok(StdlibValue {
             is_read_only: value.is_read_only,

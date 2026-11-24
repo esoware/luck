@@ -1,7 +1,7 @@
 mod string;
 
-use alloc::borrow::Cow;
-use core::mem;
+use std::borrow::Cow;
+use std::mem;
 
 use luck_diagnostics::Diagnostic;
 use luck_token::{
@@ -24,7 +24,6 @@ const MAX_RESERVED_TOKENS: usize = 1 << 20;
 
 /// A source over 4 GiB yields only the error [`Lexer::new`] reports, with no
 /// tokens.
-#[must_use]
 pub fn lex(source: &[u8], version: LuaVersion) -> LexResult {
     let mut lexer = match Lexer::new(source, version) {
         Ok(lexer) => lexer,
@@ -92,7 +91,7 @@ impl<'source> Lexer<'source> {
         };
 
         let mut lexer = Self {
-            cursor: Cursor::new(source.get(..source_end).unwrap_or(source)),
+            cursor: Cursor::new(&source[..source_end]),
             version,
             has_line_break: true,
             last_token_start: 0,
@@ -185,7 +184,7 @@ impl<'source> Lexer<'source> {
                 b'"' | b'\'' => return self.lex_short_string(start, byte),
                 b'{' => {
                     if let Some(depth) = self.interpolation_brace_depths.last_mut() {
-                        *depth = depth.saturating_add(1);
+                        *depth += 1;
                     }
                     TokenKind::LeftBrace
                 }
@@ -193,7 +192,7 @@ impl<'source> Lexer<'source> {
                     // Luau: a `}` at depth 0 closes the expression and resumes the string.
                     Some(0) => return self.lex_interpolated_string_continuation(start),
                     Some(depth) => {
-                        *depth = depth.saturating_sub(1);
+                        *depth -= 1;
                         TokenKind::RightBrace
                     }
                     None => TokenKind::RightBrace,
@@ -222,14 +221,12 @@ impl<'source> Lexer<'source> {
     }
 
     /// What a list of the tokens left to lex reserves.
-    #[must_use]
     pub fn token_capacity(&self) -> usize {
         self.cursor.rest().len().div_ceil(BYTES_PER_TOKEN).min(MAX_RESERVED_TOKENS)
     }
 
     /// What the lexer gathered beside its tokens, which went to whoever
     /// called [`Lexer::next_token`], so the result holds none.
-    #[must_use]
     pub fn finish(self) -> LexResult {
         LexResult {
             tokens: Vec::new(),
@@ -275,8 +272,7 @@ impl<'source> Lexer<'source> {
     }
 
     fn attach_leading_comments(&mut self, token_start: u32) {
-        let waiting = self.comments.get_mut(self.attached_comment_count..).unwrap_or_default();
-        for comment in waiting {
+        for comment in &mut self.comments[self.attached_comment_count..] {
             comment.attached_to = token_start;
         }
         self.attached_comment_count = self.comments.len();
@@ -293,7 +289,7 @@ impl<'source> Lexer<'source> {
         // comment and only a CRLF's CR is left out of it.
         let rest = self.cursor.rest();
         let line_length = memchr::memchr(b'\n', rest).unwrap_or(rest.len());
-        let line = rest.get(..line_length).unwrap_or_default();
+        let line = &rest[..line_length];
         self.cursor.advance_by(line.strip_suffix(b"\r").unwrap_or(line).len());
         self.comments.push(Comment {
             span: self.cursor.span_since(start),
@@ -468,10 +464,10 @@ impl<'source> Lexer<'source> {
 
     #[cold]
     fn reject_unexpected_character(&mut self, start: usize, byte: u8) {
-        let message = self.cursor.eat_rest_of_char(start).map_or_else(
-            || format!("unexpected byte 0x{byte:02X}"),
-            |unexpected| format!("unexpected character `{unexpected}`"),
-        );
+        let message = match self.cursor.eat_rest_of_char(start) {
+            Some(unexpected) => format!("unexpected character `{unexpected}`"),
+            None => format!("unexpected byte 0x{byte:02X}"),
+        };
         self.reject(start, message);
     }
 }

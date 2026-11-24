@@ -1,9 +1,9 @@
-use alloc::borrow::Cow;
-use alloc::sync::Arc;
-use core::ops;
-use core::sync::atomic::{AtomicBool, Ordering};
+use std::borrow::Cow;
+use std::ops;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ls_types::{DocumentSymbol, Position, Range, TextDocumentContentChangeEvent, Uri};
 use luck_allocator::Allocator;
@@ -331,7 +331,7 @@ impl DocumentState {
 /// What `span` covers of `text`, a document, whose spans all start and end
 /// on a character, since an editor's text is UTF-8.
 pub(crate) fn span_text(text: &str, span: Span) -> &str {
-    text.get(ops::Range::<usize>::from(span)).unwrap_or_default()
+    &text[ops::Range::<usize>::from(span)]
 }
 
 /// The path a `file:` URI names. `Uri::to_file_path` ignores the scheme, so
@@ -345,7 +345,7 @@ pub(crate) fn file_path(uri: &Uri) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr as _;
+    use std::str::FromStr as _;
 
     use super::*;
 
@@ -378,7 +378,7 @@ mod tests {
         changes: Vec<TextDocumentContentChangeEvent>,
     ) -> Option<String> {
         let next = document.changed(2, changes, PositionEncoding::Utf16)?;
-        assert_eq!(next.version(), 2i32);
+        assert_eq!(next.version(), 2);
         Some(String::from(&*next.text))
     }
 

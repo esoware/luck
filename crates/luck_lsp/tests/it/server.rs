@@ -214,7 +214,7 @@ fn lint_runs_the_default_rules_without_config() {
     let uri = workspace_uri("unused.lua");
     client.open(&uri, "local unused = 1\n");
 
-    let diags = client.diagnostics(&uri, Some(1i32));
+    let diags = client.diagnostics(&uri, Some(1));
     assert!(
         diags
             .iter()
@@ -228,7 +228,7 @@ fn parse_errors_surface_without_config() {
     let mut client = Client::start();
     let uri = workspace_uri("broken.lua");
     client.open(&uri, "local x =\n");
-    assert!(!client.diagnostics(&uri, Some(1i32)).is_empty(), "parse errors must surface");
+    assert!(!client.diagnostics(&uri, Some(1)).is_empty(), "parse errors must surface");
 }
 
 /// A broken `luck.json` is shown and published on the file, and its files
@@ -253,7 +253,7 @@ fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     assert_eq!(diag.range, Range::new(Position::new(1, 9), Position::new(1, 16)));
     let errors = client.shown(MessageType::ERROR);
     assert!(errors.iter().any(|text| text.contains("lua99")), "{errors:?}");
-    assert!(!client.diagnostics(&uri, Some(1i32)).is_empty(), "the defaults lint the file");
+    assert!(!client.diagnostics(&uri, Some(1)).is_empty(), "the defaults lint the file");
 
     fs::write(&config_path, "{}").expect("fix luck.json");
     client.file_changed(&config_path, FileChangeType::CHANGED);
@@ -281,9 +281,9 @@ fn an_override_layers_its_lint_settings_over_the_files_it_matches() {
     let mut client = Client::start();
     client.open(&source_uri, "local unused = 1\n");
     client.open(&spec_uri, "local unused = 1\n");
-    let source_diags = client.diagnostics(&source_uri, Some(1i32));
+    let source_diags = client.diagnostics(&source_uri, Some(1));
     assert!(!source_diags.is_empty(), "the rule runs outside the override: {source_diags:?}");
-    let spec_diags = client.diagnostics(&spec_uri, Some(1i32));
+    let spec_diags = client.diagnostics(&spec_uri, Some(1));
     assert!(spec_diags.is_empty(), "the override turns the rule off: {spec_diags:?}");
 }
 
@@ -388,7 +388,7 @@ fn exit_ends_the_server_while_its_request_to_the_client_is_unanswered() {
     let (mut client, _) = Client::start_with(capabilities);
     let uri = workspace_uri("unanswered.lua");
     client.open(&uri, "local unused = 1\n");
-    assert!(!client.diagnostics(&uri, Some(1i32)).is_empty(), "the server works meanwhile");
+    assert!(!client.diagnostics(&uri, Some(1)).is_empty(), "the server works meanwhile");
     assert!(
         client.server_requests().iter().any(|request| request.method == RegisterCapability::METHOD),
         "a client that can watch files is asked to: {:?}",
@@ -421,7 +421,7 @@ fn a_cancelled_request_gets_exactly_one_answer() {
     client.notify::<Cancel>(CancelParams { id: cancelled });
     match client.answer::<SemanticTokensFullRequest>(&id) {
         Ok(tokens) => assert!(tokens.is_some(), "an answer that beat the cancel is whole"),
-        Err(error) => assert_eq!(error.code, -32800i32, "RequestCancelled: {error:?}"),
+        Err(error) => assert_eq!(error.code, -32800, "RequestCancelled: {error:?}"),
     }
     // A later request's answer comes after any second answer to the first.
     assert_eq!(document_symbols(&mut client, &uri), ["value"]);
@@ -604,13 +604,13 @@ fn selection_range_expands_from_identifier() {
     // span out to the widest.
     let narrowest = &ranges[0];
     let mut widest = narrowest;
-    let mut depth = 1u32;
+    let mut depth = 1;
     while let Some(parent) = widest.parent.as_ref() {
         widest = parent;
         depth += 1;
     }
     assert!(
-        depth >= 2u32,
+        depth >= 2,
         "selection should expand through at least one enclosing node: {narrowest:?}"
     );
     let narrowest_width = narrowest.range.end.character - narrowest.range.start.character;
@@ -823,7 +823,7 @@ fn code_action_offers_lint_fix() {
     let mut client = Client::start();
     client.open(&uri, "local x = nil\n");
     // The enabled rule should have surfaced a diagnostic on open.
-    let diags = client.diagnostics(&uri, Some(1i32));
+    let diags = client.diagnostics(&uri, Some(1));
     assert!(!diags.is_empty(), "the enabled lint rule should publish a diagnostic");
 
     let actions = client
@@ -1218,7 +1218,7 @@ local aa = 11"
             },
         ],
     );
-    let _republished = client.diagnostics(&uri, Some(2i32));
+    let _republished = client.diagnostics(&uri, Some(2));
     let response = client
         .request::<DocumentSymbolRequest>(DocumentSymbolParams {
             text_document: document(&uri),
@@ -1245,7 +1245,7 @@ fn a_change_whose_range_does_not_fit_drops_the_document() {
     let mut client = Client::start();
     let uri = workspace_uri("desync.lua");
     client.open(&uri, "local a = 1\n");
-    let _opened = client.diagnostics(&uri, Some(1i32));
+    let _opened = client.diagnostics(&uri, Some(1));
     client.change(
         &uri,
         2,
@@ -1294,10 +1294,10 @@ fn did_change_with_no_changes_stores_the_new_version() {
     let mut client = Client::start();
     let uri = workspace_uri("empty_change.lua");
     client.open(&uri, "local a = 1\n");
-    let _opened = client.diagnostics(&uri, Some(1i32));
+    let _opened = client.diagnostics(&uri, Some(1));
 
     client.change(&uri, 5, Vec::new());
-    let _republished = client.diagnostics(&uri, Some(5i32));
+    let _republished = client.diagnostics(&uri, Some(5));
 
     // A repeated version is stale, so it changes and republishes nothing.
     client.replace_all(&uri, 5, "local b = 2\n");
@@ -1319,7 +1319,7 @@ fn fix_all_workspace_skips_excluded_documents() {
     client.open(&included, "local x = nil\n");
     client.open(&excluded, "local x = nil\n");
     assert!(
-        client.diagnostics(&excluded, Some(1i32)).is_empty(),
+        client.diagnostics(&excluded, Some(1)).is_empty(),
         "an excluded document publishes nothing"
     );
 
@@ -1386,7 +1386,7 @@ fn source_fix_all_stops_once_a_config_change_excludes_the_document() {
 /// `file:///C%3A/...` that `Uri::from_file_path` builds.
 #[cfg(windows)]
 fn vscode_windows_uri(path: &Path) -> Uri {
-    use core::str::FromStr as _;
+    use std::str::FromStr as _;
 
     let slashed = path.to_str().expect("UTF-8 temp path").replace('\\', "/");
     let (drive, rest) = slashed.split_once(':').expect("a drive letter");
@@ -1405,14 +1405,14 @@ fn a_vscode_windows_uri_finds_its_project_settings() {
     let mut client = Client::start();
     client.open(&included, "local x = nil\n");
     client.open(&excluded, "local x = nil\n");
-    let included_diags = client.diagnostics(&included, Some(1i32));
+    let included_diags = client.diagnostics(&included, Some(1));
     assert!(
         included_diags
             .iter()
             .any(|diag| diag.code == Some(NumberOrString::String("redundant_nil_init".to_owned()))),
         "luck.json's rules apply: {included_diags:?}"
     );
-    assert!(client.diagnostics(&excluded, Some(1i32)).is_empty(), "luck.json's exclude applies");
+    assert!(client.diagnostics(&excluded, Some(1)).is_empty(), "luck.json's exclude applies");
 }
 
 #[test]
@@ -1476,7 +1476,7 @@ params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
 
     let mut client = Client::start();
     client.open(&uri, text);
-    let diags = client.diagnostics(&uri, Some(1i32));
+    let diags = client.diagnostics(&uri, Some(1));
     let arity = "`love.graphics.print` requires at least 3 argument(s), got 1";
     assert!(diags.iter().any(|diag| diag.message == arity), "{diags:?}");
     let hover = client
@@ -1493,7 +1493,7 @@ params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
     fs::write(&std_path, love.replace(", { kind = \"number\" }, { kind = \"number\" }", ""))
         .expect("rewrite love.toml");
     client.file_changed(&std_path, FileChangeType::CHANGED);
-    let reseeded = client.diagnostics(&uri, Some(1i32));
+    let reseeded = client.diagnostics(&uri, Some(1));
     assert!(reseeded.iter().all(|diag| diag.message != arity), "{reseeded:?}");
 }
 
@@ -1541,7 +1541,7 @@ fn publishes_follow_the_versions_in_order() {
     client.replace_all(&uri, 2, "local two = 2\n");
     client.replace_all(&uri, 3, "local three = 3\n");
     let mut versions = Vec::new();
-    while versions.last() != Some(&Some(3i32)) {
+    while versions.last() != Some(&Some(3)) {
         versions.push(client.next_published(&uri).version);
     }
     let mut sorted = versions.clone();

@@ -8,6 +8,5 @@ use luck_token::Span;
 /// `luck_ast_tools` generates it for every node. Ported from `oxc_span`'s
 /// `GetSpan`.
 pub trait GetSpan {
-    #[must_use]
     fn span(&self) -> Span;
 }

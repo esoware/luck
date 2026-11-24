@@ -43,7 +43,7 @@ pub fn minify<'ast>(
     );
     let comment_bytes: usize =
         result.comments.iter().map(|comment| comment.span.text(source).len()).sum();
-    let _unmet = output.try_reserve_exact(source.len().saturating_sub(comment_bytes));
+    let _ = output.try_reserve_exact(source.len() - comment_bytes);
     minify_tree(allocator, &mut result.chunk, result.counts, config);
     Ok(luck_codegen::compact_into(&result.chunk, LiteralSpelling::Shortest, output))
 }
@@ -115,17 +115,17 @@ impl<'ast> VisitMut<'ast> for NameNumbering {
     /// The walk goes no deeper than one level past the cap, so it's safe on a
     /// tree of any depth.
     fn descend(&mut self) -> bool {
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
         self.deepest = self.deepest.max(self.depth);
         self.depth <= MAX_NESTING_DEPTH
     }
 
     fn ascend(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+        self.depth -= 1;
     }
 
     fn visit_name(&mut self, name: &mut Name<'ast>) {
         name.index = Some(NameIndex::new(self.names));
-        self.names = self.names.saturating_add(1);
+        self.names += 1;
     }
 }

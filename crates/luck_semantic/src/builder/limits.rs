@@ -98,14 +98,12 @@ impl Limits {
     /// Each variable the function captured is held by its enclosing
     /// function, which captured it too.
     pub(super) fn leave_function(&mut self) {
-        let Some(mut frame) = self.frames.pop() else {
-            return;
-        };
-        let enclosing = self.frames.len().saturating_sub(1);
+        let mut frame = self.frames.pop().expect("a function's end follows its start");
+        let enclosing = self.frames.len() - 1;
         for upvalue in frame.upvalues.drain(..) {
             match upvalue {
                 Upvalue::Symbol(id) => {
-                    if let Some(Some(Tracked::Variable(depth))) = self.symbols.get_mut(id.index()) {
+                    if let Some(Tracked::Variable(depth)) = &mut self.symbols[id.index()] {
                         *depth = enclosing;
                     }
                 }
@@ -116,14 +114,13 @@ impl Limits {
     }
 
     pub(super) fn enter_scope(&mut self) {
-        let locals = self.frames.last().map_or(0, |frame| frame.locals);
+        let locals = self.frames.last().expect("the chunk's frame stays open").locals;
         self.scope_locals.push(locals);
     }
 
     pub(super) fn leave_scope(&mut self) {
-        if let (Some(locals), Some(frame)) = (self.scope_locals.pop(), self.frames.last_mut()) {
-            frame.locals = locals;
-        }
+        let locals = self.scope_locals.pop().expect("a scope's exit follows its entry");
+        self.frames.last_mut().expect("the chunk's frame stays open").locals = locals;
     }
 
     /// Declares `symbol`, a local of the current function written at
@@ -136,14 +133,13 @@ impl Limits {
         is_constant: bool,
         errors: &mut Vec<Diagnostic>,
     ) {
-        let depth = self.frames.len().saturating_sub(1);
+        let depth = self.frames.len() - 1;
         let index = symbol.index();
         if self.symbols.len() <= index {
-            self.symbols.resize(index.saturating_add(1), None);
+            self.symbols.resize(index + 1, None);
         }
-        if let Some(slot) = self.symbols.get_mut(index) {
-            *slot = Some(if is_constant { Tracked::Constant } else { Tracked::Variable(depth) });
-        }
+        self.symbols[index] =
+            Some(if is_constant { Tracked::Constant } else { Tracked::Variable(depth) });
         if !is_constant || !self.version.has_register_local_limit() {
             self.hidden(1, span, errors);
         }
@@ -152,10 +148,8 @@ impl Limits {
     /// `count` locals no name spells, which the construct at `span`
     /// declares, as a `for` loop's state.
     pub(super) fn hidden(&mut self, count: usize, span: Span, errors: &mut Vec<Diagnostic>) {
-        let Some(frame) = self.frames.last_mut() else {
-            return;
-        };
-        frame.locals = frame.locals.saturating_add(count);
+        let frame = self.frames.last_mut().expect("the chunk's frame stays open");
+        frame.locals += count;
         if frame.locals > MAX_ACTIVE_LOCALS && !frame.has_too_many_locals {
             frame.has_too_many_locals = true;
             errors.push(too_many_locals(span, MAX_ACTIVE_LOCALS, frame.header));
@@ -176,13 +170,13 @@ impl Limits {
             },
             Upvalue::Env => self.env_depth,
         };
-        let current = self.frames.len().saturating_sub(1);
+        let current = self.frames.len() - 1;
         if held >= current {
             return;
         }
         let limit = self.version.max_upvalues();
         let mut is_reported = false;
-        for frame in self.frames.get_mut(held.saturating_add(1)..).unwrap_or_default() {
+        for frame in &mut self.frames[held + 1..] {
             frame.upvalues.push(upvalue);
             if frame.upvalues.len() > limit && !frame.has_too_many_upvalues {
                 frame.has_too_many_upvalues = true;
@@ -193,11 +187,7 @@ impl Limits {
             }
         }
         match upvalue {
-            Upvalue::Symbol(id) => {
-                if let Some(slot) = self.symbols.get_mut(id.index()) {
-                    *slot = Some(Tracked::Variable(current));
-                }
-            }
+            Upvalue::Symbol(id) => self.symbols[id.index()] = Some(Tracked::Variable(current)),
             Upvalue::Env => self.env_depth = current,
         }
     }

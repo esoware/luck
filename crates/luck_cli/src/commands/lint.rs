@@ -79,12 +79,11 @@ enum Leveled {
     Rule(RuleId),
 }
 
-/// # Errors
-///
-/// Returns the message for a name no category or rule has.
 fn leveled(name: &str) -> Result<Leveled, String> {
-    Category::from_name(name)
-        .map_or_else(|| name.parse().map(Leveled::Rule), |category| Ok(Leveled::Category(category)))
+    match Category::from_name(name) {
+        Some(category) => Ok(Leveled::Category(category)),
+        None => name.parse().map(Leveled::Rule),
+    }
 }
 
 /// The levels the `-A`, `-W`, and `-D` flags set, applied in command-line
@@ -138,7 +137,6 @@ impl Args for LevelFlags {
 }
 
 #[derive(Args)]
-#[expect(clippy::struct_excessive_bools, reason = "clap derive needs one bool field per flag")]
 pub(crate) struct LintArgs {
     /// Files, directories, or globs to lint, and `!` globs to leave out
     /// [default: current directory].
@@ -217,11 +215,6 @@ struct LintOutcome {
 }
 
 impl LintArgs {
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad config or path, or when no file
-    /// matches, and [`Exit::Failure`] when a file can't be read or written
-    /// back, or the findings fail the run under the exit-code policy.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         if self.rules {
             print_lint_rules();
@@ -267,9 +260,9 @@ impl LintArgs {
             Some(&overlay),
         )?;
 
-        let mut total_errors = 0usize;
-        let mut total_warnings = 0usize;
-        let mut total_fixed = 0usize;
+        let mut total_errors = 0;
+        let mut total_warnings = 0;
+        let mut total_fixed = 0;
         {
             // One lock and one flush per stream for the whole run.
             let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
@@ -279,16 +272,16 @@ impl LintArgs {
                 |file, allocator| self.lint_file(allocator, file, timings.as_ref(), is_quiet),
                 |outcome| {
                     if let Some(note) = &outcome.note {
-                        let _unused = writeln!(stderr, "{note}");
+                        let _ = writeln!(stderr, "{note}");
                     }
-                    let _unused = if self.format.is_for_tools() {
+                    let _ = if self.format.is_for_tools() {
                         stdout.write_all(&outcome.rendered)
                     } else {
                         stderr.write_all(&outcome.rendered)
                     };
-                    total_errors = total_errors.saturating_add(outcome.error_count);
-                    total_warnings = total_warnings.saturating_add(outcome.warning_count);
-                    total_fixed = total_fixed.saturating_add(usize::from(outcome.is_fixed));
+                    total_errors += outcome.error_count;
+                    total_warnings += outcome.warning_count;
+                    total_fixed += usize::from(outcome.is_fixed);
                     Ok(())
                 },
             )
@@ -314,11 +307,6 @@ impl LintArgs {
     /// `--fix` writes the fixed source to stdout, never to disk, and findings
     /// to stderr whatever their format, because stdout is the new file content.
     /// Otherwise output formats and the exit-code policy match the file walk.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Exit::Failure`] when stdin can't be read, the fixes don't
-    /// converge, or the findings fail the run under the exit-code policy.
     fn run_stdin(
         &self,
         stdin_path: &str,
@@ -345,11 +333,11 @@ impl LintArgs {
         }
 
         let (finding_errors, total_warnings) = severity_counts(&messages);
-        let total_errors = finding_errors.saturating_add(usize::from(fix_error.is_some()));
+        let total_errors = finding_errors + usize::from(fix_error.is_some());
         let version = stdlib.target.version();
 
         let rendered = self.rendered(stdin_path, current_source, messages, version, is_quiet);
-        let _unused = if self.format.is_for_tools() && fixes.is_empty() {
+        let _ = if self.format.is_for_tools() && fixes.is_empty() {
             io::stdout().write_all(&rendered)
         } else {
             io::stderr().write_all(&rendered)
@@ -369,10 +357,6 @@ impl LintArgs {
         }
     }
 
-    /// # Errors
-    ///
-    /// Returns [`Exit::Failure`] on any error, and on warnings under
-    /// `--deny-warnings` or when they exceed `--max-warnings`.
     fn exit_status(
         &self,
         total_errors: usize,
@@ -442,7 +426,7 @@ impl LintArgs {
         let rendered = self.rendered(&label, current_source, messages, version, is_quiet);
         // Fixes that couldn't be made or written fail the run, as an unread
         // file does.
-        let error_count = finding_errors.saturating_add(usize::from(note.is_some()));
+        let error_count = finding_errors + usize::from(note.is_some());
         LintOutcome { error_count, warning_count, is_fixed, note, rendered }
     }
 
@@ -540,7 +524,6 @@ fn print_lint_rules() {
 ///
 /// Each rule the run called gets a row, slowest first, with its time, its
 /// share of every rule's, and how many times the linter called it.
-#[expect(clippy::float_arithmetic, reason = "display math")]
 fn print_rule_timings(timings: &RuleTimings) {
     let rows = timings.sorted();
     let rule_width = rows.iter().map(|row| row.rule.name().len()).fold("Rule".len(), usize::max);
@@ -557,9 +540,8 @@ fn print_rule_timings(timings: &RuleTimings) {
     ];
     lines.extend(rows.iter().map(|row| {
         let (name, seconds, calls) = (row.rule.name(), row.duration.as_secs_f64(), row.calls);
-        let millis = seconds * 1000.0f64;
-        let percent: f64 =
-            if total_seconds > 0.0f64 { seconds / total_seconds * 100.0f64 } else { 0.0f64 };
+        let millis = seconds * 1000.0;
+        let percent: f64 = if total_seconds > 0.0 { seconds / total_seconds * 100.0 } else { 0.0 };
         format!("{name:<rule_width$}  {millis:>10.3}  {percent:>7.1}%  {calls:>calls_width$}")
     }));
     eprintln!("{}", lines.join("\n"));
@@ -567,11 +549,9 @@ fn print_rule_timings(timings: &RuleTimings) {
 
 /// Prints `lint_config` as a `luck.json` `lint` section.
 fn print_lint_config(lint_config: &LintConfig) {
-    // The config holds only strings, numbers, and string-keyed maps, which
-    // always serialize.
-    if let Ok(json) = serde_json::to_string_pretty(lint_config) {
-        println!("{json}");
-    }
+    let json = serde_json::to_string_pretty(lint_config)
+        .expect("a lint config holds only strings, numbers, and string-keyed maps");
+    println!("{json}");
 }
 
 #[cfg(test)]

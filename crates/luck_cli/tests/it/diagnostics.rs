@@ -63,7 +63,7 @@ fn a_dependency_that_is_not_utf8_reports_its_parse_error_in_place() {
     luck_in(directory.path())
         .args(["bundle", "main.lua", "-t", "54"])
         .assert()
-        .code(1i32)
+        .code(1)
         .stderr(predicate::str::contains("unexpected byte 0xFF"))
         .stderr(predicate::str::contains("dep.lua:1:8"))
         .stderr(predicate::str::contains("CacheMiss").not())
@@ -94,8 +94,7 @@ return value
 ",
     );
 
-    let assert =
-        luck_in(directory.path()).args(["minify", "main.lua", "--stats"]).assert().code(0i32);
+    let assert = luck_in(directory.path()).args(["minify", "main.lua", "--stats"]).assert().code(0);
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.is_ascii() && stderr.contains(" -> "), "{stderr}");
 }
@@ -117,7 +116,7 @@ return value
         r#"{ "entry": "main.lua", "output": "out.lua", "minify": true }"#,
     );
 
-    let assert = luck_in(directory.path()).arg("build").assert().code(0i32);
+    let assert = luck_in(directory.path()).arg("build").assert().code(0);
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.is_ascii(), "{stderr}");
     assert!(stderr.contains("->") && stderr.contains("done in"), "{stderr}");
@@ -129,7 +128,7 @@ fn failed_build_reports_a_lowercase_error() {
     write_file(directory.path(), "main.lua", "local =\n");
     write_file(directory.path(), "luck.json", r#"{ "entry": "main.lua", "output": "out.lua" }"#);
 
-    let assert = luck_in(directory.path()).arg("build").assert().code(1i32);
+    let assert = luck_in(directory.path()).arg("build").assert().code(1);
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.contains("error:\u{1b}[0m build failed"), "{stderr}");
     assert!(!stderr.contains('\u{2717}'), "{stderr}");

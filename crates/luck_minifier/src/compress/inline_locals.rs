@@ -7,7 +7,7 @@
 //! the read has gone with code a rewrite dropped, and the value goes back
 //! where the read can't take it.
 
-use core::mem;
+use std::mem;
 
 use luck_allocator::List;
 use luck_ast::{
@@ -15,7 +15,7 @@ use luck_ast::{
     expr_nesting_depth,
 };
 use luck_semantic::{ReferenceId, SymbolId};
-use luck_token::{MAX_ACTIVE_LOCALS, index_to_offset, offset_to_index};
+use luck_token::MAX_ACTIVE_LOCALS;
 use luck_value::IsLiteralValue as _;
 
 use super::remove_dead_code::is_nil_initialized;
@@ -86,10 +86,8 @@ impl<'ast> Compressor<'_, 'ast> {
         {
             let LocalAssignment { names, exprs, .. } = &mut **local;
             for (index, (attributed, value)) in names.iter().zip(exprs).enumerate() {
-                let landed = self.landed_counts.get(landed_start.saturating_add(index)).copied();
-                if let (Some(symbol), Some(landed_locals)) =
-                    (self.scoping.symbol_of(&attributed.name), landed)
-                {
+                let landed_locals = self.landed_counts[landed_start + index];
+                if let Some(symbol) = self.scoping.symbol_of(&attributed.name) {
                     self.hold(symbol, value, landed_locals);
                 }
             }
@@ -124,32 +122,29 @@ impl<'ast> Compressor<'_, 'ast> {
             return;
         };
         let depth = expr_nesting_depth(value);
-        let index = index_to_offset(self.held.len());
+        let index = u32::try_from(self.held.len()).unwrap_or(NOT_HELD);
         if depth > MAX_ADDED_DEPTH || index == NOT_HELD {
             return;
         }
-        let Some(slot) = self.held_index.get_mut(symbol.index()) else {
-            return;
-        };
-        *slot = index;
-        let locals = landed_locals.saturating_add(1);
+        self.held_index[symbol.index()] = index;
+        let locals = landed_locals + 1;
         let state = HeldState::Waiting;
         self.held.push(Held { symbol, read, value: value.take(), locals, depth, state });
-        self.waiting = self.waiting.saturating_add(1);
+        self.waiting += 1;
     }
 
     /// The place among the held values, from `start` on, of the local `name`
     /// declares, if it holds one.
     fn held_of(&self, name: &Name<'_>, start: usize) -> Option<usize> {
         let symbol = self.scoping.symbol_of(name)?;
-        let held = offset_to_index(*self.held_index.get(symbol.index())?);
+        let held = self.held_index[symbol.index()] as usize;
         (start..self.held.len()).contains(&held).then_some(held)
     }
 
     /// The waiting value of the local `name` reads, if there is one.
     fn waiting_value(&mut self, name: &Name<'_>) -> Option<&mut Held<'ast>> {
         let symbol = self.resolved(name)?;
-        let index = offset_to_index(*self.held_index.get(symbol.index())?);
+        let index = self.held_index[symbol.index()] as usize;
         self.held.get_mut(index).filter(|held| held.state == HeldState::Waiting)
     }
 
@@ -159,14 +154,14 @@ impl<'ast> Compressor<'_, 'ast> {
     pub(super) fn take_held(&mut self, name: &Name<'_>) -> Option<Expression<'ast>> {
         let depth = self.depth;
         let held = self.waiting_value(name)?;
-        let fits = depth.saturating_add(1).saturating_add(held.depth) <= MAX_NESTING_DEPTH;
+        let fits = depth + 1 + held.depth <= MAX_NESTING_DEPTH;
         held.state = if fits { HeldState::Landed } else { HeldState::Refused };
         let (read, locals) = (held.read, held.locals);
         let value = fits.then(|| held.value.take());
-        self.waiting = self.waiting.saturating_sub(1);
+        self.waiting -= 1;
         if value.is_some() {
             self.mark_dropped(read);
-            self.landed_locals = self.landed_locals.saturating_add(locals);
+            self.landed_locals += locals;
             self.has_changed = true;
         }
         value
@@ -176,7 +171,7 @@ impl<'ast> Compressor<'_, 'ast> {
     pub(super) fn refuse_held(&mut self, name: &Name<'_>) {
         if let Some(held) = self.waiting_value(name) {
             held.state = HeldState::Refused;
-            self.waiting = self.waiting.saturating_sub(1);
+            self.waiting -= 1;
         }
     }
 
@@ -198,28 +193,21 @@ impl<'ast> Compressor<'_, 'ast> {
             {
                 continue;
             }
-            let mut kept = 0usize;
+            let mut kept = 0;
             for index in 0..local.names.len() {
-                let place = local
-                    .names
-                    .get(index)
-                    .and_then(|attributed| self.held_of(&attributed.name, start));
-                let state = place.and_then(|at| self.held.get(at)).map(|held| held.state);
+                let place = self.held_of(&local.names[index].name, start);
+                let state = place.map(|at| self.held[at].state);
                 if matches!(state, Some(HeldState::Landed | HeldState::Waiting)) {
-                    if let Some(attributed) = local.names.get(index) {
-                        self.drop_annotation(attributed);
-                    }
+                    self.drop_annotation(&local.names[index]);
                     self.has_changed = true;
                     continue;
                 }
-                if let (Some(refused), Some(slot)) =
-                    (place.and_then(|at| self.held.get_mut(at)), local.exprs.get_mut(index))
-                {
-                    *slot = refused.value.take();
+                if let Some(refused) = place {
+                    local.exprs[index] = self.held[refused].value.take();
                 }
                 local.names.swap(kept, index);
                 local.exprs.swap(kept, index);
-                kept = kept.saturating_add(1);
+                kept += 1;
             }
             if kept == 0 {
                 removed.push(stmt_index);
@@ -230,13 +218,11 @@ impl<'ast> Compressor<'_, 'ast> {
         remove_stmts(stmts, &removed);
         self.removed_stmts = removed;
         for held in self.held.drain(start..) {
-            if let Some(slot) = self.held_index.get_mut(held.symbol.index()) {
-                *slot = NOT_HELD;
-            }
+            self.held_index[held.symbol.index()] = NOT_HELD;
             // A value whose read went with dropped code never lands.
             if held.state == HeldState::Waiting {
                 debug_assert!(self.dropped.contains(held.read.index()), "the walk missed a read");
-                self.waiting = self.waiting.saturating_sub(1);
+                self.waiting -= 1;
             }
         }
     }
@@ -264,7 +250,7 @@ impl<'ast> Compressor<'_, 'ast> {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use std::fmt::Write as _;
 
     use luck_allocator::Allocator;
     use luck_ast::{Statement, expr_nesting_depth};
@@ -498,8 +484,8 @@ mod tests {
     /// `local x0 = 1`, then `local xi = x(i-1) + 1` up to `x(links)`, returned.
     fn sum_chain(links: usize) -> String {
         let mut source = String::from("local x0 = 1\n");
-        for (i, previous) in (1..=links).zip(0usize..) {
-            writeln!(source, "local x{i} = x{previous} + 1").unwrap();
+        for i in 1..=links {
+            writeln!(source, "local x{i} = x{} + 1", i - 1).unwrap();
         }
         writeln!(source, "return x{links}").unwrap();
         source
@@ -522,8 +508,8 @@ mod tests {
         );
 
         let mut concat = String::from("local x0 = \"z\"\n");
-        for (i, previous) in (1..=links).zip(0usize..) {
-            writeln!(concat, "local x{i} = \"a\" .. x{previous}").unwrap();
+        for i in 1..=links {
+            writeln!(concat, "local x{i} = \"a\" .. x{}", i - 1).unwrap();
         }
         writeln!(concat, "return x{links}").unwrap();
         assert_eq!(inline(&concat), format!("return{}\"z\"", "\"a\"..".repeat(links)));
@@ -540,8 +526,8 @@ mod tests {
     fn stops_inlining_a_run_of_locals_before_it_nests_past_the_depth_cap() {
         // Each value needs parentheses where the next one uses it.
         let mut source = String::from("local x0 = 1\n");
-        for (i, previous) in (1..luck_token::MAX_ACTIVE_LOCALS).zip(0usize..) {
-            writeln!(source, "local x{i} = x{previous} * 2 + 1").unwrap();
+        for i in 1..luck_token::MAX_ACTIVE_LOCALS {
+            writeln!(source, "local x{i} = x{} * 2 + 1", i - 1).unwrap();
         }
         writeln!(source, "return x{}", luck_token::MAX_ACTIVE_LOCALS - 1).unwrap();
         assert!(inline(&source).contains("local"), "the run must stop inlining partway");

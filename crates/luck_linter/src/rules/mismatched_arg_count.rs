@@ -1,4 +1,4 @@
-use core::ptr;
+use std::ptr;
 
 use luck_ast::{AstKind, AstType, Call, Expression, FunctionBody, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset, Symbol};
@@ -78,7 +78,7 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
     // A trailing call or `...` can expand to nothing, so only the args
     // before it are sure to be passed.
     let has_multi_value_tail = args.last().is_some_and(CallArg::is_multi_value);
-    let guaranteed_arg_count = arg_count.saturating_sub(usize::from(has_multi_value_tail));
+    let guaranteed_arg_count = arg_count - usize::from(has_multi_value_tail);
     if guaranteed_arg_count <= param_count {
         return None;
     }

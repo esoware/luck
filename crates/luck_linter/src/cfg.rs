@@ -2,9 +2,8 @@
 //! shares. Each graph covers one block and stops at nested function bodies,
 //! whose flow is their own.
 
-use core::cell::OnceCell;
-use core::mem;
-use core::num::Saturating;
+use std::cell::OnceCell;
+use std::mem;
 
 use luck_ast::{
     BinaryOp, Block, FunctionBody, GenericFor, GetSpan as _, IfExpression, IfStatement, Name,
@@ -133,9 +132,7 @@ impl FlowGraph {
         let mut is_reachable = vec![false; graph.node_count()];
         let mut stack = vec![entry];
         while let Some(node) = stack.pop() {
-            if let Some(mark) = is_reachable.get_mut(node)
-                && !mem::replace(mark, true)
-            {
+            if !mem::replace(&mut is_reachable[node], true) {
                 stack.extend(graph.successors(node));
             }
         }
@@ -144,7 +141,7 @@ impl FlowGraph {
     }
 
     pub(crate) fn reaches(&self, exit: Exit) -> bool {
-        self.is_reachable.get(exit.node()).copied().unwrap_or_default()
+        self.is_reachable[exit.node()]
     }
 
     #[cfg(test)]
@@ -163,7 +160,7 @@ impl FlowGraph {
     /// body is a `Break`.
     pub(crate) fn loop_exits(&self, loop_start: u32) -> Option<Exits> {
         let index = self.loops.binary_search_by_key(&loop_start, |body| body.start).ok()?;
-        self.loop_exits.get_or_init(|| self.every_loop_s_exits()).get(index).copied()
+        Some(self.loop_exits.get_or_init(|| self.every_loop_s_exits())[index])
     }
 
     /// Inner bodies go first, so an outer one steps over each in one move to
@@ -176,8 +173,7 @@ impl FlowGraph {
             let mut past_end = Vec::new();
             stack.push(body.entry);
             while let Some(node) = stack.pop() {
-                if visited_in.get_mut(node).is_none_or(|visit| mem::replace(visit, index) == index)
-                {
+                if mem::replace(&mut visited_in[node], index) == index {
                     continue;
                 }
                 if !(body.entry..body.end).contains(&node) {
@@ -185,14 +181,12 @@ impl FlowGraph {
                 } else if node != body.entry
                     && let Ok(inner) = self.loops.binary_search_by_key(&node, |inner| inner.entry)
                 {
-                    stack.extend(reached.get(inner).into_iter().flatten());
+                    stack.extend(&reached[inner]);
                 } else {
                     stack.extend(self.successors(node));
                 }
             }
-            if let Some(slot) = reached.get_mut(index) {
-                *slot = past_end;
-            }
+            reached[index] = past_end;
         }
         self.loops
             .iter()
@@ -219,8 +213,7 @@ impl FlowGraph {
     /// Whether the code at `offset`, or else the first code after it, can
     /// run. True past the last code.
     pub(crate) fn can_run(&self, offset: u32) -> bool {
-        self.node_at(offset)
-            .is_none_or(|node| self.is_reachable.get(node).copied().unwrap_or_default())
+        self.node_at(offset).is_none_or(|node| self.is_reachable[node])
     }
 
     /// The node of the code at `offset`, or else of the first code after it.
@@ -234,7 +227,7 @@ impl FlowGraph {
     }
 
     pub(crate) fn successors(&self, node: usize) -> impl Iterator<Item = usize> + '_ {
-        self.successors.get(node).into_iter().flatten().copied().flatten()
+        self.successors[node].into_iter().flatten()
     }
 
     pub(crate) fn locals(&self) -> &[LocalDeclaration] {
@@ -242,7 +235,7 @@ impl FlowGraph {
     }
 
     pub(crate) fn starts_at_or_after(&self, node: usize, offset: u32) -> bool {
-        self.code_starts.get(node).is_some_and(|start| *start >= offset)
+        self.code_starts[node] >= offset
     }
 }
 
@@ -266,12 +259,11 @@ impl<'ast> GraphBuilder<'_, 'ast> {
     fn new_node(&mut self) -> usize {
         self.graph.successors.push([None; 2]);
         self.graph.code_starts.push(0);
-        self.graph.node_count().saturating_sub(1)
+        self.graph.node_count() - 1
     }
 
     fn connect(&mut self, from: usize, to: usize) {
-        if let Some(successors) = self.graph.successors.get_mut(from)
-            && let Some(free_edge) = successors.iter_mut().find(|edge| edge.is_none())
+        if let Some(free_edge) = self.graph.successors[from].iter_mut().find(|edge| edge.is_none())
         {
             *free_edge = Some(to);
         }
@@ -286,9 +278,7 @@ impl<'ast> GraphBuilder<'_, 'ast> {
 
     fn code(&mut self, span: Span) -> usize {
         let node = self.new_node();
-        if let Some(code_start) = self.graph.code_starts.get_mut(node) {
-            *code_start = span.start;
-        }
+        self.graph.code_starts[node] = span.start;
         self.graph.code.push((span, node));
         self.advance_to(node);
         node
@@ -434,9 +424,7 @@ impl<'ast> GraphBuilder<'_, 'ast> {
         self.break_target = outer_break_target;
         self.continue_target = outer_continue_target;
         let end = self.graph.node_count();
-        if let Some(body) = self.graph.loops.get_mut(index) {
-            body.end = end;
-        }
+        self.graph.loops[index].end = end;
         entry
     }
 
@@ -505,19 +493,20 @@ impl<'ast> GraphBuilder<'_, 'ast> {
 pub(crate) fn decision_points(block: &Block<'_>) -> u32 {
     let mut points = DecisionPoints::default();
     points.visit_block(block);
-    points.count.0
+    points.count
 }
 
 /// One per `if`, `elseif`, and loop, one per `and` or `or`, and one per `if`
 /// or `elseif` of a Luau if-expression.
 #[derive(Default)]
 struct DecisionPoints {
-    count: Saturating<u32>,
+    count: u32,
 }
 
 impl DecisionPoints {
     fn count_clauses(&mut self, clause_count: usize) {
-        self.count += u32::try_from(clause_count.saturating_add(1)).unwrap_or(u32::MAX);
+        self.count +=
+            u32::try_from(clause_count + 1).expect("a source has fewer than `u32::MAX` bytes");
     }
 }
 
@@ -549,7 +538,8 @@ impl<'ast> Visit<'ast> for DecisionPoints {
 
     fn visit_binary_op(&mut self, binary_op: &'ast BinaryOp<'ast>) {
         if matches!(binary_op.links.first().op, BinOp::And | BinOp::Or) {
-            self.count += u32::try_from(binary_op.links.len()).unwrap_or(u32::MAX);
+            self.count += u32::try_from(binary_op.links.len())
+                .expect("a source has fewer than `u32::MAX` bytes");
         }
         self.walk_binary_op(binary_op);
     }
@@ -567,7 +557,7 @@ impl<'ast> Visit<'ast> for DecisionPoints {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use std::fmt::Write as _;
 
     use luck_allocator::Allocator;
     use luck_ast::Chunk;
@@ -602,14 +592,15 @@ mod tests {
     fn a_straight_run_of_statements_is_one_node() {
         let one = flow("local a").node_count();
         let mut run = String::from("local a, b");
-        for i in 0..100u32 {
-            let _unused = write!(
+        for i in 0..100 {
+            write!(
                 run,
                 "
 a = {i}
 b = f(a)
 print(a, b)"
-            );
+            )
+            .unwrap();
         }
         assert_eq!(flow(&run).node_count(), one);
         let block_between = "\
@@ -862,14 +853,15 @@ goto a",
     #[test]
     fn gotos_find_their_labels_among_many() {
         let mut source = String::new();
-        for i in 0..2_000u32 {
-            let _unused = writeln!(
+        for i in 0..2_000 {
+            writeln!(
                 source,
                 "\
 goto l{i}
 do return end
 ::l{i}::"
-            );
+            )
+            .unwrap();
         }
         let graph = flow(&source);
         assert!(graph.reaches(Exit::End));

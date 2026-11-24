@@ -38,12 +38,6 @@ pub(crate) struct MinifyArgs {
 impl MinifyArgs {
     /// Takes no verbosity: `--quiet` has nothing to hide here, since minify
     /// prints only its result, `--stats`, and errors.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad config or an input that isn't a file,
-    /// and [`Exit::Failure`] when the input can't be read or minified or the
-    /// result can't be written.
     pub(crate) fn run(self) -> Result<(), Exit> {
         let input = Path::new(&self.input);
         let project = one_shot_project(self.config.as_deref(), input)?;
@@ -68,10 +62,8 @@ impl MinifyArgs {
         if self.stats {
             let minified_size = minified.len();
             #[expect(
-                clippy::as_conversions,
                 clippy::cast_precision_loss,
-                clippy::float_arithmetic,
-                reason = "display math, and its exact rounding is part of the output"
+                reason = "f64 rounds only a size past 2^53 bytes"
             )]
             let ratio: f64 = if original_size > 0 {
                 (minified_size as f64 / original_size as f64) * 100.0

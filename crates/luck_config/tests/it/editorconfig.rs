@@ -1,5 +1,5 @@
-use core::time::Duration;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use luck_config::{Editorconfigs, Project};
 use luck_formatter::FormatOptions;

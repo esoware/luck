@@ -35,7 +35,7 @@ impl Rule for DuplicateParameter {
 fn check_params(function: FunctionNode<'_>, context: &LintContext<'_>) {
     let params = &function.body.params;
     let vararg_name = function.body.vararg.as_deref().and_then(|vararg| vararg.name.as_ref());
-    if params.len().saturating_add(usize::from(vararg_name.is_some())) > MAX_ACTIVE_LOCALS {
+    if params.len() + usize::from(vararg_name.is_some()) > MAX_ACTIVE_LOCALS {
         return;
     }
     for (i, param_name) in params.iter().map(|param| &param.name).chain(vararg_name).enumerate() {

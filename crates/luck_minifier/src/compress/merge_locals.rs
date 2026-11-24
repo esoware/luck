@@ -1,7 +1,7 @@
 //! Merging neighboring `local`s, and neighboring assignments to proven
 //! locals, into one statement.
 
-use core::mem;
+use std::mem;
 
 use luck_allocator::List;
 use luck_ast::{
@@ -79,20 +79,18 @@ impl<'ast> Compressor<'_, 'ast> {
     }
 
     fn merge_groups(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
-        let mut kept = 0usize;
-        let mut index = 0usize;
+        let mut kept = 0;
+        let mut index = 0;
         let mut group = mem::take(&mut self.group);
         while index < stmts.len() {
             let group_end = self.merge_group_end(stmts, index, &mut group);
-            if group_end > index.saturating_add(1) {
+            if group_end > index + 1 {
                 self.merge_group(stmts, index, group_end);
                 self.has_changed = true;
             }
             stmts.swap(kept, index);
-            if let Some(stmt) = stmts.get(kept) {
-                self.live_registers = self.live_registers.saturating_add(declared_count(stmt));
-            }
-            kept = kept.saturating_add(1);
+            self.live_registers += declared_count(&stmts[kept]);
+            kept += 1;
             index = group_end;
         }
         self.group = group;
@@ -133,10 +131,8 @@ impl<'ast> Compressor<'_, 'ast> {
         start: usize,
         group: &mut Vec<SymbolId>,
     ) -> usize {
-        let Some(first) = stmts.get(start) else {
-            return start;
-        };
-        let followers = stmts.get(start.saturating_add(1)..).unwrap_or_default();
+        let first = &stmts[start];
+        let followers = &stmts[start + 1..];
         group.clear();
         let follower_count = if let Some(symbol) = self.single_local(first) {
             group.push(symbol);
@@ -185,17 +181,15 @@ impl<'ast> Compressor<'_, 'ast> {
         } else {
             0
         };
-        start.saturating_add(1).saturating_add(follower_count)
+        start + 1 + follower_count
     }
 
     /// Moves the names and values of `stmts[start + 1..end]` into
     /// `stmts[start]`, all of one kind, and leaves the followers empty.
     fn merge_group(&self, stmts: &mut List<'ast, Statement<'ast>>, start: usize, end: usize) {
         let allocator = self.allocator;
-        let Some((first, followers)) = stmts.get_mut(start..end).and_then(<[_]>::split_first_mut)
-        else {
-            return;
-        };
+        let (first, followers) =
+            stmts[start..end].split_first_mut().expect("a group holds at least two statements");
         match first {
             Statement::LocalAssignment(local) => {
                 for follower in followers {
@@ -272,12 +266,12 @@ impl<'ast> Compressor<'_, 'ast> {
     /// says whether it fused any.
     fn fuse_bare_locals(&mut self, stmts: &mut List<'ast, Statement<'ast>>) -> bool {
         let mut has_fused = false;
-        let mut kept = 0usize;
-        let mut index = 0usize;
+        let mut kept = 0;
+        let mut index = 0;
         while index < stmts.len() {
-            let can_fuse = if let (Some(stmt), Some(Statement::Assignment(assignment))) =
-                (stmts.get(index), stmts.get(index.saturating_add(1)))
-                && let Statement::LocalAssignment(local) = stmt
+            let stmt = &stmts[index];
+            let can_fuse = if let Statement::LocalAssignment(local) = stmt
+                && let Some(Statement::Assignment(assignment)) = stmts.get(index + 1)
             {
                 is_bare_local(stmt, self.version) && self.can_fuse(&local.names, assignment)
             } else {
@@ -285,7 +279,7 @@ impl<'ast> Compressor<'_, 'ast> {
             };
             if can_fuse
                 && let Some([Statement::LocalAssignment(local), Statement::Assignment(assignment)]) =
-                    stmts.get_mut(index..index.saturating_add(2))
+                    stmts.get_mut(index..index + 2)
             {
                 // A bare local is never const or exported, so fusing only adds
                 // the values, and the writes go.
@@ -295,13 +289,13 @@ impl<'ast> Compressor<'_, 'ast> {
                 }
                 has_fused = true;
                 stmts.swap(kept, index);
-                kept = kept.saturating_add(1);
-                index = index.saturating_add(2);
+                kept += 1;
+                index += 2;
                 continue;
             }
             stmts.swap(kept, index);
-            kept = kept.saturating_add(1);
-            index = index.saturating_add(1);
+            kept += 1;
+            index += 1;
         }
         stmts.truncate(kept);
         self.has_changed |= has_fused;
@@ -457,9 +451,8 @@ mod tests {
 
     #[test]
     fn tracks_scopes_under_more_locals_than_a_lookup_scans() {
-        let names = |prefix: char| {
-            (0..100u32).map(|i| format!("{prefix}{i}")).collect::<Vec<_>>().join(",")
-        };
+        let names =
+            |prefix: char| (0..100).map(|i| format!("{prefix}{i}")).collect::<Vec<_>>().join(",");
         let (outer, inner) = (names('v'), names('w'));
         let source = format!(
             "local {outer}=f()v0=1 v1=2 local c,d=g()c=1 d=2 do local {inner}=h()w0=1 end w0=1 v2=2"
@@ -491,15 +484,14 @@ mod tests {
 
     #[test]
     fn merged_assignments_stay_within_the_registers_the_targets_need() {
-        let names = (0..100u32).map(|i| format!("g{i}")).collect::<Vec<_>>().join(",");
-        let assignments = (0..100u32).map(|i| format!("g{i} = {i}\n")).collect::<Vec<_>>().concat();
+        let names = (0..100).map(|i| format!("g{i}")).collect::<Vec<_>>().join(",");
+        let assignments = (0..100).map(|i| format!("g{i} = {i}\n")).collect::<Vec<_>>().concat();
         let global_count =
             largest_assignment_target_count(&merge(&format!("local {names} = f()\n{assignments}")));
         assert!((2..=195).contains(&global_count), "{global_count} targets");
 
-        let locals =
-            (0..190u32).map(|i| format!("local v{i} = x{i}\n")).collect::<Vec<_>>().concat();
-        let stores = (0..70u32).map(|i| format!("v{i} = {i}\n")).collect::<Vec<_>>().concat();
+        let locals = (0..190).map(|i| format!("local v{i} = x{i}\n")).collect::<Vec<_>>().concat();
+        let stores = (0..70).map(|i| format!("v{i} = {i}\n")).collect::<Vec<_>>().concat();
         let local_count = largest_assignment_target_count(&merge(&format!("{locals}{stores}")));
         assert!((2..=60).contains(&local_count), "{local_count} targets");
     }

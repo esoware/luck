@@ -18,14 +18,6 @@
 //! [`tree_shape`](fn@tree_shape) checks that a printer kept a tree's
 //! meaning, by comparing the tree with the parse of what it printed.
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
 mod fixtures;
 mod full;
 mod rng;

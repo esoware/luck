@@ -774,8 +774,8 @@ fn a_local_function_keeps_where_its_keyword_starts_past_its_attributes() {
         let Statement::LocalFunction(function) = &result.chunk.block.stmts[0] else {
             panic!("expected LocalFunction: {:?}", result.chunk.block.stmts);
         };
-        let start = usize::try_from(function.keyword_start).unwrap();
-        assert!(source.get(start..).is_some_and(|rest| rest.starts_with(keyword)), "{source}");
+        let start = function.keyword_start as usize;
+        assert!(source[start..].starts_with(keyword), "{source}");
     }
 }
 

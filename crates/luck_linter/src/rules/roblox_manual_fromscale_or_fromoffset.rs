@@ -34,7 +34,7 @@ impl Rule for RobloxManualFromScaleOrFromOffset {
         };
         let last = if context.is_statement(node) { chain.suffixes.len() } else { usize::MAX };
         for (index, call) in calls_in(chain) {
-            if index.saturating_add(1) != last {
+            if index + 1 != last {
                 check_call(call, context);
             }
         }
@@ -56,8 +56,8 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) {
     ) else {
         return;
     };
-    let is_scale_zero = x_scale == 0.0f64 && y_scale == 0.0f64;
-    let is_offset_zero = x_offset == 0.0f64 && y_offset == 0.0f64;
+    let is_scale_zero = x_scale == 0.0 && y_scale == 0.0;
+    let is_offset_zero = x_offset == 0.0 && y_offset == 0.0;
     let (constructor, first_arg, second_arg) = if is_offset_zero && !is_scale_zero {
         ("fromScale", x_scale_arg, y_scale_arg)
     } else if is_scale_zero && !is_offset_zero {

@@ -49,14 +49,6 @@
 //! assert_eq!(built.diagnostics[0].message, "attempt to assign to const variable `greeting`");
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
 mod ast_types_bitset;
 mod builder;
 mod checker;

@@ -1,4 +1,4 @@
-use alloc::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
@@ -72,11 +72,6 @@ pub(crate) enum FieldType {
 }
 
 impl Schema {
-    /// # Errors
-    ///
-    /// Fails when a file under `source_dir` can't be read or parsed, or when
-    /// a type that derives `Ast` uses a shape or an attribute the generators
-    /// don't support.
     pub(crate) fn load(source_dir: &Path) -> io::Result<Self> {
         let mut paths = Vec::new();
         collect_sources(source_dir, &mut paths)?;
@@ -230,10 +225,6 @@ impl Schema {
         }
     }
 
-    /// # Errors
-    ///
-    /// Fails for a struct or variant with no span of its own and no field
-    /// to take one from, or one that would take it from a list.
     fn validate(&self) -> io::Result<()> {
         let mut names: BTreeSet<String> = ["Allocator", "Box", "Span"].map(str::to_owned).into();
         for (_, tokens) in self.field_types_with_tokens() {
@@ -260,10 +251,6 @@ impl Schema {
 
     /// A node without a `span` field spans its fields, so at least one that
     /// isn't optional has to have a span, and none may be a list.
-    ///
-    /// # Errors
-    ///
-    /// Fails for fields that can't give a span.
     fn validate_spanned_fields(&self, name: &str, fields: &[FieldDef]) -> io::Result<()> {
         if fields.iter().any(FieldDef::is_own_span) {
             return Ok(());
@@ -286,11 +273,6 @@ impl Schema {
 }
 
 impl TypeDef {
-    /// # Errors
-    ///
-    /// Fails for a type that derives `Ast` with generics other than the
-    /// lifetime `'ast`, a tuple struct, a variant with more than one unnamed
-    /// field, or an attribute the generators don't know.
     fn from_item(item: &Item, nodes: &BTreeSet<String>) -> io::Result<Option<Self>> {
         let (name, generics, attrs, shape) = if let Item::Struct(item_struct) = item
             && derives_ast(&item_struct.attrs)
@@ -423,10 +405,6 @@ pub(crate) fn binding_for(snake: &str) -> Ident {
 }
 
 /// Every `.rs` file under `directory`, but those in `generated/`.
-///
-/// # Errors
-///
-/// Fails when a directory can't be read.
 fn collect_sources(directory: &Path, paths: &mut Vec<PathBuf>) -> io::Result<()> {
     for entry in fs::read_dir(directory)? {
         let path = entry?.path();
@@ -469,10 +447,6 @@ fn ast_definition(item: &Item) -> Option<&Ident> {
     public_type(item).filter(|(_, attrs)| derives_ast(attrs)).map(|(ident, _)| ident)
 }
 
-/// # Errors
-///
-/// Fails for a variant with more than one unnamed field, or with an
-/// attribute that doesn't apply to it.
 fn variant_def(variant: &syn::Variant, nodes: &BTreeSet<String>) -> io::Result<VariantDef> {
     check_helpers(&variant.attrs, false, false)?;
     let payload = match &variant.fields {
@@ -529,10 +503,6 @@ fn use_item(krate: &str, names: &BTreeSet<&str>) -> TokenStream {
 }
 
 /// Whether the type has the lifetime `'ast`.
-///
-/// # Errors
-///
-/// Fails for any generics but that one lifetime.
 fn check_generics(name: &Ident, generics: &Generics) -> io::Result<bool> {
     let lifetimes: Vec<String> =
         generics.lifetimes().map(|lifetime| lifetime.lifetime.ident.to_string()).collect();
@@ -549,11 +519,6 @@ struct Helpers {
 }
 
 /// The tool's attributes in `attrs`.
-///
-/// # Errors
-///
-/// Fails for an attribute the tool doesn't know, or one where it doesn't
-/// apply.
 fn check_helpers(attrs: &[Attribute], can_be_level: bool, can_skip: bool) -> io::Result<Helpers> {
     let mut helpers = Helpers { is_level: false, skips_content_eq: false };
     for attr in attrs {
@@ -577,16 +542,13 @@ fn check_helpers(attrs: &[Attribute], can_be_level: bool, can_skip: bool) -> io:
     Ok(helpers)
 }
 
-/// # Errors
-///
-/// Fails as [`check_helpers`] does.
 fn field_def(
     field: &syn::Field,
     nodes: &BTreeSet<String>,
     can_be_level: bool,
 ) -> io::Result<FieldDef> {
     let helpers = check_helpers(&field.attrs, can_be_level, true)?;
-    let name = field.ident.as_ref().map(ToString::to_string).unwrap_or_default();
+    let name = field.ident.as_ref().expect("only a named field reaches here").to_string();
     Ok(FieldDef {
         name,
         ty: field_type(&field.ty, nodes),

@@ -7,7 +7,7 @@ use quote::{format_ident, quote};
 use crate::arms::Arms;
 use crate::output::{doc, line_break};
 use crate::schema::{
-    FieldDef, FieldType, Payload, Schema, Shape, TypeDef, binding_for, snake_case,
+    FieldDef, FieldType, Payload, Schema, Shape, TypeDef, VariantDef, binding_for, snake_case,
 };
 
 /// Above this many visits, a walk isn't marked `#[inline]`, as oxc's
@@ -89,7 +89,7 @@ fn generate(schema: &Schema, access: Access, description: &str) -> TokenStream {
     });
     let walk_methods = visited.iter().map(|type_def| match &type_def.shape {
         Shape::Struct(fields) => walk_struct(schema, access, type_def, fields),
-        Shape::Enum(_) => walk_enum(schema, access, type_def),
+        Shape::Enum(variants) => walk_enum(schema, access, type_def, variants),
     });
     let (trait_name, kind_ty, enter_text) = match access {
         Access::Shared => (
@@ -224,10 +224,12 @@ fn walk_struct(
     }
 }
 
-fn walk_enum(schema: &Schema, access: Access, type_def: &TypeDef) -> TokenStream {
-    let Shape::Enum(variants) = &type_def.shape else {
-        return TokenStream::new();
-    };
+fn walk_enum(
+    schema: &Schema,
+    access: Access,
+    type_def: &TypeDef,
+    variants: &[VariantDef],
+) -> TokenStream {
     let (walk, ident, ty) = (type_def.walk_ident(), type_def.ident(), type_def.ty());
     let binding = type_def.binding();
     let mut matched = Arms::default();
@@ -236,7 +238,7 @@ fn walk_enum(schema: &Schema, access: Access, type_def: &TypeDef) -> TokenStream
         match &variant.payload {
             Payload::Unit => matched.push("", quote!(#ident::#variant_ident), quote!({})),
             Payload::Single(payload, tokens) if schema.visits(payload) => {
-                let snake = payload.node().map(snake_case).unwrap_or_default();
+                let snake = snake_case(payload.node().expect("a visited payload holds a node"));
                 let payload_binding = binding_for(&snake);
                 let visits = visit_value(schema, payload, &quote!(#payload_binding), &snake);
                 matched.push(
@@ -334,17 +336,13 @@ fn visit_field(schema: &Schema, field: &FieldDef, target: &TokenStream) -> Vec<V
 /// binds it as `name`.
 fn visit_value(schema: &Schema, ty: &FieldType, target: &TokenStream, name: &str) -> Vec<Visit> {
     match ty {
-        FieldType::Node(node) => schema
-            .get(node)
-            .map(|type_def| {
-                let visit = type_def.visit_ident();
-                Visit { tokens: quote!(self.#visit(#target)), is_call: true }
-            })
-            .into_iter()
-            .collect(),
+        FieldType::Node(node) => {
+            let visit = schema.get(node).expect("every node is in the schema").visit_ident();
+            vec![Visit { tokens: quote!(self.#visit(#target)), is_call: true }]
+        }
         FieldType::Box(inner) => visit_value(schema, inner, target, name),
         FieldType::List(inner) | FieldType::OneOrMore(inner) => {
-            let snake = inner.node().map(snake_case).unwrap_or_default();
+            let snake = snake_case(inner.node().expect("a visited list holds nodes"));
             let item = binding_for(&snake);
             let body = statements(&visit_value(schema, inner, &quote!(#item), &snake));
             vec![Visit { tokens: quote!(for #item in #target { #body }), is_call: false }]

@@ -36,7 +36,6 @@ pub enum CommentContent {
 impl CommentContent {
     /// What a comment of `kind` says in `version`, from its `text`, delimiters
     /// included.
-    #[must_use]
     pub fn of(text: &[u8], kind: CommentKind, version: LuaVersion) -> Self {
         if kind == CommentKind::Line
             && version.has_hot_comments()
@@ -72,7 +71,6 @@ pub enum LintVerb {
 
 impl LintVerb {
     /// The verb as a directive spells it.
-    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Allow => "allow",
@@ -169,13 +167,12 @@ impl LintDirective {
         };
         let (list, from_close) = split_at(inside, |b| b == b')');
         let Some(after_list) = from_close.get(1..) else {
-            let open =
-                after_verb.get(..after_verb.len().saturating_sub(inside.len())).unwrap_or_default();
+            let open = &after_verb[..after_verb.len() - inside.len()];
             return Err(error(trim_start(open), DirectiveErrorKind::UnclosedList));
         };
         let span = span_in(text, start, list);
         if names(list).next().is_none() {
-            let parenthesized = Span::new(span.start.saturating_sub(1), span.end.saturating_add(1));
+            let parenthesized = Span::new(span.start - 1, span.end + 1);
             return Err(DirectiveError {
                 span: parenthesized,
                 kind: DirectiveErrorKind::EmptyList(verb),
@@ -264,16 +261,13 @@ fn command(text: &[u8], kind: CommentKind) -> Option<(&[u8], bool)> {
 fn block_body(text: &[u8]) -> &[u8] {
     let after_open = text.get(3..).unwrap_or_default();
     let level = after_open.iter().take_while(|&&b| b == b'=').count();
-    let body = after_open.get(level.saturating_add(1)..).unwrap_or_default();
+    let body = after_open.get(level + 1..).unwrap_or_default();
     body.strip_suffix(b"]")
         .and_then(|before| before.strip_suffix(after_open.get(..level)?))
         .and_then(|before| before.strip_suffix(b"]"))
         .unwrap_or(body)
 }
 
-/// # Errors
-///
-/// Returns why `command` is no directive.
 fn read_command(command: &[u8], is_file_wide: bool) -> Result<Command<'_>, Invalid<'_>> {
     let (word, rest) = split_at(trim_start(command), |b| b == b'(' || is_lua_whitespace(b));
     let verb = match word {
@@ -293,9 +287,6 @@ fn read_command(command: &[u8], is_file_wide: bool) -> Result<Command<'_>, Inval
     Ok(Command::Lint { verb, word, rest })
 }
 
-/// # Errors
-///
-/// Returns why `word` and `rest` are no formatter directive.
 fn read_format_command<'text>(
     word: &'text [u8],
     rest: &'text [u8],
@@ -325,7 +316,7 @@ fn names(list: &[u8]) -> impl Iterator<Item = &[u8]> {
 /// `text` split before its first byte `ends` accepts.
 fn split_at(text: &[u8], ends: impl Fn(u8) -> bool) -> (&[u8], &[u8]) {
     let length = text.iter().take_while(|&&b| !ends(b)).count();
-    text.split_at_checked(length).unwrap_or((text, &[]))
+    text.split_at(length)
 }
 
 fn trim_start(text: &[u8]) -> &[u8] {
@@ -334,14 +325,12 @@ fn trim_start(text: &[u8]) -> &[u8] {
 
 fn trim(text: &[u8]) -> &[u8] {
     let start = trim_start(text);
-    let length = start
-        .len()
-        .saturating_sub(start.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count());
-    start.get(..length).unwrap_or_default()
+    let trailing = start.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count();
+    &start[..start.len() - trailing]
 }
 
 /// The span of `part`, a slice of `text`, which starts at `start`.
 fn span_in(text: &[u8], start: u32, part: &[u8]) -> Span {
-    let index = part.as_ptr().addr().saturating_sub(text.as_ptr().addr());
-    Span::from_indices(index, index.saturating_add(part.len())).shifted(start)
+    let index = part.as_ptr().addr() - text.as_ptr().addr();
+    Span::from_indices(index, index + part.len()).shifted(start)
 }

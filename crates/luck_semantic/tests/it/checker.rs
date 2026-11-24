@@ -1,5 +1,5 @@
-use core::fmt::Write as _;
-use core::ops::Range;
+use std::fmt::Write as _;
+use std::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
@@ -515,7 +515,7 @@ goto late2 local z = 3 ::late2:: print(z)";
 fn many_forward_gotos_resolve_without_rescanning_the_pending_ones() {
     // Each label takes the gotos waiting for its name. Found by walking every
     // pending goto, this takes minutes.
-    let count = 60_000u32;
+    let count = 60_000;
     let mut source = String::new();
     for index in 0..count {
         writeln!(source, "goto l{index}").unwrap();

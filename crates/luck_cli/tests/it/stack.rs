@@ -12,7 +12,7 @@ use crate::common::{luck_in, write_file};
 /// else, such as a stack overflow's exit code, a failure.
 fn assert_ran(output: &Assert) {
     let code = output.get_output().status.code();
-    assert!(matches!(code, Some(0i32 | 1i32)), "{:?}", output.get_output());
+    assert!(matches!(code, Some(0 | 1)), "{:?}", output.get_output());
 }
 
 #[test]

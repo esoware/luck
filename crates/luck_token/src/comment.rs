@@ -58,18 +58,14 @@ where
     if let Some(span) = shebang {
         let line = span.text(source);
         // A trailing CR would pair with this line break into a CRLF.
-        let length =
-            line.iter().rposition(|&b| b != b'\r').map_or(0, |last| last.saturating_add(1));
-        header.extend_from_slice(line.get(..length).unwrap_or_default());
+        let length = line.iter().rposition(|&b| b != b'\r').map_or(0, |last| last + 1);
+        header.extend_from_slice(&line[..length]);
         header.push(b'\n');
     }
     for span in hot_comments {
         let text = span.text(source);
-        let length = text
-            .iter()
-            .rposition(|&b| !is_lua_whitespace(b))
-            .map_or(0, |last| last.saturating_add(1));
-        header.extend_from_slice(text.get(..length).unwrap_or_default());
+        let length = text.iter().rposition(|&b| !is_lua_whitespace(b)).map_or(0, |last| last + 1);
+        header.extend_from_slice(&text[..length]);
         header.push(b'\n');
     }
     header

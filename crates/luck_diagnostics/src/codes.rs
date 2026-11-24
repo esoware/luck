@@ -1,7 +1,7 @@
 //! E001, E003, E005, E006, E011, and W002 are never emitted, and their
 //! numbers stay reserved.
 
-use alloc::borrow::Cow;
+use std::borrow::Cow;
 
 use luck_token::Span;
 
@@ -273,7 +273,7 @@ searched paths:
         assert_eq!(w1.code, "W001");
         assert!(!w1.is_error());
         assert!(w1.help.is_none());
-        assert_eq!(w1.labels.first().map(|label| label.span), Some(Span::new(0, 5)));
+        assert_eq!(w1.labels[0].span, Span::new(0, 5));
     }
 
     #[test]

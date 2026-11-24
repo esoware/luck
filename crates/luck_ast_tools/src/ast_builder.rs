@@ -9,7 +9,7 @@
 //! Ported from oxc's `generators/ast_builder.rs`, which puts its builder
 //! methods on the AST types too.
 
-use alloc::collections::BTreeSet;
+use std::collections::BTreeSet;
 
 use proc_macro2::{Group, TokenStream, TokenTree};
 use quote::{format_ident, quote};
@@ -27,7 +27,9 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
     let separator = line_break();
     let typed_impls = schema.types.iter().filter_map(|type_def| {
         let methods: Vec<TokenStream> = match &type_def.shape {
-            Shape::Struct(_) => struct_methods(type_def, boxed.contains(type_def.name.as_str())),
+            Shape::Struct(fields) => {
+                struct_methods(type_def, fields, boxed.contains(type_def.name.as_str()))
+            }
             Shape::Enum(variants) => variants
                 .iter()
                 .filter_map(|variant| {
@@ -46,8 +48,11 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
                     let FieldType::Node(name) = held else {
                         return None;
                     };
-                    let inner = schema.get(name).filter(|inner| inner.is_struct())?;
-                    Some(variant_method(type_def, &variant.name, inner, is_boxed))
+                    let inner = schema.get(name).expect("every node is in the schema");
+                    let Shape::Struct(fields) = &inner.shape else {
+                        return None;
+                    };
+                    Some(variant_method(type_def, &variant.name, inner, fields, is_boxed))
                 })
                 .collect(),
         };
@@ -81,10 +86,7 @@ fn lifetime(type_def: &TypeDef) -> TokenStream {
 }
 
 /// `new`, and `boxed` when the struct is boxed somewhere.
-fn struct_methods(type_def: &TypeDef, is_boxed: bool) -> Vec<TokenStream> {
-    let Shape::Struct(fields) = &type_def.shape else {
-        return Vec::new();
-    };
+fn struct_methods(type_def: &TypeDef, fields: &[FieldDef], is_boxed: bool) -> Vec<TokenStream> {
     let idents: Vec<_> = fields.iter().map(FieldDef::ident).collect();
     let types = fields.iter().map(|field| with_self(&field.tokens, &type_def.name));
     let params = quote!(#(#idents: #types),*);
@@ -95,7 +97,6 @@ fn struct_methods(type_def: &TypeDef, is_boxed: bool) -> Vec<TokenStream> {
     };
     let new_expectation = too_many(idents.len());
     let mut methods = vec![quote! {
-        #[must_use]
         #[inline]
         #new_expectation
         pub const fn new(#params) -> Self {
@@ -103,10 +104,9 @@ fn struct_methods(type_def: &TypeDef, is_boxed: bool) -> Vec<TokenStream> {
         }
     }];
     if is_boxed {
-        let boxed_expectation = too_many(idents.len().saturating_add(1));
+        let boxed_expectation = too_many(idents.len() + 1);
         let generics = (!type_def.has_lifetime).then(|| quote!(<'ast>));
         methods.push(quote! {
-            #[must_use]
             #[inline]
             #boxed_expectation
             pub fn boxed #generics (#params, allocator: &'ast Allocator) -> Box<'ast, Self> {
@@ -119,10 +119,13 @@ fn struct_methods(type_def: &TypeDef, is_boxed: bool) -> Vec<TokenStream> {
 
 /// `new_<variant>` on the enum `outer`, which builds the struct `inner` the
 /// variant holds from its fields.
-fn variant_method(outer: &TypeDef, variant: &str, inner: &TypeDef, is_boxed: bool) -> TokenStream {
-    let Shape::Struct(fields) = &inner.shape else {
-        return TokenStream::new();
-    };
+fn variant_method(
+    outer: &TypeDef,
+    variant: &str,
+    inner: &TypeDef,
+    fields: &[FieldDef],
+    is_boxed: bool,
+) -> TokenStream {
     let (variant_ident, inner_ident) = (format_ident!("{variant}"), inner.ident());
     let method = format_ident!("new_{}", snake_case(variant));
     let idents: Vec<_> = fields.iter().map(FieldDef::ident).collect();
@@ -136,12 +139,11 @@ fn variant_method(outer: &TypeDef, variant: &str, inner: &TypeDef, is_boxed: boo
     } else {
         (TokenStream::new(), quote!(#inner_ident::new(#(#idents),*)), quote!(const))
     };
-    let count = idents.len().saturating_add(usize::from(is_boxed));
+    let count = idents.len() + usize::from(is_boxed);
     let expectation = (count > MAX_ARGUMENTS).then(|| {
         quote!(#[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")])
     });
     quote! {
-        #[must_use]
         #[inline]
         #expectation
         pub #constness fn #method(#(#idents: #types),* #allocator) -> Self {
@@ -150,9 +152,8 @@ fn variant_method(outer: &TypeDef, variant: &str, inner: &TypeDef, is_boxed: boo
     }
 }
 
-/// `tokens` with the type `name` written as `Self`, as clippy's `use_self`
-/// asks inside its own `impl`. The type's lifetime is the `impl`'s, so its
-/// generics go too.
+/// `tokens` with the type `name` written as `Self` inside its own `impl`.
+/// The type's lifetime is the `impl`'s, so its generics go too.
 fn with_self(tokens: &TokenStream, name: &str) -> TokenStream {
     let mut written = TokenStream::new();
     let mut trees = tokens.clone().into_iter().peekable();
@@ -164,10 +165,10 @@ fn with_self(tokens: &TokenStream, name: &str) -> TokenStream {
                     let mut depth = 1usize;
                     for skipped in trees.by_ref() {
                         if is_punct(&skipped, '<') {
-                            depth = depth.saturating_add(1);
+                            depth += 1;
                         }
                         if is_punct(&skipped, '>') {
-                            depth = depth.saturating_sub(1);
+                            depth -= 1;
                             if depth == 0 {
                                 break;
                             }

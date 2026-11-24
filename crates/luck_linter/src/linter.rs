@@ -1,5 +1,5 @@
-use alloc::rc::Rc;
-use core::cell::RefCell;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use luck_ast::{AST_TYPE_MAX, AstType};
 use luck_diagnostics::{Diagnostic, Severity};
@@ -20,8 +20,7 @@ use crate::timing::{RuleTimings, Spent};
 /// was cancelled.
 const NODES_PER_CANCEL_CHECK: usize = 1024;
 
-#[expect(clippy::as_conversions, reason = "a const has no other way to widen a `u8`")]
-const AST_TYPE_COUNT: usize = (AST_TYPE_MAX as usize).saturating_add(1);
+const AST_TYPE_COUNT: usize = AST_TYPE_MAX as usize + 1;
 
 thread_local! {
     /// For each type of node, the rules that run on it. Kept per thread and
@@ -45,7 +44,6 @@ pub struct Linter {
 }
 
 impl Linter {
-    #[must_use]
     pub fn new(config: LintConfig) -> Self {
         let rules = config.rules.options().configured();
         let severities = RuleTable::from_fn(|rule| config.severity(rule));
@@ -53,14 +51,12 @@ impl Linter {
     }
 
     /// The settings it was built from.
-    #[must_use]
     pub const fn config(&self) -> &LintConfig {
         &self.config
     }
 
     /// `parse`'s analysis against `stdlib`, a library of the dialect it was
     /// parsed as, with the config's extra globals defined.
-    #[must_use]
     pub fn analyze<'ast>(
         &self,
         parse: &'ast ParseResult<'_>,
@@ -88,7 +84,6 @@ impl Linter {
     /// # Panics
     ///
     /// In debug builds, as [`Self::run_analyzed`] does.
-    #[must_use]
     pub fn run(
         &self,
         parse: &ParseResult<'_>,
@@ -100,7 +95,8 @@ impl Linter {
             return error_messages(&parse.errors);
         }
         let analysis = self.analyze(parse, stdlib);
-        self.run_analyzed(parse, &analysis, fixes, timings, &|| false).unwrap_or_default()
+        self.run_analyzed(parse, &analysis, fixes, timings, &|| false)
+            .expect("nothing cancels the lint")
     }
 
     /// [`Self::run`] on a parse and the analysis [`Self::analyze`] built of
@@ -113,7 +109,6 @@ impl Linter {
     ///
     /// In debug builds, when a rule's `NODE_TYPES` omits a type its `run`
     /// acts on, or when a rule offers a fix of a kind its `FIX` leaves out.
-    #[must_use]
     pub fn run_analyzed(
         &self,
         parse: &ParseResult<'_>,
@@ -176,17 +171,17 @@ impl Linter {
             rules.push(rule);
         }
 
-        let findings = timings.map_or_else(
-            || execute::<false>(&rules, host, &mut [], is_cancelled),
-            |run_timings| {
+        let findings = match timings {
+            Some(run_timings) => {
                 let mut spent = vec![Spent::default(); rules.len()];
                 let findings = execute::<true>(&rules, host, &mut spent, is_cancelled);
                 for (rule, rule_spent) in rules.iter().zip(spent) {
                     run_timings.add(rule.id(), rule_spent);
                 }
                 findings
-            },
-        )?;
+            }
+            None => execute::<false>(&rules, host, &mut [], is_cancelled),
+        }?;
 
         #[cfg(debug_assertions)]
         assert_dispatch_is_pure(&rules, &skipped_rules, &findings, host);
@@ -208,12 +203,15 @@ impl Linter {
             }
             let id = RuleId::UnusedLintFilter;
             let check = || UnusedLintFilter::check(host, &used, runs);
-            let rule_findings = timings.map_or_else(check, |run_timings| {
-                let mut spent = Spent::default();
-                let rule_findings = spent.time(check);
-                run_timings.add(id, spent);
-                rule_findings
-            });
+            let rule_findings = match timings {
+                Some(run_timings) => {
+                    let mut spent = Spent::default();
+                    let rule_findings = spent.time(check);
+                    run_timings.add(id, spent);
+                    rule_findings
+                }
+                None => check(),
+            };
             report(id, rule_findings, self.severities[id], directives, None, &mut messages);
         }
         Some(messages)
@@ -230,7 +228,6 @@ pub struct Analysis<'ast> {
 }
 
 impl<'ast> Analysis<'ast> {
-    #[must_use]
     pub const fn semantic(&self) -> &SemanticAnalysis<'ast> {
         &self.semantic
     }
@@ -265,17 +262,15 @@ fn execute<const TIMED: bool>(
         }
         for (slot, rule) in rules.iter().enumerate() {
             for ty in rule.node_types().indices() {
-                if let Some(bucket) = buckets.get_mut(ty) {
-                    bucket.push(slot);
-                }
+                buckets[ty].push(slot);
             }
         }
         for (slot, (rule, context)) in rules.iter().zip(&contexts).enumerate() {
             if is_cancelled() {
                 return false;
             }
-            if TIMED && let Some(rule_spent) = spent.get_mut(slot) {
-                rule_spent.time(|| rule.run_once(context));
+            if TIMED {
+                spent[slot].time(|| rule.run_once(context));
             } else {
                 rule.run_once(context);
             }
@@ -284,10 +279,6 @@ fn execute<const TIMED: bool>(
             if i.is_multiple_of(NODES_PER_CANCEL_CHECK) && is_cancelled() {
                 return false;
             }
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "hot loop; every bucket and rule index is in bounds by construction"
-            )]
             for &slot in &buckets[bucket_of(node.kind().ty())] {
                 let (rule, context) = (rules[slot], &contexts[slot]);
                 if TIMED {
@@ -302,18 +293,12 @@ fn execute<const TIMED: bool>(
     is_finished.then(|| contexts.into_iter().map(LintContext::into_findings).collect())
 }
 
-#[expect(clippy::as_conversions, reason = "a type's discriminant is its bucket")]
 const fn bucket_of(ty: AstType) -> usize {
     ty as usize
 }
 
 /// Re-runs every rule on every node and checks that bucketed dispatch and
 /// the per-file skipping changed nothing, as oxlint's debug builds do.
-///
-/// # Panics
-///
-/// On a mismatch, which means a rule's `NODE_TYPES` misses a type its `run`
-/// acts on.
 #[cfg(debug_assertions)]
 fn assert_dispatch_is_pure(
     rules: &[&RuleEnum],
@@ -377,8 +362,8 @@ fn report(
     for finding in findings {
         let level = match cover.at(finding.span().start) {
             Some((LintVerb::Allow, entry)) => {
-                if let Some(is_used) = used.as_deref_mut().and_then(|marks| marks.get_mut(entry)) {
-                    *is_used = true;
+                if let Some(marks) = used.as_deref_mut() {
+                    marks[entry] = true;
                 }
                 continue;
             }
@@ -401,7 +386,7 @@ fn report(
 
 #[cfg(test)]
 mod tests {
-    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use luck_allocator::Allocator;
     use luck_stdlib::library_for;
@@ -469,11 +454,11 @@ print(x)";
         let mut without_filter = LintConfig::default();
         without_filter.rules.set_level(RuleId::UnusedLintFilter, RuleLevel::Off);
         let (asked_without, _) = questions(&Linter::new(without_filter));
-        assert_eq!(asked, asked_without.saturating_add(1), "one more, just before the filter");
+        assert_eq!(asked, asked_without + 1, "one more, just before the filter");
 
         let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
         let answered = AtomicUsize::new(0);
-        let cancels_last = || answered.fetch_add(1, Ordering::Relaxed).saturating_add(1) == asked;
+        let cancels_last = || answered.fetch_add(1, Ordering::Relaxed) + 1 == asked;
         let stopped = linter.run_analyzed(&parse, &analysis, FixKind::empty(), None, &cancels_last);
         assert_eq!(stopped, None, "diagnostics missing the unused `allow` would pass for whole");
     }

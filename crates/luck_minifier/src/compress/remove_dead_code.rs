@@ -9,7 +9,7 @@
 //! unreferenced as it leaves the block, last first, since each one's
 //! initializer can hold the last reference to one before it.
 
-use core::mem;
+use std::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
@@ -52,7 +52,7 @@ pub(super) fn drop_bare_return(block: &mut Block<'_>) -> bool {
         Some(Statement::Return(return_stmt)) if return_stmt.exprs.is_empty()
     );
     if is_bare {
-        block.stmts.truncate(block.stmts.len().saturating_sub(1));
+        block.stmts.truncate(block.stmts.len() - 1);
     }
     is_bare
 }
@@ -108,7 +108,7 @@ fn is_redundant_ternary(outer: &BinaryOp<'_>, names: ResolvedNames<'_>) -> bool 
         return false;
     };
     let alternative = &outer.links.first().operand;
-    let conditions = inner.links.split_last().map_or(&[][..], |(_, before_last)| before_last);
+    let conditions = &inner.links[..inner.links.len() - 1];
     outer.links.first().op == BinOp::Or
         && inner.links.first().op == BinOp::And
         && inner.links.last().operand.content_eq(alternative)
@@ -202,7 +202,7 @@ impl<'ast> Compressor<'_, 'ast> {
     fn insert_late_calls(&mut self, stmts: &mut List<'ast, Statement<'ast>>, removed: &[usize]) {
         let mut calls = self.late_calls.drain(..).rev().peekable();
         let mut to_drop = removed.iter().peekable();
-        let mut kept = Vec::with_capacity(stmts.len().saturating_add(calls.len()));
+        let mut kept = Vec::with_capacity(stmts.len() + calls.len());
         for (index, stmt) in mem::take(stmts).into_iter().enumerate() {
             if to_drop.next_if_eq(&&index).is_none() {
                 kept.push(stmt);
@@ -211,7 +211,6 @@ impl<'ast> Compressor<'_, 'ast> {
                 kept.push(call);
             }
         }
-        drop(calls);
         *stmts = List::from_iter_in(kept, self.allocator);
     }
 
@@ -247,12 +246,9 @@ impl<'ast> Compressor<'_, 'ast> {
                 {
                     return Dropped::Nothing;
                 }
-                let mut kept = 0usize;
+                let mut kept = 0;
                 for i in 0..local.names.len() {
-                    let (Some(attributed), Some(value)) = (local.names.get(i), local.exprs.get(i))
-                    else {
-                        break;
-                    };
+                    let (attributed, value) = (&local.names[i], &local.exprs[i]);
                     if !self.is_used(&attributed.name)
                         && !value.may_have_side_effects(&self.names())
                     {
@@ -261,7 +257,7 @@ impl<'ast> Compressor<'_, 'ast> {
                     } else {
                         local.names.swap(kept, i);
                         local.exprs.swap(kept, i);
-                        kept = kept.saturating_add(1);
+                        kept += 1;
                     }
                 }
                 let has_dropped = kept < local.names.len();
@@ -322,9 +318,7 @@ impl<'ast> Compressor<'_, 'ast> {
             }
         }
         // The calls go in last first, as the block's statements do.
-        if let Some(later) = self.late_calls.get_mut(calls_start..) {
-            later.reverse();
-        }
+        self.late_calls[calls_start..].reverse();
         if let Some(call) = first_call {
             *stmt = call;
         }
@@ -341,10 +335,7 @@ impl<'ast> Compressor<'_, 'ast> {
         }
         self.drop_expr(&outer.first);
         let allocator = self.allocator;
-        let Some(alternative) = (*outer.links).first_mut() else {
-            return false;
-        };
-        let kept = alternative.operand.take();
+        let kept = outer.links[0].operand.take();
         match OneOrMore::from_list(outer.links.split_off_rest()) {
             Some(rest) => {
                 outer.first = kept;
@@ -408,7 +399,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 self.visit_run_block(block, holds_run);
                 // The `if`s under it left their merge to this one, which goes.
                 if holds_run && let [Statement::IfStatement(inner)] = &mut *block.stmts {
-                    self.merge_nested_ifs(inner, self.depth.saturating_add(1));
+                    self.merge_nested_ifs(inner, self.depth + 1);
                 }
                 self.drop_arms(elseif_clauses, else_clause.as_deref());
                 *stmt = do_block(self.allocator, block.take());
@@ -426,12 +417,10 @@ impl<'ast> Compressor<'_, 'ast> {
         };
         let mut has_dropped_arm = !has_head;
         let mut taken_block = None;
-        let mut kept = 0usize;
+        let mut kept = 0;
         let mut taken_index = None;
         for index in 0..elseif_clauses.len() {
-            let Some(clause) = elseif_clauses.get_mut(index) else {
-                break;
-            };
+            let clause = &mut elseif_clauses[index];
             let truthiness = self.visit_arm_condition(&mut clause.condition);
             has_dropped_arm |= truthiness.is_some();
             match truthiness {
@@ -444,7 +433,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 None if has_head => {
                     self.visit_block(&mut clause.block);
                     elseif_clauses.swap(kept, index);
-                    kept = kept.saturating_add(1);
+                    kept += 1;
                 }
                 // The first arm left takes the dropped head's place.
                 None => {
@@ -456,8 +445,7 @@ impl<'ast> Compressor<'_, 'ast> {
             }
         }
         if let Some(index) = taken_index {
-            let rest = elseif_clauses.get(index.saturating_add(1)..).unwrap_or_default();
-            self.drop_arms(rest, else_clause.as_deref());
+            self.drop_arms(&elseif_clauses[index + 1..], else_clause.as_deref());
         }
         elseif_clauses.truncate(kept);
         if let Some(taken) = taken_block {
@@ -584,7 +572,7 @@ impl<'ast> Compressor<'_, 'ast> {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use std::fmt::Write as _;
 
     use luck_token::LuaVersion;
 
@@ -853,12 +841,12 @@ mod tests {
     #[test]
     fn removes_a_run_of_locals_each_used_only_by_the_next_in_one_walk() {
         let mut forward = String::from("local function f0() end\n");
-        for (i, previous) in (1..300u32).zip(0u32..) {
-            writeln!(forward, "local function f{i}() f{previous}() end").unwrap();
+        for i in 1..300 {
+            writeln!(forward, "local function f{i}() f{}() end", i - 1).unwrap();
         }
         let mut backward = String::new();
-        for (i, next) in (0..300u32).zip(1u32..) {
-            writeln!(backward, "local f{i} = function() f{next}() end").unwrap();
+        for i in 0..300 {
+            writeln!(backward, "local f{i} = function() f{}() end", i + 1).unwrap();
         }
         for source in [forward, backward] {
             assert_eq!(walk_once(&source, DEAD_CODE), "", "source: {source}");

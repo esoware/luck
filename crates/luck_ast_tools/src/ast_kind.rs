@@ -17,7 +17,6 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
         let (ident, ty, binding) = (type_def.ident(), type_def.ty(), type_def.binding());
         let method = format_ident!("as_{}", type_def.snake_name());
         quote! {
-            #[must_use]
             #[inline]
             pub const fn #method(self) -> Option<&'ast #ty> {
                 if let Self::#ident(#binding) = self { Some(#binding) } else { None }
@@ -27,8 +26,9 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
     let imports = schema
         .imports(nodes.iter().map(|type_def| type_def.name.as_str()).chain(["GetSpan", "Span"]));
     let separator = line_break();
-    let ast_type_max =
-        Literal::u8_unsuffixed(u8::try_from(nodes.len().saturating_sub(1)).unwrap_or(u8::MAX));
+    let ast_type_max = Literal::u8_unsuffixed(
+        u8::try_from(nodes.len() - 1).expect("`AstType` is `repr(u8)`, so its discriminants fit"),
+    );
     let max_doc = doc("The largest discriminant of an [`AstType`].");
     let type_doc = doc("Which kind of node an [`AstKind`] refers to.");
     let kind_doc = doc("A reference to a node: a value of a struct that derives `Ast`, which \
@@ -52,7 +52,6 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
         }
         #separator
         impl<'ast> AstKind<'ast> {
-            #[must_use]
             #[inline]
             pub const fn ty(self) -> AstType {
                 match self {

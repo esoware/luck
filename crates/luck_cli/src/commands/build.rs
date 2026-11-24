@@ -1,7 +1,7 @@
-use core::time::Duration;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
+use std::time::Duration;
 use std::time::Instant;
 
 use clap::Args;
@@ -19,7 +19,6 @@ use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
-#[expect(clippy::struct_excessive_bools, reason = "clap derive needs one bool field per flag")]
 pub(crate) struct BuildArgs {
     /// Path to config file [default: discover luck.json upward from cwd].
     #[arg(short, long, value_name = "PATH")]
@@ -57,11 +56,6 @@ enum BuildFailure {
 }
 
 impl BuildArgs {
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad config, and [`Exit::Failure`] when a
-    /// build fails, its output can't be written, or the file watcher can't
-    /// start.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         if self.watch { self.rebuild_on_change(verbosity) } else { self.build_once(verbosity) }
     }
@@ -74,11 +68,6 @@ impl BuildArgs {
     }
 
     /// `-c`, or else the first `luck.json` found walking up from cwd.
-    ///
-    /// # Errors
-    ///
-    /// Reports the failure and returns [`Exit::Usage`] when the working
-    /// directory is unavailable or no `luck.json` is found.
     fn config_path(&self) -> Result<PathBuf, Exit> {
         match &self.config {
             Some(path) => Ok(path.clone()),
@@ -90,11 +79,6 @@ impl BuildArgs {
         }
     }
 
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad config or an output that would replace
-    /// a bundled file, and [`Exit::Failure`] when a build fails or its output
-    /// can't be written.
     fn build_once(&self, verbosity: Verbosity) -> Result<(), Exit> {
         let total_start = Instant::now();
         let project = load_project(&self.config_path()?)?;
@@ -124,10 +108,6 @@ impl BuildArgs {
         Ok(())
     }
 
-    /// # Errors
-    ///
-    /// Returns [`Exit::Failure`] when the file watcher can't start, and the
-    /// exit code when a build's output can't be written.
     fn rebuild_on_change(&self, verbosity: Verbosity) -> Result<(), Exit> {
         let mut arenas = ThreadAllocators::new();
         let mut read_files = self.build_for_watch(&mut arenas, verbosity)?;
@@ -163,12 +143,6 @@ impl BuildArgs {
     /// Every file the builds read, config files included, so an edit to any
     /// of them triggers a rebuild. A config that doesn't load counts as read,
     /// with the file at fault, since fixing either fixes the build.
-    ///
-    /// # Errors
-    ///
-    /// Returns the exit code when a build's output can't be written. A failed
-    /// build or a bad config isn't an error here: watch mode reports it and
-    /// keeps watching.
     fn build_for_watch(
         &self,
         arenas: &mut ThreadAllocators,
@@ -203,11 +177,6 @@ impl BuildArgs {
         Ok(read_files)
     }
 
-    /// # Errors
-    ///
-    /// Returns [`BuildFailure::Failed`] after rendering bundle diagnostics,
-    /// and [`BuildFailure::Fatal`] when the output can't be written or would
-    /// replace a bundled file.
     fn build_one(
         &self,
         arenas: &mut ThreadAllocators,
@@ -394,13 +363,11 @@ fn print_build_stat(
         && original > 0
     {
         #[expect(
-            clippy::as_conversions,
             clippy::cast_possible_truncation,
             clippy::cast_precision_loss,
-            clippy::float_arithmetic,
-            reason = "display math, and its exact rounding is part of the output"
+            reason = "f64 rounds only a size past 2^53 bytes, and a percentage of two sizes fits an i64"
         )]
-        let percent = ((output_size as f64 - original as f64) / original as f64 * 100.0f64) as i64;
+        let percent = ((output_size as f64 - original as f64) / original as f64 * 100.0) as i64;
         eprintln!(
             "  \x1b[1m{path}\x1b[0m  \x1b[2m{}\x1b[0m \x1b[2m->\x1b[0m \x1b[32m{size}\x1b[0m  \x1b[2m({percent:+}%)\x1b[0m  \x1b[2m{time}\x1b[0m",
             format_size(original),

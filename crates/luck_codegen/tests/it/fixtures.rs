@@ -1,5 +1,5 @@
-use core::fmt::Write as _;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -11,7 +11,7 @@ use luck_testgen::{collect_fixture_files, detect_version, is_error_fixture};
 fn every_fixture_compacts_to_output_that_compacts_to_itself() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
     let mut report = String::new();
-    let mut round_trip_count = 0usize;
+    let mut round_trip_count = 0;
     for path in collect_fixture_files(&root).expect("the fixture tree is readable") {
         let relative = path.strip_prefix(&root).expect("a fixture is under the root");
         if is_error_fixture(relative)

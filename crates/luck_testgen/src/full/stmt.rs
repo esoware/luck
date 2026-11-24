@@ -211,7 +211,7 @@ impl FullGenerator {
         let has_goto_continue =
             loop_end == LoopEnd::End && self.version.has_goto() && self.rng.chance(30);
         let continue_label = has_goto_continue.then(|| {
-            self.next_label = self.next_label.saturating_add(1);
+            self.next_label += 1;
             format!("continue_{}", self.next_label)
         });
         self.block(|generator| {
@@ -307,9 +307,9 @@ impl FullGenerator {
         F: FnOnce(&mut Self),
     {
         self.indent.push('\t');
-        self.stmt_depth = self.stmt_depth.saturating_add(1);
+        self.stmt_depth += 1;
         fill(self);
-        self.stmt_depth = self.stmt_depth.saturating_sub(1);
+        self.stmt_depth -= 1;
         self.indent.pop();
     }
 

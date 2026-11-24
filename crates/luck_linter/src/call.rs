@@ -1,4 +1,4 @@
-use core::slice;
+use std::slice;
 
 use luck_ast::{
     Call, Expression, FunctionArgs, GetSpan as _, Name, StringLiteral, Suffix, SuffixedExpression,
@@ -112,7 +112,7 @@ impl<'ast> Iterator for CallArgs<'ast> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let count = self.list.len().saturating_add(usize::from(self.bare.is_some()));
+        let count = self.list.len() + usize::from(self.bare.is_some());
         (count, Some(count))
     }
 }

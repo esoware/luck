@@ -15,10 +15,6 @@ pub(crate) struct InitArgs {
 }
 
 impl InitArgs {
-    /// # Errors
-    ///
-    /// Reports the failure and returns [`Exit::Failure`] when `luck.json`
-    /// exists or a scaffold file can't be written.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let target = self.target.unwrap_or(LuaTarget::Lua54);
 

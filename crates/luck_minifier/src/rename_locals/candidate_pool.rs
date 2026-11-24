@@ -30,11 +30,11 @@ const REST_CHARS: usize = 63;
 /// renamer's job.
 fn push_base53(index: usize, name: &mut String) {
     let alphabet = ALPHABET.as_bytes();
-    name.extend(alphabet.get(index.rem_euclid(FIRST_CHARS)).copied().map(char::from));
-    let mut rest = index.div_euclid(FIRST_CHARS);
+    name.push(char::from(alphabet[index % FIRST_CHARS]));
+    let mut rest = index / FIRST_CHARS;
     while let Some(digit) = rest.checked_sub(1) {
-        name.extend(alphabet.get(digit.rem_euclid(REST_CHARS)).copied().map(char::from));
-        rest = digit.div_euclid(REST_CHARS);
+        name.push(char::from(alphabet[digit % REST_CHARS]));
+        rest = digit / REST_CHARS;
     }
 }
 
@@ -54,10 +54,8 @@ impl<'walk, 'ast> CandidatePool<'walk, 'ast> {
     pub(super) fn get(&mut self, index: usize) -> Candidate<'ast> {
         while self.candidates.len() <= index {
             let next = self.candidates.len();
-            let name = if next < FIRST_CHARS
-                && let Some(name) = ALPHABET.get(next..=next)
-            {
-                name
+            let name = if next < FIRST_CHARS {
+                &ALPHABET[next..=next]
             } else {
                 self.scratch.clear();
                 push_base53(next, &mut self.scratch);
@@ -69,11 +67,7 @@ impl<'walk, 'ast> CandidatePool<'walk, 'ast> {
                 name_id: self.scoping.name_id(name),
             });
         }
-        self.candidates.get(index).copied().unwrap_or(Candidate {
-            name: "",
-            is_reserved: true,
-            name_id: None,
-        })
+        self.candidates[index]
     }
 }
 

@@ -30,9 +30,6 @@ impl ProjectFilter {
         }
     }
 
-    /// # Errors
-    ///
-    /// Returns a message when the globs don't build into one set.
     pub(crate) fn new(
         root: &Path,
         include: Option<&[Glob]>,
@@ -61,7 +58,6 @@ impl ProjectFilter {
 
     /// Whether an exclude covers everything under `directory`, so a walk
     /// needn't enter it.
-    #[must_use]
     pub fn excludes_tree(&self, directory: &Path) -> bool {
         !self.excluded_trees.is_empty()
             && self.excludes_canonical_tree(&FileSystemOs.canonicalize_existing(directory))
@@ -69,19 +65,16 @@ impl ProjectFilter {
 
     /// [`excludes_tree`](Self::excludes_tree) for a canonical path, such as a
     /// walk from a canonical directory builds, which touches no disk.
-    #[must_use]
     pub fn excludes_canonical_tree(&self, directory: &Path) -> bool {
         !self.excluded_trees.is_empty() && self.excluded_trees.is_match(self.relative(directory))
     }
 
-    #[must_use]
     pub fn is_included(&self, path: &Path) -> bool {
         self.includes_canonical(&FileSystemOs.canonicalize_existing(path))
     }
 
     /// [`is_included`](Self::is_included) for a canonical path, such as a
     /// walk from a canonical directory builds, which touches no disk.
-    #[must_use]
     pub fn includes_canonical(&self, path: &Path) -> bool {
         let candidate = Candidate::new(self.relative(path));
         let is_taken = self
@@ -93,7 +86,6 @@ impl ProjectFilter {
 
     /// Whether an `exclude` glob matches `path`, whatever `include` says. A
     /// file named on the command line is held to this alone.
-    #[must_use]
     pub fn is_excluded(&self, path: &Path) -> bool {
         !self.exclude.is_empty()
             && self.exclude.is_match(self.relative(&FileSystemOs.canonicalize_existing(path)))

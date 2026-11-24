@@ -25,11 +25,6 @@ const MEMORY_LIMIT_BYTES: usize = 1 << 31;
 
 /// Sets up the interpreter for `suite`, before anything else in this process
 /// uses it, and checks it's the release the suite is pinned to.
-///
-/// # Errors
-///
-/// Fails when a flag doesn't exist, or the interpreter isn't the pinned
-/// release.
 pub(crate) fn start(suite: &Suite) -> io::Result<()> {
     enable_fast_flags(suite)?;
     let interpreter: String = Lua::new()
@@ -41,10 +36,6 @@ pub(crate) fn start(suite: &Suite) -> io::Result<()> {
 
 /// Luau reads its flags when a state starts or code compiles, so they're set
 /// before either.
-///
-/// # Errors
-///
-/// Fails when Luau has no flag by one of the names.
 #[cfg(feature = "luau")]
 fn enable_fast_flags(suite: &Suite) -> io::Result<()> {
     for flag in suite.fast_flags {
@@ -54,9 +45,6 @@ fn enable_fast_flags(suite: &Suite) -> io::Result<()> {
     Ok(())
 }
 
-/// # Errors
-///
-/// Fails when the suite names a flag, which only Luau has.
 #[cfg(not(feature = "luau"))]
 fn enable_fast_flags(suite: &Suite) -> io::Result<()> {
     match suite.fast_flags {
@@ -77,10 +65,6 @@ pub(crate) fn compiles(program: &[u8]) -> bool {
 /// It writes how the program ended to `verdict_path`: the [`RETURNED`] line
 /// and each value it returned on a line of its own, or the [`FAILED`] line and
 /// the error.
-///
-/// # Errors
-///
-/// Fails when standard input can't be read or the verdict can't be written.
 pub(crate) fn run(suite: &Suite, chunk_name: &str, verdict_path: &Path) -> io::Result<()> {
     let mut program = Vec::new();
     io::stdin().read_to_end(&mut program)?;
@@ -123,7 +107,7 @@ fn execute(suite: &Suite, chunk_name: &str, program: Vec<u8>) -> String {
                 let environment = lua.create_table()?;
                 environment.set_metatable(Some(lua.create_table_from([("__index", &globals)])?))?;
                 environment.set("_G", &environment)?;
-                globals.get::<Function>("setfenv")?.call::<()>((0i32, &environment))?;
+                globals.get::<Function>("setfenv")?.call::<()>((0, &environment))?;
                 // Luau's runner resumes each test as a thread, so its main
                 // chunk can yield to it.
                 let thread =
@@ -150,10 +134,6 @@ fn execute(suite: &Suite, chunk_name: &str, program: Vec<u8>) -> String {
 /// Luau's runner's `loadstring`, which names a chunk after its source unless
 /// it's given a name, and returns `nil` and the message when the source
 /// doesn't compile.
-///
-/// # Errors
-///
-/// Fails when the interpreter does, as when it runs out of memory.
 fn loadstring(
     lua: &Lua,
     (source, chunk_name): (LuaString, Option<LuaString>),

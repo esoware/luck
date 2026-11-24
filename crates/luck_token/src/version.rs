@@ -17,7 +17,6 @@ impl LuaVersion {
     pub const ALL: [Self; 6] =
         [Self::Lua51, Self::Lua52, Self::Lua53, Self::Lua54, Self::Lua55, Self::Luau];
 
-    #[must_use]
     pub const fn has_goto(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -26,7 +25,6 @@ impl LuaVersion {
     }
 
     /// 5.4 made labels unique among the visible labels of a function.
-    #[must_use]
     pub const fn has_label_shadowing(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 => true,
@@ -34,7 +32,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_floor_div(self) -> bool {
         match self {
             Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
@@ -42,7 +39,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_bitwise_ops(self) -> bool {
         match self {
             Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -50,7 +46,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_attributes(self) -> bool {
         match self {
             Self::Lua54 | Self::Lua55 => true,
@@ -60,7 +55,6 @@ impl LuaVersion {
 
     /// `global` stays an ordinary name, as in stock builds (`LUA_COMPAT_GLOBAL`), and the
     /// parser recognizes a declaration by the token after it.
-    #[must_use]
     pub const fn has_global(self) -> bool {
         match self {
             Self::Lua55 => true,
@@ -71,7 +65,6 @@ impl LuaVersion {
     /// Whether global access desugars to an index of the `_ENV` upvalue
     /// (Lua 5.2+). Elsewhere a binding named `_ENV` is an ordinary local with
     /// no effect on the names around it.
-    #[must_use]
     pub const fn has_env_upvalue(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -81,7 +74,6 @@ impl LuaVersion {
 
     /// Observable via `math.type`, `tostring` (`1` vs `1.0`), and `//`.
     /// Luau keeps a single f64 number type, like 5.1 and 5.2.
-    #[must_use]
     pub const fn has_integer_subtype(self) -> bool {
         match self {
             Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -91,7 +83,6 @@ impl LuaVersion {
 
     /// Whether an attribute may precede the first name in an attnamelist
     /// (`local <const> x`, `global <const> y`).
-    #[must_use]
     pub const fn has_leading_attributes(self) -> bool {
         match self {
             Self::Lua55 => true,
@@ -102,7 +93,6 @@ impl LuaVersion {
     /// Lua 5.1's grammar has `laststat ::= return | break`; Luau extends it
     /// with `continue` but keeps the last-statement restriction. 5.2+
     /// allows `break` anywhere.
-    #[must_use]
     pub const fn has_last_stmt_break(self) -> bool {
         match self {
             Self::Lua51 | Self::Luau => true,
@@ -112,7 +102,6 @@ impl LuaVersion {
 
     /// Whether a call's `(` on a new line is an "ambiguous syntax"
     /// parse error (5.1 and Luau). 5.2+ parses it as a call.
-    #[must_use]
     pub const fn has_ambiguous_call_newline_error(self) -> bool {
         match self {
             Self::Lua51 | Self::Luau => true,
@@ -120,7 +109,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_empty_stmt(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -130,7 +118,6 @@ impl LuaVersion {
 
     /// Lua 5.1 and Luau treat any escaped non-digit character as that literal character
     /// (`"\m"` is `"m"`); 5.2+ reject them.
-    #[must_use]
     pub const fn has_strict_escapes(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -138,7 +125,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_hex_escape(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
@@ -146,7 +132,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_whitespace_escape(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
@@ -154,7 +139,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_unicode_escape(self) -> bool {
         match self {
             Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
@@ -162,7 +146,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_hex_floats(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -170,7 +153,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_binary_literals(self) -> bool {
         match self {
             Self::Luau => true,
@@ -178,7 +160,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_underscore_separators(self) -> bool {
         match self {
             Self::Luau => true,
@@ -189,7 +170,6 @@ impl LuaVersion {
     /// Whether a hex or binary numeral past 64 bits reads as 2^64, as Luau's
     /// `strtoull` saturates. PUC Lua rounds it to the nearest double (5.1,
     /// 5.2) or wraps it as an integer (5.3+).
-    #[must_use]
     pub const fn has_saturating_hex_numerals(self) -> bool {
         match self {
             Self::Luau => true,
@@ -198,7 +178,6 @@ impl LuaVersion {
     }
 
     /// Whether Luau's distinct 64-bit integer literals (`123i`) are supported.
-    #[must_use]
     pub const fn has_luau_integer_literals(self) -> bool {
         match self {
             Self::Luau => true,
@@ -209,7 +188,6 @@ impl LuaVersion {
     /// Whether a `.` stays in the numeral scan past a radix prefix or an
     /// exponent, so `0xFF..2` and `1e5..2` are malformed rather than concats.
     /// The 5.1 and Luau scanners stop before the dot there.
-    #[must_use]
     pub const fn has_hex_scan_dots(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -220,7 +198,6 @@ impl LuaVersion {
     /// Whether any letter or `_` touching a decimal numeral makes it malformed.
     /// 5.2 and 5.3 read only hex digits past a numeral, so `1then` splits there
     /// into a number and a keyword.
-    #[must_use]
     pub const fn has_strict_numeral_end(self) -> bool {
         match self {
             Self::Lua51 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
@@ -228,7 +205,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_explicit_type_instantiation(self) -> bool {
         match self {
             Self::Luau => true,
@@ -236,7 +212,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_value_exports(self) -> bool {
         match self {
             Self::Luau => true,
@@ -244,7 +219,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_type_syntax(self) -> bool {
         match self {
             Self::Luau => true,
@@ -252,7 +226,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_function_attributes(self) -> bool {
         match self {
             Self::Luau => true,
@@ -260,7 +233,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_if_exprs(self) -> bool {
         match self {
             Self::Luau => true,
@@ -269,7 +241,6 @@ impl LuaVersion {
     }
 
     /// Whether `const name = value` declares a local, as a contextual keyword.
-    #[must_use]
     pub const fn has_const_stmt(self) -> bool {
         match self {
             Self::Luau => true,
@@ -279,7 +250,6 @@ impl LuaVersion {
 
     /// Whether some binding is read-only, so writing to it is a compile error:
     /// `<const>` and `<close>` locals, or Luau's `const`.
-    #[must_use]
     pub const fn has_read_only_bindings(self) -> bool {
         match self {
             Self::Lua54 | Self::Lua55 | Self::Luau => true,
@@ -290,7 +260,6 @@ impl LuaVersion {
     /// Whether a lone CR ends a line and LFCR is one line break. Luau's lexer
     /// counts only LF and reads a lone CR as whitespace. See
     /// [`crate::line_breaks`] for the shared definition.
-    #[must_use]
     pub const fn has_lfcr_line_break(self) -> bool {
         match self {
             Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -299,7 +268,6 @@ impl LuaVersion {
     }
 
     /// 5.1 and Luau read it as a malformed first token.
-    #[must_use]
     pub const fn has_bom_skip(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -309,7 +277,6 @@ impl LuaVersion {
 
     /// Whether a first line starting with `#` is skipped without a `!` after
     /// it. Luau's loader skips only a `#!` line longer than those two bytes.
-    #[must_use]
     pub const fn has_bare_hash_shebang(self) -> bool {
         match self {
             Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -319,7 +286,6 @@ impl LuaVersion {
 
     /// Whether a line comment opening with `--!`, such as `--!strict`, is a
     /// hot comment, which Luau reads before the first token.
-    #[must_use]
     pub const fn has_hot_comments(self) -> bool {
         match self {
             Self::Luau => true,
@@ -328,7 +294,6 @@ impl LuaVersion {
     }
 
     /// Luau's lexer reads 0 as the end of input, and PUC Lua lexes a NUL like any other byte.
-    #[must_use]
     pub const fn has_nul_source_end(self) -> bool {
         match self {
             Self::Luau => true,
@@ -337,7 +302,6 @@ impl LuaVersion {
     }
 
     /// Lua 5.1's default `LUA_COMPAT_LSTR` rejects the nesting.
-    #[must_use]
     pub const fn has_long_bracket_nesting_error(self) -> bool {
         match self {
             Self::Lua51 => true,
@@ -347,7 +311,6 @@ impl LuaVersion {
 
     /// Whether a `\u{XXX}` escape reaches past U+10FFFF, up to 2^31 - 1
     /// (5.4+). 5.3 and Luau stop at U+10FFFF.
-    #[must_use]
     pub const fn has_extended_unicode_escape(self) -> bool {
         match self {
             Self::Lua54 | Self::Lua55 => true,
@@ -357,7 +320,6 @@ impl LuaVersion {
 
     /// Whether a `\u{XXX}` escape is limited to 16 digits, however small its
     /// value (Luau's `fixupQuotedString`).
-    #[must_use]
     pub const fn has_unicode_escape_digit_limit(self) -> bool {
         match self {
             Self::Luau => true,
@@ -365,12 +327,10 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn is_luau(self) -> bool {
         matches!(self, Self::Luau)
     }
 
-    #[must_use]
     pub const fn has_const_for_variables(self) -> bool {
         match self {
             Self::Lua55 => true,
@@ -378,7 +338,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_named_varargs(self) -> bool {
         match self {
             Self::Lua55 => true,
@@ -388,7 +347,6 @@ impl LuaVersion {
 
     /// Whether a vararg function whose `...` has no name holds its extra
     /// arguments in a hidden local, `(vararg table)` in 5.5's `parlist`.
-    #[must_use]
     pub const fn has_hidden_vararg_table(self) -> bool {
         match self {
             Self::Lua55 => true,
@@ -399,7 +357,6 @@ impl LuaVersion {
     /// Whether the compiler folds a `<const>` local whose value is a
     /// constant into its uses, so it takes no register and no function
     /// captures it (`RDKCTC`, 5.4+).
-    #[must_use]
     pub const fn has_compile_time_constants(self) -> bool {
         match self {
             Self::Lua54 | Self::Lua55 => true,
@@ -411,7 +368,6 @@ impl LuaVersion {
     /// its limits as it parses, as PUC Lua's one-pass compiler does. Luau's
     /// counts what its optimizer leaves, which depends on the level it
     /// compiles at.
-    #[must_use]
     pub const fn has_parse_time_limits(self) -> bool {
         match self {
             Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -422,7 +378,6 @@ impl LuaVersion {
     /// Whether [`MAX_ACTIVE_LOCALS`] counts only the locals in registers,
     /// which leaves compile-time constants out, as 5.5's `adjustlocalvars`
     /// does. Earlier versions count every local a function declares.
-    #[must_use]
     pub const fn has_register_local_limit(self) -> bool {
         match self {
             Self::Lua55 => true,
@@ -433,7 +388,6 @@ impl LuaVersion {
     /// The hidden locals a numeric `for` declares before its variable, which
     /// count toward [`MAX_ACTIVE_LOCALS`]. Luau's compiler keeps a loop's
     /// state in registers that are no locals.
-    #[must_use]
     pub const fn numeric_for_state_locals(self) -> usize {
         match self {
             Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua54 => 3,
@@ -445,7 +399,6 @@ impl LuaVersion {
     /// The hidden locals a generic `for` declares before its variables, which
     /// count toward [`MAX_ACTIVE_LOCALS`]: the iterator, its state, and its
     /// control value, and in 5.4 the value it closes.
-    #[must_use]
     pub const fn generic_for_state_locals(self) -> usize {
         match self {
             Self::Lua51 | Self::Lua52 | Self::Lua53 | Self::Lua55 => 3,
@@ -456,7 +409,6 @@ impl LuaVersion {
 
     /// The upvalues one function can capture: `LUAI_MAXUPVALUES` in 5.1,
     /// `MAXUPVAL` in 5.2+, and `kMaxUpvalueCount` in Luau.
-    #[must_use]
     pub const fn max_upvalues(self) -> usize {
         match self {
             Self::Lua51 => 60,
@@ -467,7 +419,6 @@ impl LuaVersion {
 
     /// Whether a vararg function binds an implicit `arg` table even when
     /// nothing reads it, as stock 5.1 builds do under `LUA_COMPAT_VARARG`.
-    #[must_use]
     pub const fn has_implicit_vararg_table(self) -> bool {
         match self {
             Self::Lua51 => true,
@@ -477,7 +428,6 @@ impl LuaVersion {
 
     /// Whether `continue` ends a loop iteration (Luau, as a contextual
     /// keyword).
-    #[must_use]
     pub const fn has_continue(self) -> bool {
         match self {
             Self::Luau => true,
@@ -485,7 +435,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_compound_assignment(self) -> bool {
         match self {
             Self::Luau => true,
@@ -493,7 +442,6 @@ impl LuaVersion {
         }
     }
 
-    #[must_use]
     pub const fn has_interpolated_strings(self) -> bool {
         match self {
             Self::Luau => true,
@@ -504,7 +452,6 @@ impl LuaVersion {
     /// Whether a required module chunk receives the resolved file path as its
     /// second argument (Lua 5.2+). 5.1 loaders pass only the module name, and
     /// Luau's `require` calls the chunk with no arguments.
-    #[must_use]
     pub const fn has_require_filepath_arg(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -515,7 +462,6 @@ impl LuaVersion {
     /// Whether `require` returns the loader data (the resolved file
     /// path, or ":preload:") as a second result on first load (5.4+).
     /// Cache hits still return a single value.
-    #[must_use]
     pub const fn has_require_loaderdata(self) -> bool {
         match self {
             Self::Lua54 | Self::Lua55 => true,
@@ -527,7 +473,6 @@ impl LuaVersion {
     /// 5.2+ leaves `package.loaded[name]` unset when the loader raises, and
     /// Luau's `require` library caches only a returned value. 5.1 leaves its
     /// sentinel behind and raises "loop or previous error" forever after.
-    #[must_use]
     pub const fn has_require_error_retry(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
@@ -538,7 +483,6 @@ impl LuaVersion {
     /// Whether float `%` is computed as fmod plus a sign fix (5.3+).
     /// 5.1, 5.2, and Luau compute `a - floor(a/b)*b`, which loses
     /// precision at large magnitudes and the sign of zero results.
-    #[must_use]
     pub const fn has_fmod_float_modulo(self) -> bool {
         match self {
             Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -549,7 +493,6 @@ impl LuaVersion {
     /// Whether the float `%` sign fix compares operand signs directly
     /// (5.4+). 5.3 tests `fmod(a,b)*b < 0`, whose product can underflow
     /// to zero for subnormal operands and skip the fix.
-    #[must_use]
     pub const fn has_float_modulo_sign_compare(self) -> bool {
         match self {
             Self::Lua54 | Self::Lua55 => true,
@@ -558,7 +501,6 @@ impl LuaVersion {
     }
 
     /// Whether `string.format` takes `%a` and `%A` (5.2+, not Luau).
-    #[must_use]
     pub const fn has_hex_float_format(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,
@@ -567,7 +509,6 @@ impl LuaVersion {
     }
 
     /// Whether `string.format` takes `%p` (5.4+).
-    #[must_use]
     pub const fn has_pointer_format(self) -> bool {
         match self {
             Self::Lua54 | Self::Lua55 => true,
@@ -576,7 +517,6 @@ impl LuaVersion {
     }
 
     /// Whether `string.format` takes `%*`, which formats any value (Luau).
-    #[must_use]
     pub const fn has_star_format(self) -> bool {
         match self {
             Self::Luau => true,
@@ -587,7 +527,6 @@ impl LuaVersion {
     /// Whether `string.format` checks a specifier's flags, width, and
     /// precision against its conversion, as 5.4's `checkformat` does. Earlier
     /// versions and Luau only limit how many there are.
-    #[must_use]
     pub const fn has_checked_format_modifiers(self) -> bool {
         match self {
             Self::Lua54 | Self::Lua55 => true,
@@ -598,7 +537,6 @@ impl LuaVersion {
     /// Whether a `gsub` replacement string raises an error on a `%` before
     /// anything but a digit or `%`, a trailing one included. Lua 5.1 copies
     /// the following character.
-    #[must_use]
     pub const fn has_strict_gsub_replacement(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
@@ -608,7 +546,6 @@ impl LuaVersion {
 
     /// Whether `os.date` checks its conversion specifiers. Lua 5.1 passes
     /// the whole format to `strftime`.
-    #[must_use]
     pub const fn has_checked_date_format(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 | Self::Luau => true,
@@ -619,7 +556,6 @@ impl LuaVersion {
     /// Whether `os.date` reads specifiers through a `checkoption` table,
     /// with C99 and two-character forms and an error on a trailing `%`
     /// (5.2+). Luau checks one C89 list and keeps a trailing `%`.
-    #[must_use]
     pub const fn has_date_format_options(self) -> bool {
         match self {
             Self::Lua52 | Self::Lua53 | Self::Lua54 | Self::Lua55 => true,

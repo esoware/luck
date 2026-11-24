@@ -15,9 +15,7 @@ fn pieces(source: &str) -> Vec<(TokenKind, &str)> {
         .tokens
         .into_iter()
         .filter(|token| token.kind != TokenKind::Eof)
-        .map(|token| {
-            (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap_or_default())
-        })
+        .map(|token| (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap()))
         .collect()
 }
 

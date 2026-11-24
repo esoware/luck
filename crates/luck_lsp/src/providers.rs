@@ -52,7 +52,7 @@ mod tests {
         let diagnostics = diagnostics::to_lsp(&uri, &document, &lints);
         let full_range = document.full_range();
         let text_document = TextDocumentIdentifier { uri: uri.clone() };
-        let _actions = code_action::code_action(
+        let _ = code_action::code_action(
             &document,
             &CodeActionParams {
                 text_document: text_document.clone(),
@@ -69,12 +69,12 @@ mod tests {
             .collect();
         for &position in &positions {
             let at = TextDocumentPositionParams { text_document: text_document.clone(), position };
-            let _hover = hover::hover(&document, position);
-            let _completion = completion::completion(&document, position);
-            let _signature = signature_help::signature_help(&document, position);
-            let _highlights = document_highlight::document_highlights(&document, position);
-            let _prepared = rename::prepare(&workspace, &uri, &document, position);
-            let _renamed = rename::rename(
+            let _ = hover::hover(&document, position);
+            let _ = completion::completion(&document, position);
+            let _ = signature_help::signature_help(&document, position);
+            let _ = document_highlight::document_highlights(&document, position);
+            let _ = rename::prepare(&workspace, &uri, &document, position);
+            let _ = rename::rename(
                 &workspace,
                 &uri,
                 &document,
@@ -84,7 +84,7 @@ mod tests {
                     work_done_progress_params: WorkDoneProgressParams::default(),
                 },
             );
-            let _references = references::references(
+            let _ = references::references(
                 &workspace,
                 &uri,
                 &document,
@@ -95,18 +95,18 @@ mod tests {
                     context: ReferenceContext { include_declaration: true },
                 },
             );
-            let _definition = definition::goto(&workspace, &uri, &document, position);
+            let _ = definition::goto(&workspace, &uri, &document, position);
         }
-        let _selections = selection_range::selection_ranges(&document, &positions);
-        let _folds = folding_range::folding_ranges(&document);
-        let _symbols = document_symbol::document_symbols(&document);
-        let _tokens = semantic_tokens::semantic_tokens(&document);
-        let _ranged_tokens = semantic_tokens::in_range(&document, full_range);
-        let _links = document_link::document_links(&document);
-        let _formatted = document.format(None);
-        let _range_formatted = document.format(Some(0..source.len()));
-        let _workspace_symbols = workspace_symbol::workspace_symbols([(&uri, &document)], "a");
-        let _fixed = code_action::fix_all([(&uri, &document, lints.as_slice())]);
+        let _ = selection_range::selection_ranges(&document, &positions);
+        let _ = folding_range::folding_ranges(&document);
+        let _ = document_symbol::document_symbols(&document);
+        let _ = semantic_tokens::semantic_tokens(&document);
+        let _ = semantic_tokens::in_range(&document, full_range);
+        let _ = document_link::document_links(&document);
+        let _ = document.format(None);
+        let _ = document.format(Some(0..source.len()));
+        let _ = workspace_symbol::workspace_symbols([(&uri, &document)], "a");
+        let _ = code_action::fix_all([(&uri, &document, lints.as_slice())]);
     }
 
     #[test]

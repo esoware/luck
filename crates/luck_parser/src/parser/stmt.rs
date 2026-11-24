@@ -1,4 +1,4 @@
-use core::mem;
+use std::mem;
 
 use luck_allocator::{List, ThinStr};
 use luck_ast::{
@@ -164,8 +164,8 @@ impl<'ast> Parser<'ast> {
         if !self.enter_depth() {
             return None;
         }
-        self.block_depth = self.block_depth.wrapping_add(1);
-        self.counts.blocks = self.counts.blocks.wrapping_add(1);
+        self.block_depth += 1;
+        self.counts.blocks += 1;
 
         let start = self.scratch.stmts.len();
         // 5.1 and Luau have no empty statement (block ::= {stat [';']}), so
@@ -197,7 +197,7 @@ impl<'ast> Parser<'ast> {
         }
 
         self.exit_depth();
-        self.block_depth = self.block_depth.wrapping_sub(1);
+        self.block_depth -= 1;
 
         let stmts = List::split_off_in(&mut self.scratch.stmts, start, self.allocator);
         let end_span = if stmts.is_empty() { start_span } else { self.previous_span };

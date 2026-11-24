@@ -19,32 +19,32 @@ struct HookCounts {
 
 impl<'ast> Visit<'ast> for HookCounts {
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-        self.statements = self.statements.saturating_add(1);
+        self.statements += 1;
         self.walk_stmt(stmt);
     }
 
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
-        self.expressions = self.expressions.saturating_add(1);
+        self.expressions += 1;
         self.walk_expr(expr);
     }
 
     fn visit_function_args(&mut self, function_args: &'ast FunctionArgs<'ast>) {
-        self.calls = self.calls.saturating_add(1);
+        self.calls += 1;
         self.walk_function_args(function_args);
     }
 
     fn visit_table_constructor(&mut self, table_constructor: &'ast TableConstructor<'ast>) {
-        self.tables = self.tables.saturating_add(1);
+        self.tables += 1;
         self.walk_table_constructor(table_constructor);
     }
 
     fn visit_function_body(&mut self, function_body: &'ast FunctionBody<'ast>) {
-        self.bodies = self.bodies.saturating_add(1);
+        self.bodies += 1;
         self.walk_function_body(function_body);
     }
 
     fn visit_generic_type_list(&mut self, generic_type_list: &'ast GenericTypeList<'ast>) {
-        self.generic_lists = self.generic_lists.saturating_add(1);
+        self.generic_lists += 1;
         self.walk_generic_type_list(generic_type_list);
     }
 }
@@ -285,7 +285,7 @@ fn skipping_a_level_skips_what_it_holds() {
         }
 
         fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
-            self.0 = self.0.saturating_add(1);
+            self.0 += 1;
             self.walk_expr(expr);
         }
     }

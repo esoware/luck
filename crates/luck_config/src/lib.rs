@@ -42,16 +42,6 @@
 //! let format = project.format_options(Some(file), Some(&Editorconfigs::default()));
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
-
 mod build;
 mod config;
 mod editorconfig;

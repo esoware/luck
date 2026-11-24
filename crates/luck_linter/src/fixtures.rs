@@ -1,7 +1,7 @@
-use core::fmt::{self, Write as _};
-use core::iter;
-use core::ops::Range;
-use core::slice;
+use std::fmt::{self, Write as _};
+use std::iter;
+use std::ops::Range;
+use std::slice;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::{Diagnostic, Severity, Tag};
@@ -191,10 +191,6 @@ fn rendered(case: &TestCase<'_>, messages: &[Message], problems: &mut Vec<String
 }
 
 /// `source` after one round of the fixes of `messages`.
-///
-/// # Errors
-///
-/// Says what's wrong when the fixes change nothing or break the syntax.
 fn fixed(source: &str, messages: &[Message], version: LuaVersion) -> Result<String, String> {
     let Some(fixed_bytes) = fix::apply(source.as_bytes(), messages, FixKind::all()) else {
         return Err("changes nothing".to_owned());
@@ -223,32 +219,29 @@ fn render_message(text: &mut String, lines: &Lines<'_>, target: LuaTarget, messa
     let mut shown_lines: Vec<usize> = marks
         .iter()
         .flat_map(|&(span, ..)| [lines.start(span).0, lines.end(span).0])
-        .flat_map(|marked| marked.saturating_sub(1)..=marked.saturating_add(1))
+        .flat_map(|marked| marked.saturating_sub(1)..=marked + 1)
         .filter(|&line| line < lines.ranges.len())
         .collect();
     shown_lines.sort_unstable();
     shown_lines.dedup();
     let gaps_of_one: Vec<usize> = shown_lines
         .windows(2)
-        .filter_map(|pair| {
-            let (&before, &after) = (pair.first()?, pair.last()?);
-            (after == before.saturating_add(2)).then(|| before.saturating_add(1))
-        })
+        .filter_map(|pair| (pair[1] == pair[0] + 2).then_some(pair[0] + 1))
         .collect();
     shown_lines.extend(gaps_of_one);
     shown_lines.sort_unstable();
-    let width = shown_lines.last().map_or(1, |&last| last.saturating_add(1).to_string().len());
+    let width = shown_lines.last().map_or(1, |&last| (last + 1).to_string().len());
     let (line, column) = lines.start(message.span());
-    let column_chars = lines.text(line).get(..column).map_or(0, |before| before.chars().count());
-    let (line_number, column_number) = (line.saturating_add(1), column_chars.saturating_add(1));
+    let column_chars = lines.text(line)[..column].chars().count();
+    let (line_number, column_number) = (line + 1, column_chars + 1);
     writeln!(text, "{:width$}--> {target}:{line_number}:{column_number}", "").unwrap();
     let mut last_shown = None;
     for &shown in &shown_lines {
-        if last_shown.is_some_and(|last: usize| shown > last.saturating_add(1)) {
+        if last_shown.is_some_and(|last| shown > last + 1) {
             text.push_str("...\n");
         }
         last_shown = Some(shown);
-        write!(text, "{:>width$} |", shown.saturating_add(1)).unwrap();
+        write!(text, "{:>width$} |", shown + 1).unwrap();
         push_shown_line(text, lines.text(shown));
         for &mark in &marks {
             render_mark(text, lines, shown, width, mark);
@@ -278,14 +271,14 @@ fn render_mark(text: &mut String, lines: &Lines<'_>, shown: usize, width: usize,
         (false, false) => return,
     };
     write!(text, "{:width$} | ", "").unwrap();
-    for c in line_text.get(..from).unwrap_or_default().chars() {
+    for c in line_text[..from].chars() {
         if c == '\t' {
             text.push('\t');
         } else {
             text.extend(iter::repeat_n(' ', shown_width(c)));
         }
     }
-    let covered = line_text.get(from..to).unwrap_or_default();
+    let covered = &line_text[from..to];
     text.extend(iter::repeat_n(mark_char, covered.chars().map(shown_width).sum::<usize>().max(1)));
     match label {
         Some(said) if end_line == shown => writeln!(text, " {said}").unwrap(),
@@ -349,15 +342,15 @@ impl<'source> Lines<'source> {
     }
 
     fn text(&self, line: usize) -> &'source str {
-        self.ranges.get(line).and_then(|range| self.source.get(range.clone())).unwrap_or_default()
+        &self.source[self.ranges[line].clone()]
     }
 
     /// The zero-based line `offset` is on and its byte column, kept within
     /// the line's text.
     fn position(&self, offset: usize) -> (usize, usize) {
-        let line = self.ranges.partition_point(|range| range.start <= offset).saturating_sub(1);
-        let range = self.ranges.get(line).cloned().unwrap_or_default();
-        (line, offset.min(range.end).saturating_sub(range.start))
+        let line = self.ranges.partition_point(|range| range.start <= offset) - 1;
+        let range = &self.ranges[line];
+        (line, offset.min(range.end) - range.start)
     }
 
     fn start(&self, span: Span) -> (usize, usize) {
@@ -370,7 +363,7 @@ impl<'source> Lines<'source> {
         let Range { start, end } = Range::<usize>::from(span);
         let (line, column) = self.position(end);
         if end > start && column == 0 && line > self.start(span).0 {
-            let previous_line = line.saturating_sub(1);
+            let previous_line = line - 1;
             return (previous_line, self.text(previous_line).len());
         }
         (line, column)

@@ -1,10 +1,10 @@
 //! Byte offsets are `u32` to match `luck_token::Span`, which caps files at
 //! 4 GB.
 
-use core::ops;
+use std::ops;
 
 use ls_types::{Position, PositionEncodingKind, Range};
-use luck_token::{Span, index_to_offset, offset_to_index};
+use luck_token::{Span, index_to_offset};
 
 /// What a column counts, which `initialize` settles for the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +61,7 @@ impl PositionEncoding {
             }
             Self::Utf32 => 1,
         };
-        length.saturating_sub(units)
+        length - units
     }
 }
 
@@ -98,19 +98,19 @@ impl LineIndex {
         line_starts.push(0);
         for i in memchr::memchr2_iter(b'\n', b'\r', bytes) {
             // LSP's EOLs, the client's for every dialect, are LF, CRLF, and CR.
-            let next = i.saturating_add(1);
-            if bytes.get(i) == Some(&b'\n') || bytes.get(next) != Some(&b'\n') {
+            let next = i + 1;
+            if bytes[i] == b'\n' || bytes.get(next) != Some(&b'\n') {
                 line_starts.push(index_to_offset(next));
             }
         }
         let mut wide_chars = Vec::new();
         if encoding != PositionEncoding::Utf8 {
-            let mut extra_bytes = 0u32;
+            let mut extra_bytes = 0;
             for (run_index, run) in bytes.chunks(ASCII_RUN).enumerate() {
                 if run.is_ascii() {
                     continue;
                 }
-                let run_start = run_index.saturating_mul(ASCII_RUN);
+                let run_start = run_index * ASCII_RUN;
                 for (i, b) in run.iter().enumerate() {
                     // A lead byte gives its character's length.
                     let length = match *b {
@@ -119,11 +119,11 @@ impl LineIndex {
                         0xF0..=0xFF => 4,
                         _ => continue,
                     };
-                    let start = index_to_offset(run_start.saturating_add(i));
-                    extra_bytes = extra_bytes.saturating_add(encoding.extra_bytes(length));
+                    let start = index_to_offset(run_start + i);
+                    extra_bytes += encoding.extra_bytes(length);
                     wide_chars.push(WideChar {
                         start,
-                        end: start.saturating_add(length),
+                        end: start + length,
                         extra_through: extra_bytes,
                     });
                 }
@@ -134,23 +134,19 @@ impl LineIndex {
 
     /// How many more bytes than units every character before `wide` takes.
     const fn extra_before(&self, wide: WideChar) -> u32 {
-        let own = self.encoding.extra_bytes(wide.end.saturating_sub(wide.start));
-        wide.extra_through.saturating_sub(own)
+        let own = self.encoding.extra_bytes(wide.end - wide.start);
+        wide.extra_through - own
     }
 
     /// How many more bytes than units the text before `offset` takes.
     fn extra_bytes_before(&self, offset: u32) -> u32 {
         let index = self.wide_chars.partition_point(|wide| wide.end <= offset);
-        index
-            .checked_sub(1)
-            .and_then(|last| self.wide_chars.get(last))
-            .map_or(0, |wide| wide.extra_through)
+        self.wide_chars[..index].last().map_or(0, |wide| wide.extra_through)
     }
 
     fn line_bounds(&self, line: usize) -> (u32, u32) {
-        let mut starts = self.line_starts.iter().skip(line).copied();
-        let start = starts.next().unwrap_or_default();
-        (start, starts.next().unwrap_or(self.source_length))
+        let end = self.line_starts.get(line + 1).copied().unwrap_or(self.source_length);
+        (self.line_starts[line], end)
     }
 
     pub(crate) fn position(&self, source: &str, offset: u32) -> Position {
@@ -175,7 +171,7 @@ impl LineIndex {
             Ok(exact) => exact,
             // `Err(insert)` returns the index where `offset` *would* go; the
             // line containing `offset` is therefore `insert - 1`.
-            Err(insert) => insert.saturating_sub(1),
+            Err(insert) => insert - 1,
         };
         let wide_before = self.wide_chars.partition_point(|wide| wide.end <= offset);
         Cursor { line, line_extra: self.extra_bytes_before(self.line_bounds(line).0), wide_before }
@@ -187,23 +183,17 @@ impl LineIndex {
         let Cursor { mut line, mut line_extra, mut wide_before } = cursor;
         let is_behind = offset < self.line_bounds(line).0
             || self.wide_before(wide_before).is_some_and(|wide| wide.end > offset);
-        let is_far = self
-            .line_starts
-            .get(line.saturating_add(STEP_LIMIT))
-            .is_some_and(|&start| start <= offset)
-            || self
-                .wide_chars
-                .get(wide_before.saturating_add(STEP_LIMIT))
-                .is_some_and(|wide| wide.end <= offset);
+        let is_far = self.line_starts.get(line + STEP_LIMIT).is_some_and(|&start| start <= offset)
+            || self.wide_chars.get(wide_before + STEP_LIMIT).is_some_and(|wide| wide.end <= offset);
         if is_behind || is_far {
             return None;
         }
         let first_line = line;
-        while self.line_starts.get(line.saturating_add(1)).is_some_and(|&next| next <= offset) {
-            line = line.saturating_add(1);
+        while self.line_starts.get(line + 1).is_some_and(|&next| next <= offset) {
+            line += 1;
         }
         while self.wide_chars.get(wide_before).is_some_and(|wide| wide.end <= offset) {
-            wide_before = wide_before.saturating_add(1);
+            wide_before += 1;
         }
         if line != first_line {
             line_extra = self.extra_bytes_before(self.line_bounds(line).0);
@@ -213,14 +203,14 @@ impl LineIndex {
 
     /// The last of the first `count` wide characters.
     fn wide_before(&self, count: usize) -> Option<&WideChar> {
-        self.wide_chars.get(count.checked_sub(1)?)
+        self.wide_chars[..count].last()
     }
 
     /// A line past the end clamps to the last line, and a character past the
     /// end of its line clamps to the line end.
     pub(crate) fn offset(&self, source: &str, position: Position) -> u32 {
-        let last_line = self.line_starts.len().saturating_sub(1);
-        let line = offset_to_index(position.line).min(last_line);
+        let last_line = self.line_starts.len() - 1;
+        let line = (position.line as usize).min(last_line);
         let (line_start, line_end) = self.line_bounds(line);
         let line_span = Span::new(line_start, line_end);
         let Some(terminated_line) = source.get(ops::Range::<usize>::from(line_span)) else {
@@ -231,28 +221,23 @@ impl LineIndex {
         // on the next line.
         let without_lf = terminated_line.strip_suffix('\n').unwrap_or(terminated_line);
         let line_text = without_lf.strip_suffix('\r').unwrap_or(without_lf);
-        let text_end = line_start.saturating_add(index_to_offset(line_text.len()));
+        let text_end = line_start + index_to_offset(line_text.len());
         let column = position.character;
         let extra_at_line_start = self.extra_bytes_before(line_start);
         // The units from the line's start to `offset`, with `extra` more bytes
         // than units before it.
-        let units_to = |offset: u32, extra: u32| {
-            offset
-                .saturating_sub(line_start)
-                .saturating_sub(extra.saturating_sub(extra_at_line_start))
-        };
+        let units_to =
+            |offset: u32, extra: u32| offset - line_start - (extra - extra_at_line_start);
         let first = self.wide_chars.partition_point(|wide| wide.start < line_start);
         let last = self.wide_chars.partition_point(|wide| wide.start < text_end);
-        let on_line = self.wide_chars.get(first..last).unwrap_or_default();
+        let on_line = &self.wide_chars[first..last];
         // The first wide character that ends past the column, and the last
         // boundary before it.
         let next = on_line.partition_point(|wide| units_to(wide.end, wide.extra_through) <= column);
-        let (anchor, anchor_extra) = next
-            .checked_sub(1)
-            .and_then(|previous| on_line.get(previous))
+        let (anchor, anchor_extra) = on_line[..next]
+            .last()
             .map_or((line_start, extra_at_line_start), |wide| (wide.end, wide.extra_through));
-        let narrow_offset =
-            anchor.saturating_add(column.saturating_sub(units_to(anchor, anchor_extra)));
+        let narrow_offset = anchor.saturating_add(column - units_to(anchor, anchor_extra));
         let landed = match on_line.get(next) {
             // A column inside a character lands on its start.
             Some(&wide) if units_to(wide.start, self.extra_before(wide)) <= column => wide.start,
@@ -262,10 +247,7 @@ impl LineIndex {
         };
         // Under UTF-8 no character is wide, so a byte column inside one
         // lands on its start here.
-        index_to_offset(
-            line_text.floor_char_boundary(offset_to_index(landed.saturating_sub(line_start))),
-        )
-        .saturating_add(line_start)
+        index_to_offset(line_text.floor_char_boundary((landed - line_start) as usize)) + line_start
     }
 
     pub(crate) fn range(&self, source: &str, span: Span) -> Range {
@@ -324,11 +306,11 @@ impl Positions<'_> {
         let (line_start, line_end) = index.line_bounds(cursor.line);
         let upper = clamped.min(line_end);
         // An offset inside a multi-byte character maps to column 0.
-        let character = if self.source.is_char_boundary(offset_to_index(upper)) {
+        let character = if self.source.is_char_boundary(upper as usize) {
             let extra_before =
                 index.wide_before(cursor.wide_before).map_or(0, |wide| wide.extra_through);
-            let extra = extra_before.saturating_sub(cursor.line_extra);
-            upper.saturating_sub(line_start).saturating_sub(extra)
+            let extra = extra_before - cursor.line_extra;
+            upper - line_start - extra
         } else {
             0
         };
@@ -382,7 +364,7 @@ mod tests {
         let source = format!("{}zz", line.repeat(12));
         for encoding in ENCODINGS {
             let index = LineIndex::new(&source, encoding);
-            let offsets: Vec<u32> = (0..=index_to_offset(source.len()).saturating_add(2)).collect();
+            let offsets: Vec<u32> = (0..=index_to_offset(source.len()) + 2).collect();
             let every_seventh: Vec<u32> = offsets.iter().copied().step_by(7).collect();
             let reversed: Vec<u32> = offsets.iter().rev().copied().collect();
             for run in [&offsets, &every_seventh, &reversed] {
@@ -426,7 +408,7 @@ mod tests {
             let position = index.position(source, 5);
             assert_eq!(position, Position { line: 0, character: column }, "{encoding:?}");
             assert_eq!(index.offset(source, position), 5, "{encoding:?}");
-            assert_eq!(index.length(Span::new(0, 6)), column.saturating_add(1), "{encoding:?}");
+            assert_eq!(index.length(Span::new(0, 6)), column + 1, "{encoding:?}");
         }
     }
 
@@ -445,10 +427,9 @@ zz";
             let index = LineIndex::new(source, encoding);
             for offset in 0..=source.len() {
                 let position = index.position(source, index_to_offset(offset));
-                let line_start = index.line_starts[offset_to_index(position.line)];
-                let expected = source
-                    .get(offset_to_index(line_start)..offset)
-                    .map_or(0, |line| units(line, encoding));
+                let line_start = index.line_starts[position.line as usize];
+                let expected =
+                    source.get(line_start as usize..offset).map_or(0, |line| units(line, encoding));
                 assert_eq!(position.character, expected, "{encoding:?} offset {offset}");
             }
             for (line_number, &line_start) in index.line_starts.iter().enumerate() {
@@ -456,7 +437,7 @@ zz";
                 let (_, line_end) = index.line_bounds(line_number);
                 let terminated = span_text(source, Span::new(line_start, line_end));
                 let line_text = terminated.trim_end_matches(['\n', '\r']);
-                for column in 0..units(line_text, encoding).saturating_add(3) {
+                for column in 0..units(line_text, encoding) + 3 {
                     let mut walked = line_start;
                     let mut remaining = column;
                     for c in line_text.chars() {
@@ -464,7 +445,7 @@ zz";
                             break;
                         };
                         remaining = rest;
-                        walked = walked.saturating_add(index_to_offset(c.len_utf8()));
+                        walked += index_to_offset(c.len_utf8());
                     }
                     let position = Position { line, character: column };
                     assert_eq!(

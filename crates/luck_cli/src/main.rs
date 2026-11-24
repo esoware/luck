@@ -11,15 +11,6 @@
     clippy::print_stdout,
     reason = "a CLI prints, and println! panicking on a closed pipe is accepted"
 )]
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
 
 mod cli;
 mod commands;

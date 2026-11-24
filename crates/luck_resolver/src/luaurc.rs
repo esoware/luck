@@ -1,7 +1,7 @@
-use alloc::sync::Arc;
-use core::ops::Deref;
 use std::ffi::OsString;
+use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
@@ -82,13 +82,14 @@ impl AliasCache {
 
 fn alias_target(declaring_directory: &Path, written_target: &str) -> AliasTarget {
     let target = written_target.replace('\\', "/");
-    target.strip_prefix('@').map_or_else(
-        || AliasTarget::Directory(lexically_normalized(&declaring_directory.join(&target))),
-        |chained| AliasTarget::Chained {
+    if let Some(chained) = target.strip_prefix('@') {
+        AliasTarget::Chained {
             target: chained.to_owned(),
             declared_in: declaring_directory.to_path_buf(),
-        },
-    )
+        }
+    } else {
+        AliasTarget::Directory(lexically_normalized(&declaring_directory.join(&target)))
+    }
 }
 
 /// `path` with `.` and `..` collapsed, since walking `..` from an alias's
@@ -244,13 +245,13 @@ impl<'contents> LuaurcReader<'contents> {
     fn skip_line(&mut self) {
         let line_end =
             self.rest.iter().position(|b| matches!(b, b'\r' | b'\n')).unwrap_or(self.rest.len());
-        self.rest = self.rest.get(line_end..).unwrap_or_default();
+        self.rest = &self.rest[line_end..];
     }
 
     fn eat(&mut self, byte: u8) -> bool {
         let is_next = self.peek() == Some(byte);
         if is_next {
-            self.rest = self.rest.get(1..).unwrap_or_default();
+            self.rest = &self.rest[1..];
         }
         is_next
     }
@@ -273,7 +274,7 @@ impl<'contents> LuaurcReader<'contents> {
     /// quote.
     fn string(&mut self) -> Option<&'contents [u8]> {
         let quote = self.peek().filter(|b| matches!(b, b'"' | b'\''))?;
-        let body = self.rest.get(1..)?;
+        let body = &self.rest[1..];
         let mut remaining = body;
         loop {
             match remaining {
@@ -281,8 +282,7 @@ impl<'contents> LuaurcReader<'contents> {
                 [b'\\', b'\r', b'\n', tail @ ..] | [b'\\', _, tail @ ..] => remaining = tail,
                 [byte, tail @ ..] if *byte == quote => {
                     self.rest = tail;
-                    let text_length = body.len().saturating_sub(tail.len()).saturating_sub(1);
-                    return body.get(..text_length);
+                    return Some(&body[..body.len() - tail.len() - 1]);
                 }
                 [_, tail @ ..] => remaining = tail,
             }
@@ -297,13 +297,13 @@ fn long_bracket_level(text: &[u8]) -> Option<usize> {
 }
 
 fn after_long_bracket(text: &[u8], level: usize) -> Option<&[u8]> {
-    let mut remaining = text.get(level.saturating_add(2)..)?;
+    let mut remaining = &text[level + 2..];
     loop {
         let closer = remaining.iter().position(|b| *b == b']')?;
-        let after_closer = remaining.get(closer.saturating_add(1)..)?;
+        let after_closer = &remaining[closer + 1..];
         let equals_count = after_closer.iter().take_while(|b| **b == b'=').count();
         if equals_count == level && after_closer.get(level) == Some(&b']') {
-            return after_closer.get(level.saturating_add(1)..);
+            return Some(&after_closer[level + 1..]);
         }
         remaining = after_closer;
     }
@@ -329,7 +329,7 @@ mod tests {
         // lookups must use the canonical directory too.
         let source_directory = canonical(&project.path().join("src"));
         let aliases: serde_json::Map<String, serde_json::Value> =
-            (0u8..64).map(|i| (format!("alias{i}"), serde_json::json!("."))).collect();
+            (0..64).map(|i| (format!("alias{i}"), serde_json::json!("."))).collect();
         fs::write(
             source_directory.join(".luaurc"),
             serde_json::json!({"aliases": aliases}).to_string(),
@@ -369,7 +369,7 @@ mod tests {
         let sibling_file = sibling.join("main.luau");
         let luau = Luau::default();
         let cache = Cache::new(FileSystemOs);
-        for _ in 0u8..2 {
+        for _ in 0..2 {
             for module in ["@SHARED/utils", "@inherited/utils"] {
                 let resolved =
                     luau.resolve(&cache, &current, module).expect("resolve inherited alias");
@@ -391,7 +391,7 @@ mod tests {
         let current = source_directory.join("init.luau");
         let luau = Luau::default();
         let cache = Cache::new(FileSystemOs);
-        for _ in 0u8..2 {
+        for _ in 0..2 {
             let resolved =
                 luau.resolve(&cache, &current, "@SELF/utils").expect("resolve built-in self");
             assert_eq!(resolved.path, source_directory.join("utils.luau"));

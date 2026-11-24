@@ -1,7 +1,7 @@
-use core::mem;
+use std::mem;
 
 use luck_ast::{Name, NameIndex, TreeCounts};
-use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
+use luck_token::{LuaVersion, Span};
 
 use crate::id::{LabelId, NameId, NodeId, ReferenceId, ScopeId, SymbolId};
 use crate::names::Names;
@@ -93,10 +93,6 @@ pub enum ScopeKind {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "five independent facts about a binding, in any combination"
-)]
 pub struct Symbol {
     pub id: SymbolId,
     pub name: NameId,
@@ -147,7 +143,6 @@ pub enum SymbolKind {
 impl SymbolKind {
     /// Whether no token spells the symbol, so it has no name to rename or
     /// remove.
-    #[must_use]
     pub const fn is_implicit(self) -> bool {
         match self {
             Self::ImplicitSelf | Self::ImplicitArg => true,
@@ -190,7 +185,6 @@ pub enum ReferenceKind {
 }
 
 impl ReferenceKind {
-    #[must_use]
     pub const fn is_read(self) -> bool {
         match self {
             Self::Read | Self::ReadWrite => true,
@@ -198,7 +192,6 @@ impl ReferenceKind {
         }
     }
 
-    #[must_use]
     pub const fn is_write(self) -> bool {
         match self {
             Self::Write | Self::ReadWrite => true,
@@ -224,13 +217,13 @@ pub struct Label {
 impl Scoping {
     /// Tables sized from `counts`, the parse's or the default.
     pub(crate) fn with_capacity(version: LuaVersion, counts: TreeCounts) -> Self {
-        let declarations = offset_to_index(counts.declarations);
-        let name_uses = offset_to_index(counts.name_uses);
-        let mut resolved_offsets = Vec::with_capacity(declarations.saturating_add(1));
+        let declarations = counts.declarations as usize;
+        let name_uses = counts.name_uses as usize;
+        let mut resolved_offsets = Vec::with_capacity(declarations + 1);
         resolved_offsets.push(0);
         Self {
             version,
-            scopes: Vec::with_capacity(offset_to_index(counts.blocks)),
+            scopes: Vec::with_capacity(counts.blocks as usize),
             symbols: Vec::with_capacity(declarations),
             references: Vec::with_capacity(name_uses),
             labels: Vec::new(),
@@ -238,10 +231,10 @@ impl Scoping {
             resolved_offsets,
             positions: Vec::with_capacity(name_uses),
             unfilled_positions: 0,
-            roles: vec![NameRole::None; offset_to_index(counts.names)],
+            roles: vec![NameRole::None; counts.names as usize],
             // No chunk has more distinct names than declarations and uses
             // together.
-            names: Names::with_capacity(declarations.saturating_add(name_uses)),
+            names: Names::with_capacity(declarations + name_uses),
             declared_globals: Vec::new(),
             is_env_assigned: false,
         }
@@ -254,9 +247,7 @@ impl Scoping {
     }
 
     pub(crate) fn mark_vararg_read(&mut self, function: ScopeId) {
-        if let Some(scope) = self.scopes.get_mut(function.index()) {
-            scope.has_vararg_read = true;
-        }
+        self.scopes[function.index()].has_vararg_read = true;
     }
 
     pub(crate) fn add_symbol(
@@ -287,8 +278,8 @@ impl Scoping {
         id
     }
 
-    pub(crate) fn symbol_mut(&mut self, id: SymbolId) -> Option<&mut Symbol> {
-        self.symbols.get_mut(id.index())
+    pub(crate) fn symbol_mut(&mut self, id: SymbolId) -> &mut Symbol {
+        &mut self.symbols[id.index()]
     }
 
     /// A slot in the references by position for one the walk adds once it's
@@ -296,7 +287,7 @@ impl Scoping {
     pub(crate) fn reserve_position(&mut self) -> usize {
         let slot = self.positions.len();
         self.positions.push(unfilled_position());
-        self.unfilled_positions = self.unfilled_positions.saturating_add(1);
+        self.unfilled_positions += 1;
         slot
     }
 
@@ -309,16 +300,13 @@ impl Scoping {
         position: Option<usize>,
     ) -> ReferenceId {
         let id = ReferenceId::from_index(self.references.len());
-        if let Some(count) = reference
-            .resolved
-            .and_then(|symbol| self.resolved_offsets.get_mut(symbol.index().saturating_add(1)))
-        {
-            *count = count.saturating_add(1);
+        if let Some(symbol) = reference.resolved {
+            self.resolved_offsets[symbol.index() + 1] += 1;
         }
         self.references.push(reference);
-        if let Some(slot) = position.and_then(|slot| self.positions.get_mut(slot)) {
-            *slot = id;
-            self.unfilled_positions = self.unfilled_positions.saturating_sub(1);
+        if let Some(slot) = position {
+            self.positions[slot] = id;
+            self.unfilled_positions -= 1;
         } else {
             self.positions.push(id);
         }
@@ -331,8 +319,8 @@ impl Scoping {
         id
     }
 
-    pub(crate) fn label_mut(&mut self, id: LabelId) -> Option<&mut Label> {
-        self.labels.get_mut(id.index())
+    pub(crate) fn label_mut(&mut self, id: LabelId) -> &mut Label {
+        &mut self.labels[id.index()]
     }
 
     pub(crate) fn intern(&mut self, name: &str) -> NameId {
@@ -351,15 +339,14 @@ impl Scoping {
     /// Records what the name of index `name_index` is, growing the table for
     /// a tree the parse didn't count.
     pub(crate) fn set_role(&mut self, name_index: Option<NameIndex>, role: NameRole) {
-        let Some(index) = name_index.map(NameIndex::get).map(offset_to_index) else {
+        let Some(index) = name_index else {
             return;
         };
+        let index = index.get() as usize;
         if self.roles.len() <= index {
-            self.roles.resize(index.saturating_add(1), NameRole::None);
+            self.roles.resize(index + 1, NameRole::None);
         }
-        if let Some(slot) = self.roles.get_mut(index) {
-            *slot = role;
-        }
+        self.roles[index] = role;
     }
 
     /// Keeps the references `keep` takes in each symbol's list, in order, for
@@ -370,24 +357,21 @@ impl Scoping {
         Keep: FnMut(ReferenceId) -> bool,
     {
         let Self { resolved, resolved_offsets, .. } = self;
-        let mut kept = 0usize;
-        let mut start = 0usize;
+        let mut kept: u32 = 0;
+        let mut start = 0;
         for offset in resolved_offsets.iter_mut().skip(1) {
-            let end = offset_to_index(*offset);
+            let end = *offset as usize;
             for i in start..end {
-                if let Some(&id) = resolved.get(i)
-                    && keep(id)
-                {
-                    if let Some(slot) = resolved.get_mut(kept) {
-                        *slot = id;
-                    }
-                    kept = kept.saturating_add(1);
+                let id = resolved[i];
+                if keep(id) {
+                    resolved[kept as usize] = id;
+                    kept += 1;
                 }
             }
-            *offset = index_to_offset(kept);
+            *offset = kept;
             start = end;
         }
-        resolved.truncate(kept);
+        resolved.truncate(kept as usize);
     }
 
     /// Lays out each symbol's references once the walk has added them all.
@@ -395,20 +379,17 @@ impl Scoping {
         let Self { references, resolved, resolved_offsets, positions, .. } = self;
         // Each symbol's count, one slot along, becomes the start of its run,
         // which then fills in reference order up to where the next starts.
-        let mut total = 0u32;
+        let mut total = 0;
         for offset in resolved_offsets.iter_mut().skip(1) {
             let count = mem::replace(offset, total);
-            total = total.saturating_add(count);
+            total += count;
         }
-        *resolved = vec![ReferenceId::from_index(0); offset_to_index(total)];
+        *resolved = vec![ReferenceId::from_index(0); total as usize];
         for (i, reference) in references.iter().enumerate() {
-            if let Some(cursor) = reference
-                .resolved
-                .and_then(|symbol| resolved_offsets.get_mut(symbol.index().saturating_add(1)))
-                && let Some(slot) = resolved.get_mut(offset_to_index(*cursor))
-            {
-                *slot = ReferenceId::from_index(i);
-                *cursor = cursor.saturating_add(1);
+            if let Some(symbol) = reference.resolved {
+                let cursor = &mut resolved_offsets[symbol.index() + 1];
+                resolved[*cursor as usize] = ReferenceId::from_index(i);
+                *cursor += 1;
             }
         }
         // A slot a name reserved but that made no reference, which a name the
@@ -421,30 +402,25 @@ impl Scoping {
             && self.name_id("_ENV").is_some_and(|env| self.is_assigned_global(env));
     }
 
-    #[must_use]
     pub const fn version(&self) -> LuaVersion {
         self.version
     }
 
     /// The chunk's own scope first, then each in the order the walk enters
     /// it, so a parent comes before its children.
-    #[must_use]
     pub fn scopes(&self) -> &[Scope] {
         &self.scopes
     }
 
-    #[must_use]
     pub fn symbols(&self) -> &[Symbol] {
         &self.symbols
     }
 
-    #[must_use]
     pub fn references(&self) -> &[Reference] {
         &self.references
     }
 
     /// In source order.
-    #[must_use]
     pub fn labels(&self) -> &[Label] {
         &self.labels
     }
@@ -457,71 +433,46 @@ impl Scoping {
         })
     }
 
-    #[must_use]
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "ids are minted only by this table, and a fallback would turn a bug into wrong diagnostics"
-    )]
     pub fn scope(&self, id: ScopeId) -> &Scope {
         &self.scopes[id.index()]
     }
 
-    #[must_use]
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "ids are minted only by this table, and a fallback would turn a bug into wrong diagnostics"
-    )]
     pub fn symbol(&self, id: SymbolId) -> &Symbol {
         &self.symbols[id.index()]
     }
 
-    #[must_use]
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "ids are minted only by this table, and a fallback would turn a bug into wrong diagnostics"
-    )]
     pub fn reference(&self, id: ReferenceId) -> &Reference {
         &self.references[id.index()]
     }
 
-    #[must_use]
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "ids are minted only by this table, and a fallback would turn a bug into wrong diagnostics"
-    )]
     pub fn label(&self, id: LabelId) -> &Label {
         &self.labels[id.index()]
     }
 
-    #[must_use]
     pub fn name(&self, id: NameId) -> &str {
         self.names.text(id)
     }
 
     /// `None` for a name the chunk never uses.
-    #[must_use]
     pub fn name_id(&self, name: &str) -> Option<NameId> {
         self.names.get(name)
     }
 
     /// The references that resolve to `symbol`, in reference order.
-    #[must_use]
     pub fn resolved_references(&self, symbol: SymbolId) -> &[ReferenceId] {
-        let start = self.resolved_offsets.get(symbol.index()).copied().unwrap_or_default();
-        let end = self.resolved_offsets.get(symbol.index().saturating_add(1)).copied();
-        let run = offset_to_index(start)..offset_to_index(end.unwrap_or(start));
-        self.resolved.get(run).unwrap_or_default()
+        let start = self.resolved_offsets[symbol.index()] as usize;
+        let end = self.resolved_offsets[symbol.index() + 1] as usize;
+        &self.resolved[start..end]
     }
 
     fn role(&self, name: &Name<'_>) -> NameRole {
         name.index
-            .and_then(|index| self.roles.get(offset_to_index(index.get())))
+            .and_then(|index| self.roles.get(index.get() as usize))
             .copied()
             .unwrap_or_default()
     }
 
     /// The symbol `name` declares: `None` for a name that declares none.
-    #[must_use]
     pub fn symbol_of(&self, name: &Name<'_>) -> Option<SymbolId> {
         let NameRole::Symbol(id) = self.role(name) else {
             return None;
@@ -531,7 +482,6 @@ impl Scoping {
 
     /// The reference `name` makes: `None` for a name that makes none, such
     /// as a field or a declaration.
-    #[must_use]
     pub fn reference_of(&self, name: &Name<'_>) -> Option<ReferenceId> {
         let NameRole::Reference(id) = self.role(name) else {
             return None;
@@ -541,7 +491,6 @@ impl Scoping {
 
     /// The label `name` names: its own, or the one a `goto` with that name
     /// jumps to.
-    #[must_use]
     pub fn label_of(&self, name: &Name<'_>) -> Option<LabelId> {
         let NameRole::Label(id) = self.role(name) else {
             return None;
@@ -553,9 +502,7 @@ impl Scoping {
     pub fn references_within(&self, span: Span) -> impl Iterator<Item = ReferenceId> + '_ {
         let first =
             self.positions.partition_point(|&id| self.reference(id).span.start < span.start);
-        self.positions
-            .get(first..)
-            .unwrap_or_default()
+        self.positions[first..]
             .iter()
             .copied()
             .take_while(move |&id| self.reference(id).span.start < span.end)
@@ -568,7 +515,6 @@ impl Scoping {
     ///
     /// Scope isn't checked, so a local from a block that already closed can
     /// still match.
-    #[must_use]
     pub fn nearest_local(&self, name: &str, offset: u32) -> Option<&Symbol> {
         let name_id = self.name_id(name)?;
         self.symbols
@@ -580,7 +526,6 @@ impl Scoping {
     /// Code that matches stdlib paths (`table.insert`, `require(...)`,
     /// `error(...)`) must bail when the base name is shadowed
     /// (`local table = {}`), or it reports stdlib diagnostics on user values.
-    #[must_use]
     pub fn resolves_to_local(&self, name: &Name<'_>) -> bool {
         self.reference_of(name).is_some_and(|id| self.reference(id).resolved.is_some())
     }
@@ -591,20 +536,17 @@ impl Scoping {
     /// False for a local, a field of a local `_ENV`, a chunk that assigns its
     /// own `_ENV`, a global this chunk writes anywhere, and a name that makes
     /// no reference.
-    #[must_use]
     pub fn reaches_host_global(&self, name: &Name<'_>) -> bool {
         self.reference_of(name).is_some_and(|id| self.is_host_global(self.reference(id)))
     }
 
     /// See [`Self::reaches_host_global`].
-    #[must_use]
     pub fn is_host_global(&self, reference: &Reference) -> bool {
         self.is_global(reference) && !self.is_assigned_global(reference.name)
     }
 
     /// Whether `reference` names a global. A free name that indexes a `_ENV`
     /// the chunk controls doesn't.
-    #[must_use]
     pub const fn is_global(&self, reference: &Reference) -> bool {
         reference.resolved.is_none() && reference.env.is_none() && !self.is_env_assigned
     }
@@ -616,14 +558,12 @@ impl Scoping {
 
     /// Whether this chunk writes a global of this name as a free name, so
     /// the host's value of it can't be assumed anywhere in the chunk.
-    #[must_use]
     pub fn is_assigned_global(&self, name: NameId) -> bool {
         self.names.is_assigned_global(name)
     }
 
     /// Lua 5.5: whether a `global` statement declares this name, which makes
     /// it defined wherever it's read.
-    #[must_use]
     pub fn is_declared_global(&self, name: NameId) -> bool {
         self.names.is_declared_global(name)
     }
@@ -631,21 +571,18 @@ impl Scoping {
     /// Lua 5.5: each name a `global` statement declares, and the scope of the
     /// block the statement is in, where from then on the name reads the
     /// global, in source order.
-    #[must_use]
     pub fn declared_globals(&self) -> &[(NameId, ScopeId)] {
         &self.declared_globals
     }
 
     /// Lua 5.2+: the chunk assigns its own `_ENV`, which redirects every
     /// free name. A local `_ENV` is [`Reference::env`] instead.
-    #[must_use]
     pub const fn is_env_assigned(&self) -> bool {
         self.is_env_assigned
     }
 
     /// Whether `symbol` is a Lua 5.2+ `_ENV`, which every free name in its
     /// scope indexes.
-    #[must_use]
     pub fn is_env_binding(&self, symbol: SymbolId) -> bool {
         self.version.has_env_upvalue() && self.name(self.symbol(symbol).name) == "_ENV"
     }
@@ -653,7 +590,6 @@ impl Scoping {
     /// Whether code in the scope `from` runs in a function nested inside the
     /// scope `to`, which encloses it, rather than in the function that holds
     /// `to`.
-    #[must_use]
     pub fn crosses_function_boundary(&self, from: ScopeId, to: ScopeId) -> bool {
         self.scope(from).function != self.scope(to).function
     }

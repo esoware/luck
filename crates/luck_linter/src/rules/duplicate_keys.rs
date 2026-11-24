@@ -1,4 +1,4 @@
-use core::fmt;
+use std::fmt;
 
 use luck_ast::{AstKind, AstType, Expression, Field, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};

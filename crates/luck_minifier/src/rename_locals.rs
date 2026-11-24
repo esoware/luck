@@ -13,7 +13,7 @@ mod choose_names;
 mod explicit_self;
 mod scope_claims;
 
-use core::mem;
+use std::mem;
 
 use luck_allocator::Allocator;
 use luck_ast::{
@@ -21,7 +21,6 @@ use luck_ast::{
 };
 use luck_data_structures::BitSet;
 use luck_semantic::{NameId, ScopeId, Scoping, SymbolId, SymbolKind};
-use luck_token::{index_to_offset, offset_to_index};
 
 use self::candidate_pool::CandidatePool;
 use self::choose_names::Choice;
@@ -110,9 +109,8 @@ pub(crate) fn rename<'ast>(
         for name in renamable_globals(&chunk.block, chunk.version, &scoping) {
             // Its definitions are references, so no declaration spells it.
             let id = renamer.declare(0, false, 0);
-            if let Some(slot) = renamer.of_global.get_mut(name.index()) {
-                *slot = index_to_offset(id);
-            }
+            renamer.of_global[name.index()] =
+                u32::try_from(id).expect("a chunk declares fewer bindings than `u32::MAX`");
         }
     }
     renamer.read_scoping();
@@ -138,16 +136,14 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
             .scopes()
             .iter()
             .enumerate()
-            .map(|(id, scope)| Scope {
-                parent: scope.parent.map(ScopeId::index),
-                end: id.saturating_add(1),
-            })
+            .map(|(id, scope)| Scope { parent: scope.parent.map(ScopeId::index), end: id + 1 })
             .collect();
         // A child's id is past its parent's, so the ends move up in one
         // pass from the last.
         for id in (0..scopes.len()).rev() {
-            let (end, parent) = scopes.get(id).map_or((0, None), |scope| (scope.end, scope.parent));
-            if let Some(enclosing) = parent.and_then(|parent_id| scopes.get_mut(parent_id)) {
+            let (end, parent) = (scopes[id].end, scopes[id].parent);
+            if let Some(parent) = parent {
+                let enclosing = &mut scopes[parent];
                 enclosing.end = enclosing.end.max(end);
             }
         }
@@ -182,19 +178,17 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
 
     /// Records a reference to the renamed binding `id` from `scope`.
     fn reference(&mut self, id: usize, scope: usize) {
-        if let Some(binding) = self.renamed.get_mut(id) {
-            binding.occurrences = binding.occurrences.saturating_add(1);
-            if binding.last_reference_scope != scope {
-                binding.last_reference_scope = scope;
-                self.reference_scopes.push((id, scope));
-            }
+        let binding = &mut self.renamed[id];
+        binding.occurrences += 1;
+        if binding.last_reference_scope != scope {
+            binding.last_reference_scope = scope;
+            self.reference_scopes.push((id, scope));
         }
     }
 
     fn read_globally(&mut self, name: usize, scope: usize) {
-        if let Some(last_scope) = self.last_global_read_scopes.get_mut(name)
-            && *last_scope != scope
-        {
+        let last_scope = &mut self.last_global_read_scopes[name];
+        if *last_scope != scope {
             *last_scope = scope;
             self.global_reads.push((name, scope));
         }
@@ -241,9 +235,11 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
                 continue;
             }
             let (name, scope) = (reference.name.index(), reference.scope.index());
-            match self.of_global.get(name).copied().filter(|&id| id != NOT_RENAMED) {
-                Some(id) => self.reference(offset_to_index(id), scope),
-                None => self.read_globally(name, scope),
+            let id = self.of_global[name];
+            if id == NOT_RENAMED {
+                self.read_globally(name, scope);
+            } else {
+                self.reference(id as usize, scope);
             }
         }
         for &(name, scope) in scoping.declared_globals() {
@@ -261,22 +257,20 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
     /// a renamed global.
     fn renamed_of(&self, name: &Name<'_>) -> Option<usize> {
         if let Some(symbol) = self.scoping.symbol_of(name) {
-            return Some(self.symbol_base.saturating_add(symbol.index()));
+            return Some(self.symbol_base + symbol.index());
         }
         let reference = self.scoping.reference(self.scoping.reference_of(name)?);
-        reference.resolved.map_or_else(
-            || {
-                let global = self.of_global.get(reference.name.index()).copied();
-                global.filter(|&id| id != NOT_RENAMED).map(offset_to_index)
-            },
-            |symbol| Some(self.symbol_base.saturating_add(symbol.index())),
-        )
+        if let Some(symbol) = reference.resolved {
+            return Some(self.symbol_base + symbol.index());
+        }
+        let global = self.of_global[reference.name.index()];
+        (global != NOT_RENAMED).then_some(global as usize)
     }
 
     /// The name renaming gives `id`, which is empty for one that keeps its
     /// own.
     fn new_name(&self, id: usize) -> &'ast str {
-        self.new_names.get(id).copied().unwrap_or_default()
+        self.new_names[id]
     }
 }
 
@@ -307,7 +301,7 @@ impl<'ast> Applier<'_, '_, 'ast> {
     /// and every duplicate or missing label, as it was.
     fn rename_label(&mut self, name: &mut Name<'ast>) {
         let text = name.text.as_str();
-        let function_labels = self.labels.get(self.function_labels..).unwrap_or_default();
+        let function_labels = &self.labels[self.function_labels..];
         if let Some(&(_, new_name)) = function_labels.iter().find(|&&(label, _)| label == text) {
             name.text = new_name.into();
             return;
@@ -315,12 +309,12 @@ impl<'ast> Applier<'_, '_, 'ast> {
         let index = function_labels.len();
         while self.label_names.len() <= index {
             let candidate = self.pool.get(self.next_label_candidate);
-            self.next_label_candidate = self.next_label_candidate.saturating_add(1);
+            self.next_label_candidate += 1;
             if !candidate.is_reserved {
                 self.label_names.push(candidate.name);
             }
         }
-        let new_name = self.label_names.get(index).copied().unwrap_or(text);
+        let new_name = self.label_names[index];
         self.labels.push((text, new_name));
         name.text = new_name.into();
     }
@@ -369,7 +363,7 @@ impl<'ast> VisitMut<'ast> for Applier<'_, '_, 'ast> {
         }
         self.walk_function_decl(function_decl);
         if is_method && let Some(Some(receiver)) = self.methods.pop() {
-            let renamed = self.renamer.symbol_base.saturating_add(receiver.index());
+            let renamed = self.renamer.symbol_base + receiver.index();
             let new_name = self.renamer.new_name(renamed);
             let text = if new_name.is_empty() { METHOD_RECEIVER_NAME } else { new_name };
             let span = function_decl.name.method.map_or(function_decl.span, |method| method.span);

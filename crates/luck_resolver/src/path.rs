@@ -1,11 +1,10 @@
-use alloc::borrow::Cow;
+use std::borrow::Cow;
 use std::path::Path;
 #[cfg(windows)]
 use std::path::PathBuf;
 
 /// `path` with forward slashes on every platform, the form luck writes a path
 /// out in, with any name that isn't Unicode lossily converted.
-#[must_use]
 pub fn to_slash_lossy(path: &Path) -> Cow<'_, str> {
     let lossy = path.to_string_lossy();
     #[cfg(windows)]

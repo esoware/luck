@@ -133,9 +133,8 @@ fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> Semantic
             continue;
         }
         let Position { line, character } = positions.position(span.start);
-        let delta_line = line.saturating_sub(previous.line);
-        let delta_start =
-            if delta_line == 0 { character.saturating_sub(previous.character) } else { character };
+        let delta_line = line - previous.line;
+        let delta_start = if delta_line == 0 { character - previous.character } else { character };
         data.push(SemanticToken {
             delta_line,
             delta_start,
@@ -220,9 +219,7 @@ impl<'document> Classifier<'document> {
         if symbol.is_read_only {
             classification.modifiers |= MODIFIER_READONLY;
         }
-        if let Some(slot) = self.declared.get_mut(symbol_id.index()) {
-            *slot = Some(classification);
-        }
+        self.declared[symbol_id.index()] = Some(classification);
         self.push(name.span, classification);
     }
 
@@ -241,11 +238,7 @@ impl<'document> Classifier<'document> {
         }
         let mut classification = match reference.resolved {
             Some(symbol_id) => symbol_classify(tree.symbol(symbol_id).kind),
-            None if tree.is_host_global(reference) => self
-                .globals
-                .get(reference.name.index())
-                .copied()
-                .unwrap_or(Classification::plain(TYPE_VARIABLE)),
+            None if tree.is_host_global(reference) => self.globals[reference.name.index()],
             None => Classification::plain(TYPE_VARIABLE),
         };
         if classification.token_type == TYPE_VARIABLE {
@@ -259,7 +252,7 @@ impl<'document> Classifier<'document> {
             classification.token_type = TYPE_FUNCTION;
         }
         if let Some(symbol_id) = reference.resolved
-            && let Some(Some(declared)) = self.declared.get(symbol_id.index()).copied()
+            && let Some(declared) = self.declared[symbol_id.index()]
         {
             if !tree.symbol(symbol_id).is_modified && declared.token_type == TYPE_FUNCTION {
                 classification.token_type = TYPE_FUNCTION;
@@ -280,16 +273,11 @@ impl<'document> Classifier<'document> {
         let Some(text) = identifier(name) else {
             return;
         };
-        let mut classification = entry.map_or_else(
-            || {
-                if shape.is_some() {
-                    Classification::plain(TYPE_METHOD)
-                } else {
-                    Classification::value(TYPE_PROPERTY, text)
-                }
-            },
-            member_classify,
-        );
+        let mut classification = match entry {
+            Some(entry) => member_classify(entry),
+            None if shape.is_some() => Classification::plain(TYPE_METHOD),
+            None => Classification::value(TYPE_PROPERTY, text),
+        };
         if shape == Some(ValueShape::Called) {
             classification.token_type = TYPE_METHOD;
         }
@@ -498,7 +486,7 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
                 }
                 self.reference(name);
                 at = Some(PathAt::Root(name));
-            } else if method.is_none() && i.saturating_add(1) == names.len() {
+            } else if method.is_none() && i + 1 == names.len() {
                 self.plain(name, TYPE_METHOD);
             } else {
                 let entry = self.step(at, name.text.as_str());
@@ -670,7 +658,7 @@ const fn member_classify(entry: &StdlibEntry<'_>) -> Classification {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{LuaTarget, index_to_offset, offset_to_index};
+    use luck_token::{LuaTarget, index_to_offset};
 
     use super::*;
     use crate::document::span_text;
@@ -711,23 +699,19 @@ mod tests {
         let mut previous_end = Position::default();
         data.iter()
             .map(|token| {
-                position.line = position.line.saturating_add(token.delta_line);
+                position.line += token.delta_line;
                 position.character = if token.delta_line == 0 {
-                    position.character.saturating_add(token.delta_start)
+                    position.character + token.delta_start
                 } else {
                     token.delta_start
                 };
                 assert!(position >= previous_end, "overlapping tokens: {data:?}");
                 assert!(token.length > 0, "zero-length token: {data:?}");
-                previous_end =
-                    Position::new(position.line, position.character.saturating_add(token.length));
+                previous_end = Position::new(position.line, position.character + token.length);
                 let span = Span::new(document.offset(position), document.offset(previous_end));
                 Highlight {
                     text: span_text(document.text(), span).to_owned(),
-                    kind: legend
-                        .token_types
-                        .get(offset_to_index(token.token_type))
-                        .map_or_else(String::new, |kind| kind.as_str().to_owned()),
+                    kind: legend.token_types[token.token_type as usize].as_str().to_owned(),
                     modifiers: legend
                         .token_modifiers
                         .iter()

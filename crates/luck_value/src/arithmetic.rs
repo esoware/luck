@@ -2,7 +2,7 @@
 //! operation whose result the target computes in a way this can't reproduce
 //! has no result here.
 
-use core::cmp::Ordering;
+use std::cmp::Ordering;
 
 use luck_token::{BinOp, LuaNumber, LuaVersion};
 
@@ -47,7 +47,7 @@ pub(crate) fn arithmetic(
         (Float(left), Int(right)) => {
             // 5.4+ compiles `x - 0` as an immediate add, so -0.0 keeps or
             // loses its sign depending on the target.
-            if op == BinOp::Sub && right == 0 && left == 0.0f64 && left.is_sign_negative() {
+            if op == BinOp::Sub && right == 0 && left == 0.0 && left.is_sign_negative() {
                 return None;
             }
             float_arithmetic(left, op, exact_f64(right)?, version)
@@ -56,7 +56,6 @@ pub(crate) fn arithmetic(
 }
 
 /// `-number`. Integers wrap, so `i64::MIN` negates to itself.
-#[expect(clippy::float_arithmetic, reason = "this is Lua unary minus, evaluated at compile time")]
 pub(crate) fn negate(number: LuaNumber) -> LuaNumber {
     match number {
         LuaNumber::Int(value) => LuaNumber::Int(value.wrapping_neg()),
@@ -161,33 +160,25 @@ fn shift_left(value: i64, shift: i64) -> i64 {
 /// `wrapping_abs` leaves it negative and it passes, which is right, since
 /// -2^63 is a power of two.
 fn exact_f64(value: i64) -> Option<f64> {
-    (value.wrapping_abs() <= (1i64 << 53)).then(|| LuaNumber::Int(value).to_f64())
+    (value.wrapping_abs() <= (1 << 53)).then(|| LuaNumber::Int(value).to_f64())
 }
 
 /// `base ^ exponent` when both are integers and every partial product is
 /// exact. Anything else goes through the target's C `pow`, whose rounding
 /// isn't ours to reproduce.
-#[expect(
-    clippy::float_arithmetic,
-    clippy::while_float,
-    reason = "exact integer powers, computed at compile time"
-)]
 fn exact_power(base: f64, exponent: f64) -> Option<f64> {
-    if base.fract() != 0.0f64
-        || exponent.fract() != 0.0f64
-        || !(0.0f64..=53.0f64).contains(&exponent)
-    {
+    if base.fract() != 0.0 || exponent.fract() != 0.0 || !(0.0..=53.0).contains(&exponent) {
         return None;
     }
-    let exact_limit = LuaNumber::Int(1i64 << 53).to_f64();
-    let mut power = 1.0f64;
+    let exact_limit = LuaNumber::Int(1 << 53).to_f64();
+    let mut power = 1.0;
     let mut remaining = exponent;
-    while remaining >= 1.0f64 {
+    while remaining >= 1.0 {
         power *= base;
         if power.abs() >= exact_limit {
             return None;
         }
-        remaining -= 1.0f64;
+        remaining -= 1.0;
     }
     Some(power)
 }
@@ -214,23 +205,10 @@ fn floored_div(lhs: i64, rhs: i64) -> Option<i64> {
         return Some(lhs.wrapping_neg());
     }
     let quotient = lhs.checked_div(rhs)?;
-    let remainder = lhs.checked_rem(rhs)?;
-    if remainder != 0 && (remainder < 0) != (rhs < 0) {
-        quotient.checked_sub(1)
-    } else {
-        Some(quotient)
-    }
+    let remainder = lhs % rhs;
+    if remainder != 0 && (remainder < 0) != (rhs < 0) { Some(quotient - 1) } else { Some(quotient) }
 }
 
-#[expect(
-    clippy::suboptimal_flops,
-    reason = "Lua's floor formula rounds twice, and mul_add would round once"
-)]
-#[expect(
-    clippy::float_arithmetic,
-    clippy::modulo_arithmetic,
-    reason = "Lua float arithmetic at compile time; 5.3+ % is C fmod"
-)]
 fn float_arithmetic(lhs: f64, op: BinOp, rhs: f64, version: LuaVersion) -> Option<LuaNumber> {
     let value = match op {
         BinOp::Add => lhs + rhs,
@@ -245,14 +223,10 @@ fn float_arithmetic(lhs: f64, op: BinOp, rhs: f64, version: LuaVersion) -> Optio
                 let remainder = lhs % rhs;
                 let should_add_divisor = if version.has_float_modulo_sign_compare() {
                     // Lua 5.4+
-                    if remainder > 0.0f64 {
-                        rhs < 0.0f64
-                    } else {
-                        remainder < 0.0f64 && rhs > 0.0f64
-                    }
+                    if remainder > 0.0 { rhs < 0.0 } else { remainder < 0.0 && rhs > 0.0 }
                 } else {
                     // Lua 5.3
-                    remainder * rhs < 0.0f64
+                    remainder * rhs < 0.0
                 };
                 if should_add_divisor { remainder + rhs } else { remainder }
             } else {

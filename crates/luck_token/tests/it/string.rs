@@ -21,8 +21,7 @@ fn written(bytes: &[u8]) -> String {
     let spelling = spell_string(bytes);
     let mut written_bytes = Vec::new();
     spelling.write_to(&mut written_bytes);
-    assert!(str::from_utf8(&written_bytes).is_ok(), "{written_bytes:?} is UTF-8");
-    let output = String::from_utf8_lossy(&written_bytes).into_owned();
+    let output = String::from_utf8(written_bytes).expect("a spelling is UTF-8");
     assert_eq!(output.len(), spelling.length(), "{output:?}");
     assert_eq!(output.starts_with('['), spelling.is_long_bracket(), "{output:?}");
     output
@@ -212,7 +211,7 @@ fn spells_a_string_only_shorter_than_a_length() {
         "\u{e9}\u{6f22}\\\\\\\\".as_bytes(),
     ] {
         let spelling = written(bytes);
-        for length in 0..spelling.len().saturating_add(3) {
+        for length in 0..spelling.len() + 3 {
             let shorter = spell_string_shorter_than(bytes, length).map(|shorter| {
                 let mut written_bytes = Vec::new();
                 shorter.write_to(&mut written_bytes);
@@ -279,7 +278,7 @@ fn long_strings_take_the_lowest_level_no_closer_in_the_text_takes() {
 
 #[test]
 fn a_long_string_takes_the_level_past_a_closer_at_every_level() {
-    let levels = 300usize;
+    let levels = 300;
     let mut text = String::new();
     for level in 0..levels {
         text.push(']');

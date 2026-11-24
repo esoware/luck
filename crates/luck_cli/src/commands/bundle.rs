@@ -54,11 +54,6 @@ pub(crate) struct BundleArgs {
 }
 
 impl BundleArgs {
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad config, a bad entry path, or an output
-    /// that would replace a bundled file or another output, and
-    /// [`Exit::Failure`] when bundling or writing fails.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let entry_path = existing_file(&self.entry)?;
         let project = one_shot_project(self.config.as_deref(), entry_path)?;
@@ -96,10 +91,6 @@ impl BundleArgs {
     }
 }
 
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Failure`] when `map_path` can't be
-/// written.
 fn write_line_map(map_path: &Path, line_map: &[LineMapEntry]) -> Result<(), Exit> {
     let entries: Vec<serde_json::Value> = line_map
         .iter()
@@ -111,7 +102,7 @@ fn write_line_map(map_path: &Path, line_map: &[LineMapEntry]) -> Result<(), Exit
             })
         })
         .collect();
-    let map_json = serde_json::json!({ "version": 1u8, "entries": entries });
+    let map_json = serde_json::json!({ "version": 1, "entries": entries });
     fs::write(map_path, format!("{map_json:#}\n"))
         .map_err(|e| operation_error(format!("cannot write `{}`: {e}", map_path.display())))
 }

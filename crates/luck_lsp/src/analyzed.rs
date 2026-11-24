@@ -1,10 +1,5 @@
-#![expect(
-    clippy::mem_forget,
-    reason = "`self_cell!`'s builders forget their drop guard once the cell is built"
-)]
-
-use alloc::sync::Arc;
-use core::{fmt, mem};
+use std::sync::Arc;
+use std::{fmt, mem};
 
 use luck_allocator::Allocator;
 use luck_linter::{Analysis, Linter};

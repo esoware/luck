@@ -1,5 +1,5 @@
-use core::iter::once;
-use core::{fmt, mem};
+use std::iter::once;
+use std::{fmt, mem};
 
 use luck_allocator::{Allocator, Box};
 use luck_token::{Associativity, Span};
@@ -22,20 +22,17 @@ pub struct ChainHead<'ast> {
 
 impl<'ast> ChainHead<'ast> {
     /// The prefix, when no suffix follows it.
-    #[must_use]
     pub const fn as_expr(self) -> Option<&'ast Expression<'ast>> {
         if self.suffixes.is_empty() { Some(self.prefix) } else { None }
     }
 
     /// The name, when the head is nothing else.
-    #[must_use]
     pub fn as_name(self) -> Option<&'ast Name<'ast>> {
         if let Some(Expression::Name(name)) = self.as_expr() { Some(name) } else { None }
     }
 
     /// `None` for a prefix other than a name, or a suffix other than a
     /// field.
-    #[must_use]
     pub fn dotted_path(self) -> Option<DottedPath<'ast>> {
         let Expression::Name(root) = self.prefix else {
             return None;
@@ -44,7 +41,6 @@ impl<'ast> ChainHead<'ast> {
         is_dotted.then_some(DottedPath { root, fields: self.suffixes })
     }
 
-    #[must_use]
     pub fn split_last(self) -> Option<(Self, &'ast Suffix<'ast>)> {
         let (last, before) = self.suffixes.split_last()?;
         Some((Self { suffixes: before, ..self }, last))
@@ -83,7 +79,6 @@ pub struct DottedPath<'ast> {
 }
 
 impl<'ast> DottedPath<'ast> {
-    #[must_use]
     pub const fn root(self) -> &'ast Name<'ast> {
         self.root
     }
@@ -97,9 +92,8 @@ impl<'ast> DottedPath<'ast> {
     }
 
     /// How many names it has, the root's included.
-    #[must_use]
     pub const fn segment_count(self) -> usize {
-        self.fields.len().saturating_add(1)
+        self.fields.len() + 1
     }
 }
 
@@ -128,7 +122,6 @@ pub struct Call<'ast> {
 
 impl<'ast> Call<'ast> {
     /// `None` for a suffix other than a call.
-    #[must_use]
     pub fn new(callee: ChainHead<'ast>, suffix: &'ast Suffix<'ast>) -> Option<Self> {
         match suffix {
             Suffix::Call(args) => Some(Self { callee, method: None, type_args: None, args }),
@@ -156,7 +149,6 @@ impl GetSpan for Call<'_> {
 impl<'ast> SuffixedExpression<'ast> {
     /// The prefix and the first `count` suffixes, or all of them when there
     /// are fewer.
-    #[must_use]
     pub fn head(&self, count: usize) -> ChainHead<'_> {
         let suffixes: &[Suffix<'_>] = &self.suffixes;
         ChainHead {
@@ -172,21 +164,18 @@ impl<'ast> SuffixedExpression<'ast> {
     }
 
     /// The call the chain ends in, if it ends in one.
-    #[must_use]
     pub fn last_call(&self) -> Option<Call<'_>> {
         let (last, before) = self.suffixes.split_last()?;
         Call::new(self.head(before.len()), last)
     }
 
     /// Whether the chain ends in a call, which makes it one too.
-    #[must_use]
     pub fn is_call(&self) -> bool {
         matches!(self.suffixes.last(), Suffix::Call(_) | Suffix::MethodCall(_))
     }
 
     /// Whether the chain ends in a field or an index, which makes it a
     /// [`Var`](crate::Var).
-    #[must_use]
     pub fn is_var(&self) -> bool {
         matches!(self.suffixes.last(), Suffix::Field(_) | Suffix::Index { .. })
     }
@@ -219,7 +208,6 @@ impl<'ast> SuffixedExpression<'ast> {
 
 impl<'ast> BinaryOp<'ast> {
     /// What every operator in the run shares.
-    #[must_use]
     pub fn precedence(&self) -> (u8, Associativity) {
         self.links.first().op.precedence()
     }
@@ -400,7 +388,7 @@ mod tests {
         let mut sum = name();
         let mut concat = name();
         let mut path = name();
-        for _ in 0..50_000u32 {
+        for _ in 0..50_000 {
             sum = unspliced_run(sum, BinOp::Add, name(), allocator);
             concat = unspliced_run(name(), BinOp::Concat, concat, allocator);
             path = unspliced_chain(path, Suffix::Field(synth.name("a")), allocator);

@@ -1,7 +1,6 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
+// Puts the shared helpers under clippy.toml's `allow-unwrap-in-tests`, which
+// otherwise reaches only the `#[test]` functions of an integration test binary.
+#![cfg(test)]
 
 mod common;
 

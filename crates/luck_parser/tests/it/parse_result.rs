@@ -1,4 +1,4 @@
-use core::ptr;
+use std::ptr;
 
 use luck_allocator::Allocator;
 use luck_ast::{Expression, FunctionArgs, GetSpan as _, Statement, Visit};

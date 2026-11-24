@@ -1,7 +1,7 @@
-use core::time::Duration;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 use std::{env, fs};
 
 use luck_config::Project;

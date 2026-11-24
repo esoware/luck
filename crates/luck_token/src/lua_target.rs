@@ -1,5 +1,5 @@
-use core::fmt;
-use core::str::FromStr;
+use std::fmt;
+use std::str::FromStr;
 
 use crate::LuaVersion;
 
@@ -42,7 +42,6 @@ impl LuaTarget {
         Self::LuauRoblox,
     ];
 
-    #[must_use]
     pub const fn version(self) -> LuaVersion {
         match self {
             Self::Lua51 => LuaVersion::Lua51,
@@ -54,7 +53,6 @@ impl LuaTarget {
         }
     }
 
-    #[must_use]
     pub const fn is_roblox(self) -> bool {
         matches!(self, Self::LuauRoblox)
     }
@@ -156,7 +154,7 @@ mod tests {
     #[test]
     fn deserializes_the_lowercase_names_from_str_reads() {
         for (target, aliases) in ALIASES {
-            let name = aliases.first().expect("every target has a name");
+            let name = aliases[0];
             let deserialized = LuaTarget::deserialize(name.into_deserializer());
             assert_eq!(deserialized, Ok::<_, Error>(target), "{name}");
         }

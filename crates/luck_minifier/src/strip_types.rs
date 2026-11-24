@@ -26,11 +26,11 @@ const fn is_instantiation(suffix: &Suffix<'_>) -> bool {
 impl<'ast> VisitMut<'ast> for TypeStripper<'ast> {
     fn visit_block(&mut self, block: &mut Block<'ast>) {
         self.walk_block(block);
-        let mut kept = 0usize;
+        let mut kept = 0;
         for index in 0..block.stmts.len() {
-            if !matches!(block.stmts.get(index), Some(Statement::TypeDeclaration(_))) {
+            if !matches!(block.stmts[index], Statement::TypeDeclaration(_)) {
                 block.stmts.swap(kept, index);
-                kept = kept.saturating_add(1);
+                kept += 1;
             }
         }
         block.stmts.truncate(kept);
@@ -81,11 +81,11 @@ impl<'ast> VisitMut<'ast> for TypeStripper<'ast> {
     /// which [`Self::visit_expr`] does.
     fn visit_suffixed_expr(&mut self, suffixed_expr: &mut SuffixedExpression<'ast>) {
         self.walk_suffixed_expr(suffixed_expr);
-        let mut kept = 0usize;
+        let mut kept = 0;
         for index in 0..suffixed_expr.suffixes.len() {
-            if suffixed_expr.suffixes.get(index).is_some_and(|suffix| !is_instantiation(suffix)) {
+            if !is_instantiation(&suffixed_expr.suffixes[index]) {
                 suffixed_expr.suffixes.swap(kept, index);
-                kept = kept.saturating_add(1);
+                kept += 1;
             }
         }
         if kept > 0 {

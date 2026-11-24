@@ -107,7 +107,7 @@ impl FullGenerator {
     }
 
     const fn fresh_id(&mut self) -> usize {
-        self.next_id = self.next_id.saturating_add(1);
+        self.next_id += 1;
         self.next_id
     }
 
@@ -147,13 +147,13 @@ impl FullGenerator {
         self.line("     spanning two lines. ]]");
         self.line("--[==[ leveled block comment ]==]");
         self.line("");
-        for _ in 0..2usize {
+        for _ in 0..2 {
             let name = self.fresh_name();
             let source = self.rng.pick(&["math.floor", "table.concat", "string.rep", "os.clock"]);
             self.line(&format!("local {name} = {source}"));
         }
         if self.version.is_luau() {
-            for _ in 0..2usize {
+            for _ in 0..2 {
                 self.type_alias_stmt();
             }
         }
@@ -276,7 +276,6 @@ impl FullGenerator {
     }
 }
 
-#[must_use]
 pub fn generate_full(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
     FullGenerator::new(seed, version).program(statement_budget)
 }

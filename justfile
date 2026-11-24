@@ -48,9 +48,9 @@ fmt:
 
 # Run clippy and fail on any warning, with luck_conformance on its own under Lua 5.4 and Luau, since its dialect features exclude each other
 lint *args:
-  cargo clippy --workspace --exclude luck_conformance --all-targets --all-features --keep-going --config "build.warnings='deny'" {{args}} -- --cap-lints warn
-  cargo clippy -p luck_conformance --all-targets --keep-going --config "build.warnings='deny'" {{args}} -- --cap-lints warn
-  cargo clippy -p luck_conformance --all-targets --no-default-features --features luau --keep-going --config "build.warnings='deny'" {{args}} -- --cap-lints warn
+  cargo clippy --workspace --exclude luck_conformance --all-targets --all-features --keep-going --config "build.warnings='deny'" {{args}}
+  cargo clippy -p luck_conformance --all-targets --keep-going --config "build.warnings='deny'" {{args}}
+  cargo clippy -p luck_conformance --all-targets --no-default-features --features luau --keep-going --config "build.warnings='deny'" {{args}}
 
 # Accept pending insta snapshots, since cargo insta review is interactive
 accept:

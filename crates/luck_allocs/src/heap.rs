@@ -1,6 +1,6 @@
-use core::alloc::{GlobalAlloc, Layout};
-use core::sync::atomic::AtomicUsize;
-use core::sync::atomic::Ordering::SeqCst;
+use std::alloc::{GlobalAlloc, Layout};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::SeqCst;
 
 use luck_allocator::Allocator;
 use mimalloc_safe::MiMalloc;
@@ -108,9 +108,10 @@ impl HeapTracker {
 
     fn record_realloc(&self, old_size: usize, new_size: usize) {
         self.reallocs.increment();
-        match new_size.checked_sub(old_size) {
-            Some(growth) => self.grow(growth),
-            None => self.live_bytes.sub(old_size.saturating_sub(new_size)),
+        if new_size >= old_size {
+            self.grow(new_size - old_size);
+        } else {
+            self.live_bytes.sub(old_size - new_size);
         }
     }
 

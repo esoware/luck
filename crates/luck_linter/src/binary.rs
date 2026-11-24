@@ -35,15 +35,11 @@ pub(crate) fn operator_pairs<'ast>(
     let links: &[BinaryLink<'_>] = &run.links;
     let count = links.len();
     let run_last_operand = &run.links.last().operand;
-    (0..count).filter_map(move |step| {
-        let index =
-            if is_left_associative { count.saturating_sub(step).saturating_sub(1) } else { step };
-        let link = links.get(index)?;
-        let left_operand = match index.checked_sub(1) {
-            Some(before) => &links.get(before)?.operand,
-            None => &run.first,
-        };
-        Some(if is_left_associative {
+    (0..count).map(move |step| {
+        let index = if is_left_associative { count - step - 1 } else { step };
+        let link = &links[index];
+        let left_operand = if index == 0 { &run.first } else { &links[index - 1].operand };
+        if is_left_associative {
             OperatorPair {
                 op: link.op,
                 lhs: (index == 0).then_some(left_operand),
@@ -55,10 +51,10 @@ pub(crate) fn operator_pairs<'ast>(
             OperatorPair {
                 op: link.op,
                 lhs: Some(left_operand),
-                rhs: (index.saturating_add(1) == count).then_some(&link.operand),
+                rhs: (index + 1 == count).then_some(&link.operand),
                 first_operand: left_operand,
                 last_operand: run_last_operand,
             }
-        })
+        }
     })
 }

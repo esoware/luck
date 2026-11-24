@@ -22,9 +22,7 @@ fn a_string_says_whether_it_holds_what_its_value_rewrites() {
         .filter(|token| {
             matches!(token.kind, TokenKind::StringLiteral | TokenKind::InterpolatedStringSimple)
         })
-        .map(|token| {
-            (str::from_utf8(token.text(source.as_bytes())).unwrap_or_default(), token.has_escape)
-        })
+        .map(|token| (str::from_utf8(token.text(source.as_bytes())).unwrap(), token.has_escape))
         .collect();
     assert_eq!(
         flags,

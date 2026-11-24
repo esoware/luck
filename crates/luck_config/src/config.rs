@@ -1,7 +1,7 @@
 //! One `luck.json` as written, before `extends` and validation. Nothing here
 //! touches the filesystem.
 
-use core::fmt;
+use std::fmt;
 use std::path::PathBuf;
 
 use luck_bundler::DynamicRequire;
@@ -130,7 +130,6 @@ impl LuckConfig {
     /// `self`'s, without an item that comes again later. Every other key,
     /// `entries`, `profiles`, and `transforms` among them, comes whole from
     /// `self` when set there and from `base` otherwise.
-    #[must_use]
     pub(crate) fn merge_onto(self, base: Self) -> Self {
         Self {
             lua: self.lua.or(base.lua),
@@ -163,8 +162,8 @@ where
     Merge: FnOnce(T, T) -> T,
 {
     match (child, base) {
-        (Some(child_value), Some(base_value)) => Some(merge(child_value, base_value)),
-        (child_value, base_value) => child_value.or(base_value),
+        (Some(child), Some(base)) => Some(merge(child, base)),
+        (child, base) => child.or(base),
     }
 }
 

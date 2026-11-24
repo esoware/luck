@@ -32,7 +32,7 @@ impl Rule for RobloxIncorrectColor3NewBounds {
         };
         let last = if context.is_statement(node) { chain.suffixes.len() } else { usize::MAX };
         for (index, call) in calls_in(chain) {
-            if index.saturating_add(1) != last {
+            if index + 1 != last {
                 check_call(call, context);
             }
         }
@@ -43,10 +43,8 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) {
     let Some(args) = global_new_call(call, "Color3", context.semantic) else {
         return;
     };
-    let has_out_of_bounds = args
-        .iter()
-        .filter_map(|arg| number_value(arg, context))
-        .any(|v| !(0.0f64..=1.0f64).contains(&v));
+    let has_out_of_bounds =
+        args.iter().filter_map(|arg| number_value(arg, context)).any(|v| !(0.0..=1.0).contains(&v));
     if has_out_of_bounds {
         context.diagnostic(
             Finding::new("`Color3.new` components are on a 0 to 1 scale", call.span())

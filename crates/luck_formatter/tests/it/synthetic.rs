@@ -54,7 +54,7 @@ fn long_string_delimiters_and_bytes_roundtrip() {
         }
         content.push(']');
         content.push_str(&"=".repeat(level));
-        let equals = "=".repeat(level.saturating_add(1));
+        let equals = "=".repeat(level + 1);
         let expected = format!("return [{equals}[{content}]{equals}]\n");
         cases.push((content, expected));
     }
@@ -1035,20 +1035,20 @@ fn a_tree_far_past_the_nesting_cap_is_refused_without_walking_down_it() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let mut nested = synth.name_expr("x");
-    for _ in 0..200_000u32 {
+    for _ in 0..200_000 {
         nested = synth.unary_op(UnOp::Not, nested);
     }
     let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([nested])]));
     assert_eq!(block_nesting_depth(&chunk.block), MAX_NESTING_DEPTH + 1, "measuring stops there");
     let options = FormatOptions::default();
-    assert_eq!(format_chunk(fixture.allocator(), &chunk, Comments::none(), &options).ok(), None);
+    assert!(format_chunk(fixture.allocator(), &chunk, Comments::none(), &options).is_err());
 }
 
 #[test]
 fn a_run_of_any_length_formats_as_one_level() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let (links, calls) = (50_000usize, 2_000usize);
+    let (links, calls) = (50_000, 2_000);
     let mut sum = synth.name_expr("x");
     let mut methods = synth.name_expr("object");
     for _ in 0..links {
@@ -1065,7 +1065,7 @@ return x
 {}\t\t+ 1,
 \tobject
 {}",
-        "\t\t+ 1\n".repeat(links.saturating_sub(1)),
+        "\t\t+ 1\n".repeat(links - 1),
         "\t\t:next()\n".repeat(calls)
     );
     assert_format_block(&fixture, block, LuaVersion::Lua54, &expected);

@@ -1,6 +1,6 @@
-use core::ops::Range;
 use std::fs;
 use std::io::{self, BufWriter, Write as _};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
@@ -17,7 +17,6 @@ use crate::reporter::{DefaultReporter, Reporter as _, SourceFile};
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
-#[expect(clippy::struct_excessive_bools, reason = "clap derive needs one bool field per flag")]
 pub(crate) struct FmtArgs {
     /// Files, directories, or globs to format, and `!` globs to leave out
     /// [default: current directory].
@@ -87,11 +86,6 @@ enum FileOutcome {
 }
 
 impl FmtArgs {
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad config, path, or range, or when no
-    /// file matches, and [`Exit::Failure`] when a file can't be formatted or
-    /// `--check` finds one that would change.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         // Stdin mode ignores positional paths.
         if let Some(stdin_path) = self.stdin_filepath.as_deref() {
@@ -117,7 +111,7 @@ impl FmtArgs {
         )?;
 
         // Writing in place is the default, so --write needs no handling here.
-        let _: bool = self.write;
+        let _ = self.write;
 
         let mut changed_paths: Vec<String> = Vec::new();
         let mut has_failed_file = false;
@@ -133,22 +127,22 @@ impl FmtArgs {
                 |outcome| {
                     match outcome {
                         FileOutcome::Failed(rendered) => {
-                            let _unused = stderr.write_all(&rendered);
+                            let _ = stderr.write_all(&rendered);
                             has_failed_file = true;
                         }
                         FileOutcome::RangeError(message) => {
-                            let _unused = writeln!(stderr, "{message}");
+                            let _ = writeln!(stderr, "{message}");
                             return Err(Exit::Usage);
                         }
                         FileOutcome::Unchanged => {}
                         FileOutcome::Changed(path) => changed_paths.push(path),
                         FileOutcome::WriteError(message) => {
-                            let _unused = writeln!(stderr, "{message}");
+                            let _ = writeln!(stderr, "{message}");
                             return Err(Exit::Failure);
                         }
                         FileOutcome::Written(path) => {
                             if verbosity != Verbosity::Quiet {
-                                let _unused = writeln!(stdout, "{path}");
+                                let _ = writeln!(stdout, "{path}");
                             }
                         }
                     }
@@ -179,11 +173,6 @@ impl FmtArgs {
     /// The default mode writes the result to stdout. `--check` and
     /// `--list-different` only report, and `--check` fails when the document
     /// would change.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad range, and [`Exit::Failure`] when
-    /// stdin can't be read or formatted or `--check` finds a difference.
     fn run_stdin(&self, stdin_path: &str, project: &Project) -> Result<(), Exit> {
         let source = read_stdin_source()?;
 
@@ -198,7 +187,7 @@ impl FmtArgs {
 
         match format_document(&Allocator::new(), &source, file_path, version, &options, range) {
             FormatOutcome::Failed(rendered) => {
-                let _unused = io::stderr().write_all(&rendered);
+                let _ = io::stderr().write_all(&rendered);
                 Err(Exit::Failure)
             }
             FormatOutcome::Unchanged => {
@@ -277,11 +266,6 @@ impl FmtArgs {
 
     /// A missing start is 0, a missing end is the end of the source, and an
     /// explicit end is clamped to the source length.
-    ///
-    /// # Errors
-    ///
-    /// Returns a ready-to-print message when the resolved start exceeds the
-    /// resolved end.
     fn format_range(&self, source_length: usize) -> Result<Option<Range<usize>>, String> {
         if self.range_start.is_none() && self.range_end.is_none() {
             return Ok(None);
@@ -314,10 +298,10 @@ fn format_document(
         DefaultReporter.render(file, &parse.errors, &mut rendered);
         return FormatOutcome::Failed(rendered);
     }
-    let result = range.map_or_else(
-        || luck_formatter::format_parsed(allocator, &parse, options),
-        |byte_range| luck_formatter::format_range(allocator, &parse, options, byte_range),
-    );
+    let result = match range {
+        Some(byte_range) => luck_formatter::format_range(allocator, &parse, options, byte_range),
+        None => luck_formatter::format_parsed(allocator, &parse, options),
+    };
     if result.output == source {
         FormatOutcome::Unchanged
     } else {

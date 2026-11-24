@@ -1,8 +1,3 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
 use std::path::Path;
 
 use luck_allocator::{Allocator, ThreadAllocators};
@@ -39,19 +34,13 @@ where
 /// first with the stack every stage needs, since every test here that
 /// reaches that pool comes through this.
 pub(crate) fn off_pool<T>(work: impl FnOnce() -> T) -> T {
-    let _already_built = ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global();
+    let _ = ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global();
     work()
 }
 
 /// Bundles `entry` as text on one thread, and from outside the pool on many,
 /// which have to agree, and minified on a few, which has to be what minifying
 /// the text gives, and returns the text's result.
-///
-/// # Errors
-///
-/// Returns the diagnostics that stopped the bundle, which every form reports
-/// alike.
-#[expect(clippy::panic_in_result_fn, reason = "a form that disagrees fails the calling test")]
 pub(crate) fn bundle_both(
     entry: &Path,
     options: &BundleOptions<'_>,

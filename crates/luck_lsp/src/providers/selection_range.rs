@@ -1,4 +1,4 @@
-use core::iter;
+use std::iter;
 
 use ls_types::{Position, SelectionRange};
 use luck_ast::{AstKind, GetSpan as _};
@@ -41,8 +41,8 @@ fn selection_for(document: &DocumentState, position: Position) -> SelectionRange
     };
     // Of the two tokens that can meet at the cursor, the later.
     let tokens = document.tokens();
-    let touching = tokens.get(tokens.partition_point(|token| token.span.end < offset)..);
-    if let Some(word) = touching.unwrap_or_default().iter().take(2).rfind(|token| {
+    let touching = &tokens[tokens.partition_point(|token| token.span.end < offset)..];
+    if let Some(word) = touching.iter().take(2).rfind(|token| {
         token.span.start <= offset
             && token.kind != TokenKind::Eof
             && TokenKind::is_identifier_shaped(span_text(document.text(), token.span))
@@ -55,7 +55,7 @@ fn selection_for(document: &DocumentState, position: Position) -> SelectionRange
     for kind in ids.map(|id| nodes.kind(id)) {
         if let AstKind::BinaryOp(run) = kind {
             let operands = || run.links.iter().map(|link| &link.operand);
-            let inner_count = run.links.len().saturating_sub(1);
+            let inner_count = run.links.len() - 1;
             if run.precedence().1 == Associativity::Left {
                 let start = extent(run.first.span()).start;
                 for operand in operands().take(inner_count) {
@@ -72,7 +72,7 @@ fn selection_for(document: &DocumentState, position: Position) -> SelectionRange
             // Each head is the chain it was before the next suffix joined it,
             // in the parentheses it was in.
             let mut start = extent(chain.prefix.span()).start;
-            let inner_count = chain.suffixes.len().saturating_sub(1);
+            let inner_count = chain.suffixes.len() - 1;
             for suffix in chain.suffixes.iter().take(inner_count) {
                 let head = Span::new(start, suffix.span().end);
                 push(head);

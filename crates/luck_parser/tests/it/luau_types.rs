@@ -1,4 +1,4 @@
-use core::ops::Range;
+use std::ops::Range;
 
 use luck_allocator::{Allocator, Box};
 use luck_ast::{Expression, GetSpan as _, Statement, Type, TypeDeclarationValue, TypeField};
@@ -28,7 +28,7 @@ fn named_type() {
             panic!("expected inline Name");
         };
         assert_eq!(name.text, expected);
-        assert_eq!(source.get(Range::<usize>::from(name.span)), Some(expected));
+        assert_eq!(&source[Range::<usize>::from(name.span)], expected);
     }
 }
 
@@ -58,7 +58,7 @@ fn nested_generics_split_the_closing_shift_right() {
     };
     let args = named.generics.as_ref().expect("generics");
     assert_eq!(args.args.len(), 2);
-    let inner = args.args.get(1).expect("second arg");
+    let inner = &args.args[1];
     assert!(matches!(inner, Type::Named(nested) if nested.generics.is_some()));
 }
 
@@ -118,7 +118,7 @@ fn a_run_of_question_marks_is_one_optional() {
         [("type X = number?", 1), ("type X = number??", 2), ("type X = number? ? ?", 3)]
     {
         let alias = alias_type(&allocator, source);
-        assert_eq!(source.get(Range::<usize>::from(alias.span())), source.get(9..), "{source}");
+        assert_eq!(&source[Range::<usize>::from(alias.span())], &source[9..], "{source}");
         let Type::Optional(optional) = alias else {
             panic!("expected Optional, got {alias:?}");
         };

@@ -6,7 +6,7 @@
 
 use luck_ast::{Chunk, FunctionBody, GetSpan as _, Statement, Visit};
 use luck_diagnostics::{Diagnostic, Label};
-use luck_token::{LuaVersion, Span, has_line_break, offset_to_index};
+use luck_token::{LuaVersion, Span, has_line_break};
 
 /// Labels each of `unclosed`'s errors, an index into `errors` and the span of
 /// the token that opened what it leaves open, with the construct `chunk`
@@ -20,10 +20,8 @@ pub(super) fn label_forgotten_ends(
     let mut finder = Misindented { source, version: chunk.version, found: Vec::new() };
     finder.visit_block(&chunk.block);
     for &(index, opener) in unclosed {
-        let Some(error) = errors.get_mut(index) else {
-            continue;
-        };
-        let at = error.span.unwrap_or_default().start;
+        let error = &mut errors[index];
+        let at = error.span.expect("a parse error has a span").start;
         let latest = finder
             .found
             .iter()
@@ -66,16 +64,16 @@ impl Misindented<'_> {
     }
 
     fn is_on_another_line(&self, earlier: Span, later: Span) -> bool {
-        let between = self.source.get(offset_to_index(earlier.end)..offset_to_index(later.start));
+        let between = self.source.get(earlier.end as usize..later.start as usize);
         between.is_some_and(|text| has_line_break(text, self.version))
     }
 
     /// The last `word` before `offset`, which a construct's keyword is when
     /// only a name, attributes, or whitespace come between.
     fn last_before(&self, word: &str, offset: u32) -> Option<Span> {
-        let before = self.source.get(..offset_to_index(offset))?;
+        let before = &self.source[..offset as usize];
         let start = before.windows(word.len()).rposition(|window| window == word.as_bytes())?;
-        Some(Span::from_indices(start, start.saturating_add(word.len())))
+        Some(Span::from_indices(start, start + word.len()))
     }
 
     /// The `end` that `span`, a construct's, ends with, if it ends with one.
@@ -94,7 +92,7 @@ impl<'ast> Visit<'ast> for Misindented<'_> {
             Statement::DoBlock(_) => Some("do"),
             Statement::NumericFor(_) | Statement::GenericFor(_) => Some("for"),
             Statement::RepeatLoop(repeat) => {
-                let opener = Span::new(span.start, span.start.saturating_add(6));
+                let opener = Span::new(span.start, span.start + 6);
                 let until = self.last_before("until", repeat.condition.span().start);
                 self.check("repeat", opener, until);
                 None
@@ -119,8 +117,8 @@ impl<'ast> Visit<'ast> for Misindented<'_> {
             | Statement::Error(_) => None,
         };
         if let Some(word) = keyword {
-            let start = offset_to_index(span.start);
-            let opener = Span::from_indices(start, start.saturating_add(word.len()));
+            let start = span.start as usize;
+            let opener = Span::from_indices(start, start + word.len());
             self.check(word, opener, self.end_of(span));
         }
         self.walk_stmt(stmt);
@@ -136,11 +134,10 @@ impl<'ast> Visit<'ast> for Misindented<'_> {
 
 /// The spaces and tabs that open the line holding `offset`.
 fn indentation(source: &[u8], offset: u32) -> &[u8] {
-    let index = offset_to_index(offset);
-    let before = source.get(..index).unwrap_or_default();
+    let index = offset as usize;
     let line_start =
-        before.iter().rposition(|&b| b == b'\n' || b == b'\r').map_or(0, |at| at.saturating_add(1));
-    let line = source.get(line_start..).unwrap_or_default();
+        source[..index].iter().rposition(|&b| b == b'\n' || b == b'\r').map_or(0, |at| at + 1);
+    let line = &source[line_start..];
     let width = line.iter().take_while(|&&b| b == b' ' || b == b'\t').count();
-    line.get(..width).unwrap_or_default()
+    &line[..width]
 }

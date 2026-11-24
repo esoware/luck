@@ -2,7 +2,7 @@
 //! their compilers count while they parse, and the checker reports each
 //! where the compiler does.
 
-use core::fmt::Write as _;
+use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
@@ -191,7 +191,7 @@ fn counts_a_capture_in_each_function_between() {
     // `fooB` captures what `fooC` reads of `fooA`, so it passes 60 first.
     let mut source = format!("local function fooA()\n{}", locals("a", 61));
     source.push_str("local function fooB()\nlocal function fooC()\nreturn 0");
-    for i in 1..=61u32 {
+    for i in 1..=61 {
         write!(source, " + a{i}").unwrap();
     }
     source.push_str("\nend end end");

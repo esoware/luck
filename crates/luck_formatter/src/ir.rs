@@ -10,16 +10,16 @@
 //! elements, and each region takes its content as a closure, which is what
 //! keeps every start paired with its end.
 
-use core::cell::Cell;
-use core::mem;
-use core::ops::Range;
+use std::cell::Cell;
+use std::mem;
+use std::ops::Range;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::Name;
 use luck_parser::Groupings;
-use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
+use luck_token::{LuaVersion, Span};
 use memchr::memchr2;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthStr as _;
 
 use crate::FormatOptions;
 use crate::comments::{Comments, CommentsCheckpoint};
@@ -33,11 +33,11 @@ pub(crate) struct GroupId(u32);
 
 impl GroupId {
     pub(crate) fn new(index: usize) -> Self {
-        Self(index_to_offset(index))
+        Self(u32::try_from(index).expect("a document opens fewer groups than `u32::MAX`"))
     }
 
-    pub(crate) fn index(self) -> usize {
-        offset_to_index(self.0)
+    pub(crate) const fn index(self) -> usize {
+        self.0 as usize
     }
 }
 
@@ -135,7 +135,7 @@ impl TextWidth {
             return Self::of_columns(text.len());
         }
         let first_line_length = memchr2(b'\n', b'\r', text).unwrap_or(text.len());
-        let width = Self::of_columns(columns(text.get(..first_line_length).unwrap_or_default()));
+        let width = Self::of_columns(columns(&text[..first_line_length]));
         if first_line_length == text.len() { width } else { Self(width.0 | Self::MULTILINE) }
     }
 
@@ -145,8 +145,8 @@ impl TextWidth {
     }
 
     /// The columns of the text's first line.
-    pub(crate) fn columns(self) -> usize {
-        offset_to_index(self.0 & Self::COLUMNS)
+    pub(crate) const fn columns(self) -> usize {
+        (self.0 & Self::COLUMNS) as usize
     }
 
     pub(crate) const fn is_multiline(self) -> bool {
@@ -170,14 +170,12 @@ impl TextWidth {
 pub(crate) fn columns(line: &[u8]) -> usize {
     // Checking for UTF-8 is word-at-a-time, but walking chunks is a byte at a
     // time, and nearly every line is UTF-8.
-    str::from_utf8(line).map_or_else(
-        |_| {
-            line.utf8_chunks()
-                .map(|chunk| chunk.valid().width().saturating_add(chunk.invalid().len()))
-                .fold(0, usize::saturating_add)
-        },
-        UnicodeWidthStr::width,
-    )
+    match str::from_utf8(line) {
+        Ok(text) => text.width(),
+        Err(_) => {
+            line.utf8_chunks().map(|chunk| chunk.valid().width() + chunk.invalid().len()).sum()
+        }
+    }
 }
 
 /// Restoring rewinds the element stream, the layout, and the comment cursor
@@ -235,7 +233,7 @@ impl<'ast> Formatter<'ast> {
         // more than two and a half, however long its text, so this room
         // seldom has to grow. A tree built in code has neither and starts
         // empty.
-        let capacity = comments.token_and_comment_count().saturating_mul(5).div_ceil(2);
+        let capacity = (comments.token_and_comment_count() * 5).div_ceil(2);
         Self {
             elements: List::with_capacity_in(capacity, allocator),
             // About one element in eleven starts a group.
@@ -305,21 +303,16 @@ impl<'ast> Formatter<'ast> {
         let (Some(first), Some(last)) = (slices.first(), slices.last()) else {
             return;
         };
-        let written = self.elements.get(first.start..last.end).unwrap_or_default().to_vec();
+        let written = self.elements[first.start..last.end].to_vec();
         let mut target = first.start;
         let mut gap_start = first.start;
         for (slice, &i) in slices.iter().zip(order) {
             let gap = gap_start..slice.start;
             gap_start = slice.end;
-            let piece = slices.get(i).cloned().unwrap_or_default();
-            for range in [gap, piece] {
-                let shifted =
-                    range.start.saturating_sub(first.start)..range.end.saturating_sub(first.start);
-                let source = written.get(shifted).unwrap_or_default();
-                let end = target.saturating_add(source.len());
-                if let Some(destination) = self.elements.get_mut(target..end) {
-                    destination.copy_from_slice(source);
-                }
+            for range in [gap, slices[i].clone()] {
+                let source = &written[range.start - first.start..range.end - first.start];
+                let end = target + source.len();
+                self.elements[target..end].copy_from_slice(source);
                 target = end;
             }
         }
@@ -419,7 +412,7 @@ impl<'ast> Formatter<'ast> {
 
     #[inline]
     fn push_text(&mut self, text: &'ast [u8], width: TextWidth) {
-        self.text_bytes = self.text_bytes.wrapping_add(text.len());
+        self.text_bytes += text.len();
         if width.is_multiline() {
             self.layout.force_break(self.elements.len());
         }
@@ -453,7 +446,7 @@ impl<'ast> Formatter<'ast> {
 
     pub(crate) fn verbatim(&mut self, text: &'ast [u8]) {
         let width = TextWidth::of(text);
-        self.text_bytes = self.text_bytes.wrapping_add(text.len());
+        self.text_bytes += text.len();
         if width.is_multiline() {
             self.layout.force_break(self.elements.len());
         }
@@ -462,13 +455,13 @@ impl<'ast> Formatter<'ast> {
 
     /// See [`FormatElement::LineSuffix`]. A break in one forces nothing.
     pub(crate) fn line_suffix(&mut self, text: &'ast [u8], is_measured: bool) {
-        self.text_bytes = self.text_bytes.wrapping_add(text.len()).wrapping_add(1);
+        self.text_bytes += text.len() + 1;
         self.push(FormatElement::LineSuffix(text, TextWidth::of(text), is_measured));
     }
 
     #[inline]
     pub(crate) fn space(&mut self) {
-        self.text_bytes = self.text_bytes.wrapping_add(1);
+        self.text_bytes += 1;
         if self.elements.len() > self.space_fence
             && let Some(FormatElement::Text(_, width)) = self.elements.last_mut()
         {
@@ -480,7 +473,7 @@ impl<'ast> Formatter<'ast> {
 
     #[inline]
     pub(crate) fn line(&mut self, mode: LineMode) {
-        self.text_bytes = self.text_bytes.wrapping_add(1);
+        self.text_bytes += 1;
         self.layout.line(self.elements.len(), mode);
         self.push(FormatElement::Line(mode));
     }
@@ -634,7 +627,7 @@ impl<'ast> Formatter<'ast> {
     pub(crate) fn print(self, base_indent: &[u8]) -> Vec<u8> {
         // Indentation comes on top of the text, and seldom reaches a quarter
         // of it.
-        let capacity = self.text_bytes.saturating_add(self.text_bytes.div_ceil(4));
+        let capacity = self.text_bytes + self.text_bytes.div_ceil(4);
         printer::print(&self.elements, self.layout, &self.options, base_indent, capacity)
     }
 }

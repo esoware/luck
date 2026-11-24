@@ -56,7 +56,7 @@ impl Rule for CyclomaticComplexity {
             return;
         };
         // McCabe: one straight-line path plus one per decision point.
-        let complexity = decision_points(&function.body.block).saturating_add(1);
+        let complexity = decision_points(&function.body.block) + 1;
         if complexity <= threshold {
             return;
         }

@@ -33,14 +33,14 @@ impl Rule for BadStringEscape {
              `\\ddd`{extended_escapes}"
         );
         for &span in context.lenient_escapes {
-            let escaped = span.text(context.source).get(1..).unwrap_or_default();
+            let escaped = &span.text(context.source)[1..];
             // The escape takes one byte, and its span the whole character.
             let display = match str::from_utf8(escaped).ok().and_then(|text| text.chars().next()) {
                 Some(character) if character.is_ascii_control() || character == ' ' => {
                     format!("\\x{:02x}", u32::from(character))
                 }
                 Some(character) => format!("\\{character}"),
-                None => format!("\\x{:02x}", escaped.first().copied().unwrap_or_default()),
+                None => format!("\\x{:02x}", escaped[0]),
             };
             context.diagnostic(
                 Finding::new(format!("invalid string escape `{display}`"), span)

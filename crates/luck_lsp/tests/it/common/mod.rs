@@ -1,11 +1,11 @@
-use core::mem;
-use core::num::NonZero;
-use core::str::FromStr as _;
-use core::time::Duration;
 use std::io;
+use std::mem;
+use std::num::NonZero;
 use std::panic;
 use std::path::Path;
+use std::str::FromStr as _;
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use crossbeam_channel::unbounded;
 use ls_types::notification::{
@@ -99,7 +99,7 @@ impl Client {
     where
         R: LspRequest,
     {
-        self.next_id = self.next_id.saturating_add(1);
+        self.next_id += 1;
         let id = RequestId::from(self.next_id);
         let request = Request::new(id.clone(), R::METHOD.to_owned(), params);
         self.connection.sender.send(request.into()).expect("the server reads");
@@ -107,10 +107,6 @@ impl Client {
     }
 
     /// The answer to `id`.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error the server answered with.
     pub(crate) fn answer<R>(&mut self, id: &RequestId) -> Result<R::Result, ResponseError>
     where
         R: LspRequest,
@@ -129,9 +125,6 @@ impl Client {
         }
     }
 
-    /// # Errors
-    ///
-    /// Returns the error the server answered with.
     pub(crate) fn request_result<R>(
         &mut self,
         params: R::Params,
@@ -267,20 +260,12 @@ impl Client {
     }
 
     /// Asks the server to shut down and exit.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error the server ended with.
     pub(crate) fn shut_down(mut self) -> io::Result<()> {
         self.request::<Shutdown>(());
         self.exit()
     }
 
     /// Sends `exit` alone.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error the server ended with.
     pub(crate) fn exit(mut self) -> io::Result<()> {
         self.notify::<Exit>(());
         // Only this or a drop takes the server, and each ends the client.
@@ -298,7 +283,7 @@ impl Drop for Client {
         let (unconnected, _) = unbounded();
         drop(mem::replace(&mut self.connection.sender, unconnected));
         if let Some(server) = self.server.take() {
-            let _ended = server.join();
+            let _ = server.join();
         }
     }
 }

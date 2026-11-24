@@ -3,7 +3,6 @@
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(default, deny_unknown_fields))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::struct_excessive_bools, reason = "each bool turns one independent pass on or off")]
 pub struct TransformConfig {
     /// Luau: drop every type annotation, cast, instantiation, and `type`
     /// declaration before the other passes run. Types never run, so this

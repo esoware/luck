@@ -1,8 +1,8 @@
 //! Each stage's results over a suite, summarized and listed the way oxc's
 //! `tasks/coverage` snapshots them.
 
-use alloc::collections::BTreeMap;
-use core::fmt::Write as _;
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::{fs, io};
 
@@ -56,11 +56,7 @@ impl CoverageResult {
 /// The summary that opens a snapshot and that the console shows: how many of
 /// the files the reference interpreter compiles luck parsed and passed, and
 /// how many of the ones it rejects luck rejected.
-///
-/// # Errors
-///
-/// Fails when a count doesn't fit a ratio.
-pub(crate) fn summary(name: &str, results: &[CoverageResult]) -> io::Result<String> {
+pub(crate) fn summary(name: &str, results: &[CoverageResult]) -> String {
     let (negatives, positives): (Vec<&CoverageResult>, Vec<&CoverageResult>) =
         results.iter().partition(|result| result.should_fail);
     let tally = |group: &[&CoverageResult], is_counted: fn(&CoverageResult) -> bool| {
@@ -75,20 +71,14 @@ pub(crate) fn summary(name: &str, results: &[CoverageResult]) -> io::Result<Stri
         lines.push(("Negative Passed", tally(&negatives, CoverageResult::passed), negatives.len()));
     }
     for (label, count, all) in lines {
-        writeln!(summary, "{label}: {count}/{all} ({:.2}%)", percent(count, all)?)
-            .map_err(io::Error::other)?;
+        let _ = writeln!(summary, "{label}: {count}/{all} ({:.2}%)", percent(count, all));
     }
-    Ok(summary)
+    summary
 }
 
-/// # Errors
-///
-/// Fails when a count doesn't fit in a `u32`.
-fn percent(count: usize, all: usize) -> io::Result<f64> {
-    let part = f64::from(u32::try_from(count).map_err(io::Error::other)?);
-    let whole = f64::from(u32::try_from(all.max(1)).map_err(io::Error::other)?);
-    #[expect(clippy::float_arithmetic, reason = "the snapshot pins this ratio's rounding")]
-    Ok(part / whole * 100.0f64)
+#[expect(clippy::cast_precision_loss, reason = "f64 rounds only a count past 2^53")]
+fn percent(count: usize, all: usize) -> f64 {
+    count as f64 / all.max(1) as f64 * 100.0
 }
 
 /// Every result that didn't pass, in path order, then every file luck
@@ -143,14 +133,10 @@ pub(crate) struct LintLine {
 /// The linter's snapshot: how many files it ran on and each rule's count, then
 /// the files it couldn't run on, and every diagnostic of the others, by file in
 /// path order.
-///
-/// # Errors
-///
-/// Fails when a line can't be written.
 pub(crate) fn lint(
     name: &str,
     files: &[(&str, &Result<Vec<LintLine>, TestResult>)],
-) -> io::Result<(String, String)> {
+) -> (String, String) {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut not_linted = Vec::new();
     let mut listed = String::new();
@@ -163,39 +149,28 @@ pub(crate) fn lint(
             }),
             Ok(diagnostics) if diagnostics.is_empty() => {}
             Ok(diagnostics) => {
-                writeln!(listed, "{path}").map_err(io::Error::other)?;
+                let _ = writeln!(listed, "{path}");
                 for LintLine { rule, text } in diagnostics {
-                    let count = counts.entry(rule).or_default();
-                    *count = count.saturating_add(1);
-                    writeln!(listed, "{text}").map_err(io::Error::other)?;
+                    *counts.entry(rule).or_default() += 1;
+                    let _ = writeln!(listed, "{text}");
                 }
                 listed.push('\n');
             }
         }
     }
     let mut summary = format!("{name} Summary:\n");
-    writeln!(
-        summary,
-        "Files Linted   : {}/{}",
-        files.len().saturating_sub(not_linted.len()),
-        files.len()
-    )
-    .map_err(io::Error::other)?;
-    writeln!(summary, "Diagnostics    : {}", counts.values().sum::<usize>())
-        .map_err(io::Error::other)?;
+    let _ =
+        writeln!(summary, "Files Linted   : {}/{}", files.len() - not_linted.len(), files.len());
+    let _ = writeln!(summary, "Diagnostics    : {}", counts.values().sum::<usize>());
     let mut by_count: Vec<(&str, usize)> = counts.into_iter().collect();
     by_count.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
     for (rule, count) in by_count {
-        writeln!(summary, "{count:>6} {rule}").map_err(io::Error::other)?;
+        let _ = writeln!(summary, "{count:>6} {rule}");
     }
-    Ok((summary, format!("{}{listed}", failures(&not_linted))))
+    (summary, format!("{}{listed}", failures(&not_linted)))
 }
 
 /// Writes `snapshots/<name>.snap` beside this crate's `Cargo.toml`.
-///
-/// # Errors
-///
-/// Fails when the snapshot can't be written.
 pub(crate) fn save(name: &str, content: &str) -> io::Result<()> {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("snapshots");
     fs::create_dir_all(&directory)?;

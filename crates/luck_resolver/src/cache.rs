@@ -1,7 +1,7 @@
-use alloc::sync::Arc;
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use rustc_hash::FxHashMap;
@@ -147,10 +147,6 @@ fn split(path: &Path) -> Option<(&Path, &str)> {
 
 /// A name that isn't ASCII is left out, since only the file system can match
 /// it.
-///
-/// # Errors
-///
-/// Returns the error that stopped the directory from being listed.
 fn read_listing(fs: &impl FileSystem, path: &Path) -> io::Result<Listing> {
     let mut entries = FxHashMap::default();
     let mut is_ascii = true;

@@ -1,4 +1,4 @@
-use core::ops::Range;
+use std::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_ast::{SpanCounter, Synth};
@@ -75,7 +75,7 @@ pub(crate) fn assert_format_range(input: &str, range: Range<usize>, expected: &s
     let result = range_formatted(input, start..end);
     assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
     assert_eq!(result.output, expected.as_bytes(), "format mismatch");
-    let formatted_end = expected.len().saturating_sub(input.len().saturating_sub(end));
+    let formatted_end = expected.len() - (input.len() - end);
     let second_pass = range_formatted(expected, start..formatted_end);
     assert_eq!(second_pass.output, expected.as_bytes(), "not idempotent");
     let allocator = Allocator::new();

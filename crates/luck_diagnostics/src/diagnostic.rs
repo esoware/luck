@@ -1,7 +1,7 @@
-use alloc::borrow::Cow;
-use core::error::Error;
-use core::fmt;
-use core::ops::{Deref, DerefMut};
+use std::borrow::Cow;
+use std::error::Error;
+use std::fmt;
+use std::ops::{Deref, DerefMut};
 
 use luck_token::Span;
 
@@ -48,7 +48,6 @@ pub enum Severity {
 
 impl Severity {
     /// The name machine-readable output spells it with.
-    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Error => "error",
@@ -77,7 +76,6 @@ pub enum Tag {
 
 impl Tag {
     /// The name machine-readable output spells it with.
-    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Unnecessary => "unnecessary",
@@ -161,7 +159,6 @@ impl Diagnostic {
         self
     }
 
-    #[must_use]
     pub fn is_error(&self) -> bool {
         self.inner.severity == Severity::Error
     }

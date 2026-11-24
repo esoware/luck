@@ -125,7 +125,7 @@ impl Lexer<'_> {
     /// escapes, to `lenient_escapes`.
     fn scan_escape(&mut self, is_interpolated: bool) {
         self.has_escape = true;
-        let escape_start = self.cursor.position().saturating_sub(1);
+        let escape_start = self.cursor.position() - 1;
         let (length, meaning) = read_escape(self.cursor.rest(), is_interpolated, self.version);
         match meaning {
             Ok(escaped) => {
@@ -140,12 +140,12 @@ impl Lexer<'_> {
             }
             Err(EscapeError::Undefined) => {
                 let character_start = self.cursor.position();
-                let byte = self.cursor.peek().unwrap_or_default();
+                let byte = self.cursor.peek().expect("the caller found a byte after the `\\`");
                 self.cursor.bump();
-                let message = self.cursor.eat_rest_of_char(character_start).map_or_else(
-                    || format!("invalid escape sequence, `\\` before byte 0x{byte:02X}"),
-                    |character| format!("invalid escape sequence `\\{character}`"),
-                );
+                let message = match self.cursor.eat_rest_of_char(character_start) {
+                    Some(character) => format!("invalid escape sequence `\\{character}`"),
+                    None => format!("invalid escape sequence, `\\` before byte 0x{byte:02X}"),
+                };
                 self.reject(escape_start, message);
             }
             Err(error) => {
@@ -234,7 +234,7 @@ pub(super) fn eat_long_bracket_level(cursor: &mut Cursor<'_>) -> Option<usize> {
     if rest.get(level) != Some(&b'[') {
         return None;
     }
-    cursor.advance_by(level.saturating_add(1));
+    cursor.advance_by(level + 1);
     Some(level)
 }
 
@@ -280,22 +280,22 @@ pub(super) fn advance_past_long_bracket_close(
             errors.push(Diagnostic::e008(cursor.span_since(start), unterminated));
             return LongBracketBody { is_closed: false, has_cr };
         };
-        cursor.advance_by(stop_offset.saturating_add(1));
-        if rest.get(stop_offset) == Some(&b'\r') {
+        cursor.advance_by(stop_offset + 1);
+        if rest[stop_offset] == b'\r' {
             has_cr = true;
             continue;
         }
         let after_bracket = cursor.rest();
         let closing_level = after_bracket.iter().take_while(|&&b| b == b'=').count();
         if closing_level == level && after_bracket.get(level) == Some(&b']') {
-            cursor.advance_by(level.saturating_add(1));
+            cursor.advance_by(level + 1);
             if level == 0
                 && version.has_long_bracket_nesting_error()
                 && let Some(offset) = memmem::find(cursor.text_since(body_start), b"[[")
             {
-                let nested_open = body_start.saturating_add(offset);
+                let nested_open = body_start + offset;
                 errors.push(Diagnostic::e008(
-                    Span::from_indices(nested_open, nested_open.saturating_add(2)),
+                    Span::from_indices(nested_open, nested_open + 2),
                     "nesting of `[[...]]` is deprecated",
                 ));
             }

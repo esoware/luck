@@ -44,7 +44,7 @@ impl Rule for AccessingUninitialized {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use std::fmt::Write as _;
 
     use luck_token::LuaTarget;
 
@@ -54,7 +54,7 @@ mod tests {
     fn unassigned_locals(count: usize) -> String {
         let mut source = String::new();
         for i in 0..count {
-            let _unused = writeln!(source, "local a{i}");
+            writeln!(source, "local a{i}").unwrap();
         }
         source.push_str("print(a0)");
         source

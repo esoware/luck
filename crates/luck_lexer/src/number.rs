@@ -5,10 +5,6 @@ use crate::cursor::Cursor;
 
 /// Scan a numeral that starts at `start` with `first`, a digit or a `.`
 /// before one, with the cursor past `first`.
-///
-/// # Errors
-///
-/// Returns a [`Diagnostic`] for a malformed numeral.
 #[inline]
 pub(crate) fn scan_number(
     cursor: &mut Cursor<'_>,
@@ -32,10 +28,6 @@ pub(crate) fn scan_number(
 
 /// Cold and out of line, which parses 1-2% faster than leaving it to the
 /// compiler.
-///
-/// # Errors
-///
-/// Returns a [`Diagnostic`] for a malformed numeral.
 #[cold]
 #[inline(never)]
 fn scan_other_number(
@@ -58,7 +50,7 @@ fn scan_other_number(
             } else {
                 0
             };
-            let prefix_length = underscore_count.saturating_add(1);
+            let prefix_length = underscore_count + 1;
             match after_zero.get(underscore_count) {
                 Some(b'x' | b'X') => scan_hex_number(cursor, version, start, prefix_length)?,
                 // Luau
@@ -75,10 +67,6 @@ fn scan_other_number(
 
 /// Whether the numeral took the Luau `i` suffix. The cursor is past the `0`,
 /// `prefix_length` bytes before the hex digits.
-///
-/// # Errors
-///
-/// Returns a [`Diagnostic`] for a malformed hexadecimal numeral.
 fn scan_hex_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
@@ -137,7 +125,7 @@ fn scan_hex_number(
         || is_touching_numeral(cursor, version)
     {
         return Err(Diagnostic::e008(
-            Span::from_indices(start, cursor.position().saturating_add(1)),
+            Span::from_indices(start, cursor.position() + 1),
             "malformed hexadecimal number",
         ));
     }
@@ -146,10 +134,6 @@ fn scan_hex_number(
 
 /// Whether the numeral took the Luau `i` suffix. The cursor is past the `0`,
 /// `prefix_length` bytes before the binary digits.
-///
-/// # Errors
-///
-/// Returns a [`Diagnostic`] for a malformed binary numeral.
 fn scan_binary_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
@@ -175,10 +159,6 @@ fn scan_binary_number(
 
 /// Whether the numeral took the Luau `i` suffix. The cursor is past the first
 /// digit, or past a leading `.` when `is_fraction` holds.
-///
-/// # Errors
-///
-/// Returns a [`Diagnostic`] for a malformed decimal numeral.
 fn scan_decimal_number(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
@@ -243,7 +223,7 @@ fn is_touching_numeral(cursor: &Cursor<'_>, version: LuaVersion) -> bool {
 
 fn touching_letter_error(cursor: &Cursor<'_>, start: usize) -> Diagnostic {
     Diagnostic::e008(
-        Span::from_indices(start, cursor.position().saturating_add(1)),
+        Span::from_indices(start, cursor.position() + 1),
         "malformed number (a numeral cannot touch a letter)",
     )
 }
@@ -285,10 +265,6 @@ fn eat_exponent(cursor: &mut Cursor<'_>, version: LuaVersion) -> bool {
 ///
 /// A decimal literal must fit an `i64`, while hexadecimal and binary ones may
 /// use all 64 bits, matching Luau's bit-pattern semantics.
-///
-/// # Errors
-///
-/// Returns a [`Diagnostic`] when the value doesn't fit in 64 bits.
 fn eat_integer_suffix(
     cursor: &mut Cursor<'_>,
     version: LuaVersion,
@@ -297,7 +273,8 @@ fn eat_integer_suffix(
     if !(version.has_luau_integer_literals() && cursor.eat(b'i')) {
         return Ok(false);
     }
-    if str::from_utf8(cursor.text_since(start)).ok().and_then(read_integer).is_none() {
+    let numeral = str::from_utf8(cursor.text_since(start)).expect("a numeral is ASCII");
+    if read_integer(numeral).is_none() {
         return Err(Diagnostic::e008(
             cursor.span_since(start),
             "integer literal is outside the 64-bit range",
@@ -310,14 +287,10 @@ fn eat_integer_suffix(
 /// Every reference scanner consumes `.` greedily up to an exponent, so that
 /// is "malformed number", never a concat (`1 ..2` needs the space). Past an
 /// exponent only the 5.2+ scanners still do.
-///
-/// # Errors
-///
-/// Returns a [`Diagnostic`] spanning the numeral and the two dots.
 fn reject_adjacent_concat(cursor: &Cursor<'_>, start: usize) -> Result<(), Diagnostic> {
     if cursor.rest().starts_with(b"..") {
         return Err(Diagnostic::e008(
-            Span::from_indices(start, cursor.position().saturating_add(2)),
+            Span::from_indices(start, cursor.position() + 2),
             "malformed number (a numeral cannot directly precede `..`)",
         ));
     }

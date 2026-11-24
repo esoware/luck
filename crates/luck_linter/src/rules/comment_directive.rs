@@ -34,8 +34,8 @@ impl Rule for CommentDirective {
                 ));
                 continue;
             }
-            let body = comment.span.text(context.source).get(3..).unwrap_or_default();
-            let hot_comment = HotComment::split(body, comment.span.start.saturating_add(3));
+            let body = &comment.span.text(context.source)[3..];
+            let hot_comment = HotComment::split(body, comment.span.start + 3);
             if !hot_comment.sets_mode() {
                 if let Some(finding) = hot_comment.problem() {
                     context.diagnostic(finding);
@@ -65,14 +65,14 @@ struct HotComment<'body> {
 impl<'body> HotComment<'body> {
     fn split(body: &'body [u8], word_start: u32) -> Self {
         let word_length = body.iter().position(|&b| is_lua_whitespace(b)).unwrap_or(body.len());
-        let (word, rest) = body.split_at_checked(word_length).unwrap_or((body, &[]));
+        let (word, rest) = body.split_at(word_length);
         Self { word, rest, word_span: Span::from_indices(0, word_length).shifted(word_start) }
     }
 
     fn trailing_symbols_span(&self) -> Option<Span> {
         let first = self.rest.iter().position(|&b| !is_lua_whitespace(b))?;
         let last = self.rest.iter().rposition(|&b| !is_lua_whitespace(b))?;
-        Some(Span::from_indices(first, last.saturating_add(1)).shifted(self.word_span.end))
+        Some(Span::from_indices(first, last + 1).shifted(self.word_span.end))
     }
 
     const fn is_mode(&self) -> bool {

@@ -25,7 +25,6 @@ impl FunctionBody<'_> {
     /// Only meaningful for parsed ASTs, since synthetic bodies carry point
     /// spans. Callers use it only for source-anchored trivia, which
     /// synthetic ASTs don't have.
-    #[must_use]
     pub const fn end_keyword_span(&self) -> Span {
         Span::new(self.span.end.saturating_sub(3), self.span.end)
     }

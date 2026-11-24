@@ -15,19 +15,16 @@ pub struct SyntheticComment<'text> {
 }
 
 impl<'text> SyntheticComment<'text> {
-    #[must_use]
     pub fn leading(stmt: &Statement<'_>, text: &'text str) -> Self {
         Self { attached_to: stmt.span().start, text, position: CommentPosition::Leading }
     }
 
-    #[must_use]
     pub fn trailing(stmt: &Statement<'_>, text: &'text str) -> Self {
         Self { attached_to: stmt.span().start, text, position: CommentPosition::Trailing }
     }
 
     /// A comment printed inside `block` when it's empty, such as
     /// `-- unreachable`.
-    #[must_use]
     pub const fn dangling(block: &Block<'_>, text: &'text str) -> Self {
         Self { attached_to: block.span.start, text, position: CommentPosition::Leading }
     }

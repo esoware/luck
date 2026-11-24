@@ -1,4 +1,4 @@
-use core::iter;
+use std::iter;
 
 use ls_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, Position,
@@ -6,7 +6,7 @@ use ls_types::{
 };
 use luck_ast::{FunctionArgs, GetSpan as _};
 use luck_stdlib::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
-use luck_token::{TokenKind, index_to_offset, offset_to_index};
+use luck_token::TokenKind;
 
 use crate::document::DocumentState;
 use crate::providers::cursor::{TextKind, text_kind_at};
@@ -34,8 +34,7 @@ pub(crate) fn signature_help(
                 let FunctionArgs::Parenthesized { span: parens, args } = call.args else {
                     return None;
                 };
-                let is_closed =
-                    source.get(offset_to_index(parens.end.saturating_sub(1))) == Some(&b')');
+                let is_closed = source[(parens.end - 1) as usize] == b')';
                 let is_inside = parens.start < offset
                     && offset <= parens.end
                     && !(is_closed && offset == parens.end);
@@ -74,14 +73,18 @@ pub(crate) fn signature_help(
         .collect();
 
     let active_signature = function.signature_index_for_active_param(active_param);
-    let active_param_count = function.signatures.get(active_signature)?.params.len();
+    let active_param_count = function.signatures[active_signature].params.len();
 
     Some(SignatureHelp {
         signatures,
-        active_signature: Some(index_to_offset(active_signature)),
-        active_parameter: Some(index_to_offset(
-            active_param.min(active_param_count.saturating_sub(1)),
-        )),
+        active_signature: Some(
+            u32::try_from(active_signature)
+                .expect("a function has fewer signatures than `u32::MAX`"),
+        ),
+        active_parameter: Some(
+            u32::try_from(active_param.min(active_param_count.saturating_sub(1)))
+                .expect("a signature has fewer parameters than `u32::MAX`"),
+        ),
     })
 }
 
@@ -97,9 +100,11 @@ fn build_signature(
         if i > 0 {
             label.push_str(", ");
         }
-        let start = index_to_offset(label.chars().count());
+        let start = u32::try_from(label.chars().count())
+            .expect("a signature label is shorter than `u32::MAX` characters");
         label.push_str(&param_label(param));
-        let end = index_to_offset(label.chars().count());
+        let end = u32::try_from(label.chars().count())
+            .expect("a signature label is shorter than `u32::MAX` characters");
         params.push(ParameterInformation {
             label: ParameterLabel::LabelOffsets([start, end]),
             documentation: param_documentation(param),
@@ -151,13 +156,13 @@ fn param_documentation(param: &StdlibParam<'_>) -> Option<Documentation> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
+    use luck_token::{LuaTarget, index_to_offset};
 
     use super::*;
     use crate::fixtures::document;
 
     fn active_signature(help: &SignatureHelp) -> &SignatureInformation {
-        &help.signatures[offset_to_index(help.active_signature.unwrap_or(0))]
+        &help.signatures[help.active_signature.unwrap_or(0) as usize]
     }
 
     #[test]

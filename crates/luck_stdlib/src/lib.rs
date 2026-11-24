@@ -48,16 +48,6 @@
 //! assert!(analysis.is_known_global("love"));
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
-
 mod analysis;
 #[cfg(test)]
 mod fixtures;

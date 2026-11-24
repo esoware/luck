@@ -25,16 +25,6 @@
 //! assert_eq!((name.kind, name.text(source)), (TokenKind::Identifier, &b"x"[..]));
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
-
 mod cursor;
 mod lex_result;
 mod lexer;

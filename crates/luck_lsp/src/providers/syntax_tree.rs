@@ -1,5 +1,5 @@
-use core::fmt::{self, Write as _};
-use core::mem;
+use std::fmt::{self, Write as _};
+use std::mem;
 
 use crate::document::DocumentState;
 
@@ -8,11 +8,11 @@ use crate::document::DocumentState;
 /// its size.
 const MAX_DUMP_BYTES: usize = 8 * 1024 * 1024;
 
+#[expect(clippy::use_debug, reason = "this dump's format is the AST's `Debug` output")]
 pub(crate) fn syntax_tree(document: &DocumentState) -> String {
     let mut dump = PrettyDump::default();
-    #[expect(clippy::use_debug, reason = "this dump's format is the AST's `Debug` output")]
     // The only error is the limit, which ends the dump with its marker.
-    let _unused = write!(dump, "{:?}", document.parse().chunk);
+    let _ = write!(dump, "{:?}", document.parse().chunk);
     dump.text
 }
 
@@ -41,7 +41,7 @@ impl PrettyDump {
         if self.is_cut_off {
             return;
         }
-        if self.text.len().saturating_add(piece.len()) > MAX_DUMP_BYTES {
+        if self.text.len() + piece.len() > MAX_DUMP_BYTES {
             self.text.push_str("\n... the rest of the tree is cut off here");
             self.is_cut_off = true;
             return;
@@ -62,7 +62,7 @@ impl PrettyDump {
 
     fn open(&mut self, opener: &str) {
         self.push(opener);
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
         self.new_line();
     }
 
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn a_tree_at_the_cap_dumps_within_the_bound_on_the_smallest_stack() {
         // The chunk is a level, and each function a body and a block.
-        let levels = MAX_NESTING_DEPTH.saturating_sub(1).div_euclid(2);
+        let levels = (MAX_NESTING_DEPTH - 1) / 2;
         let source = format!(
             "{}local innermost = 1{}",
             "local function f() ".repeat(levels),
@@ -186,7 +186,7 @@ mod tests {
             let document = document(text, LuaTarget::Lua54);
             assert!(document.parse().errors.is_empty(), "{:?}", document.parse().errors);
             let dump = syntax_tree(&document);
-            assert!(dump.len() <= MAX_DUMP_BYTES.saturating_add(64), "{}", dump.len());
+            assert!(dump.len() <= MAX_DUMP_BYTES + 64, "{}", dump.len());
             assert!(dump.ends_with("cut off here"), "the dump says it stopped early");
         });
     }
@@ -197,7 +197,7 @@ mod tests {
         let text = format!("local x = {chain}\n").repeat(40);
         let document = document(&text, LuaTarget::Lua54);
         let dump = syntax_tree(&document);
-        assert!(dump.len() <= MAX_DUMP_BYTES.saturating_add(64), "{}", dump.len());
+        assert!(dump.len() <= MAX_DUMP_BYTES + 64, "{}", dump.len());
         assert!(dump.ends_with("cut off here"), "the dump says it stopped early");
     }
 }

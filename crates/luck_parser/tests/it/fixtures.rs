@@ -1,5 +1,5 @@
-use core::fmt::Write as _;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -29,7 +29,7 @@ fn fixtures_outside_errors_parse_cleanly() {
     assert!(!files.is_empty(), "no fixture files found");
 
     let mut failures = Vec::new();
-    let mut success_count = 0usize;
+    let mut success_count = 0;
 
     for path in &files {
         let relative = path.strip_prefix(&root).expect("fixture is under the root");
@@ -42,7 +42,7 @@ fn fixtures_outside_errors_parse_cleanly() {
         }
 
         if result.errors.is_empty() {
-            success_count = success_count.saturating_add(1);
+            success_count += 1;
         } else {
             failures.push((path.clone(), result.errors));
         }

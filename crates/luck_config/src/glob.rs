@@ -1,4 +1,4 @@
-use core::fmt;
+use std::fmt;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::de::{Deserialize, Deserializer, Error, Visitor};
@@ -60,9 +60,6 @@ pub fn glob_set(patterns: &[String]) -> Result<GlobSet, String> {
     builder.build().map_err(|e| format!("invalid glob set: {e}"))
 }
 
-/// # Errors
-///
-/// Returns a message naming the first pattern in `globs` that doesn't build.
 pub(crate) fn compiled<'glob>(
     globs: impl IntoIterator<Item = &'glob Glob>,
 ) -> Result<GlobSet, String> {
@@ -75,10 +72,6 @@ pub(crate) fn compiled<'glob>(
 
 /// Invalid patterns are hard errors, like unknown config keys, so a typo'd
 /// exclude can't quietly let generated code through.
-///
-/// # Errors
-///
-/// Returns a message naming `pattern` when it isn't a valid glob.
 fn parse(pattern: &str) -> Result<globset::Glob, String> {
     if brace_depth(pattern) > MAX_BRACE_DEPTH {
         return Err(format!(
@@ -98,7 +91,7 @@ fn brace_depth(pattern: &str) -> usize {
     for b in pattern.bytes() {
         match b {
             b'{' => {
-                depth = depth.saturating_add(1);
+                depth += 1;
                 deepest = deepest.max(depth);
             }
             b'}' => depth = depth.saturating_sub(1),
@@ -115,9 +108,6 @@ mod tests {
 
     use super::*;
 
-    /// # Errors
-    ///
-    /// Returns the message `pattern` fails to deserialize with.
     fn glob(pattern: &str) -> Result<Glob, String> {
         Glob::deserialize(pattern.into_deserializer()).map_err(|e: Error| e.to_string())
     }

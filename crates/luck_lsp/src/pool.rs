@@ -1,6 +1,6 @@
-use core::iter;
-use core::num::NonZero;
 use std::io;
+use std::iter;
+use std::num::NonZero;
 use std::thread::{self, JoinHandle};
 
 use crossbeam_channel::{Receiver, RecvError, Sender, select_biased, unbounded};
@@ -46,9 +46,6 @@ struct Queues {
 }
 
 impl Pool {
-    /// # Errors
-    ///
-    /// Returns the error from starting a thread.
     pub(crate) fn new(threads: NonZero<usize>) -> io::Result<Self> {
         let (requests, request_jobs) = unbounded::<Job>();
         let (background, background_jobs) = unbounded::<Job>();
@@ -80,7 +77,7 @@ impl Pool {
         };
         // A worker holds each receiver until every queue closes, which only
         // `join` does.
-        let _queued = queue.send(Box::new(job));
+        let _ = queue.send(Box::new(job));
     }
 
     /// Closes every queue, and waits for the workers to run what's queued
@@ -90,7 +87,7 @@ impl Pool {
         drop((requests, background, idle));
         for worker in workers {
             // A worker that panicked has nothing left to stop.
-            let _stopped = worker.join();
+            let _ = worker.join();
         }
     }
 }
@@ -105,11 +102,6 @@ impl Queues {
 
     /// The first job of the queue it prefers that holds one, waiting for
     /// one when none does.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error once every queue is closed and empty. They all close
-    /// at once, after which each still gives what it holds.
     fn next(&self) -> Result<Job, RecvError> {
         let Self { requests, background, idle } = self;
         let drained = || requests.recv().or_else(|_| background.recv()).or_else(|_| idle.recv());
@@ -123,7 +115,7 @@ impl Queues {
 
 #[cfg(test)]
 mod tests {
-    use core::time::Duration;
+    use std::time::Duration;
 
     use crossbeam_channel::bounded;
 

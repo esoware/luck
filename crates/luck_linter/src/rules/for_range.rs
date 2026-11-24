@@ -45,7 +45,7 @@ fn range_problem(
 
     // A zero step loops forever before Lua 5.4 and raises an error from 5.4
     // on.
-    if step == Some(0.0f64) {
+    if step == Some(0.0) {
         return Some((
             "numeric `for` loop with step 0 never advances".to_owned(),
             "use a nonzero step or rewrite as `while`",
@@ -53,7 +53,7 @@ fn range_problem(
     }
 
     if let (Some(start_value), Some(limit_value), Some(step_value)) = (start, limit, step) {
-        if step_value < 0.0f64 && start_value < limit_value {
+        if step_value < 0.0 && start_value < limit_value {
             return Some((
                 format!(
                     "numeric `for` from {start_value} to {limit_value} with a negative step never iterates"
@@ -62,7 +62,7 @@ fn range_problem(
             ));
         }
         // `reversed_for_loop` covers a start above the limit with no step.
-        if step_value > 0.0f64 && start_value > limit_value {
+        if step_value > 0.0 && start_value > limit_value {
             return Some((
                 format!(
                     "numeric `for` from {start_value} to {limit_value} with a positive step never iterates"
@@ -74,7 +74,7 @@ fn range_problem(
 
     // Sequences start at 1, so `0, #t` also visits `t[0]`. Only a `#name`
     // limit fires, since `0, n` may be intentional.
-    if start == Some(0.0f64) && is_length_of_identifier(&numeric_for.limit) {
+    if start == Some(0.0) && is_length_of_identifier(&numeric_for.limit) {
         return Some((
             "numeric `for` starts at 0, but Lua sequences are 1-indexed".to_owned(),
             "use `for i = 1, #t do` to iterate the whole sequence",
@@ -100,12 +100,12 @@ fn length_start_problem(
 ) -> Option<(String, &'static str)> {
     let has_step_expr = numeric_for.step.is_some();
     match limit_value {
-        0.0f64 if !has_step_expr || step.is_some_and(|step_value| step_value > 0.0f64) => Some((
+        0.0 if !has_step_expr || step.is_some_and(|step_value| step_value > 0.0) => Some((
             "numeric `for` from a length to 0 needs a `-1` step, and Lua sequences are 1-indexed"
                 .to_owned(),
             "use `for i = #t, 1, -1 do` to iterate the sequence backwards",
         )),
-        1.0f64 if !has_step_expr => Some((
+        1.0 if !has_step_expr => Some((
             "numeric `for` from a length to 1 should iterate backwards, did you forget a `-1` step?"
                 .to_owned(),
             "add the step: `for i = #t, 1, -1 do`",
@@ -119,10 +119,6 @@ fn length_start_problem(
 ///
 /// Only fractional mismatches fire, since integer strides like
 /// `for i = 1, 10, 2` are idiomatic.
-#[expect(
-    clippy::float_arithmetic,
-    reason = "this rule reproduces the Lua VM arithmetic in doubles"
-)]
 fn limit_landing_problem(
     numeric_for: &NumericFor<'_>,
     start_value: f64,
@@ -130,24 +126,20 @@ fn limit_landing_problem(
     step: Option<f64>,
 ) -> Option<(String, &'static str)> {
     let step_value = match &numeric_for.step {
-        None => 1.0f64,
+        None => 1.0,
         Some(_) => step?,
     };
     if !start_value.is_finite()
         || !limit_value.is_finite()
         || !step_value.is_finite()
-        || step_value == 0.0f64
+        || step_value == 0.0
     {
         return None;
     }
     let count = ((limit_value - start_value) / step_value).floor();
-    #[expect(
-        clippy::suboptimal_flops,
-        reason = "the VM rounds the product and the sum separately; a fused multiply-add would not"
-    )]
     let last_value = start_value + count * step_value;
     let mismatch = limit_value - last_value;
-    (count >= 0.0f64 && mismatch.is_finite() && mismatch.fract() != 0.0f64).then(|| {
+    (count >= 0.0 && mismatch.is_finite() && mismatch.fract() != 0.0).then(|| {
         (
             format!(
                 "numeric `for` loop ends at {last_value} instead of {limit_value}, did you forget to specify a step?"

@@ -68,7 +68,7 @@ fn is_entered(block: &AstNode<'_>, graph: &FlowGraph, context: &LintContext<'_>)
         return true;
     }
     let owner = if matches!(kind, AstKind::ElseIfClause(_) | AstKind::ElseClause(_)) {
-        nodes.parent_node(parent.id()).unwrap_or(parent)
+        nodes.parent_node(parent.id()).expect("a clause is inside its `if`")
     } else {
         parent
     };

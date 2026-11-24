@@ -7,7 +7,7 @@ use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::{
     ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction, expand_replace_template,
 };
-use luck_token::{index_to_offset, is_lua_whitespace, offset_to_index};
+use luck_token::{index_to_offset, is_lua_whitespace};
 
 use crate::call::{CallArgs, calls_in, string_literal_value};
 use crate::context::{ContextHost, LintContext};
@@ -36,8 +36,7 @@ impl Rule for Deprecated {
             return;
         };
         // A call statement's call is its chain's last.
-        let statement_call =
-            context.is_statement(node).then(|| chain.suffixes.len().saturating_sub(1));
+        let statement_call = context.is_statement(node).then(|| chain.suffixes.len() - 1);
         for (index, call) in calls_in(chain) {
             if let Some(callee) = context.callee(node, index) {
                 check_call(call, callee, statement_call == Some(index), context);
@@ -107,7 +106,7 @@ fn deprecated_params(
         // The first signature's deprecation speaks for all of them.
         let deprecation = deprecations.next().flatten()?;
         deprecations.all(|later| later.is_some()).then(|| {
-            let arg_number = index.saturating_add(1);
+            let arg_number = index + 1;
             Finding::new(
                 format!("argument {arg_number} of `{}` is deprecated", callee.name()),
                 arg.span(),
@@ -188,7 +187,7 @@ fn starts_with_rebound_name(expanded: &[u8], offset: u32, semantic: &SemanticAna
         .iter()
         .position(|&b| !b.is_ascii_alphanumeric() && b != b'_')
         .unwrap_or(expanded.len());
-    let name = str::from_utf8(expanded.get(..name_length).unwrap_or_default()).unwrap_or_default();
+    let name = str::from_utf8(&expanded[..name_length]).expect("a name's bytes are ASCII");
     let tree = semantic.scoping();
     !name.is_empty()
         && (tree.nearest_local(name, offset).is_some()
@@ -231,27 +230,20 @@ fn fit_to_position(
 /// `^`, or a suffix that continues the expression.
 fn is_followed_by_tighter_binding(offset: u32, context: &ContextHost<'_>) -> bool {
     let bytes = context.source;
-    let mut index = offset_to_index(offset);
+    let mut index = offset as usize;
     loop {
-        index = index.saturating_add(
-            bytes
-                .get(index..)
-                .unwrap_or_default()
-                .iter()
-                .take_while(|&&b| is_lua_whitespace(b))
-                .count(),
-        );
+        index += bytes[index..].iter().take_while(|&&b| is_lua_whitespace(b)).count();
         let found = context
             .comments
             .binary_search_by_key(&index_to_offset(index), |comment| comment.span.start)
             .ok()
-            .and_then(|position| context.comments.get(position));
+            .map(|position| &context.comments[position]);
         let Some(comment) = found else {
             break;
         };
-        index = offset_to_index(comment.span.end);
+        index = comment.span.end as usize;
     }
-    match bytes.get(index..).unwrap_or_default() {
+    match &bytes[index..] {
         // `..` concatenates, which binds looser than a unary operator.
         [b'.', second, ..] => *second != b'.',
         [b'^' | b':' | b'[' | b'(' | b'{' | b'"' | b'\'', ..] => true,
@@ -283,12 +275,11 @@ fn check_field_accesses(
     };
     // A target's last field is stored to, not read.
     let read_count = if context.is_assignment_target(node) {
-        chain.suffixes.len().saturating_sub(1)
+        chain.suffixes.len() - 1
     } else {
         chain.suffixes.len()
     };
-    let reads = chain.suffixes.get(..read_count).unwrap_or_default();
-    for (read_index, suffix) in (1usize..).zip(reads) {
+    for (read_index, suffix) in (1..).zip(&chain.suffixes[..read_count]) {
         let Suffix::Field(name) = suffix else {
             return;
         };
@@ -301,9 +292,12 @@ fn check_field_accesses(
             continue;
         }
         if let Some(deprecation) = entry.deprecation() {
-            let path = chain.head(read_index).dotted_path().map(|path| path.to_string());
+            let path = chain
+                .head(read_index)
+                .dotted_path()
+                .expect("every suffix read so far is a field of a name");
             context.diagnostic(
-                Finding::new(format!("`{}` is deprecated", path.unwrap_or_default()), name.span)
+                Finding::new(format!("`{path}` is deprecated"), name.span)
                     .with_tag(Tag::Deprecated)
                     .with_help(deprecation.message.to_owned()),
             );

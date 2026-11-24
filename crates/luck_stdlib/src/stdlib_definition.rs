@@ -9,7 +9,7 @@
 //! since serde reads an internally tagged enum through a buffer that loses
 //! where in the file each value was.
 
-use alloc::collections::BTreeMap;
+use std::collections::BTreeMap;
 
 use luck_diagnostics::Diagnostic;
 use luck_token::Span;
@@ -228,10 +228,6 @@ impl TryFrom<RawEntry> for Entry {
 }
 
 /// A function's signatures, from its flat `params` or its `overloads`.
-///
-/// # Errors
-///
-/// Fails when both are set, or when a signature's params are out of order.
 fn signatures(
     flat: Option<Vec<Param>>,
     forms: Option<NonEmpty<Overload>>,
@@ -261,10 +257,6 @@ fn signatures(
 }
 
 #[derive(Debug, Clone)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "mirrors `StdlibFunction`, and all sixteen combinations are legal"
-)]
 pub(crate) struct Function {
     /// Each signature's params, required ones first, then optional ones,
     /// then at most one vararg.
@@ -443,11 +435,6 @@ pub(crate) struct Shape {
 /// Each type is an `Enum`-shaped namespace of the `Enum` global, which a
 /// definition without one gets, and each item an `EnumItem`-shaped read-only
 /// constant.
-///
-/// # Errors
-///
-/// Fails when the definition's `Enum` global isn't a namespace, or when it
-/// declares a member of a type's name itself.
 fn splice_enums(
     enums: BTreeMap<String, Spanned<EnumType>>,
     globals: &mut BTreeMap<String, Entry>,

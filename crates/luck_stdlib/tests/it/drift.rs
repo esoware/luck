@@ -6,12 +6,12 @@
 //! allowlist below names the difference and the reason for it. The other
 //! tests check each library's internal consistency.
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use luck_stdlib::{
     StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibLibrary, StdlibParam, StdlibSignature,
 };
-use luck_token::{LuaVersion, offset_to_index};
+use luck_token::LuaVersion;
 
 use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, roblox, standalone_library};
 
@@ -127,16 +127,14 @@ fn fingerprint(entry: &StdlibEntry<'_>) -> String {
 }
 
 fn deprecation_fingerprint(entry: &StdlibEntry<'_>) -> String {
-    entry.deprecation().map_or_else(
-        || "live".to_owned(),
-        |deprecation| {
-            let replacement = deprecation.replacement.map_or_else(
-                || "-".to_owned(),
-                |replacement| format!("{} exact={}", replacement.template, replacement.is_exact),
-            );
-            format!("deprecated({}|{replacement})", deprecation.message)
-        },
-    )
+    let Some(deprecation) = entry.deprecation() else {
+        return "live".to_owned();
+    };
+    let replacement = match deprecation.replacement {
+        Some(replacement) => format!("{} exact={}", replacement.template, replacement.is_exact),
+        None => "-".to_owned(),
+    };
+    format!("deprecated({}|{replacement})", deprecation.message)
 }
 
 #[test]
@@ -309,7 +307,7 @@ fn max_placeholder(template: &str) -> usize {
             && let Some(digit) = chars.peek().and_then(|next| next.to_digit(10))
         {
             chars.next();
-            max = max.max(offset_to_index(digit));
+            max = max.max(digit as usize);
         }
     }
     max
@@ -450,7 +448,7 @@ fn string_shape_mirrors_string_namespace() {
                 assert!(method.is_method, "{file}: string:{name} not a method");
                 assert_eq!(
                     method.primary_signature().params.len(),
-                    source.primary_signature().params.len().saturating_sub(1),
+                    source.primary_signature().params.len() - 1,
                     "{file}: string:{name} did not drop exactly the subject param"
                 );
             }

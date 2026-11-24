@@ -21,7 +21,6 @@ impl<'ast> Synth<'ast> {
     /// Negatives use unary minus. NaN becomes `0/0` and deliberately loses
     /// its sign, payload, and signaling state, since only a target-specific
     /// runtime construction can rebuild a bit-exact NaN.
-    #[must_use]
     pub fn number_f64(&self, value: f64) -> Expression<'ast> {
         self.number_value(LuaNumber::Float(value))
     }
@@ -35,7 +34,6 @@ impl<'ast> Synth<'ast> {
     /// Negatives use unary minus, but for `i64::MIN`, which no integer
     /// negates to: it's a literal on 5.3+, which prints as the hex that
     /// wraps to it.
-    #[must_use]
     pub fn number_i64(&self, value: i64) -> Expression<'ast> {
         if self.version.is_some_and(|version| !version.has_integer_subtype()) {
             return self.number_f64(LuaNumber::Int(value).to_f64());
@@ -56,7 +54,6 @@ impl<'ast> Synth<'ast> {
 
     /// Luau: an exact 64-bit integer literal, which prints as hex when it's
     /// negative, as the bit pattern a literal can't carry a sign for.
-    #[must_use]
     pub fn integer_i64(&self, value: i64) -> Expression<'ast> {
         Expression::Integer(self.boxed(IntegerLiteral::new(value, None, self.next_span())))
     }
@@ -66,14 +63,12 @@ impl<'ast> Synth<'ast> {
     }
 
     /// A string literal whose value is `content`.
-    #[must_use]
     pub fn string(&self, content: &str) -> Expression<'ast> {
         self.string_bytes(content.as_bytes())
     }
 
     /// A string literal whose value is arbitrary bytes, such as a bytecode
     /// constant that isn't UTF-8.
-    #[must_use]
     pub fn string_bytes(&self, content: &[u8]) -> Expression<'ast> {
         Expression::StringLiteral(self.boxed(self.string_literal(content)))
     }
@@ -89,7 +84,6 @@ impl<'ast> Synth<'ast> {
     /// level every version reads back as `content`. Content with a carriage
     /// return, which Lua normalizes, or a NUL byte, which ends a Luau source,
     /// is [`Synth::string`] instead.
-    #[must_use]
     pub fn long_string(&self, content: &str) -> Expression<'ast> {
         let mut spelling = Vec::new();
         let mut literal = self.string_literal(content.as_bytes());
@@ -99,17 +93,14 @@ impl<'ast> Synth<'ast> {
         Expression::StringLiteral(self.boxed(literal))
     }
 
-    #[must_use]
     pub fn nil(&self) -> Expression<'ast> {
         Expression::Nil(self.next_span())
     }
 
-    #[must_use]
     pub fn boolean(&self, value: bool) -> Expression<'ast> {
         if value { Expression::True(self.next_span()) } else { Expression::False(self.next_span()) }
     }
 
-    #[must_use]
     pub fn vararg(&self) -> Expression<'ast> {
         Expression::VarArg(self.next_span())
     }
@@ -119,7 +110,6 @@ impl<'ast> Synth<'ast> {
     ///
     /// Each text is a value, which the printers escape. Adjacent text parts
     /// merge.
-    #[must_use]
     pub fn interpolated_string<'text, Parts>(&self, parts: Parts) -> Expression<'ast>
     where
         Parts: IntoIterator<Item = InterpolatedStringPart<'text, 'ast>>,
@@ -171,7 +161,7 @@ mod tests {
         assert_eq!(number_value(&synth.number_f64(1.5)), LuaNumber::Float(1.5));
         assert_eq!(number_value(&synth.number_f64(3.0)), LuaNumber::Float(3.0));
         assert_eq!(number_value(&synth.number_f64(f64::INFINITY)), LuaNumber::Float(f64::INFINITY));
-        for negative in [-2.5f64, -0.0f64, f64::NEG_INFINITY] {
+        for negative in [-2.5, -0.0, f64::NEG_INFINITY] {
             let Expression::UnaryOp(negation) = synth.number_f64(negative) else {
                 panic!("a literal carries no sign");
             };
@@ -217,7 +207,7 @@ mod tests {
         let Expression::UnaryOp(negated_min) = luau.number_i64(i64::MIN) else {
             panic!("expected a negation");
         };
-        let two_to_63 = LuaNumber::Float(f64::from_bits(0x43E0_0000_0000_0000));
+        let two_to_63 = LuaNumber::Float(9_223_372_036_854_775_808.0);
         assert_eq!(number_value(&negated_min.operand), two_to_63);
         // 2^53 + 1, the first integer a double can't hold.
         let rounded = number_value(&luau.number_i64(0x20_0000_0000_0001));

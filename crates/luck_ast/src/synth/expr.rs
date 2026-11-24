@@ -1,4 +1,4 @@
-use core::mem;
+use std::mem;
 
 use luck_allocator::Box;
 use luck_token::{Associativity, BinOp, UnOp};
@@ -27,12 +27,10 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn name_var(&self, name: &str) -> Var<'ast> {
         Var::Name(self.boxed(self.name(name)))
     }
 
-    #[must_use]
     pub fn index_var(&self, prefix: Expression<'ast>, index: Expression<'ast>) -> Var<'ast> {
         Var::Suffixed(self.index_chain(prefix, index))
     }
@@ -40,7 +38,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn field_var(&self, prefix: Expression<'ast>, name: &str) -> Var<'ast> {
         Var::Suffixed(self.suffixed(prefix, Suffix::Field(self.name(name))))
     }
@@ -48,12 +45,10 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn name_expr(&self, name: &str) -> Expression<'ast> {
         Expression::Name(self.boxed(self.name(name)))
     }
 
-    #[must_use]
     pub fn index(&self, prefix: Expression<'ast>, index: Expression<'ast>) -> Expression<'ast> {
         Expression::Suffixed(self.index_chain(prefix, index))
     }
@@ -61,7 +56,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn field(&self, prefix: Expression<'ast>, name: &str) -> Expression<'ast> {
         Expression::Suffixed(self.suffixed(prefix, Suffix::Field(self.name(name))))
     }
@@ -93,7 +87,6 @@ impl<'ast> Synth<'ast> {
 
     /// `prefix.name` when `name` is a safe identifier (in the pinned dialect,
     /// or in every dialect when none is pinned), `prefix["name"]` otherwise.
-    #[must_use]
     pub fn field_or_index(&self, prefix: Expression<'ast>, name: &str) -> Expression<'ast> {
         if self.is_safe_field_name(name) {
             self.field(prefix, name)
@@ -107,7 +100,6 @@ impl<'ast> Synth<'ast> {
     /// where it groups as this one would, first under a left-associative
     /// `op` and last under a right-associative one, so `(a + b) - c` builds
     /// one run, and `a - (b - c)` a run in a run.
-    #[must_use]
     pub fn binary_op(
         &self,
         lhs: Expression<'ast>,
@@ -140,7 +132,6 @@ impl<'ast> Synth<'ast> {
         Expression::BinaryOp(run)
     }
 
-    #[must_use]
     pub fn unary_op(&self, op: UnOp, operand: Expression<'ast>) -> Expression<'ast> {
         Expression::new_unary_op(self.next_span(), op, operand, self.allocator)
     }
@@ -150,7 +141,6 @@ impl<'ast> Synth<'ast> {
     ///
     /// Use it at the end of a call, return, or assignment list when exactly
     /// one value is meant, such as a bytecode `CALL` that requests one result.
-    #[must_use]
     pub fn single_value(&self, expr: Expression<'ast>) -> Expression<'ast> {
         if is_multi_value(&expr) {
             Expression::new_parenthesized(self.next_span(), expr, self.allocator)
@@ -160,13 +150,11 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Luau type cast: `expr :: T`.
-    #[must_use]
     pub fn type_cast(&self, expr: Expression<'ast>, ty: Type<'ast>) -> Expression<'ast> {
         Expression::new_type_cast(self.next_span(), expr, ty, self.allocator)
     }
 
     /// Luau: `expr<<T, U>>`.
-    #[must_use]
     pub fn type_instantiation<Types>(
         &self,
         expr: Expression<'ast>,
@@ -189,7 +177,6 @@ impl<'ast> Synth<'ast> {
         TypeArgs::boxed(self.next_span(), self.list(types), self.allocator)
     }
 
-    #[must_use]
     pub fn call<Args>(&self, callee: Expression<'ast>, args: Args) -> Expression<'ast>
     where
         Args: IntoIterator<Item = Expression<'ast>>,
@@ -201,7 +188,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn method_call<Args>(
         &self,
         receiver: Expression<'ast>,
@@ -220,7 +206,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn method_call_with_types<Types, Args>(
         &self,
         receiver: Expression<'ast>,
@@ -241,7 +226,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if a [`FieldSpec::Named`] key isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn call_table<'name, Fields>(
         &self,
         callee: Expression<'ast>,
@@ -256,7 +240,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// `callee"content"`, the string argument form, whose value is `content`.
-    #[must_use]
     pub fn call_string(&self, callee: Expression<'ast>, content: &str) -> Expression<'ast> {
         let args = FunctionArgs::StringLiteral(self.boxed(self.string_literal(content.as_bytes())));
         Expression::Suffixed(self.suffixed(callee, Suffix::Call(args)))
@@ -265,7 +248,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` or a [`FieldSpec::Named`] key isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn method_call_table<'name, Fields>(
         &self,
         receiver: Expression<'ast>,
@@ -283,7 +265,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn method_call_string(
         &self,
         receiver: Expression<'ast>,
@@ -316,7 +297,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if a [`FieldSpec::Named`] key isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn table<'name, Fields>(&self, fields: Fields) -> Expression<'ast>
     where
         Fields: IntoIterator<Item = FieldSpec<'name, 'ast>>,
@@ -325,7 +305,6 @@ impl<'ast> Synth<'ast> {
         Expression::TableConstructor(self.table_constructor(fields))
     }
 
-    #[must_use]
     pub fn array<Values>(&self, values: Values) -> Expression<'ast>
     where
         Values: IntoIterator<Item = Expression<'ast>>,
@@ -335,7 +314,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Keys that aren't safe identifiers fall back to the bracketed string form.
-    #[must_use]
     pub fn record<'name, Fields>(&self, fields: Fields) -> Expression<'ast>
     where
         Fields: IntoIterator<Item = (&'name str, Expression<'ast>)>,
@@ -372,14 +350,12 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if a name in `params` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn function_def(&self, params: &[&str], body: Block<'ast>) -> Expression<'ast> {
         let signature = FunctionSignature { params: self.params(params), ..Default::default() };
         self.function_def_full([], signature, body)
     }
 
     /// Build `attributes` with [`Synth::function_attribute`].
-    #[must_use]
     pub fn function_def_full<Attributes>(
         &self,
         attributes: Attributes,
@@ -399,7 +375,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Luau: `if condition then then_expr elseif ... else else_expr`.
-    #[must_use]
     pub fn if_expr<ElseIfs>(
         &self,
         condition: Expression<'ast>,
@@ -508,7 +483,7 @@ mod tests {
     fn a_run_extended_a_link_at_a_time_keeps_its_order() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let names: Vec<String> = (0..2_000u32).map(|i| format!("v{i}")).collect();
+        let names: Vec<String> = (0..2_000).map(|i| format!("v{i}")).collect();
         let name_of = |expr: &Expression<'_>| {
             let Expression::Name(name) = expr else {
                 panic!("expected a name, got {expr:?}");
@@ -559,13 +534,13 @@ mod tests {
         let synth = fixture.synth();
         let mut sum = synth.name_expr("x");
         let one_link = fixture.allocator().used_bytes();
-        for _ in 0..10_000u32 {
+        for _ in 0..10_000 {
             sum = synth.binary_op(sum, BinOp::Add, synth.nil());
         }
         assert_eq!(run(&sum).links.len(), 10_000);
         // The links' doubling allocations and the run's box, well under the
         // quadratic space that copying the run at each link would take.
-        let used = fixture.allocator().used_bytes().saturating_sub(one_link);
+        let used = fixture.allocator().used_bytes() - one_link;
         assert!(used < 10_000 * 4 * size_of::<BinaryLink<'_>>(), "{used} bytes");
     }
 

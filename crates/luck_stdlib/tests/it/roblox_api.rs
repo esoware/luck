@@ -2,8 +2,8 @@
 //! `roblox_api.toml` and `roblox_enums.toml` from the live API dump, and
 //! offline checks on the committed files.
 
-use core::error::Error;
-use core::fmt::Write as _;
+use std::error::Error;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
@@ -207,11 +207,6 @@ values = [
 
 /// Write `roblox_enums.toml`: every enum type and item in the dump, with
 /// deprecation tags carried over.
-///
-/// # Errors
-///
-/// Fails when the dump lacks an expected field or the file can't be
-/// written.
 fn write_enum_file(dump: &serde_json::Value) -> Result<(), Box<dyn Error>> {
     type EnumRow = (String, bool, Vec<(String, bool)>);
     let enums = dump["Enums"].as_array().ok_or("Enums array")?;

@@ -1,6 +1,6 @@
-use alloc::sync::Arc;
-use core::num::NonZero;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use luck_config::Project;

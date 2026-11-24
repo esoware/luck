@@ -46,10 +46,9 @@ pub(crate) fn renamable_globals(
                 && !function_globals.contains(&name)
                 && !reads.has(name)
                 && !is_excluded(name)
-                && let Some(slot) = is_assign_first.get_mut(name.index())
-                && !*slot
+                && !is_assign_first[name.index()]
             {
-                *slot = true;
+                is_assign_first[name.index()] = true;
                 assign_first.push(name);
             }
         }
@@ -97,9 +96,8 @@ fn function_globals(
                 for target in &assignment.targets {
                     if let Some(name) = target_global(target, global)
                         && !reads.has(name)
-                        && let Some(slot) = is_assigned_first.get_mut(name.index())
                     {
-                        *slot = true;
+                        is_assigned_first[name.index()] = true;
                     }
                 }
             }
@@ -112,14 +110,9 @@ fn function_globals(
                     reads.visit_stmt(stmt);
                     continue;
                 };
-                let is_read_first = reads.has(name)
-                    && !is_assigned_first.get(name.index()).copied().unwrap_or(false);
-                if !is_read_first
-                    && !is_excluded(name)
-                    && let Some(slot) = is_taken.get_mut(name.index())
-                    && !*slot
-                {
-                    *slot = true;
+                let is_read_first = reads.has(name) && !is_assigned_first[name.index()];
+                if !is_read_first && !is_excluded(name) && !is_taken[name.index()] {
+                    is_taken[name.index()] = true;
                     function_globals.push(name);
                 }
             }
@@ -160,14 +153,12 @@ impl<'global> Reads<'global> {
     }
 
     fn has(&self, name: NameId) -> bool {
-        self.is_read.get(name.index()).copied().unwrap_or(false)
+        self.is_read[name.index()]
     }
 
     fn read(&mut self, name: &Name<'_>) {
-        if let Some(slot) =
-            (self.global)(name).and_then(|global| self.is_read.get_mut(global.index()))
-        {
-            *slot = true;
+        if let Some(global) = (self.global)(name) {
+            self.is_read[global.index()] = true;
         }
     }
 

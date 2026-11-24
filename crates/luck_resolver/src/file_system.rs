@@ -121,7 +121,6 @@ fn entry_metadata(entry: &fs::DirEntry) -> Option<FileMetadata> {
     if file_type.is_symlink() || is_reparse_point(entry) {
         return None;
     }
-    #[expect(clippy::filetype_is_file, reason = "`Path::is_file` means a regular file")]
     let is_file = file_type.is_file();
     Some(FileMetadata { is_file, is_dir: file_type.is_dir() })
 }

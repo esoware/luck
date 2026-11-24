@@ -1,4 +1,4 @@
-use alloc::borrow::Cow;
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, ValueEnum};
@@ -45,10 +45,6 @@ pub(crate) struct GraphArgs {
 }
 
 impl GraphArgs {
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad config or entry path, and
-    /// [`Exit::Failure`] when the graph can't be built.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let entry_path = existing_file(&self.entry)?;
         let project = one_shot_project(self.config.as_deref(), entry_path)?;
@@ -75,15 +71,13 @@ impl GraphArgs {
 fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
     use serde_json::{Map, Value, json};
 
-    let module_path = |id: ModuleId| {
-        dependency_graph.modules.get(id.0).map(|module| to_slash_lossy(&module.path))
-    };
+    let module_path = |id: ModuleId| to_slash_lossy(&dependency_graph.modules[id.0].path);
 
     let mut modules_map = Map::new();
     for module in &dependency_graph.modules {
         let requires: Vec<&str> =
             module.dependencies.iter().map(|dependency| dependency.require_string).collect();
-        let resolved_paths: Vec<Option<Cow<'_, str>>> =
+        let resolved_paths: Vec<Cow<'_, str>> =
             module.dependencies.iter().map(|dependency| module_path(dependency.target)).collect();
 
         modules_map.insert(
@@ -95,7 +89,7 @@ fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
         );
     }
 
-    let ordered_paths: Vec<Option<Cow<'_, str>>> =
+    let ordered_paths: Vec<Cow<'_, str>> =
         dependency_graph.topological_order.iter().map(|id| module_path(*id)).collect();
 
     let output = json!({
@@ -113,9 +107,8 @@ fn print_graph_dot(dependency_graph: &DependencyGraph<'_>) {
     println!("digraph dependencies {{");
     for module in &dependency_graph.modules {
         for dependency in &module.dependencies {
-            if let Some(target) = dependency_graph.modules.get(dependency.target.0) {
-                println!("  \"{}\" -> \"{}\";", quoted(&module.path), quoted(&target.path));
-            }
+            let target = &dependency_graph.modules[dependency.target.0];
+            println!("  \"{}\" -> \"{}\";", quoted(&module.path), quoted(&target.path));
         }
     }
     println!("}}");

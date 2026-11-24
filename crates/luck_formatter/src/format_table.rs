@@ -68,7 +68,7 @@ impl<'ast> Formatter<'ast> {
         let should_fill = is_fillable(table)
             && (!has_magic_comma || self.is_packed_in_source(table))
             && !self.comments().has_comment_in(table.span.start, table.span.end);
-        let last_index = table.fields.len().saturating_sub(1);
+        let last_index = table.fields.len() - 1;
 
         let group_id = self.group_id();
         let content = |grouped: &mut Self| {

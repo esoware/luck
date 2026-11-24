@@ -34,9 +34,6 @@ impl Lua {
         self.resolved.clear();
     }
 
-    /// # Errors
-    ///
-    /// Returns [`ResolveError::NotFound`] when no template names a file.
     pub(crate) fn resolve(
         &self,
         cache: &Cache<impl FileSystem>,

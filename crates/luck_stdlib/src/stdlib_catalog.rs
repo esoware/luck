@@ -21,7 +21,6 @@ static LUA55: StdlibLibrary<'static> = include!("stdlib_catalog/lua55.rs");
 static LUAU: StdlibLibrary<'static> = include!("stdlib_catalog/luau.rs");
 static LUAU_ROBLOX: StdlibLibrary<'static> = include!("stdlib_catalog/luau_roblox.rs");
 
-#[must_use]
 pub const fn library_for(target: LuaTarget) -> &'static StdlibLibrary<'static> {
     match target {
         LuaTarget::Lua51 => &LUA51,
@@ -39,7 +38,6 @@ pub const fn library_for(target: LuaTarget) -> &'static StdlibLibrary<'static> {
 /// The real `require` finds one in `package.loaded` before any searcher, so
 /// no file can stand in for it. Luau has no `package` table, so its
 /// `require` always resolves a path.
-#[must_use]
 pub fn is_preloaded_module(name: &str, version: LuaVersion) -> bool {
     !version.is_luau()
         && (name == "_G"
@@ -79,9 +77,9 @@ const fn constant(value: &'static str) -> StdlibConstant<'static> {
 
 #[cfg(test)]
 mod tests {
-    use core::ptr;
     use std::fs;
     use std::path::PathBuf;
+    use std::ptr;
 
     use luck_allocator::Allocator;
 
@@ -128,7 +126,7 @@ mod tests {
             if entries.is_empty() {
                 return "stdlib_map!(StdlibEntry<'static>, [])".to_owned();
             }
-            let entry_depth = depth.saturating_add(1);
+            let entry_depth = depth + 1;
             let lines: Vec<String> = entries
                 .iter()
                 .map(|(name, value)| {
@@ -210,16 +208,16 @@ stdlib_map!(StdlibEntry<'static>, [
 
         fn param(&self, param: &StdlibParam<'_>) -> String {
             let kind = self.arg_kind(&param.kind);
-            param.deprecated.as_ref().map_or_else(
-                || format!("{}({kind})", if param.is_required { "required" } else { "optional" }),
-                |deprecated| {
-                    format!(
-                        "StdlibParam {{ kind: {kind}, is_required: {}, deprecated: {} }}",
-                        param.is_required,
-                        deprecation(deprecated)
-                    )
-                },
-            )
+            match &param.deprecated {
+                Some(deprecated) => format!(
+                    "StdlibParam {{ kind: {kind}, is_required: {}, deprecated: {} }}",
+                    param.is_required,
+                    deprecation(deprecated)
+                ),
+                None => {
+                    format!("{}({kind})", if param.is_required { "required" } else { "optional" })
+                }
+            }
         }
 
         fn arg_kind(&self, kind: &StdlibArgKind<'_>) -> String {
@@ -232,17 +230,14 @@ stdlib_map!(StdlibEntry<'static>, [
                 StdlibArgKind::Table => "StdlibArgKind::Table".to_owned(),
                 StdlibArgKind::Display(label) => format!("StdlibArgKind::Display({label:?})"),
                 StdlibArgKind::Constant(values) => {
-                    let set = self.sets.iter().find(|(_, set)| ptr::eq(*set, *values));
-                    set.map_or_else(
-                        || {
-                            let constants: Vec<String> =
-                                values.iter().map(constant_literal).collect();
-                            format!("StdlibArgKind::Constant(&[{}])", constants.join(", "))
-                        },
-                        |(name, _)| {
-                            format!("StdlibArgKind::Constant(&{})", name.to_ascii_uppercase())
-                        },
-                    )
+                    if let Some((name, _)) =
+                        self.sets.iter().find(|(_, set)| ptr::eq(*set, *values))
+                    {
+                        format!("StdlibArgKind::Constant(&{})", name.to_ascii_uppercase())
+                    } else {
+                        let constants: Vec<String> = values.iter().map(constant_literal).collect();
+                        format!("StdlibArgKind::Constant(&[{}])", constants.join(", "))
+                    }
                 }
                 StdlibArgKind::Vararg => "StdlibArgKind::Vararg".to_owned(),
             }
@@ -329,15 +324,13 @@ static {}: [StdlibConstant<'static>; {}] = [
     }
 
     fn deprecation(deprecation: &StdlibDeprecation<'_>) -> String {
-        let replacement = deprecation.replacement.as_ref().map_or_else(
-            || "None".to_owned(),
-            |replacement| {
-                format!(
-                    "Some(StdlibReplacement {{ template: {:?}, is_exact: {} }})",
-                    replacement.template, replacement.is_exact
-                )
-            },
-        );
+        let replacement = match &deprecation.replacement {
+            Some(replacement) => format!(
+                "Some(StdlibReplacement {{ template: {:?}, is_exact: {} }})",
+                replacement.template, replacement.is_exact
+            ),
+            None => "None".to_owned(),
+        };
         format!(
             "Some(StdlibDeprecation {{ message: {:?}, replacement: {replacement} }})",
             deprecation.message

@@ -22,7 +22,6 @@ pub struct Dependency<'ast> {
 /// One module as discovery found it. Its source and tree live in one of the
 /// arenas the graph was built in.
 #[derive(Debug)]
-#[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the module")]
 pub struct ModuleInfo<'ast> {
     /// The canonical path, from
     /// [`FileSystem::canonicalize`](luck_resolver::FileSystem::canonicalize),

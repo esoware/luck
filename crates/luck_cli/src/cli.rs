@@ -1,4 +1,4 @@
-use core::num::NonZero;
+use std::num::NonZero;
 use std::process::ExitCode;
 use std::thread;
 
@@ -114,9 +114,9 @@ mod tests {
     #[test]
     fn threads_is_a_count_of_one_or_more_any_command_takes() {
         let threads = |args: &[&str]| Cli::try_parse_from(args).map(|cli| cli.threads);
-        assert_eq!(threads(&["luck", "lint"]).ok(), Some(None));
-        assert_eq!(threads(&["luck", "--threads", "4", "lint"]).ok(), Some(NonZero::new(4)));
-        assert_eq!(threads(&["luck", "fmt", "--threads", "1"]).ok(), Some(NonZero::new(1)));
-        assert_eq!(threads(&["luck", "check", "--threads", "0"]).ok(), None);
+        assert_eq!(threads(&["luck", "lint"]).unwrap(), None);
+        assert_eq!(threads(&["luck", "--threads", "4", "lint"]).unwrap(), NonZero::new(4));
+        assert_eq!(threads(&["luck", "fmt", "--threads", "1"]).unwrap(), NonZero::new(1));
+        assert!(threads(&["luck", "check", "--threads", "0"]).is_err());
     }
 }

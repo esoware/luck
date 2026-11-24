@@ -58,7 +58,7 @@ fn bundle_and_graph_resolve_through_the_project_s_search_paths() {
     luck_in(project.path())
         .args(["bundle", "src/main.lua", "-s", "src/?.lua"])
         .assert()
-        .code(1i32)
+        .code(1)
         .stderr(predicate::str::contains("module not found: `util`"));
 }
 
@@ -73,11 +73,11 @@ fn an_override_layers_its_lint_settings_over_the_files_it_matches() {
     write_file(project.path(), "src/a.lua", "local unused = 1\n");
     write_file(project.path(), "spec/a_spec.lua", "local unused = 1\n");
     luck_in(project.path()).args(["lint", "--deny-warnings", "spec"]).assert().success();
-    luck_in(project.path()).args(["lint", "--deny-warnings", "src"]).assert().code(1i32);
+    luck_in(project.path()).args(["lint", "--deny-warnings", "src"]).assert().code(1);
     luck_in(project.path())
         .args(["lint", "--deny-warnings", "-W", "unused_variable", "spec"])
         .assert()
-        .code(1i32);
+        .code(1);
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn a_config_error_names_the_place_in_the_file() {
     luck_in(project.path())
         .arg("lint")
         .assert()
-        .code(2i32)
+        .code(2)
         .stderr(predicate::str::contains("E014"))
         .stderr(predicate::str::contains("did you mean `unused_variable`?"))
         .stderr(predicate::str::contains("luck.json:2:24"));
@@ -202,7 +202,7 @@ shape = 1
     luck_in(project.path())
         .arg("lint")
         .assert()
-        .code(2i32)
+        .code(2)
         .stderr(predicate::str::contains("E014"))
         .stderr(predicate::str::contains("love.toml"));
 }

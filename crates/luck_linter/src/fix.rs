@@ -1,9 +1,9 @@
-use alloc::borrow::Cow;
-use alloc::collections::BTreeMap;
-use core::cmp::Reverse;
-use core::error::Error;
-use core::fmt;
-use core::ops::Range;
+use std::borrow::Cow;
+use std::cmp::Reverse;
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
+use std::ops::Range;
 
 use bitflags::bitflags;
 use luck_allocator::Allocator;
@@ -162,9 +162,6 @@ impl Linter {
         self.fix_within(allocator, source, stdlib, fixes, timings, ROUND_BUDGET)
     }
 
-    /// # Errors
-    ///
-    /// As for [`Self::fix`], with `budget` as the limit.
     fn fix_within<'ast>(
         &self,
         allocator: &'ast Allocator,
@@ -206,11 +203,11 @@ pub(crate) fn apply(source: &[u8], messages: &[Message], fixes: FixKind) -> Opti
     let mut copied_to = 0;
     for edit in edits {
         let Range { start, end } = Range::<usize>::from(edit.span);
-        text.extend_from_slice(source.get(copied_to..start).unwrap_or_default());
+        text.extend_from_slice(&source[copied_to..start]);
         text.extend_from_slice(&edit.replacement);
         copied_to = end;
     }
-    text.extend_from_slice(source.get(copied_to..).unwrap_or_default());
+    text.extend_from_slice(&source[copied_to..]);
     (text != source).then_some(text)
 }
 
@@ -221,7 +218,6 @@ pub(crate) fn apply(source: &[u8], messages: &[Message], fixes: FixKind) -> Opti
 /// overlapping ones the later wins. A fix is kept or dropped whole, because
 /// half of a multi-edit fix changes the code's meaning. Edits at one offset
 /// keep a fixed order, whichever rule produced them.
-#[must_use]
 pub fn non_overlapping_edits(messages: &[Message], fixes: FixKind) -> Vec<&TextEdit> {
     let mut candidates: Vec<&Fix> = messages
         .iter()
@@ -299,9 +295,6 @@ mod tests {
         Linter::new(config)
     }
 
-    /// # Errors
-    ///
-    /// As for [`Linter::fix_within`].
     fn fixed_within(source: &str, linter: &Linter, budget: usize) -> Result<String, FixError> {
         let allocator = Allocator::new();
         let stdlib = library_for(LuaTarget::Lua54);

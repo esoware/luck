@@ -1,6 +1,6 @@
 use luck_ast::{Block, GetSpan as _, LocalAssignment, LocalFunction, Statement};
 use luck_semantic::{ScopeKind, Scoping, SymbolId};
-use luck_token::{LuaVersion, Span, line_breaks, offset_to_index};
+use luck_token::{LuaVersion, Span, line_breaks};
 use rustc_hash::FxHashSet;
 
 use crate::emitter::Edit;
@@ -93,7 +93,7 @@ impl<'ast> Exports<'ast> {
             } else {
                 exports.local_names.extend(statement_symbols.into_iter().map(|symbol| {
                     let name = tree.symbol(symbol).definition_span.text(source);
-                    str::from_utf8(name).unwrap_or_default()
+                    str::from_utf8(name).expect("the lexer reads only ASCII names")
                 }));
             }
         }
@@ -210,7 +210,7 @@ impl<'ast> Exports<'ast> {
 pub(crate) fn contains_span(spans: &[Span], span: Span) -> bool {
     spans
         .binary_search_by_key(&span.start, |candidate| candidate.start)
-        .is_ok_and(|i| spans.get(i) == Some(&span))
+        .is_ok_and(|i| spans[i] == span)
 }
 
 /// Whether the module exports a value, so its bundled wrapper returns the
@@ -308,6 +308,6 @@ impl TextLowerer<'_> {
 }
 
 fn export_keyword_at(start: u32) -> Span {
-    let index = offset_to_index(start);
-    Span::from_indices(index, index.saturating_add("export".len()))
+    let index = start as usize;
+    Span::from_indices(index, index + "export".len())
 }

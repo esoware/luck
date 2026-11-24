@@ -2,7 +2,7 @@
 //! without parentheses. A `->` after the closing paren is what makes
 //! `(params) -> R` a function type, and its return type may be a pack.
 
-use core::mem;
+use std::mem;
 
 use luck_allocator::{Box, List};
 use luck_ast::{
@@ -89,7 +89,7 @@ impl<'ast> Parser<'ast> {
         {
             // The suffix wraps an element one level inside the pack, and
             // counts from the whole pack's deepest level.
-            self.nesting_depth = level.wrapping_add(1);
+            self.nesting_depth = level + 1;
             *element = self.parse_union_level(element.take());
             self.nesting_depth = level;
             let element_span = element.span();
@@ -265,7 +265,7 @@ impl<'ast> Parser<'ast> {
         while self.is_at(TokenKind::Question) {
             let question = self.advance();
             optional.span = optional.span.merge(question);
-            optional.question_count = optional.question_count.saturating_add(1);
+            optional.question_count += 1;
         }
         Type::Optional(optional)
     }
@@ -458,7 +458,7 @@ impl<'ast> Parser<'ast> {
             TokenKind::Greater => self.advance(),
             TokenKind::GreaterEqual => {
                 let span = self.token.span;
-                let split_at = span.start.saturating_add(1);
+                let split_at = span.start + 1;
                 self.token = Token {
                     span: Span::new(split_at, span.end),
                     kind: TokenKind::Equal,
@@ -644,16 +644,16 @@ impl<'ast> Parser<'ast> {
         is_pack_allowed: bool,
     ) -> Type<'ast> {
         let mut params = mem::take(&mut self.scratch.function_type_params);
-        for param in params.get(start..).unwrap_or_default() {
+        for param in &params[start..] {
             if let Some(name) = param.name {
                 self.error(name.span, "named parameters are only valid in function types");
             }
         }
         // `(T)` is a parenthesized type; `()`, `(T, U)`, and `(...T)` are packs.
-        let ty = if let [single] = params.get(start..).unwrap_or_default()
+        let ty = if let [single] = &params[start..]
             && !matches!(single.ty, Type::Variadic(_) | Type::GenericPack(_))
-            && let Some(param) = params.pop()
         {
+            let param = params.pop().expect("the match holds one member");
             Type::new_parenthesized(span, param.ty, self.allocator)
         } else if is_pack_allowed {
             let types_start = self.scratch.types.len();

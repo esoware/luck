@@ -1,4 +1,4 @@
-use core::fmt::Write as _;
+use std::fmt::Write as _;
 use std::path::{self, Path};
 
 use luck_diagnostics::Diagnostic;
@@ -29,11 +29,11 @@ impl Reporter for GithubReporter {
             let mut message = diag.message.to_string();
             for other in &diag.labels {
                 let (line, column) = line_and_column(&lines, text, other.span.start);
-                let _infallible = write!(message, "\n{line}:{column}: {}", other.message);
+                let _ = write!(message, "\n{line}:{column}: {}", other.message);
             }
             for (heading, extra) in [("help", &diag.help), ("note", &diag.note)] {
                 if let Some(added) = extra {
-                    let _infallible = write!(message, "\n{heading}: {added}");
+                    let _ = write!(message, "\n{heading}: {added}");
                 }
             }
             let place = diag.span.map_or_else(String::new, |span| {
@@ -41,7 +41,7 @@ impl Reporter for GithubReporter {
                 let (end_line, end_column) = line_and_column(&lines, text, span.end);
                 format!(",line={line},endLine={end_line},col={column},endColumn={end_column}")
             });
-            let _infallible = writeln!(
+            let _ = writeln!(
                 annotations,
                 "::{} file={path}{place},title={}::{}",
                 diag.severity.name(),

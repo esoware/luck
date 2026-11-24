@@ -15,7 +15,7 @@ pub use identifier::{
 pub use literal::InterpolatedStringPart;
 pub use types::TypeFieldSpec;
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use luck_allocator::{Allocator, Box, List, ThinStr};
 use luck_token::{LuaVersion, Span};
@@ -168,14 +168,12 @@ pub struct SpanCounter {
 }
 
 impl SpanCounter {
-    #[must_use]
     pub const fn new() -> Self {
         Self { next_offset: AtomicU64::new(0) }
     }
 
     /// A counter whose spans start at `offset`, for splicing nodes into a
     /// parsed tree without colliding with its byte offsets.
-    #[must_use]
     pub fn starting_at(offset: u32) -> Self {
         Self { next_offset: AtomicU64::new(u64::from(offset)) }
     }
@@ -193,7 +191,6 @@ impl SpanCounter {
 }
 
 impl<'ast> Synth<'ast> {
-    #[must_use]
     pub const fn new(allocator: &'ast Allocator, spans: &'ast SpanCounter) -> Self {
         Self { allocator, spans, version: None }
     }
@@ -216,7 +213,6 @@ impl<'ast> Synth<'ast> {
     /// A fresh single-point span, distinct from every earlier one the counter
     /// gave out until it reaches `u32::MAX`, for a node built with its own
     /// constructor.
-    #[must_use]
     pub fn next_span(&self) -> Span {
         self.spans.next_span()
     }
@@ -231,12 +227,11 @@ impl<'ast> Synth<'ast> {
     ///
     /// Panics if `text` isn't an identifier under the pinned version, or in
     /// any dialect when none is pinned.
-    #[must_use]
     pub fn name(&self, text: &str) -> Name<'ast> {
-        let is_valid = self.version.map_or_else(
-            || is_valid_identifier(text),
-            |version| is_valid_identifier_in(text, version),
-        );
+        let is_valid = match self.version {
+            Some(version) => is_valid_identifier_in(text, version),
+            None => is_valid_identifier(text),
+        };
         assert!(is_valid, "synth: {text:?} is not a valid identifier");
         Name::new(ThinStr::new(self.allocator.alloc_str(text)), None, self.next_span())
     }
@@ -244,10 +239,10 @@ impl<'ast> Synth<'ast> {
     /// Whether `name` works as a `.name` field or `name =` key: an identifier
     /// in the pinned dialect, or in every dialect when none is pinned.
     fn is_safe_field_name(&self, name: &str) -> bool {
-        self.version.map_or_else(
-            || LuaVersion::ALL.iter().all(|&version| is_valid_identifier_in(name, version)),
-            |version| is_valid_identifier_in(name, version),
-        )
+        match self.version {
+            Some(version) => is_valid_identifier_in(name, version),
+            None => LuaVersion::ALL.iter().all(|&version| is_valid_identifier_in(name, version)),
+        }
     }
 
     fn list<T, Items>(&self, items: Items) -> List<'ast, T>
@@ -265,7 +260,7 @@ impl<'ast> Synth<'ast> {
 
 #[cfg(test)]
 mod tests {
-    use core::iter::repeat_with;
+    use std::iter::repeat_with;
     use std::thread;
 
     use rustc_hash::FxHashSet;

@@ -28,7 +28,7 @@ impl ScopeClaims {
 
     /// Every index below this one is claimed in `scope`.
     pub(super) fn first_free(&self, scope: usize) -> usize {
-        self.first_free.get(scope).copied().unwrap_or(0)
+        self.first_free[scope]
     }
 
     pub(super) fn claim(&mut self, scopes: &[usize], index: usize) {
@@ -39,27 +39,21 @@ impl ScopeClaims {
 
     fn claim_in(&mut self, scope: usize, index: usize) {
         if index < LOW_INDEXES {
-            if let Some(word) = self.low.get_mut(scope) {
-                *word |= 1u64 << index;
-            }
+            self.low[scope] |= 1 << index;
         } else {
             self.high.insert((scope, index));
         }
         if self.first_free(scope) != index {
             return;
         }
-        let mut first_free = index.saturating_add(1);
-        if let Some(&word) = self.low.get(scope)
-            && first_free < LOW_INDEXES
-        {
-            first_free = usize::try_from(word.trailing_ones()).unwrap_or(LOW_INDEXES);
+        let mut first_free = index + 1;
+        if first_free < LOW_INDEXES {
+            first_free = self.low[scope].trailing_ones() as usize;
         }
         while first_free >= LOW_INDEXES && self.high.contains(&(scope, first_free)) {
-            first_free = first_free.saturating_add(1);
+            first_free += 1;
         }
-        if let Some(slot) = self.first_free.get_mut(scope) {
-            *slot = first_free;
-        }
+        self.first_free[scope] = first_free;
     }
 }
 

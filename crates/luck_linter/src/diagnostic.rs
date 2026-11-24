@@ -1,5 +1,5 @@
-use alloc::borrow::Cow;
-use core::ops::Deref;
+use std::borrow::Cow;
+use std::ops::Deref;
 
 use luck_diagnostics::{Diagnostic, Label, Severity, Tag};
 use luck_token::Span;
@@ -24,7 +24,6 @@ pub enum Category {
 
 impl Category {
     /// The name `luck.json`, `--rules`, and `--print-config` spell it with.
-    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Correctness => "correctness",
@@ -36,7 +35,6 @@ impl Category {
 
     /// Parses a `-A`/`-W`/`-D` flag value, case-insensitively, or `None` when
     /// it names no category.
-    #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "correctness" => Some(Self::Correctness),
@@ -61,7 +59,6 @@ pub struct Message {
 
 impl Message {
     /// Where the problem is, which every lint and parse error has.
-    #[must_use]
     pub fn span(&self) -> Span {
         self.diagnostic.span.unwrap_or_default()
     }
@@ -92,7 +89,6 @@ pub(crate) struct Finding {
 }
 
 impl Finding {
-    #[must_use]
     pub(crate) fn new<Text>(message: Text, span: Span) -> Self
     where
         Text: Into<Cow<'static, str>>,
@@ -102,7 +98,6 @@ impl Finding {
 
     /// Adds another place the finding is about, such as the first of two
     /// definitions, and what `message` says of it.
-    #[must_use]
     pub(crate) fn with_label<Text>(mut self, span: Span, message: Text) -> Self
     where
         Text: Into<Cow<'static, str>>,
@@ -111,7 +106,6 @@ impl Finding {
         self
     }
 
-    #[must_use]
     pub(crate) fn with_help<Help>(mut self, help: Help) -> Self
     where
         Help: Into<Cow<'static, str>>,
@@ -122,7 +116,6 @@ impl Finding {
 
     /// Marks the code at the finding's span as doing nothing, or as a use of
     /// something deprecated, for an editor to draw it so.
-    #[must_use]
     pub(crate) const fn with_tag(mut self, tag: Tag) -> Self {
         self.tag = Some(tag);
         self
@@ -135,7 +128,6 @@ impl Finding {
     /// A fix whose edits replace a comment that the replacement doesn't
     /// carry is dropped, since no fix may delete what the author wrote
     /// beside the code.
-    #[must_use]
     pub(crate) fn with_fix<Build, Built>(
         mut self,
         context: &ContextHost<'_>,
@@ -159,7 +151,6 @@ impl Finding {
 
     /// [`Self::with_fix`] for a [`FixKind::Fix`] that removes all or part of
     /// a directive comment, which the comment check would drop.
-    #[must_use]
     pub(crate) fn with_directive_fix<Build>(
         mut self,
         context: &ContextHost<'_>,
@@ -199,7 +190,7 @@ fn keeps_comments(fix: &Fix, context: &ContextHost<'_>) -> bool {
             let Some(at) = memmem::find(unmatched, text) else {
                 return false;
             };
-            unmatched = unmatched.get(at.saturating_add(text.len())..).unwrap_or_default();
+            unmatched = &unmatched[at + text.len()..];
         }
         true
     })

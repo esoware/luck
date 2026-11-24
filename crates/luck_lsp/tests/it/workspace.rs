@@ -45,7 +45,7 @@ fn uri_of(directory: &Path, name: &str) -> Uri {
 }
 
 fn file_name(uri: &Uri) -> &str {
-    uri.path().as_str().rsplit('/').next().unwrap_or_default()
+    uri.path().as_str().rsplit('/').next().unwrap()
 }
 
 /// Each location as its file's name and its start.
@@ -72,9 +72,6 @@ fn references(
         .expect("the document is open")
 }
 
-/// # Errors
-///
-/// Returns the refusal the server answers with.
 fn rename(
     client: &mut Client,
     uri: &Uri,
@@ -273,7 +270,7 @@ print(missing)
     let mut client = Client::start();
     client.open(&main, text);
 
-    let diags = client.diagnostics(&main, Some(1i32));
+    let diags = client.diagnostics(&main, Some(1));
     let [diag] = diags.as_slice() else { panic!("one unresolved require: {diags:?}") };
     assert_eq!(diag.code, Some(NumberOrString::String("E004".to_owned())));
     assert_eq!(diag.message.lines().next(), Some("module not found: `missing`"));
@@ -283,6 +280,6 @@ print(missing)
     fs::write(&missing, "return {}\n").expect("write missing.lua");
     client.file_changed(&missing, FileChangeType::CREATED);
     let republished = client.next_published(&main);
-    assert_eq!(republished.version, Some(1i32));
+    assert_eq!(republished.version, Some(1));
     assert!(republished.diagnostics.is_empty(), "{:?}", republished.diagnostics);
 }

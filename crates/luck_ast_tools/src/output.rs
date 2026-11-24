@@ -30,7 +30,7 @@ pub(crate) fn doc(text: &str) -> TokenStream {
         }
         let mut line = String::new();
         for word in paragraph.split_whitespace() {
-            if !line.is_empty() && line.len().saturating_add(word.len()) >= DOC_WIDTH {
+            if !line.is_empty() && line.len() + word.len() >= DOC_WIDTH {
                 lines.push(line);
                 line = String::new();
             }
@@ -46,10 +46,6 @@ pub(crate) fn doc(text: &str) -> TokenStream {
 const DOC_WIDTH: usize = 72;
 
 /// `tokens` as a formatted file, the way `cargo fmt` leaves it.
-///
-/// # Errors
-///
-/// Fails when `tokens` aren't a Rust file, or `rustfmt` can't run or fails.
 pub(crate) fn print_rust(tokens: TokenStream, workspace: &Path) -> io::Result<String> {
     let file = syn::parse2::<syn::File>(tokens).map_err(io::Error::other)?;
     let printed = prettyplease::unparse(&file);
@@ -87,9 +83,6 @@ fn end_wrapped_calls(code: &str) -> String {
     fixed
 }
 
-/// # Errors
-///
-/// Fails when `rustfmt` can't run or fails.
 fn rustfmt(code: &str, workspace: &Path) -> io::Result<String> {
     let mut child = Command::new("rustfmt")
         .args(["--edition", "2024", "--config-path"])

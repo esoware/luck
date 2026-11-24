@@ -96,7 +96,6 @@ fn a_tree_at_the_nesting_cap_prints_and_reparses() {
 /// A tree holds no parentheses for grouping, so the printer writes the ones
 /// each expression needs where it goes, and no others.
 #[test]
-#[expect(clippy::too_many_lines, reason = "one entry per case")]
 fn a_tree_prints_the_parentheses_its_grouping_needs() {
     type Build = for<'ast> fn(Synth<'ast>, [Expression<'ast>; 3]) -> Expression<'ast>;
     let (lua, luau) = (LuaVersion::Lua54, LuaVersion::Luau);
@@ -241,10 +240,10 @@ fn a_run_of_any_length_prints_as_one_level() {
     let synth = Synth::new(&allocator, &spans);
     let mut sum = synth.name_expr("x");
     let mut calls = synth.name_expr("f");
-    for _ in 0..200_000u32 {
+    for _ in 0..200_000 {
         sum = synth.binary_op(sum, BinOp::Add, synth.number_i64(1));
     }
-    for _ in 0..2_000u32 {
+    for _ in 0..2_000 {
         calls = synth.call(calls, []);
     }
     let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([sum, calls])]));

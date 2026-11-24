@@ -1,8 +1,8 @@
-use core::iter::Map;
-use core::slice;
+use std::iter::Map;
+use std::slice;
 
 use luck_allocator::Allocator;
-use luck_token::{LuaTarget, offset_to_index};
+use luck_token::LuaTarget;
 
 /// Library entries by name, in name order, with a hash table over them,
 /// built at compile time for a built-in library and in its arena for a
@@ -43,7 +43,6 @@ pub(crate) use stdlib_map;
 pub(crate) const MAX_MAP_ENTRIES: usize = 0xFFFF;
 
 /// FNV-1a, which both compile-time table building and lookups run.
-#[expect(clippy::as_conversions, reason = "`u32::from` isn't const")]
 const fn name_hash(name: &str) -> u32 {
     let mut hash: u32 = 0x811c_9dc5;
     let mut remaining = name.as_bytes();
@@ -55,7 +54,7 @@ const fn name_hash(name: &str) -> u32 {
 }
 
 pub(crate) const fn slot_count(entry_count: usize) -> usize {
-    entry_count.saturating_mul(2).next_power_of_two()
+    (entry_count * 2).next_power_of_two()
 }
 
 pub(crate) const fn hash_slots<V, const SLOTS: usize>(entries: &[(&str, V)]) -> [u16; SLOTS] {
@@ -66,28 +65,20 @@ pub(crate) const fn hash_slots<V, const SLOTS: usize>(entries: &[(&str, V)]) -> 
 
 /// Fills `slots`, [`slot_count`] of them, all zero, with the hash table over
 /// `entries`.
-///
-/// # Panics
-///
-/// When `entries` holds more than [`MAX_MAP_ENTRIES`], which fails the build
-/// for a static map, and which a layered map is checked against first.
 #[expect(
-    clippy::as_conversions,
     clippy::cast_possible_truncation,
-    clippy::indexing_slicing,
-    reason = "the checked conversions aren't const, and `slot_count` makes every masked slot an \
-              index"
+    reason = "the assert keeps `index` within a `u16`, and `u16::try_from` isn't const"
 )]
 const fn fill_slots<V>(entries: &[(&str, V)], slots: &mut [u16]) {
     assert!(entries.len() <= MAX_MAP_ENTRIES, "a stdlib table has too many entries for its slots");
-    let mask = slots.len().wrapping_sub(1);
+    let mask = slots.len() - 1;
     let mut index = 0usize;
     let mut remaining = entries;
     while let [(name, _), rest @ ..] = remaining {
-        index = index.wrapping_add(1);
+        index += 1;
         let mut slot = name_hash(name) as usize & mask;
         while slots[slot] != 0 {
-            slot = slot.wrapping_add(1) & mask;
+            slot = (slot + 1) & mask;
         }
         slots[slot] = index as u16;
         remaining = rest;
@@ -114,23 +105,20 @@ impl<'lib, V> StdlibMap<'lib, V> {
         Self { entries, slots: allocator.alloc_slice_copy(&slots) }
     }
 
-    #[must_use]
     pub fn get(&self, name: &str) -> Option<&'lib V> {
-        let mask = self.slots.len().wrapping_sub(1);
-        let mut slot = offset_to_index(name_hash(name)) & mask;
+        let mask = self.slots.len().checked_sub(1)?;
+        let mut slot = name_hash(name) as usize & mask;
         // An empty slot ends every probe, since at least half are empty.
         loop {
-            let entry = self.slots.get(slot)?.checked_sub(1)?;
-            if let Some((entry_name, value)) = self.entries.get(usize::from(entry))
-                && *entry_name == name
-            {
+            let entry = self.slots[slot].checked_sub(1)?;
+            let (entry_name, value) = &self.entries[usize::from(entry)];
+            if *entry_name == name {
                 return Some(value);
             }
-            slot = slot.wrapping_add(1) & mask;
+            slot = (slot + 1) & mask;
         }
     }
 
-    #[must_use]
     pub fn contains_key(&self, name: &str) -> bool {
         self.get(name).is_some()
     }
@@ -144,12 +132,10 @@ impl<'lib, V> StdlibMap<'lib, V> {
         self.entries.iter().map(|(name, _)| *name)
     }
 
-    #[must_use]
     pub const fn len(&self) -> usize {
         self.entries.len()
     }
 
-    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -175,7 +161,6 @@ pub enum StdlibEntry<'lib> {
 }
 
 impl<'lib> StdlibEntry<'lib> {
-    #[must_use]
     pub const fn deprecation(&self) -> Option<&'lib StdlibDeprecation<'lib>> {
         match *self {
             Self::Function(function) => function.deprecated.as_ref(),
@@ -185,7 +170,6 @@ impl<'lib> StdlibEntry<'lib> {
     }
 
     /// A namespace is always read-only, even when some members (`package.path`) aren't.
-    #[must_use]
     pub const fn is_read_only(&self) -> bool {
         match self {
             Self::Function(function) => function.is_read_only,
@@ -196,7 +180,6 @@ impl<'lib> StdlibEntry<'lib> {
 
     /// The shape of the value this entry names. A function's value has
     /// none; `returns_shape` is the shape of its call's result.
-    #[must_use]
     pub const fn shape(&self) -> Option<&'lib str> {
         match self {
             Self::Constant(value) | Self::Property(value) => value.shape,
@@ -207,10 +190,6 @@ impl<'lib> StdlibEntry<'lib> {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "four independent flags, and all sixteen combinations are legal"
-)]
 pub struct StdlibFunction<'lib> {
     /// At least one, in definition order. The first is the primary form,
     /// shown where only one fits.
@@ -228,13 +207,11 @@ pub struct StdlibFunction<'lib> {
 }
 
 impl<'lib> StdlibFunction<'lib> {
-    #[must_use]
     pub fn min_args(&self) -> usize {
         self.signatures.iter().map(|signature| signature.min_args).min().unwrap_or(0)
     }
 
     /// Maximum arity across all signatures; `None` if any is unbounded.
-    #[must_use]
     pub fn max_args(&self) -> Option<usize> {
         let mut max = 0;
         for signature in self.signatures {
@@ -243,7 +220,6 @@ impl<'lib> StdlibFunction<'lib> {
         Some(max)
     }
 
-    #[must_use]
     pub fn accepts_arg_count(&self, count: usize) -> bool {
         self.signatures.iter().any(|signature| signature.accepts(count))
     }
@@ -262,7 +238,6 @@ impl<'lib> StdlibFunction<'lib> {
     /// Returns `None` when no signature accepts `count`, or when one of them
     /// takes anything but a constant there, which leaves the argument
     /// unconstrained.
-    #[must_use]
     pub fn allowed_constants(
         &self,
         index: usize,
@@ -283,11 +258,6 @@ impl<'lib> StdlibFunction<'lib> {
         is_constrained.then(|| sets.flatten())
     }
 
-    #[must_use]
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "a std definition gives every function at least one signature"
-    )]
     pub const fn primary_signature(&self) -> &'lib StdlibSignature<'lib> {
         &self.signatures[0]
     }
@@ -295,7 +265,6 @@ impl<'lib> StdlibFunction<'lib> {
     /// Index of the signature to highlight when the cursor sits on
     /// parameter `active_param`: the first signature with a slot at
     /// that position, else the last.
-    #[must_use]
     pub fn signature_index_for_active_param(&self, active_param: usize) -> usize {
         self.signatures
             .iter()
@@ -306,7 +275,7 @@ impl<'lib> StdlibFunction<'lib> {
                         .last()
                         .is_some_and(|param| matches!(param.kind, StdlibArgKind::Vararg))
             })
-            .unwrap_or_else(|| self.signatures.len().saturating_sub(1))
+            .unwrap_or_else(|| self.signatures.len() - 1)
     }
 }
 
@@ -322,9 +291,8 @@ pub struct StdlibSignature<'lib> {
 }
 
 impl<'lib> StdlibSignature<'lib> {
-    #[must_use]
     pub const fn new(params: &'lib [StdlibParam<'lib>]) -> Self {
-        let mut min_args = 0usize;
+        let mut min_args = 0;
         let mut max_args = Some(params.len());
         let mut remaining = params;
         while let [param, rest @ ..] = remaining {
@@ -333,14 +301,13 @@ impl<'lib> StdlibSignature<'lib> {
                 max_args = None;
             }
             if param.is_required && !is_vararg {
-                min_args = min_args.saturating_add(1);
+                min_args += 1;
             }
             remaining = rest;
         }
         Self { params, min_args, max_args }
     }
 
-    #[must_use]
     pub fn accepts(&self, count: usize) -> bool {
         count >= self.min_args && self.max_args.is_none_or(|max| count <= max)
     }
@@ -459,7 +426,6 @@ impl<'lib> StdlibLibrary<'lib> {
     /// Each step goes through a namespace's members or the shape of a
     /// property or constant, so `["game", "GetService"]` resolves through
     /// `game`'s shape.
-    #[must_use]
     pub fn lookup<Path>(&self, path: Path) -> Option<&'lib StdlibEntry<'lib>>
     where
         Path: IntoIterator,
@@ -475,7 +441,6 @@ impl<'lib> StdlibLibrary<'lib> {
 
     /// The member reachable from `entry` under `segment`: a namespace
     /// member, or a member of the entry's declared value shape.
-    #[must_use]
     pub fn child(
         &self,
         entry: &StdlibEntry<'lib>,
@@ -493,7 +458,6 @@ impl<'lib> StdlibLibrary<'lib> {
 
     /// `name` among the members of `shape` or of a shape it extends, the
     /// nearest first.
-    #[must_use]
     pub fn shape_member(&self, shape: &str, name: &str) -> Option<&'lib StdlibEntry<'lib>> {
         let mut current = self.shapes.get(shape)?;
         // A chain longer than the shape count is an `extends` cycle, which
@@ -508,7 +472,6 @@ impl<'lib> StdlibLibrary<'lib> {
     }
 
     /// Every member [`Self::shape_member`] finds in `shape`, each name once.
-    #[must_use]
     pub fn shape_members(&self, shape: &str) -> Vec<(&'lib str, &'lib StdlibEntry<'lib>)> {
         let mut members = Vec::new();
         let mut nearer: Vec<&'lib StdlibShape<'lib>> = Vec::new();
@@ -542,14 +505,13 @@ impl<'lib> StdlibLibrary<'lib> {
 ///
 /// Each argument is source as written, bytes that need not be UTF-8, and so
 /// is the expansion.
-#[must_use]
 pub fn expand_replace_template(template: &str, args: &[&[u8]]) -> Vec<u8> {
     let mut output = Vec::with_capacity(template.len());
     let mut remaining = template.as_bytes();
     while let Some(percent) = remaining.iter().position(|&b| b == b'%') {
-        let (literal, from_percent) = remaining.split_at_checked(percent).unwrap_or_default();
+        let (literal, from_percent) = remaining.split_at(percent);
         output.extend_from_slice(literal);
-        let after_percent = from_percent.get(1..).unwrap_or_default();
+        let after_percent = &from_percent[1..];
         match after_percent.split_first() {
             Some((b'%', after_escape)) => {
                 output.push(b'%');
@@ -557,9 +519,8 @@ pub fn expand_replace_template(template: &str, args: &[&[u8]]) -> Vec<u8> {
             }
             Some((&digit, after_digit)) if digit.is_ascii_digit() => {
                 remaining = after_digit;
-                let Some(from_argument) = usize::from(digit.wrapping_sub(b'0'))
-                    .checked_sub(1)
-                    .and_then(|i| args.get(i..))
+                let Some(from_argument) =
+                    usize::from(digit - b'0').checked_sub(1).and_then(|i| args.get(i..))
                 else {
                     continue;
                 };

@@ -1,6 +1,6 @@
-use core::panic::AssertUnwindSafe;
 use std::ffi::OsString;
 use std::panic;
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -128,11 +128,6 @@ impl<'input> Reader<'input> {
     }
 
     /// Reads and parses the module at `path` into `allocator`.
-    ///
-    /// # Errors
-    ///
-    /// Returns E010 when the file can't be read and E012 when it's too
-    /// large.
     fn read<'ast>(
         &self,
         allocator: &'ast Allocator,
@@ -221,7 +216,7 @@ pub(crate) fn discover_reachable<'ast>(
                 // waiting for it forever.
                 let outcome =
                     panic::catch_unwind(AssertUnwindSafe(|| reader.discover(arenas.get(), &path)));
-                let _unused = task_sender.send((path, outcome));
+                let _ = task_sender.send((path, outcome));
             });
         };
         start(entry.to_path_buf());

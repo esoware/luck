@@ -30,7 +30,7 @@ impl Rule for MustUse {
         let Some(call) = chain.last_call() else {
             return;
         };
-        let last = chain.suffixes.len().saturating_sub(1);
+        let last = chain.suffixes.len() - 1;
         if let Some(name) = context.callee(node, last).and_then(must_use_name) {
             context.diagnostic(
                 Finding::new(format!("return value of `{name}` is discarded"), call.span())

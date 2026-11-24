@@ -1,7 +1,7 @@
 //! One analysis of what evaluating an expression does, which every question
 //! the crate answers about an expression reads, so the answers agree.
 
-use core::iter;
+use std::iter;
 
 use luck_ast::{BinaryOp, Expression, Field, IfExpression, Suffix, TableConstructor};
 use luck_token::{Associativity, BinOp, LuaNumber, LuaVersion, UnOp};
@@ -136,7 +136,7 @@ impl<'ast> Outcome<'ast> {
         Self {
             ty,
             value,
-            truthiness: value.map_or_else(|| ty.truthiness(), |known| Some(known.to_boolean())),
+            truthiness: value.map(ConstantValue::to_boolean).or_else(|| ty.truthiness()),
             has_effects: self.has_effects || !is_safe,
             is_literal: self.is_literal && is_safe,
         }

@@ -16,13 +16,13 @@ fn assert_counts_cover_the_tables(source: &str, version: LuaVersion) {
     let chunk = allocator.alloc(parsed.chunk);
     let semantic = SemanticBuilder::new().with_counts(counts).build(chunk).semantic;
     let tree = semantic.scoping();
-    let declarations = usize::try_from(counts.declarations).unwrap();
-    let name_uses = usize::try_from(counts.name_uses).unwrap();
-    assert_eq!(tree.scopes().len(), usize::try_from(counts.blocks).unwrap(), "{source}");
+    let declarations = counts.declarations as usize;
+    let name_uses = counts.name_uses as usize;
+    assert_eq!(tree.scopes().len(), counts.blocks as usize, "{source}");
     assert!(tree.symbols().len() <= declarations, "{counts:?}\n{source}");
     assert!(tree.references().len() <= name_uses, "{counts:?}\n{source}");
     // Every `goto` of a valid source names a label.
-    let names = declarations.saturating_add(name_uses).saturating_add(tree.labels().len());
+    let names = declarations + name_uses + tree.labels().len();
     assert!(tree.names().count() <= names, "{counts:?}\n{source}");
 }
 

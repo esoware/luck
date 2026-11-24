@@ -1,4 +1,4 @@
-use core::mem;
+use std::mem;
 
 use luck_allocator::List;
 use luck_token::Span;

@@ -99,13 +99,13 @@ fn fold_left_run<'ast>(
         value = next;
         bound = joined_bound(bound, link.op, &link.operand, version);
         if is_short_enough(value, bound, version) {
-            folded = Some((index.saturating_add(1), value));
+            folded = Some((index + 1, value));
         }
     }
     let Some((folded_links, folded_value)) = folded else {
         return false;
     };
-    let folded_operands = run.links.get(..folded_links).unwrap_or_default();
+    let folded_operands = &run.links[..folded_links];
     let span =
         folded_operands.iter().fold(run.first.span(), |span, link| span.merge(link.operand.span()));
     let Some(literal) = value_to_expr(allocator, folded_value, span) else {
@@ -148,8 +148,7 @@ fn fold_power_run<'ast>(
     // each link's as one past the link's index, and the value.
     let mut folded = None;
     for (index, link) in run.links.iter().enumerate().rev() {
-        let left = index.checked_sub(1).and_then(|i| run.links.get(i));
-        let left_operand = left.map_or(&run.first, |left_link| &left_link.operand);
+        let left_operand = if index == 0 { &run.first } else { &run.links[index - 1].operand };
         let Some(next) = left_operand
             .evaluate_value(&context)
             .and_then(|lhs| lhs.binary(link.op, value, version))
@@ -165,18 +164,17 @@ fn fold_power_run<'ast>(
     let Some((start, folded_value)) = folded else {
         return false;
     };
-    let first_link = start.checked_sub(1).and_then(|i| run.links.get(i));
-    let first_operand = first_link.map_or(&run.first, |link| &link.operand);
+    let first_operand = if start == 0 { &run.first } else { &run.links[start - 1].operand };
     let span = first_operand.span().merge(last.span());
     let Some(literal) = value_to_expr(allocator, folded_value, span) else {
         return false;
     };
-    let Some(kept_links) = start.checked_sub(1) else {
+    if start == 0 {
         drop(expr);
         *expr = literal;
         return true;
-    };
-    for link in run.links.get(kept_links..).unwrap_or_default() {
+    }
+    for link in &run.links[start - 1..] {
         drop(&link.operand);
     }
     run.links.truncate(start);
@@ -209,7 +207,7 @@ fn fold_concat_run<'ast>(
     // Last first.
     let mut strings: Vec<&[u8]> =
         run.links.iter().rev().map_while(|link| string(&link.operand)).collect();
-    let first_link = run.links.len().saturating_sub(strings.len());
+    let first_link = run.links.len() - strings.len();
     let first_string = if first_link == 0 { string(&run.first) } else { None };
     let is_whole_run = first_string.is_some();
     strings.extend(first_string);
@@ -220,11 +218,7 @@ fn fold_concat_run<'ast>(
     for bytes in strings.iter().rev() {
         joined.extend_from_slice(bytes);
     }
-    let first_operand = if is_whole_run {
-        &run.first
-    } else {
-        run.links.get(first_link).map_or(&run.first, |link| &link.operand)
-    };
+    let first_operand = if is_whole_run { &run.first } else { &run.links[first_link].operand };
     let span = first_operand.span().merge(run.links.last().operand.span());
     let value = ThinBytes::new(allocator.alloc_slice_copy(&joined));
     let literal = Expression::new_string_literal(value, None, span, allocator);
@@ -232,10 +226,10 @@ fn fold_concat_run<'ast>(
         drop(expr);
         *expr = literal;
     } else {
-        for link in run.links.get(first_link..).unwrap_or_default() {
+        for link in &run.links[first_link..] {
             drop(&link.operand);
         }
-        run.links.truncate(first_link.saturating_add(1));
+        run.links.truncate(first_link + 1);
         run.links.last_mut().operand = literal;
     }
     true
@@ -261,19 +255,19 @@ fn fold_logical_run<'ast>(
     let is_or = run.links.first().op == BinOp::Or;
     let decider =
         run.links.iter().position(|link| link.operand.to_boolean(&context) == Some(is_or));
-    if let Some(kept_links) = decider.map(|index| index.saturating_add(1))
+    if let Some(kept_links) = decider.map(|index| index + 1)
         && kept_links < run.links.len()
     {
-        for link in run.links.get(kept_links..).unwrap_or_default() {
+        for link in &run.links[kept_links..] {
             drop(&link.operand);
         }
         run.links.truncate(kept_links);
         return true;
     }
-    let mut folded_links = 0usize;
+    let mut folded_links = 0;
     while let Some(is_truthy) = run.first.to_boolean(&context) {
         if is_truthy == is_or {
-            for link in run.links.get(folded_links..).unwrap_or_default() {
+            for link in &run.links[folded_links..] {
                 drop(&link.operand);
             }
             *expr = run.first.take();
@@ -287,7 +281,7 @@ fn fold_logical_run<'ast>(
         };
         drop(&run.first);
         run.first = truncate_multi_value(allocator, link.operand.take());
-        folded_links = folded_links.saturating_add(1);
+        folded_links += 1;
     }
     if folded_links == 0 {
         return false;
@@ -338,7 +332,7 @@ fn joined_bound(
     version: LuaVersion,
 ) -> Option<usize> {
     let operand_bound = printed_length_bound(operand, version)?;
-    Some(bound?.saturating_add(op.static_text().len()).saturating_add(operand_bound))
+    Some(bound? + op.static_text().len() + operand_bound)
 }
 
 /// The fewest bytes the compact printer writes `expr` in, when it's a number
@@ -349,7 +343,7 @@ fn printed_length_bound(expr: &Expression<'_>, version: LuaVersion) -> Option<us
         Expression::Number(literal) => Some(spell_number(literal.value, version).as_str().len()),
         Expression::UnaryOp(unary) => {
             let operand_bound = printed_length_bound(&unary.operand, version)?;
-            Some(unary.op.static_text().len().saturating_add(operand_bound))
+            Some(unary.op.static_text().len() + operand_bound)
         }
         Expression::BinaryOp(run) => {
             run.links.iter().try_fold(printed_length_bound(&run.first, version)?, |bound, link| {
@@ -384,8 +378,7 @@ fn is_short_enough(value: ConstantValue<'_>, bound: Option<usize>, version: LuaV
     let Some((is_negative, magnitude)) = number.literal_magnitude() else {
         return false;
     };
-    let length =
-        usize::from(is_negative).saturating_add(spell_number(magnitude, version).as_str().len());
+    let length = usize::from(is_negative) + spell_number(magnitude, version).as_str().len();
     bound.is_none_or(|replaced| length <= replaced)
 }
 

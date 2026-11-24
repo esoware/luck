@@ -26,11 +26,11 @@ const REGISTERS_PER_ASSIGNMENT_TARGET: usize = 3;
 /// This is well under the 200 C levels `restassign` recurses through, so the
 /// target count needs no limit of its own.
 pub(crate) const fn assignment_target_limit(live_registers: usize) -> usize {
-    MAX_REGISTERS.saturating_sub(live_registers).div_euclid(REGISTERS_PER_ASSIGNMENT_TARGET)
+    MAX_REGISTERS.saturating_sub(live_registers) / REGISTERS_PER_ASSIGNMENT_TARGET
 }
 
 /// A `:` method's `self` and a named vararg aren't all visible from the body
 /// alone, so both are assumed present.
 pub(crate) fn parameter_locals(body: &FunctionBody<'_>) -> usize {
-    body.params.len().saturating_add(2)
+    body.params.len() + 2
 }

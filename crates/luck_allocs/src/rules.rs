@@ -16,10 +16,6 @@ use crate::stats::{StageStats, record_stats_in};
 /// Each rule runs alone over one analysis per file, which parsing, analysis,
 /// and compiling its linter happen outside of, so its numbers are its own.
 /// Its `arena size` is how far the arena grew while it ran.
-///
-/// # Errors
-///
-/// Fails when the report can't be written.
 pub(crate) fn run(allocator: &mut Allocator, files: &[TestFile]) -> io::Result<()> {
     let every_rule = Linter::new(every_rule());
     let linters: Vec<(RuleId, Linter)> =
@@ -37,7 +33,7 @@ pub(crate) fn run(allocator: &mut Allocator, files: &[TestFile]) -> io::Result<(
                 let ((), mut stats) = record_stats_in(allocator, || {
                     drop(linter.run_analyzed(&parse, &analysis, FixKind::empty(), None, &|| false));
                 });
-                stats.arena_used_bytes = allocator.used_bytes().saturating_sub(arena_bytes_before);
+                stats.arena_used_bytes = allocator.used_bytes() - arena_bytes_before;
                 (rule.name(), stats)
             })
             .collect();

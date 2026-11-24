@@ -1,6 +1,6 @@
-use core::fmt;
-use core::ops::{Deref, DerefMut};
-use core::slice;
+use std::fmt;
+use std::ops::{Deref, DerefMut};
+use std::slice;
 
 use luck_allocator::{Allocator, List, ListIntoIter};
 
@@ -10,13 +10,11 @@ use luck_allocator::{Allocator, List, ListIntoIter};
 pub struct OneOrMore<'ast, T>(List<'ast, T>);
 
 impl<'ast, T> OneOrMore<'ast, T> {
-    #[must_use]
     pub fn new(item: T, allocator: &'ast Allocator) -> Self {
         Self(List::from_array_in([item], allocator))
     }
 
     /// `None` when `items` is empty.
-    #[must_use]
     pub fn from_list(items: List<'ast, T>) -> Option<Self> {
         (!items.is_empty()).then_some(Self(items))
     }
@@ -27,7 +25,6 @@ impl<'ast, T> OneOrMore<'ast, T> {
     ///
     /// Panics if `at` isn't below `items.len()`, which would leave the list
     /// empty, or if more than `u32::MAX` items move.
-    #[must_use]
     pub fn split_off_in(items: &mut Vec<T>, at: usize, allocator: &'ast Allocator) -> Self {
         assert!(
             at < items.len(),
@@ -49,7 +46,6 @@ impl<'ast, T> OneOrMore<'ast, T> {
 
     /// Removes every item after the first and returns them in order, without
     /// allocating, as [`List::split_off`] does.
-    #[must_use]
     pub fn split_off_rest(&mut self) -> List<'ast, T> {
         self.0.split_off(1)
     }
@@ -61,7 +57,6 @@ impl<'ast, T> OneOrMore<'ast, T> {
     ///
     /// Panics if `at` is zero, which would leave the list empty, or past the
     /// list's length.
-    #[must_use]
     pub fn split_off(&mut self, at: usize) -> List<'ast, T> {
         assert!(at > 0, "a run keeps at least one item");
         self.0.split_off(at)
@@ -77,22 +72,16 @@ impl<'ast, T> OneOrMore<'ast, T> {
         self.0.truncate(new_length);
     }
 
-    #[must_use]
     pub fn first(&self) -> &T {
-        #[expect(clippy::indexing_slicing, reason = "the list is never empty")]
         &self.0[0]
     }
 
-    #[must_use]
     pub fn last(&self) -> &T {
-        #[expect(clippy::indexing_slicing, reason = "the list is never empty")]
-        &self.0[self.0.len().saturating_sub(1)]
+        &self.0[self.0.len() - 1]
     }
 
-    #[must_use]
     pub fn last_mut(&mut self) -> &mut T {
-        let last = self.0.len().saturating_sub(1);
-        #[expect(clippy::indexing_slicing, reason = "the list is never empty")]
+        let last = self.0.len() - 1;
         &mut self.0[last]
     }
 }
@@ -151,7 +140,7 @@ mod tests {
     #[test]
     fn grows_at_either_end_and_keeps_its_first_and_last() {
         let allocator = Allocator::new();
-        let mut list = OneOrMore::new(2u8, &allocator);
+        let mut list = OneOrMore::new(2, &allocator);
         assert_eq!((*list.first(), *list.last()), (2, 2));
         list.push(3, &allocator);
         list.insert(0, 1, &allocator);
@@ -164,7 +153,7 @@ mod tests {
     #[test]
     fn splits_and_truncates_without_emptying() {
         let allocator = Allocator::new();
-        let mut list = OneOrMore::from_list(List::from_array_in([1u8, 2, 3, 4], &allocator))
+        let mut list = OneOrMore::from_list(List::from_array_in([1, 2, 3, 4], &allocator))
             .expect("the list has items");
         let rest = list.split_off(3);
         assert_eq!((&*list, &*rest), ([1, 2, 3].as_slice(), [4].as_slice()));
@@ -176,14 +165,14 @@ mod tests {
     fn builds_from_any_list_but_an_empty_one() {
         let allocator = Allocator::new();
         assert!(OneOrMore::<u8>::from_list(List::new()).is_none());
-        let list = OneOrMore::from_list(List::from_array_in([7u8, 8], &allocator));
+        let list = OneOrMore::from_list(List::from_array_in([7, 8], &allocator));
         assert_eq!(list.as_deref(), Some([7, 8].as_slice()));
     }
 
     #[test]
     fn splits_the_tail_off_a_scratch_vec() {
         let allocator = Allocator::new();
-        let mut scratch = vec![1u8, 2, 3];
+        let mut scratch = vec![1, 2, 3];
         let tail = OneOrMore::split_off_in(&mut scratch, 1, &allocator);
         assert_eq!((scratch.as_slice(), &*tail), ([1].as_slice(), [2, 3].as_slice()));
     }

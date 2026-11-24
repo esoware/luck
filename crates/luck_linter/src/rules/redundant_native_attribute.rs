@@ -1,7 +1,7 @@
 use luck_ast::{AstKind, AstType, FunctionAttribute};
 use luck_diagnostics::Tag;
 use luck_semantic::{AstNode, AstTypesBitset};
-use luck_token::{Span, leading_hot_comments, offset_to_index};
+use luck_token::{Span, leading_hot_comments};
 
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
@@ -72,8 +72,8 @@ fn removal_span(
     attributes: &[FunctionAttribute<'_>],
     bytes: &[u8],
 ) -> Option<Span> {
-    let after_at = offset_to_index(attribute.span.start).saturating_add(1);
-    let mut edit_end = offset_to_index(attribute.name.span.end);
+    let after_at = attribute.span.start as usize + 1;
+    let mut edit_end = attribute.name.span.end as usize;
     if bytes.get(after_at) == Some(&b'[') {
         if attribute.args.is_some()
             || attributes.iter().filter(|other| other.span.start == attribute.span.start).count()
@@ -81,39 +81,27 @@ fn removal_span(
         {
             return None;
         }
-        let whitespace_length = bytes
-            .get(edit_end..)
-            .unwrap_or_default()
-            .iter()
-            .take_while(|b| b.is_ascii_whitespace())
-            .count();
-        let close_index = edit_end.saturating_add(whitespace_length);
+        let whitespace_length =
+            bytes[edit_end..].iter().take_while(|b| b.is_ascii_whitespace()).count();
+        let close_index = edit_end + whitespace_length;
         if bytes.get(close_index) != Some(&b']') {
             return None;
         }
-        edit_end = close_index.saturating_add(1);
+        edit_end = close_index + 1;
     }
-    let separator_length = match bytes.get(edit_end..).unwrap_or_default() {
+    let separator_length = match &bytes[edit_end..] {
         [b'\r', b'\n', ..] => 2,
         [b' ' | b'\t' | b'\n' | b'\r', ..] => 1,
         _ => 0,
     };
-    Some(Span::from_indices(
-        offset_to_index(attribute.span.start),
-        edit_end.saturating_add(separator_length),
-    ))
+    Some(Span::from_indices(attribute.span.start as usize, edit_end + separator_length))
 }
 
 /// Whether a `--!native` hot comment comes before any code. Luau ignores one
 /// placed later.
 fn has_native_directive(host: &ContextHost<'_>) -> bool {
-    leading_hot_comments(host.comments, host.chunk.block.span.start).any(|comment| {
-        comment
-            .span
-            .text(host.source)
-            .get(3..)
-            .is_some_and(|word| word.trim_ascii_end() == b"native")
-    })
+    leading_hot_comments(host.comments, host.chunk.block.span.start)
+        .any(|comment| comment.span.text(host.source)[3..].trim_ascii_end() == b"native")
 }
 
 #[cfg(test)]

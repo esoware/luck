@@ -1,8 +1,3 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
@@ -24,9 +19,6 @@ fn fixture_directory(dialect: &str, name: &str) -> PathBuf {
         .join("input")
 }
 
-/// # Errors
-///
-/// Returns the diagnostics that stopped the fixture from bundling.
 fn run_bundle(
     dialect: &str,
     name: &str,
@@ -37,9 +29,6 @@ fn run_bundle(
         .map(|result| String::from_utf8(result.output).unwrap())
 }
 
-/// # Errors
-///
-/// Returns the diagnostics that stopped the fixture from bundling.
 fn run_bundle_with(
     dialect: &str,
     name: &str,
@@ -425,9 +414,6 @@ return util.value
     assert!(output.contains("../shared/util.lua"), "{output}");
 }
 
-/// # Errors
-///
-/// Returns the I/O error that stopped a file from being written.
 fn temp_project(files: &[(&str, &[u8])]) -> io::Result<TempDir> {
     let directory = tempfile::tempdir()?;
     for (name, contents) in files {
@@ -436,10 +422,6 @@ fn temp_project(files: &[(&str, &[u8])]) -> io::Result<TempDir> {
     Ok(directory)
 }
 
-/// # Errors
-///
-/// Returns the diagnostics that stopped the project at `directory` from
-/// bundling from `main.luau`.
 fn bundle_luau_project(directory: &Path) -> Result<BundleResult, Vec<FileDiagnostics>> {
     bundle_both(
         &directory.join("main.luau"),
@@ -452,10 +434,6 @@ fn bundle_luau_project(directory: &Path) -> Result<BundleResult, Vec<FileDiagnos
     )
 }
 
-/// # Errors
-///
-/// Returns the diagnostics that stopped the project at `directory` from
-/// bundling from `main.lua` for Lua 5.4.
 fn bundle_lua_project(directory: &Path) -> Result<BundleResult, Vec<FileDiagnostics>> {
     bundle_both(
         &directory.join("main.lua"),
@@ -960,10 +938,6 @@ require(\"b\")
 /// Each module requires every module of its own directory, the first of the
 /// next, and, when `has_missing_requires`, one that doesn't exist, while the
 /// entry requires few.
-///
-/// # Errors
-///
-/// Returns the I/O error that stopped a file from being written.
 fn wide_project(version: LuaVersion, has_missing_requires: bool) -> io::Result<TempDir> {
     let directory = tempfile::tempdir()?;
     let extension = if version.is_luau() { "luau" } else { "lua" };
@@ -977,7 +951,7 @@ fn wide_project(version: LuaVersion, has_missing_requires: bool) -> io::Result<T
         }
     };
     let packages = ["a", "b", "c", "d", "e", "f", "g", "h"];
-    let modules: Vec<String> = (0u8..20).map(|module| format!("m{module}")).collect();
+    let modules: Vec<String> = (0..20).map(|module| format!("m{module}")).collect();
     let main: String = packages.iter().map(|package| require(".", package, "m0")).collect();
     fs::write(directory.path().join(format!("main.{extension}")), main)?;
     for (package, next_package) in packages.iter().zip(packages.iter().cycle().skip(1)) {
@@ -1017,7 +991,7 @@ fn threads_sharing_one_resolver_find_what_one_thread_does() {
                 Err(errors) => assert_eq!(codes(errors), ["E004"; 160], "{version:?}"),
             }
             assert_eq!(one_thread.is_err(), has_missing_requires, "{version:?}");
-            for _ in 0u8..4 {
+            for _ in 0..4 {
                 let threaded = on_pool(16, bundle);
                 assert_eq!(format!("{threaded:?}"), format!("{one_thread:?}"), "{version:?}");
             }

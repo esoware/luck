@@ -1,4 +1,4 @@
-use core::mem;
+use std::mem;
 
 use luck_allocator::{Box, List};
 use luck_ast::{FunctionBody, GetSpan as _, Name, Parameter, Type, VarArgParam};
@@ -87,7 +87,7 @@ impl<'ast> Parser<'ast> {
     /// Finish a function parameter or a for-loop variable whose `name` was
     /// just consumed, taking a Luau `: T` annotation if one follows.
     pub(super) fn parse_parameter(&mut self, name: Name<'ast>) -> Parameter<'ast> {
-        self.counts.declarations = self.counts.declarations.wrapping_add(1);
+        self.counts.declarations += 1;
         Parameter::new(name, self.try_parse_type_annotation())
     }
 
@@ -96,11 +96,11 @@ impl<'ast> Parser<'ast> {
         let dots = self.advance();
         // Lua 5.1: a vararg function binds its extra arguments' table to `arg`.
         if self.version.has_implicit_vararg_table() {
-            self.counts.declarations = self.counts.declarations.wrapping_add(1);
+            self.counts.declarations += 1;
         }
         // Lua 5.5: named varargs `...name`.
         let name = (self.version.has_named_varargs() && self.is_at_name()).then(|| {
-            self.counts.declarations = self.counts.declarations.wrapping_add(1);
+            self.counts.declarations += 1;
             self.advance_name()
         });
         // Luau: vararg type annotation `...: type` or `...: T...`.

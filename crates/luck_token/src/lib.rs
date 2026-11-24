@@ -37,14 +37,6 @@
 //! assert_eq!(begin.text(source), b"hello ");
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
 mod comment;
 mod directive;
 mod lua_target;

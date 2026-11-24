@@ -1,5 +1,5 @@
-use core::num::NonZero;
 use std::io::{self, Write as _};
+use std::num::NonZero;
 
 use lsp_server::Connection;
 

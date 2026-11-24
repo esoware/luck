@@ -29,8 +29,9 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
                             quote!(*span),
                         ),
                         Payload::Single(payload, tokens) => {
-                            let binding =
-                                binding_for(&payload.node().map(snake_case).unwrap_or_default());
+                            let node =
+                                payload.node().expect("a payload other than a span is a node");
+                            let binding = binding_for(&snake_case(node));
                             matched.push(
                                 &format!("{binding}: {tokens}"),
                                 quote!(Self::#variant_ident(#binding)),
@@ -119,7 +120,6 @@ fn fields_span(fields: &[&FieldDef], place: &TokenStream) -> SpanCode {
         return SpanCode { lets: TokenStream::new(), value };
     }
     let always_spanned = fields.iter().find(|field| !matches!(field.ty, FieldType::Option(_)));
-    #[expect(clippy::unreachable, reason = "`Schema::load` checks every node has such a field")]
     let Some(first) = always_spanned else {
         unreachable!("a node without a `span` has a field that always has one");
     };
@@ -129,7 +129,8 @@ fn fields_span(fields: &[&FieldDef], place: &TokenStream) -> SpanCode {
     for field in fields.iter().filter(|field| field.name != first.name) {
         let ident = field.ident();
         if let FieldType::Option(inner) = &field.ty {
-            let present = binding_for(&inner.node().map(snake_case).unwrap_or_default());
+            let node = inner.node().expect("an optional field with a span holds a node");
+            let present = binding_for(&snake_case(node));
             let target = if place.is_empty() { quote!(#ident) } else { quote!(&#place #ident) };
             lets.extend(quote! {
                 if let Some(#present) = #target {

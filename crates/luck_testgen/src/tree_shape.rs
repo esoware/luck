@@ -22,7 +22,6 @@ use luck_token::{Associativity, LuaNumber, UnOp};
 /// Two trees print the same when a printer may turn one into the other, so
 /// comparing a tree with the parse of its printed output checks that the
 /// printer kept its meaning.
-#[must_use]
 pub fn tree_shape(chunk: &Chunk<'_>) -> String {
     let mut printer = Printer { output: String::new(), depth: 0 };
     printer.block(&chunk.block);
@@ -46,11 +45,11 @@ impl Printer {
     /// Prints `text` and indents what follows, until [`Self::close`].
     fn open(&mut self, text: &str) {
         self.line(text);
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
     }
 
     const fn close(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+        self.depth -= 1;
     }
 
     /// A number by its value, which keeps an integer and a float apart.

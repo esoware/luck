@@ -26,10 +26,10 @@ struct NilFalseCounts {
 impl<'ast> Visit<'ast> for NilFalseCounts {
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
         if matches!(expr, Expression::Nil(_)) {
-            self.nils = self.nils.saturating_add(1);
+            self.nils += 1;
         }
         if matches!(expr, Expression::False(_)) {
-            self.falses = self.falses.saturating_add(1);
+            self.falses += 1;
         }
         self.walk_expr(expr);
     }
@@ -200,27 +200,27 @@ fn hooks_fire_in_stmt_and_expr_positions() {
     impl<'ast> VisitMut<'ast> for HookCounts {
         fn enter_node(&mut self, kind: AstType) {
             if kind == AstType::Block {
-                self.blocks = self.blocks.saturating_add(1);
+                self.blocks += 1;
             }
         }
 
         fn visit_suffixed_expr(&mut self, suffixed_expr: &mut SuffixedExpression<'ast>) {
-            self.chains = self.chains.saturating_add(1);
+            self.chains += 1;
             self.walk_suffixed_expr(suffixed_expr);
         }
 
         fn visit_function_args(&mut self, function_args: &mut FunctionArgs<'ast>) {
-            self.args = self.args.saturating_add(1);
+            self.args += 1;
             self.walk_function_args(function_args);
         }
 
         fn visit_table_constructor(&mut self, table_constructor: &mut TableConstructor<'ast>) {
-            self.tables = self.tables.saturating_add(1);
+            self.tables += 1;
             self.walk_table_constructor(table_constructor);
         }
 
         fn visit_function_body(&mut self, function_body: &mut FunctionBody<'ast>) {
-            self.bodies = self.bodies.saturating_add(1);
+            self.bodies += 1;
             self.walk_function_body(function_body);
         }
     }

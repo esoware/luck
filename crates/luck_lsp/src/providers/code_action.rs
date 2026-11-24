@@ -1,4 +1,4 @@
-use core::iter;
+use std::iter;
 
 use ls_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams,
@@ -6,7 +6,7 @@ use ls_types::{
 };
 use luck_ast::{GetSpan as _, Statement};
 use luck_linter::{Fix, FixKind, Message};
-use luck_token::{Span, has_line_break, is_lua_whitespace, offset_to_index};
+use luck_token::{Span, has_line_break, is_lua_whitespace};
 use rustc_hash::FxHashMap;
 
 use crate::document::DocumentState;
@@ -112,7 +112,7 @@ fn lints_starting_at(lints: &[Message], mut starts: Vec<u32>) -> FxHashMap<(Span
     for start in starts {
         let from = lints.partition_point(|lint| lint.span().start < start);
         let to = lints.partition_point(|lint| lint.span().start <= start);
-        for lint in lints.get(from..to).unwrap_or_default() {
+        for lint in &lints[from..to] {
             by_key.insert((lint.span(), lint.code), lint);
         }
     }
@@ -165,9 +165,9 @@ fn disable_edit(document: &DocumentState, start: u32, rule: &str) -> Option<Text
             let stmt = stmts.get(stmts.partition_point(|stmt| stmt.span().end <= start))?;
             (stmt.span().start <= start).then(|| stmt.span().end)
         })?;
-    let rest = document.text().get(offset_to_index(statement_end)..).unwrap_or_default();
+    let rest = &document.text()[statement_end as usize..];
     let blank_length = rest.bytes().take_while(|&b| is_lua_whitespace(b)).count();
-    let blank = rest.get(..blank_length).unwrap_or_default();
+    let blank = &rest[..blank_length];
     let is_line_end =
         blank_length == rest.len() || has_line_break(blank.as_bytes(), document.version());
     let new_text = if is_line_end {
@@ -279,7 +279,7 @@ mod tests {
 
     fn disabled(text: &str, config: &LintConfig, lint_index: usize) -> String {
         let (document, lints) = linted(text, config);
-        let lint = lints.get(lint_index).expect("the lint fired");
+        let lint = &lints[lint_index];
         let edit =
             disable_edit(&document, lint.span().start, lint.code).expect("a statement holds it");
         applied(&document, vec![edit])

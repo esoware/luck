@@ -3,7 +3,7 @@ use luck_ast::{Expression, Field, GetSpan as _, Name, Parameter, Type};
 use luck_token::Span;
 
 fn name(text: &'static str, start: u32) -> Name<'static> {
-    let end = start.saturating_add(1);
+    let end = start + 1;
     Name::new(text.into(), None, Span::new(start, end))
 }
 

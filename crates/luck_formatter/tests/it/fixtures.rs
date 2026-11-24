@@ -1,8 +1,8 @@
 //! Each snapshot shows a fixture's every layout once, under the widths that
 //! give it, so a change at any width is a diff to review.
 
-use core::fmt::Write as _;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 

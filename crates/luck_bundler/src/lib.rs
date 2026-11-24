@@ -35,14 +35,6 @@
 //! assert!(!bundle.output.is_empty());
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
 mod analysis;
 mod block_emitter;
 mod bundle;

@@ -1,4 +1,4 @@
-use core::fmt::Write as _;
+use std::fmt::Write as _;
 
 use ls_types::{
     CodeDescription, Diagnostic as LspDiagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
@@ -69,7 +69,7 @@ where
     let mut message = diag.message.to_string();
     for (heading, extra) in [("help", &diag.help), ("note", &diag.note)] {
         if let Some(text) = extra {
-            let _infallible = write!(message, "\n\n{heading}: {text}");
+            let _ = write!(message, "\n\n{heading}: {text}");
         }
     }
     let range = range_of(diag.span.unwrap_or_default());

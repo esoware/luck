@@ -1,7 +1,7 @@
 mod gotos;
 mod limits;
 
-use core::mem;
+use std::mem;
 
 use luck_ast::{
     Assignment, AstKind, Attribute, Block, Call, Chunk, CompoundAssignment, DoBlock, Expression,
@@ -12,7 +12,7 @@ use luck_ast::{
     TypeDeclarationValue, Var, Visit, WhileLoop,
 };
 use luck_diagnostics::Diagnostic;
-use luck_token::{LuaVersion, Span, offset_to_index};
+use luck_token::{LuaVersion, Span};
 use rustc_hash::FxHashSet;
 
 use self::gotos::{BlockStart, FunctionStart, Gotos, Sink};
@@ -54,7 +54,6 @@ pub struct SemanticBuilderReturn<'ast> {
 
 impl SemanticBuilder {
     /// A build of the scoping alone.
-    #[must_use]
     pub const fn new() -> Self {
         Self {
             counts: TreeCounts { blocks: 0, declarations: 0, name_uses: 0, names: 0 },
@@ -100,24 +99,22 @@ impl SemanticBuilder {
         self
     }
 
-    #[must_use]
     pub fn build<'ast>(self, chunk: &'ast Chunk<'ast>) -> SemanticBuilderReturn<'ast> {
         let counts = self.counts;
-        let names = offset_to_index(counts.names);
-        let distinct_names =
-            offset_to_index(counts.declarations).saturating_add(offset_to_index(counts.name_uses));
+        let names = counts.names as usize;
+        let distinct_names = counts.declarations as usize + counts.name_uses as usize;
         let module = ScopeId::from_index(0);
         let mut builder = Builder {
             version: chunk.version,
             is_checking: self.is_checking,
             limits: if self.is_checking {
-                Limits::new(chunk.version, offset_to_index(counts.declarations))
+                Limits::new(chunk.version, counts.declarations as usize)
             } else {
                 None
             },
             scoping: Scoping::with_capacity(chunk.version, counts),
             // A chunk has about four nodes for each name.
-            nodes: self.is_building_nodes.then(|| AstNodes::with_capacity(names.saturating_mul(4))),
+            nodes: self.is_building_nodes.then(|| AstNodes::with_capacity(names * 4)),
             node_stack: Vec::new(),
             next_node: NodeId::from_index(0),
             require_calls: self.is_finding_requires.then(Vec::new),
@@ -385,13 +382,12 @@ impl<'ast> Builder<'ast> {
     }
 
     fn binding(&self, name: NameId) -> Binding {
-        self.bindings.get(name.index()).copied().unwrap_or(Binding::Free)
+        self.bindings[name.index()]
     }
 
     fn bind(&mut self, name: NameId, binding: Binding) {
-        if let Some(slot) = self.bindings.get_mut(name.index()) {
-            self.shadowed.push((name, mem::replace(slot, binding)));
-        }
+        let previous = mem::replace(&mut self.bindings[name.index()], binding);
+        self.shadowed.push((name, previous));
     }
 
     fn goto_sink(&mut self) -> Sink<'_> {
@@ -431,9 +427,7 @@ impl<'ast> Builder<'ast> {
     }
 
     fn pop_scope(&mut self) {
-        let Some(outer) = self.outer_scopes.pop() else {
-            return;
-        };
+        let outer = self.outer_scopes.pop().expect("a scope's exit follows its entry");
         if let Some(limits) = &mut self.limits {
             limits.leave_scope();
         }
@@ -450,9 +444,7 @@ impl<'ast> Builder<'ast> {
         // Innermost first, since a scope can declare one name twice.
         let Self { shadowed, bindings, .. } = self;
         for (name, previous) in shadowed.drain(outer.shadowed_len..).rev() {
-            if let Some(slot) = bindings.get_mut(name.index()) {
-                *slot = previous;
-            }
+            bindings[name.index()] = previous;
         }
     }
 
@@ -477,7 +469,7 @@ impl<'ast> Builder<'ast> {
         let id =
             self.scoping.add_symbol(name, self.current_scope, kind, declaration, span, shadows);
         self.bind(name, Binding::Local(id));
-        self.active_vars = self.active_vars.saturating_add(1);
+        self.active_vars += 1;
         if self.version.has_env_upvalue() && text == "_ENV" {
             self.env_name = Some(name);
         }
@@ -500,7 +492,7 @@ impl<'ast> Builder<'ast> {
         }
         let id = self.declare(name.text.as_str(), name.span, kind, declaration, is_constant);
         self.scoping.set_role(name.index, NameRole::Symbol(id));
-        self.scoping.symbol_mut(id)
+        Some(self.scoping.symbol_mut(id))
     }
 
     /// `count` locals no name spells, which the construct at `span` declares,
@@ -523,8 +515,8 @@ impl<'ast> Builder<'ast> {
             self.scoping.mark_assigned_global(id);
         }
         self.bind(id, if is_read_only { Binding::ReadOnlyGlobal } else { Binding::Global });
-        self.named_globals = self.named_globals.saturating_add(1);
-        self.active_vars = self.active_vars.saturating_add(1);
+        self.named_globals += 1;
+        self.active_vars += 1;
     }
 
     /// Records a use of `name`, whose node is `node`, resolved against the
@@ -572,10 +564,9 @@ impl<'ast> Builder<'ast> {
             let is_captured = self.type_depth == 0
                 && self.scoping.scope(self.scoping.symbol(symbol_id).scope).function
                     != self.current_function;
-            if let Some(symbol) = self.scoping.symbol_mut(symbol_id) {
-                symbol.is_upvalue |= is_captured;
-                symbol.is_modified |= resolved.is_some() && kind.is_write();
-            }
+            let symbol = self.scoping.symbol_mut(symbol_id);
+            symbol.is_upvalue |= is_captured;
+            symbol.is_modified |= resolved.is_some() && kind.is_write();
             is_captured.then_some(Upvalue::Symbol(symbol_id))
         } else {
             (self.version.has_env_upvalue() && self.type_depth == 0).then_some(Upvalue::Env)
@@ -692,7 +683,7 @@ impl<'ast> Builder<'ast> {
                 .stmts
                 .iter()
                 .rposition(|stmt| !matches!(stmt, Statement::Label(_)))
-                .map_or(0, |i| i.saturating_add(1))
+                .map_or(0, |i| i + 1)
         };
         for (i, stmt) in block.stmts.iter().enumerate() {
             if let Statement::Label(label) = stmt {
@@ -856,8 +847,8 @@ impl<'ast> Builder<'ast> {
             self.declare("self", span, SymbolKind::ImplicitSelf, body_node, false);
         }
         for (i, param) in body.params.iter().enumerate() {
-            let node = self.scratch_nodes.get(first_param.saturating_add(i)).copied();
-            self.declare_name(&param.name, SymbolKind::Parameter, node.unwrap_or(body_node), false);
+            let node = self.scratch_nodes[first_param + i];
+            self.declare_name(&param.name, SymbolKind::Parameter, node, false);
         }
         self.scratch_nodes.truncate(first_param);
         if let (Some(vararg), Some(node)) = (body.vararg.as_deref(), vararg_node) {
@@ -935,9 +926,9 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
 
     // Luau
     fn visit_type(&mut self, ty: &'ast Type<'ast>) {
-        self.type_depth = self.type_depth.saturating_add(1);
+        self.type_depth += 1;
         self.walk_type(ty);
-        self.type_depth = self.type_depth.saturating_sub(1);
+        self.type_depth -= 1;
     }
 
     fn visit_function_def(&mut self, function_def: &'ast FunctionDef<'ast>) {
@@ -1001,11 +992,8 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             Var::Suffixed(_) => None,
         });
         for (i, name) in names.enumerate() {
-            if let Some(&(node, position)) =
-                self.deferred_writes.get(first_target.saturating_add(i))
-            {
-                self.reference(name, ReferenceKind::Write, node, Some(position));
-            }
+            let (node, position) = self.deferred_writes[first_target + i];
+            self.reference(name, ReferenceKind::Write, node, Some(position));
         }
         self.deferred_writes.truncate(first_target);
         self.leave();
@@ -1064,9 +1052,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
                 self.limits.as_ref().is_some_and(|limits| limits.is_constant(expr, &self.scoping))
             });
         for (i, attributed) in local_assignment.names.iter().enumerate() {
-            let Some(&node) = self.scratch_nodes.get(first_name.saturating_add(i)) else {
-                continue;
-            };
+            let node = self.scratch_nodes[first_name + i];
             let is_constant = is_last_constant && i == last;
             let Some(symbol) =
                 self.declare_name(&attributed.name, SymbolKind::Local, node, is_constant)
@@ -1223,13 +1209,10 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         self.hidden_locals(self.version.generic_for_state_locals(), first_name_span);
         let has_const_control = self.version.has_const_for_variables();
         for (i, binding) in generic_for.names.iter().enumerate() {
-            let declaration = self.scratch_nodes.get(first_name.saturating_add(i)).copied();
-            if let Some(symbol) = self.declare_name(
-                &binding.name,
-                SymbolKind::IteratorVariable,
-                declaration.unwrap_or(node),
-                false,
-            ) {
+            let declaration = self.scratch_nodes[first_name + i];
+            if let Some(symbol) =
+                self.declare_name(&binding.name, SymbolKind::IteratorVariable, declaration, false)
+            {
                 // Lua 5.5: only the first variable is the control variable.
                 symbol.is_read_only = i == 0 && has_const_control;
             }
@@ -1276,7 +1259,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
     fn visit_global_star(&mut self, global_star: &'ast GlobalStar<'ast>) {
         self.walk_global_star(global_star);
         self.global_star = Some(global_star.attribute.as_ref().is_some_and(is_read_only_attribute));
-        self.active_vars = self.active_vars.saturating_add(1);
+        self.active_vars += 1;
     }
 
     // Luau: the body of a type function, unlike a type alias, runs in the
@@ -1303,7 +1286,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
 
 #[cfg(test)]
 mod tests {
-    use core::str;
+    use std::str;
 
     use luck_allocator::Allocator;
     use luck_ast::AstType;

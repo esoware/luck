@@ -4,7 +4,6 @@ use crate::stmt::Statement;
 /// `expr` inside every [`Expression::Parenthesized`] around it, for a place
 /// where taking one value, or reading a Luau integer as a value, changes
 /// nothing.
-#[must_use]
 pub fn unwrap_parentheses<'tree, 'ast>(expr: &'tree Expression<'ast>) -> &'tree Expression<'ast> {
     let mut current = expr;
     while let Expression::Parenthesized(parenthesized) = current {
@@ -18,7 +17,6 @@ pub fn unwrap_parentheses<'tree, 'ast>(expr: &'tree Expression<'ast>) -> &'tree 
 ///
 /// Parenthesizing one, or moving it out of the last position of a list,
 /// truncates it to exactly one value.
-#[must_use]
 pub fn is_multi_value(expr: &Expression<'_>) -> bool {
     match expr {
         Expression::VarArg(_) => true,
@@ -48,7 +46,6 @@ pub fn is_multi_value(expr: &Expression<'_>) -> bool {
 /// A printer that writes it in parentheses starts the statement with `(`,
 /// which glues onto a statement before it that ends in an expression and
 /// reads back as a call, so it puts a `;` between them.
-#[must_use]
 pub fn leading_prefix<'tree, 'ast>(
     stmt: &'tree Statement<'ast>,
 ) -> Option<&'tree Expression<'ast>> {

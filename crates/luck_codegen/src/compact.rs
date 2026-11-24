@@ -26,7 +26,6 @@ pub enum LiteralSpelling {
 /// The output is bytes, as a source is, and starts with no reserved
 /// capacity. Use [`compact_into`] to write after a header, or into a buffer
 /// with a useful size reserved.
-#[must_use]
 pub fn compact(chunk: &Chunk<'_>, spelling: LiteralSpelling) -> Vec<u8> {
     compact_into(chunk, spelling, Vec::new())
 }
@@ -37,7 +36,6 @@ pub fn compact(chunk: &Chunk<'_>, spelling: LiteralSpelling) -> Vec<u8> {
 /// code, and the capacity it reserves is the capacity the printer starts
 /// with. A parsed tree's source length, its comments aside, makes a good
 /// hint, since compact output is rarely longer.
-#[must_use]
 pub fn compact_into(chunk: &Chunk<'_>, spelling: LiteralSpelling, output: Vec<u8>) -> Vec<u8> {
     let mut printer = Printer {
         output: CodeBuffer::from(output),
@@ -86,9 +84,7 @@ impl Printer {
     #[inline(always)]
     fn piece(&mut self, text: &str) {
         let bytes = text.as_bytes();
-        if let (Some(&first), Some(&last)) = (bytes.first(), bytes.last()) {
-            self.emit(bytes, merges_after(first), class_of(last));
-        }
+        self.emit(bytes, merges_after(bytes[0]), class_of(bytes[bytes.len() - 1]));
     }
 
     /// Merges as a keyword does, whatever letter or `_` it starts with.
@@ -178,7 +174,7 @@ impl Printer {
         let start = self.output.len();
         self.output.print_with(|output| write_interpolated_text(&text.value, output));
         if let Some(raw) = text.raw
-            && raw.len() <= self.output.len().saturating_sub(start)
+            && raw.len() <= self.output.len() - start
         {
             self.output.truncate(start);
             self.output.print_bytes(raw.as_bytes());

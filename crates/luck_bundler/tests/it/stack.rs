@@ -4,11 +4,6 @@
 //! so a module nested to the parser's cap, or holding long runs and lists,
 //! gets through all of that.
 
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
 use std::fs;
 
 use luck_bundler::{BundleOptions, DynamicRequire};

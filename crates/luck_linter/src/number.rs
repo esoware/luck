@@ -1,7 +1,7 @@
 //! The number an expression evaluates to, as a double, which is how the
 //! rules that check one compare it.
 
-use core::cmp::Ordering;
+use std::cmp::Ordering;
 
 use luck_ast::Expression;
 use luck_token::LuaNumber;

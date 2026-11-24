@@ -52,7 +52,7 @@ pub(super) fn simplify_table(table: &mut TableConstructor<'_>, version: LuaVersi
 /// A float key with an integer's value is that integer's key (Lua 5.3+), so
 /// `[1.0]` is positional too.
 fn is_sequential_from_one(fields: &[Field<'_>]) -> bool {
-    let has_sequential_keys = (1i64..).zip(fields).all(|(expected, field)| {
+    let has_sequential_keys = (1..).zip(fields).all(|(expected, field)| {
         matches!(
             field,
             Field::Bracketed { key: Expression::Number(literal), .. }

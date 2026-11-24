@@ -1,8 +1,3 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
 use luck_allocator::ThreadAllocators;
 use luck_benchmark::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use luck_benchmark_files::bundle_project_root;
@@ -13,8 +8,11 @@ use rayon::ThreadPoolBuilder;
 fn bench_bundler(criterion: &mut Criterion) {
     // A pool of only the bench thread reads every module on it, so no work
     // waits on another thread or depends on the runner's core count.
-    let pool = ThreadPoolBuilder::new().num_threads(1).use_current_thread().build_global();
-    assert!(pool.is_ok(), "{:?}", pool.err());
+    ThreadPoolBuilder::new()
+        .num_threads(1)
+        .use_current_thread()
+        .build_global()
+        .expect("nothing built the global pool before");
 
     let root = bundle_project_root();
     let entry_path = root.join("main.lua");
@@ -30,8 +28,7 @@ fn bench_bundler(criterion: &mut Criterion) {
         arenas.reset();
         luck_bundler::bundle(&arenas, &entry_path, &options)
     };
-    let bundled = bundle();
-    assert!(bundled.is_ok(), "{:?}", bundled.err());
+    bundle().expect("the benchmark project bundles");
 
     let mut group = criterion.benchmark_group("bundler");
     // Measures the full pipeline a `luck bundle` invocation runs:

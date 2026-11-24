@@ -53,14 +53,12 @@ enum Scheme {
 }
 
 impl Resolver {
-    #[must_use]
     pub fn new(options: ResolveOptions) -> Self {
         Self::new_with_file_system(FileSystemOs, options)
     }
 }
 
 impl<Fs: FileSystem> ResolverGeneric<Fs> {
-    #[must_use]
     pub fn new_with_file_system(file_system: Fs, options: ResolveOptions) -> Self {
         let ResolveOptions { version, search_paths, root } = options;
         let scheme = if version.is_luau() {

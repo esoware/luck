@@ -1,10 +1,11 @@
 use luck_token::{
-    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, leading_hot_comments,
+    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, index_to_offset,
+    leading_hot_comments,
 };
 
 fn comment_at(source: &str, text: &str, kind: CommentKind) -> Comment {
-    let start = source.find(text).unwrap_or_default();
-    let span = Span::from_indices(start, start.saturating_add(text.len()));
+    let start = source.find(text).expect("the comment is in the source");
+    let span = Span::from_indices(start, start + text.len());
     Comment {
         span,
         attached_to: span.end,
@@ -21,9 +22,9 @@ fn hot_comment_texts<'source>(
     first_token: &str,
 ) -> Vec<&'source str> {
     let first_token_start =
-        source.find(first_token).map_or(u32::MAX, |start| u32::try_from(start).unwrap_or(u32::MAX));
+        index_to_offset(source.find(first_token).expect("the token is in the source"));
     leading_hot_comments(comments, first_token_start)
-        .map(|comment| str::from_utf8(comment.span.text(source.as_bytes())).unwrap_or_default())
+        .map(|comment| str::from_utf8(comment.span.text(source.as_bytes())).expect("UTF-8"))
         .collect()
 }
 

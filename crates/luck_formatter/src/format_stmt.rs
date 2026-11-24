@@ -4,7 +4,7 @@
 //! The comments between statements are placed in `format_block`, and the
 //! ones inside a statement by the nodes it writes.
 
-use core::{iter, slice};
+use std::{iter, slice};
 
 use luck_ast::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, Expression,

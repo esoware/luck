@@ -1,5 +1,5 @@
-use core::num::NonZeroU32;
-use core::{fmt, str};
+use std::num::NonZeroU32;
+use std::{fmt, str};
 
 use luck_allocator::{ThinBytes, ThinStr};
 use luck_ast_macros::Ast;
@@ -47,14 +47,12 @@ impl fmt::Debug for Name<'_> {
 pub struct NameIndex(NonZeroU32);
 
 impl NameIndex {
-    #[must_use]
     pub const fn new(index: u32) -> Self {
         Self(NonZeroU32::MIN.saturating_add(index))
     }
 
-    #[must_use]
     pub const fn get(self) -> u32 {
-        self.0.get().wrapping_sub(1)
+        self.0.get() - 1
     }
 }
 
@@ -116,7 +114,6 @@ pub struct StringLiteral<'ast> {
 
 impl<'ast> StringLiteral<'ast> {
     /// The value as text, when it's UTF-8.
-    #[must_use]
     pub fn as_str(&self) -> Option<&'ast str> {
         str::from_utf8(self.value.as_bytes()).ok()
     }
@@ -128,7 +125,7 @@ mod tests {
 
     #[test]
     fn an_index_saturates_below_u32_max() {
-        let last = u32::MAX.wrapping_sub(1);
+        let last = u32::MAX - 1;
         for (index, kept) in [(0, 0), (7, 7), (last, last), (u32::MAX, last)] {
             assert_eq!(NameIndex::new(index).get(), kept, "{index}");
         }

@@ -1,8 +1,3 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
 use std::fs;
 use std::path::Path;
 
@@ -11,7 +6,7 @@ use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_bundler::{BundleOptions, BundleResult, DynamicRequire};
 use luck_diagnostics::FileDiagnostics;
 use luck_testgen::with_the_smallest_stack;
-use luck_token::{LuaVersion, offset_to_index};
+use luck_token::LuaVersion;
 use tempfile::TempDir;
 
 use crate::common::{bundle_both, located};
@@ -29,10 +24,6 @@ fn write_project(files: &[(&str, &str)]) -> TempDir {
     directory
 }
 
-/// # Errors
-///
-/// Returns the diagnostics that stopped the project at `directory` from
-/// bundling from `entry`.
 fn bundle_project(
     directory: &Path,
     entry: &str,
@@ -50,9 +41,6 @@ fn bundle_project(
     )
 }
 
-/// # Errors
-///
-/// Returns the diagnostics that stopped `files` from bundling from `entry`.
 fn bundle_files(
     entry: &str,
     files: &[(&str, &str)],
@@ -189,10 +177,10 @@ fn flags_e013_at_the_construct_a_wrapper_pushes_past_the_cap() {
             assert!(path.ends_with(shape.deep_file), "{}: {error:?}", shape.name);
             // The innermost table is the one past the cap.
             let innermost = shape.prefix.len() + tables - 1;
-            let span = error.span.unwrap_or_default();
-            assert_eq!(offset_to_index(span.start), innermost, "{}: {error:?}", shape.name);
+            let span = error.span.expect("E013 points at the construct");
+            assert_eq!(span.start as usize, innermost, "{}: {error:?}", shape.name);
             assert_eq!(span.text(deep_source.as_bytes()), b"{1}", "{}: {error:?}", shape.name);
-            let help = error.help.as_deref().unwrap_or_default();
+            let help = error.help.as_deref().expect("E013 has help");
             assert!(
                 help.contains(&format!("{} levels deeper", shape.wrapper_levels)),
                 "{}: {help}",

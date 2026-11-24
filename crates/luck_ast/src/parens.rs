@@ -70,7 +70,6 @@ impl Expression<'_> {
     /// operand at its own level reads back as part of it, and takes
     /// parentheses even where its operators would group the same. A
     /// [`Expression::Parenthesized`] prints its own.
-    #[must_use]
     pub fn needs_parens(&self, slot: Slot) -> bool {
         match self {
             Self::Name(_) | Self::Suffixed(_) | Self::Parenthesized(_) | Self::Error(_) => false,

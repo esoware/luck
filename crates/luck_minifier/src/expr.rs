@@ -11,7 +11,7 @@ pub(crate) const MAX_ADDED_DEPTH: usize = 32;
 /// The output has to reparse, so a rewrite that moves an expression deeper
 /// asks first.
 pub(crate) fn fits_at_depth(depth: usize, added_levels: usize, expr: &Expression<'_>) -> bool {
-    depth.saturating_add(added_levels).saturating_add(expr_nesting_depth(expr)) <= MAX_NESTING_DEPTH
+    depth + added_levels + expr_nesting_depth(expr) <= MAX_NESTING_DEPTH
 }
 
 /// Whether `expr` evaluates into exactly one register with no temporaries.

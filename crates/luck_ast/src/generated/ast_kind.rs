@@ -154,7 +154,6 @@ pub enum AstKind<'ast> {
 }
 
 impl<'ast> AstKind<'ast> {
-    #[must_use]
     #[inline]
     pub const fn ty(self) -> AstType {
         match self {
@@ -222,37 +221,31 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_suffixed_expr(self) -> Option<&'ast SuffixedExpression<'ast>> {
         if let Self::SuffixedExpression(suffixed_expr) = self { Some(suffixed_expr) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_method_call(self) -> Option<&'ast MethodCall<'ast>> {
         if let Self::MethodCall(method_call) = self { Some(method_call) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_binary_op(self) -> Option<&'ast BinaryOp<'ast>> {
         if let Self::BinaryOp(binary_op) = self { Some(binary_op) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_binary_link(self) -> Option<&'ast BinaryLink<'ast>> {
         if let Self::BinaryLink(binary_link) = self { Some(binary_link) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_unary_op(self) -> Option<&'ast UnaryOp<'ast>> {
         if let Self::UnaryOp(unary_op) = self { Some(unary_op) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_parenthesized_expr(self) -> Option<&'ast ParenthesizedExpression<'ast>> {
         if let Self::ParenthesizedExpression(parenthesized_expr) = self {
@@ -262,7 +255,6 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_table_constructor(self) -> Option<&'ast TableConstructor<'ast>> {
         if let Self::TableConstructor(table_constructor) = self {
@@ -272,19 +264,16 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_function_def(self) -> Option<&'ast FunctionDef<'ast>> {
         if let Self::FunctionDef(function_def) = self { Some(function_def) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_if_expr(self) -> Option<&'ast IfExpression<'ast>> {
         if let Self::IfExpression(if_expr) = self { Some(if_expr) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_else_if_expr_clause(self) -> Option<&'ast ElseIfExprClause<'ast>> {
         if let Self::ElseIfExprClause(else_if_expr_clause) = self {
@@ -294,7 +283,6 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_interpolated_string(self) -> Option<&'ast InterpolatedString<'ast>> {
         if let Self::InterpolatedString(interpolated_string) = self {
@@ -304,7 +292,6 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_interpolated_segment(self) -> Option<&'ast InterpolatedSegment<'ast>> {
         if let Self::InterpolatedSegment(interpolated_segment) = self {
@@ -314,31 +301,26 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_type_cast(self) -> Option<&'ast TypeCast<'ast>> {
         if let Self::TypeCast(type_cast) = self { Some(type_cast) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_function_body(self) -> Option<&'ast FunctionBody<'ast>> {
         if let Self::FunctionBody(function_body) = self { Some(function_body) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_param(self) -> Option<&'ast Parameter<'ast>> {
         if let Self::Parameter(param) = self { Some(param) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_var_arg_param(self) -> Option<&'ast VarArgParam<'ast>> {
         if let Self::VarArgParam(var_arg_param) = self { Some(var_arg_param) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_function_attribute(self) -> Option<&'ast FunctionAttribute<'ast>> {
         if let Self::FunctionAttribute(function_attribute) = self {
@@ -348,127 +330,106 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_name(self) -> Option<&'ast Name<'ast>> {
         if let Self::Name(name) = self { Some(name) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_number_literal(self) -> Option<&'ast NumberLiteral<'ast>> {
         if let Self::NumberLiteral(number_literal) = self { Some(number_literal) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_integer_literal(self) -> Option<&'ast IntegerLiteral<'ast>> {
         if let Self::IntegerLiteral(integer_literal) = self { Some(integer_literal) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_string_literal(self) -> Option<&'ast StringLiteral<'ast>> {
         if let Self::StringLiteral(string_literal) = self { Some(string_literal) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_chunk(self) -> Option<&'ast Chunk<'ast>> {
         if let Self::Chunk(chunk) = self { Some(chunk) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_block(self) -> Option<&'ast Block<'ast>> {
         if let Self::Block(block) = self { Some(block) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_assignment(self) -> Option<&'ast Assignment<'ast>> {
         if let Self::Assignment(assignment) = self { Some(assignment) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_do_block(self) -> Option<&'ast DoBlock<'ast>> {
         if let Self::DoBlock(do_block) = self { Some(do_block) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_while_loop(self) -> Option<&'ast WhileLoop<'ast>> {
         if let Self::WhileLoop(while_loop) = self { Some(while_loop) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_repeat_loop(self) -> Option<&'ast RepeatLoop<'ast>> {
         if let Self::RepeatLoop(repeat_loop) = self { Some(repeat_loop) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_if_stmt(self) -> Option<&'ast IfStatement<'ast>> {
         if let Self::IfStatement(if_stmt) = self { Some(if_stmt) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_else_if_clause(self) -> Option<&'ast ElseIfClause<'ast>> {
         if let Self::ElseIfClause(else_if_clause) = self { Some(else_if_clause) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_else_clause(self) -> Option<&'ast ElseClause<'ast>> {
         if let Self::ElseClause(else_clause) = self { Some(else_clause) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_numeric_for(self) -> Option<&'ast NumericFor<'ast>> {
         if let Self::NumericFor(numeric_for) = self { Some(numeric_for) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_generic_for(self) -> Option<&'ast GenericFor<'ast>> {
         if let Self::GenericFor(generic_for) = self { Some(generic_for) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_function_name(self) -> Option<&'ast FunctionName<'ast>> {
         if let Self::FunctionName(function_name) = self { Some(function_name) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_function_decl(self) -> Option<&'ast FunctionDecl<'ast>> {
         if let Self::FunctionDecl(function_decl) = self { Some(function_decl) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_local_function(self) -> Option<&'ast LocalFunction<'ast>> {
         if let Self::LocalFunction(local_function) = self { Some(local_function) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_attribute(self) -> Option<&'ast Attribute<'ast>> {
         if let Self::Attribute(attribute) = self { Some(attribute) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_attributed_name(self) -> Option<&'ast AttributedName<'ast>> {
         if let Self::AttributedName(attributed_name) = self { Some(attributed_name) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_local_assignment(self) -> Option<&'ast LocalAssignment<'ast>> {
         if let Self::LocalAssignment(local_assignment) = self {
@@ -478,25 +439,21 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_goto_stmt(self) -> Option<&'ast GotoStatement<'ast>> {
         if let Self::GotoStatement(goto_stmt) = self { Some(goto_stmt) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_label_stmt(self) -> Option<&'ast LabelStatement<'ast>> {
         if let Self::LabelStatement(label_stmt) = self { Some(label_stmt) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_return_stmt(self) -> Option<&'ast ReturnStatement<'ast>> {
         if let Self::ReturnStatement(return_stmt) = self { Some(return_stmt) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_compound_assignment(self) -> Option<&'ast CompoundAssignment<'ast>> {
         if let Self::CompoundAssignment(compound_assignment) = self {
@@ -506,7 +463,6 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_type_declaration(self) -> Option<&'ast TypeDeclaration<'ast>> {
         if let Self::TypeDeclaration(type_declaration) = self {
@@ -516,7 +472,6 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_global_declaration(self) -> Option<&'ast GlobalDeclaration<'ast>> {
         if let Self::GlobalDeclaration(global_declaration) = self {
@@ -526,49 +481,41 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_global_function(self) -> Option<&'ast GlobalFunction<'ast>> {
         if let Self::GlobalFunction(global_function) = self { Some(global_function) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_global_star(self) -> Option<&'ast GlobalStar<'ast>> {
         if let Self::GlobalStar(global_star) = self { Some(global_star) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_named_type(self) -> Option<&'ast NamedType<'ast>> {
         if let Self::NamedType(named_type) = self { Some(named_type) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_type_args(self) -> Option<&'ast TypeArgs<'ast>> {
         if let Self::TypeArgs(type_args) = self { Some(type_args) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_typeof_type(self) -> Option<&'ast TypeofType<'ast>> {
         if let Self::TypeofType(typeof_type) = self { Some(typeof_type) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_table_type(self) -> Option<&'ast TableType<'ast>> {
         if let Self::TableType(table_type) = self { Some(table_type) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_function_type(self) -> Option<&'ast FunctionType<'ast>> {
         if let Self::FunctionType(function_type) = self { Some(function_type) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_function_type_param(self) -> Option<&'ast FunctionTypeParam<'ast>> {
         if let Self::FunctionTypeParam(function_type_param) = self {
@@ -578,19 +525,16 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_optional_type(self) -> Option<&'ast OptionalType<'ast>> {
         if let Self::OptionalType(optional_type) = self { Some(optional_type) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_union_type(self) -> Option<&'ast UnionType<'ast>> {
         if let Self::UnionType(union_type) = self { Some(union_type) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_intersection_type(self) -> Option<&'ast IntersectionType<'ast>> {
         if let Self::IntersectionType(intersection_type) = self {
@@ -600,7 +544,6 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_parenthesized_type(self) -> Option<&'ast ParenthesizedType<'ast>> {
         if let Self::ParenthesizedType(parenthesized_type) = self {
@@ -610,19 +553,16 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_type_pack(self) -> Option<&'ast TypePack<'ast>> {
         if let Self::TypePack(type_pack) = self { Some(type_pack) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_variadic_type(self) -> Option<&'ast VariadicType<'ast>> {
         if let Self::VariadicType(variadic_type) = self { Some(variadic_type) } else { None }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_generic_pack_type(self) -> Option<&'ast GenericPackType<'ast>> {
         if let Self::GenericPackType(generic_pack_type) = self {
@@ -632,7 +572,6 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_generic_type_list(self) -> Option<&'ast GenericTypeList<'ast>> {
         if let Self::GenericTypeList(generic_type_list) = self {
@@ -642,7 +581,6 @@ impl<'ast> AstKind<'ast> {
         }
     }
 
-    #[must_use]
     #[inline]
     pub const fn as_generic_type_param(self) -> Option<&'ast GenericTypeParam<'ast>> {
         if let Self::GenericTypeParam(generic_type_param) = self {

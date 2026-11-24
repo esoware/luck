@@ -1,10 +1,5 @@
-#![expect(
-    clippy::panic,
-    reason = "a benchmark file that fails to load leaves its caller nothing to measure"
-)]
-
-use core::time::Duration;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::{fs, thread};
 
 use flate2::read::GzDecoder;
@@ -23,10 +18,6 @@ fn cache_directory() -> PathBuf {
 
 /// CI runners see transient connection resets from GitHub's codeload host,
 /// and one failed fetch would fail the whole bench job.
-///
-/// # Panics
-///
-/// Panics when every attempt fails.
 fn fetch_bytes(url: &str) -> Vec<u8> {
     #[cfg(test)]
     if let Some(bytes) = canned_response(url) {
@@ -46,9 +37,6 @@ fn fetch_bytes(url: &str) -> Vec<u8> {
     panic!("failed to fetch {url} after 3 attempts: {last_error}")
 }
 
-/// # Panics
-///
-/// Panics when the tarball can't be fetched or extracted.
 pub(crate) fn fetch_project_tarball(owner: &str, repository: &str, sha: &str) -> PathBuf {
     let extracted_name = format!("{repository}-{sha}");
     let extracted = cache_directory().join(&extracted_name);
@@ -60,18 +48,18 @@ pub(crate) fn fetch_project_tarball(owner: &str, repository: &str, sha: &str) ->
     // Extracting aside and renaming keeps `extracted` absent until it's whole.
     // An interrupted run's leftovers go first.
     let partial = cache_directory().join(format!("{extracted_name}.partial"));
-    let _stale_partial = fs::remove_dir_all(&partial);
+    let _ = fs::remove_dir_all(&partial);
     let mut archive = Archive::new(GzDecoder::new(bytes.as_slice()));
     archive.unpack(&partial).unwrap_or_else(|e| panic!("failed to extract {url}: {e}"));
     fs::rename(partial.join(&extracted_name), &extracted)
         .unwrap_or_else(|e| panic!("failed to move {url} into the cache: {e}"));
-    let _empty_partial = fs::remove_dir_all(&partial);
+    let _ = fs::remove_dir_all(&partial);
     extracted
 }
 
 #[cfg(test)]
 mod tests {
-    use core::mem;
+    use std::mem;
     use std::panic;
 
     use super::*;
@@ -86,14 +74,12 @@ mod tests {
         ]);
         // Header and data of the first entry, then the second's header and
         // one byte of its data.
-        let cut_off_archive = complete_archive.get(..1537).expect("cut point inside the archive");
-        let mut response = gzip(cut_off_archive);
+        let mut response = gzip(&complete_archive[..1537]);
         let complete_response = gzip(&complete_archive);
         let _cache =
             isolated_cache(move |_url| mem::replace(&mut response, complete_response.clone()));
 
-        let _interrupted =
-            panic::catch_unwind(|| fetch_project_tarball("owner", "project", "0123"));
+        let _ = panic::catch_unwind(|| fetch_project_tarball("owner", "project", "0123"));
         let directory = fetch_project_tarball("owner", "project", "0123");
 
         assert!(

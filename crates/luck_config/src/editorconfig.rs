@@ -1,8 +1,8 @@
 mod glob;
 
-use alloc::sync::Arc;
 use std::fs;
 use std::path::{self, Path, PathBuf};
+use std::sync::Arc;
 
 use luck_formatter::{IndentStyle, LineEndings};
 use parking_lot::Mutex;

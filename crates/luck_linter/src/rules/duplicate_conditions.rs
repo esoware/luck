@@ -1,4 +1,4 @@
-use core::iter;
+use std::iter;
 
 use luck_ast::{AstKind, AstType, ContentEq as _, Expression, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};
@@ -33,7 +33,7 @@ impl Rule for DuplicateConditions {
             .chain(if_stmt.elseif_clauses.iter().map(|clause| &clause.condition))
             .filter(|condition| !matches!(condition, Expression::Error(_)));
         let mut earlier: Vec<&Expression<'_>> =
-            Vec::with_capacity(if_stmt.elseif_clauses.len().saturating_add(1));
+            Vec::with_capacity(if_stmt.elseif_clauses.len() + 1);
         for condition in conditions {
             let Some(first) =
                 earlier.iter().find(|&&earlier_condition| earlier_condition.content_eq(condition))

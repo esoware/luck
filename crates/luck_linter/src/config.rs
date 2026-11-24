@@ -2,13 +2,13 @@
 //! names are its keys and each rule decides the options it takes.
 
 #[cfg(feature = "schemars")]
-use alloc::borrow::Cow;
+use std::borrow::Cow;
 #[cfg(feature = "schemars")]
-use alloc::collections::BTreeMap;
+use std::collections::BTreeMap;
 #[cfg(feature = "serde")]
-use core::fmt;
+use std::fmt;
 #[cfg(feature = "serde")]
-use core::marker::PhantomData;
+use std::marker::PhantomData;
 
 use luck_diagnostics::Severity;
 use rustc_hash::FxHashSet;
@@ -120,7 +120,6 @@ pub enum RuleLevel {
 
 impl RuleLevel {
     /// `None` for [`RuleLevel::Off`].
-    #[must_use]
     pub const fn severity(self) -> Option<Severity> {
         match self {
             Self::Off => None,
@@ -152,7 +151,6 @@ pub struct CategoryLevels {
 }
 
 impl CategoryLevels {
-    #[must_use]
     pub const fn level(self, category: Category) -> Option<RuleLevel> {
         match category {
             Category::Correctness => self.correctness,
@@ -194,7 +192,6 @@ pub struct RuleSettings {
 
 impl RuleSettings {
     /// The level set for `rule`, if any.
-    #[must_use]
     pub fn level(&self, rule: RuleId) -> Option<RuleLevel> {
         self.levels[rule]
     }
@@ -272,11 +269,6 @@ impl<'de> Visitor<'de> for RuleSettingsVisitor {
 
 /// A rule's entry in `rules`, which keeps `options` for one that takes them,
 /// and returns its level.
-///
-/// # Errors
-///
-/// Fails on a level no rule has, options on a rule that takes none, options
-/// it doesn't take, and a list of any length but 2.
 #[cfg(feature = "serde")]
 pub(crate) fn next_setting<'de, Options, Access>(
     rule: RuleId,
@@ -297,9 +289,6 @@ where
     })
 }
 
-/// # Errors
-///
-/// As `map` fails.
 #[cfg(feature = "serde")]
 pub(crate) fn serialize_entry<Options, Map>(
     rule: RuleId,

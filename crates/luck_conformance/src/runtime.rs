@@ -1,10 +1,10 @@
 //! The parent side of a run: the original, formatted, and minified programs
 //! each in a child process, which must end the same way.
 
-use core::time::Duration;
 use std::io::{self, Write as _};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::Duration;
 use std::time::Instant;
 use std::{env, fs, thread};
 
@@ -82,10 +82,6 @@ fn describe(verdict: &Verdict) -> String {
 }
 
 /// Runs `program` as `file` in a child process, in the suite's directory.
-///
-/// # Errors
-///
-/// Fails when the child can't start, take its input, or be waited on.
 fn execute(root: &Path, file: &SuiteFile, program: &[u8]) -> io::Result<Verdict> {
     let directory = tempfile::tempdir()?;
     let verdict_path = directory.path().join("verdict");
@@ -119,10 +115,6 @@ fn execute(root: &Path, file: &SuiteFile, program: &[u8]) -> io::Result<Verdict>
 
 /// The child's status, or `None` after it ran past [`TIMEOUT`] and was
 /// killed.
-///
-/// # Errors
-///
-/// Fails when the child can't be waited on or killed.
 fn wait(child: &mut Child) -> io::Result<Option<ExitStatus>> {
     let started = Instant::now();
     loop {

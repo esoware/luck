@@ -45,7 +45,7 @@ impl<'ast> Parser<'ast> {
         start: u32,
     ) -> Expression<'ast> {
         self.advance();
-        let operand_precedence = precedence.saturating_add(1);
+        let operand_precedence = precedence + 1;
         let links_start = self.scratch.binary_links.len();
         let operand = self.parse_expr(operand_precedence);
         self.scratch.binary_links.push(BinaryLink::new(op, operand));
@@ -147,7 +147,7 @@ impl<'ast> Parser<'ast> {
             | TokenKind::Write
             | TokenKind::Global => {
                 let name = self.advance_name();
-                self.counts.name_uses = self.counts.name_uses.wrapping_add(1);
+                self.counts.name_uses += 1;
                 let start = name.span.start;
                 let prefix = Expression::Name(self.alloc(name));
                 self.parse_suffixes(prefix, start)
@@ -202,7 +202,7 @@ impl<'ast> Parser<'ast> {
         self.advance();
         self.open(Closer::Paren);
         let expr = self.parse_expr(0);
-        self.grouping_depth = self.grouping_depth.wrapping_sub(1);
+        self.grouping_depth -= 1;
         let close = self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
         let parens = open.merge(close);
         let grouped = if is_multi_value(&expr) || matches!(expr, Expression::Integer(_)) {
@@ -257,7 +257,7 @@ impl<'ast> Parser<'ast> {
         if !matches!(prefix, Expression::Suffixed(_)) && !self.enter_wrapper(level) {
             return Expression::Error(prefix.span());
         }
-        self.nesting_depth = level.wrapping_add(1);
+        self.nesting_depth = level + 1;
         let suffixes_start = self.scratch.suffixes.len();
         loop {
             self.parse_suffix();
@@ -438,7 +438,7 @@ impl<'ast> Parser<'ast> {
             (end.span, self.interpolated_text(end))
         } else {
             // The `{` is the last byte of the text before the hole.
-            let brace_start = open_hole.span.end.saturating_sub(1);
+            let brace_start = open_hole.span.end - 1;
             let end_span = self
                 .report_unclosed(TokenKind::RightBrace, Span::new(brace_start, open_hole.span.end));
             let at = self.previous_span.end;
@@ -470,8 +470,7 @@ impl<'ast> Parser<'ast> {
     #[cold]
     #[inline(never)]
     fn report_empty_hole(&mut self, literal: Token) -> Expression<'ast> {
-        let span =
-            Span::new(literal.span.end.saturating_sub(1), self.token.span.start.saturating_add(1));
+        let span = Span::new(literal.span.end - 1, self.token.span.start + 1);
         self.error(span, "malformed interpolated string: expected expression inside `{}`");
         Expression::Error(span)
     }

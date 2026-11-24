@@ -7,7 +7,6 @@ use luck_token::LuaVersion;
 /// The dialect of a fixture at `relative` under the fixtures root: `.luau`
 /// files and the `luau/` tree are Luau, `lua51/` to `lua55/` name their
 /// version, and everything else, `idiomatic/` included, is 5.4.
-#[must_use]
 pub fn detect_version(relative: &Path) -> LuaVersion {
     if relative.extension() == Some(OsStr::new("luau")) {
         return LuaVersion::Luau;
@@ -22,7 +21,6 @@ pub fn detect_version(relative: &Path) -> LuaVersion {
     }
 }
 
-#[must_use]
 pub fn is_error_fixture(relative: &Path) -> bool {
     relative.components().any(|component| component.as_os_str() == "errors")
 }

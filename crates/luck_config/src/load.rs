@@ -18,7 +18,6 @@ const MAX_EXTENDS_DEPTH: usize = 64;
 
 /// The nearest `luck.json` at or above `directory`, which mustn't hold a
 /// `..`, since walking up from one would leave the directory it names.
-#[must_use]
 pub fn find_config(directory: &Path) -> Option<PathBuf> {
     let absolute = path::absolute(directory).ok()?;
     absolute
@@ -46,12 +45,6 @@ pub(crate) struct Loaded {
 
 /// Later `extends` entries override earlier ones, and the file itself
 /// overrides them all. A file reached more than once is read once.
-///
-/// # Errors
-///
-/// Returns E010 when `config_path` can't be read, and E014 when a file in
-/// the chain isn't a valid config or names a file it can't extend, in the
-/// file at fault.
 pub(crate) fn load(config_path: &Path) -> Result<Loaded, FileDiagnostics> {
     let canonical = FileSystemOs.canonicalize(config_path).map_err(|e| {
         in_file(config_path, Diagnostic::e010(&display(config_path), &e.to_string()))
@@ -75,10 +68,6 @@ struct ExtendsWalk {
 impl ExtendsWalk {
     /// The config at `path`, whose canonical form is `canonical`, merged over
     /// what it extends.
-    ///
-    /// # Errors
-    ///
-    /// As for [`load`].
     fn layer(
         &mut self,
         path: &Path,
@@ -151,8 +140,7 @@ impl ExtendsWalk {
                     ),
                 ));
             }
-            let base =
-                self.layer(&extended, extended_canonical, boundary, depth.saturating_add(1))?;
+            let base = self.layer(&extended, extended_canonical, boundary, depth + 1)?;
             merged = base.merge_onto(merged);
         }
         self.chain.pop();
@@ -162,20 +150,16 @@ impl ExtendsWalk {
     }
 }
 
-/// # Errors
-///
-/// Returns E014, at the place the JSON5 reader stopped, when `text` isn't a
-/// valid config.
 pub(crate) fn parse(text: &str) -> Result<LuckConfig, Diagnostic> {
     json5::from_str(text).map_err(|e| {
         let message = e.to_string();
-        let (problem, span) = e.position().map_or_else(
-            || (message.as_str(), None),
-            |position| {
+        let (problem, span) = match e.position() {
+            Some(position) => {
                 let problem = message.strip_suffix(&format!(" at {position}")).unwrap_or(&message);
                 (problem, Some(token_at(text, offset_of(text, position))))
-            },
-        );
+            }
+            None => (message.as_str(), None),
+        };
         Diagnostic::e014(span, problem)
     })
 }
@@ -193,7 +177,7 @@ fn offset_of(text: &str, position: json5::Position) -> usize {
             if c == '\r' {
                 chars.next_if(|&(_, next)| next == '\n');
             }
-            line = line.saturating_add(1);
+            line += 1;
         }
     }
     chars.nth(position.column).map_or(text.len(), |(offset, _)| offset)
@@ -203,7 +187,7 @@ fn offset_of(text: &str, position: json5::Position) -> usize {
 /// characters a key, a number, or a literal is made of, so an error
 /// underlines the word at fault.
 fn token_at(text: &str, start: usize) -> Span {
-    let rest = text.get(start..).unwrap_or_default();
+    let rest = &text[start..];
     let mut chars = rest.char_indices();
     let length = match chars.next() {
         None => 0,
@@ -215,14 +199,14 @@ fn token_at(text: &str, start: usize) -> Span {
                     is_escaped = c == '\\' && !is_escaped;
                     is_closing
                 })
-                .map_or(rest.len(), |(index, _)| index.saturating_add(1))
+                .map_or(rest.len(), |(index, _)| index + 1)
         }
         Some((_, first)) if is_word_char(first) => {
             chars.find(|&(_, c)| !is_word_char(c)).map_or(rest.len(), |(index, _)| index)
         }
         Some((_, first)) => first.len_utf8(),
     };
-    Span::from_indices(start, start.saturating_add(length))
+    Span::from_indices(start, start + length)
 }
 
 fn is_word_char(c: char) -> bool {
@@ -235,18 +219,11 @@ fn text_span(text: &str, name: &str) -> Span {
     ['"', '\'']
         .iter()
         .find_map(|quote| text.find(&format!("{quote}{name}{quote}")))
-        .map_or_else(Span::default, |start| {
-            Span::from_indices(start, start.saturating_add(name.len()).saturating_add(2))
-        })
+        .map_or_else(Span::default, |start| Span::from_indices(start, start + name.len() + 2))
 }
 
 /// The std definition at `path`, which names a file the `std` of a config
 /// resolved.
-///
-/// # Errors
-///
-/// Returns E010 when the file can't be read, and E014 when it isn't a valid
-/// std definition, in the file.
 pub(crate) fn read_std_definition(path: &Path) -> Result<StdlibDefinition, FileDiagnostics> {
     let text = fs::read_to_string(path)
         .map_err(|e| in_file(path, Diagnostic::e010(&display(path), &e.to_string())))?;

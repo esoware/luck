@@ -1,15 +1,9 @@
 avoid-breaking-exported-api = false
-check-private-items = true
 allow-mixed-uninlined-format-args = false
-check-inconsistent-struct-field-initializers = true
-inherent-impl-lint-scope = "file"
 upper-case-acronyms-aggressive = true
 matches-for-let-else = "AllTypes"
 lint-commented-code = true
 allow-unwrap-in-tests = true
-allow-expect-in-tests = true
-allow-panic-in-tests = true
-allow-indexing-slicing-in-tests = true
 
 allowed-idents-below-min-chars = ["..", "a", "b", "c", "e", "f", "k", "v"]
 
@@ -19,6 +13,11 @@ disallowed-names = [
   "err", "conn", "addr", "sig", "prev", "len", "idx", "cb", "rx",
   "vs", "dst", "src", "doc", "dir", "dest", "out", "ret", "obj", "arr",
   "num", "cnt", "opt", "opts", "meta", "ws", "fut", "hdr", "cur", "pos", "ch", "evt",
+]
+
+disallowed-methods = [
+  { path = "f32::mul_add", reason = "constant evaluation rounds the product and the sum separately, as the target does" },
+  { path = "f64::mul_add", reason = "constant evaluation rounds the product and the sum separately, as the target does" },
 ]
 
 disallowed-types = [

@@ -140,7 +140,7 @@ fn lint_renders_a_span_ending_inside_a_multibyte_char() {
         !stderr.contains("panicked"),
         "a finding that ends inside a multibyte character must render, not panic:\n{stderr}"
     );
-    assert_eq!(output.status.code(), Some(0i32), "one warning exits 0:\n{stderr}");
+    assert_eq!(output.status.code(), Some(0), "one warning exits 0:\n{stderr}");
 }
 
 #[test]
@@ -212,7 +212,7 @@ return not (a == (not (b == c)))
 
     let output = run(directory.path(), &["lint", "--fix", "main.lua"]);
 
-    assert_eq!(output.status.code(), Some(0i32), "{}", stderr_text(&output));
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_text(&output));
     assert_eq!(
         fs::read_to_string(&path).expect("main.lua reads"),
         "\
@@ -239,7 +239,7 @@ return t
 
     assert_eq!(
         output.status.code(),
-        Some(1i32),
+        Some(1),
         "a file that can't be written fails the run:\n{}",
         stderr_text(&output)
     );
@@ -261,7 +261,7 @@ return 1
 
     assert_eq!(
         output.status.code(),
-        Some(0i32),
+        Some(0),
         "one warning is within `--max-warnings 1` however many arguments reach the file:\n{}",
         stderr_text(&output)
     );
@@ -275,7 +275,7 @@ fn lint_survives_long_runs() {
 
     assert_eq!(
         output.status.code(),
-        Some(0i32),
+        Some(0),
         "`lint` must finish instead of overflowing its stack:\n{}",
         stderr_text(&output)
     );
@@ -289,7 +289,7 @@ fn minify_survives_long_runs() {
 
     assert_eq!(
         output.status.code(),
-        Some(0i32),
+        Some(0),
         "`minify` must finish instead of overflowing its stack:\n{}",
         stderr_text(&output)
     );
@@ -303,7 +303,7 @@ fn minify_missing_input_exits_usage() {
 
     assert_eq!(
         output.status.code(),
-        Some(2i32),
+        Some(2),
         "a path that doesn't exist exits 2, as it does for every other command:\n{}",
         stderr_text(&output)
     );
@@ -316,13 +316,13 @@ fn graph_resolves_modules_next_to_the_entry_as_bundle_does() {
     write_file(directory.path(), "sources/main.lua", TWO_MODULE_ENTRY);
     write_file(directory.path(), "sources/helper.lua", HELPER_MODULE);
     let bundled = run(directory.path(), &["bundle", "sources/main.lua", "-o", "bundle.lua"]);
-    assert_eq!(bundled.status.code(), Some(0i32), "{}", stderr_text(&bundled));
+    assert_eq!(bundled.status.code(), Some(0), "{}", stderr_text(&bundled));
 
     let output = run(directory.path(), &["graph", "sources/main.lua"]);
 
     assert_eq!(
         output.status.code(),
-        Some(0i32),
+        Some(0),
         "`graph` must find the modules `bundle` finds for the same entry:\n{}",
         stderr_text(&output)
     );
@@ -336,7 +336,7 @@ fn bundle_survives_long_runs() {
 
     assert_eq!(
         output.status.code(),
-        Some(0i32),
+        Some(0),
         "`bundle` must finish instead of overflowing its stack:\n{}",
         stderr_text(&output)
     );
@@ -367,7 +367,7 @@ fn bundle_at_the_nesting_cap_reads_back() {
         let output = run(directory.path(), args);
         assert_eq!(
             output.status.code(),
-            Some(0i32),
+            Some(0),
             "`{}`:\n{}",
             args.join(" "),
             stderr_text(&output)
@@ -385,7 +385,7 @@ fn bundle_reports_a_module_too_deep_to_wrap_in_that_module() {
     for args in [&["bundle", "main.lua"][..], &["bundle", "main.lua", "--minify"]] {
         let output = run(directory.path(), args);
         let stderr = stderr_text(&output);
-        assert_eq!(output.status.code(), Some(1i32), "`{}`:\n{stderr}", args.join(" "));
+        assert_eq!(output.status.code(), Some(1), "`{}`:\n{stderr}", args.join(" "));
         assert!(stderr.contains("E013"), "{stderr}");
         assert!(stderr.contains(&first_too_deep), "{stderr}");
         assert!(!stderr.contains("main.lua:"), "{stderr}");
@@ -594,7 +594,7 @@ fn build_rejects_release_with_dev() {
 
     assert_eq!(
         output.status.code(),
-        Some(2i32),
+        Some(2),
         "the shorthands select contradictory profiles, as `--profile` given twice does"
     );
 }
@@ -660,7 +660,7 @@ fn fmt_survives_long_runs() {
 
     assert_eq!(
         output.status.code(),
-        Some(0i32),
+        Some(0),
         "`fmt` must finish instead of overflowing its stack:\n{}",
         stderr_text(&output)
     );
@@ -682,14 +682,14 @@ fn every_command_survives_long_lists() {
         let output = run(directory.path(), args);
         assert_eq!(
             output.status.code(),
-            Some(0i32),
+            Some(0),
             "`{}` must finish instead of overflowing its stack or going quadratic:\n{}",
             args[0],
             stderr_text(&output)
         );
     }
     let output = run(directory.path(), &["lint", "params.lua"]);
-    assert_eq!(output.status.code(), Some(1i32), "{}", stderr_text(&output));
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_text(&output));
     let report = format!("{}{}", stdout_text(&output), stderr_text(&output));
     assert!(
         report.contains("too many local variables (limit is 200) in function")
@@ -727,7 +727,7 @@ fn init_failure_leaves_no_partial_project() {
     write_file(directory.path(), "src", "a file where the source directory belongs\n");
 
     let output = run(directory.path(), &["init"]);
-    assert_eq!(output.status.code(), Some(1i32), "{}", stderr_text(&output));
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_text(&output));
 
     assert!(
         !directory.path().join("luck.json").exists(),

@@ -48,16 +48,6 @@
 //! The server runs every job on the workers it starts, as many as its caller
 //! asks for, each with [`luck_ast::MIN_STACK_BYTES`] of stack.
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
-
 mod analyzed;
 mod document;
 #[cfg(test)]

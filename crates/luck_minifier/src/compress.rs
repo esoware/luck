@@ -30,7 +30,7 @@ mod simplify_indexes;
 mod simplify_parens;
 mod simplify_statements;
 
-use core::mem;
+use std::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
@@ -92,11 +92,11 @@ fn remove_stmts(stmts: &mut List<'_, Statement<'_>>, indexes: &[usize]) {
         return;
     }
     let mut removed = indexes.iter().peekable();
-    let mut kept = 0usize;
+    let mut kept = 0;
     for index in 0..stmts.len() {
         if removed.next_if_eq(&&index).is_none() {
             stmts.swap(kept, index);
-            kept = kept.saturating_add(1);
+            kept += 1;
         }
     }
     stmts.truncate(kept);
@@ -224,11 +224,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
     /// Checks the symbols' lists against a fresh analysis of the tree: each
     /// name that refers to a symbol is live and in its list, and no list
     /// holds a reference whose name left the tree.
-    ///
-    /// # Panics
-    ///
-    /// Panics when a rewrite dropped a name without marking its reference,
-    /// marked one it kept, or changed what a name resolves to.
     #[cfg(debug_assertions)]
     fn assert_references_match(&self, chunk: &Chunk<'_>, counts: TreeCounts) {
         let fresh = analyze(chunk, counts);
@@ -303,18 +298,12 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
 
     /// Walks each statement, and drops the ones the walk leaves nothing of.
     fn visit_stmts(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
-        let mut kept = 0usize;
+        let mut kept = 0;
         for index in 0..stmts.len() {
-            let Some(stmt) = stmts.get_mut(index) else {
-                break;
-            };
-            if self.visit_kept_stmt(stmt) {
+            if self.visit_kept_stmt(&mut stmts[index]) {
                 stmts.swap(kept, index);
-                if let Some(kept_stmt) = stmts.get(kept) {
-                    self.live_registers =
-                        self.live_registers.saturating_add(merge_locals::declared_count(kept_stmt));
-                }
-                kept = kept.saturating_add(1);
+                self.live_registers += merge_locals::declared_count(&stmts[kept]);
+                kept += 1;
             } else {
                 self.has_changed = true;
             }
@@ -374,18 +363,14 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     self.has_changed = true;
                 }
                 let outer_registers = self.live_registers;
-                self.live_registers = self
-                    .live_registers
-                    .saturating_add(NUMERIC_FOR_STATE_REGISTERS.saturating_add(1));
+                self.live_registers += NUMERIC_FOR_STATE_REGISTERS + 1;
                 self.walk_stmt(stmt);
                 self.live_registers = outer_registers;
                 return true;
             }
             Statement::GenericFor(generic_for) => {
                 let outer_registers = self.live_registers;
-                let loop_registers =
-                    GENERIC_FOR_STATE_REGISTERS.saturating_add(generic_for.names.len());
-                self.live_registers = self.live_registers.saturating_add(loop_registers);
+                self.live_registers += GENERIC_FOR_STATE_REGISTERS + generic_for.names.len();
                 self.walk_stmt(stmt);
                 self.live_registers = outer_registers;
                 return true;
@@ -439,11 +424,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
     /// Where the item at `index` of a list of `count` stands: the last may
     /// spread its values when `can_spread`.
     const fn list_item(&self, index: usize, count: usize, can_spread: bool) -> Place {
-        if can_spread && index.saturating_add(1) == count {
-            Place::AllValues
-        } else {
-            self.one_value()
-        }
+        if can_spread && index + 1 == count { Place::AllValues } else { self.one_value() }
     }
 
     /// Walks the values of a list that fills `targets` slots.
@@ -603,12 +584,12 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
 
 impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
     fn descend(&mut self) -> bool {
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
         true
     }
 
     fn ascend(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+        self.depth -= 1;
     }
 
     fn visit_block(&mut self, block: &mut Block<'ast>) {
@@ -743,9 +724,9 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
     }
 
     fn visit_type(&mut self, ty: &mut Type<'ast>) {
-        self.type_depth = self.type_depth.saturating_add(1);
+        self.type_depth += 1;
         self.walk_type(ty);
-        self.type_depth = self.type_depth.saturating_sub(1);
+        self.type_depth -= 1;
     }
 }
 
@@ -765,9 +746,8 @@ impl<'tree> Visit<'tree> for FreshCheck<'_> {
     fn visit_name(&mut self, name: &'tree Name<'tree>) {
         if let (Some(symbol), Some(fresh)) =
             (self.scoping.symbol_of(name), self.fresh.symbol_of(name))
-            && let Some(pair) = self.pairs.get_mut(symbol.index())
         {
-            *pair = Some(fresh);
+            self.pairs[symbol.index()] = Some(fresh);
         }
         let kept = self.scoping.reference_of(name);
         let found = self.fresh.reference_of(name);
@@ -776,7 +756,7 @@ impl<'tree> Visit<'tree> for FreshCheck<'_> {
             assert!(!self.dropped.contains(reference.index()), "{name:?} is marked dropped");
             let fresh_resolved = self.fresh.reference(fresh).resolved;
             let paired = self.scoping.reference(reference).resolved.and_then(|symbol| {
-                let pair = self.pairs.get_mut(symbol.index())?;
+                let pair = &mut self.pairs[symbol.index()];
                 // An implicit `self` or `arg` has no name, so its first
                 // reference pairs it.
                 if pair.is_none() {

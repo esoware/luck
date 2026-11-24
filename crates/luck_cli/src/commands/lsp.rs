@@ -1,4 +1,4 @@
-use core::num::NonZero;
+use std::num::NonZero;
 
 use clap::Args;
 
@@ -12,16 +12,11 @@ pub(crate) struct LspArgs {
 }
 
 impl LspArgs {
-    /// # Errors
-    ///
-    /// Reports the failure and returns [`Exit::Failure`] when the session
-    /// doesn't end as LSP says it should, such as with `exit` before
-    /// `shutdown`, or the transport fails.
     pub(crate) fn run(self, threads: NonZero<usize>) -> Result<(), Exit> {
-        let served = self.socket.map_or_else(
-            || luck_lsp::serve_stdio(threads),
-            |port| luck_lsp::serve_socket(port, threads),
-        );
+        let served = match self.socket {
+            Some(port) => luck_lsp::serve_socket(port, threads),
+            None => luck_lsp::serve_stdio(threads),
+        };
         served.map_err(|e| {
             eprintln!("luck lsp: {e}");
             Exit::Failure

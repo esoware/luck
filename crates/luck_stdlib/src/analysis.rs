@@ -32,7 +32,6 @@ struct HostGlobal {
 /// which the shapes read, and the `require` sites. Its tables are sized from
 /// `counts`, the parse's or the default. For Luau, it's the same whether or
 /// not the target is Roblox, which only adds the Roblox runtime's stdlib.
-#[must_use]
 pub fn analyze<'ast>(
     chunk: &'ast Chunk<'ast>,
     counts: TreeCounts,
@@ -59,27 +58,22 @@ pub fn analyze<'ast>(
 }
 
 impl<'ast> SemanticAnalysis<'ast> {
-    #[must_use]
     pub const fn semantic(&self) -> &Semantic<'ast> {
         &self.semantic
     }
 
-    #[must_use]
     pub const fn scoping(&self) -> &Scoping {
         self.semantic.scoping()
     }
 
-    #[must_use]
     pub const fn stdlib(&self) -> &'ast StdlibLibrary<'ast> {
         self.stdlib
     }
 
-    #[must_use]
     pub const fn target(&self) -> LuaTarget {
         self.stdlib.target
     }
 
-    #[must_use]
     pub const fn version(&self) -> LuaVersion {
         self.stdlib.target.version()
     }
@@ -92,13 +86,8 @@ impl<'ast> SemanticAnalysis<'ast> {
         Names: IntoIterator<Item = &'name str>,
     {
         for name in names {
-            if let Some(global) = self
-                .semantic
-                .scoping()
-                .name_id(name)
-                .and_then(|id| self.host_globals.get_mut(id.index()))
-            {
-                global.is_extra = true;
+            if let Some(id) = self.semantic.scoping().name_id(name) {
+                self.host_globals[id.index()].is_extra = true;
             }
         }
     }
@@ -106,49 +95,41 @@ impl<'ast> SemanticAnalysis<'ast> {
     /// Whether `name` is recognized as a global: a stdlib entry for this
     /// target, an extra global, or a name a `global` statement in this
     /// chunk declares.
-    #[must_use]
     pub fn is_known_global(&self, name: &str) -> bool {
-        self.scoping().name_id(name).map_or_else(
-            || self.stdlib.globals.contains_key(name),
-            |id| self.is_known_global_name(id),
-        )
+        match self.scoping().name_id(name) {
+            Some(id) => self.is_known_global_name(id),
+            None => self.stdlib.globals.contains_key(name),
+        }
     }
 
     /// [`Self::is_known_global`] for one of the chunk's names.
-    #[must_use]
     pub fn is_known_global_name(&self, name: NameId) -> bool {
-        self.host_globals
-            .get(name.index())
-            .is_some_and(|global| global.is_stdlib || global.is_extra)
-            || self.scoping().is_declared_global(name)
+        let global = self.host_globals[name.index()];
+        global.is_stdlib || global.is_extra || self.scoping().is_declared_global(name)
     }
 
     /// Whether [`Self::add_extra_globals`] marked `name`.
-    #[must_use]
     pub fn is_extra_global(&self, name: NameId) -> bool {
-        self.host_globals.get(name.index()).is_some_and(|global| global.is_extra)
+        self.host_globals[name.index()].is_extra
     }
 
     /// Whether a global's name is defined where `reference` uses it: known
     /// to [`Self::is_known_global`], or covered by a Lua 5.5 `global`
     /// statement in scope there, `global *` included.
-    #[must_use]
     pub fn is_defined_global(&self, reference: &Reference) -> bool {
         reference.is_declared_global || self.is_known_global_name(reference.name)
     }
 
     /// Whether the stdlib marks the global `name` read-only, so code
     /// shouldn't reassign it. Namespaces always are.
-    #[must_use]
     pub fn is_read_only_global(&self, name: &str) -> bool {
         self.stdlib.globals.get(name).is_some_and(StdlibEntry::is_read_only)
     }
 
     /// `symbol`'s shape: a never-reassigned local initialized from a value
     /// of known shape, such as `local f = io.open(...)`.
-    #[must_use]
     pub fn symbol_shape(&self, symbol: SymbolId) -> Option<&'ast str> {
-        self.symbol_shapes.get(symbol.index()).copied().flatten()
+        self.symbol_shapes[symbol.index()]
     }
 
     /// Returns `None` for shadowed bases, unknown names, values of unknown
@@ -157,14 +138,12 @@ impl<'ast> SemanticAnalysis<'ast> {
     ///
     /// This reads the callee from its prefix, so for each call of a chain,
     /// [`Self::chain_callees`] costs less.
-    #[must_use]
     pub fn resolve_callee<'call>(&'call self, call: Call<'call>) -> Option<ResolvedCallee<'call>> {
         self.shape_resolver().call_callee(call)
     }
 
     /// Resolves the calls of `chain`, asked for front to back, in one pass
     /// over it.
-    #[must_use]
     pub fn chain_callees<'chain>(
         &'chain self,
         chain: &'chain SuffixedExpression<'chain>,
@@ -184,7 +163,6 @@ impl<'ast> SemanticAnalysis<'ast> {
     /// lookup. Any other root resolves to nothing unless it's a local of
     /// known shape, which keeps shadowed names out of hover and semantic
     /// tokens.
-    #[must_use]
     pub fn resolve_stdlib_path(
         &self,
         segments: &[&str],

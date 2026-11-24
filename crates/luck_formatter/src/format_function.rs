@@ -1,4 +1,4 @@
-use core::iter;
+use std::iter;
 
 use luck_ast::{
     Expression, FunctionArgs, FunctionAttribute, FunctionBody, GetSpan as _, Parameter, Slot,

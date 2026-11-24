@@ -1,4 +1,4 @@
-use core::mem;
+use std::mem;
 
 use luck_token::Span;
 
@@ -43,7 +43,6 @@ pub const MIN_STACK_BYTES: usize = 16 * 1024 * 1024;
 /// `MAX_NESTING_DEPTH + 1` for anything deeper.
 ///
 /// The walk stops there, so it is safe on a tree of any depth.
-#[must_use]
 pub fn block_nesting_depth(block: &Block<'_>) -> usize {
     let mut meter = DepthMeter { depth: 0, deepest: 0 };
     meter.visit_block(block);
@@ -54,7 +53,6 @@ pub fn block_nesting_depth(block: &Block<'_>) -> usize {
 /// `MAX_NESTING_DEPTH + 1` for anything deeper.
 ///
 /// The walk stops there, so it is safe on a tree of any depth.
-#[must_use]
 pub fn expr_nesting_depth(expr: &Expression<'_>) -> usize {
     let mut meter = DepthMeter { depth: 0, deepest: 0 };
     meter.visit_expr(expr);
@@ -65,7 +63,6 @@ pub fn expr_nesting_depth(expr: &Expression<'_>) -> usize {
 /// `MAX_NESTING_DEPTH + 1` for anything deeper.
 ///
 /// The walk stops there, so it is safe on a type of any depth.
-#[must_use]
 pub fn type_nesting_depth(ty: &Type<'_>) -> usize {
     let mut meter = DepthMeter { depth: 0, deepest: 0 };
     meter.visit_type(ty);
@@ -77,7 +74,6 @@ pub fn type_nesting_depth(ty: &Type<'_>) -> usize {
 /// [`MAX_NESTING_DEPTH`]: one for each construct the cap refuses.
 ///
 /// The walk stops at the cap, so it is safe on a tree of any depth.
-#[must_use]
 pub fn spans_past_nesting_cap(block: &Block<'_>, depth: usize) -> Vec<Span> {
     let mut finder = OverflowFinder { depth, node: block.span, spans: Vec::new() };
     finder.visit_block(block);
@@ -91,13 +87,13 @@ struct DepthMeter {
 
 impl Visit<'_> for DepthMeter {
     fn descend(&mut self) -> bool {
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
         self.deepest = self.deepest.max(self.depth);
         self.depth <= MAX_NESTING_DEPTH
     }
 
     fn ascend(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+        self.depth -= 1;
     }
 }
 
@@ -110,7 +106,7 @@ struct OverflowFinder {
 
 impl<'ast> Visit<'ast> for OverflowFinder {
     fn descend(&mut self) -> bool {
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
         let fits = self.depth <= MAX_NESTING_DEPTH;
         if !fits {
             self.spans.push(self.node);
@@ -119,7 +115,7 @@ impl<'ast> Visit<'ast> for OverflowFinder {
     }
 
     fn ascend(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+        self.depth -= 1;
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
@@ -219,7 +215,7 @@ mod tests {
         let mut sum = synth.name_expr("x");
         let mut path = synth.name_expr("t");
         let mut concat = synth.name_expr("s");
-        for _ in 0..300u32 {
+        for _ in 0..300 {
             sum = synth.binary_op(sum, BinOp::Sub, synth.number_i64(1));
             path = synth.method_call(synth.field(path, "a"), "m", []);
             concat = synth.binary_op(synth.name_expr("s"), BinOp::Concat, concat);
@@ -299,7 +295,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let mut block = synth.block([]);
-        for _ in 0..9u32 {
+        for _ in 0..9 {
             block = synth.block([synth.do_block(block)]);
         }
         assert_eq!(block_nesting_depth(&block), 10);
@@ -315,7 +311,7 @@ mod tests {
             chain = synth.unary_op(UnOp::Not, chain);
         }
         assert_eq!(expr_nesting_depth(&chain), MAX_NESTING_DEPTH);
-        for _ in 0..50_000u32 {
+        for _ in 0..50_000 {
             chain = Expression::new_unary_op(Span::default(), UnOp::Not, chain, allocator);
         }
         assert_eq!(expr_nesting_depth(&chain), MAX_NESTING_DEPTH + 1);

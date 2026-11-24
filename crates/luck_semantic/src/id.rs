@@ -1,31 +1,28 @@
-use luck_token::offset_to_index;
-
 /// Defines an index newtype over `NonZeroU32` holding `index + 1`, so
 /// `Option<Id>` stays 4 bytes.
 macro_rules! define_index_id {
     ($(#[$attr:meta])* $name:ident) => {
         $(#[$attr])*
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub struct $name(core::num::NonZeroU32);
+        pub struct $name(std::num::NonZeroU32);
 
         impl $name {
             /// A table never holds more rows than its chunk has bytes, so an
             /// index always fits.
             pub(crate) fn from_index(index: usize) -> Self {
                 let offset = u32::try_from(index).unwrap_or(u32::MAX);
-                Self(core::num::NonZeroU32::MIN.saturating_add(offset))
+                Self(std::num::NonZeroU32::MIN.saturating_add(offset))
             }
 
             /// Its row in its table, for a consumer's side table.
             #[inline]
-            #[must_use]
-            pub fn index(self) -> usize {
-                offset_to_index(self.0.get().wrapping_sub(1))
+            pub const fn index(self) -> usize {
+                (self.0.get() - 1) as usize
             }
         }
 
-        impl core::fmt::Debug for $name {
-            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, concat!(stringify!($name), "({})"), self.index())
             }
         }

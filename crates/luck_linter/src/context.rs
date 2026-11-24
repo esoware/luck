@@ -1,7 +1,7 @@
-use alloc::rc::Rc;
-use core::cell::{OnceCell, RefCell};
-use core::ops::Deref;
-use core::{iter, ptr};
+use std::cell::{OnceCell, RefCell};
+use std::ops::Deref;
+use std::rc::Rc;
+use std::{iter, ptr};
 
 use luck_ast::{AstKind, Block, Chunk, Expression, GetSpan as _, Name, Var};
 use luck_parser::{Groupings, ParseResult};
@@ -96,11 +96,7 @@ impl<'ast> ContextHost<'ast> {
             iter::repeat_with(OnceCell::new).take(self.scoping().scopes().len()).collect()
         });
         let block = self.function_block(function)?;
-        Some(
-            graphs
-                .get(function.index())?
-                .get_or_init(|| Box::new(FlowGraph::of_block(block, self))),
-        )
+        Some(graphs[function.index()].get_or_init(|| Box::new(FlowGraph::of_block(block, self))))
     }
 
     /// The block of the function or chunk that opens `function`.
@@ -153,7 +149,7 @@ impl<'ast> ContextHost<'ast> {
             resolved.callees.clear();
             resolved.callees.extend((0..chain.suffixes.len()).map(|i| callees.callee(i)));
         }
-        resolved.callees.get(index).copied().flatten()
+        resolved.callees[index]
     }
 
     /// Whether `node` is a statement of its block, as a chain that a call

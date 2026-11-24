@@ -1,5 +1,5 @@
-use core::borrow::Borrow;
-use core::hash::Hash;
+use std::borrow::Borrow;
+use std::hash::Hash;
 
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;

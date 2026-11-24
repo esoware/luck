@@ -13,9 +13,6 @@ fn luau_options(root: &Path) -> ResolveOptions {
     ResolveOptions { version: LuaVersion::Luau, search_paths: Vec::new(), root: root.to_path_buf() }
 }
 
-/// # Errors
-///
-/// Returns why `module` doesn't resolve.
 fn resolve_luau(
     project: &TempDir,
     requiring_file: &str,

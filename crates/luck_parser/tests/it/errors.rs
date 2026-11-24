@@ -1,4 +1,4 @@
-use core::ops::Range;
+use std::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_ast::{Expression, FunctionArgs, Statement};
@@ -291,8 +291,7 @@ do
 end",
     ] {
         let result = parse(&allocator, source);
-        let cut_off =
-            source.find("--").and_then(|start| source.get(start..)).expect("a comment opener");
+        let cut_off = &source[source.find("--").expect("a comment opener")..];
         let errors: Vec<(&str, &[u8])> = result
             .errors
             .iter()

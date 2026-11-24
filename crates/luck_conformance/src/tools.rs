@@ -1,11 +1,11 @@
 //! The checks that run in this process: each stage over one file, and over
 //! its own output.
 
-use core::any::Any;
-use core::panic::AssertUnwindSafe;
-use core::slice;
+use std::any::Any;
 use std::panic;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
+use std::slice;
 
 use luck_allocator::Allocator;
 use luck_codegen::LiteralSpelling;
@@ -136,10 +136,6 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile, linter: &Linte
 }
 
 /// `run`'s result.
-///
-/// # Errors
-///
-/// Returns the panic `run` raised, as a failure.
 fn guard<T>(run: impl FnOnce() -> T) -> Result<T, TestResult> {
     panic::catch_unwind(AssertUnwindSafe(run))
         .map_err(|payload| TestResult::GenericError("Panic", panic_message(payload.as_ref())))

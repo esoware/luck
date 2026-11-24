@@ -158,7 +158,7 @@ fn keyword_reads_back_each_keyword_spelling_under_its_versions() {
     ];
     for version in LuaVersion::ALL {
         for kind in base_keywords {
-            let text = kind.static_text().unwrap_or_default();
+            let text = kind.static_text().unwrap();
             assert_eq!(TokenKind::keyword(text, version), Some(kind));
         }
         let goto = version.has_goto().then_some(TokenKind::Goto);

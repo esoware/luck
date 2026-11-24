@@ -46,8 +46,8 @@ impl<'input, 'lib> ShapeResolver<'input, 'lib> {
         Self { tree, library, symbol_shapes }
     }
 
-    fn symbol_shape(self, symbol: SymbolId) -> Option<&'lib str> {
-        self.symbol_shapes.get(symbol.index()).copied().flatten()
+    const fn symbol_shape(self, symbol: SymbolId) -> Option<&'lib str> {
+        self.symbol_shapes[symbol.index()]
     }
 
     /// The shape of `expr`, when statically known. See the module docs for
@@ -218,10 +218,8 @@ pub(crate) fn symbol_shapes<'lib>(
             if tree.symbol(symbol).is_modified {
                 continue;
             }
-            let shape = ShapeResolver::new(tree, library, &shapes).expr_shape(initializer);
-            if let Some(slot) = shapes.get_mut(symbol.index()) {
-                *slot = shape;
-            }
+            shapes[symbol.index()] =
+                ShapeResolver::new(tree, library, &shapes).expr_shape(initializer);
         }
     }
     shapes
@@ -246,17 +244,19 @@ enum CalleePath<'call> {
 
 impl<'call> ResolvedCallee<'call> {
     /// Display path, such as `table.insert` or `game:GetService`.
-    #[must_use]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "a callee resolves through its head only while the head is a dotted path"
+    )]
     pub fn name(&self) -> String {
         match self.path {
             CalleePath::Method { base, method } => format!("{base}:{method}"),
             CalleePath::Dotted(head) => {
-                head.dotted_path().map(|path| path.to_string()).unwrap_or_default()
+                head.dotted_path().expect("a dotted callee's head is a dotted path").to_string()
             }
         }
     }
 
-    #[must_use]
     pub const fn entry(&self) -> &'call StdlibEntry<'call> {
         self.entry
     }
@@ -282,7 +282,6 @@ impl<'chain> ChainCallees<'chain> {
         Self { resolver, chain, state, read_count: 0 }
     }
 
-    #[must_use]
     pub const fn chain(&self) -> &'chain SuffixedExpression<'chain> {
         self.chain
     }
@@ -364,7 +363,7 @@ params = [{ kind = "vararg" }]
         let shapes = symbol_shapes(&semantic, &library);
         let tree = semantic.scoping();
         let symbol = tree.symbols().iter().find(|symbol| tree.name(symbol.name) == name)?;
-        shapes.get(symbol.id.index()).copied().flatten().map(str::to_owned)
+        shapes[symbol.id.index()].map(str::to_owned)
     }
 
     #[test]

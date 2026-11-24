@@ -25,9 +25,6 @@ fn lua_options(root: &Path, templates: &[&str]) -> ResolveOptions {
     }
 }
 
-/// # Errors
-///
-/// Returns why `module` doesn't resolve.
 fn resolve_lua(
     project: &TempDir,
     templates: &[&str],

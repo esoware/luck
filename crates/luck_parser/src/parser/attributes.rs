@@ -209,11 +209,7 @@ impl<'ast> Parser<'ast> {
         if args.is_some() && name.text != "deprecated" {
             self.error(name.span, format!("attribute `@{}` does not take arguments", name.text));
         }
-        let first = self
-            .scratch
-            .attributes
-            .get(list_start..)
-            .unwrap_or_default()
+        let first = self.scratch.attributes[list_start..]
             .iter()
             .find(|attribute| attribute.name.text == name.text);
         if let Some(first_attribute) = first {

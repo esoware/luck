@@ -1,4 +1,4 @@
-use core::fmt::Write as _;
+use std::fmt::Write as _;
 
 use predicates::prelude::*;
 use tempfile::TempDir;
@@ -38,7 +38,7 @@ fn explicit_config_extends_controls_target_and_transforms() {
     luck_in(directory.path())
         .args(["minify", "main.luau", "-c", "chosen.json", "-t", "luau"])
         .assert()
-        .code(1i32);
+        .code(1);
 }
 
 #[test]
@@ -147,10 +147,10 @@ fn bundle_minification_uses_discovered_and_explicit_config() {
 fn renaming_a_bundles_globals_keeps_its_global_loader_name() {
     let directory = TempDir::new().expect("directory");
     let mut locals = String::new();
-    for i in 0..59u32 {
-        let _unused = writeln!(locals, "local u{i} = {i}");
+    for i in 0..59 {
+        writeln!(locals, "local u{i} = {i}").unwrap();
     }
-    let sum = (0..59u32).map(|i| format!("u{i}")).collect::<Vec<_>>().join(" + ");
+    let sum = (0..59).map(|i| format!("u{i}")).collect::<Vec<_>>().join(" + ");
     let entry = format!(
         "\
 {locals}local function f()
@@ -177,11 +177,11 @@ fn invalid_config_is_not_bypassed_by_target_override() {
         luck_in(directory.path())
             .args([operation, "main.lua", "-t", "54"])
             .assert()
-            .code(2i32)
+            .code(2)
             .stderr(predicate::str::contains("fold_constnats"));
         luck_in(directory.path())
             .args([operation, "main.lua", "-c", "missing.json"])
             .assert()
-            .code(2i32);
+            .code(2);
     }
 }

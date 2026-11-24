@@ -20,7 +20,7 @@ pub(crate) fn for_each_valid_source(mut check: impl FnMut(&str, LuaVersion)) {
         }
         let source = fs::read_to_string(&path).unwrap();
         check(&source, detect_version(relative));
-        checked = checked.saturating_add(1);
+        checked += 1;
     }
     assert!(checked > 0, "no fixtures found under {}", root.display());
     for version in LuaVersion::ALL {

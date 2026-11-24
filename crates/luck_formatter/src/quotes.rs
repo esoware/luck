@@ -10,8 +10,7 @@ pub(crate) fn requote(literal: &[u8], style: QuoteStyle, requoted: &mut Vec<u8>)
     let Some(&current_quote) = literal.first().filter(|&&b| matches!(b, b'"' | b'\'')) else {
         return false;
     };
-    let Some(content) = literal.get(1..).and_then(|rest| rest.strip_suffix(&[current_quote]))
-    else {
+    let Some(content) = literal[1..].strip_suffix(&[current_quote]) else {
         return false;
     };
     let target_quote = resolve_target_quote(style, content);
@@ -25,12 +24,12 @@ pub(crate) fn requote(literal: &[u8], style: QuoteStyle, requoted: &mut Vec<u8>)
 
     // Each escape consumes both of its bytes, or a `\\` followed by a quote
     // would read as an escaped quote.
-    let mut original_escapes = 0usize;
-    let mut requoted_escapes = 0usize;
+    let mut original_escapes = 0;
+    let mut requoted_escapes = 0;
     let mut bytes = content.iter().copied();
     while let Some(byte) = bytes.next() {
         if byte == b'\\' {
-            original_escapes = original_escapes.saturating_add(1);
+            original_escapes += 1;
             match bytes.next() {
                 // Unescape old delimiter: \' -> ' (or \" -> ")
                 Some(escaped) if escaped == current_quote => requoted.push(current_quote),
@@ -38,20 +37,20 @@ pub(crate) fn requote(literal: &[u8], style: QuoteStyle, requoted: &mut Vec<u8>)
                 // delimiter, is copied as a pair.
                 Some(escaped) => {
                     requoted.extend_from_slice(&[b'\\', escaped]);
-                    requoted_escapes = requoted_escapes.saturating_add(1);
+                    requoted_escapes += 1;
                     if escaped == b'\\' {
-                        original_escapes = original_escapes.saturating_add(1);
-                        requoted_escapes = requoted_escapes.saturating_add(1);
+                        original_escapes += 1;
+                        requoted_escapes += 1;
                     }
                 }
                 None => {
                     requoted.push(b'\\');
-                    requoted_escapes = requoted_escapes.saturating_add(1);
+                    requoted_escapes += 1;
                 }
             }
         } else if byte == target_quote {
             requoted.extend_from_slice(&[b'\\', target_quote]);
-            requoted_escapes = requoted_escapes.saturating_add(1);
+            requoted_escapes += 1;
         } else {
             requoted.push(byte);
         }

@@ -46,7 +46,6 @@ pub(crate) struct FormatConfig {
 }
 
 impl FormatConfig {
-    #[must_use]
     pub(crate) fn merge_onto(self, base: Self) -> Self {
         Self {
             line_width: self.line_width.or(base.line_width),

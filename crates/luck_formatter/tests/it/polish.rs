@@ -1,4 +1,4 @@
-use core::fmt::Write as _;
+use std::fmt::Write as _;
 
 use luck_formatter::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
@@ -873,9 +873,9 @@ end
 fn a_long_run_of_requires_sorts_without_comparing_every_pair() {
     // Whether one line of a run reads another's binding is a lookup per line.
     // Checked pair by pair, this takes minutes.
-    let count = 180_000usize;
+    let count = 180_000;
     let require_line = |index: usize| {
-        let module = index.wrapping_mul(7919).rem_euclid(count);
+        let module = index * 7919 % count;
         format!("local m{index} = require(\"mod{module}\")\n")
     };
     let mut by_name: Vec<usize> = (0..count).collect();
@@ -909,7 +909,7 @@ fn many_format_off_regions_format_without_rescanning_the_regions() {
     // regions from the first, this takes minutes.
     let mut source = String::new();
     let mut expected = String::new();
-    for index in 0..140_000u32 {
+    for index in 0..140_000 {
         let region = format!(
             "\
 -- luck: format off

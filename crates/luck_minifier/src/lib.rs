@@ -45,14 +45,6 @@
 //! assert_eq!(output.as_deref(), Ok(&b"return 3"[..]));
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
 mod binding;
 mod compress;
 mod expr;

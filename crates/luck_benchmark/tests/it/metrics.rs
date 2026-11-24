@@ -9,13 +9,8 @@
 //! network on first run) and minify all of them. The benchmark workflow runs
 //! the check.
 
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
-use core::error::Error;
-use core::fmt::Write as _;
+use std::error::Error;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Write as _;
 
@@ -37,19 +32,12 @@ struct Row {
     gzip_bytes: usize,
 }
 
-/// # Errors
-///
-/// Fails when the encoder can't write.
 fn gzipped_byte_count(bytes: &[u8]) -> Result<usize, Box<dyn Error>> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(bytes)?;
     Ok(encoder.finish()?.len())
 }
 
-/// # Errors
-///
-/// Fails when `source` doesn't minify, when minifying the result changes it
-/// again, or when the result can't be compressed.
 fn measure(
     allocator: &mut Allocator,
     name: &str,
@@ -60,7 +48,7 @@ fn measure(
     let normalized: Vec<u8> = source
         .iter()
         .enumerate()
-        .filter(|&(i, &b)| b != b'\r' || source.get(i.saturating_add(1)) != Some(&b'\n'))
+        .filter(|&(i, &b)| b != b'\r' || source.get(i + 1) != Some(&b'\n'))
         .map(|(_, &b)| b)
         .collect();
     let config = TransformConfig::default();
@@ -82,10 +70,6 @@ fn measure(
 }
 
 /// One row per file and one per project, which sums its files.
-///
-/// # Errors
-///
-/// Fails when any benchmark file can't be measured.
 fn collect_rows() -> Result<Vec<Row>, Box<dyn Error>> {
     let mut allocator = Allocator::new();
     let mut rows = Vec::new();
@@ -112,10 +96,6 @@ fn collect_rows() -> Result<Vec<Row>, Box<dyn Error>> {
 
 /// The regenerator and the up-to-date check both call this, so they can't
 /// disagree on the format.
-///
-/// # Errors
-///
-/// Fails when a benchmark file can't be measured.
 fn minsize_snapshot() -> Result<String, Box<dyn Error>> {
     let mut snapshot = String::new();
     writeln!(
@@ -134,8 +114,7 @@ gzip is the minified output at the default flate2 level. Regenerate:
     for row in collect_rows()? {
         let minified = f64::from(u32::try_from(row.minified_bytes)?);
         let original = f64::from(u32::try_from(row.original_bytes)?);
-        #[expect(clippy::float_arithmetic, reason = "minsize.snap pins the rounding of this ratio")]
-        let ratio = minified / original * 100.0f64;
+        let ratio = minified / original * 100.0;
         writeln!(
             snapshot,
             "{:>10} | {:>10} | {:>10} | {ratio:>6.2}% | {}",

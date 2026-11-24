@@ -66,9 +66,9 @@ mod unused_variable;
 mod value_overwritten_before_read;
 
 #[cfg(feature = "serde")]
-use core::fmt;
-use core::ops::{Index, IndexMut};
-use core::str::FromStr;
+use std::fmt;
+use std::ops::{Index, IndexMut};
+use std::str::FromStr;
 
 use luck_diagnostics::Severity;
 use luck_semantic::{AstNode, AstTypesBitset};
@@ -110,14 +110,12 @@ macro_rules! declare_all_lint_rules {
 
             /// What `luck.json`, the `-A`, `-W`, and `-D` flags, directives,
             /// and diagnostics call the rule, which is its module's name.
-            #[must_use]
             pub const fn name(self) -> &'static str {
                 match self {
                     $(Self::$rule => stringify!($module),)+
                 }
             }
 
-            #[must_use]
             pub const fn category(self) -> Category {
                 match self {
                     $(Self::$rule => <$module::$rule as RuleMeta>::CATEGORY,)+
@@ -126,14 +124,12 @@ macro_rules! declare_all_lint_rules {
 
             /// What the rule reports at while config sets no level for it
             /// or its category, which only a correctness rule runs under.
-            #[must_use]
             pub const fn default_severity(self) -> Severity {
                 match self {
                     $(Self::$rule => <$module::$rule as RuleMeta>::DEFAULT_SEVERITY,)+
                 }
             }
 
-            #[must_use]
             pub const fn description(self) -> &'static str {
                 match self {
                     $(Self::$rule => <$module::$rule as RuleMeta>::DESCRIPTION,)+
@@ -142,7 +138,6 @@ macro_rules! declare_all_lint_rules {
 
             /// The kinds the rule's fixes come in, empty when it offers none.
             /// Some of its diagnostics may still have no fix.
-            #[must_use]
             pub const fn fix_kind(self) -> FixKind {
                 match self {
                     $(Self::$rule => <$module::$rule as RuleMeta>::FIX,)+
@@ -151,7 +146,6 @@ macro_rules! declare_all_lint_rules {
 
             /// The rule's source on GitHub, at the release this linter is,
             /// where its doc comment and its test cases document it.
-            #[must_use]
             pub const fn docs_url(self) -> &'static str {
                 match self {
                     $(Self::$rule => concat!(
@@ -166,7 +160,6 @@ macro_rules! declare_all_lint_rules {
             }
 
             /// The rule called `name`, if any is.
-            #[must_use]
             pub fn from_name(name: &str) -> Option<Self> {
                 match name {
                     $(stringify!($module) => Some(Self::$rule),)+
@@ -236,10 +229,6 @@ macro_rules! declare_all_lint_rules {
 
             /// Reads `rule`'s setting from `map`, keeps its options, and
             /// returns its level.
-            ///
-            /// # Errors
-            ///
-            /// As [`next_setting`] fails.
             #[cfg(feature = "serde")]
             pub(crate) fn next_setting<'de, Access>(
                 &mut self,
@@ -254,9 +243,6 @@ macro_rules! declare_all_lint_rules {
                 }
             }
 
-            /// # Errors
-            ///
-            /// As [`serialize_entry`] fails.
             #[cfg(feature = "serde")]
             pub(crate) fn serialize_entry<Map>(
                 &self,
@@ -356,7 +342,6 @@ declare_all_lint_rules! {
 pub(crate) use unused_lint_filter::UnusedLintFilter;
 
 impl RuleId {
-    #[expect(clippy::as_conversions, reason = "a rule's discriminant is its index")]
     const fn index(self) -> usize {
         self as usize
     }
@@ -415,7 +400,7 @@ impl Visitor<'_> for RuleIdVisitor {
 pub(crate) fn closest_rule_name(needle: &str) -> Option<RuleId> {
     let name = closest(needle, RuleId::ALL.map(RuleId::name), |distance, candidate| {
         // Up to a third of the longer name, and never less than 2.
-        distance <= 2 || distance.saturating_mul(3) <= needle.len().max(candidate.len())
+        distance <= 2 || distance * 3 <= needle.len().max(candidate.len())
     })?;
     RuleId::from_name(name)
 }
@@ -445,14 +430,12 @@ where
 impl<T> Index<RuleId> for RuleTable<T> {
     type Output = T;
 
-    #[expect(clippy::indexing_slicing, reason = "the table holds a value for every id")]
     fn index(&self, index: RuleId) -> &T {
         &self.0[index.index()]
     }
 }
 
 impl<T> IndexMut<RuleId> for RuleTable<T> {
-    #[expect(clippy::indexing_slicing, reason = "the table holds a value for every id")]
     fn index_mut(&mut self, index: RuleId) -> &mut T {
         &mut self.0[index.index()]
     }

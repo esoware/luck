@@ -2,7 +2,7 @@
 //! unwrapped, nested `if`s merged into one condition, and `if ... return`
 //! runs turned into `and`/`or` chains.
 
-use core::{iter, mem};
+use std::{iter, mem};
 
 use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
@@ -167,7 +167,7 @@ impl<'ast> Compressor<'_, 'ast> {
             };
             head = &mut **next;
             // Its block's level.
-            head_depth = head_depth.saturating_add(1);
+            head_depth += 1;
         }
     }
 
@@ -230,7 +230,7 @@ impl<'ast> Compressor<'_, 'ast> {
             return;
         }
         let return_index = stmts.len();
-        let chain_start = return_index.saturating_sub(link_count);
+        let chain_start = return_index - link_count;
         let allocator = self.allocator;
         let mut guards = Vec::with_capacity(link_count);
         for stmt in stmts.iter_mut().skip(chain_start) {
@@ -240,9 +240,7 @@ impl<'ast> Compressor<'_, 'ast> {
             let [Statement::Return(guard_return)] = &mut *if_stmt.block.stmts else {
                 continue;
             };
-            let Some(value) = (*guard_return.exprs).first_mut().map(Expression::take) else {
-                continue;
-            };
+            let value = guard_return.exprs[0].take();
             let mut guard = logical(allocator, BinOp::And, if_stmt.condition.take(), vec![value]);
             self.leave_expr(&mut guard, Place::OneValue);
             guards.push(guard);
@@ -261,7 +259,7 @@ impl<'ast> Compressor<'_, 'ast> {
         self.leave_expr(fallback, Place::AllValues);
         // The return takes the place of the first guard, and the guards go.
         block.stmts.swap(chain_start, return_index);
-        block.stmts.truncate(chain_start.saturating_add(1));
+        block.stmts.truncate(chain_start + 1);
         self.has_changed = true;
     }
 }

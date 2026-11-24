@@ -14,7 +14,7 @@ const IDIOMATIC_DIRECTORY: &str =
 #[test]
 fn default_lint_is_silent_on_idiomatic_fixtures() {
     let entries = read_dir(IDIOMATIC_DIRECTORY).expect("idiomatic fixtures dir exists");
-    let mut fixture_count = 0usize;
+    let mut fixture_count = 0;
     for entry in entries {
         let path = entry.expect("readable dir entry").path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("lua") {

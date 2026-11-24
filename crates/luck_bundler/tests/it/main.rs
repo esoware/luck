@@ -1,5 +1,5 @@
-// Lets clippy.toml's allow-*-in-tests settings cover the shared helpers, not
-// just the `#[test]` functions.
+// Puts the shared helpers under clippy.toml's `allow-unwrap-in-tests`, which
+// otherwise reaches only the `#[test]` functions of an integration test binary.
 #![cfg(test)]
 
 mod common;

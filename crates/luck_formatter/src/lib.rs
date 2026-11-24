@@ -37,16 +37,6 @@
 //! assert_eq!(result.output, b"local x = 1\n");
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
-
 mod comments;
 #[cfg(test)]
 mod fixtures;

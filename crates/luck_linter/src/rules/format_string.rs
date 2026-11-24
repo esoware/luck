@@ -213,15 +213,15 @@ fn literal_error(
     let verbatim_start = literal.raw.and_then(|raw| {
         let raw_bytes = raw.as_bytes().as_ptr_range();
         let value = literal.value.as_bytes().as_ptr();
-        raw_bytes.contains(&value).then(|| value.addr().wrapping_sub(raw_bytes.start.addr()))
+        raw_bytes.contains(&value).then(|| value.addr() - raw_bytes.start.addr())
     });
     let Some(value_start) = verbatim_start else {
         return Finding::new(message, literal.span);
     };
     let offset = error.offset();
     let width = body.get(offset..).and_then(|rest| rest.chars().next()).map_or(1, char::len_utf8);
-    let start = literal.span.start.saturating_add(index_to_offset(value_start));
-    Finding::new(message, Span::from_indices(offset, offset.saturating_add(width)).shifted(start))
+    let start = literal.span.start + index_to_offset(value_start);
+    Finding::new(message, Span::from_indices(offset, offset + width).shifted(start))
 }
 
 #[cfg(test)]

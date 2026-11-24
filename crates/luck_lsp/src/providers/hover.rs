@@ -1,4 +1,4 @@
-use core::ptr;
+use std::ptr;
 
 use ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 use luck_ast::{AstKind, GetSpan as _, Suffix};
@@ -29,7 +29,7 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
             let field = chain.suffixes.iter().position(
                 |suffix| matches!(suffix, Suffix::Field(field) if ptr::eq(field, name)),
             )?;
-            (chain.head(field.saturating_add(1)), None)
+            (chain.head(field + 1), None)
         } else if let AstKind::MethodCall(method_call) = parent {
             let chain = nodes.parent_kind(nodes.parent_id(id)?)?.as_suffixed_expr()?;
             let call = chain.suffixes.iter().position(|suffix| {

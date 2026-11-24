@@ -12,7 +12,7 @@
 //! known global or a name already used anywhere in its document. Refusing is
 //! safer than silently capturing a shadowed name.
 
-use alloc::collections::BTreeMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use ls_types::{Position, PrepareRenameResponse, RenameParams, TextEdit, Uri, WorkspaceEdit};
@@ -48,10 +48,6 @@ pub(crate) fn prepare(
     })
 }
 
-/// # Errors
-///
-/// Returns the refusal to show the user when that local's name can't change
-/// without changing what the document means.
 fn rename_target(
     document: &DocumentState,
     offset: u32,
@@ -74,10 +70,6 @@ fn rename_target(
     Ok(Some((symbol_id, span)))
 }
 
-/// # Errors
-///
-/// Returns the refusal to show the user when `params.new_name` could change
-/// what the code means.
 pub(crate) fn rename(
     workspace: &WorkspaceView<'_>,
     uri: &Uri,
@@ -118,11 +110,6 @@ pub(crate) fn rename(
 /// Renames the member `name` of the table of the module at `module` to
 /// `new_name` in every file that names it, or `None` once the request is
 /// cancelled.
-///
-/// # Errors
-///
-/// Returns the refusal to show the user when the module is outside the
-/// workspace, or `new_name` could change what a file means.
 fn rename_member(
     workspace: &WorkspaceView<'_>,
     name: &str,
@@ -181,10 +168,6 @@ fn rename_member(
     Ok(Some(WorkspaceEdit { changes: Some(changes.into_iter().collect()), ..Default::default() }))
 }
 
-/// # Errors
-///
-/// Returns the refusal to show the user when it isn't an identifier, shadows
-/// a built-in or configured global, or is already used in the document.
 fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), String> {
     // Checked under the document's Lua version, so keywords are rejected
     // version-accurately (`goto` is an identifier in 5.1).
@@ -224,9 +207,6 @@ mod tests {
         "file:///main.lua".parse().expect("valid URI")
     }
 
-    /// # Errors
-    ///
-    /// Returns the refusal [`rename`] gives.
     fn rename_at(
         document: &DocumentState,
         line: u32,

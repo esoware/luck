@@ -18,8 +18,6 @@
 //! The reference interpreter is mlua's vendored build of the dialect this
 //! crate's one feature picks. Ported from oxc's `tasks/coverage`.
 
-extern crate alloc;
-
 mod execute;
 mod runtime;
 mod snapshot;
@@ -41,11 +39,6 @@ use crate::tools::FileReport;
 
 /// With `--filter` and part of a path, checks only the files whose path holds
 /// it, prints each failure in full, and writes no snapshot.
-///
-/// # Errors
-///
-/// Fails on any other arguments, when the suite can't be fetched or read, or
-/// when a snapshot can't be written.
 fn main() -> io::Result<()> {
     let suite = Suite::linked()?;
     execute::start(suite)?;
@@ -64,10 +57,6 @@ fn main() -> io::Result<()> {
 
 type StageResult = fn(&FileReport) -> Option<&TestResult>;
 
-/// # Errors
-///
-/// Fails when the suite can't be fetched or read, or a snapshot can't be
-/// written.
 fn run(suite: &'static Suite, filter: Option<&str>) -> io::Result<()> {
     let root = suite.fetch()?;
     let files = suite.files(&root, filter)?;
@@ -98,7 +87,7 @@ fn run(suite: &'static Suite, filter: Option<&str>) -> io::Result<()> {
                 })
             })
             .collect();
-        let summary = snapshot::summary(&name, &results)?;
+        let summary = snapshot::summary(&name, &results);
         let failures = snapshot::failures(&results);
         report(&name, &summary, &failures, filter.is_some().then_some(results.as_slice()))?;
     }
@@ -109,16 +98,12 @@ fn run(suite: &'static Suite, filter: Option<&str>) -> io::Result<()> {
         .zip(&reports)
         .filter_map(|(file, report)| report.linter.as_ref().map(|lint| (file.path.as_str(), lint)))
         .collect();
-    let (summary, diagnostics) = snapshot::lint(&name, &linted)?;
+    let (summary, diagnostics) = snapshot::lint(&name, &linted);
     report(&name, &summary, &diagnostics, filter.is_some().then_some(&[]))
 }
 
 /// Prints a stage's summary, and with `filtered`, its failures and a diff for
 /// each mismatch, or else writes its snapshot.
-///
-/// # Errors
-///
-/// Fails when the snapshot can't be written.
 #[expect(clippy::print_stdout, reason = "the console report is this tool's output")]
 fn report(
     name: &str,

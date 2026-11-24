@@ -19,12 +19,10 @@ pub enum ConstantValue<'ast> {
 impl ConstantValue<'_> {
     /// Whether the value is truthy, which every value but `nil` and `false`
     /// is.
-    #[must_use]
     pub const fn to_boolean(self) -> bool {
         !matches!(self, Self::Nil | Self::Boolean(false))
     }
 
-    #[must_use]
     pub const fn as_number(self) -> Option<LuaNumber> {
         if let Self::Number(number) = self { Some(number) } else { None }
     }
@@ -36,7 +34,6 @@ impl ConstantValue<'_> {
     /// isn't an exact integer goes through the C library's `pow`, so neither
     /// has a result here. Nor does `..`, which makes a new string, and spells
     /// a number the target's own way.
-    #[must_use]
     pub fn binary(self, op: BinOp, rhs: Self, version: LuaVersion) -> Option<Self> {
         match op {
             BinOp::And => Some(if self.to_boolean() { rhs } else { self }),

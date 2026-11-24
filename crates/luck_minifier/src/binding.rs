@@ -40,7 +40,7 @@ impl NameIndexes {
 
     pub(crate) const fn next(&mut self) -> NameIndex {
         let index = NameIndex::new(self.next);
-        self.next = self.next.saturating_add(1);
+        self.next += 1;
         index
     }
 }

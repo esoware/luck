@@ -67,7 +67,7 @@ impl Rule for RedefiningLocal {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use std::fmt::Write as _;
 
     use luck_token::LuaTarget;
 
@@ -78,7 +78,7 @@ mod tests {
     fn locals_then_the_first_again(count: u32) -> String {
         let mut source = String::new();
         for i in 0..count {
-            let _unused = writeln!(source, "local x{i} = 1");
+            writeln!(source, "local x{i} = 1").unwrap();
         }
         source.push_str("local x0 = 1");
         source

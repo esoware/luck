@@ -69,14 +69,14 @@ impl Counters {
     const fn since(&self, before: &Self) -> Self {
         Self {
             heap: HeapCounters {
-                allocs: self.heap.allocs.saturating_sub(before.heap.allocs),
-                reallocs: self.heap.reallocs.saturating_sub(before.heap.reallocs),
-                deallocs: self.heap.deallocs.saturating_sub(before.heap.deallocs),
-                alloc_bytes: self.heap.alloc_bytes.saturating_sub(before.heap.alloc_bytes),
+                allocs: self.heap.allocs - before.heap.allocs,
+                reallocs: self.heap.reallocs - before.heap.reallocs,
+                deallocs: self.heap.deallocs - before.heap.deallocs,
+                alloc_bytes: self.heap.alloc_bytes - before.heap.alloc_bytes,
             },
             arena: ArenaCounters {
-                allocs: self.arena.allocs.saturating_sub(before.arena.allocs),
-                reallocs: self.arena.reallocs.saturating_sub(before.arena.reallocs),
+                allocs: self.arena.allocs - before.arena.allocs,
+                reallocs: self.arena.reallocs - before.arena.reallocs,
             },
         }
     }
@@ -110,7 +110,7 @@ const ARENA_SIZE_TOLERANCE_BYTES: usize = 1024;
 /// architectures, so the drift scales with the work and no flat tolerance
 /// fits both small and large values.
 fn relative_tolerance(value: usize) -> usize {
-    value.div_euclid(100).max(4096)
+    (value / 100).max(4096)
 }
 
 #[derive(Debug)]

@@ -1,4 +1,4 @@
-use core::str::FromStr;
+use std::str::FromStr;
 
 /// How the bundler treats a `require` whose argument isn't a string literal
 /// and so can't be resolved at build time.

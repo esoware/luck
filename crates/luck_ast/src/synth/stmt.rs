@@ -16,7 +16,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `method` or a name in `name_path` or `params` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn function_decl(
         &self,
         name_path: &[&str],
@@ -33,7 +32,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `method` or a name in `name_path` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn function_decl_full<Attributes>(
         &self,
         name_path: &[&str],
@@ -65,7 +63,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` or a name in `params` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn local_function(
         &self,
         name: &str,
@@ -81,7 +78,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn local_function_full<Attributes>(
         &self,
         name: &str,
@@ -101,7 +97,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn const_function<Attributes>(
         &self,
         name: &str,
@@ -121,7 +116,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn export_function<Attributes>(
         &self,
         name: &str,
@@ -165,7 +159,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn global_function(
         &self,
         name: &str,
@@ -185,7 +178,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if a name in `names` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn local<Exprs>(&self, names: &[&str], exprs: Exprs) -> Statement<'ast>
     where
         Exprs: IntoIterator<Item = Expression<'ast>>,
@@ -196,7 +188,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Build `names` with [`Synth::attributed_name`].
-    #[must_use]
     pub fn local_full<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
         Names: IntoIterator<Item = AttributedName<'ast>>,
@@ -212,7 +203,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `exprs` is empty; the grammar requires an initializer.
-    #[must_use]
     pub fn const_local<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
         Names: IntoIterator<Item = AttributedName<'ast>>,
@@ -226,7 +216,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Luau: `export local names = exprs`.
-    #[must_use]
     pub fn export_local<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
         Names: IntoIterator<Item = AttributedName<'ast>>,
@@ -242,7 +231,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `exprs` is empty; the grammar requires an initializer.
-    #[must_use]
     pub fn export_const<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
         Names: IntoIterator<Item = AttributedName<'ast>>,
@@ -287,7 +275,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` or `attribute` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn attributed_name(
         &self,
         name: &str,
@@ -306,7 +293,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Lua 5.5: `global names = exprs`, or with no `=` when `exprs` is empty.
-    #[must_use]
     pub fn global_declaration<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
         Names: IntoIterator<Item = AttributedName<'ast>>,
@@ -328,7 +314,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `attribute` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn global_star(&self, attribute: Option<&str>) -> Statement<'ast> {
         Statement::new_global_star(
             self.next_span(),
@@ -338,7 +323,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Build targets with [`Synth::name_var`], [`Synth::index_var`], [`Synth::field_var`].
-    #[must_use]
     pub fn assign<Targets, Values>(&self, targets: Targets, values: Values) -> Statement<'ast>
     where
         Targets: IntoIterator<Item = Var<'ast>>,
@@ -355,7 +339,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Luau: `target op= value`.
-    #[must_use]
     pub fn compound_assign(
         &self,
         target: Var<'ast>,
@@ -368,8 +351,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `call_expr` isn't a function call.
-    #[must_use]
-    #[expect(clippy::panic, reason = "documented panic")]
     #[expect(clippy::unused_self, reason = "every constructor is the synthesizer's")]
     pub fn call_stmt(&self, call_expr: Expression<'ast>) -> Statement<'ast> {
         let Expression::Suffixed(call) = call_expr else {
@@ -382,22 +363,18 @@ impl<'ast> Synth<'ast> {
         Statement::FunctionCall(call)
     }
 
-    #[must_use]
     pub fn do_block(&self, block: Block<'ast>) -> Statement<'ast> {
         Statement::new_do_block(self.next_span(), block, self.allocator)
     }
 
-    #[must_use]
     pub fn while_(&self, condition: Expression<'ast>, block: Block<'ast>) -> Statement<'ast> {
         Statement::new_while_loop(self.next_span(), condition, block, self.allocator)
     }
 
-    #[must_use]
     pub fn repeat_(&self, block: Block<'ast>, condition: Expression<'ast>) -> Statement<'ast> {
         Statement::new_repeat_loop(self.next_span(), block, condition, self.allocator)
     }
 
-    #[must_use]
     pub fn if_<ElseIfs>(
         &self,
         condition: Expression<'ast>,
@@ -426,7 +403,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Build `variable` with [`Synth::param`] or [`Synth::param_typed`].
-    #[must_use]
     pub fn numeric_for(
         &self,
         variable: Parameter<'ast>,
@@ -448,7 +424,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Build names with [`Synth::param`] or [`Synth::param_typed`].
-    #[must_use]
     pub fn generic_for<Names, Exprs>(
         &self,
         names: Names,
@@ -473,7 +448,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `label` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn goto_(&self, label: &str) -> Statement<'ast> {
         Statement::new_goto(self.next_span(), self.name(label), self.allocator)
     }
@@ -481,12 +455,10 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn label(&self, name: &str) -> Statement<'ast> {
         Statement::new_label(self.next_span(), self.name(name), self.allocator)
     }
 
-    #[must_use]
     pub fn return_<Exprs>(&self, exprs: Exprs) -> Statement<'ast>
     where
         Exprs: IntoIterator<Item = Expression<'ast>>,
@@ -495,13 +467,11 @@ impl<'ast> Synth<'ast> {
         Statement::new_return(self.next_span(), self.list(exprs), self.allocator)
     }
 
-    #[must_use]
     pub fn break_(&self) -> Statement<'ast> {
         Statement::Break(self.next_span())
     }
 
     /// Luau: `continue`.
-    #[must_use]
     pub fn continue_(&self) -> Statement<'ast> {
         Statement::Continue(self.next_span())
     }
@@ -509,7 +479,6 @@ impl<'ast> Synth<'ast> {
     /// A statement that has to end its block, in the pinned dialect or in
     /// any when none is pinned, goes in a `do ... end` of its own when others
     /// follow it, so the printed block reads back.
-    #[must_use]
     pub fn block<Stmts>(&self, stmts: Stmts) -> Block<'ast>
     where
         Stmts: IntoIterator<Item = Statement<'ast>>,
@@ -518,10 +487,10 @@ impl<'ast> Synth<'ast> {
         let given = stmts.into_iter();
         let last_index = given.len().saturating_sub(1);
         let ended = given.enumerate().map(|(i, stmt)| {
-            let has_to_end_block = self.version.map_or_else(
-                || LuaVersion::ALL.iter().any(|&version| stmt.has_to_end_block(version)),
-                |version| stmt.has_to_end_block(version),
-            );
+            let has_to_end_block = match self.version {
+                Some(version) => stmt.has_to_end_block(version),
+                None => LuaVersion::ALL.iter().any(|&version| stmt.has_to_end_block(version)),
+            };
             if i < last_index && has_to_end_block {
                 let block = Block::new(self.next_span(), self.list([stmt]));
                 Statement::new_do_block(self.next_span(), block, self.allocator)
@@ -537,7 +506,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn type_declaration(
         &self,
         is_exported: bool,
@@ -560,7 +528,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn type_function(
         &self,
         is_exported: bool,

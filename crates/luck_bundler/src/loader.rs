@@ -1,4 +1,4 @@
-use core::fmt::Write as _;
+use std::fmt::Write as _;
 
 use luck_token::LuaVersion;
 
@@ -44,7 +44,7 @@ fn write_loader(prefix: &str, version: LuaVersion, is_loader_global: bool, outpu
     // wins over bundled files, matching real require's state and searcher
     // order. The require's truthiness check reloads a module that returned
     // false, as every PUC version does.
-    let _infallible = write!(
+    let _ = write!(
         output,
         "local {prefix}modules={{}}\n\
          local {prefix}loaded=type(package)==\"table\" and type(package.loaded)==\"table\" and package.loaded or {{}}\n\
@@ -72,7 +72,7 @@ const fn entry_point(is_loader_global: bool) -> (&'static str, &'static str) {
 /// Chunks receive no arguments and must return exactly one value
 /// (`Require/src/RequireImpl.cpp`, `CLI/src/ReplRequirer.cpp`).
 fn write_luau_loader(prefix: &str, output: &mut String) {
-    let _infallible = write!(
+    let _ = write!(
         output,
         "local {prefix}modules={{}}\n\
          local {prefix}loaded={{}}\n\
@@ -99,7 +99,7 @@ fn write_luau_loader(prefix: &str, output: &mut String) {
 /// accesses error until the module finishes, then fills and freezes it
 /// (`populatePlaceholder` in `Require/src/RequireImpl.cpp`).
 fn write_export_runtime(prefix: &str, output: &mut String) {
-    let _infallible = write!(
+    let _ = write!(
         output,
         "local {prefix}freeze=table.freeze\n\
          local {prefix}lock={{\n\
@@ -131,7 +131,7 @@ fn write_lua_require(
         // previous error" failure. It's a function because `module()` adopts
         // a table it finds in `package.loaded`.
         let (opening, closing) = entry_point(is_loader_global);
-        let _infallible = write!(
+        let _ = write!(
             output,
             "local {prefix}loading=function()end\n\
              {opening} {prefix}require(name)\n\
@@ -158,7 +158,7 @@ fn write_lua_require(
         // 5.2/5.3 have no sentinel. As in real 5.2+, a load-time cycle
         // recurses until the stack overflows, and a load that raises
         // leaves the cache unset so a later require retries.
-        let _infallible = write!(
+        let _ = write!(
             output,
             "local function {prefix}require(name)\n\
              local value={prefix}loaded[name]\n\
@@ -182,7 +182,7 @@ fn write_lua_require(
     }
     // 5.4/5.5 also return the loader data as a second result, on first
     // load only.
-    let _infallible = write!(
+    let _ = write!(
         output,
         "local function {prefix}require(name)\n\
          local value={prefix}loaded[name]\n\
@@ -215,7 +215,7 @@ fn write_lua_require(
 /// one the host installs later still counts.
 fn write_dynamic_entry(prefix: &str, is_loader_global: bool, output: &mut String) {
     let (opening, closing) = entry_point(is_loader_global);
-    let _infallible = write!(
+    let _ = write!(
         output,
         "{opening} {prefix}dynamic(name)\n\
          if {prefix}modules[name]~=nil or {prefix}preload[name]~=nil then return {prefix}require(name)end\n\

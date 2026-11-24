@@ -1,4 +1,4 @@
-use core::iter;
+use std::iter;
 
 use luck_ast::{AstKind, AstType, GetSpan};
 use luck_token::Span;
@@ -16,17 +16,14 @@ pub struct AstNode<'ast> {
 }
 
 impl<'ast> AstNode<'ast> {
-    #[must_use]
     pub const fn kind(&self) -> AstKind<'ast> {
         self.kind
     }
 
-    #[must_use]
     pub const fn scope(&self) -> ScopeId {
         self.scope
     }
 
-    #[must_use]
     pub const fn id(&self) -> NodeId {
         self.id
     }
@@ -77,12 +74,10 @@ impl<'ast> AstNodes<'ast> {
     }
 
     /// Zero when the build didn't ask for the table.
-    #[must_use]
     pub const fn len(&self) -> usize {
         self.nodes.len()
     }
 
-    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
@@ -92,34 +87,25 @@ impl<'ast> AstNodes<'ast> {
         self.nodes.iter()
     }
 
-    #[must_use]
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "ids are minted only by this table, and a fallback would turn a bug into wrong diagnostics"
-    )]
     pub fn get(&self, id: NodeId) -> &AstNode<'ast> {
         &self.nodes[id.index()]
     }
 
-    #[must_use]
     pub fn kind(&self, id: NodeId) -> AstKind<'ast> {
         self.get(id).kind
     }
 
     /// `None` for the chunk.
-    #[must_use]
     pub fn parent_id(&self, id: NodeId) -> Option<NodeId> {
-        self.parent_ids.get(id.index()).copied().flatten()
+        self.parent_ids[id.index()]
     }
 
     /// `None` for the chunk.
-    #[must_use]
     pub fn parent_node(&self, id: NodeId) -> Option<&AstNode<'ast>> {
         self.parent_id(id).map(|parent| self.get(parent))
     }
 
     /// `None` for the chunk.
-    #[must_use]
     pub fn parent_kind(&self, id: NodeId) -> Option<AstKind<'ast>> {
         self.parent_id(id).map(|parent| self.kind(parent))
     }
@@ -140,7 +126,6 @@ impl<'ast> AstNodes<'ast> {
     /// The last node to start by `offset` is that node or inside it, since
     /// nodes are sorted by where they start and the nodes inside one follow
     /// it, so the search is one binary search and a walk up from there.
-    #[must_use]
     pub fn node_at(&self, offset: u32) -> Option<NodeId> {
         let after = self.nodes.partition_point(|node| node.span().start <= offset);
         let last = NodeId::from_index(after.checked_sub(1)?);
@@ -150,13 +135,11 @@ impl<'ast> AstNodes<'ast> {
     }
 
     /// Whether the tree holds a node of `ty`.
-    #[must_use]
     pub const fn contains(&self, ty: AstType) -> bool {
         self.node_kinds_set.has(ty)
     }
 
     /// Whether the tree holds a node of any type in `types`.
-    #[must_use]
     pub fn contains_any(&self, types: AstTypesBitset) -> bool {
         self.node_kinds_set.intersects(types)
     }

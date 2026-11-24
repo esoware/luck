@@ -1,4 +1,4 @@
-use core::ops::Range;
+use std::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_ast::{MAX_NESTING_DEPTH, Statement, Visit, block_nesting_depth};
@@ -204,7 +204,6 @@ const fn grouped(
 }
 
 /// The chunk's block is the first level of every shape.
-#[expect(clippy::too_many_lines, reason = "one entry per shape")]
 fn shapes() -> Vec<Shape> {
     let (lua54, luau_version) = (LuaVersion::Lua54, LuaVersion::Luau);
     vec![
@@ -322,7 +321,7 @@ fn the_cap_bounds_the_depth_of_the_tree_exactly() {
             let wraps_at_cap = if shape.is_grouped {
                 MAX_NESTING_DEPTH
             } else {
-                (MAX_NESTING_DEPTH - shape.fixed_levels).div_euclid(shape.levels_per_wrap)
+                (MAX_NESTING_DEPTH - shape.fixed_levels) / shape.levels_per_wrap
             };
             for wraps in wraps_at_cap - 1..=wraps_at_cap + 2 {
                 let depth = shape.fixed_levels + shape.levels_per_wrap * wraps;
@@ -440,13 +439,13 @@ struct Levels {
 
 impl Visit<'_> for Levels {
     fn descend(&mut self) -> bool {
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
         self.deepest = self.deepest.max(self.depth);
         true
     }
 
     fn ascend(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+        self.depth -= 1;
     }
 }
 

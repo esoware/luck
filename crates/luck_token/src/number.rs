@@ -1,5 +1,5 @@
-use core::fmt::{self, Write as _};
-use core::iter;
+use std::fmt::{self, Write as _};
+use std::iter;
 
 use crate::LuaVersion;
 
@@ -30,7 +30,6 @@ impl Eq for LuaNumber {}
 impl LuaNumber {
     /// The value as a double, an integer rounded to the nearest one as the
     /// C cast Lua uses rounds it.
-    #[must_use]
     pub const fn to_f64(self) -> f64 {
         match self {
             Self::Int(value) => int_to_f64(value),
@@ -41,7 +40,6 @@ impl LuaNumber {
     /// The integer the number equals, which a float does when it has no
     /// fraction and lies in `[-2^63, 2^63)`, as Lua 5.3+ converts a float
     /// for a bitwise operator, a table key, or a comparison with an integer.
-    #[must_use]
     pub fn to_integer(self) -> Option<i64> {
         match self {
             Self::Int(value) => Some(value),
@@ -56,7 +54,6 @@ impl LuaNumber {
     /// negative zero keeps its sign that way. `i64::MIN` has no magnitude to
     /// negate, so it's a literal of its own, which prints as the hex that
     /// wraps to it on Lua 5.3+.
-    #[must_use]
     pub const fn literal_magnitude(self) -> Option<(bool, Self)> {
         match self {
             Self::Int(value) => Some(match value.checked_neg() {
@@ -70,18 +67,15 @@ impl LuaNumber {
 }
 
 #[expect(
-    clippy::as_conversions,
     clippy::cast_possible_truncation,
     reason = "every float the range and the fraction check let through is an integer's exact value"
 )]
 fn float_to_integer(value: f64) -> Option<i64> {
-    // -2^63 and 2^63.
-    let range = f64::from_bits(0xC3E0_0000_0000_0000)..f64::from_bits(0x43E0_0000_0000_0000);
-    (value.fract() == 0.0f64 && range.contains(&value)).then_some(value as i64)
+    let range = -9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0;
+    (value.fract() == 0.0 && range.contains(&value)).then_some(value as i64)
 }
 
 #[expect(
-    clippy::as_conversions,
     clippy::cast_precision_loss,
     reason = "the C cast Lua itself uses, and i64 has no From into f64"
 )]
@@ -90,7 +84,6 @@ const fn int_to_f64(value: i64) -> f64 {
 }
 
 #[expect(
-    clippy::as_conversions,
     clippy::cast_precision_loss,
     reason = "the C cast of an unsigned 64-bit integer to double, which rounds to the nearest"
 )]
@@ -99,7 +92,7 @@ const fn unsigned_to_f64(value: u64) -> f64 {
 }
 
 /// 2^64, which Luau reads a hex or binary numeral past 64 bits as.
-const TWO_TO_64: f64 = f64::from_bits(0x43F0_0000_0000_0000);
+const TWO_TO_64: f64 = 18_446_744_073_709_551_616.0;
 
 /// What a numeral means: its value, and whether that is the integer it
 /// spells.
@@ -122,7 +115,6 @@ pub struct Numeral {
 /// integer wraps past 64 bits on 5.3+, and is the nearest double elsewhere,
 /// but Luau's saturate at 2^64, as its binary ones do. A hex float (5.2+) is
 /// the nearest double. Luau drops every `_` first.
-#[must_use]
 pub fn read_numeral(text: &str, version: LuaVersion) -> Numeral {
     if let Some(integer) = short_decimal_integer(text.as_bytes()) {
         let value = if version.has_integer_subtype() {
@@ -142,9 +134,9 @@ fn short_decimal_integer(digits: &[u8]) -> Option<i64> {
     if digits.is_empty() || digits.len() > 15 {
         return None;
     }
-    digits.iter().try_fold(0i64, |value, &digit| {
+    digits.iter().try_fold(0, |value, &digit| {
         let digit_value = digit.wrapping_sub(b'0');
-        (digit_value <= 9).then(|| value.wrapping_mul(10).wrapping_add(i64::from(digit_value)))
+        (digit_value <= 9).then(|| value * 10 + i64::from(digit_value))
     })
 }
 
@@ -175,16 +167,16 @@ where
     if !text.contains('_') {
         return read(text);
     }
-    let mut short = [0u8; 64];
+    let mut short = [0; 64];
     if text.len() > short.len() {
         return read(&text.replace('_', ""));
     }
-    let mut length = 0usize;
+    let mut length = 0;
     for (slot, b) in short.iter_mut().zip(text.bytes().filter(|&b| b != b'_')) {
         *slot = b;
-        length = length.saturating_add(1);
+        length += 1;
     }
-    read(str::from_utf8(short.get(..length).unwrap_or_default()).unwrap_or_default())
+    read(str::from_utf8(&short[..length]).expect("dropping ASCII `_`s leaves UTF-8"))
 }
 
 fn read_decimal(text: &str, version: LuaVersion) -> Numeral {
@@ -197,10 +189,10 @@ fn read_decimal(text: &str, version: LuaVersion) -> Numeral {
         return Numeral { value: nearest(), is_exact: wide.is_some_and(is_exact_in_double) };
     }
     // Lua 5.3+ reads a decimal past `i64::MAX` as a float.
-    wide.and_then(|value| i64::try_from(value).ok()).map_or_else(
-        || Numeral { value: nearest(), is_exact: false },
-        |integer| Numeral { value: LuaNumber::Int(integer), is_exact: true },
-    )
+    match wide.and_then(|value| i64::try_from(value).ok()) {
+        Some(integer) => Numeral { value: LuaNumber::Int(integer), is_exact: true },
+        None => Numeral { value: nearest(), is_exact: false },
+    }
 }
 
 /// `digits` follow the `0x`.
@@ -219,17 +211,16 @@ fn read_hex(digits: &[u8], version: LuaVersion) -> Numeral {
 /// `bytes` before the first byte `is_marker` picks out, and the bytes after
 /// it when there is one.
 fn split_at_marker(bytes: &[u8], is_marker: impl Fn(u8) -> bool) -> (&[u8], Option<&[u8]>) {
-    bytes.iter().position(|&b| is_marker(b)).map_or((bytes, None), |marker| {
-        let (before, from_marker) = bytes.split_at(marker);
-        (before, from_marker.get(1..))
-    })
+    bytes
+        .iter()
+        .position(|&b| is_marker(b))
+        .map_or((bytes, None), |marker| (&bytes[..marker], Some(&bytes[marker + 1..])))
 }
 
 fn read_hex_integer(digits: &[u8], version: LuaVersion) -> Numeral {
     if version.has_integer_subtype() {
-        let wrapped = digits
-            .iter()
-            .fold(0u64, |value, &digit| value.wrapping_shl(4) | u64::from(hex_value(digit)));
+        let wrapped =
+            digits.iter().fold(0u64, |value, &digit| (value << 4) | u64::from(hex_value(digit)));
         let significant_digits = digits.iter().skip_while(|&&digit| digit == b'0').count();
         return Numeral {
             value: LuaNumber::Int(wrapped.cast_signed()),
@@ -258,7 +249,8 @@ fn float_numeral(integer: u64) -> Numeral {
 /// Whether a double holds `value` exactly, meaning its significant bits fit
 /// the 53-bit significand.
 const fn is_exact_in_double(value: u128) -> bool {
-    value.wrapping_shr(value.trailing_zeros()) < (1u128 << 53u32)
+    // `wrapping_shr` takes zero's 128 trailing zeros as a shift of 0.
+    value.wrapping_shr(value.trailing_zeros()) < (1 << 53)
 }
 
 /// The integer decimal `digits` spell, or `None` past `u128`.
@@ -267,7 +259,7 @@ fn decimal_integer(digits: &[u8]) -> Option<u128> {
         return None;
     }
     digits.iter().try_fold(0u128, |value, &digit| {
-        value.checked_mul(10)?.checked_add(u128::from(digit.wrapping_sub(b'0')))
+        value.checked_mul(10)?.checked_add(u128::from(digit - b'0'))
     })
 }
 
@@ -279,8 +271,8 @@ fn digits_value(digits: &[u8], radix: u32) -> Option<u64> {
     })
 }
 
-fn hex_value(digit: u8) -> u8 {
-    char::from(digit).to_digit(16).and_then(|value| u8::try_from(value).ok()).unwrap_or_default()
+fn hex_value(digit: u8) -> u32 {
+    char::from(digit).to_digit(16).unwrap_or_default()
 }
 
 /// A hex float's `p` exponent: an optional sign, then decimal digits.
@@ -292,12 +284,9 @@ fn read_exponent(exponent: &[u8]) -> i64 {
     // Past this every value is zero or infinite, and the sums the reader
     // makes with it can't overflow.
     let magnitude = digits.iter().fold(0i64, |value, &digit| {
-        value
-            .saturating_mul(10)
-            .saturating_add(i64::from(digit.wrapping_sub(b'0')))
-            .min(1i64 << 40u32)
+        (value * 10 + i64::from(digit.wrapping_sub(b'0'))).min(1 << 40)
     });
-    if is_negative { magnitude.wrapping_neg() } else { magnitude }
+    if is_negative { -magnitude } else { magnitude }
 }
 
 /// The double nearest to the hex digits `whole` and `fraction` spell, with a
@@ -313,15 +302,15 @@ fn hex_to_f64(whole: &[u8], fraction: &[u8], binary_exponent: i64) -> (f64, bool
     let digits = whole_digits.chain(fraction.iter().map(|&digit| (digit, true)));
     for (digit, is_fraction) in digits {
         let value = hex_value(digit);
-        if mantissa >> 60u32 == 0 {
-            mantissa = (mantissa << 4u32) | u64::from(value);
+        if mantissa >> 60 == 0 {
+            mantissa = (mantissa << 4) | u64::from(value);
             if is_fraction {
-                exponent = exponent.saturating_sub(4);
+                exponent -= 4;
             }
         } else {
             is_sticky |= value != 0;
             if !is_fraction {
-                exponent = exponent.saturating_add(4);
+                exponent += 4;
             }
         }
     }
@@ -337,32 +326,31 @@ fn round_to_f64(mantissa: u64, exponent: i64, is_sticky: bool) -> (f64, bool) {
     let leading_zeros = mantissa.leading_zeros();
     let normalized = mantissa << leading_zeros;
     // The power of two the top bit of `normalized` stands for.
-    let top_exponent = exponent.saturating_sub(i64::from(leading_zeros)).saturating_add(63);
+    let top_exponent = exponent - i64::from(leading_zeros) + 63;
     if top_exponent > 1023 {
         return (f64::INFINITY, false);
     }
     // How many low bits fall below the double's last significand bit: 11 for
     // a normal double, and more the further a subnormal falls below 2^-1022.
-    let dropped_bits =
-        if top_exponent >= -1022 { 11 } else { (-1011i64).saturating_sub(top_exponent) };
+    let dropped_bits = if top_exponent >= -1022 { 11 } else { -1011 - top_exponent };
     let Some(dropped) = u32::try_from(dropped_bits).ok().filter(|&dropped| dropped <= 64) else {
         return (0.0, false);
     };
     let (kept, remainder, half) = if dropped == 64 {
-        (0, normalized, 1u64 << 63u32)
+        (0, normalized, 1 << 63)
     } else {
-        let low_mask = (1u64 << dropped).wrapping_sub(1);
-        (normalized >> dropped, normalized & low_mask, 1u64 << dropped.wrapping_sub(1))
+        let low_mask = (1 << dropped) - 1;
+        (normalized >> dropped, normalized & low_mask, 1 << (dropped - 1))
     };
     let is_above_half = remainder > half || (remainder == half && is_sticky);
     let is_odd_tie = remainder == half && !is_sticky && kept & 1 == 1;
-    let rounded = kept.wrapping_add(u64::from(is_above_half || is_odd_tie));
+    let rounded = kept + u64::from(is_above_half || is_odd_tie);
     let is_exact = remainder == 0 && !is_sticky;
-    let bits = match u64::try_from(top_exponent.saturating_add(1023)) {
+    let bits = match u64::try_from(top_exponent + 1023) {
         // `rounded` holds the implicit bit, so adding it to the exponent
         // field one below counts it, and a carry out of it raises the
         // exponent.
-        Ok(biased) if biased > 0 => (biased.wrapping_sub(1) << 52u32).wrapping_add(rounded),
+        Ok(biased) if biased > 0 => ((biased - 1) << 52) + rounded,
         // A subnormal's exponent field is zero, and a carry into it gives the
         // least normal double.
         Ok(_) | Err(_) => rounded,
@@ -375,7 +363,6 @@ fn round_to_f64(mantissa: u64, exponent: i64, is_sticky: bool) -> (f64, bool) {
 ///
 /// `None` when it's past 64 bits: a decimal must fit an `i64`, and hex and
 /// binary digits a `u64`, as a bit pattern.
-#[must_use]
 pub fn read_integer(text: &str) -> Option<i64> {
     without_separators(text, |separated| {
         let body = separated.strip_suffix('i').unwrap_or(separated);
@@ -397,20 +384,18 @@ pub struct NumberSpelling {
 impl NumberSpelling {
     const EMPTY: Self = Self { bytes: [0; 32], length: 0 };
 
-    #[must_use]
+    #[expect(clippy::missing_panics_doc, reason = "a numeral's spelling is ASCII")]
     pub fn as_str(&self) -> &str {
-        str::from_utf8(self.bytes.get(..self.length).unwrap_or_default()).unwrap_or_default()
+        str::from_utf8(self.as_bytes()).expect("a numeral's spelling is ASCII")
     }
 
     fn as_bytes(&self) -> &[u8] {
-        self.bytes.get(..self.length).unwrap_or_default()
+        &self.bytes[..self.length]
     }
 
-    fn push(&mut self, byte: u8) {
-        if let Some(slot) = self.bytes.get_mut(self.length) {
-            *slot = byte;
-            self.length = self.length.saturating_add(1);
-        }
+    const fn push(&mut self, byte: u8) {
+        self.bytes[self.length] = byte;
+        self.length += 1;
     }
 
     fn push_all(&mut self, bytes: impl IntoIterator<Item = u8>) {
@@ -422,7 +407,7 @@ impl NumberSpelling {
 
 impl fmt::Write for NumberSpelling {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        let end = self.length.saturating_add(s.len());
+        let end = self.length + s.len();
         self.bytes.get_mut(self.length..end).ok_or(fmt::Error)?.copy_from_slice(s.as_bytes());
         self.length = end;
         Ok(())
@@ -441,7 +426,6 @@ impl fmt::Debug for NumberSpelling {
 /// negative integer, which a numeral spells only as hex that wraps, is
 /// written in hex. `value` is one a literal holds: a float that's neither
 /// negative nor NaN. Infinity is `1e999`, which every reader overflows.
-#[must_use]
 pub fn spell_number(value: LuaNumber, version: LuaVersion) -> NumberSpelling {
     match value {
         LuaNumber::Int(integer) => spell_int(integer, ""),
@@ -451,7 +435,6 @@ pub fn spell_number(value: LuaNumber, version: LuaVersion) -> NumberSpelling {
 
 /// The shortest Luau integer literal for `value`, which is in hex when it's
 /// negative.
-#[must_use]
 pub fn spell_integer(value: i64) -> NumberSpelling {
     spell_int(value, "i")
 }
@@ -461,7 +444,7 @@ fn spell_int(value: i64, suffix: &str) -> NumberSpelling {
     let bits = value.cast_unsigned();
     let decimal_length = (value >= 0).then(|| decimal_length(bits));
     // Plain digits win a tie.
-    let _infallible = if decimal_length.is_some_and(|length| length <= hex_length(bits)) {
+    let _ = if decimal_length.is_some_and(|length| length <= hex_length(bits)) {
         write!(spelling, "{value}{suffix}")
     } else {
         write!(spelling, "0x{bits:x}{suffix}")
@@ -471,18 +454,18 @@ fn spell_int(value: i64, suffix: &str) -> NumberSpelling {
 
 /// How many digits `value` takes in decimal.
 fn decimal_length(value: u64) -> usize {
-    iter::successors(Some(value), |&rest| (rest >= 10).then(|| rest.div_euclid(10))).count()
+    iter::successors(Some(value), |&rest| (rest >= 10).then_some(rest / 10)).count()
 }
 
 /// How many bytes `value` takes as a hex numeral, `0x` included.
 fn hex_length(value: u64) -> usize {
-    let digit_count = 64u32.saturating_sub(value.leading_zeros()).div_ceil(4).max(1);
-    usize::try_from(digit_count).unwrap_or_default().saturating_add(2)
+    let digit_count = (64 - value.leading_zeros()).div_ceil(4).max(1);
+    digit_count as usize + 2
 }
 
 /// How many bytes `exponent` takes in decimal, its sign included.
 fn exponent_length(exponent: i64) -> usize {
-    decimal_length(exponent.unsigned_abs()).saturating_add(usize::from(exponent < 0))
+    decimal_length(exponent.unsigned_abs()) + usize::from(exponent < 0)
 }
 
 /// The ways [`spell_float`] can lay out a float's digits.
@@ -505,8 +488,8 @@ fn spell_float(value: f64, is_float_marked: bool) -> NumberSpelling {
         return spelling;
     }
     let magnitude = value.abs();
-    if magnitude == 0.0f64 {
-        let _infallible = spelling.write_str(if is_float_marked { "0." } else { "0" });
+    if magnitude == 0.0 {
+        let _ = spelling.write_str(if is_float_marked { "0." } else { "0" });
         return spelling;
     }
     if magnitude.is_infinite() {
@@ -516,18 +499,12 @@ fn spell_float(value: f64, is_float_marked: bool) -> NumberSpelling {
     // `{:e}` gives the shortest digits that read back as the value, as
     // `d.ddde-x`.
     let mut scientific = NumberSpelling::EMPTY;
-    if write!(scientific, "{magnitude:e}").is_err() {
-        return spelling;
-    }
-    let text = scientific.as_bytes();
-    let marker = text.iter().position(|&b| b == b'e').unwrap_or(text.len());
-    let (mantissa, marked_exponent) = text.split_at(marker);
-    let exponent: i64 = str::from_utf8(marked_exponent.get(1..).unwrap_or_default())
-        .ok()
-        .and_then(|written| written.parse().ok())
-        .unwrap_or_default();
+    let _ = write!(scientific, "{magnitude:e}");
+    let (mantissa, exponent) =
+        scientific.as_str().split_once('e').expect("scientific notation has an exponent");
+    let exponent: i64 = exponent.parse().expect("scientific notation has an integer exponent");
     let mut digit_text = NumberSpelling::EMPTY;
-    digit_text.push_all(mantissa.iter().copied().filter(|&b| b != b'.'));
+    digit_text.push_all(mantissa.bytes().filter(|&b| b != b'.'));
     let digits = digit_text.as_bytes();
     let layout = shortest_layout(magnitude, digits, exponent, is_float_marked);
     write_layout(layout, magnitude, digits, exponent, is_float_marked, &mut spelling);
@@ -538,25 +515,21 @@ fn spell_float(value: f64, is_float_marked: bool) -> NumberSpelling {
 /// point, then hex.
 fn shortest_layout(value: f64, digits: &[u8], exponent: i64, is_float_marked: bool) -> Layout {
     let count = digits.len();
-    let count_wide = i64::try_from(count).unwrap_or_default();
-    let last_exponent = exponent.saturating_sub(count_wide).saturating_add(1);
-    let to_length = |wide: i64| usize::try_from(wide).unwrap_or(usize::MAX);
+    let count_wide = i64::try_from(count).expect("a double has at most 17 digits");
+    let last_exponent = exponent - count_wide + 1;
+    let to_length = |wide: i64| usize::try_from(wide).expect("each branch checks the sign");
     let plain = if last_exponent >= 0 {
-        count.saturating_add(to_length(last_exponent)).saturating_add(usize::from(is_float_marked))
+        count + to_length(last_exponent) + usize::from(is_float_marked)
     } else if exponent >= 0 {
-        count.saturating_add(1)
+        count + 1
     } else {
-        count.saturating_add(to_length(exponent.saturating_neg()))
+        count + to_length(-exponent)
     };
     let mut best = (Layout::Plain, plain);
     for before_point in (0..=count).rev() {
-        let shifted = exponent
-            .saturating_add(1)
-            .saturating_sub(i64::try_from(before_point).unwrap_or_default());
-        let length = count
-            .saturating_add(usize::from(before_point < count))
-            .saturating_add(1)
-            .saturating_add(exponent_length(shifted));
+        let shifted =
+            exponent + 1 - i64::try_from(before_point).expect("a double has at most 17 digits");
+        let length = count + usize::from(before_point < count) + 1 + exponent_length(shifted);
         if length < best.1 {
             best = (Layout::Exponent(before_point), length);
         }
@@ -573,14 +546,15 @@ fn shortest_layout(value: f64, digits: &[u8], exponent: i64, is_float_marked: bo
 /// `value` as an integer, when it is one below 2^64.
 fn float_to_u64(value: f64) -> Option<u64> {
     let bits = value.to_bits();
-    let biased = i64::try_from(bits >> 52u32).ok()?;
-    let significand = (bits & 0x000F_FFFF_FFFF_FFFF) | (1u64 << 52u32);
-    let shift = biased.checked_sub(1075)?;
+    let biased = i64::try_from(bits >> 52).expect("a sign and an exponent fit 12 bits");
+    let significand = (bits & 0x000F_FFFF_FFFF_FFFF) | (1 << 52);
+    let shift = biased - 1075;
     if shift >= 0 {
-        (shift < 12).then(|| significand << u32::try_from(shift).unwrap_or_default())
+        (shift < 12).then(|| significand << shift)
     } else {
-        let right = u32::try_from(shift.checked_neg()?).ok()?;
-        (right < 53 && significand.trailing_zeros() >= right).then(|| significand >> right)
+        let right = shift.unsigned_abs();
+        (right < 53 && u64::from(significand.trailing_zeros()) >= right)
+            .then(|| significand >> right)
     }
 }
 
@@ -592,42 +566,41 @@ fn write_layout(
     is_float_marked: bool,
     spelling: &mut NumberSpelling,
 ) {
-    let count = i64::try_from(digits.len()).unwrap_or_default();
+    let count = i64::try_from(digits.len()).expect("a double has at most 17 digits");
     match layout {
         Layout::Plain => {
-            let last_exponent = exponent.saturating_sub(count).saturating_add(1);
-            if let Ok(zeros) = usize::try_from(last_exponent) {
+            if let Ok(zeros) = usize::try_from(exponent - count + 1) {
                 spelling.push_all(digits.iter().copied());
                 spelling.push_all(iter::repeat_n(b'0', zeros));
                 if is_float_marked {
                     spelling.push(b'.');
                 }
-            } else if let Ok(whole) = usize::try_from(exponent.saturating_add(1)) {
-                let (whole_digits, fraction_digits) = digits.split_at(whole.min(digits.len()));
+            } else if let Ok(whole) = usize::try_from(exponent + 1) {
+                let (whole_digits, fraction_digits) = digits.split_at(whole);
                 spelling.push_all(whole_digits.iter().copied());
                 spelling.push(b'.');
                 spelling.push_all(fraction_digits.iter().copied());
             } else {
                 spelling.push(b'.');
-                let zeros = usize::try_from(exponent.saturating_add(1).saturating_neg());
-                spelling.push_all(iter::repeat_n(b'0', zeros.unwrap_or_default()));
+                let zeros = usize::try_from(-exponent - 1).expect("the exponent is below -1");
+                spelling.push_all(iter::repeat_n(b'0', zeros));
                 spelling.push_all(digits.iter().copied());
             }
         }
         Layout::Exponent(before_point) => {
-            let (whole_digits, fraction_digits) = digits.split_at(before_point.min(digits.len()));
+            let (whole_digits, fraction_digits) = digits.split_at(before_point);
             spelling.push_all(whole_digits.iter().copied());
             if !fraction_digits.is_empty() {
                 spelling.push(b'.');
                 spelling.push_all(fraction_digits.iter().copied());
             }
-            let shifted = exponent
-                .saturating_add(1)
-                .saturating_sub(i64::try_from(before_point).unwrap_or_default());
-            let _infallible = write!(spelling, "e{shifted}");
+            let shifted =
+                exponent + 1 - i64::try_from(before_point).expect("a double has at most 17 digits");
+            let _ = write!(spelling, "e{shifted}");
         }
         Layout::Hex => {
-            let _infallible = write!(spelling, "0x{:x}", float_to_u64(value).unwrap_or_default());
+            let integer = float_to_u64(value).expect("only an integer takes the hex layout");
+            let _ = write!(spelling, "0x{integer:x}");
         }
     }
 }

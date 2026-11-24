@@ -1,6 +1,6 @@
-use core::cmp::Reverse;
-use core::sync::atomic::{AtomicU64, Ordering};
-use core::time::Duration;
+use std::cmp::Reverse;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::rules::{RuleId, RuleTable};
@@ -31,14 +31,12 @@ pub struct RuleTiming {
 }
 
 impl RuleTimings {
-    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Each rule the linter called, slowest first, and rules that took as
     /// long by name.
-    #[must_use]
     pub fn sorted(&self) -> Vec<RuleTiming> {
         let mut timings: Vec<RuleTiming> = RuleId::ALL
             .into_iter()
@@ -78,8 +76,8 @@ impl Spent {
     {
         let started = Instant::now();
         let returned = hook();
-        self.duration = self.duration.saturating_add(started.elapsed());
-        self.calls = self.calls.saturating_add(1);
+        self.duration += started.elapsed();
+        self.calls += 1;
         returned
     }
 }

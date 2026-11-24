@@ -1,5 +1,5 @@
-use core::fmt::Write as _;
-use core::iter;
+use std::fmt::Write as _;
+use std::iter;
 
 use luck_allocator::Allocator;
 use luck_ast::{Expression, Statement, Suffix, SuffixedExpression, Var};
@@ -65,7 +65,7 @@ pub(crate) fn chain_shape(chain: &SuffixedExpression<'_>) -> String {
         format!("{:?}", chain.prefix)
     };
     for suffix in &chain.suffixes {
-        let _unused = match suffix {
+        let _ = match suffix {
             Suffix::Field(name) => write!(shape, ".{}", name.text),
             Suffix::Index { .. } => write!(shape, "[]"),
             Suffix::Call(_) => write!(shape, "()"),

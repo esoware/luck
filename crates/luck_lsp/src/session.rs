@@ -1,8 +1,8 @@
-use alloc::sync::Arc;
-use core::num::NonZero;
-use core::sync::atomic::{AtomicBool, Ordering};
 use std::fs;
+use std::num::NonZero;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::Sender;
 use ls_types::notification::{Notification as _, PublishDiagnostics, ShowMessage};
@@ -87,7 +87,7 @@ impl Session {
     /// Hands `task` to the main loop.
     pub(crate) fn send(&self, task: Task) {
         // Only a main loop that has stopped stops listening.
-        let _stopped = self.tasks.send(task);
+        let _ = self.tasks.send(task);
     }
 
     /// Tells every job still queued to return without doing its work.

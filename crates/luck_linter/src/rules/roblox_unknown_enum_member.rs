@@ -1,4 +1,4 @@
-use luck_ast::{AstKind, AstType, ChainHead, DottedPath, Expression, Suffix};
+use luck_ast::{AstKind, AstType, ChainHead, Expression, Suffix};
 use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::Span;
 
@@ -45,11 +45,11 @@ impl Rule for RobloxUnknownEnumMember {
         }
         // A target's last field is stored to, not read.
         let read_count = if context.is_assignment_target(node) {
-            chain.suffixes.len().saturating_sub(1)
+            chain.suffixes.len() - 1
         } else {
             chain.suffixes.len()
         };
-        for (read_index, suffix) in (0usize..).zip(chain.suffixes.iter().take(read_count)) {
+        for (read_index, suffix) in (0..).zip(chain.suffixes.iter().take(read_count)) {
             let Suffix::Field(name) = suffix else {
                 return;
             };
@@ -71,12 +71,12 @@ impl Rule for RobloxUnknownEnumMember {
 
 /// `prefix` is the dotted path from `Enum` that has no `last_segment`.
 fn unknown_member(prefix: ChainHead<'_>, last_segment: &str, span: Span) -> Finding {
-    let path = prefix.dotted_path();
-    let prefix_path = path.map(|dotted| dotted.to_string()).unwrap_or_default();
-    let message = match path.map_or(0, DottedPath::segment_count) {
+    let path =
+        prefix.dotted_path().expect("every segment before the unknown one is a field of `Enum`");
+    let message = match path.segment_count() {
         1 => format!("unknown enum type `Enum.{last_segment}`"),
-        2 => format!("`{last_segment}` is not an item of `{prefix_path}`"),
-        _ => format!("`{last_segment}` is not a member of `{prefix_path}`"),
+        2 => format!("`{last_segment}` is not an item of `{path}`"),
+        _ => format!("`{last_segment}` is not a member of `{path}`"),
     };
     Finding::new(message, span)
         .with_help("enum data is generated from the Roblox API dump, so check the spelling")

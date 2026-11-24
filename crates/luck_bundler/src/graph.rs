@@ -1,5 +1,5 @@
-use core::mem;
 use std::ffi::OsString;
+use std::mem;
 use std::path::{Path, PathBuf};
 
 use luck_allocator::ThreadAllocators;
@@ -81,10 +81,6 @@ impl<'ast> DependencyGraph<'ast> {
 /// The diagnostics are gathered in that order too, so neither depends on how
 /// discovery was scheduled. A module that discovery skipped is discovered
 /// now. Stops with E009 at the module limit.
-///
-/// # Errors
-///
-/// Returns the errors discovery found.
 fn number_modules<'ast>(
     entry: PathBuf,
     mut found: FxHashMap<OsString, Discovered<'ast>>,
@@ -129,7 +125,7 @@ fn number_modules<'ast>(
                 .collect();
             modules.push(info);
         }
-        next = next.saturating_add(1);
+        next += 1;
     }
     if !errors.is_empty() {
         return Err(errors);
@@ -200,27 +196,20 @@ fn topological_order(
     };
 
     let cycle = find_cycle(&graph, cycle_node);
-    let cycle_paths: Vec<String> = cycle
-        .iter()
-        .filter_map(|id| modules.get(id.0))
-        .map(|module| to_slash_lossy(&module.path).into_owned())
-        .collect();
+    let cycle_paths: Vec<String> =
+        cycle.iter().map(|id| to_slash_lossy(&modules[id.0].path).into_owned()).collect();
 
     // The require that closes the cycle: the last module in the path requiring
     // the first.
     let (reporting_id, closing_span) = match cycle.as_slice() {
         [.., from, to] => {
-            let closing_span = modules.get(from.0).and_then(|module| {
-                let dependency = module.dependencies.iter().find(|found| found.target == *to);
-                dependency.map(|found| found.call_span)
-            });
+            let dependency = modules[from.0].dependencies.iter().find(|found| found.target == *to);
+            let closing_span = dependency.map(|found| found.call_span);
             (*from, closing_span)
         }
         [] | [_] => (ModuleId(0), None),
     };
-    if let Some(module_warnings) = warnings.get_mut(reporting_id.0) {
-        module_warnings.push(Diagnostic::w003(closing_span, &cycle_paths));
-    }
+    warnings[reporting_id.0].push(Diagnostic::w003(closing_span, &cycle_paths));
     (0..modules.len()).map(ModuleId).collect()
 }
 

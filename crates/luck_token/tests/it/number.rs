@@ -1,4 +1,4 @@
-use core::iter;
+use std::iter;
 
 use luck_token::{
     LuaNumber, LuaVersion, Numeral, read_integer, read_numeral, spell_integer, spell_number,
@@ -25,10 +25,7 @@ fn samples() -> impl Iterator<Item = u64> {
             state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         state
     });
-    mixed
-        .take(4000)
-        .enumerate()
-        .map(|(i, bits)| bits >> u32::try_from(i.rem_euclid(64)).unwrap_or_default())
+    mixed.take(4000).enumerate().map(|(i, bits)| bits >> (i % 64))
 }
 
 #[test]
@@ -47,14 +44,14 @@ fn integers_split_from_floats_only_from_lua53() {
 #[test]
 fn equality_is_identity() {
     assert_ne!(LuaNumber::Int(1), LuaNumber::Float(1.0));
-    assert_ne!(LuaNumber::Float(0.0f64), LuaNumber::Float(-0.0f64));
+    assert_ne!(LuaNumber::Float(0.0), LuaNumber::Float(-0.0));
     assert_eq!(LuaNumber::Float(f64::NAN), LuaNumber::Float(f64::NAN));
-    assert_eq!(LuaNumber::Int(-3).to_f64(), -3.0f64);
+    assert_eq!(LuaNumber::Int(-3).to_f64(), -3.0);
 }
 
 #[test]
 fn a_float_is_an_integer_only_without_a_fraction_and_in_range() {
-    let two_to_63 = f64::from_bits(0x43E0_0000_0000_0000);
+    let two_to_63 = 2.0f64.powi(63);
     for (number, expected) in [
         (LuaNumber::Int(i64::MIN), Some(i64::MIN)),
         (LuaNumber::Float(3.0), Some(3)),
@@ -86,13 +83,13 @@ fn a_literal_holds_a_magnitude_under_a_minus() {
 #[test]
 fn decimals_read_every_spelling_the_lexer_takes() {
     for (text, expected) in [
-        ("0.5", 0.5f64),
-        (".5", 0.5f64),
-        ("5.", 5.0f64),
-        ("1E3", 1000.0f64),
-        ("1.5e-1", 0.15f64),
-        ("2e+2", 200.0f64),
-        ("007.5", 7.5f64),
+        ("0.5", 0.5),
+        (".5", 0.5),
+        ("5.", 5.0),
+        ("1E3", 1000.0),
+        ("1.5e-1", 0.15),
+        ("2e+2", 200.0),
+        ("007.5", 7.5),
         ("1e999", f64::INFINITY),
     ] {
         assert_eq!(value(text, LuaVersion::Lua54), LuaNumber::Float(expected), "{text}");
@@ -132,10 +129,7 @@ fn hex_integers_wrap_on_lua53_and_round_elsewhere() {
         assert_eq!(value("0x10000000000000000", version), LuaNumber::Float(2.0f64.powi(64)));
         assert!(is_exact("0x10000000000000000", version), "2^64 is a double");
         assert!(!is_exact("0x20000000000001", version), "2^53 + 1 is not");
-        assert_eq!(
-            value("0x20000000000003", version),
-            LuaNumber::Float(9_007_199_254_740_996.0f64)
-        );
+        assert_eq!(value("0x20000000000003", version), LuaNumber::Float(9_007_199_254_740_996.0));
     }
 }
 
@@ -156,38 +150,34 @@ fn luau_saturates_hex_and_binary_numerals_past_64_bits() {
 #[test]
 fn luau_drops_separators_anywhere() {
     let luau = LuaVersion::Luau;
-    for (text, expected) in [
-        ("1_000", 1000.0f64),
-        ("1__2", 12.0f64),
-        ("12_", 12.0f64),
-        ("0_x1_0", 16.0f64),
-        ("1_0.5_0", 10.5f64),
-    ] {
+    for (text, expected) in
+        [("1_000", 1000.0), ("1__2", 12.0), ("12_", 12.0), ("0_x1_0", 16.0), ("1_0.5_0", 10.5)]
+    {
         assert_eq!(value(text, luau), LuaNumber::Float(expected), "{text}");
     }
     let long = format!("1{}", "_0".repeat(40));
-    assert_eq!(value(&long, luau), LuaNumber::Float(1e40f64));
+    assert_eq!(value(&long, luau), LuaNumber::Float(1e40));
 }
 
 #[test]
 fn hex_floats_read_as_the_nearest_double() {
     let lua54 = LuaVersion::Lua54;
     for (text, expected) in [
-        ("0x1.8p1", 3.0f64),
-        ("0x.1p4", 1.0f64),
-        ("0X1P-1", 0.5f64),
-        ("0xA.8", 10.5f64),
+        ("0x1.8p1", 3.0),
+        ("0x.1p4", 1.0),
+        ("0X1P-1", 0.5),
+        ("0xA.8", 10.5),
         ("0x1p-1074", f64::from_bits(1)),
-        ("0x1p-1075", 0.0f64),
+        ("0x1p-1075", 0.0),
         ("0x1.000001p-1075", f64::from_bits(1)),
         ("0x3p-1075", f64::from_bits(2)),
         ("0x1.fffffffffffffp1023", f64::MAX),
         ("0x1.fffffffffffff8p1023", f64::INFINITY),
         ("0x1p1024", f64::INFINITY),
-        ("0x1p-99999999999999", 0.0f64),
-        ("0x0.0p0", 0.0f64),
-        ("0x1.00000000000008p0", 1.0f64),
-        ("0x1.000000000000081p0", 1.000_000_000_000_000_2f64),
+        ("0x1p-99999999999999", 0.0),
+        ("0x0.0p0", 0.0),
+        ("0x1.00000000000008p0", 1.0),
+        ("0x1.000000000000081p0", 1.000_000_000_000_000_2),
     ] {
         assert_eq!(value(text, lua54), LuaNumber::Float(expected), "{text}");
     }
@@ -196,14 +186,14 @@ fn hex_floats_read_as_the_nearest_double() {
 #[test]
 fn long_hex_numerals_round_once() {
     // 5^16, so `x / 2^16` is `x * 5^16 / 10^16`.
-    let five_to_16 = 152_587_890_625u128;
+    let five_to_16 = 152_587_890_625;
     for bits in samples() {
         let wide = u128::from(bits);
         let hex = |text: String, version| value(&text, version);
         assert_eq!(hex(format!("0x{bits:x}"), LuaVersion::Lua52), nearest_to(wide, 0));
-        let sixteen_times = nearest_to(wide << 4u32, 0);
+        let sixteen_times = nearest_to(wide << 4, 0);
         assert_eq!(hex(format!("0x{bits:x}0"), LuaVersion::Lua51), sixteen_times, "{bits:x}");
-        let fraction = nearest_to(wide.wrapping_mul(five_to_16), 16);
+        let fraction = nearest_to(wide * five_to_16, 16);
         assert_eq!(hex(format!("0x{bits:x}p-16"), LuaVersion::Lua54), fraction, "{bits:x}");
     }
 }
@@ -211,7 +201,7 @@ fn long_hex_numerals_round_once() {
 /// The double nearest to `numerator / 10^decimals`, as Rust's correctly
 /// rounding parser reads it.
 fn nearest_to(numerator: u128, decimals: u32) -> LuaNumber {
-    LuaNumber::Float(format!("{numerator}e-{decimals}").parse().unwrap_or(f64::NAN))
+    LuaNumber::Float(format!("{numerator}e-{decimals}").parse().expect("a decimal numeral"))
 }
 
 #[test]
@@ -261,7 +251,7 @@ fn writes_the_shortest_numeral_for_each_dialect() {
 #[test]
 fn every_written_number_reads_back_as_itself() {
     for bits in samples() {
-        let float = f64::from_bits(bits >> 1u32);
+        let float = f64::from_bits(bits >> 1);
         let numbers = [LuaNumber::Int(bits.cast_signed()), LuaNumber::Float(float)];
         for number in numbers {
             if matches!(number, LuaNumber::Float(nan) if nan.is_nan()) {
@@ -277,7 +267,7 @@ fn every_written_number_reads_back_as_itself() {
                 if let LuaNumber::Float(written_float) = number {
                     let shortest =
                         format!("{written_float:e}").len().min(format!("{written_float}").len());
-                    assert!(text.len() <= shortest.saturating_add(1), "{text} {written_float:e}");
+                    assert!(text.len() <= shortest + 1, "{text} {written_float:e}");
                 }
             }
         }

@@ -1,5 +1,5 @@
-use core::iter;
-use core::ops::Range;
+use std::iter;
+use std::ops::Range;
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
 use luck_diagnostics::{Diagnostic, Severity};
@@ -42,7 +42,7 @@ impl Reporter for DefaultReporter {
             }
             let cache = (file.label, &snippet.source);
             // A failed write has nowhere to be reported.
-            let _unused = report(file.label, diag, span, &snippet).write(cache, &mut *output);
+            let _ = report(file.label, diag, span, &snippet).write(cache, &mut *output);
         }
     }
 }
@@ -58,8 +58,7 @@ struct Snippet {
 impl Snippet {
     fn new(text: &[u8], version: LuaVersion) -> Self {
         let span_shift = chunk_start(text, version);
-        let body = text.get(span_shift..).unwrap_or_default();
-        Self { source: Source::from(renderable(body, version)), span_shift }
+        Self { source: Source::from(renderable(&text[span_shift..], version)), span_shift }
     }
 
     fn shifted(&self, span: Span) -> Range<usize> {
@@ -81,7 +80,7 @@ fn renderable(bytes: &[u8], version: LuaVersion) -> String {
         let mut copied_to = 0;
         let mut index = 0;
         while let Some(&b) = text_bytes.get(index) {
-            let next = |ahead: usize| text_bytes.get(index.saturating_add(ahead)).copied();
+            let next = |ahead: usize| text_bytes.get(index + ahead).copied();
             let replacement = match b {
                 0x0B | 0x0C => " ",
                 // NEL
@@ -92,16 +91,16 @@ fn renderable(bytes: &[u8], version: LuaVersion) -> String {
                 b'\r' if !version.has_lfcr_line_break() && next(1) != Some(b'\n') => " ",
                 b'\n' if version.has_lfcr_line_break() && next(1) == Some(b'\r') => "\r\n",
                 _ => {
-                    index = index.saturating_add(1);
+                    index += 1;
                     continue;
                 }
             };
-            rendered.push_str(text.get(copied_to..index).unwrap_or_default());
+            rendered.push_str(&text[copied_to..index]);
             rendered.push_str(replacement);
-            index = index.saturating_add(replacement.len());
+            index += replacement.len();
             copied_to = index;
         }
-        rendered.push_str(text.get(copied_to..).unwrap_or_default());
+        rendered.push_str(&text[copied_to..]);
         rendered.extend(iter::repeat_n('?', chunk.invalid().len()));
     }
     rendered
@@ -125,7 +124,7 @@ fn report<'label>(
         .with_message(&diag.message)
         .with_config(Config::default().with_index_type(IndexType::Byte))
         .with_label(Label::new(primary).with_message(&diag.message));
-    for (order, other) in (1i32..).zip(&diag.labels) {
+    for (order, other) in (1..).zip(&diag.labels) {
         let place = (label, snippet.shifted(other.span));
         builder =
             builder.with_label(Label::new(place).with_message(&other.message).with_order(order));

@@ -32,7 +32,7 @@ fn shadow_depth(stmt: &str, name: &str, depth: usize) -> Option<usize> {
     if is_local {
         Some(depth)
     } else if is_block_binding {
-        Some(depth.saturating_add(1))
+        Some(depth + 1)
     } else {
         None
     }
@@ -98,12 +98,10 @@ fn runtime_while_bodies_never_write_their_counter() {
         else {
             continue;
         };
-        let body_depth = tab_depth(header).saturating_add(1);
+        let body_depth = tab_depth(header) + 1;
         // The first body line is the loop's own increment.
-        let body = lines
-            .iter()
-            .skip(header_index.saturating_add(2))
-            .take_while(|line| tab_depth(line) >= body_depth);
+        let body =
+            lines.iter().skip(header_index + 2).take_while(|line| tab_depth(line) >= body_depth);
         let mut hidden_from: Option<usize> = None;
         for line in body {
             let depth = tab_depth(line);
@@ -135,8 +133,8 @@ fn runtime_until_conditions_read_their_counter_not_a_body_local() {
             continue;
         }
         let header_depth = tab_depth(header);
-        let body_depth = header_depth.saturating_add(1);
-        let after_header = || lines.iter().skip(header_index.saturating_add(1));
+        let body_depth = header_depth + 1;
+        let after_header = || lines.iter().skip(header_index + 1);
         let until = after_header()
             .find(|line| tab_depth(line) == header_depth && line.trim_start().starts_with("until "))
             .expect("every generated repeat closes with until");
@@ -173,12 +171,10 @@ fn runtime_function_returns_add_a_number_not_a_shadowing_string() {
         else {
             continue;
         };
-        let body_depth = tab_depth(header).saturating_add(1);
+        let body_depth = tab_depth(header) + 1;
         let string_prefix = format!("local {param} = (\"");
-        let body = lines
-            .iter()
-            .skip(header_index.saturating_add(1))
-            .take_while(|line| tab_depth(line) >= body_depth);
+        let body =
+            lines.iter().skip(header_index + 1).take_while(|line| tab_depth(line) >= body_depth);
         for line in body {
             let is_body_level = tab_depth(line) == body_depth;
             assert!(

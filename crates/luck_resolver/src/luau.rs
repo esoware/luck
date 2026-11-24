@@ -68,11 +68,6 @@ impl Luau {
         &self.aliases
     }
 
-    /// # Errors
-    ///
-    /// Returns [`ResolveError::MissingPrefix`] when the require has no
-    /// relative or `@alias` prefix, and otherwise why its path names no
-    /// module, or more than one, the requiring module included.
     pub(crate) fn resolve(
         &self,
         cache: &Cache<impl FileSystem>,
@@ -92,22 +87,16 @@ impl Luau {
         // ambiguous one fails every require it makes with a valid prefix.
         self.probe(cache, &requiring_module)?;
         let parent = requiring_module.parent().unwrap_or_else(|| Path::new("."));
-        alias_path.map_or_else(
-            || {
-                let path = self.navigate(cache, parent, &require_path)?;
-                Ok(Resolution { path, is_self_alias_shadowed: false })
-            },
-            |alias| self.resolve_alias(cache, alias, parent, &requiring_module),
-        )
+        if let Some(alias) = alias_path {
+            return self.resolve_alias(cache, alias, parent, &requiring_module);
+        }
+        let path = self.navigate(cache, parent, &require_path)?;
+        Ok(Resolution { path, is_self_alias_shadowed: false })
     }
 
     /// Resolves `@alias` or `@alias/sub/path`, given without its `@`.
     /// `lookup_directory` is the requiring module's parent, where the search
     /// for `.luaurc` files starts.
-    ///
-    /// # Errors
-    ///
-    /// Returns why the alias or the module names no module, or more than one.
     fn resolve_alias(
         &self,
         cache: &Cache<impl FileSystem>,
@@ -133,11 +122,6 @@ impl Luau {
 
     /// Follows `alias_name` through any aliases of aliases to the directory
     /// the chain ends at, with `sub_path` preceded by what the chain added.
-    ///
-    /// # Errors
-    ///
-    /// Returns why an alias in the chain is missing, or that the chain is a
-    /// cycle.
     fn follow_alias(
         &self,
         cache: &Cache<impl FileSystem>,
@@ -185,11 +169,6 @@ impl Luau {
     /// `@self` walks down from the requiring module itself, so `@self/x` is
     /// `dir/x` from `dir/init.luau` and `main/x` from `main.luau`, never a
     /// sibling. A `.luaurc` alias named `self` can't override it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ResolveError::BareSelfAlias`] on a bare `@self`, and
-    /// otherwise why the path names no module, or more than one.
     fn resolve_self(
         &self,
         cache: &Cache<impl FileSystem>,
@@ -207,11 +186,6 @@ impl Luau {
     /// Walks `/`-separated `sub_path` from `start` to the module it ends at,
     /// and returns that module's canonical path. Empty and `.` components are
     /// skipped, and `..` leaves the current directory unchecked, as in Luau.
-    ///
-    /// # Errors
-    ///
-    /// Returns why a component is missing or ambiguous, or the path ends at
-    /// no module.
     fn navigate(
         &self,
         cache: &Cache<impl FileSystem>,
@@ -250,7 +224,11 @@ impl Luau {
                 }
             }
         }
-        match probed_position.map_or_else(|| self.probe(cache, &position), Ok)? {
+        let probed = match probed_position {
+            Some(probed) => probed,
+            None => self.probe(cache, &position)?,
+        };
+        match probed {
             Probed::Module(found) => Ok(cache.canonical_file(&found)),
             Probed::Directory | Probed::Missing => Err(not_found(start, sub_path)),
         }
@@ -258,10 +236,6 @@ impl Luau {
 
     /// What `module_path`, a path with no extension, names: a `.luau` or
     /// `.lua` file, a directory with or without an `init` file, or nothing.
-    ///
-    /// # Errors
-    ///
-    /// Returns which of those conflict when more than one exists.
     fn probe(
         &self,
         cache: &Cache<impl FileSystem>,
@@ -320,10 +294,6 @@ fn not_found(start: &Path, sub_path: &str) -> ResolveError {
 
 /// The one of the files `with_extension` makes of `.luau` and `.lua` that
 /// exists.
-///
-/// # Errors
-///
-/// Returns [`ResolveError::BothExtensions`] when both do.
 fn existing_one(
     files: ExtensionFiles,
     with_extension: impl Fn(&str) -> PathBuf,

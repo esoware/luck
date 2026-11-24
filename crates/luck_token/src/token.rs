@@ -1,4 +1,4 @@
-use core::fmt;
+use std::fmt;
 
 use crate::{LuaVersion, Span};
 
@@ -124,7 +124,10 @@ impl fmt::Display for TokenKind {
             Self::InterpolatedStringEnd => "interpolated string end",
             Self::InterpolatedStringSimple => "interpolated string",
             Self::Eof => "end of file",
-            fixed => return write!(f, "`{}`", fixed.static_text().unwrap_or_default()),
+            fixed => {
+                let text = fixed.static_text().expect("every other kind has a fixed spelling");
+                return write!(f, "`{text}`");
+            }
         })
     }
 }
@@ -133,7 +136,6 @@ impl TokenKind {
     /// The exact source spelling, or `None` for a kind whose text varies and
     /// for `Eof`, which has none.
     #[inline]
-    #[must_use]
     pub const fn static_text(self) -> Option<&'static str> {
         Some(match self {
             Self::Identifier
@@ -226,10 +228,9 @@ impl TokenKind {
     /// lexer reads it, or `None` when it's an identifier there, as `goto` is
     /// on 5.1 and Luau and `type` is outside Luau.
     #[inline]
-    #[must_use]
     pub fn keyword(text: &str, version: LuaVersion) -> Option<Self> {
         let packed = pack_keyword_candidate(text.as_bytes())?;
-        let &(keyword, kind) = KEYWORDS.get(keyword_slot(packed))?;
+        let (keyword, kind) = KEYWORDS[keyword_slot(packed)];
         (keyword == packed && kind.is_keyword_in(version)).then_some(kind)
     }
 
@@ -237,7 +238,6 @@ impl TokenKind {
     /// `version`: a keyword, or Lua 5.5's `global`, which builds without
     /// `LUA_COMPAT_GLOBAL` reserve. Every other contextual keyword is a name
     /// wherever a name goes.
-    #[must_use]
     pub fn is_reserved(text: &str, version: LuaVersion) -> bool {
         Self::keyword(text, version).is_some_and(|kind| !kind.is_name() || kind == Self::Global)
     }
@@ -245,7 +245,6 @@ impl TokenKind {
     /// Whether the parser reads this kind as a name where one goes: an
     /// identifier, or a contextual keyword.
     #[inline]
-    #[must_use]
     pub const fn is_name(self) -> bool {
         match self {
             Self::Identifier
@@ -431,7 +430,6 @@ impl TokenKind {
     /// then ASCII letters, digits, and `_`. Keywords are spelled that way too,
     /// so a name check pairs this with a keyword check such as
     /// [`Self::is_reserved`].
-    #[must_use]
     pub fn is_identifier_shaped(text: &str) -> bool {
         let mut bytes = text.bytes();
         bytes.next().is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
@@ -483,7 +481,6 @@ static KEYWORDS: [(u64, TokenKind); 64] = {
     let mut table = [(0, TokenKind::Identifier); 64];
     let mut i = 0;
     while i < KEYWORD_KINDS.len() {
-        #[expect(clippy::indexing_slicing, reason = "const evaluation checks every index")]
         let kind = KEYWORD_KINDS[i];
         let Some(spelling) = kind.static_text() else {
             panic!("a keyword has a fixed spelling");
@@ -491,10 +488,8 @@ static KEYWORDS: [(u64, TokenKind); 64] = {
         let mut padded = [0; 8];
         let (head, _) = padded.split_at_mut(spelling.len());
         head.copy_from_slice(spelling.as_bytes());
-        #[expect(clippy::little_endian_bytes, reason = "the packing is little-endian by design")]
         let packed = u64::from_le_bytes(padded);
         let slot = keyword_slot(packed);
-        #[expect(clippy::indexing_slicing, reason = "const evaluation checks every index")]
         let entry = &mut table[slot];
         assert!(entry.0 == 0, "two keywords hash to one slot");
         *entry = (packed, kind);
@@ -504,7 +499,6 @@ static KEYWORDS: [(u64, TokenKind); 64] = {
 };
 
 #[inline]
-#[expect(clippy::as_conversions, reason = "the shift leaves 6 bits, which fit any usize")]
 const fn keyword_slot(packed: u64) -> usize {
     (packed.wrapping_mul(KEYWORD_HASH_MULTIPLIER) >> 58) as usize
 }
@@ -515,20 +509,16 @@ const fn keyword_slot(packed: u64) -> usize {
 /// Two overlapping loads cover any length from 2 to 8, and the bytes they
 /// share are the same, so OR-ing them rebuilds the spelling.
 #[inline]
-#[expect(clippy::little_endian_bytes, reason = "the packing is little-endian by design")]
 fn pack_keyword_candidate(bytes: &[u8]) -> Option<u64> {
-    let overlap_shift = |length: usize, load_width: usize| {
-        u32::try_from(length.wrapping_sub(load_width).wrapping_mul(8)).unwrap_or_default()
-    };
     let length = bytes.len();
     if length < 4 {
         let first = u64::from(u16::from_le_bytes(*bytes.first_chunk()?));
         let last = u64::from(u16::from_le_bytes(*bytes.last_chunk()?));
-        Some(first | last.wrapping_shl(overlap_shift(length, 2)))
+        Some(first | (last << ((length - 2) * 8)))
     } else if length <= 8 {
         let first = u64::from(u32::from_le_bytes(*bytes.first_chunk()?));
         let last = u64::from(u32::from_le_bytes(*bytes.last_chunk()?));
-        Some(first | last.wrapping_shl(overlap_shift(length, 4)))
+        Some(first | (last << ((length - 4) * 8)))
     } else {
         None
     }
@@ -560,7 +550,6 @@ impl Token {
     /// for any other token its whole spelling, a string's quotes or long
     /// brackets included. Escapes stay as written.
     #[inline]
-    #[must_use]
     pub fn text(self, source: &[u8]) -> &[u8] {
         self.text_span().text(source)
     }
@@ -568,7 +557,6 @@ impl Token {
     /// Where [`Self::text`] lies: the whole token, or for an interpolated
     /// string piece, what lies between its delimiters.
     #[inline]
-    #[must_use]
     pub const fn text_span(self) -> Span {
         if matches!(
             self.kind,
@@ -578,9 +566,8 @@ impl Token {
                 | TokenKind::InterpolatedStringSimple
         ) {
             // Every delimiter is one byte, and only a closing one can be missing.
-            let start = self.span.start.saturating_add(1);
-            let end =
-                if self.is_unterminated { self.span.end } else { self.span.end.saturating_sub(1) };
+            let start = self.span.start + 1;
+            let end = if self.is_unterminated { self.span.end } else { self.span.end - 1 };
             Span::new(start, if end > start { end } else { start })
         } else {
             self.span
@@ -589,7 +576,6 @@ impl Token {
 
     /// How an error message names this token: its kind, followed by its text
     /// for a name, a contextual keyword included, or a numeral.
-    #[must_use]
     pub fn display(self, source: &[u8]) -> impl fmt::Display {
         TokenDisplay { kind: self.kind, text: self.text(source) }
     }

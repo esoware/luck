@@ -18,7 +18,7 @@
 
 use luck_ast::NameIndex;
 use luck_diagnostics::Diagnostic;
-use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
+use luck_token::{LuaVersion, Span};
 
 use crate::checker::{duplicate_label, goto_into_local_scope, unresolved_goto};
 use crate::id::{LabelId, NameId};
@@ -79,9 +79,7 @@ pub(super) struct Sink<'sink> {
 
 impl Sink<'_> {
     fn resolve(&mut self, index: Option<NameIndex>, label: LabelId) {
-        if let Some(entry) = self.scoping.label_mut(label) {
-            entry.is_used = true;
-        }
+        self.scoping.label_mut(label).is_used = true;
         self.scoping.set_role(index, NameRole::Label(label));
     }
 
@@ -121,17 +119,16 @@ impl Gotos {
     pub(super) fn close_block(&mut self, start: BlockStart, sink: &mut Sink<'_>) {
         let first_goto = self.block_pending;
         for open in self.labels.drain(self.block_labels..).rev() {
-            if let Some(heads) = self.heads.get_mut(open.name.index()) {
-                heads.label = open.shadowed;
-            }
+            self.heads[open.name.index()].label = open.shadowed;
         }
         self.block_labels = start.labels;
         self.block_pending = start.pending;
         let mut kept = first_goto;
         for i in first_goto..self.pending.len() {
-            let Some(&goto) = self.pending.get(i).filter(|goto| !goto.is_resolved) else {
+            let goto = self.pending[i];
+            if goto.is_resolved {
                 continue;
-            };
+            }
             let heads = self.heads_of(goto.name);
             if let Some(label) = self.label_from(heads, start.labels) {
                 // A label already seen takes it backward, into no variable's
@@ -141,14 +138,13 @@ impl Gotos {
             }
             let older = match goto.older {
                 // Each goto of its name before it in the block moved first.
-                Some(at) if offset_to_index(at) >= first_goto => heads.goto,
+                Some(at) if at as usize >= first_goto => heads.goto,
                 older => older,
             };
-            if let Some(slot) = self.pending.get_mut(kept) {
-                *slot = PendingGoto { active_vars: start.active_vars, older, ..goto };
-            }
-            self.set_heads(goto.name, Heads { goto: Some(index_to_offset(kept)), ..heads });
-            kept = kept.saturating_add(1);
+            self.pending[kept] = PendingGoto { active_vars: start.active_vars, older, ..goto };
+            let kept_at = u32::try_from(kept).expect("a chunk has fewer gotos than `u32::MAX`");
+            self.set_heads(goto.name, Heads { goto: Some(kept_at), ..heads });
+            kept += 1;
         }
         self.pending.truncate(kept);
     }
@@ -166,25 +162,23 @@ impl Gotos {
         let heads = self.heads_of(name);
         let visible_from =
             if version.has_label_shadowing() { self.block_labels } else { self.function_labels };
-        if let Some(mut first) = heads.label.filter(|&at| offset_to_index(at) >= visible_from) {
-            while let Some(shadowed) = self
-                .labels
-                .get(offset_to_index(first))
-                .and_then(|open| open.shadowed)
-                .filter(|&at| offset_to_index(at) >= visible_from)
+        if let Some(mut first) = heads.label.filter(|&at| at as usize >= visible_from) {
+            while let Some(shadowed) =
+                self.labels[first as usize].shadowed.filter(|&at| at as usize >= visible_from)
             {
                 first = shadowed;
             }
-            if let Some(open) = self.labels.get(offset_to_index(first)) {
-                let (span, first_span) =
-                    (sink.scoping.label(label).span, sink.scoping.label(open.label).span);
-                sink.report(|text| duplicate_label(span, text, first_span), name);
-            }
+            let open = &self.labels[first as usize];
+            let (span, first_span) =
+                (sink.scoping.label(label).span, sink.scoping.label(open.label).span);
+            sink.report(|text| duplicate_label(span, text, first_span), name);
         }
         self.take_pending(name, self.block_pending, label, active_vars, sink);
         // A second label of the name in one block leaves the first visible.
         if self.label_from(heads, self.block_labels).is_none() {
-            let at = Some(index_to_offset(self.labels.len()));
+            let at = Some(
+                u32::try_from(self.labels.len()).expect("a chunk has fewer labels than `u32::MAX`"),
+            );
             self.labels.push(OpenLabel { name, label, shadowed: heads.label });
             self.set_heads(name, Heads { label: at, ..self.heads_of(name) });
         }
@@ -205,7 +199,9 @@ impl Gotos {
             sink.resolve(index, label);
             return;
         }
-        let at = Some(index_to_offset(self.pending.len()));
+        let at = Some(
+            u32::try_from(self.pending.len()).expect("a chunk has fewer gotos than `u32::MAX`"),
+        );
         self.pending.push(PendingGoto {
             name,
             index,
@@ -234,14 +230,12 @@ impl Gotos {
     pub(super) fn leave_function(&mut self, enclosing: FunctionStart, sink: &mut Sink<'_>) {
         let first_goto = self.block_pending;
         if sink.errors.is_some() {
-            for goto in self.pending.get(first_goto..).unwrap_or_default() {
+            for goto in &self.pending[first_goto..] {
                 sink.report(|text| unresolved_goto(goto.span, text), goto.name);
             }
         }
         for goto in self.pending.drain(first_goto..).rev() {
-            if let Some(heads) = self.heads.get_mut(goto.name.index()) {
-                heads.goto = goto.older;
-            }
+            self.heads[goto.name.index()].goto = goto.older;
         }
         self.block_labels = enclosing.block_labels;
         self.block_pending = enclosing.block_pending;
@@ -255,17 +249,15 @@ impl Gotos {
     fn set_heads(&mut self, name: NameId, heads: Heads) {
         let index = name.index();
         if self.heads.len() <= index {
-            self.heads.resize(index.saturating_add(1), Heads::default());
+            self.heads.resize(index + 1, Heads::default());
         }
-        if let Some(slot) = self.heads.get_mut(index) {
-            *slot = heads;
-        }
+        self.heads[index] = heads;
     }
 
     /// The innermost open label in `heads`, if it's at or after `from`.
     fn label_from(&self, heads: Heads, from: usize) -> Option<LabelId> {
-        let at = offset_to_index(heads.label?);
-        self.labels.get(at).filter(|_| at >= from).map(|open| open.label)
+        let at = heads.label? as usize;
+        (at >= from).then(|| self.labels[at].label)
     }
 
     /// Hands `label` every goto to `name` waiting at or after `from`, each
@@ -280,10 +272,8 @@ impl Gotos {
         sink: &mut Sink<'_>,
     ) {
         let mut next = self.heads_of(name).goto;
-        while let Some(at) = next.filter(|&at| offset_to_index(at) >= from) {
-            let Some(slot) = self.pending.get_mut(offset_to_index(at)) else {
-                break;
-            };
+        while let Some(at) = next.filter(|&at| at as usize >= from) {
+            let slot = &mut self.pending[at as usize];
             slot.is_resolved = true;
             let goto = *slot;
             if goto.active_vars < label_vars {

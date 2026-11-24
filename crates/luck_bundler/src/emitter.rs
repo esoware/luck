@@ -1,7 +1,7 @@
-use core::fmt::Write as _;
-use core::ops::Range;
-use core::{iter, mem};
+use std::fmt::Write as _;
+use std::ops::Range;
 use std::path::PathBuf;
+use std::{iter, mem};
 
 use luck_allocator::Allocator;
 use luck_ast::MAX_NESTING_DEPTH;
@@ -129,7 +129,7 @@ impl Key<'_> {
 }
 
 pub(crate) fn push_number(output: &mut String, number: usize) {
-    let _infallible = write!(output, "{number}");
+    let _ = write!(output, "{number}");
 }
 
 /// A statement that registers a module's function under another key.
@@ -183,9 +183,9 @@ impl Registration<'_> {
                 output.extend([prefix, "paths["]);
                 name.write(output);
                 output.push_str("]=");
-                let path = modules.get(module.0).map_or("", |info| info.relative_path.as_str());
+                let path = modules[module.0].relative_path.as_bytes();
                 let mut literal = Vec::new();
-                spell_string(path.as_bytes()).write_to(&mut literal);
+                spell_string(path).write_to(&mut literal);
                 output.push_str(&String::from_utf8_lossy(&literal));
                 output.push('\n');
             }
@@ -230,10 +230,7 @@ impl Wrapper {
     /// wrapper, measured as its parse counted it. Lowering an export to a
     /// field of the export table reads it one level deeper.
     pub(crate) fn may_overflow(self, module: &ModuleInfo<'_>) -> bool {
-        module
-            .nesting_depth
-            .saturating_add(self.levels())
-            .saturating_add(usize::from(module.exports.has_table()))
+        module.nesting_depth + self.levels() + usize::from(module.exports.has_table())
             > MAX_NESTING_DEPTH
     }
 }
@@ -246,14 +243,13 @@ impl<'ast> Plan<'ast> {
             loader: LoaderShape {
                 version,
                 is_loader_global: modules.iter().any(|module| {
-                    module.max_function_upvalues.saturating_add(LOADER_UPVALUES)
-                        > version.max_upvalues()
+                    module.max_function_upvalues + LOADER_UPVALUES > version.max_upvalues()
                 }),
                 has_dynamic_entry: modules.iter().any(|module| !module.dynamic_callees.is_empty()),
                 has_export_runtime: modules.iter().any(|module| module.exports.has_values),
             },
             slots: None,
-            items: Vec::with_capacity(modules.len().saturating_mul(2)),
+            items: Vec::with_capacity(modules.len() * 2),
         };
         if version.is_luau() {
             plan.push_luau_modules(graph, version);
@@ -274,10 +270,10 @@ impl<'ast> Plan<'ast> {
     /// The key of the module `dependency` loads. `None` when its file has no
     /// slot, which leaves the call as written.
     pub(crate) fn key(&self, dependency: &Dependency<'ast>) -> Option<Key<'ast>> {
-        self.slots.as_ref().map_or_else(
-            || Some(Key::Name(dependency.require_string)),
-            |slots| slots.get(dependency.target.0).copied().flatten().map(Key::Slot),
-        )
+        match &self.slots {
+            Some(slots) => slots[dependency.target.0].map(Key::Slot),
+            None => Some(Key::Name(dependency.require_string)),
+        }
     }
 
     fn push_module(
@@ -296,10 +292,8 @@ impl<'ast> Plan<'ast> {
     /// the entry when something requires it.
     fn push_luau_modules(&mut self, graph: &DependencyGraph<'ast>, version: LuaVersion) {
         let mut slots: Vec<Option<usize>> = vec![None; graph.modules.len()];
-        for (slot, (id, _)) in (1usize..).zip(non_entry_modules(graph)) {
-            if let Some(module_slot) = slots.get_mut(id.0) {
-                *module_slot = Some(slot);
-            }
+        for (slot, (id, _)) in (1..).zip(non_entry_modules(graph)) {
+            slots[id.0] = Some(slot);
         }
         let is_entry_required = graph
             .modules
@@ -308,12 +302,10 @@ impl<'ast> Plan<'ast> {
             .any(|dependency| dependency.target == graph.entry_id);
         // The slot after every other module's.
         let entry_slot = is_entry_required.then_some(graph.modules.len());
-        if let Some(entry_module_slot) = slots.get_mut(graph.entry_id.0) {
-            *entry_module_slot = entry_slot;
-        }
+        slots[graph.entry_id.0] = entry_slot;
         self.slots = Some(slots);
 
-        for (slot, (id, module)) in (1usize..).zip(non_entry_modules(graph)) {
+        for (slot, (id, module)) in (1..).zip(non_entry_modules(graph)) {
             let key = Key::Slot(slot);
             self.push_module(id, module, version, Some(key), Binding::Slot(key));
             if module.exports.has_values {
@@ -321,9 +313,7 @@ impl<'ast> Plan<'ast> {
             }
         }
 
-        let Some(entry) = graph.modules.get(graph.entry_id.0) else {
-            return;
-        };
+        let entry = &graph.modules[graph.entry_id.0];
         self.push_module(graph.entry_id, entry, version, None, Binding::Entry);
         if let Some(slot) = entry_slot {
             let exporting_slot = entry.exports.has_values.then_some(slot);
@@ -339,23 +329,16 @@ impl<'ast> Plan<'ast> {
     fn push_lua_modules(&mut self, graph: &DependencyGraph<'ast>, version: LuaVersion) {
         let mut seen_strings: FxHashSet<&str> = FxHashSet::default();
         let mut strings_by_module: Vec<Vec<&'ast str>> = vec![Vec::new(); graph.modules.len()];
-        let ordered_dependencies = graph
-            .topological_order
-            .iter()
-            .filter_map(|id| graph.modules.get(id.0))
-            .flat_map(|module| &module.dependencies);
+        let ordered_dependencies =
+            graph.topological_order.iter().flat_map(|id| &graph.modules[id.0].dependencies);
         for dependency in ordered_dependencies {
-            if seen_strings.insert(dependency.require_string)
-                && let Some(strings) = strings_by_module.get_mut(dependency.target.0)
-            {
-                strings.push(dependency.require_string);
+            if seen_strings.insert(dependency.require_string) {
+                strings_by_module[dependency.target.0].push(dependency.require_string);
             }
         }
 
         for (id, module) in non_entry_modules(graph) {
-            let Some((&primary, aliases)) =
-                strings_by_module.get(id.0).and_then(|strings| strings.split_first())
-            else {
+            let Some((&primary, aliases)) = strings_by_module[id.0].split_first() else {
                 continue;
             };
             let first = Key::Name(primary);
@@ -364,15 +347,13 @@ impl<'ast> Plan<'ast> {
                 let registration = Registration::Alias { alias: Key::Name(alias), primary: first };
                 self.items.push(Item::Registration(registration));
             }
-            self.push_path_registrations(id, strings_by_module.get(id.0), version);
+            self.push_path_registrations(id, &strings_by_module[id.0], version);
         }
 
-        let Some(entry) = graph.modules.get(graph.entry_id.0) else {
-            return;
-        };
+        let entry = &graph.modules[graph.entry_id.0];
         self.push_module(graph.entry_id, entry, version, None, Binding::Entry);
-        let entry_strings = strings_by_module.get(graph.entry_id.0);
-        for &string in entry_strings.into_iter().flatten() {
+        let entry_strings = &strings_by_module[graph.entry_id.0];
+        for &string in entry_strings {
             let registration = Registration::Entry { key: Key::Name(string), exporting_slot: None };
             self.items.push(Item::Registration(registration));
         }
@@ -382,13 +363,13 @@ impl<'ast> Plan<'ast> {
     fn push_path_registrations(
         &mut self,
         module: ModuleId,
-        strings: Option<&Vec<&'ast str>>,
+        strings: &[&'ast str],
         version: LuaVersion,
     ) {
         if !version.has_require_filepath_arg() {
             return;
         }
-        for &string in strings.into_iter().flatten() {
+        for &string in strings {
             let registration = Registration::Path { name: Key::Name(string), module };
             self.items.push(Item::Registration(registration));
         }
@@ -418,9 +399,8 @@ fn module_edits<'ast>(
     version: LuaVersion,
 ) -> Vec<(Span, Edit<'ast>)> {
     let source = module.source;
-    let mut edits: Vec<(Span, Edit<'ast>)> = Vec::with_capacity(
-        module.dependencies.len().saturating_add(module.dynamic_callees.len()).saturating_add(1),
-    );
+    let mut edits: Vec<(Span, Edit<'ast>)> =
+        Vec::with_capacity(module.dependencies.len() + module.dynamic_callees.len() + 1);
     edits.extend(module.dependencies.iter().filter_map(|dependency| {
         let call = dependency.call_span.text(source);
         if call.is_empty() {
@@ -458,29 +438,18 @@ fn module_edits<'ast>(
 /// A shebang is only valid on a chunk's first line, so the entry's moves to
 /// the bundle's first line, which keeps the bundle runnable as a script, and
 /// every other module's is dropped.
-///
-/// # Errors
-///
-/// Returns an E013 for each construct a wrapper would nest past
-/// [`MAX_NESTING_DEPTH`], at its place in its module's source, since luck
-/// couldn't read that bundle back. Measuring one rewrites its module's tree,
-/// whose new nodes go in `allocator`.
 pub(crate) fn emit<'ast>(
     allocator: &'ast Allocator,
     graph: &mut DependencyGraph<'ast>,
     version: LuaVersion,
 ) -> Result<(Vec<u8>, Vec<LineMapEntry>), Vec<FileDiagnostics>> {
-    let Some(entry) = graph.modules.get(graph.entry_id.0) else {
-        return Ok((Vec::new(), Vec::new()));
-    };
-
+    let entry = &graph.modules[graph.entry_id.0];
     if graph.modules.len() == 1 && entry.dependencies.is_empty() {
         let line_map = vec![LineMapEntry {
             bundle_start_line: 1,
             // A final line break closes its line rather than opening an empty one.
-            bundle_end_line: line_breaks(entry.source, version)
-                .count()
-                .saturating_add(usize::from(!ends_with_line_break(entry.source, version))),
+            bundle_end_line: line_breaks(entry.source, version).count()
+                + usize::from(!ends_with_line_break(entry.source, version)),
             path: entry.path.clone(),
         }];
         return Ok((entry.source.to_owned(), line_map));
@@ -490,19 +459,13 @@ pub(crate) fn emit<'ast>(
     // Taken before measuring a module rewrites its tree.
     let edits: Vec<Vec<(Span, Edit<'ast>)>> = plan
         .wrapped_modules()
-        .map(|wrapped| {
-            graph
-                .modules
-                .get(wrapped.id.0)
-                .map_or_else(Vec::new, |module| module_edits(module, &plan, version))
-        })
+        .map(|wrapped| module_edits(&graph.modules[wrapped.id.0], &plan, version))
         .collect();
     let names = LoaderNames::new(allocator, &plan.prefix);
     let mut errors = Vec::new();
     for wrapped in plan.wrapped_modules() {
-        if let Some(module) = graph.modules.get_mut(wrapped.id.0)
-            && wrapped.wrapper.may_overflow(module)
-        {
+        let module = &mut graph.modules[wrapped.id.0];
+        if wrapped.wrapper.may_overflow(module) {
             let mut block = module.block.take();
             rewrite_module(allocator, &mut block, module, &plan, &names, version);
             errors.extend(overflow_errors(&block, module, wrapped.wrapper));
@@ -514,12 +477,7 @@ pub(crate) fn emit<'ast>(
     }
 
     // The sources plus rough room for each module's wrapper and the loader.
-    let capacity = graph
-        .modules
-        .iter()
-        .map(|module| module.source.len().saturating_add(96))
-        .sum::<usize>()
-        .saturating_add(512);
+    let capacity = graph.modules.iter().map(|module| module.source.len() + 96).sum::<usize>() + 512;
     let writer = write(graph, &plan, version, capacity, Bodies::Spliced(edits));
     Ok((writer.output, writer.line_map))
 }
@@ -536,7 +494,7 @@ pub(crate) fn skeleton(
     plan: &Plan<'_>,
     version: LuaVersion,
 ) -> Vec<u8> {
-    let capacity = graph.modules.len().saturating_mul(128).saturating_add(4096);
+    let capacity = graph.modules.len() * 128 + 4096;
     write(graph, plan, version, capacity, Bodies::Holes).output
 }
 
@@ -564,9 +522,8 @@ fn write<'plan, 'ast>(
     };
     let prefix = plan.prefix.as_str();
 
-    if let Some(entry) = graph.modules.get(graph.entry_id.0) {
-        writer.push(&chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied()));
-    }
+    let entry = &graph.modules[graph.entry_id.0];
+    writer.push(&chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied()));
 
     writer.generate(|output| write_prelude(prefix, plan.loader, output));
 
@@ -577,10 +534,10 @@ fn write<'plan, 'ast>(
     for item in &plan.items {
         match item {
             Item::Module(wrapped) => {
-                let module_edits = spliced.as_mut().map(|edits| edits.next().unwrap_or_default());
-                if let Some(module) = graph.modules.get(wrapped.id.0) {
-                    writer.push_wrapped(wrapped, module, module_edits);
-                }
+                let module_edits = spliced
+                    .as_mut()
+                    .map(|edits| edits.next().expect("each wrapped module has its edits"));
+                writer.push_wrapped(wrapped, &graph.modules[wrapped.id.0], module_edits);
             }
             Item::Registration(registration) => {
                 writer.generate(|output| registration.write(prefix, &graph.modules, output));
@@ -608,7 +565,7 @@ struct BundleWriter<'plan, 'ast> {
 impl BundleWriter<'_, '_> {
     fn push(&mut self, fragment: &[u8]) {
         self.output.extend_from_slice(fragment);
-        self.next_line = self.next_line.saturating_add(line_breaks(fragment, self.version).count());
+        self.next_line += line_breaks(fragment, self.version).count();
     }
 
     /// Writes generated text with `write`, counting its line breaks.
@@ -656,7 +613,7 @@ impl BundleWriter<'_, '_> {
         let mut cursor = chunk_start(source, self.version);
         // A lone CR opening the body would join the generated LF above it into
         // one LFCR line break, losing the body's first line.
-        let body = source.get(cursor..).unwrap_or_default();
+        let body = &source[cursor..];
         if self.version.has_lfcr_line_break()
             && body.starts_with(b"\r")
             && !body.starts_with(b"\r\n")
@@ -665,11 +622,11 @@ impl BundleWriter<'_, '_> {
         }
         for (span, edit) in edits {
             let range = Range::<usize>::from(*span);
-            self.push(source.get(cursor..range.start).unwrap_or_default());
+            self.push(&source[cursor..range.start]);
             self.push_edit(edit);
             cursor = range.end;
         }
-        self.push(source.get(cursor..).unwrap_or_default());
+        self.push(&source[cursor..]);
 
         if module.exports.has_values {
             if self.output.len() == body_start || !ends_with_line_break(&self.output, self.version)
@@ -685,7 +642,7 @@ impl BundleWriter<'_, '_> {
 
         self.line_map.push(LineMapEntry {
             bundle_start_line: first_line,
-            bundle_end_line: self.next_line.saturating_sub(1),
+            bundle_end_line: self.next_line - 1,
             path: module.path.clone(),
         });
     }
@@ -719,7 +676,7 @@ fn write_provenance(label: Key<'_>, relative_path: &str, output: &mut String) {
     while let Some(at) = rest.find(['\n', '\r']) {
         let (before, after) = rest.split_at(at);
         output.extend([before, if after.starts_with('\n') { "\\n" } else { "\\r" }]);
-        rest = after.get(1..).unwrap_or_default();
+        rest = &after[1..];
     }
     output.extend([rest, "\n"]);
 }
@@ -775,18 +732,18 @@ fn non_entry_modules<'graph, 'ast>(
         .topological_order
         .iter()
         .filter(|id| **id != graph.entry_id)
-        .filter_map(|id| graph.modules.get(id.0).map(|module| (*id, module)))
+        .map(|id| (*id, &graph.modules[id.0]))
 }
 
 /// The first of `__luck_`, `__luck1_`, `__luck2_`, and so on that no module's
 /// source holds.
 fn choose_prefix(modules: &[ModuleInfo<'_>]) -> String {
     let mut candidate = format!("{PREFIX_STEM}_");
-    let mut counter = 0usize;
+    let mut counter = 0;
     while modules.iter().any(|module| {
         module.has_prefix_stem && memmem::find(module.source, candidate.as_bytes()).is_some()
     }) {
-        counter = counter.saturating_add(1);
+        counter += 1;
         candidate = format!("{PREFIX_STEM}{counter}_");
     }
     candidate
@@ -936,7 +893,7 @@ print(utils)
         let mut modules = Vec::new();
         let mut entry_source = String::new();
         let mut resolutions: Vec<(String, String)> = Vec::new();
-        for i in 0..500usize {
+        for i in 0..500 {
             modules.push(module(
                 &allocator,
                 &format!("src/mod_{i}.lua"),
@@ -944,7 +901,7 @@ print(utils)
                 &[],
                 LuaVersion::Lua54,
             ));
-            let _unused = writeln!(entry_source, "require(\"mod_{i}\")");
+            let _ = writeln!(entry_source, "require(\"mod_{i}\")");
             resolutions.push((format!("mod_{i}"), format!("src/mod_{i}.lua")));
         }
         let borrowed_resolutions: Vec<(&str, &str)> = resolutions

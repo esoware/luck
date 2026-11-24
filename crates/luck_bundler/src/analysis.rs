@@ -174,7 +174,7 @@ const fn counts_upvalues(version: LuaVersion) -> bool {
 /// compiler counts it.
 fn max_function_upvalues(tree: &Scoping) -> usize {
     let mut captures: FxHashSet<(SymbolId, ScopeId)> = FxHashSet::default();
-    let mut counts = vec![0usize; tree.scopes().len()];
+    let mut counts = vec![0; tree.scopes().len()];
     for reference in tree.references() {
         let Some(symbol) = reference.resolved else {
             continue;
@@ -183,11 +183,8 @@ fn max_function_upvalues(tree: &Scoping) -> usize {
         let mut function = tree.scope(reference.scope).function;
         while function != home {
             let scope = tree.scope(function);
-            if scope.kind == ScopeKind::Function
-                && captures.insert((symbol, function))
-                && let Some(count) = counts.get_mut(function.index())
-            {
-                *count = count.saturating_add(1);
+            if scope.kind == ScopeKind::Function && captures.insert((symbol, function)) {
+                counts[function.index()] += 1;
             }
             let Some(parent) = scope.parent else {
                 break;

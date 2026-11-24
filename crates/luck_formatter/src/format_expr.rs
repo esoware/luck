@@ -6,9 +6,8 @@
 //! operator expression, or where a comment sits in them. Others come off,
 //! as `StyLua`'s do.
 
-use core::iter;
+use std::iter;
 
-use luck_allocator::ThinBytes;
 use luck_ast::{
     BinaryOp, Expression, FunctionDef, GetSpan as _, IfExpression, IntegerLiteral,
     InterpolatedString, NumberLiteral, Slot, StringLiteral, Suffix, SuffixedExpression, UnaryOp,
@@ -227,31 +226,27 @@ impl<'ast> Formatter<'ast> {
     /// spells its value, with a zero on the bare side of a point, normalized
     /// either way.
     fn write_number(&mut self, literal: &NumberLiteral<'ast>) {
-        let text = literal.raw.map_or_else(
-            || {
-                let spelling = spell_number(literal.value, self.version());
-                let (buffer, allocator) = self.scratch();
-                buffer.extend_from_slice(spelling.as_str().as_bytes());
-                if buffer.ends_with(b".") {
-                    buffer.push(b'0');
-                }
-                &*allocator.alloc_slice_copy(buffer)
-            },
-            |raw| raw.as_bytes(),
-        );
+        let text = if let Some(raw) = literal.raw {
+            raw.as_bytes()
+        } else {
+            let spelling = spell_number(literal.value, self.version());
+            let (buffer, allocator) = self.scratch();
+            buffer.extend_from_slice(spelling.as_str().as_bytes());
+            if buffer.ends_with(b".") {
+                buffer.push(b'0');
+            }
+            &*allocator.alloc_slice_copy(buffer)
+        };
         self.write_numeral(text);
     }
 
     /// Luau: an integer, as [`Self::write_number`] writes a number.
     fn write_integer(&mut self, literal: &IntegerLiteral<'ast>) {
-        let text = literal.raw.map_or_else(
-            || {
-                &*self
-                    .allocator()
-                    .alloc_slice_copy(spell_integer(literal.value).as_str().as_bytes())
-            },
-            |raw| raw.as_bytes(),
-        );
+        let text = if let Some(raw) = literal.raw {
+            raw.as_bytes()
+        } else {
+            &*self.allocator().alloc_slice_copy(spell_integer(literal.value).as_str().as_bytes())
+        };
         self.write_numeral(text);
     }
 
@@ -293,14 +288,13 @@ impl<'ast> Formatter<'ast> {
     /// Luau: a piece of an interpolated string, as written or escaped from
     /// its value.
     fn write_interpolated_text(&mut self, text: &StringLiteral<'ast>) {
-        let spelling = text.raw.map_or_else(
-            || {
-                let (buffer, allocator) = self.scratch();
-                write_interpolated_text(&text.value, buffer);
-                allocator.alloc_slice_copy(buffer)
-            },
-            ThinBytes::as_bytes,
-        );
+        let spelling = if let Some(raw) = text.raw {
+            raw.as_bytes()
+        } else {
+            let (buffer, allocator) = self.scratch();
+            write_interpolated_text(&text.value, buffer);
+            &*allocator.alloc_slice_copy(buffer)
+        };
         if !spelling.is_empty() {
             self.text(spelling);
         }

@@ -18,7 +18,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn ty_named(&self, name: &str) -> Type<'ast> {
         Type::Name(self.boxed(self.name(name)))
     }
@@ -26,7 +25,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `module` or `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn ty_qualified(&self, module: &str, name: &str) -> Type<'ast> {
         Type::new_named(
             self.next_span(),
@@ -40,7 +38,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn ty_generic<Args>(&self, name: &str, args: Args) -> Type<'ast>
     where
         Args: IntoIterator<Item = Type<'ast>>,
@@ -55,7 +52,6 @@ impl<'ast> Synth<'ast> {
         )
     }
 
-    #[must_use]
     pub fn ty_typeof(&self, expr: Expression<'ast>) -> Type<'ast> {
         Type::new_typeof(self.next_span(), expr, self.allocator)
     }
@@ -85,17 +81,15 @@ impl<'ast> Synth<'ast> {
     }
 
     /// An optional `inner` takes one more `?` instead of a wrapper.
-    #[must_use]
     pub fn ty_optional(&self, inner: Type<'ast>) -> Type<'ast> {
         if let Type::Optional(mut optional) = inner {
-            optional.question_count = optional.question_count.saturating_add(1);
+            optional.question_count += 1;
             return Type::Optional(optional);
         }
         let ty = self.parenthesize_if_composite(inner);
         Type::new_optional(self.next_span(), ty, 1, self.allocator)
     }
 
-    #[must_use]
     pub fn ty_union<Types>(&self, types: Types) -> Type<'ast>
     where
         Types: IntoIterator<Item = Type<'ast>>,
@@ -107,7 +101,6 @@ impl<'ast> Synth<'ast> {
         Type::new_union(span, false, members, self.allocator)
     }
 
-    #[must_use]
     pub fn ty_intersection<Types>(&self, types: Types) -> Type<'ast>
     where
         Types: IntoIterator<Item = Type<'ast>>,
@@ -126,12 +119,10 @@ impl<'ast> Synth<'ast> {
         Type::new_intersection(span, false, members, self.allocator)
     }
 
-    #[must_use]
     pub fn ty_parenthesized(&self, inner: Type<'ast>) -> Type<'ast> {
         Type::new_parenthesized(self.next_span(), inner, self.allocator)
     }
 
-    #[must_use]
     pub fn ty_table_array(&self, element: Type<'ast>) -> Type<'ast> {
         self.ty_table([TypeFieldSpec::Array(element)])
     }
@@ -139,7 +130,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if a field's name isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn ty_record<'name, Fields>(&self, fields: Fields) -> Type<'ast>
     where
         Fields: IntoIterator<Item = (&'name str, Type<'ast>)>,
@@ -161,7 +151,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if a [`TypeFieldSpec::Named`] name isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn ty_table<'name, Fields>(&self, fields: Fields) -> Type<'ast>
     where
         Fields: IntoIterator<Item = TypeFieldSpec<'name, 'ast>>,
@@ -194,7 +183,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// For generics or named parameters, use [`Synth::ty_function_full`].
-    #[must_use]
     pub fn ty_function<Params>(&self, params: Params, return_type: Type<'ast>) -> Type<'ast>
     where
         Params: IntoIterator<Item = Type<'ast>>,
@@ -208,7 +196,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if a parameter's name isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn ty_function_full<'name, Params>(
         &self,
         generics: Option<GenericTypeList<'ast>>,
@@ -232,22 +219,18 @@ impl<'ast> Synth<'ast> {
         )
     }
 
-    #[must_use]
     pub fn ty_singleton_string(&self, content: &str) -> Type<'ast> {
         Type::StringLiteral(self.boxed(self.string_literal(content.as_bytes())))
     }
 
-    #[must_use]
     pub fn ty_singleton_bool(&self, value: bool) -> Type<'ast> {
         if value { Type::True(self.next_span()) } else { Type::False(self.next_span()) }
     }
 
-    #[must_use]
     pub fn ty_singleton_nil(&self) -> Type<'ast> {
         Type::Nil(self.next_span())
     }
 
-    #[must_use]
     pub fn ty_pack<Types>(&self, types: Types) -> Type<'ast>
     where
         Types: IntoIterator<Item = Type<'ast>>,
@@ -257,7 +240,6 @@ impl<'ast> Synth<'ast> {
         Type::new_pack(span, self.list(types), self.allocator)
     }
 
-    #[must_use]
     pub fn ty_variadic(&self, element: Type<'ast>) -> Type<'ast> {
         Type::new_variadic(self.next_span(), element, self.allocator)
     }
@@ -265,7 +247,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn ty_generic_pack(&self, name: &str) -> Type<'ast> {
         Type::new_generic_pack(self.next_span(), self.name(name), self.allocator)
     }
@@ -275,7 +256,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if a parameter's name isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn generic_type_list<'name, Params>(&self, params: Params) -> GenericTypeList<'ast>
     where
         Params: IntoIterator<Item = (&'name str, bool)>,

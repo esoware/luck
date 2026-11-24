@@ -1,5 +1,5 @@
-use core::iter;
-use core::mem::MaybeUninit;
+use std::iter;
+use std::mem::MaybeUninit;
 
 /// Bytes, as a Lua source is, so a printer copies a string or a comment that
 /// isn't UTF-8 as it was written.
@@ -12,21 +12,18 @@ impl CodeBuffer {
     /// The capacity is a hint: one the allocator can't meet is dropped, and
     /// the buffer grows as it's written.
     #[inline]
-    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         let mut bytes = Vec::new();
-        let _unused = bytes.try_reserve_exact(capacity);
+        let _ = bytes.try_reserve_exact(capacity);
         Self { bytes }
     }
 
     #[inline]
-    #[must_use]
     pub const fn len(&self) -> usize {
         self.bytes.len()
     }
 
     #[inline]
-    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
@@ -78,11 +75,11 @@ impl CodeBuffer {
                 1 => copy_overlapping::<1>(source, window),
                 0 => {}
             }
-            // SAFETY: The `count` bytes past `length` now hold `source`, so
-            // they're initialized, and they were spare capacity, so the sum
-            // can't wrap.
+            // SAFETY: The `count` bytes past `length` were spare capacity, so
+            // they're within it, and now hold `source`, so they're
+            // initialized.
             unsafe {
-                self.bytes.set_len(length.wrapping_add(count));
+                self.bytes.set_len(length + count);
             }
         } else {
             print_slow(&mut self.bytes, source);
@@ -100,7 +97,6 @@ impl CodeBuffer {
     }
 
     #[inline]
-    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -111,7 +107,6 @@ impl CodeBuffer {
     }
 
     #[inline]
-    #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }

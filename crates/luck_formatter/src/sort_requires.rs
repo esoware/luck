@@ -11,8 +11,8 @@
 //! second format reads, so it keeps the order the first one chose. It then moves each member's
 //! printed lines, so comments and trivia on a line move with it.
 
-use core::mem;
-use core::ops::Range;
+use std::mem;
+use std::ops::Range;
 
 use luck_ast::{Expression, FunctionArgs, Statement, Suffix};
 use rustc_hash::FxHashSet;
@@ -87,7 +87,7 @@ impl<'ast> RequireRun<'ast> {
             return;
         }
         let mut order: Vec<usize> = (0..members.len()).collect();
-        order.sort_by_key(|&i| members.get(i).map(|member| member.require.key));
+        order.sort_by_key(|&i| members[i].require.key);
         if order.iter().enumerate().all(|(position, &i)| position == i) {
             return;
         }

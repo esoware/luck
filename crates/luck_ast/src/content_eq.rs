@@ -14,7 +14,6 @@ use crate::one_or_more::OneOrMore;
 /// `luck_ast_tools` generates it for every type that derives `Ast`. Ported
 /// from `oxc_span`'s `ContentEq`.
 pub trait ContentEq {
-    #[must_use]
     fn content_eq(&self, other: &Self) -> bool;
 }
 

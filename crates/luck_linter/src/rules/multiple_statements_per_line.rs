@@ -33,7 +33,7 @@ impl Rule for MultipleStatementsPerLine {
             let lines = context.line_index();
             // `end` is exclusive, so step back one byte to stay on the line
             // where `previous` ends.
-            if lines.line(previous.end.saturating_sub(1)) == lines.line(next.start) {
+            if lines.line(previous.end - 1) == lines.line(next.start) {
                 context.diagnostic(
                     Finding::new(
                         "statement starts on the same line as the previous statement",

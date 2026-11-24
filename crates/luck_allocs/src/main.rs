@@ -38,11 +38,6 @@ const STAGES: [&str; 7] =
 
 /// The stages run on a thread with the stack every stage needs, as the CLI's
 /// do.
-///
-/// # Errors
-///
-/// Fails on an argument other than `rules`, or when the thread can't start
-/// or a snapshot can't be written.
 fn main() -> io::Result<()> {
     let is_rules = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
         [] => false,
@@ -61,9 +56,6 @@ fn main() -> io::Result<()> {
         .unwrap_or_else(|payload| panic::resume_unwind(payload))
 }
 
-/// # Errors
-///
-/// Fails when a snapshot can't be written or the thread pool can't start.
 fn run(is_rules: bool) -> io::Result<()> {
     let files = test_files();
 
@@ -99,10 +91,6 @@ fn run(is_rules: bool) -> io::Result<()> {
 /// Each one's output is dropped inside its measurement, except the parse,
 /// which the stages after it read. The minifier rewrites the tree, so it runs
 /// last.
-///
-/// # Panics
-///
-/// Panics when `file` doesn't parse cleanly.
 fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()] {
     HEAP.reset();
     let (source, target) = (file.source_text.as_slice(), file.target);

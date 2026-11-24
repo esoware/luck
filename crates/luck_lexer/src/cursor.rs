@@ -3,7 +3,7 @@
     reason = "the scans move a raw pointer without the bounds checks its invariant makes redundant"
 )]
 
-use core::{slice, str};
+use std::{slice, str};
 
 use luck_token::{LuaVersion, Span, strip_line_break};
 
@@ -37,7 +37,7 @@ impl<'source> Cursor<'source> {
 
     #[inline]
     pub(crate) fn position(&self) -> usize {
-        self.ptr.addr().wrapping_sub(self.source.as_ptr().addr())
+        self.ptr.addr() - self.source.as_ptr().addr()
     }
 
     #[inline]
@@ -76,20 +76,19 @@ impl<'source> Cursor<'source> {
 
     #[inline]
     pub(crate) fn rest(&self) -> &'source [u8] {
-        let length = self.end.addr().wrapping_sub(self.ptr.addr());
+        let length = self.end.addr() - self.ptr.addr();
         // SAFETY: The bytes from `ptr` to `end` are the end of the source.
         unsafe { slice::from_raw_parts(self.ptr, length) }
     }
 
     #[inline]
     pub(crate) fn text_since(&self, start: usize) -> &'source [u8] {
-        self.source.get(start..self.position()).unwrap_or_default()
+        &self.source[start..self.position()]
     }
 
     /// A plain cast, measured 2-3% faster per token than a checked one.
     #[inline]
     #[expect(
-        clippy::as_conversions,
         clippy::cast_possible_truncation,
         reason = "`Lexer::new` refuses a source over `u32::MAX` bytes, so a position fits a `u32`"
     )]
@@ -161,11 +160,11 @@ impl<'source> Cursor<'source> {
     /// yields one error that names it. `None` for a byte that begins no
     /// character, which the cursor is past.
     pub(crate) fn eat_rest_of_char(&mut self, start: usize) -> Option<char> {
-        let rest = self.source.get(start..).unwrap_or_default();
+        let rest = &self.source[start..];
         // No character takes more than 4 bytes.
         let window = rest.get(..4).unwrap_or(rest);
         let character = window.utf8_chunks().next()?.valid().chars().next()?;
-        self.advance_by(character.len_utf8().saturating_sub(1));
+        self.advance_by(character.len_utf8() - 1);
         Some(character)
     }
 
@@ -174,7 +173,7 @@ impl<'source> Cursor<'source> {
     pub(crate) fn is_at_line_end(&self, version: LuaVersion) -> bool {
         let rest = self.rest();
         let blank_length = rest.iter().take_while(|b| matches!(b, b' ' | b'\t')).count();
-        let after_blanks = rest.get(blank_length..).unwrap_or_default();
+        let after_blanks = &rest[blank_length..];
         after_blanks.is_empty() || strip_line_break(after_blanks, version).is_some()
     }
 }

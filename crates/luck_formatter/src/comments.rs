@@ -25,18 +25,18 @@
 //! ([`Comments::with_blank_before`]), since there's no source to find blank
 //! lines in. Only statements and blocks take synthetic comments.
 
-use alloc::collections::BTreeMap;
-use core::cell::Cell;
-use core::iter::once;
-use core::mem::take;
-use core::ops::Range;
+use std::cell::Cell;
+use std::collections::BTreeMap;
+use std::iter::once;
+use std::mem::take;
+use std::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_ast::SyntheticComment;
 use luck_parser::ParseResult;
 use luck_token::{
     Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, Token, TokenKind,
-    has_line_break, index_to_offset, line_breaks, offset_to_index, strip_line_break,
+    has_line_break, index_to_offset, line_breaks, strip_line_break,
 };
 use rustc_hash::FxHashSet;
 
@@ -88,7 +88,6 @@ pub(crate) struct CommentsCheckpoint {
 }
 
 impl<'ast> Comments<'ast> {
-    #[must_use]
     pub const fn none() -> Self {
         Self { store: Store::Empty, next_start: u32::MAX }
     }
@@ -141,7 +140,6 @@ impl<'ast> Comments<'ast> {
         Self { store: Store::Parsed(parsed), next_start }
     }
 
-    #[must_use]
     pub fn synthetic<Synthetic>(comments: Synthetic) -> Self
     where
         Synthetic: IntoIterator<Item = SyntheticComment<'ast>>,
@@ -196,7 +194,7 @@ impl<'ast> Comments<'ast> {
     /// code has none of.
     pub(crate) const fn token_and_comment_count(&self) -> usize {
         match &self.store {
-            Store::Parsed(parsed) => parsed.tokens.len().saturating_add(parsed.comments.len()),
+            Store::Parsed(parsed) => parsed.tokens.len() + parsed.comments.len(),
             Store::Synthetic { .. } | Store::Empty => 0,
         }
     }
@@ -317,7 +315,7 @@ impl<'ast> Comments<'ast> {
         };
         let all_comments = parsed.comments;
         let first_comment = all_comments.partition_point(|c| c.span.start < start);
-        let mut comments = all_comments.get(first_comment..).unwrap_or_default();
+        let mut comments = &all_comments[first_comment..];
         let mut gap_start = start;
         let tokens = parsed.tokens_in(start, end).map(|token| token.span);
         for next in tokens.chain(once(Span::new(end, end))) {
@@ -450,12 +448,11 @@ impl<'ast> Comments<'ast> {
 
 impl<'ast> Parsed<'ast> {
     fn pending(&self) -> &'ast [Comment] {
-        self.comments.get(self.printed_count..).unwrap_or_default()
+        &self.comments[self.printed_count..]
     }
 
     fn printed_end(&self) -> Option<u32> {
-        let last_index = self.printed_count.checked_sub(1)?;
-        self.comments.get(last_index).map(|c| c.span.end)
+        self.comments[..self.printed_count].last().map(|c| c.span.end)
     }
 
     /// Where the next `format off` region starts, past which no pass may take
@@ -488,7 +485,7 @@ impl<'ast> Parsed<'ast> {
         if pending.first().is_none_or(|c| c.span.start >= start) {
             return pending;
         }
-        pending.get(pending.partition_point(|c| c.span.start < start)..).unwrap_or_default()
+        &pending[pending.partition_point(|c| c.span.start < start)..]
     }
 
     /// The tokens from the first at or after `offset` on.
@@ -500,26 +497,22 @@ impl<'ast> Parsed<'ast> {
         let tokens = self.tokens;
         let is_before = |token: &Token| token.span.start < offset;
         let cursor = self.token_cursor.get().min(tokens.len());
-        let is_behind = cursor
-            .checked_sub(1)
-            .and_then(|last| tokens.get(last))
-            .is_some_and(|token| !is_before(token));
+        let is_behind = tokens[..cursor].last().is_some_and(|token| !is_before(token));
         let index = if is_behind {
-            tokens.get(..cursor).unwrap_or_default().partition_point(is_before)
+            tokens[..cursor].partition_point(is_before)
         } else {
             // Every token before `low` starts before `offset`, and the first
             // that doesn't is within `step` of it.
             let mut low = cursor;
-            let mut step = 1usize;
-            while tokens.get(low.saturating_add(step).saturating_sub(1)).is_some_and(is_before) {
-                low = low.saturating_add(step);
-                step = step.saturating_mul(2);
+            let mut step = 1;
+            while tokens.get(low + step - 1).is_some_and(is_before) {
+                low += step;
+                step *= 2;
             }
-            let window = tokens.get(low..low.saturating_add(step).min(tokens.len()));
-            low.saturating_add(window.unwrap_or_default().partition_point(is_before))
+            low + tokens[low..(low + step).min(tokens.len())].partition_point(is_before)
         };
         self.token_cursor.set(index);
-        tokens.get(index..).unwrap_or_default()
+        &tokens[index..]
     }
 
     /// The tokens that start in `start..end`, read lazily, since a check of a
@@ -568,15 +561,15 @@ impl<'ast> Parsed<'ast> {
                 is_reachable
             })
             .count();
-        pending.get(..before_count.saturating_add(after_count)).unwrap_or_default()
+        &pending[..before_count + after_count]
     }
 
     /// Takes the first `n` pending comments, which only
     /// [`Comments::take`] calls, since it keeps `next_start` up to date.
     fn take(&mut self, n: usize) -> &'ast [Comment] {
         let pending = self.pending();
-        self.printed_count = self.printed_count.saturating_add(n);
-        pending.get(..n).unwrap_or_default()
+        self.printed_count += n;
+        &pending[..n]
     }
 }
 
@@ -596,8 +589,8 @@ impl<'ast> Formatter<'ast> {
             let length = text
                 .iter()
                 .rposition(|b| !matches!(b, b'\r' | b' ' | b'\t'))
-                .map_or(0, |last| last.saturating_add(1));
-            return text.get(..length).unwrap_or_default();
+                .map_or(0, |last| last + 1);
+            return &text[..length];
         }
         // Only a block comment the lexer saw a line break in holds one.
         if comment.kind != CommentKind::MultiLineBlock || !text.contains(&b'\r') {
@@ -608,14 +601,13 @@ impl<'ast> Formatter<'ast> {
         for line_break in line_breaks(text, version) {
             // Luau reads a lone CR as a space, and one left before the LF
             // would make a CRLF of it.
-            let line = text.get(cursor..line_break.start).unwrap_or_default();
-            let length =
-                line.iter().rposition(|&b| b != b'\r').map_or(0, |last| last.saturating_add(1));
-            normalized.extend_from_slice(line.get(..length).unwrap_or_default());
+            let line = &text[cursor..line_break.start];
+            let length = line.iter().rposition(|&b| b != b'\r').map_or(0, |last| last + 1);
+            normalized.extend_from_slice(&line[..length]);
             normalized.push(b'\n');
             cursor = line_break.end;
         }
-        normalized.extend_from_slice(text.get(cursor..).unwrap_or_default());
+        normalized.extend_from_slice(&text[cursor..]);
         allocator.alloc_slice_copy(normalized)
     }
 
@@ -696,8 +688,8 @@ impl<'ast> Formatter<'ast> {
         };
         let source = parsed.source;
         let mut gap_start = end;
-        let mut in_place_count = 0usize;
-        let mut run_length = 0usize;
+        let mut in_place_count = 0;
+        let mut run_length = 0;
         let mut in_place_end = end;
         let mut has_separator = false;
         let mut is_line_ending = false;
@@ -716,7 +708,7 @@ impl<'ast> Formatter<'ast> {
                 break;
             }
             has_separator |= does_cross;
-            run_length = run_length.saturating_add(1);
+            run_length += 1;
             gap_start = comment.span.end;
             if ends_line(comment) {
                 is_line_ending = true;
@@ -1064,7 +1056,7 @@ fn ends_line(comment: &Comment) -> bool {
 /// Whether only whitespace comes before `offset` on its line, as `version`
 /// breaks lines.
 fn starts_line(source: &[u8], offset: u32, version: LuaVersion) -> bool {
-    let before = source.get(..offset_to_index(offset)).unwrap_or_default();
+    let before = &source[..offset as usize];
     let is_line_space = |b: &&u8| {
         matches!(b, b' ' | b'\t' | 0x0B | 0x0C) || (**b == b'\r' && !version.has_lfcr_line_break())
     };
@@ -1086,19 +1078,18 @@ fn region_ending_after(regions: &[Range<u32>], position: u32) -> Option<&Range<u
 /// `offset`'s line's start, when only spaces and tabs come before `offset` on
 /// it.
 pub(crate) fn own_line_start(source: &[u8], offset: u32) -> Option<u32> {
-    let i = offset_to_index(offset);
-    let before = source.get(..i).unwrap_or_default();
+    let i = offset as usize;
+    let before = &source[..i];
     let indent_length = before.iter().rev().take_while(|b| matches!(b, b' ' | b'\t')).count();
-    let line_start = i.saturating_sub(indent_length);
-    let is_line_start =
-        line_start == 0 || matches!(before.get(line_start.saturating_sub(1)), Some(b'\n' | b'\r'));
+    let line_start = i - indent_length;
+    let is_line_start = line_start == 0 || matches!(before[line_start - 1], b'\n' | b'\r');
     is_line_start.then(|| index_to_offset(line_start))
 }
 
 fn after_line_break(source: &[u8], offset: u32, version: LuaVersion) -> u32 {
-    let rest = source.get(offset_to_index(offset)..).unwrap_or_default();
+    let rest = &source[offset as usize..];
     let remaining = strip_line_break(rest, version).map_or(rest.len(), <[u8]>::len);
-    index_to_offset(source.len().saturating_sub(remaining))
+    index_to_offset(source.len() - remaining)
 }
 
 /// Synthetic text may leave out the `--` marker, so each line gets one when
@@ -1131,7 +1122,7 @@ fn is_long_comment(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use core::iter;
+    use std::iter;
 
     use super::*;
     use crate::FormatOptions;
@@ -1249,11 +1240,11 @@ local x = 1";
             panic!("a parsed store");
         };
         let end = index_to_offset(source.len());
-        for start_cursor in 0..=parsed.tokens.len().saturating_add(2) {
+        for start_cursor in 0..=parsed.tokens.len() + 2 {
             store.token_cursor.set(start_cursor);
             for offset in (0..=end).chain((0..=end).rev()) {
                 let first = parsed.tokens.partition_point(|token| token.span.start < offset);
-                let expected = parsed.tokens.get(first..).unwrap_or_default();
+                let expected = &parsed.tokens[first..];
                 assert_eq!(store.tokens_from(offset), expected, "{offset} from {start_cursor}");
             }
         }

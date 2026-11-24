@@ -1,4 +1,4 @@
-use core::{mem, ptr};
+use std::{mem, ptr};
 
 use luck_ast::{AstKind, Expression, is_multi_value};
 use luck_semantic::{
@@ -51,9 +51,8 @@ impl LocalFlow {
             for local in graph.locals() {
                 if let Ok(index) = tracked.binary_search_by_key(&local.name_span.start, |symbol| {
                     symbol.definition_span.start
-                }) && let Some(symbol) = tracked.get(index)
-                {
-                    flow.add_local(symbol, local, &mut walk, host);
+                }) {
+                    flow.add_local(tracked[index], local, &mut walk, host);
                 }
             }
         }
@@ -98,11 +97,11 @@ impl LocalFlow {
             walk.mark_next_uses(&uses, local);
             // The declaration's node runs on past it, so a use there comes
             // next.
-            let is_initializer_overwritten =
-                uses.iter().find(|used| used.node == local.node).map_or_else(
-                    || walk.is_overwritten_unread(graph.successors(local.node)),
-                    |next| !next.kind.is_read(),
-                );
+            let next_use = uses.iter().find(|used| used.node == local.node);
+            let is_initializer_overwritten = match next_use {
+                Some(next) => !next.kind.is_read(),
+                None => walk.is_overwritten_unread(graph.successors(local.node)),
+            };
             if !is_uninitialized && is_initializer_overwritten {
                 self.overwritten_values.push((symbol.id, symbol.definition_span));
             }
@@ -110,12 +109,11 @@ impl LocalFlow {
                 if !used.kind.is_write() {
                     continue;
                 }
-                let next_in_node =
-                    uses.get(i.saturating_add(1)).filter(|next| next.node == used.node);
-                let is_overwritten = next_in_node.map_or_else(
-                    || walk.is_overwritten_unread(graph.successors(used.node)),
-                    |next| !next.kind.is_read(),
-                );
+                let next_in_node = uses.get(i + 1).filter(|next| next.node == used.node);
+                let is_overwritten = match next_in_node {
+                    Some(next) => !next.kind.is_read(),
+                    None => walk.is_overwritten_unread(graph.successors(used.node)),
+                };
                 if is_overwritten {
                     self.overwritten_values.push((symbol.id, used.span));
                 }
@@ -197,16 +195,15 @@ impl NodeSet {
     }
 
     const fn clear(&mut self) {
-        self.current = self.current.saturating_add(1);
+        self.current += 1;
     }
 
     fn insert(&mut self, node: usize) -> bool {
-        let current = self.current;
-        self.stamps.get_mut(node).is_some_and(|stamp| mem::replace(stamp, current) != current)
+        mem::replace(&mut self.stamps[node], self.current) != self.current
     }
 
     fn contains(&self, node: usize) -> bool {
-        self.stamps.get(node) == Some(&self.current)
+        self.stamps[node] == self.current
     }
 }
 
@@ -299,9 +296,7 @@ impl<'graph> GraphWalk<'graph> {
                     let first_edge =
                         edges_by_successor.partition_point(|&(successor, _)| successor < node);
                     stack.extend(
-                        edges_by_successor
-                            .get(first_edge..)
-                            .unwrap_or_default()
+                        edges_by_successor[first_edge..]
                             .iter()
                             .take_while(|&&(successor, _)| successor == node)
                             .map(|&(_, predecessor)| predecessor)
