@@ -4,14 +4,34 @@
 
 use std::cmp::Ordering;
 
-use luck_token::{BinOp, LuaNumber, LuaVersion};
+use luck_token::{LuaNumber, LuaVersion};
 
-/// `lhs op rhs` for an arithmetic `op`, or `None` for any other operator, an
-/// integer `%` or `//` by zero, which raises, or a result the target doesn't
-/// compute exactly.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArithmeticOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    FloorDiv, // Lua 5.3+, Luau
+    Mod,
+    Pow,
+}
+
+/// Lua 5.3+'s operators on the integers two numbers convert to.
+#[derive(Clone, Copy)]
+pub(crate) enum BitwiseOp {
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+}
+
+/// `lhs op rhs`, or `None` for an integer `%` or `//` by zero, which raises,
+/// or a result the target doesn't compute exactly.
 pub(crate) fn arithmetic(
     lhs: LuaNumber,
-    op: BinOp,
+    op: ArithmeticOp,
     rhs: LuaNumber,
     version: LuaVersion,
 ) -> Option<LuaNumber> {
@@ -19,35 +39,23 @@ pub(crate) fn arithmetic(
     match (lhs, rhs) {
         (Int(left), Int(right)) => match op {
             // Integer ops wrap, matching Lua 5.3+ exactly.
-            BinOp::Add => Some(Int(left.wrapping_add(right))),
-            BinOp::Sub => Some(Int(left.wrapping_sub(right))),
-            BinOp::Mul => Some(Int(left.wrapping_mul(right))),
+            ArithmeticOp::Add => Some(Int(left.wrapping_add(right))),
+            ArithmeticOp::Sub => Some(Int(left.wrapping_sub(right))),
+            ArithmeticOp::Mul => Some(Int(left.wrapping_mul(right))),
             // `/` and `^` always produce floats.
-            BinOp::Div | BinOp::Pow => float_arithmetic(lhs.to_f64(), op, rhs.to_f64(), version),
-            BinOp::Mod => floored_mod(left, right).map(Int),
+            ArithmeticOp::Div | ArithmeticOp::Pow => {
+                float_arithmetic(lhs.to_f64(), op, rhs.to_f64(), version)
+            }
+            ArithmeticOp::Mod => floored_mod(left, right).map(Int),
             // Lua 5.3+, Luau
-            BinOp::FloorDiv => floored_div(left, right).map(Int),
-            BinOp::Concat
-            | BinOp::Eq
-            | BinOp::Ne
-            | BinOp::Lt
-            | BinOp::Le
-            | BinOp::Gt
-            | BinOp::Ge
-            | BinOp::And
-            | BinOp::Or
-            | BinOp::BitAnd
-            | BinOp::BitOr
-            | BinOp::BitXor
-            | BinOp::Shl
-            | BinOp::Shr => None,
+            ArithmeticOp::FloorDiv => floored_div(left, right).map(Int),
         },
         (Float(left), Float(right)) => float_arithmetic(left, op, right, version),
         (Int(left), Float(right)) => float_arithmetic(exact_f64(left)?, op, right, version),
         (Float(left), Int(right)) => {
             // 5.4+ compiles `x - 0` as an immediate add, so -0.0 keeps or
             // loses its sign depending on the target.
-            if op == BinOp::Sub && right == 0 && left == 0.0 && left.is_sign_negative() {
+            if op == ArithmeticOp::Sub && right == 0 && left == 0.0 && left.is_sign_negative() {
                 return None;
             }
             float_arithmetic(left, op, exact_f64(right)?, version)
@@ -63,10 +71,10 @@ pub(crate) fn negate(number: LuaNumber) -> LuaNumber {
     }
 }
 
-/// `lhs op rhs` for an order comparison `op`, or `None` for any other
-/// operator or a mixed pair this can't compare exactly. NaN is ordered with
-/// nothing, so every comparison with it is false.
-pub(crate) fn compare(lhs: LuaNumber, op: BinOp, rhs: LuaNumber) -> Option<bool> {
+/// Whether `lhs` and `rhs` order as `holds` asks, or `None` for a mixed pair
+/// this can't compare exactly. NaN is ordered with nothing, so every
+/// comparison with it is false.
+pub(crate) fn compare(lhs: LuaNumber, rhs: LuaNumber, holds: fn(Ordering) -> bool) -> Option<bool> {
     use LuaNumber::{Float, Int};
     let ordering = match (lhs, rhs) {
         (Int(left), Int(right)) => Some(left.cmp(&right)),
@@ -76,29 +84,7 @@ pub(crate) fn compare(lhs: LuaNumber, op: BinOp, rhs: LuaNumber) -> Option<bool>
         (Int(left), Float(right)) => exact_f64(left)?.partial_cmp(&right),
         (Float(left), Int(right)) => left.partial_cmp(&exact_f64(right)?),
     };
-    Some(match op {
-        BinOp::Lt => ordering == Some(Ordering::Less),
-        BinOp::Le => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
-        BinOp::Gt => ordering == Some(Ordering::Greater),
-        BinOp::Ge => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
-        BinOp::Add
-        | BinOp::Sub
-        | BinOp::Mul
-        | BinOp::Div
-        | BinOp::FloorDiv
-        | BinOp::Mod
-        | BinOp::Pow
-        | BinOp::Concat
-        | BinOp::Eq
-        | BinOp::Ne
-        | BinOp::And
-        | BinOp::Or
-        | BinOp::BitAnd
-        | BinOp::BitOr
-        | BinOp::BitXor
-        | BinOp::Shl
-        | BinOp::Shr => return None,
-    })
+    Some(ordering.is_some_and(holds))
 }
 
 /// Lua's `==` on two numbers, which is exact: an integer equals a float only
@@ -114,31 +100,14 @@ pub(crate) fn number_equals(lhs: LuaNumber, rhs: LuaNumber) -> bool {
     }
 }
 
-/// `lhs op rhs` for a Lua 5.3+ bitwise `op` on the integers its operands
-/// convert to, or `None` for any other operator.
-pub(crate) fn bitwise(lhs: i64, op: BinOp, rhs: i64) -> Option<i64> {
+/// `lhs op rhs` on the integers the operands convert to.
+pub(crate) fn bitwise(lhs: i64, op: BitwiseOp, rhs: i64) -> i64 {
     match op {
-        BinOp::BitAnd => Some(lhs & rhs),
-        BinOp::BitOr => Some(lhs | rhs),
-        BinOp::BitXor => Some(lhs ^ rhs),
-        BinOp::Shl => Some(shift_left(lhs, rhs)),
-        BinOp::Shr => Some(shift_left(lhs, rhs.wrapping_neg())),
-        BinOp::Add
-        | BinOp::Sub
-        | BinOp::Mul
-        | BinOp::Div
-        | BinOp::FloorDiv
-        | BinOp::Mod
-        | BinOp::Pow
-        | BinOp::Concat
-        | BinOp::Eq
-        | BinOp::Ne
-        | BinOp::Lt
-        | BinOp::Le
-        | BinOp::Gt
-        | BinOp::Ge
-        | BinOp::And
-        | BinOp::Or => None,
+        BitwiseOp::And => lhs & rhs,
+        BitwiseOp::Or => lhs | rhs,
+        BitwiseOp::Xor => lhs ^ rhs,
+        BitwiseOp::Shl => shift_left(lhs, rhs),
+        BitwiseOp::Shr => shift_left(lhs, rhs.wrapping_neg()),
     }
 }
 
@@ -209,13 +178,18 @@ fn floored_div(lhs: i64, rhs: i64) -> Option<i64> {
     if remainder != 0 && (remainder < 0) != (rhs < 0) { Some(quotient - 1) } else { Some(quotient) }
 }
 
-fn float_arithmetic(lhs: f64, op: BinOp, rhs: f64, version: LuaVersion) -> Option<LuaNumber> {
+fn float_arithmetic(
+    lhs: f64,
+    op: ArithmeticOp,
+    rhs: f64,
+    version: LuaVersion,
+) -> Option<LuaNumber> {
     let value = match op {
-        BinOp::Add => lhs + rhs,
-        BinOp::Sub => lhs - rhs,
-        BinOp::Mul => lhs * rhs,
-        BinOp::Div => lhs / rhs,
-        BinOp::Mod => {
+        ArithmeticOp::Add => lhs + rhs,
+        ArithmeticOp::Sub => lhs - rhs,
+        ArithmeticOp::Mul => lhs * rhs,
+        ArithmeticOp::Div => lhs / rhs,
+        ArithmeticOp::Mod => {
             if version.has_fmod_float_modulo() {
                 // 5.3+ luai_nummod: fmod plus a sign fix. The floor
                 // formula is wrong at large magnitudes (1e16 % 3) and
@@ -234,23 +208,9 @@ fn float_arithmetic(lhs: f64, op: BinOp, rhs: f64, version: LuaVersion) -> Optio
                 lhs - (lhs / rhs).floor() * rhs
             }
         }
-        BinOp::Pow => return exact_power(lhs, rhs).map(LuaNumber::Float),
+        ArithmeticOp::Pow => return exact_power(lhs, rhs).map(LuaNumber::Float),
         // Lua 5.3+, Luau
-        BinOp::FloorDiv => (lhs / rhs).floor(),
-        BinOp::Concat
-        | BinOp::Eq
-        | BinOp::Ne
-        | BinOp::Lt
-        | BinOp::Le
-        | BinOp::Gt
-        | BinOp::Ge
-        | BinOp::And
-        | BinOp::Or
-        | BinOp::BitAnd
-        | BinOp::BitOr
-        | BinOp::BitXor
-        | BinOp::Shl
-        | BinOp::Shr => return None,
+        ArithmeticOp::FloorDiv => (lhs / rhs).floor(),
     };
     Some(LuaNumber::Float(value))
 }

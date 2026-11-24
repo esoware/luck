@@ -89,7 +89,7 @@ fn a_float_divided_by_zero_is_infinite_or_nan() {
 }
 
 #[test]
-fn results_the_target_computes_through_the_c_library_have_no_value() {
+fn results_the_target_computes_its_own_way_have_no_value() {
     assert_values(
         LuaVersion::Lua54,
         &[
@@ -130,6 +130,8 @@ fn comparisons_are_exact_and_false_with_nan() {
         LuaVersion::Lua54,
         &[
             ("1 < 2", BOOLEAN(true)),
+            ("2 <= 2", BOOLEAN(true)),
+            ("2 > 1.5", BOOLEAN(true)),
             ("1 == 1.0", BOOLEAN(true)),
             ("9007199254740993 == 9007199254740992.0", BOOLEAN(false)),
             ("0.0 == -0.0", BOOLEAN(true)),

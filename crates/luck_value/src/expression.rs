@@ -8,7 +8,7 @@ use luck_token::{Associativity, BinOp, LuaNumber, LuaVersion, UnOp};
 
 use crate::arithmetic::negate;
 use crate::context::ValueContext;
-use crate::value::{ConstantValue, ValueType};
+use crate::value::ConstantValue;
 
 /// Whether an expression's value is truthy, which every value but `nil` and
 /// `false` is.
@@ -80,6 +80,58 @@ impl IsLiteralValue for Expression<'_> {
     }
 }
 
+/// The type of a value an expression yields, as far as the analysis tells.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ValueType {
+    Nil,
+    Boolean,
+    Number,
+    String,
+    Table,
+    Function,
+    /// Luau: a 64-bit integer, which no arithmetic operator takes.
+    Integer,
+    /// Any type: a variable's value, or a metamethod's result.
+    Undetermined,
+}
+
+impl ValueType {
+    const fn of(value: ConstantValue<'_>) -> Self {
+        match value {
+            ConstantValue::Nil => Self::Nil,
+            ConstantValue::Boolean(_) => Self::Boolean,
+            ConstantValue::Number(_) => Self::Number,
+            ConstantValue::Integer(_) => Self::Integer,
+            ConstantValue::String(_) => Self::String,
+        }
+    }
+
+    /// Whether a value of this type is truthy, when the type tells.
+    const fn truthiness(self) -> Option<bool> {
+        match self {
+            Self::Nil => Some(false),
+            Self::Number | Self::String | Self::Table | Self::Function | Self::Integer => {
+                Some(true)
+            }
+            Self::Boolean | Self::Undetermined => None,
+        }
+    }
+
+    /// Whether a value of this type may be a table or userdata, the only
+    /// values whose `__eq` runs, and only when both operands are.
+    const fn may_have_eq_metamethod(self) -> bool {
+        match self {
+            Self::Table | Self::Undetermined => true,
+            Self::Nil
+            | Self::Boolean
+            | Self::Number
+            | Self::String
+            | Self::Function
+            | Self::Integer => false,
+        }
+    }
+}
+
 /// What evaluating an expression is known to do.
 #[derive(Clone, Copy)]
 struct Outcome<'ast> {
@@ -103,7 +155,7 @@ impl<'ast> Outcome<'ast> {
 
     const fn constant(value: ConstantValue<'ast>) -> Self {
         Self {
-            ty: value.ty(),
+            ty: ValueType::of(value),
             value: Some(value),
             truthiness: Some(value.to_boolean()),
             has_effects: false,
@@ -142,8 +194,9 @@ impl<'ast> Outcome<'ast> {
         }
     }
 
-    /// The effects and the literalness of evaluating `self` and `other`.
-    const fn and(self, other: Self) -> Self {
+    /// What `self` yields, with the effects and the literalness of evaluating
+    /// both `self` and `other`.
+    const fn alongside(self, other: Self) -> Self {
         Self {
             has_effects: self.has_effects || other.has_effects,
             is_literal: self.is_literal && other.is_literal,
@@ -158,7 +211,7 @@ impl<'ast> Outcome<'ast> {
             ty: if self.ty == other.ty { self.ty } else { ValueType::Undetermined },
             value: self.value.filter(|_| self.value == other.value),
             truthiness: self.truthiness.filter(|_| self.truthiness == other.truthiness),
-            ..self.and(other)
+            ..self.alongside(other)
         }
     }
 
@@ -262,18 +315,19 @@ fn table_outcome<'ast>(
 }
 
 fn unary_outcome(op: UnOp, operand: Outcome<'_>, version: LuaVersion) -> Outcome<'_> {
-    match op {
+    let (number, is_safe) = match op {
         // `not` runs no metamethod.
-        UnOp::Not => Outcome {
-            ty: ValueType::Boolean,
-            value: operand.truthiness.map(|is_truthy| ConstantValue::Boolean(!is_truthy)),
-            truthiness: operand.truthiness.map(|is_truthy| !is_truthy),
-            ..operand
-        },
+        UnOp::Not => {
+            return Outcome {
+                ty: ValueType::Boolean,
+                value: operand.truthiness.map(|is_truthy| ConstantValue::Boolean(!is_truthy)),
+                truthiness: operand.truthiness.map(|is_truthy| !is_truthy),
+                ..operand
+            };
+        }
         UnOp::Neg => {
-            let is_safe = operand.ty == ValueType::Number;
-            let value = operand.value.and_then(ConstantValue::as_number).map(negate);
-            operand.operation(number_or_any(is_safe), value.map(ConstantValue::Number), is_safe)
+            let negated = operand.value.and_then(ConstantValue::as_number).map(negate);
+            (negated, operand.ty == ValueType::Number)
         }
         // A string's length is its byte count, and a table's may run `__len`.
         UnOp::Len => {
@@ -287,24 +341,22 @@ fn unary_outcome(op: UnOp, operand: Outcome<'_>, version: LuaVersion) -> Outcome
                 )
                 | None => None,
             };
-            let value = length.map(|integer| {
-                let number = LuaNumber::Int(integer);
+            let number = length.map(|integer| {
                 if version.has_integer_subtype() {
-                    number
+                    LuaNumber::Int(integer)
                 } else {
-                    LuaNumber::Float(number.to_f64())
+                    LuaNumber::Float(LuaNumber::Int(integer).to_f64())
                 }
             });
-            let is_safe = operand.ty == ValueType::String;
-            operand.operation(number_or_any(is_safe), value.map(ConstantValue::Number), is_safe)
+            (number, operand.ty == ValueType::String)
         }
         // Lua 5.3+: a float with a fraction raises, as a string may.
         UnOp::BitNot => {
             let integer = operand.integer().filter(|_| version.has_bitwise_ops());
-            let value = integer.map(|bits| ConstantValue::Number(LuaNumber::Int(!bits)));
-            operand.operation(number_or_any(integer.is_some()), value, integer.is_some())
+            (integer.map(|bits| LuaNumber::Int(!bits)), integer.is_some())
         }
-    }
+    };
+    operand.operation(number_or_any(is_safe), number.map(ConstantValue::Number), is_safe)
 }
 
 /// A number, or what a metamethod returns, which may be anything.
@@ -340,43 +392,41 @@ fn binary_outcome<'ast>(
     rhs: Outcome<'ast>,
     version: LuaVersion,
 ) -> Outcome<'ast> {
-    let operands = lhs.and(rhs);
-    let value = lhs.value.zip(rhs.value).and_then(|(left, right)| left.binary(op, right, version));
     let are_numbers = lhs.ty == ValueType::Number && rhs.ty == ValueType::Number;
-    match op {
-        BinOp::And => logical_outcome(lhs, rhs, false),
-        BinOp::Or => logical_outcome(lhs, rhs, true),
+    let (ty, is_safe) = match op {
+        BinOp::And | BinOp::Or => return logical_outcome(lhs, rhs, op == BinOp::Or),
         BinOp::Eq | BinOp::Ne => {
             let is_safe = !(lhs.ty.may_have_eq_metamethod() && rhs.ty.may_have_eq_metamethod());
-            operands.operation(ValueType::Boolean, value, is_safe)
+            (ValueType::Boolean, is_safe)
         }
         // Lua makes a boolean of what an order metamethod returns.
         BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
             let are_strings = lhs.ty == ValueType::String && rhs.ty == ValueType::String;
-            operands.operation(ValueType::Boolean, value, are_numbers || are_strings)
+            (ValueType::Boolean, are_numbers || are_strings)
         }
         BinOp::Concat => {
             let is_joinable = |ty| matches!(ty, ValueType::Number | ValueType::String);
             let is_safe = is_joinable(lhs.ty) && is_joinable(rhs.ty);
-            let ty = if is_safe { ValueType::String } else { ValueType::Undetermined };
-            operands.operation(ty, value, is_safe)
+            (if is_safe { ValueType::String } else { ValueType::Undetermined }, is_safe)
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
-            operands.operation(number_or_any(are_numbers), value, are_numbers)
+            (number_or_any(are_numbers), are_numbers)
         }
         // Lua 5.3+ raises on an integer divided by zero.
         BinOp::FloorDiv | BinOp::Mod => {
             let is_safe = are_numbers
                 && !(version.has_integer_subtype() && may_divide_integer_by_zero(lhs, rhs));
-            operands.operation(number_or_any(is_safe), value, is_safe)
+            (number_or_any(is_safe), is_safe)
         }
         // Lua 5.3+: a float with a fraction raises, as a string may.
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
             let is_safe =
                 version.has_bitwise_ops() && lhs.integer().is_some() && rhs.integer().is_some();
-            operands.operation(number_or_any(is_safe), value, is_safe)
+            (number_or_any(is_safe), is_safe)
         }
-    }
+    };
+    let value = lhs.value.zip(rhs.value).and_then(|(left, right)| left.binary(op, right, version));
+    lhs.alongside(rhs).operation(ty, value, is_safe)
 }
 
 /// Whether two numbers may both be integers with the second zero, which
@@ -399,10 +449,10 @@ fn logical_outcome<'ast>(lhs: Outcome<'ast>, rhs: Outcome<'ast>, is_or: bool) ->
         // `false and x` and `true or x` yield their left operand, and the
         // right one never runs.
         Some(is_truthy) if is_truthy == is_or => {
-            Outcome { has_effects: lhs.has_effects, ..lhs.and(rhs) }
+            Outcome { is_literal: lhs.is_literal && rhs.is_literal, ..lhs }
         }
         // `true and x` and `false or x` yield their right operand.
-        Some(_) => rhs.and(lhs),
+        Some(_) => rhs.alongside(lhs),
         None => Outcome {
             // `x and false` is falsy, and `x or true` truthy, whichever operand
             // it yields.

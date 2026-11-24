@@ -6,5 +6,5 @@ mod common;
 
 mod constant_evaluation;
 mod is_literal_value;
-mod side_effects;
+mod may_have_side_effects;
 mod to_boolean;

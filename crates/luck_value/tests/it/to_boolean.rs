@@ -30,7 +30,7 @@ fn only_nil_and_false_are_falsy() {
 }
 
 #[test]
-fn a_value_built_with_effects_is_still_truthy() {
+fn a_value_reached_through_an_effect_keeps_its_truthiness() {
     assert_truthiness(
         LuaVersion::Lua54,
         &[("{f()}", Some(true)), ("x or true", Some(true)), ("x and false", Some(false))],
@@ -74,7 +74,7 @@ fn a_metamethod_can_return_anything() {
 }
 
 #[test]
-fn an_if_expression_is_its_branches_truthiness() {
+fn an_if_expression_has_the_truthiness_its_reachable_branches_share() {
     assert_truthiness(
         LuaVersion::Luau,
         &[

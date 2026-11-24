@@ -1,6 +1,8 @@
+use std::cmp::Ordering;
+
 use luck_token::{BinOp, LuaNumber, LuaVersion};
 
-use crate::arithmetic::{arithmetic, bitwise, compare, number_equals};
+use crate::arithmetic::{ArithmeticOp, BitwiseOp, arithmetic, bitwise, compare, number_equals};
 
 /// A value an expression can be known to evaluate to. Each has no identity,
 /// as a table or a closure has, so two of them are the same value when
@@ -40,29 +42,47 @@ impl ConstantValue<'_> {
             BinOp::Or => Some(if self.to_boolean() { self } else { rhs }),
             BinOp::Eq => Some(Self::Boolean(self.raw_equals(rhs))),
             BinOp::Ne => Some(Self::Boolean(!self.raw_equals(rhs))),
-            BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                compare(self.as_number()?, op, rhs.as_number()?).map(Self::Boolean)
-            }
-            BinOp::Add
-            | BinOp::Sub
-            | BinOp::Mul
-            | BinOp::Div
-            | BinOp::FloorDiv
-            | BinOp::Mod
-            | BinOp::Pow => {
-                arithmetic(self.as_number()?, op, rhs.as_number()?, version).map(Self::Number)
-            }
+            BinOp::Lt => self.compare(rhs, Ordering::is_lt),
+            BinOp::Le => self.compare(rhs, Ordering::is_le),
+            BinOp::Gt => self.compare(rhs, Ordering::is_gt),
+            BinOp::Ge => self.compare(rhs, Ordering::is_ge),
+            BinOp::Add => self.arithmetic(ArithmeticOp::Add, rhs, version),
+            BinOp::Sub => self.arithmetic(ArithmeticOp::Sub, rhs, version),
+            BinOp::Mul => self.arithmetic(ArithmeticOp::Mul, rhs, version),
+            BinOp::Div => self.arithmetic(ArithmeticOp::Div, rhs, version),
+            // Lua 5.3+, Luau
+            BinOp::FloorDiv => self.arithmetic(ArithmeticOp::FloorDiv, rhs, version),
+            BinOp::Mod => self.arithmetic(ArithmeticOp::Mod, rhs, version),
+            BinOp::Pow => self.arithmetic(ArithmeticOp::Pow, rhs, version),
             // Lua 5.3+
-            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
-                if !version.has_bitwise_ops() {
-                    return None;
-                }
-                let lhs = self.as_number()?.to_integer()?;
-                let integer = bitwise(lhs, op, rhs.as_number()?.to_integer()?)?;
-                Some(Self::Number(LuaNumber::Int(integer)))
-            }
+            BinOp::BitAnd => self.bitwise(BitwiseOp::And, rhs, version),
+            // Lua 5.3+
+            BinOp::BitOr => self.bitwise(BitwiseOp::Or, rhs, version),
+            // Lua 5.3+
+            BinOp::BitXor => self.bitwise(BitwiseOp::Xor, rhs, version),
+            // Lua 5.3+
+            BinOp::Shl => self.bitwise(BitwiseOp::Shl, rhs, version),
+            // Lua 5.3+
+            BinOp::Shr => self.bitwise(BitwiseOp::Shr, rhs, version),
             BinOp::Concat => None,
         }
+    }
+
+    fn compare(self, rhs: Self, holds: fn(Ordering) -> bool) -> Option<Self> {
+        compare(self.as_number()?, rhs.as_number()?, holds).map(Self::Boolean)
+    }
+
+    fn arithmetic(self, op: ArithmeticOp, rhs: Self, version: LuaVersion) -> Option<Self> {
+        arithmetic(self.as_number()?, op, rhs.as_number()?, version).map(Self::Number)
+    }
+
+    fn bitwise(self, op: BitwiseOp, rhs: Self, version: LuaVersion) -> Option<Self> {
+        if !version.has_bitwise_ops() {
+            return None;
+        }
+        let lhs = self.as_number()?.to_integer()?;
+        let integer = bitwise(lhs, op, rhs.as_number()?.to_integer()?);
+        Some(Self::Number(LuaNumber::Int(integer)))
     }
 
     /// Lua's `==` with no metamethod, which is all a value without identity
@@ -79,58 +99,6 @@ impl ConstantValue<'_> {
                 Self::Nil | Self::Boolean(_) | Self::Number(_) | Self::Integer(_) | Self::String(_),
                 _,
             ) => false,
-        }
-    }
-
-    pub(crate) const fn ty(self) -> ValueType {
-        match self {
-            Self::Nil => ValueType::Nil,
-            Self::Boolean(_) => ValueType::Boolean,
-            Self::Number(_) => ValueType::Number,
-            Self::Integer(_) => ValueType::Integer,
-            Self::String(_) => ValueType::String,
-        }
-    }
-}
-
-/// The type of a value an expression yields, as far as the analysis tells.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ValueType {
-    Nil,
-    Boolean,
-    Number,
-    String,
-    Table,
-    Function,
-    /// Luau: a 64-bit integer, which no arithmetic operator takes.
-    Integer,
-    /// Any type: a variable's value, or a metamethod's result.
-    Undetermined,
-}
-
-impl ValueType {
-    /// Whether a value of this type is truthy, when the type tells.
-    pub(crate) const fn truthiness(self) -> Option<bool> {
-        match self {
-            Self::Nil => Some(false),
-            Self::Number | Self::String | Self::Table | Self::Function | Self::Integer => {
-                Some(true)
-            }
-            Self::Boolean | Self::Undetermined => None,
-        }
-    }
-
-    /// Whether a value of this type may be a table or userdata, the only
-    /// values whose `__eq` runs, and only when both operands are.
-    pub(crate) const fn may_have_eq_metamethod(self) -> bool {
-        match self {
-            Self::Table | Self::Undetermined => true,
-            Self::Nil
-            | Self::Boolean
-            | Self::Number
-            | Self::String
-            | Self::Function
-            | Self::Integer => false,
         }
     }
 }
