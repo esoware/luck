@@ -56,7 +56,6 @@ memchr                = "2"
 mimalloc-safe         = "0.1.70"
 mlua                  = { version = "0.12", features = ["vendored"] }
 notify-debouncer-mini = "0.7"
-oxc_data_structures   = { version = "0.159", features = ["types"] }
 parking_lot           = "0.12"
 petgraph              = { version = "0.8", default-features = false, features = ["std"] }
 predicates            = { version = "3", default-features = false }

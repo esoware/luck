@@ -820,8 +820,6 @@ dependencies = [
 name = "luck_allocator"
 version = "0.6.0"
 dependencies = [
- "luck_allocator",
- "oxc_data_structures",
  "quickcheck",
  "thread_local",
 ]
@@ -1421,12 +1419,6 @@ checksum = "7f59006ce1e204c30956638535b74d317bca99477b9356dfaec54c37f6f600ab"
 dependencies = [
  "num-traits",
 ]
-
-[[package]]
-name = "oxc_data_structures"
-version = "0.159.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8932e4c5ad3c6973548bf2f7750b778315012ecd7086617721d23f17b43e5a55"
 
 [[package]]
 name = "parking_lot"

@@ -33,8 +33,7 @@ impl ThreadAllocators {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Barrier;
-    use std::thread;
+    use std::{sync::Barrier, thread};
 
     use super::*;
 

@@ -1,4 +1,4 @@
-use luck_allocator::Allocator;
+use luck_allocator::{AllocationCounts, Allocator};
 
 use crate::heap::{HEAP, HeapCounters};
 
@@ -34,8 +34,8 @@ impl StageStats {
                 self.sys_peak_growth_bytes,
                 relative_tolerance(self.sys_peak_growth_bytes),
             ),
-            Metric::count("arena allocs", arena.allocs),
-            Metric::count("arena reallocs", arena.reallocs),
+            Metric::count("arena allocs", arena.allocations),
+            Metric::count("arena reallocs", arena.reallocations),
             Metric::bytes("arena size", self.arena_used_bytes, ARENA_SIZE_TOLERANCE_BYTES),
         ]
     }
@@ -46,21 +46,12 @@ impl StageStats {
 #[derive(Debug)]
 pub(crate) struct Counters {
     pub heap: HeapCounters,
-    pub arena: ArenaCounters,
-}
-
-/// A reallocation is a `List` growing, which moves it to a bigger arena
-/// allocation.
-#[derive(Debug)]
-pub(crate) struct ArenaCounters {
-    pub allocs: usize,
-    pub reallocs: usize,
+    pub arena: AllocationCounts,
 }
 
 impl Counters {
     fn record(allocator: &Allocator) -> Self {
-        let (allocs, reallocs) = allocator.get_allocation_stats();
-        Self { heap: HEAP.read(), arena: ArenaCounters { allocs, reallocs } }
+        Self { heap: HEAP.read(), arena: allocator.allocation_counts() }
     }
 
     /// Chunk operations need no correction here, because the global
@@ -74,9 +65,9 @@ impl Counters {
                 deallocs: self.heap.deallocs - before.heap.deallocs,
                 alloc_bytes: self.heap.alloc_bytes - before.heap.alloc_bytes,
             },
-            arena: ArenaCounters {
-                allocs: self.arena.allocs - before.arena.allocs,
-                reallocs: self.arena.reallocs - before.arena.reallocs,
+            arena: AllocationCounts {
+                allocations: self.arena.allocations - before.arena.allocations,
+                reallocations: self.arena.reallocations - before.arena.reallocations,
             },
         }
     }

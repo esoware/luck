@@ -1,5 +1,4 @@
-use std::iter;
-use std::mem::MaybeUninit;
+use std::{iter, mem::MaybeUninit};
 
 /// Bytes, as a Lua source is, so a printer copies a string or a comment that
 /// isn't UTF-8 as it was written.
@@ -89,9 +88,9 @@ impl CodeBuffer {
     /// Appends what `write` appends to the vector it's handed, which is the
     /// buffer itself, so nothing is copied.
     #[inline]
-    pub fn print_with<Write>(&mut self, write: Write)
+    pub fn print_with<F>(&mut self, write: F)
     where
-        Write: FnOnce(&mut Vec<u8>),
+        F: FnOnce(&mut Vec<u8>),
     {
         write(&mut self.bytes);
     }

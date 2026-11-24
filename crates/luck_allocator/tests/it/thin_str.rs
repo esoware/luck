@@ -1,13 +1,14 @@
-use std::{mem, ptr};
+use std::ptr;
 
 use luck_allocator::{Allocator, ThinStr};
-use oxc_data_structures::types::implements;
+
+use crate::common::AutoTraits;
 
 #[test]
 fn holds_a_str_in_three_words_of_four_bytes() {
-    assert_eq!(mem::size_of::<ThinStr<'_>>(), 12);
-    assert_eq!(mem::align_of::<ThinStr<'_>>(), 4);
-    assert_eq!(mem::size_of::<Option<ThinStr<'_>>>(), 12);
+    assert_eq!(size_of::<ThinStr<'_>>(), 12);
+    assert_eq!(align_of::<ThinStr<'_>>(), 4);
+    assert_eq!(size_of::<Option<ThinStr<'_>>>(), 12);
 }
 
 #[test]
@@ -41,6 +42,8 @@ fn compares_and_prints_as_its_str() {
 
 #[test]
 fn is_send_and_sync() {
-    assert!(implements!(ThinStr<'static>: Send));
-    assert!(implements!(ThinStr<'static>: Sync));
+    const {
+        assert!(AutoTraits::<ThinStr<'_>>::IS_SEND);
+        assert!(AutoTraits::<ThinStr<'_>>::IS_SYNC);
+    }
 }

@@ -1,13 +1,18 @@
+#![expect(unsafe_code, reason = "a list is a raw pointer, a length, and a capacity in the arena")]
+
 use std::{
     alloc::Layout,
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
     marker::PhantomData,
+    mem,
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
     slice,
 };
 
+#[cfg(feature = "track_allocations")]
+use crate::AllocationCounts;
 use crate::Allocator;
 
 /// A list in the arena: a pointer, a length, and a capacity, in 16 bytes.
@@ -31,21 +36,23 @@ use crate::Allocator;
 /// ```
 pub struct List<'alloc, T> {
     ptr: NonNull<T>,
-    len: u32,
+    length: u32,
     capacity: u32,
     marker: PhantomData<(&'alloc (), T)>,
 }
 
-/// SAFETY: A list owns its items as a [`Box`](crate::Box) of a slice would, and holds no `&Arena`,
-/// so it gets the auto traits the `Box`'s `Send` impl argues for.
+// SAFETY: A list owns its items as a `Box` of a slice would, and holds no reference to its
+// allocator, so it takes the auto traits the `Box`'s `Send` impl argues for.
 unsafe impl<T: Send> Send for List<'_, T> {}
 
-/// SAFETY: Sharing a `&List<T>` shares only a `&[T]`, so `T` being [`Sync`] is what it takes.
+// SAFETY: Sharing a `&List<T>` shares only a `&[T]`, so it takes `T: Sync`.
 unsafe impl<T: Sync> Sync for List<'_, T> {}
 
 impl<'alloc, T> List<'alloc, T> {
-    const ASSERT_T_IS_NOT_DROP: () =
-        assert!(!std::mem::needs_drop::<T>(), "Cannot create a List<T> where T is a Drop type");
+    const ASSERT_T_IS_NOT_DROP: () = assert!(
+        !mem::needs_drop::<T>(),
+        "a `List` is never dropped, so it can't hold a type that needs `Drop`"
+    );
 
     /// A zero-sized item takes no memory, so a list of them never needs to grow.
     const EMPTY_CAPACITY: u32 = if size_of::<T>() == 0 { u32::MAX } else { 0 };
@@ -56,7 +63,7 @@ impl<'alloc, T> List<'alloc, T> {
         const { Self::ASSERT_T_IS_NOT_DROP };
         Self {
             ptr: NonNull::dangling(),
-            len: 0,
+            length: 0,
             capacity: Self::EMPTY_CAPACITY,
             marker: PhantomData,
         }
@@ -72,10 +79,10 @@ impl<'alloc, T> List<'alloc, T> {
         if capacity == 0 || size_of::<T>() == 0 {
             return Self::new();
         }
-        let capacity = u32::try_from(capacity).expect("a list holds at most u32::MAX items");
+        let capacity = u32::try_from(capacity).expect("a list holds at most `u32::MAX` items");
         let layout = Layout::array::<T>(capacity as usize).expect("the list fits in memory");
         let ptr = allocator.alloc_layout(layout).cast::<T>();
-        Self { ptr, len: 0, capacity, marker: PhantomData }
+        Self { ptr, length: 0, capacity, marker: PhantomData }
     }
 
     /// # Panics
@@ -86,13 +93,22 @@ impl<'alloc, T> List<'alloc, T> {
         I: IntoIterator<Item = T>,
         I::IntoIter: ExactSizeIterator,
     {
-        let items = items.into_iter();
-        if items.len() == 0 {
+        let mut items = items.into_iter();
+        let count = items.len();
+        if count == 0 {
             return Self::new();
         }
-        let slice = allocator.arena().alloc_slice_fill_iter(items);
-        let len = slice.len();
-        Self::from_initialized(NonNull::from(slice).cast::<T>(), len)
+        let layout = Layout::array::<T>(count).expect("the list fits in memory");
+        let destination = allocator.alloc_layout(layout).cast::<T>();
+        for i in 0..count {
+            let item = items.next().expect("the iterator yields as many items as its `len()`");
+            // SAFETY: `destination` is a fresh arena allocation with room for `count` items, and
+            // `i` is less than `count`.
+            let slot = unsafe { destination.add(i) };
+            // SAFETY: The slot is allocated and free.
+            unsafe { slot.write(item) };
+        }
+        Self::from_initialized(destination, count)
     }
 
     /// # Panics
@@ -120,22 +136,21 @@ impl<'alloc, T> List<'alloc, T> {
         }
         let destination = allocator.alloc_layout(Layout::for_value(tail)).cast::<T>();
         // SAFETY: `destination` is a fresh arena allocation with room for `count` items, so it
-        // can't overlap `items`. Lowering the length of `items` to `at` hands the copied items
-        // over to the list without dropping them.
-        unsafe {
-            ptr::copy_nonoverlapping(tail.as_ptr(), destination.as_ptr(), count);
-            items.set_len(at);
-        }
+        // can't overlap `items`.
+        unsafe { ptr::copy_nonoverlapping(tail.as_ptr(), destination.as_ptr(), count) };
+        // SAFETY: Lowering the length of `items` to `at` hands the copied items over to the list
+        // without dropping them.
+        unsafe { items.set_len(at) };
         Self::from_initialized(destination, count)
     }
 
-    /// A list of the `len` initialized items at `ptr`, which live in the arena for `'alloc`, and
-    /// whose capacity is exactly that.
-    fn from_initialized(ptr: NonNull<T>, len: usize) -> Self {
+    /// A list of the `length` initialized items at `ptr`, which live in the arena for `'alloc`,
+    /// and whose capacity is exactly that.
+    fn from_initialized(ptr: NonNull<T>, length: usize) -> Self {
         const { Self::ASSERT_T_IS_NOT_DROP };
-        let len = u32::try_from(len).expect("a list holds at most u32::MAX items");
-        let capacity = if size_of::<T>() == 0 { u32::MAX } else { len };
-        Self { ptr, len, capacity, marker: PhantomData }
+        let length = u32::try_from(length).expect("a list holds at most `u32::MAX` items");
+        let capacity = if size_of::<T>() == 0 { u32::MAX } else { length };
+        Self { ptr, length, capacity, marker: PhantomData }
     }
 
     /// # Panics
@@ -143,13 +158,15 @@ impl<'alloc, T> List<'alloc, T> {
     /// Panics if the list already holds `u32::MAX` items.
     #[inline]
     pub fn push(&mut self, item: T, allocator: &'alloc Allocator) {
-        if self.len == self.capacity {
+        if self.length == self.capacity {
             self.grow(allocator);
         }
         // SAFETY: The capacity is more than the length, so the slot after the last item is
-        // allocated and free.
-        unsafe { self.ptr.add(self.len as usize).write(item) };
-        self.len += 1;
+        // allocated.
+        let slot = unsafe { self.ptr.add(self.length as usize) };
+        // SAFETY: The slot is allocated and free.
+        unsafe { slot.write(item) };
+        self.length += 1;
     }
 
     /// Puts `item` at `index`, shifting every item after it one place later.
@@ -158,19 +175,21 @@ impl<'alloc, T> List<'alloc, T> {
     ///
     /// Panics if `index` is past the list's length, or if the list already holds `u32::MAX` items.
     pub fn insert(&mut self, index: usize, item: T, allocator: &'alloc Allocator) {
-        let len = self.len();
-        assert!(index <= len, "insertion index {index} is past the list's length {len}");
-        if self.len == self.capacity {
+        let length = self.len();
+        assert!(index <= length, "insertion index {index} is past the list's length {length}");
+        if self.length == self.capacity {
             self.grow(allocator);
         }
-        // SAFETY: `index <= len < capacity`, so `len - index` items start at `index`, and the
-        // slot after them is allocated and free. `ptr::copy` allows the overlap.
-        unsafe {
-            let slot = self.ptr.add(index);
-            ptr::copy(slot.as_ptr(), slot.add(1).as_ptr(), len - index);
-            slot.write(item);
-        }
-        self.len += 1;
+        // SAFETY: `index <= length < capacity`, so the slot at `index` is allocated.
+        let slot = unsafe { self.ptr.add(index) };
+        // SAFETY: `index + 1 <= capacity`, so the slot after it is allocated, or the end.
+        let next_slot = unsafe { slot.add(1) };
+        // SAFETY: `length - index` items start at `index`, and the slot after them is allocated
+        // and free. `ptr::copy` allows the overlap.
+        unsafe { ptr::copy(slot.as_ptr(), next_slot.as_ptr(), length - index) };
+        // SAFETY: The slot is allocated, and its item moved one place later.
+        unsafe { slot.write(item) };
+        self.length += 1;
     }
 
     /// Moves the items to an arena allocation of twice the capacity, or of 4 items when the list
@@ -179,16 +198,16 @@ impl<'alloc, T> List<'alloc, T> {
     #[inline(never)]
     fn grow(&mut self, allocator: &'alloc Allocator) {
         let capacity = self.capacity.saturating_mul(2).max(4);
-        assert!(capacity > self.len, "a list holds at most u32::MAX items");
+        assert!(capacity > self.length, "a list holds at most `u32::MAX` items");
         let layout = Layout::array::<T>(capacity as usize).expect("the list fits in memory");
         let destination = allocator.alloc_layout(layout).cast::<T>();
         #[cfg(feature = "track_allocations")]
         if self.capacity > 0 {
-            allocator.arena().stats.record_reallocation_after_allocation();
+            allocator.counts.update(AllocationCounts::with_reallocation);
         }
-        // SAFETY: `destination` is a fresh arena allocation with room for `capacity > len` items,
-        // so it can't overlap the `len` initialized items at `ptr`. Those are left behind as
-        // copies nothing reads again, which is sound because an item needs no drop.
+        // SAFETY: `destination` is a fresh arena allocation with room for `capacity > length`
+        // items, so it can't overlap the `length` initialized items at `ptr`. Those are left
+        // behind as copies nothing reads again, which is sound because an item needs no drop.
         unsafe { ptr::copy_nonoverlapping(self.ptr.as_ptr(), destination.as_ptr(), self.len()) };
         self.ptr = destination;
         self.capacity = capacity;
@@ -203,22 +222,22 @@ impl<'alloc, T> List<'alloc, T> {
     /// Panics if `at` is past the list's length.
     #[must_use]
     pub fn split_off(&mut self, at: usize) -> Self {
-        let len = self.len();
-        assert!(at <= len, "split index {at} is past the list's length {len}");
-        let head_len = u32::try_from(at).expect("`at` is at most the length, a `u32`");
-        // SAFETY: `at <= len`, so the tail starts in bounds or one past the end.
+        let length = self.len();
+        assert!(at <= length, "split index {at} is past the list's length {length}");
+        let head_length = u32::try_from(at).expect("`at` is at most the length, a `u32`");
+        // SAFETY: `at <= length`, so the tail starts in bounds or one past the end.
         let tail_ptr = unsafe { self.ptr.add(at) };
         let is_zero_sized = size_of::<T>() == 0;
-        let tail_capacity = if is_zero_sized { u32::MAX } else { self.capacity - head_len };
+        let tail_capacity = if is_zero_sized { u32::MAX } else { self.capacity - head_length };
         let tail = Self {
             ptr: tail_ptr,
-            len: self.len - head_len,
+            length: self.length - head_length,
             capacity: tail_capacity,
             marker: PhantomData,
         };
-        self.len = head_len;
+        self.length = head_length;
         if !is_zero_sized {
-            self.capacity = head_len;
+            self.capacity = head_length;
         }
         tail
     }
@@ -233,10 +252,10 @@ impl<'alloc, T> List<'alloc, T> {
     /// Keeps the first `new_length` items. A list already that short stays as it is.
     pub fn truncate(&mut self, new_length: usize) {
         if let Ok(new_length) = u32::try_from(new_length)
-            && new_length < self.len
+            && new_length < self.length
         {
             // The items cut off need no drop.
-            self.len = new_length;
+            self.length = new_length;
         }
     }
 }
@@ -252,9 +271,9 @@ impl<T> Deref for List<'_, T> {
 
     #[inline]
     fn deref(&self) -> &[T] {
-        // SAFETY: The first `len` items at `ptr` are initialized and live in the arena for
+        // SAFETY: The first `length` items at `ptr` are initialized and live in the arena for
         // `'alloc`, and `ptr` is aligned and non-null even when the list is empty.
-        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len as usize) }
+        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.length as usize) }
     }
 }
 
@@ -263,7 +282,7 @@ impl<T> DerefMut for List<'_, T> {
     fn deref_mut(&mut self) -> &mut [T] {
         // SAFETY: As for `deref`, and the list owns its items, so `&mut self` grants exclusive
         // access to them.
-        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len as usize) }
+        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.length as usize) }
     }
 }
 
@@ -325,21 +344,30 @@ impl<T> Iterator for ListIntoIter<'_, T> {
 
     #[inline]
     fn next(&mut self) -> Option<T> {
-        if self.next == self.list.len {
+        if self.next == self.list.length {
             return None;
         }
-        // SAFETY: `next < len`, so the slot holds an initialized item, and it's read only once,
-        // since `next` moves past it and the list is never read again otherwise.
-        let item = unsafe { self.list.ptr.add(self.next as usize).read() };
+        // SAFETY: `next < length`, so the slot is allocated.
+        let slot = unsafe { self.list.ptr.add(self.next as usize) };
+        // SAFETY: The slot holds an initialized item, and it's read only once, since `next` moves
+        // past it and the list is never read again otherwise.
+        let item = unsafe { slot.read() };
         self.next += 1;
         Some(item)
     }
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = (self.list.len - self.next) as usize;
+        let remaining = (self.list.length - self.next) as usize;
         (remaining, Some(remaining))
     }
 }
 
 impl<T> ExactSizeIterator for ListIntoIter<'_, T> {}
+
+/// Leaves the items out, since those already moved out may be borrowed elsewhere.
+impl<T> Debug for ListIntoIter<'_, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ListIntoIter").finish_non_exhaustive()
+    }
+}

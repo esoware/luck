@@ -1,3 +1,5 @@
+#![expect(unsafe_code, reason = "thin bytes are a raw pointer and a 32-bit length")]
+
 use std::{
     fmt::{self, Debug, Formatter, Write},
     hash::{Hash, Hasher},
@@ -16,14 +18,14 @@ use std::{
 #[repr(C, packed(4))]
 pub struct ThinBytes<'a> {
     ptr: NonNull<u8>,
-    len: u32,
+    length: u32,
     marker: PhantomData<&'a [u8]>,
 }
 
-/// SAFETY: A `ThinBytes` is a `&[u8]`, which is `Send`.
+// SAFETY: A `ThinBytes` is a `&[u8]`, which is `Send`.
 unsafe impl Send for ThinBytes<'_> {}
 
-/// SAFETY: A `ThinBytes` is a `&[u8]`, which is `Sync`.
+// SAFETY: A `ThinBytes` is a `&[u8]`, which is `Sync`.
 unsafe impl Sync for ThinBytes<'_> {}
 
 impl<'a> ThinBytes<'a> {
@@ -35,17 +37,17 @@ impl<'a> ThinBytes<'a> {
     pub const fn new(bytes: &'a [u8]) -> Self {
         assert!(bytes.len() <= u32::MAX as usize, "thin bytes hold under 4 GiB");
         #[expect(clippy::cast_possible_truncation, reason = "checked above")]
-        let len = bytes.len() as u32;
-        Self { ptr: NonNull::from_ref(bytes).cast(), len, marker: PhantomData }
+        let length = bytes.len() as u32;
+        Self { ptr: NonNull::from_ref(bytes).cast(), length, marker: PhantomData }
     }
 
     #[must_use]
     #[inline]
     pub const fn as_bytes(self) -> &'a [u8] {
-        let (ptr, len) = (self.ptr, self.len);
-        // SAFETY: `ptr` and `len` came from a `&'a [u8]` in `new`, and `u32` fits in `usize` on
-        // every target luck builds for.
-        unsafe { slice::from_raw_parts(ptr.as_ptr(), len as usize) }
+        let (ptr, length) = (self.ptr, self.length);
+        // SAFETY: `ptr` and `length` came from a `&'a [u8]` in `new`, and `u32` fits in `usize`
+        // on every target luck builds for.
+        unsafe { slice::from_raw_parts(ptr.as_ptr(), length as usize) }
     }
 }
 

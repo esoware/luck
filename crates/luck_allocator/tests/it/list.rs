@@ -1,10 +1,12 @@
 use std::{
     cell::Cell,
     hash::{BuildHasher, RandomState},
+    iter,
 };
 
 use luck_allocator::{Allocator, List};
-use oxc_data_structures::types::implements;
+
+use crate::common::{AutoTraits, Fallback as _, panic_message};
 
 #[test]
 fn from_iter_in_holds_every_item_in_order() {
@@ -37,6 +39,14 @@ fn empty_lists_allocate_nothing() {
 }
 
 #[test]
+fn from_iter_in_refuses_a_list_too_big_for_memory() {
+    let message = panic_message(|| {
+        List::from_iter_in(iter::repeat_n(0_u64, usize::MAX), &Allocator::new());
+    });
+    assert!(message.starts_with("the list fits in memory"), "{message}");
+}
+
+#[test]
 fn split_off_in_moves_the_tail_and_leaves_the_head() {
     let allocator = Allocator::new();
     let mut scratch = vec!["kept", "first", "second"];
@@ -66,7 +76,7 @@ fn split_off_in_from_the_start_takes_everything() {
     let mut scratch = vec![1_u32, 2, 3];
     let list = List::split_off_in(&mut scratch, 0, &allocator);
     assert_eq!(*list, [1, 2, 3]);
-    assert_eq!(scratch, [] as [u32; 0]);
+    assert_eq!(scratch, Vec::<u32>::new());
 }
 
 #[test]
@@ -210,10 +220,12 @@ fn compares_hashes_and_prints_by_content() {
 
 #[test]
 fn auto_traits_follow_the_item_type() {
-    assert!(implements!(List<u32>: Send));
-    assert!(implements!(List<u32>: Sync));
-    assert!(implements!(List<Cell<u32>>: Send));
-    assert!(implements!(List<Cell<u32>>: !Sync));
+    const {
+        assert!(AutoTraits::<List<'_, u32>>::IS_SEND);
+        assert!(AutoTraits::<List<'_, u32>>::IS_SYNC);
+        assert!(AutoTraits::<List<'_, Cell<u32>>>::IS_SEND);
+        assert!(!AutoTraits::<List<'_, Cell<u32>>>::IS_SYNC);
+    }
 }
 
 #[test]

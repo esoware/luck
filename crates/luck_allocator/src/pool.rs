@@ -1,74 +1,55 @@
-use std::{iter, mem::ManuallyDrop, ops::Deref, sync::Mutex};
+use std::{iter, mem, ops::Deref, sync::PoisonError};
 
 use crate::Allocator;
 
-/// A thread-safe pool for reusing [`Allocator`] instances to reduce allocation overhead.
+/// Allocators for a pool of threads, each lent to one thread at a time and reset when it comes
+/// back, so a run keeps about one allocator per thread however much work it does.
 #[derive(Debug)]
 pub struct AllocatorPool {
-    /// Allocators currently in the pool.
-    allocators: Mutex<Vec<Allocator>>,
+    #[expect(
+        clippy::disallowed_types,
+        reason = "parking_lot isn't a dependency here, and nothing that can panic holds the lock"
+    )]
+    allocators: std::sync::Mutex<Vec<Allocator>>,
 }
 
 impl AllocatorPool {
-    /// Create a new [`AllocatorPool`] for use across the specified number of threads.
-    pub fn new(thread_count: usize) -> AllocatorPool {
-        let allocators = iter::repeat_with(Allocator::new).take(thread_count).collect();
-        AllocatorPool { allocators: Mutex::new(allocators) }
+    /// A pool that starts with an allocator for each of `thread_count` threads.
+    pub fn new(thread_count: usize) -> Self {
+        let allocators: Vec<Allocator> =
+            iter::repeat_with(Allocator::new).take(thread_count).collect();
+        Self { allocators: allocators.into() }
     }
 
-    /// Retrieve an [`Allocator`] from the pool, or create a new one if the pool is empty.
-    ///
-    /// Returns an [`AllocatorGuard`] that gives access to the allocator.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the underlying mutex is poisoned.
+    /// An allocator from the pool, or a new one when the pool has none to spare.
     pub fn get(&self) -> AllocatorGuard<'_> {
-        let allocator = {
-            let mut allocators = self.allocators.lock().unwrap();
-            allocators.pop()
-        };
-        let allocator = allocator.unwrap_or_else(Allocator::new);
-
-        AllocatorGuard { allocator: ManuallyDrop::new(allocator), pool: self }
-    }
-
-    /// Add an [`Allocator`] to the pool.
-    ///
-    /// The `Allocator` is reset by this method, so it's ready to be re-used.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the underlying mutex is poisoned.
-    fn add(&self, mut allocator: Allocator) {
-        allocator.reset();
-        let mut allocators = self.allocators.lock().unwrap();
-        allocators.push(allocator);
+        let spare = self.allocators.lock().unwrap_or_else(PoisonError::into_inner).pop();
+        let allocator = spare.unwrap_or_default();
+        AllocatorGuard { allocator, pool: self }
     }
 }
 
-/// A guard object representing exclusive access to an [`Allocator`] from the pool.
-///
-/// On drop, the `Allocator` is reset and returned to the pool.
+/// An allocator lent from an [`AllocatorPool`], which goes back to the pool reset when the guard
+/// drops.
 #[derive(Debug)]
-pub struct AllocatorGuard<'alloc_pool> {
-    allocator: ManuallyDrop<Allocator>,
-    pool: &'alloc_pool AllocatorPool,
+pub struct AllocatorGuard<'pool> {
+    allocator: Allocator,
+    pool: &'pool AllocatorPool,
 }
 
 impl Deref for AllocatorGuard<'_> {
     type Target = Allocator;
 
-    fn deref(&self) -> &Self::Target {
+    fn deref(&self) -> &Allocator {
         &self.allocator
     }
 }
 
 impl Drop for AllocatorGuard<'_> {
-    /// Return [`Allocator`] back to the pool.
     fn drop(&mut self) {
-        // SAFETY: After taking ownership of the `Allocator`, we do not touch the `ManuallyDrop` again
-        let allocator = unsafe { ManuallyDrop::take(&mut self.allocator) };
-        self.pool.add(allocator);
+        // A new allocator owns no memory, so the one left in its place has nothing to free.
+        let mut allocator = mem::take(&mut self.allocator);
+        allocator.reset();
+        self.pool.allocators.lock().unwrap_or_else(PoisonError::into_inner).push(allocator);
     }
 }

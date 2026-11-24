@@ -1,35 +1,13 @@
-#![expect(
-    clippy::allow_attributes,
-    clippy::cast_possible_truncation,
-    clippy::dbg_macro,
-    clippy::explicit_into_iter_loop,
-    clippy::items_after_statements,
-    clippy::large_enum_variant,
-    clippy::large_stack_arrays,
-    clippy::match_like_matches_macro,
-    clippy::match_same_arms,
-    clippy::needless_pass_by_value,
-    clippy::print_stderr,
-    clippy::print_stdout,
-    clippy::ptr_cast_constness,
-    clippy::ptr_offset_by_literal,
-    clippy::ref_as_ptr,
-    clippy::undocumented_unsafe_blocks,
-    clippy::uninlined_format_args
-)]
-// `#[ignore]` attrs only exist when `debug_assertions` is enabled
-#![cfg_attr(debug_assertions, expect(clippy::ignore_without_reason))]
+// Puts the shared helpers under clippy.toml's `allow-unwrap-in-tests`, which
+// otherwise reaches only the `#[test]` functions of an integration test binary.
+#![cfg(test)]
 
-mod alloc_fill;
-mod alloc_with;
-mod capacity;
+mod common;
+
+mod allocator;
+mod boxed;
 mod list;
 mod pool;
-mod quickcheck;
-mod quickchecks;
-mod tests;
 mod thin_bytes;
 mod thin_str;
 mod tree;
-
-fn main() {}

@@ -1,3 +1,5 @@
+#![expect(unsafe_code, reason = "a thin str reads its bytes as UTF-8 without checking them again")]
+
 use std::{
     fmt::{self, Debug, Display, Formatter},
     ops::Deref,

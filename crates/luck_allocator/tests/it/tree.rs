@@ -4,7 +4,8 @@
 use std::{mem, thread};
 
 use luck_allocator::{Allocator, Box, List};
-use oxc_data_structures::types::implements;
+
+use crate::common::{AutoTraits, Fallback as _};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Expression<'a> {
@@ -150,20 +151,22 @@ fn joins_pieces_built_on_several_threads() {
             .collect();
         workers.into_iter().map(|worker| worker.join().unwrap()).collect()
     });
-    let joiner = Allocator::new();
-    let callee = name("all", &joiner);
+    let combining = Allocator::new();
+    let callee = name("all", &combining);
     let joined = Expression::Call(Box::new_in(
-        Call { callee, args: List::from_iter_in(pieces, &joiner) },
-        &joiner,
+        Call { callee, args: List::from_iter_in(pieces, &combining) },
+        &combining,
     ));
     assert_eq!(args(&joined).len(), 3);
-    assert_eq!(args(&joined)[2], call("c", [Expression::Nil], &joiner));
+    assert_eq!(args(&joined)[2], call("c", [Expression::Nil], &combining));
 }
 
 #[test]
 fn auto_traits() {
-    assert!(implements!(Expression: Send));
-    assert!(implements!(Expression: Sync));
-    assert!(implements!(Allocator: Send));
-    assert!(implements!(Allocator: !Sync));
+    const {
+        assert!(AutoTraits::<Expression<'_>>::IS_SEND);
+        assert!(AutoTraits::<Expression<'_>>::IS_SYNC);
+        assert!(AutoTraits::<Allocator>::IS_SEND);
+        assert!(!AutoTraits::<Allocator>::IS_SYNC);
+    }
 }

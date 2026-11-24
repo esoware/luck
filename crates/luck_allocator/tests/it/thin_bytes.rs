@@ -1,13 +1,14 @@
-use std::{mem, ptr};
+use std::ptr;
 
 use luck_allocator::{Allocator, ThinBytes};
-use oxc_data_structures::types::implements;
+
+use crate::common::AutoTraits;
 
 #[test]
 fn holds_bytes_in_three_words_of_four_bytes() {
-    assert_eq!(mem::size_of::<ThinBytes<'_>>(), 12);
-    assert_eq!(mem::align_of::<ThinBytes<'_>>(), 4);
-    assert_eq!(mem::size_of::<Option<ThinBytes<'_>>>(), 12);
+    assert_eq!(size_of::<ThinBytes<'_>>(), 12);
+    assert_eq!(align_of::<ThinBytes<'_>>(), 4);
+    assert_eq!(size_of::<Option<ThinBytes<'_>>>(), 12);
 }
 
 #[test]
@@ -34,6 +35,8 @@ fn compares_as_its_bytes_and_prints_them_quoted() {
 
 #[test]
 fn is_send_and_sync() {
-    assert!(implements!(ThinBytes<'static>: Send));
-    assert!(implements!(ThinBytes<'static>: Sync));
+    const {
+        assert!(AutoTraits::<ThinBytes<'_>>::IS_SEND);
+        assert!(AutoTraits::<ThinBytes<'_>>::IS_SYNC);
+    }
 }
