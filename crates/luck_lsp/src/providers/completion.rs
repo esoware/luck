@@ -138,7 +138,7 @@ fn member_completions(
 
     let stdlib = semantic.stdlib();
     let mut items: Vec<CompletionItem> = Vec::new();
-    let mut push = |name: &str, member: &StdlibEntry| {
+    let mut push = |name: &str, member: &StdlibEntry<'_>| {
         let is_method = matches!(member, StdlibEntry::Function(function) if function.is_method);
         if is_method == access.is_colon {
             items.push(item_for_entry(name, member));
@@ -153,14 +153,14 @@ fn member_completions(
         }
     }
     // A shaped local: `local f = io.open(...); f:` offers the file methods,
-    // `local g = game; g:` the DataModel ones.
+    // `local g = game; g:` the DataModel ones, its Instance ones among them.
     let shape = match (stdlib_entry, root_local, segments.as_slice()) {
         (Some(entry), _, _) => entry.shape(),
         (None, Some(symbol_id), [_]) => semantic.symbol_shape(symbol_id),
         (None, _, _) => None,
     };
-    if let Some(shape_members) = shape.and_then(|name| stdlib.shapes.get(name)) {
-        for (name, member) in &shape_members.members {
+    if let Some(shape_name) = shape {
+        for (name, member) in stdlib.shape_members(shape_name) {
             push(name, member);
         }
     }
@@ -323,7 +323,7 @@ fn dotted_chain_ending_tokens<'source>(
     }
 }
 
-fn item_for_entry(name: &str, entry: &StdlibEntry) -> CompletionItem {
+fn item_for_entry(name: &str, entry: &StdlibEntry<'_>) -> CompletionItem {
     let (kind, detail, is_deprecated, markdown) = match entry {
         StdlibEntry::Function(function) => (
             CompletionItemKind::FUNCTION,
@@ -369,7 +369,7 @@ fn item_for_entry(name: &str, entry: &StdlibEntry) -> CompletionItem {
     }
 }
 
-fn function_documentation(name: &str, function: &StdlibFunction) -> String {
+fn function_documentation(name: &str, function: &StdlibFunction<'_>) -> String {
     let params =
         function.primary_signature().params.iter().map(param_label).collect::<Vec<_>>().join(", ");
     let overload_count = function.signatures.len().saturating_sub(1);

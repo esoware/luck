@@ -1,9 +1,9 @@
 # GENERATED FILE - do not hand-edit.
 # Regenerate: just roblox-api
 # Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).
-# Spliced into the luau_roblox library: each [enums.<Type>] becomes an
-# Enum-shaped member namespace of the Enum global, each item an
-# EnumItem-shaped read-only constant (see tests/it/stdlib_catalog.rs splice_enums).
+# Each [enums.<Type>] is an Enum-shaped namespace of the Enum global, and
+# each item an EnumItem-shaped read-only constant, which `just stdlib`
+# layers over luau_roblox.toml.
 
 [enums.AccessModifierType]
 items = [

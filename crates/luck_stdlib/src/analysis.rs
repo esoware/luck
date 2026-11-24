@@ -4,18 +4,17 @@ use luck_semantic::{NameId, Reference, Scoping, Semantic, SemanticBuilder, Symbo
 use luck_token::{LuaTarget, LuaVersion};
 
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
-use crate::stdlib_catalog::library_for;
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
 /// A chunk's [`Semantic`], read against the stdlib of one target.
 #[derive(Debug)]
 pub struct SemanticAnalysis<'ast> {
     semantic: Semantic<'ast>,
-    stdlib: &'static StdlibLibrary,
+    stdlib: &'ast StdlibLibrary<'ast>,
     /// Each symbol's shape, by symbol index: a never-reassigned local
     /// initialized from a value of known shape, such as
     /// `local f = io.open(...)`.
-    symbol_shapes: Vec<Option<&'static str>>,
+    symbol_shapes: Vec<Option<&'ast str>>,
     /// Each name's standing as a global the host defines, by name index.
     host_globals: Vec<HostGlobal>,
 }
@@ -26,7 +25,7 @@ struct HostGlobal {
     is_extra: bool,
 }
 
-/// `chunk`'s semantic, read against the stdlib of `target`, the dialect
+/// `chunk`'s semantic, read against `stdlib`, a library of the dialect
 /// `chunk` was parsed as, and beside it the checker's errors.
 ///
 /// The semantic holds every part: the checker's errors, the node table,
@@ -37,9 +36,9 @@ struct HostGlobal {
 pub fn analyze<'ast>(
     chunk: &'ast Chunk<'ast>,
     counts: TreeCounts,
-    target: LuaTarget,
+    stdlib: &'ast StdlibLibrary<'ast>,
 ) -> (SemanticAnalysis<'ast>, Vec<Diagnostic>) {
-    debug_assert_eq!(chunk.version, target.version(), "the target is the chunk's dialect");
+    debug_assert_eq!(chunk.version, stdlib.target.version(), "the target is the chunk's dialect");
     let built = SemanticBuilder::new()
         .with_counts(counts)
         .with_check(true)
@@ -47,7 +46,6 @@ pub fn analyze<'ast>(
         .with_requires(true)
         .build(chunk);
     let semantic = built.semantic;
-    let stdlib = library_for(target);
     let symbol_shapes = symbol_shapes(&semantic, stdlib);
     let host_globals = semantic
         .scoping()
@@ -72,7 +70,7 @@ impl<'ast> SemanticAnalysis<'ast> {
     }
 
     #[must_use]
-    pub const fn stdlib(&self) -> &'static StdlibLibrary {
+    pub const fn stdlib(&self) -> &'ast StdlibLibrary<'ast> {
         self.stdlib
     }
 
@@ -149,7 +147,7 @@ impl<'ast> SemanticAnalysis<'ast> {
     /// `symbol`'s shape: a never-reassigned local initialized from a value
     /// of known shape, such as `local f = io.open(...)`.
     #[must_use]
-    pub fn symbol_shape(&self, symbol: SymbolId) -> Option<&'static str> {
+    pub fn symbol_shape(&self, symbol: SymbolId) -> Option<&'ast str> {
         self.symbol_shapes.get(symbol.index()).copied().flatten()
     }
 
@@ -174,7 +172,7 @@ impl<'ast> SemanticAnalysis<'ast> {
         ChainCallees::new(self.shape_resolver(), chain)
     }
 
-    fn shape_resolver(&self) -> ShapeResolver<'_> {
+    fn shape_resolver(&self) -> ShapeResolver<'_, 'ast> {
         ShapeResolver::new(self.scoping(), self.stdlib, &self.symbol_shapes)
     }
 
@@ -191,7 +189,7 @@ impl<'ast> SemanticAnalysis<'ast> {
         &self,
         segments: &[&str],
         root: &Reference,
-    ) -> Option<&'static StdlibEntry> {
+    ) -> Option<&'ast StdlibEntry<'ast>> {
         let members = segments.get(1..)?;
         match root.resolved {
             Some(symbol) => {
@@ -215,13 +213,15 @@ mod tests {
 
     use super::*;
     use crate::fixtures::parse;
+    use crate::stdlib_catalog::library_for;
 
     fn analyze_source<'ast>(
         allocator: &'ast Allocator,
         source: &'ast str,
         version: LuaVersion,
     ) -> SemanticAnalysis<'ast> {
-        analyze(parse(allocator, source, version), TreeCounts::default(), version.into()).0
+        let stdlib = library_for(version.into());
+        analyze(parse(allocator, source, version), TreeCounts::default(), stdlib).0
     }
 
     #[test]
@@ -342,8 +342,8 @@ return y",
     fn roblox_globals_known_only_on_roblox() {
         let allocator = Allocator::new();
         let chunk = parse(&allocator, "print(game, bit32)", LuaVersion::Luau);
-        let (standalone, _) = analyze(chunk, TreeCounts::default(), LuaTarget::Luau);
-        let (roblox, _) = analyze(chunk, TreeCounts::default(), LuaTarget::LuauRoblox);
+        let (standalone, _) = analyze(chunk, TreeCounts::default(), library_for(LuaTarget::Luau));
+        let (roblox, _) = analyze(chunk, TreeCounts::default(), library_for(LuaTarget::LuauRoblox));
         assert!(!standalone.is_known_global("game"));
         assert!(roblox.is_known_global("game"));
         assert!(standalone.is_known_global("bit32"));
@@ -353,7 +353,7 @@ return y",
     fn resolve_last_statement_call(source: &str, version: LuaVersion) -> Option<String> {
         let allocator = Allocator::new();
         let chunk = parse(&allocator, source, version);
-        let (analysis, _) = analyze(chunk, TreeCounts::default(), version.into());
+        let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(version.into()));
         let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
             panic!("the last statement must be a call");
         };
@@ -453,7 +453,7 @@ local x <const> = 1
 x = 2",
             LuaVersion::Lua54,
         );
-        let (_, diagnostics) = analyze(chunk, TreeCounts::default(), LuaTarget::Lua54);
+        let (_, diagnostics) = analyze(chunk, TreeCounts::default(), library_for(LuaTarget::Lua54));
         let messages: Vec<&str> = diagnostics.iter().map(|diag| &*diag.message).collect();
         assert_eq!(messages, ["attempt to assign to const variable `x`"]);
     }

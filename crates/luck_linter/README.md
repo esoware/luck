@@ -4,7 +4,7 @@ The Lua and Luau linter, with scope-aware rules, auto-fixes, and suppression com
 
 ## Overview
 
-`analyze` reads a parse's lint directives and runs `luck_stdlib::analyze` over it, with the configured extra globals defined, which builds the chunk's `luck_semantic::Semantic`: its scoping, its `AstNodes` table, every node in source preorder with its parent and scope, and its `require` sites. The rules read both. They run as oxlint's do: a rule's `run` takes one node of the types it lists, and every such rule runs in one pass over the node table, or its `run_once` reads the file once, as the scoping or the directives. A rule finds a node's context through its parents, such as whether a chain is a call statement or what an assignment writes. Each function's control-flow graph, and the stdlib entries a chain's calls reach, are built once, the first time a rule asks, and every rule shares them. A rule that asks what an expression evaluates to, such as whether a condition is always truthy or a divisor always zero, asks `luck_value`, as the minifier does, with a context that knows a local from a global. A file is linted on the thread that asks, and a host lints files in parallel. Each finding becomes a `Message`: a `luck_diagnostics::Diagnostic` coded with its rule's name, at the severity config or a directive gives it, with a link to the rule's source and any labels, help, and editor tag the rule gives, and the fix, if any. A directive covering a finding drops it or sets its severity. A parse with errors gives its E008 errors as messages and runs no rules, so nothing can turn one off, and so does a chunk Lua refuses to compile for an error semantic analysis finds, such as a write to a `<const>` local, a `goto` no label takes, or more locals active in a function than Lua compiles.
+`analyze` reads a parse's lint directives and runs `luck_stdlib::analyze` over it against a standard library, built in or with a project's std definitions layered over it, with the configured extra globals defined, which builds the chunk's `luck_semantic::Semantic`: its scoping, its `AstNodes` table, every node in source preorder with its parent and scope, and its `require` sites. The rules read both. They run as oxlint's do: a rule's `run` takes one node of the types it lists, and every such rule runs in one pass over the node table, or its `run_once` reads the file once, as the scoping or the directives. A rule finds a node's context through its parents, such as whether a chain is a call statement or what an assignment writes. Each function's control-flow graph, and the stdlib entries a chain's calls reach, are built once, the first time a rule asks, and every rule shares them. A rule that asks what an expression evaluates to, such as whether a condition is always truthy or a divisor always zero, asks `luck_value`, as the minifier does, with a context that knows a local from a global. A file is linted on the thread that asks, and a host lints files in parallel. Each finding becomes a `Message`: a `luck_diagnostics::Diagnostic` coded with its rule's name, at the severity config or a directive gives it, with a link to the rule's source and any labels, help, and editor tag the rule gives, and the fix, if any. A directive covering a finding drops it or sets its severity. A parse with errors gives its E008 errors as messages and runs no rules, so nothing can turn one off, and so does a chunk Lua refuses to compile for an error semantic analysis finds, such as a write to a `<const>` local, a `goto` no label takes, or more locals active in a function than Lua compiles.
 
 A diagnostic may carry a `Fix`, a set of text edits applied together, of one `FixKind`. A `Fix` keeps what the code does, so `--fix` and the editor's fix-all apply it. A `Suggestion` can change what the code does, or hides a problem rather than solving it, as renaming an unused variable to `_x` does, so only the user applies it, as an editor quick fix or with `--fix-suggestions`. Each rule declares the kinds its fixes come in. A host names the kinds it applies, and a rule builds a fix only of those, so a plain lint builds none. Every fix but the one that removes an unused directive passes one check before it's kept: an edit that replaces a comment must carry it, or the fix is dropped.
 
@@ -16,7 +16,7 @@ A diagnostic may carry a `Fix`, a set of text edits applied together, of one `Fi
 
 ## Usage
 
-- `lint(allocator, source, target, config, fixes)` parses and lints, building the fixes of the kinds `fixes` holds.
+- `lint(allocator, source, stdlib, config, fixes)` parses as `stdlib`'s target and lints, building the fixes of the kinds `fixes` holds.
 - `lint_parsed` lints a parse the caller holds. A host that also keeps the analysis, as the language server does, calls `analyze` and then `lint_analyzed`, which asks the host between rules whether to stop, so a lint of a version the user has already edited stops early.
 - A source is bytes, as Lua reads it, and so is a fix's replacement, which keeps the bytes of the code it copies.
 - `fix` lints and applies the fixes of the kinds asked for, round after round, until none is left. Of two overlapping fixes a round applies one, and the next round lints the result again. It returns the fixed source's parse and diagnostics, or an error when a round's fixes break the syntax or fixes are still coming after 10 rounds, so a caller writes back every fix or none.
@@ -26,11 +26,13 @@ A diagnostic may carry a `Fix`, a set of text edits applied together, of one `Fi
 ```rust
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig};
+use luck_stdlib::library_for;
 use luck_token::LuaTarget;
 
 let allocator = Allocator::new();
 let config = LintConfig::default();
 let source = b"print(undefined_name)";
-let diags = luck_linter::lint(&allocator, source, LuaTarget::Lua54, &config, FixKind::empty());
+let stdlib = library_for(LuaTarget::Lua54);
+let diags = luck_linter::lint(&allocator, source, stdlib, &config, FixKind::empty());
 assert_eq!(diags[0].code, "undefined_variable");
 ```

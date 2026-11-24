@@ -15,7 +15,8 @@ use luck_diagnostics::FileDiagnostics;
 use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
 use luck_resolver::{ResolveOptions, Resolver};
-use luck_token::{LuaTarget, LuaVersion};
+use luck_stdlib::Stdlib;
+use luck_token::LuaVersion;
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -27,7 +28,9 @@ const EDITORCONFIG_FILE_NAME: &str = ".editorconfig";
 #[derive(Debug)]
 pub(crate) struct DocumentSettings {
     pub project: Arc<LoadedProject>,
-    pub target: LuaTarget,
+    /// The standard library of the document's dialect, with the project's
+    /// std definitions over it.
+    pub stdlib: Stdlib,
     /// The project's lint settings, with the overrides the path matches.
     /// Publishing, code actions, and fix-all all lint with these, so none of
     /// them fixes a diagnostic the user was never shown.
@@ -113,7 +116,8 @@ struct Lookups {
     /// watched change has to touch to matter.
     config_names: FxHashSet<OsString>,
     /// Each config file a reported load error is in. While there's one, any
-    /// JSON file a broken chain might name matters.
+    /// JSON file a broken chain might extend, and any TOML file it might name
+    /// as a std definition, matters.
     broken: Vec<PathBuf>,
 }
 
@@ -178,7 +182,7 @@ impl SettingsCache {
         let loaded = project.project();
         let settings = DocumentSettings {
             project: Arc::clone(&project),
-            target: loaded.target_for(path),
+            stdlib: loaded.stdlib_for(path).clone(),
             lint: loaded.lint_for(path),
             format: loaded.format_options(path, Some(&editorconfigs)),
             is_included: path.is_none_or(|file| loaded.filter().is_included(file)),
@@ -248,7 +252,9 @@ impl SettingsCache {
             || name == EDITORCONFIG_FILE_NAME
             || lookups.config_names.contains(name)
             || (!lookups.broken.is_empty()
-                && path.extension().is_some_and(|extension| extension == "json"))
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "json" || extension == "toml"))
     }
 
     /// Forgets every lookup, every `.editorconfig` read, and every resolver,
@@ -274,6 +280,8 @@ impl SettingsCache {
 mod tests {
     use core::ptr;
     use std::fs;
+
+    use luck_token::LuaTarget;
 
     use super::*;
 

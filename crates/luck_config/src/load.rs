@@ -4,6 +4,7 @@ use std::path::{self, Path, PathBuf};
 use json5::char::{is_json5_identifier, is_json5_line_terminator};
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
+use luck_stdlib::StdlibDefinition;
 use luck_token::Span;
 use rustc_hash::FxHashMap;
 
@@ -94,8 +95,20 @@ impl ExtendsWalk {
         if !self.files.contains(&canonical) {
             self.files.push(canonical.clone());
         }
-        let config = parse(&text).map_err(|diag| in_file(path, diag))?;
+        let mut config = parse(&text).map_err(|diag| in_file(path, diag))?;
         let directory = config_directory(path);
+        for std_path in config.std.iter_mut().flatten() {
+            let named = std_path.to_string_lossy().into_owned();
+            *std_path = directory.join(&*std_path).canonicalize().map_err(|e| {
+                in_file(
+                    path,
+                    Diagnostic::e014(
+                        Some(text_span(&text, &named)),
+                        &format!("`std` names `{named}`, which can't be read: {e}"),
+                    ),
+                )
+            })?;
+        }
         let own_boundary = if config.root == Some(true) {
             Some(directory.canonicalize().map_err(|e| {
                 in_file(path, Diagnostic::e010(&display(&directory), &e.to_string()))
@@ -225,6 +238,19 @@ fn text_span(text: &str, name: &str) -> Span {
         .map_or_else(Span::default, |start| {
             Span::from_indices(start, start.saturating_add(name.len()).saturating_add(2))
         })
+}
+
+/// The std definition at `path`, which names a file the `std` of a config
+/// resolved.
+///
+/// # Errors
+///
+/// Returns E010 when the file can't be read, and E014 when it isn't a valid
+/// std definition, in the file.
+pub(crate) fn read_std_definition(path: &Path) -> Result<StdlibDefinition, FileDiagnostics> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| in_file(path, Diagnostic::e010(&display(path), &e.to_string())))?;
+    StdlibDefinition::parse(&text).map_err(|diag| in_file(path, diag))
 }
 
 /// The form a message names a file in.

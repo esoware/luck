@@ -9,22 +9,24 @@ use core::{fmt, mem};
 use luck_allocator::Allocator;
 use luck_linter::{Analysis, LintConfig};
 use luck_parser::ParseResult;
-use luck_token::LuaTarget;
+use luck_stdlib::Stdlib;
 use parking_lot::Mutex;
 use self_cell::{MutBorrow, self_cell};
 
 /// A text, its parse in an arena of its own, and the analysis of that parse,
 /// which nothing changes once they're built.
 ///
-/// A parse borrows its arena and an analysis its parse, so they're two cells,
-/// as `oxc_semantic` holds its arena and scoping. The arena sits in a
-/// [`MutBorrow`], which lends it once, to the parse, so nothing can reach it
-/// again from another thread, and the whole is `Sync` with no `unsafe`.
+/// A parse borrows its arena and an analysis its parse and its standard
+/// library, so they're two cells, as `oxc_semantic` holds its arena and
+/// scoping. The arena sits in a [`MutBorrow`], which lends it once, to the
+/// parse, so nothing can reach it again from another thread, and the whole
+/// is `Sync` with no `unsafe`.
 pub(crate) struct Analyzed(AnalyzedCell);
 
 struct Source {
     text: Arc<str>,
     arena: MutBorrow<Arena>,
+    stdlib: Stdlib,
 }
 
 self_cell!(
@@ -44,25 +46,24 @@ self_cell!(
 );
 
 impl Analyzed {
-    /// Parses `text` in `arena`, keeping its tokens, and analyzes it for
-    /// `target`, with `config`'s extra globals defined.
-    pub(crate) fn new(
-        text: Arc<str>,
-        target: LuaTarget,
-        config: &LintConfig,
-        arena: Arena,
-    ) -> Self {
-        let owner = Source { text, arena: MutBorrow::new(arena) };
+    /// Parses `text` in `arena` as `stdlib`'s target, keeping its tokens, and
+    /// analyzes it against `stdlib`, with `config`'s extra globals defined.
+    pub(crate) fn new(text: Arc<str>, stdlib: Stdlib, config: &LintConfig, arena: Arena) -> Self {
+        let owner = Source { text, arena: MutBorrow::new(arena), stdlib };
         let parsed = ParsedCell::new(owner, |source| {
             let lent: &Arena = source.arena.borrow_mut();
             luck_parser::parse_with_tokens(
                 &lent.allocator,
                 source.text.as_bytes(),
-                target.version(),
+                source.stdlib.target().version(),
             )
         });
         let analyzed = AnalyzedCell::new(parsed, |cell| {
-            luck_linter::analyze(cell.borrow_dependent(), target, config)
+            luck_linter::analyze(
+                cell.borrow_dependent(),
+                cell.borrow_owner().stdlib.library(),
+                config,
+            )
         });
         Self(analyzed)
     }
@@ -141,11 +142,14 @@ impl SpareArena {
 mod tests {
     use std::thread;
 
+    use luck_token::LuaTarget;
+
     use super::*;
 
     fn analyzed(text: &str, spare: &Arc<SpareArena>) -> Analyzed {
         let config = LintConfig::default();
-        Analyzed::new(Arc::from(text), LuaTarget::Lua54, &config, Arena::from_spare(spare))
+        let stdlib = Stdlib::new(LuaTarget::Lua54);
+        Analyzed::new(Arc::from(text), stdlib, &config, Arena::from_spare(spare))
     }
 
     #[test]

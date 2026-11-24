@@ -4,6 +4,7 @@ use std::{fs, io};
 use luck_allocator::Allocator;
 use luck_benchmark_files::TestFile;
 use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
+use luck_stdlib::library_for;
 
 use crate::every_rule;
 use crate::snapshot::render_entry;
@@ -26,7 +27,7 @@ pub(crate) fn run(allocator: &mut Allocator, files: &[TestFile]) -> io::Result<(
         allocator.reset();
         let version = file.target.version();
         let parse = luck_parser::parse(allocator, &file.source_text, version);
-        let analysis = luck_linter::analyze(&parse, file.target, &every_rule);
+        let analysis = luck_linter::analyze(&parse, library_for(file.target), &every_rule);
         let mut entries: Vec<(&str, StageStats)> = luck_linter::rules()
             .map(|rule| {
                 let config = only(rule.name());

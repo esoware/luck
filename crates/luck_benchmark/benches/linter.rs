@@ -2,6 +2,7 @@ use luck_allocator::Allocator;
 use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use luck_benchmark_files::{test_files, test_projects};
 use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
+use luck_stdlib::library_for;
 
 /// Each iteration analyzes and lints a parse made once, since the linter's
 /// node table is built in the analysis walk.
@@ -25,7 +26,7 @@ fn bench_linter(criterion: &mut Criterion) {
             bencher.iter(|| {
                 luck_linter::lint_parsed(
                     black_box(&parse_result),
-                    file.target,
+                    library_for(file.target),
                     &config,
                     FixKind::empty(),
                 )
@@ -42,7 +43,7 @@ fn bench_linter(criterion: &mut Criterion) {
                 for parse_result in &parse_results {
                     black_box(luck_linter::lint_parsed(
                         black_box(parse_result),
-                        project.target,
+                        library_for(project.target),
                         &config,
                         FixKind::empty(),
                     ));

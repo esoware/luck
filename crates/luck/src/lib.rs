@@ -26,8 +26,9 @@
 //! - `formatter` - Prettier-style formatter (feature `formatter`)
 //! - `semantic` - Scoping, compile-time checks, the node table, and `require`
 //!   sites, in one pass (feature `semantic`)
-//! - `stdlib` - Each target's standard library, and what a chunk reaches in
-//!   it (feature `stdlib`, enables `semantic`)
+//! - `stdlib` - Each target's standard library, the std definitions that
+//!   layer a host's library over one, and what a chunk reaches in it
+//!   (feature `stdlib`, enables `semantic`)
 //! - `linter` - Rule engine with auto-fixes (feature `linter`, enables
 //!   `stdlib`)
 //! - `config` - `luck.json` and `.editorconfig` loading (feature `config`,
@@ -120,9 +121,10 @@
 //! # }
 //! ```
 //!
-//! Lint, with feature `linter`. `linter::lint_parsed` lints a parse a caller
-//! already holds, and `linter::fix` applies the fixes of the kinds asked for
-//! until none is left, returning the fixed source's parse and diagnostics:
+//! Lint, with feature `linter`, against a target's standard library.
+//! `linter::lint_parsed` lints a parse a caller already holds, and
+//! `linter::fix` applies the fixes of the kinds asked for until none is left,
+//! returning the fixed source's parse and diagnostics:
 //!
 //! ```
 //! # #[cfg(feature = "linter")] {
@@ -132,11 +134,12 @@
 //!
 //! let allocator = Allocator::new();
 //! let config = LintConfig::default();
+//! let stdlib = luck::stdlib::library_for(LuaTarget::Lua54);
 //! let source = b"print(undefined_name)";
-//! let diags = luck::linter::lint(&allocator, source, LuaTarget::Lua54, &config, FixKind::empty());
+//! let diags = luck::linter::lint(&allocator, source, stdlib, &config, FixKind::empty());
 //! assert_eq!(diags[0].code, "undefined_variable");
 //!
-//! let fixed = luck::linter::fix(&allocator, b"unpack(t)", LuaTarget::Lua54, &config, FixKind::Fix);
+//! let fixed = luck::linter::fix(&allocator, b"unpack(t)", stdlib, &config, FixKind::Fix);
 //! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"table.unpack(t)"[..]));
 //! # }
 //! ```

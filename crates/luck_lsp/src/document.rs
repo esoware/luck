@@ -184,7 +184,7 @@ impl DocumentState {
         line_index: Arc<LineIndex>,
         arena: Arena,
     ) -> Self {
-        let analyzed = Analyzed::new(text, settings.target, &settings.lint, arena);
+        let analyzed = Analyzed::new(text, settings.stdlib.clone(), &settings.lint, arena);
         Self {
             settings,
             line_index,

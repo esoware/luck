@@ -168,11 +168,8 @@ fn regenerate_roblox_api() {
     generated.push_str(
         "# Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).\n",
     );
-    generated
-        .push_str("# Spliced into the luau_roblox library; luau_roblox.toml params reference\n");
-    generated.push_str(
-        "# these sets by name (see tests/it/stdlib_catalog.rs for the constant_sets schema).\n",
-    );
+    generated.push_str("# The constant sets luau_roblox.toml's params name, which `just stdlib`\n");
+    generated.push_str("# layers it over.\n");
     generated.push_str("# Settings-provider classes (settings() / UserSettings() children) are\n");
     generated.push_str(
         "# excluded from roblox_services: they are not reachable via game:GetService.\n\n",
@@ -209,8 +206,7 @@ values = [
 }
 
 /// Write `roblox_enums.toml`: every enum type and item in the dump, with
-/// deprecation tags carried over. `splice_enums` in `tests/it/stdlib_catalog.rs`
-/// splices it in.
+/// deprecation tags carried over.
 ///
 /// # Errors
 ///
@@ -246,11 +242,10 @@ fn write_enum_file(dump: &serde_json::Value) -> Result<(), Box<dyn Error>> {
     generated.push_str(
         "# Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).\n",
     );
-    generated.push_str("# Spliced into the luau_roblox library: each [enums.<Type>] becomes an\n");
-    generated.push_str("# Enum-shaped member namespace of the Enum global, each item an\n");
-    generated.push_str(
-        "# EnumItem-shaped read-only constant (see tests/it/stdlib_catalog.rs splice_enums).\n",
-    );
+    generated
+        .push_str("# Each [enums.<Type>] is an Enum-shaped namespace of the Enum global, and\n");
+    generated.push_str("# each item an EnumItem-shaped read-only constant, which `just stdlib`\n");
+    generated.push_str("# layers over luau_roblox.toml.\n");
     for (name, is_deprecated, items) in &enum_types {
         writeln!(generated, "\n[enums.{name}]")?;
         if *is_deprecated {

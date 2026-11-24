@@ -1,5 +1,6 @@
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig};
+use luck_stdlib::library_for;
 use luck_token::{LuaTarget, Span};
 
 use crate::common::{enable, lint};
@@ -10,8 +11,13 @@ use crate::common::{enable, lint};
 fn flags_a_lenient_escape_of_a_byte_that_is_not_utf8() {
     let source = b"print('caf\\\xE9') -- d\xE9j\xE0";
     let config = enable("bad_string_escape");
-    let diags =
-        luck_linter::lint(&Allocator::new(), source, LuaTarget::Lua51, &config, FixKind::empty());
+    let diags = luck_linter::lint(
+        &Allocator::new(),
+        source,
+        library_for(LuaTarget::Lua51),
+        &config,
+        FixKind::empty(),
+    );
     let found: Vec<(&str, &str, Span)> =
         diags.iter().map(|diag| (diag.code, &*diag.message, diag.span())).collect();
     assert_eq!(found, [("bad_string_escape", "invalid string escape `\\xe9`", Span::new(10, 12))]);

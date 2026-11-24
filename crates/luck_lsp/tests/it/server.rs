@@ -1452,6 +1452,52 @@ fn watched_config_change_reseeds_open_documents_with_extra_globals() {
 }
 
 #[test]
+fn a_std_definition_reaches_lints_and_hover_and_an_edit_to_it_reseeds_them() {
+    let love = r#"
+[globals.love]
+kind = "namespace"
+
+[globals.love.members.graphics]
+kind = "namespace"
+
+[globals.love.members.graphics.members.print]
+kind = "function"
+params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
+"#;
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(directory.path().join("luck.json"), r#"{ "std": ["love.toml"] }"#)
+        .expect("write luck.json");
+    let std_path = directory.path().join("love.toml");
+    fs::write(&std_path, love).expect("write love.toml");
+    let path = directory.path().join("main.lua");
+    let text = "love.graphics.print('hello')\n";
+    fs::write(&path, text).expect("write main.lua");
+    let uri = Uri::from_file_path(&path).expect("file path URI");
+
+    let mut client = Client::start();
+    client.open(&uri, text);
+    let diags = client.diagnostics(&uri, Some(1i32));
+    let arity = "`love.graphics.print` requires at least 3 argument(s), got 1";
+    assert!(diags.iter().any(|diag| diag.message == arity), "{diags:?}");
+    let hover = client
+        .request::<HoverRequest>(HoverParams {
+            text_document_position_params: position_params(&uri, 0, 16),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        })
+        .expect("cursor on love.graphics.print should hover");
+    let HoverContents::Markup(markup) = hover.contents else {
+        panic!("hover should return markup contents");
+    };
+    assert!(markup.value.contains("love.graphics.print"), "{}", markup.value);
+
+    fs::write(&std_path, love.replace(", { kind = \"number\" }, { kind = \"number\" }", ""))
+        .expect("rewrite love.toml");
+    client.file_changed(&std_path, FileChangeType::CHANGED);
+    let reseeded = client.diagnostics(&uri, Some(1i32));
+    assert!(reseeded.iter().all(|diag| diag.message != arity), "{reseeded:?}");
+}
+
+#[test]
 fn a_change_sent_right_after_the_open_is_not_lost() {
     let mut client = Client::start();
     let uri = workspace_uri("quick.lua");

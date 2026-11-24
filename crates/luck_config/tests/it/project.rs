@@ -172,6 +172,85 @@ fn records_every_config_file_it_read() {
     assert_eq!(project.files(), [canonical("luck.json"), canonical("base.json")]);
 }
 
+const LOVE: &str = r#"
+[globals.love]
+kind = "namespace"
+
+[globals.love.members.draw]
+kind = "function"
+is_read_only = false
+"#;
+
+#[test]
+fn std_definitions_layer_over_the_library_of_each_dialect() {
+    let (directory, project) = loaded(&[
+        ("std/love.toml", LOVE),
+        ("luck.json", r#"{ "lua": "lua51", "luau": "roblox", "std": ["std/love.toml"] }"#),
+    ]);
+    for (file, target) in [("main.lua", LuaTarget::Lua51), ("main.luau", LuaTarget::LuauRoblox)] {
+        let stdlib = project.stdlib_for(Some(Path::new(file)));
+        assert_eq!(stdlib.target(), target);
+        assert!(stdlib.library().lookup(["love", "draw"]).is_some(), "{file}");
+        assert!(stdlib.library().lookup(["print"]).is_some(), "{file}");
+    }
+    let std_file = directory.path().join("std/love.toml").canonicalize().expect("exists");
+    assert!(project.files().contains(&std_file), "{:?}", project.files());
+}
+
+#[test]
+fn a_std_path_is_relative_to_the_file_that_names_it() {
+    let (_directory, project) = loaded(&[
+        ("shared/love.toml", LOVE),
+        ("shared/base.json", r#"{ "std": ["love.toml"] }"#),
+        ("luck.json", r#"{ "extends": ["shared/base.json"], "std": ["shared/love.toml"] }"#),
+    ]);
+    let stdlib = project.stdlib_for(None);
+    assert!(stdlib.library().lookup(["love"]).is_some());
+    assert_eq!(project.files().len(), 3, "one std file, read once: {:?}", project.files());
+}
+
+#[test]
+fn a_std_file_that_cannot_be_read_is_reported_on_its_name() {
+    let text = r#"{ "std": ["gone.toml"] }"#;
+    let directory = project_with(&[("luck.json", text)]);
+    let (path, diag) = load_error(&directory.path().join("luck.json"));
+    assert!(path.ends_with("luck.json"), "{path:?}");
+    assert!(diag.message.contains("`std` names `gone.toml`, which can't be read"), "{diag:?}");
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""gone.toml""#[..]));
+}
+
+#[test]
+fn an_invalid_std_definition_is_reported_in_it() {
+    let definition = r#"
+[globals.love]
+kind = "namspace"
+"#;
+    let directory =
+        project_with(&[("love.toml", definition), ("luck.json", r#"{ "std": ["love.toml"] }"#)]);
+    let (path, diag) = load_error(&directory.path().join("luck.json"));
+    assert!(path.ends_with("love.toml"), "{path:?}");
+    assert_eq!(diag.code, "E014");
+    assert!(diag.message.contains("unknown variant `namspace`"), "{diag:?}");
+    assert!(diag.span.is_some(), "{diag:?}");
+}
+
+#[test]
+fn a_std_definition_that_names_what_no_library_declares_is_reported_in_it() {
+    let definition = r#"
+[globals.screen]
+kind = "property"
+shape = "Sceen"
+"#;
+    let directory =
+        project_with(&[("love.toml", definition), ("luck.json", r#"{ "std": ["love.toml"] }"#)]);
+    let (path, diag) = load_error(&directory.path().join("luck.json"));
+    assert!(path.ends_with("love.toml"), "{path:?}");
+    assert_eq!(
+        diag.message,
+        "invalid config: `screen` names the shape `Sceen`, which no library declares"
+    );
+}
+
 #[test]
 fn builds_resolve_entries_profiles_and_outputs() {
     let (directory, project) = loaded(&[

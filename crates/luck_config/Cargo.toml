@@ -21,6 +21,7 @@ luck_formatter   = { workspace = true, features = ["serde"] }
 luck_linter      = { workspace = true, features = ["serde"] }
 luck_minifier    = { workspace = true, features = ["serde"] }
 luck_resolver    = { workspace = true }
+luck_stdlib      = { workspace = true }
 luck_token       = { workspace = true, features = ["serde"] }
 
 globset     = { workspace = true }

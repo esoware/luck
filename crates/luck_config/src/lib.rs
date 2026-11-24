@@ -2,13 +2,14 @@
 //!
 //! Loads a `luck.json`, through the files it `extends`, into one validated
 //! [`Project`], which every luck command and the language server ask for
-//! each file's dialect, lint settings, and format options, and for the
-//! build's entries and module resolution.
+//! each file's dialect and standard library, lint settings, and format
+//! options, and for the build's entries and module resolution.
 //!
 //! Everything is checked at load: the JSON5 syntax, every key, the dialects,
-//! the globs, the lint rule names and options, and the build keys that can't
-//! go together. A problem comes back as one E014 [`Diagnostic`] placed where
-//! it is, in the [`FileDiagnostics`] of the file at fault.
+//! the globs, the lint rule names and options, the build keys that can't go
+//! together, and the std definitions `std` names, which layer over each
+//! dialect's library. A problem comes back as one E014 [`Diagnostic`] placed
+//! where it is, in the [`FileDiagnostics`] of the file at fault.
 //!
 //! Each tool derives the `luck.json` shape of its own option types behind its
 //! `serde` feature, which this crate turns on, so `transforms`,

@@ -8,9 +8,11 @@ Loads a `luck.json` into one validated project, which every luck command and the
 
 Each tool defines the type of its own section, so `transforms`, `dynamic_require`, and `lint` deserialize straight into `TransformConfig`, `DynamicRequire`, and `LintConfig`, through the `serde` features this crate turns on, and the dialect keys into `LuaTarget`. The linter checks its rule names as its section deserializes.
 
+`std` names std definition files, each relative to the config that names it, as `extends` does, and listed after the ones of the files it extends. `Project::load` reads each as a `luck_stdlib::StdlibDefinition` and layers them, in order, over the library of each dialect, so a std file with a problem is reported in it, and a project's files include its std files, which the language server watches.
+
 A project gives each file its settings:
 
-- `target_for` picks its dialect: the `luau` key for a `.luau` file and the `lua` key for any other, and either can name any dialect.
+- `target_for` picks its dialect: the `luau` key for a `.luau` file and the `lua` key for any other, and either can name any dialect. `stdlib_for` gives that dialect's standard library with the `std` definitions layered over it, which the linter and the language server read.
 - `lint_for` layers the `overrides` the file's path matches over the `lint` section, in order, as oxlint's `overrides` do. `overlay_lint` layers command-line flags over every file's, overrides included.
 - `format_options` layers the defaults, then `.editorconfig`, then the `format` section, then the matching `overrides`.
 - `filter` holds `include` and `exclude`, and `bundle_options` and `search_paths` resolve modules from the project's root.

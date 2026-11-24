@@ -12,11 +12,13 @@
 //! ```
 //! use luck_allocator::Allocator;
 //! use luck_linter::{FixKind, LintConfig};
+//! use luck_stdlib::library_for;
 //! use luck_token::LuaTarget;
 //!
 //! let allocator = Allocator::new();
 //! let config = LintConfig::default();
-//! let diags = luck_linter::lint(&allocator, b"print(1)", LuaTarget::Lua54, &config, FixKind::empty());
+//! let stdlib = library_for(LuaTarget::Lua54);
+//! let diags = luck_linter::lint(&allocator, b"print(1)", stdlib, &config, FixKind::empty());
 //! assert!(diags.is_empty());
 //! ```
 

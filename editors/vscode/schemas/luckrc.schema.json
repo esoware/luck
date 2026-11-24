@@ -176,6 +176,16 @@
         "type": "string"
       }
     },
+    "std": {
+      "description": "Std definition files, relative to this file's directory, that layer\na host's globals, fields, and functions, such as LOVE's or Neovim's,\nover each dialect's standard library, in order. Each is TOML in the\nformat of luck's own `stdlib_data`, which\n<https://github.com/esoware/luck/tree/main/crates/luck_stdlib#std-definitions>\ndescribes.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
     "transforms": {
       "anyOf": [
         {

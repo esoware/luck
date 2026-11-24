@@ -24,6 +24,7 @@ use luck_formatter::FormatOptions;
 use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
 use luck_minifier::TransformConfig;
 use luck_semantic::SemanticBuilder;
+use luck_stdlib::library_for;
 
 use crate::heap::{HEAP, TrackedAllocator};
 use crate::snapshot::write_snapshot;
@@ -123,7 +124,7 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
     });
     let config = every_rule();
     let ((), linter) = record_stats_in(allocator, || {
-        drop(luck_linter::lint_parsed(&parse, target, &config, FixKind::empty()));
+        drop(luck_linter::lint_parsed(&parse, library_for(target), &config, FixKind::empty()));
     });
     let ((), codegen) = record_stats_in(allocator, || {
         drop(luck_codegen::compact(&parse.chunk, LiteralSpelling::AsWritten));

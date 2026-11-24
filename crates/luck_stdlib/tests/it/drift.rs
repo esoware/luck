@@ -15,7 +15,9 @@ use luck_token::{LuaVersion, offset_to_index};
 
 use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, roblox, standalone_library};
 
-fn global_paths(library: &'static StdlibLibrary) -> BTreeMap<String, &'static StdlibEntry> {
+fn global_paths(
+    library: &'static StdlibLibrary<'static>,
+) -> BTreeMap<String, &'static StdlibEntry<'static>> {
     let mut paths = BTreeMap::new();
     for (name, entry) in &library.globals {
         collect(name, entry, &mut paths);
@@ -23,7 +25,9 @@ fn global_paths(library: &'static StdlibLibrary) -> BTreeMap<String, &'static St
     paths
 }
 
-fn shape_paths(library: &'static StdlibLibrary) -> BTreeMap<String, &'static StdlibEntry> {
+fn shape_paths(
+    library: &'static StdlibLibrary<'static>,
+) -> BTreeMap<String, &'static StdlibEntry<'static>> {
     let mut paths = BTreeMap::new();
     for (shape_name, shape) in &library.shapes {
         for (member, entry) in &shape.members {
@@ -33,7 +37,9 @@ fn shape_paths(library: &'static StdlibLibrary) -> BTreeMap<String, &'static Std
     paths
 }
 
-fn all_entries(library: &'static StdlibLibrary) -> BTreeMap<String, &'static StdlibEntry> {
+fn all_entries(
+    library: &'static StdlibLibrary<'static>,
+) -> BTreeMap<String, &'static StdlibEntry<'static>> {
     let mut entries = global_paths(library);
     entries.extend(shape_paths(library));
     entries
@@ -41,8 +47,8 @@ fn all_entries(library: &'static StdlibLibrary) -> BTreeMap<String, &'static Std
 
 fn collect(
     path: &str,
-    entry: &'static StdlibEntry,
-    paths: &mut BTreeMap<String, &'static StdlibEntry>,
+    entry: &'static StdlibEntry<'static>,
+    paths: &mut BTreeMap<String, &'static StdlibEntry<'static>>,
 ) {
     paths.insert(path.to_owned(), entry);
     if let StdlibEntry::Namespace(namespace) = entry {
@@ -52,7 +58,7 @@ fn collect(
     }
 }
 
-fn param_fingerprint(param: &StdlibParam) -> String {
+fn param_fingerprint(param: &StdlibParam<'_>) -> String {
     let kind = match &param.kind {
         StdlibArgKind::Any => "any".to_owned(),
         StdlibArgKind::Bool => "bool".to_owned(),
@@ -74,7 +80,7 @@ fn param_fingerprint(param: &StdlibParam) -> String {
     )
 }
 
-fn signature_fingerprint(signature: &StdlibSignature) -> String {
+fn signature_fingerprint(signature: &StdlibSignature<'_>) -> String {
     let max_args = signature.max_args.map_or_else(|| "*".to_owned(), |max| max.to_string());
     let params: String = signature.params.iter().map(param_fingerprint).collect();
     format!(" [{}..{max_args}]({params})", signature.min_args)
@@ -82,7 +88,7 @@ fn signature_fingerprint(signature: &StdlibSignature) -> String {
 
 /// Deprecation has its own fingerprint, since it legitimately changes as
 /// APIs age.
-fn fingerprint(entry: &StdlibEntry) -> String {
+fn fingerprint(entry: &StdlibEntry<'_>) -> String {
     match entry {
         StdlibEntry::Function(function) => {
             let mut output = String::from("fn");
@@ -120,7 +126,7 @@ fn fingerprint(entry: &StdlibEntry) -> String {
     }
 }
 
-fn deprecation_fingerprint(entry: &StdlibEntry) -> String {
+fn deprecation_fingerprint(entry: &StdlibEntry<'_>) -> String {
     entry.deprecation().map_or_else(
         || "live".to_owned(),
         |deprecation| {
@@ -309,71 +315,20 @@ fn max_placeholder(template: &str) -> usize {
     max
 }
 
+/// A std definition's format already rules out a function with no
+/// signature, params out of order, and an empty constant list.
 #[test]
-fn signature_shapes_are_internally_consistent() {
+fn overloads_are_distinct_and_constants_unique() {
     let mut violations = Vec::new();
     for (file, library) in all_libraries() {
         for (path, entry) in all_entries(library) {
             let StdlibEntry::Function(function) = entry else {
                 continue;
             };
-            if function.signatures.is_empty() {
-                violations.push(format!("{file} {path}: function with no signatures"));
-                continue;
-            }
             let mut arities = Vec::new();
             for signature in function.signatures {
-                let has_vararg = signature
-                    .params
-                    .last()
-                    .is_some_and(|param| matches!(param.kind, StdlibArgKind::Vararg));
-                if signature
-                    .params
-                    .iter()
-                    .rev()
-                    .skip(1)
-                    .any(|param| matches!(param.kind, StdlibArgKind::Vararg))
-                {
-                    violations.push(format!("{file} {path}: vararg param not in last position"));
-                }
-                match signature.max_args {
-                    None => {
-                        if !has_vararg {
-                            violations.push(format!(
-                                "{file} {path}: unbounded max_args without trailing vararg"
-                            ));
-                        }
-                    }
-                    Some(max) => {
-                        if signature.min_args > max {
-                            violations.push(format!("{file} {path}: min_args > max_args"));
-                        }
-                        if !has_vararg && max != signature.params.len() {
-                            violations.push(format!(
-                                "{file} {path}: max_args {max} != {} declared params",
-                                signature.params.len()
-                            ));
-                        }
-                    }
-                }
-                let required_count = signature
-                    .params
-                    .iter()
-                    .filter(|param| {
-                        param.is_required && !matches!(param.kind, StdlibArgKind::Vararg)
-                    })
-                    .count();
-                if required_count != signature.min_args {
-                    violations.push(format!(
-                        "{file} {path}: min_args {} != {required_count} required params",
-                        signature.min_args
-                    ));
-                }
                 for param in signature.params {
                     if let StdlibArgKind::Constant(values) = param.kind {
-                        if values.is_empty() {
-                            violations.push(format!("{file} {path}: empty constant set"));
-                        }
                         let mut seen_values = BTreeSet::new();
                         for v in values {
                             if !seen_values.insert(v.value) {
@@ -415,13 +370,15 @@ fn shape_references_resolve_and_templates_fit_arity() {
                 }
                 StdlibEntry::Namespace(namespace) => (namespace.shape.as_ref(), 0),
             };
+            // A std definition may name a shape of another library, which
+            // a built-in one has no use for.
             if let Some(shape) = shape_reference
                 && !library.shapes.contains_key(shape)
             {
                 violations.push(format!("{file} {path}: dangling shape reference '{shape}'"));
             }
             let mut check_template = |context: &str,
-                                      deprecation: &StdlibDeprecation,
+                                      deprecation: &StdlibDeprecation<'_>,
                                       budget: usize| {
                 if let Some(replacement) = &deprecation.replacement {
                     let template = replacement.template;
@@ -451,6 +408,13 @@ fn shape_references_resolve_and_templates_fit_arity() {
                         }
                     }
                 }
+            }
+        }
+        for (name, shape) in &library.shapes {
+            if let Some(base) = shape.extends
+                && !library.shapes.contains_key(base)
+            {
+                violations.push(format!("{file} {name}: extends the missing shape '{base}'"));
             }
         }
     }

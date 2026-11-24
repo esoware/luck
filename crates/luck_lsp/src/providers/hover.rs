@@ -58,7 +58,7 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
     })
 }
 
-fn render_entry(path: &[&str], entry: &StdlibEntry, version: LuaVersion) -> String {
+fn render_entry(path: &[&str], entry: &StdlibEntry<'_>, version: LuaVersion) -> String {
     let full_path = render_path(path, entry);
     let body = match entry {
         StdlibEntry::Function(function) => render_function(&full_path, function),
@@ -83,7 +83,7 @@ fn render_entry(path: &[&str], entry: &StdlibEntry, version: LuaVersion) -> Stri
 }
 
 /// Methods render with colon syntax (`game:GetService`).
-fn render_path(path: &[&str], entry: &StdlibEntry) -> String {
+fn render_path(path: &[&str], entry: &StdlibEntry<'_>) -> String {
     if let StdlibEntry::Function(function) = entry
         && function.is_method
         && let Some((method, receiver)) = path.split_last()
@@ -95,7 +95,7 @@ fn render_path(path: &[&str], entry: &StdlibEntry) -> String {
     }
 }
 
-fn render_function(full_path: &str, function: &StdlibFunction) -> String {
+fn render_function(full_path: &str, function: &StdlibFunction<'_>) -> String {
     let signatures = function
         .signatures
         .iter()
@@ -120,18 +120,18 @@ fn render_function(full_path: &str, function: &StdlibFunction) -> String {
     )
 }
 
-fn deprecation_note(deprecated: Option<&StdlibDeprecation>) -> String {
+fn deprecation_note(deprecated: Option<&StdlibDeprecation<'_>>) -> String {
     deprecated.map_or_else(String::new, |deprecation| {
         format!("\n**Deprecated:** {}\n", deprecation.message)
     })
 }
 
-fn render_signature(name: &str, params: &[StdlibParam]) -> String {
+fn render_signature(name: &str, params: &[StdlibParam<'_>]) -> String {
     let rendered = params.iter().map(render_param).collect::<Vec<_>>().join(", ");
     format!("function {name}({rendered})")
 }
 
-fn render_param(param: &StdlibParam) -> String {
+fn render_param(param: &StdlibParam<'_>) -> String {
     let label = param_label(param);
     let StdlibArgKind::Constant(values) = &param.kind else {
         return label;

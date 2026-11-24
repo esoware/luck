@@ -18,19 +18,19 @@ pub(crate) fn parse<'ast>(
 pub(crate) const NUMBERED_VERSIONS: [LuaVersion; 5] =
     [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55];
 
-pub(crate) fn standalone_library(version: LuaVersion) -> &'static StdlibLibrary {
+pub(crate) fn standalone_library(version: LuaVersion) -> &'static StdlibLibrary<'static> {
     library_for(version.into())
 }
 
-pub(crate) fn luau() -> &'static StdlibLibrary {
+pub(crate) fn luau() -> &'static StdlibLibrary<'static> {
     standalone_library(LuaVersion::Luau)
 }
 
-pub(crate) fn roblox() -> &'static StdlibLibrary {
+pub(crate) fn roblox() -> &'static StdlibLibrary<'static> {
     library_for(LuaTarget::LuauRoblox)
 }
 
-pub(crate) fn all_libraries() -> [(&'static str, &'static StdlibLibrary); 7] {
+pub(crate) fn all_libraries() -> [(&'static str, &'static StdlibLibrary<'static>); 7] {
     [
         ("lua51", standalone_library(LuaVersion::Lua51)),
         ("lua52", standalone_library(LuaVersion::Lua52)),

@@ -30,8 +30,9 @@ impl RuleRunner for UndefinedVariable {
             }
             let name = tree.name(reference.name);
             context.diagnostic(
-                Finding::new(format!("undefined variable `{name}`"), reference.span)
-                    .with_help("declare it with `local`, or add it to `extra_globals`"),
+                Finding::new(format!("undefined variable `{name}`"), reference.span).with_help(
+                    "declare it with `local`, or add it to `extra_globals` or a `std` definition",
+                ),
             );
         }
     }

@@ -8,6 +8,7 @@ use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
 use luck_minifier::TransformConfig;
+use luck_stdlib::Stdlib;
 use luck_token::{LuaTarget, LuaVersion};
 
 use crate::build::{BuildConfig, BuildKeys};
@@ -16,7 +17,7 @@ use crate::editorconfig::Editorconfigs;
 use crate::filter::ProjectFilter;
 use crate::format_config::FormatConfig;
 use crate::glob::compiled;
-use crate::load::{self, Loaded, config_directory, in_file};
+use crate::load::{self, Loaded, config_directory, in_file, read_std_definition};
 use crate::path::canonicalize_existing;
 
 /// A `luck.json` loaded through its `extends` chain and validated, or the
@@ -25,8 +26,10 @@ use crate::path::canonicalize_existing;
 pub struct Project {
     root: PathBuf,
     files: Vec<PathBuf>,
-    lua: LuaTarget,
-    luau: LuaTarget,
+    /// The `lua` key's dialect's library, with the `std` definitions over it.
+    lua: Stdlib,
+    /// The `luau` key's dialect's library, with the `std` definitions over it.
+    luau: Stdlib,
     filter: ProjectFilter,
     format: FormatConfig,
     lint: Arc<LintConfig>,
@@ -51,11 +54,11 @@ impl Project {
     ///
     /// # Errors
     ///
-    /// Returns E010 when `config_path` can't be read, and E014 when it or a
-    /// file it extends isn't a valid config, each in the file at fault and
-    /// placed where the problem is.
+    /// Returns E010 when `config_path` or a std definition it names can't be
+    /// read, and E014 when it, a file it extends, or a std definition isn't
+    /// valid, each in the file at fault and placed where the problem is.
     pub fn load(config_path: &Path) -> Result<Self, FileDiagnostics> {
-        let Loaded { config, files } = load::load(config_path)?;
+        let Loaded { config, mut files } = load::load(config_path)?;
         let invalid = |problem: &str| in_file(config_path, Diagnostic::e014(None, problem));
         #[expect(
             clippy::unneeded_field_pattern,
@@ -64,6 +67,7 @@ impl Project {
         let LuckConfig {
             lua,
             luau,
+            std,
             root: _,
             extends: _,
             include,
@@ -103,11 +107,32 @@ impl Project {
             })
             .collect::<Result<_, String>>()
             .map_err(|message| invalid(&message))?;
+        let std_paths = std.unwrap_or_default();
+        let definitions = std_paths
+            .iter()
+            .map(|std_path| read_std_definition(std_path))
+            .collect::<Result<Vec<_>, _>>()?;
+        let layered = |target: LuaTarget| {
+            std_paths.iter().zip(&definitions).try_fold(
+                Stdlib::new(target),
+                |stdlib, (std_path, definition)| {
+                    stdlib.layer(definition).map_err(|diag| in_file(std_path, diag))
+                },
+            )
+        };
+        let targets = (lua.unwrap_or(LuaTarget::Lua54), luau.unwrap_or(LuaTarget::Luau));
+        let stdlibs = if targets.0 == targets.1 {
+            let shared = layered(targets.0)?;
+            (shared.clone(), shared)
+        } else {
+            (layered(targets.0)?, layered(targets.1)?)
+        };
+        files.extend(std_paths);
         Ok(Self {
             root,
             files,
-            lua: lua.unwrap_or(LuaTarget::Lua54),
-            luau: luau.unwrap_or(LuaTarget::Luau),
+            lua: stdlibs.0,
+            luau: stdlibs.1,
             filter,
             format: format.unwrap_or_default(),
             lint: Arc::new(lint.unwrap_or_default()),
@@ -136,8 +161,8 @@ impl Project {
         Self {
             root,
             files: Vec::new(),
-            lua: LuaTarget::Lua54,
-            luau: LuaTarget::Luau,
+            lua: Stdlib::new(LuaTarget::Lua54),
+            luau: Stdlib::new(LuaTarget::Luau),
             filter,
             format: FormatConfig::default(),
             lint: Arc::default(),
@@ -157,7 +182,7 @@ impl Project {
     }
 
     /// The canonical path of every config file the project read: its
-    /// `luck.json` and each file that extends.
+    /// `luck.json`, each file that extends, and each std definition.
     #[must_use]
     pub fn files(&self) -> &[PathBuf] {
         &self.files
@@ -173,10 +198,17 @@ impl Project {
     /// path.
     #[must_use]
     pub fn target_for(&self, path: Option<&Path>) -> LuaTarget {
+        self.stdlib_for(path).target()
+    }
+
+    /// The standard library of the file at `path`: its dialect's, with the
+    /// `std` definitions layered over it.
+    #[must_use]
+    pub fn stdlib_for(&self, path: Option<&Path>) -> &Stdlib {
         if path.and_then(Path::extension).is_some_and(|extension| extension == "luau") {
-            self.luau
+            &self.luau
         } else {
-            self.lua
+            &self.lua
         }
     }
 

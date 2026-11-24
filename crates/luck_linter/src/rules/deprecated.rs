@@ -62,7 +62,7 @@ fn check_call(
         let name = callee.name();
         let finding = Finding::new(format!("`{name}` is deprecated"), call.span())
             .with_tag(Tag::Deprecated)
-            .with_help(deprecation.message);
+            .with_help(deprecation.message.to_owned());
         context.diagnostic(match deprecation.replacement {
             Some(replacement) => {
                 let kind = if replacement.is_exact { FixKind::Fix } else { FixKind::Suggestion };
@@ -99,7 +99,7 @@ fn check_call(
 fn deprecated_params(
     call: Call<'_>,
     callee: &ResolvedCallee<'_>,
-    function: &StdlibFunction,
+    function: &StdlibFunction<'_>,
 ) -> impl Iterator<Item = Finding> {
     let args = CallArgs::new(call.args);
     let arg_count = args.len();
@@ -116,7 +116,7 @@ fn deprecated_params(
                 arg.span(),
             )
             .with_tag(Tag::Deprecated)
-            .with_help(deprecation.message)
+            .with_help(deprecation.message.to_owned())
         })
     })
 }
@@ -130,7 +130,7 @@ fn deprecated_params(
 fn deprecated_constants(
     call: Call<'_>,
     callee: &ResolvedCallee<'_>,
-    function: &StdlibFunction,
+    function: &StdlibFunction<'_>,
 ) -> impl Iterator<Item = Finding> {
     let args = CallArgs::new(call.args);
     let arg_count = args.len();
@@ -148,7 +148,7 @@ fn deprecated_constants(
                 span,
             )
             .with_tag(Tag::Deprecated)
-            .with_help(deprecation.message),
+            .with_help(deprecation.message.to_owned()),
         )
     })
 }
@@ -158,7 +158,7 @@ fn deprecated_constants(
 fn replacement_fix(
     fixer: RuleFixer,
     call: Call<'_>,
-    entry: &StdlibEntry,
+    entry: &StdlibEntry<'_>,
     is_statement: bool,
     name: &str,
     template: &str,
@@ -308,7 +308,7 @@ fn check_field_accesses(
             context.diagnostic(
                 Finding::new(format!("`{}` is deprecated", path.unwrap_or_default()), name.span)
                     .with_tag(Tag::Deprecated)
-                    .with_help(deprecation.message),
+                    .with_help(deprecation.message.to_owned()),
             );
         }
     }

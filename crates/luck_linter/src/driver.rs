@@ -6,8 +6,8 @@ use luck_ast::{AST_TYPE_MAX, AstType};
 use luck_diagnostics::{Diagnostic, Severity};
 use luck_parser::ParseResult;
 use luck_semantic::AstTypesBitset;
-use luck_stdlib::SemanticAnalysis;
-use luck_token::{LintVerb, LuaTarget};
+use luck_stdlib::{SemanticAnalysis, StdlibLibrary};
+use luck_token::LintVerb;
 
 use crate::config::{LintConfig, RuleLevel};
 use crate::context::{ContextHost, LintContext};
@@ -31,9 +31,9 @@ thread_local! {
         RefCell::new(Box::new([const { Vec::new() }; AST_TYPE_COUNT]));
 }
 
-/// Parses `source` into `allocator` and lints it for `target`, whose stdlib
-/// decides which globals exist. A diagnostic carries a fix only of the kinds
-/// `fixes` holds, so an empty set builds none.
+/// Parses `source` into `allocator` as `stdlib`'s target and lints it,
+/// knowing the globals `stdlib` declares. A diagnostic carries a fix only of
+/// the kinds `fixes` holds, so an empty set builds none.
 ///
 /// # Panics
 ///
@@ -42,15 +42,15 @@ thread_local! {
 pub fn lint(
     allocator: &Allocator,
     source: &[u8],
-    target: LuaTarget,
+    stdlib: &StdlibLibrary<'_>,
     config: &LintConfig,
     fixes: FixKind,
 ) -> Vec<Message> {
-    let parse = luck_parser::parse(allocator, source, target.version());
-    lint_parsed(&parse, target, config, fixes)
+    let parse = luck_parser::parse(allocator, source, stdlib.target.version());
+    lint_parsed(&parse, stdlib, config, fixes)
 }
 
-/// [`analyze`]s `parse` for `target` and lints it, building the fixes of
+/// [`analyze`]s `parse` against `stdlib` and lints it, building the fixes of
 /// the kinds `fixes` holds.
 ///
 /// A parse with errors yields its errors, each an E008, and no rules run, so
@@ -64,14 +64,14 @@ pub fn lint(
 #[must_use]
 pub fn lint_parsed(
     parse: &ParseResult<'_>,
-    target: LuaTarget,
+    stdlib: &StdlibLibrary<'_>,
     config: &LintConfig,
     fixes: FixKind,
 ) -> Vec<Message> {
     if !parse.errors.is_empty() {
         return error_messages(&parse.errors);
     }
-    lint_analyzed(parse, &analyze(parse, target, config), config, fixes, &|| false)
+    lint_analyzed(parse, &analyze(parse, stdlib, config), config, fixes, &|| false)
         .unwrap_or_default()
 }
 
@@ -127,17 +127,17 @@ impl<'ast> Analysis<'ast> {
     }
 }
 
-/// `parse`'s analysis for `target`, the dialect it was parsed as, with
-/// `config`'s extra globals defined.
+/// `parse`'s analysis against `stdlib`, a library of the dialect it was
+/// parsed as, with `config`'s extra globals defined.
 #[must_use]
 pub fn analyze<'ast>(
     parse: &'ast ParseResult<'_>,
-    target: LuaTarget,
+    stdlib: &'ast StdlibLibrary<'ast>,
     config: &LintConfig,
 ) -> Analysis<'ast> {
     let chunk = &parse.chunk;
     let mut directives = Directives::new(&parse.comments, parse.source);
-    let (mut semantic, errors) = luck_stdlib::analyze(chunk, parse.counts, target);
+    let (mut semantic, errors) = luck_stdlib::analyze(chunk, parse.counts, stdlib);
     directives.cover_statements(semantic.semantic().nodes(), parse.source, chunk.version);
     semantic.add_extra_globals(config.extra_globals.iter().map(String::as_str));
     Analysis { semantic, errors, directives }
@@ -382,7 +382,8 @@ pub(crate) fn rule_severity(rule: &dyn Rule, config: &LintConfig) -> Option<Seve
 mod tests {
     use core::sync::atomic::{AtomicUsize, Ordering};
 
-    use luck_token::LuaVersion;
+    use luck_stdlib::library_for;
+    use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
 
@@ -401,7 +402,7 @@ local y = nil
 print(x, y)";
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let silent = silent();
-        let analysis = analyze(&parse, LuaTarget::Lua54, &silent);
+        let analysis = analyze(&parse, library_for(LuaTarget::Lua54), &silent);
         let diags = lint_analyzed(&parse, &analysis, &silent, FixKind::empty(), &|| false)
             .expect("nothing cancels it");
         let found: Vec<(&str, u32, Severity)> =
@@ -415,7 +416,7 @@ print(x, y)";
         let source = "local x = nil -- luck: deny(redundant_nil_init)";
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let silent = silent();
-        let analysis = analyze(&parse, LuaTarget::Lua54, &silent);
+        let analysis = analyze(&parse, library_for(LuaTarget::Lua54), &silent);
         let cancelled = lint_analyzed(&parse, &analysis, &silent, FixKind::empty(), &|| true);
         assert_eq!(cancelled, None, "a rule only a directive runs stops too");
     }
@@ -429,7 +430,7 @@ local x = 1
 print(x)";
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let questions = |config: &LintConfig| {
-            let analysis = analyze(&parse, LuaTarget::Lua54, config);
+            let analysis = analyze(&parse, library_for(LuaTarget::Lua54), config);
             let asked = AtomicUsize::new(0);
             let counted = || asked.fetch_add(1, Ordering::Relaxed) == usize::MAX;
             let whole = lint_analyzed(&parse, &analysis, config, FixKind::empty(), &counted)
@@ -444,7 +445,7 @@ print(x)";
         let (asked_without, _) = questions(&without_filter);
         assert_eq!(asked, asked_without.saturating_add(1), "one more, just before the filter");
 
-        let analysis = analyze(&parse, LuaTarget::Lua54, &config);
+        let analysis = analyze(&parse, library_for(LuaTarget::Lua54), &config);
         let answered = AtomicUsize::new(0);
         let cancels_last = || answered.fetch_add(1, Ordering::Relaxed).saturating_add(1) == asked;
         let stopped = lint_analyzed(&parse, &analysis, &config, FixKind::empty(), &cancels_last);
@@ -458,7 +459,7 @@ print(x)";
         config.rules.set_level("compare_nan", RuleLevel::Warn);
         for (source, expected) in [("print(1)", 0), ("print(x == 0/0)", 1)] {
             let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-            let analysis = analyze(&parse, LuaTarget::Lua54, &config);
+            let analysis = analyze(&parse, library_for(LuaTarget::Lua54), &config);
             let diags = lint_analyzed(&parse, &analysis, &config, FixKind::empty(), &|| false)
                 .expect("nothing cancels it");
             assert_eq!(diags.len(), expected, "{source}: {diags:?}");

@@ -1,6 +1,7 @@
 use luck_allocator::Allocator;
 use luck_diagnostics::Severity;
 use luck_linter::{FixKind, LintConfig, Message, RuleLevel};
+use luck_stdlib::library_for;
 use luck_token::LuaTarget;
 
 use crate::common::{lint, with_level};
@@ -189,7 +190,7 @@ fn invalid_lint_filter_shows_a_word_that_is_not_utf8() {
     let diags = luck_linter::lint(
         &Allocator::new(),
         source,
-        LuaTarget::Lua51,
+        library_for(LuaTarget::Lua51),
         &LintConfig::default(),
         FixKind::empty(),
     );
@@ -346,7 +347,7 @@ print(a) -- luck: allow(unused_variable, undefined_variable)
     let fixed = luck_linter::fix(
         &allocator,
         source.as_bytes(),
-        LuaTarget::Lua54,
+        library_for(LuaTarget::Lua54),
         &LintConfig::default(),
         FixKind::Fix,
     )

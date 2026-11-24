@@ -1,5 +1,6 @@
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig};
+use luck_stdlib::library_for;
 use luck_token::LuaTarget;
 
 use crate::common::{enable, lint};
@@ -8,8 +9,14 @@ use crate::common::{enable, lint};
 /// that the fixes converge and that the result parses.
 fn fixed(source: &str, config: &LintConfig, fixes: FixKind) -> String {
     let allocator = Allocator::new();
-    let result = luck_linter::fix(&allocator, source.as_bytes(), LuaTarget::Lua54, config, fixes)
-        .expect("the fixes converge");
+    let result = luck_linter::fix(
+        &allocator,
+        source.as_bytes(),
+        library_for(LuaTarget::Lua54),
+        config,
+        fixes,
+    )
+    .expect("the fixes converge");
     assert!(result.parse.errors.is_empty(), "{:?}", result.parse.errors);
     String::from_utf8(result.parse.source.to_owned()).unwrap()
 }
@@ -22,10 +29,16 @@ local unused = nil
 return 1";
     let config = enable("redundant_nil_init");
     let fix_kinds = |fixes: FixKind| -> Vec<(&str, Option<FixKind>)> {
-        luck_linter::lint(&allocator, source.as_bytes(), LuaTarget::Lua54, &config, fixes)
-            .iter()
-            .map(|diag| (diag.code, diag.fix.as_ref().map(|built| built.kind)))
-            .collect()
+        luck_linter::lint(
+            &allocator,
+            source.as_bytes(),
+            library_for(LuaTarget::Lua54),
+            &config,
+            fixes,
+        )
+        .iter()
+        .map(|diag| (diag.code, diag.fix.as_ref().map(|built| built.kind)))
+        .collect()
     };
     assert_eq!(
         fix_kinds(FixKind::empty()),
@@ -48,9 +61,14 @@ fn fix_returns_the_last_round_s_diagnostics() {
 local unused = nil
 return 1";
     let config = enable("redundant_nil_init");
-    let result =
-        luck_linter::fix(&allocator, source.as_bytes(), LuaTarget::Lua54, &config, FixKind::Fix)
-            .expect("the fixes converge");
+    let result = luck_linter::fix(
+        &allocator,
+        source.as_bytes(),
+        library_for(LuaTarget::Lua54),
+        &config,
+        FixKind::Fix,
+    )
+    .expect("the fixes converge");
     assert_eq!(
         result.parse.source,
         b"\
@@ -68,8 +86,9 @@ fn a_fix_copies_bytes_that_are_not_utf8_as_written() {
     let allocator = Allocator::new();
     let source = b"local a = 'caf\xE9'\nlocal b = '\xFF' -- d\xE9j\xE0\nreturn a, b";
     let config = enable("merge_adjacent_locals");
-    let result = luck_linter::fix(&allocator, source, LuaTarget::Lua51, &config, FixKind::Fix)
-        .expect("the fixes converge");
+    let result =
+        luck_linter::fix(&allocator, source, library_for(LuaTarget::Lua51), &config, FixKind::Fix)
+            .expect("the fixes converge");
     assert_eq!(result.parse.source, b"local a, b = 'caf\xE9', '\xFF' -- d\xE9j\xE0\nreturn a, b");
 }
 

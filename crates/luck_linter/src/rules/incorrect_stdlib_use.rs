@@ -81,7 +81,7 @@ fn check_call(call: Call<'_>, callee: &ResolvedCallee<'_>, context: &LintContext
 /// isn't checked.
 fn invalid_constant_args(
     callee: &ResolvedCallee<'_>,
-    function: &StdlibFunction,
+    function: &StdlibFunction<'_>,
     args: CallArgs<'_>,
     arg_count: usize,
 ) -> impl Iterator<Item = Finding> {

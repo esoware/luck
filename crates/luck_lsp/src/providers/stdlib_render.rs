@@ -8,7 +8,7 @@ const CONSTANT_PREVIEW_LIMIT: usize = 8;
 /// Varargs are always `"..."` (never suffixed), and constrained constants
 /// render as `"constant"` (callers that want the value set add
 /// [`constant_preview`]).
-pub(crate) fn param_label(param: &StdlibParam) -> String {
+pub(crate) fn param_label(param: &StdlibParam<'_>) -> String {
     let word = match &param.kind {
         StdlibArgKind::Any => "any",
         StdlibArgKind::Bool => "bool",
@@ -26,9 +26,9 @@ pub(crate) fn param_label(param: &StdlibParam) -> String {
 /// The first [`CONSTANT_PREVIEW_LIMIT`] of `values`, each rendered by
 /// `render` and joined by `separator`, ending in the total when any are cut.
 pub(crate) fn constant_preview(
-    values: &[StdlibConstant],
+    values: &[StdlibConstant<'_>],
     separator: &str,
-    render: impl Fn(&StdlibConstant) -> String,
+    render: impl Fn(&StdlibConstant<'_>) -> String,
 ) -> String {
     let preview =
         values.iter().take(CONSTANT_PREVIEW_LIMIT).map(render).collect::<Vec<_>>().join(separator);

@@ -291,9 +291,11 @@ impl Server {
 
     fn register_watchers(&self) {
         let watchers = [
-            // Any JSON file, since a `luck.json` can extend a file of any
-            // name. A change touching none the projects read is ignored.
+            // Any JSON or TOML file, since a `luck.json` can extend a file,
+            // or name a std definition, of any name. A change touching none
+            // the projects read is ignored.
             ("**/*.json", None),
+            ("**/*.toml", None),
             ("**/.editorconfig", None),
             ("**/.luaurc", None),
             ("**/*.{lua,luau}", Some(WatchKind::Create | WatchKind::Delete)),

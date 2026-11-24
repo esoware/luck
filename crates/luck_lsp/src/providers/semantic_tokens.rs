@@ -161,7 +161,7 @@ enum ValueShape {
 #[derive(Clone, Copy)]
 enum PathAt<'ast> {
     Root(&'ast Name<'ast>),
-    Member(Option<&'static StdlibEntry>),
+    Member(Option<&'ast StdlibEntry<'ast>>),
 }
 
 struct Classifier<'document> {
@@ -180,7 +180,7 @@ struct Classifier<'document> {
     highlights: Highlights,
 }
 
-impl Classifier<'_> {
+impl<'document> Classifier<'document> {
     /// Keeps the highlights in order and apart, so a name recovery gave
     /// another's span can't break the encoding.
     fn push(&mut self, span: Span, classification: Classification) {
@@ -274,7 +274,7 @@ impl Classifier<'_> {
     fn member(
         &mut self,
         name: &Name<'_>,
-        entry: Option<&'static StdlibEntry>,
+        entry: Option<&StdlibEntry<'_>>,
         shape: Option<ValueShape>,
     ) {
         let Some(text) = identifier(name) else {
@@ -300,7 +300,11 @@ impl Classifier<'_> {
     /// anything but a name or a field. A root that reaches the host's global
     /// looks up the library, a local of known shape its shape, and any other
     /// root nothing.
-    fn step(&self, at: Option<PathAt<'_>>, member: &str) -> Option<&'static StdlibEntry> {
+    fn step(
+        &self,
+        at: Option<PathAt<'document>>,
+        member: &str,
+    ) -> Option<&'document StdlibEntry<'document>> {
         match at? {
             PathAt::Root(root) => {
                 let tree = self.semantic.scoping();
@@ -355,7 +359,7 @@ impl Classifier<'_> {
     }
 }
 
-impl<'ast> Visit<'ast> for Classifier<'_> {
+impl<'ast> Visit<'ast> for Classifier<'ast> {
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
         if let Expression::Name(name) = expr {
             self.reference(name);
@@ -638,7 +642,7 @@ const fn symbol_classify(kind: SymbolKind) -> Classification {
     }
 }
 
-const fn stdlib_classify(entry: &StdlibEntry) -> Classification {
+const fn stdlib_classify(entry: &StdlibEntry<'_>) -> Classification {
     let token_type = match entry {
         StdlibEntry::Function(_) => TYPE_FUNCTION,
         StdlibEntry::Namespace(_) => TYPE_NAMESPACE,
@@ -656,7 +660,7 @@ const fn stdlib_classify(entry: &StdlibEntry) -> Classification {
 
 /// Stdlib namespace members: same modifiers as bare globals, but member
 /// functions read as methods so call sites match the accessor grammar.
-const fn member_classify(entry: &StdlibEntry) -> Classification {
+const fn member_classify(entry: &StdlibEntry<'_>) -> Classification {
     let mut classification = stdlib_classify(entry);
     if classification.token_type == TYPE_FUNCTION {
         classification.token_type = TYPE_METHOD;

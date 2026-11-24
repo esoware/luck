@@ -8,7 +8,8 @@ use luck_config::Project;
 use luck_diagnostics::{Diagnostic, Severity};
 use luck_linter::{Category, FixError, FixKind, Fixed, LintConfig, Message, RuleLevel};
 use luck_resolver::{FileSystem as _, FileSystemOs};
-use luck_token::{LuaTarget, LuaVersion};
+use luck_stdlib::StdlibLibrary;
+use luck_token::LuaVersion;
 
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source, write_output};
@@ -310,11 +311,11 @@ impl LintArgs {
         let source = read_stdin_source()?;
 
         let path = Some(Path::new(stdin_path));
-        let (target, lint_config) = (project.target_for(path), project.lint_for(path));
+        let (stdlib, lint_config) = (project.stdlib_for(path).library(), project.lint_for(path));
         let allocator = Allocator::new();
         let fixes = self.fixes();
         let (current_source, messages, fix_error) =
-            fixed_or_linted(&allocator, &source, target, &lint_config, fixes);
+            fixed_or_linted(&allocator, &source, stdlib, &lint_config, fixes);
 
         if !fixes.is_empty() {
             // Echo the source even with nothing to fix, since editors and
@@ -327,7 +328,7 @@ impl LintArgs {
 
         let (finding_errors, total_warnings) = severity_counts(&messages);
         let total_errors = finding_errors.saturating_add(usize::from(fix_error.is_some()));
-        let version = target.version();
+        let version = stdlib.target.version();
 
         let rendered = self.rendered(stdin_path, current_source, messages, version, is_quiet);
         let _unused = if self.format.is_for_tools() && fixes.is_empty() {
@@ -394,10 +395,10 @@ impl LintArgs {
             }
         };
 
-        let target = file.project.target_for(Some(file_path));
+        let stdlib = file.project.stdlib_for(Some(file_path)).library();
         let lint_config = file.project.lint_for(Some(file_path));
         let (fixed, fixed_messages, fix_error) =
-            fixed_or_linted(allocator, &source, target, &lint_config, self.fixes());
+            fixed_or_linted(allocator, &source, stdlib, &lint_config, self.fixes());
         let mut note =
             fix_error.map(|error| format!("error: cannot fix `{}`: {error}", file_path.display()));
         let mut is_fixed = false;
@@ -406,7 +407,7 @@ impl LintArgs {
         } else if let Err(error) = fs::write(file_path, fixed) {
             note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
             let unfixed =
-                luck_linter::lint(allocator, &source, target, &lint_config, FixKind::empty());
+                luck_linter::lint(allocator, &source, stdlib, &lint_config, FixKind::empty());
             (source.as_slice(), unfixed)
         } else {
             is_fixed = true;
@@ -414,7 +415,7 @@ impl LintArgs {
         };
 
         let (finding_errors, warning_count) = severity_counts(&messages);
-        let version = target.version();
+        let version = stdlib.target.version();
         let label = file_path.to_string_lossy();
         let rendered = self.rendered(&label, current_source, messages, version, is_quiet);
         // Fixes that couldn't be made or written fail the run, as an unread
@@ -461,19 +462,19 @@ impl LintArgs {
 fn fixed_or_linted<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
-    target: LuaTarget,
+    stdlib: &StdlibLibrary<'_>,
     lint_config: &LintConfig,
     fixes: FixKind,
 ) -> (&'ast [u8], Vec<Message>, Option<FixError>) {
     let fix_error = if fixes.is_empty() {
         None
     } else {
-        match luck_linter::fix(allocator, source, target, lint_config, fixes) {
+        match luck_linter::fix(allocator, source, stdlib, lint_config, fixes) {
             Ok(Fixed { parse, messages }) => return (parse.source, messages, None),
             Err(error) => Some(error),
         }
     };
-    let messages = luck_linter::lint(allocator, source, target, lint_config, FixKind::empty());
+    let messages = luck_linter::lint(allocator, source, stdlib, lint_config, FixKind::empty());
     (source, messages, fix_error)
 }
 
@@ -514,6 +515,8 @@ fn print_lint_config(lint_config: &LintConfig) {
 mod tests {
     use clap::Parser as _;
     use clap::error::ErrorKind;
+    use luck_stdlib::library_for;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::cli::{Cli, Command};
@@ -545,7 +548,7 @@ mod tests {
         luck_linter::lint(
             &Allocator::new(),
             source.as_bytes(),
-            target,
+            library_for(target),
             lint_config,
             FixKind::empty(),
         )

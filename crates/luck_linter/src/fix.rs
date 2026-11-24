@@ -9,7 +9,8 @@ use bitflags::bitflags;
 use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
 use luck_parser::ParseResult;
-use luck_token::{LuaTarget, Span};
+use luck_stdlib::StdlibLibrary;
+use luck_token::Span;
 
 use crate::config::LintConfig;
 use crate::diagnostic::Message;
@@ -131,7 +132,7 @@ impl fmt::Display for FixError {
 
 impl Error for FixError {}
 
-/// Lints `source` for `target` and applies its fixes of the kinds `fixes`
+/// Lints `source` against `stdlib` and applies its fixes of the kinds `fixes`
 /// holds, round after round, until none is left. Each round's text is parsed
 /// into `allocator` once, both to check it and to lint it.
 ///
@@ -151,11 +152,11 @@ impl Error for FixError {}
 pub fn fix<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
-    target: LuaTarget,
+    stdlib: &StdlibLibrary<'_>,
     config: &LintConfig,
     fixes: FixKind,
 ) -> Result<Fixed<'ast>, FixError> {
-    fix_within(allocator, source, target, config, fixes, ROUND_BUDGET)
+    fix_within(allocator, source, stdlib, config, fixes, ROUND_BUDGET)
 }
 
 /// # Errors
@@ -164,15 +165,15 @@ pub fn fix<'ast>(
 fn fix_within<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
-    target: LuaTarget,
+    stdlib: &StdlibLibrary<'_>,
     config: &LintConfig,
     fixes: FixKind,
     budget: usize,
 ) -> Result<Fixed<'ast>, FixError> {
-    let version = target.version();
+    let version = stdlib.target.version();
     let mut parse = luck_parser::parse(allocator, source, version);
     for round in 1..=budget {
-        let messages = lint_parsed(&parse, target, config, fixes);
+        let messages = lint_parsed(&parse, stdlib, config, fixes);
         let Some(text) = apply(parse.source, &messages, fixes) else {
             return Ok(Fixed { parse, messages });
         };
@@ -255,6 +256,9 @@ fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use luck_stdlib::library_for;
+    use luck_token::LuaTarget;
+
     use super::*;
     use crate::config::RuleLevel;
     use crate::fixtures::message;
@@ -290,7 +294,8 @@ mod tests {
     /// As for [`fix_within`].
     fn fixed_within(source: &str, config: &LintConfig, budget: usize) -> Result<String, FixError> {
         let allocator = Allocator::new();
-        fix_within(&allocator, source.as_bytes(), LuaTarget::Lua54, config, FixKind::Fix, budget)
+        let stdlib = library_for(LuaTarget::Lua54);
+        fix_within(&allocator, source.as_bytes(), stdlib, config, FixKind::Fix, budget)
             .map(|fixed| String::from_utf8(fixed.parse.source.to_owned()).unwrap())
     }
 

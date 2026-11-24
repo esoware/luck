@@ -15,6 +15,7 @@ use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
 use luck_semantic::SemanticBuilder;
+use luck_stdlib::library_for;
 use luck_testgen::tree_shape;
 use luck_token::{LineIndex, LuaVersion};
 
@@ -246,7 +247,7 @@ fn lint(suite: &Suite, parse: &ParseResult<'_>, lines: &LineIndex) -> Vec<LintLi
         },
         ..LintConfig::default()
     };
-    luck_linter::lint_parsed(parse, suite.target, &every_rule, FixKind::empty())
+    luck_linter::lint_parsed(parse, library_for(suite.target), &every_rule, FixKind::empty())
         .iter()
         .map(|message| {
             let (line, column) = lines.line_column(message.span().start);

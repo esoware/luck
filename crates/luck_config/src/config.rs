@@ -2,6 +2,7 @@
 //! touches the filesystem.
 
 use core::fmt;
+use std::path::PathBuf;
 
 use luck_bundler::DynamicRequire;
 use luck_linter::LintConfig;
@@ -65,6 +66,14 @@ pub(crate) struct LuckConfig {
     pub lua: Option<LuaTarget>,
     /// Dialect of `.luau` files (default `luau`).
     pub luau: Option<LuaTarget>,
+    /// Std definition files, relative to this file's directory, that layer
+    /// a host's globals, fields, and functions, such as LOVE's or Neovim's,
+    /// over each dialect's standard library, in order. Each is TOML in the
+    /// format of luck's own `stdlib_data`, which
+    /// <https://github.com/esoware/luck/tree/main/crates/luck_stdlib#std-definitions>
+    /// describes.
+    #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
+    pub std: Option<Vec<PathBuf>>,
     /// Keeps the `extends` chain inside this file's directory.
     pub root: Option<bool>,
     /// Configs this one builds on, relative to its directory. A later one
@@ -116,7 +125,7 @@ pub(crate) struct LuckConfig {
 impl LuckConfig {
     /// `self` layered on `base`, as a file is on the files it `extends`.
     ///
-    /// `format` and `lint` merge field by field. `include`, `exclude`,
+    /// `format` and `lint` merge field by field. `std`, `include`, `exclude`,
     /// `search_paths`, and `overrides` list `base`'s items and then
     /// `self`'s, without an item that comes again later. Every other key,
     /// `entries`, `profiles`, and `transforms` among them, comes whole from
@@ -126,6 +135,7 @@ impl LuckConfig {
         Self {
             lua: self.lua.or(base.lua),
             luau: self.luau.or(base.luau),
+            std: merge_with(self.std, base.std, layer),
             root: self.root.or(base.root),
             extends: None,
             include: merge_with(self.include, base.include, layer),

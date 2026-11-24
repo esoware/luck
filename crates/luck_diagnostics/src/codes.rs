@@ -147,8 +147,8 @@ impl Diagnostic {
         ))
     }
 
-    /// A `luck.json`, or a file it extends, that isn't a valid config, at
-    /// `span` when the problem has a place in the file.
+    /// A `luck.json`, a file it extends, or a std definition it names, that
+    /// isn't valid, at `span` when the problem has a place in the file.
     pub fn e014(span: Option<Span>, problem: &str) -> Self {
         Self::error_at("E014", span, format!("invalid config: {problem}"))
     }

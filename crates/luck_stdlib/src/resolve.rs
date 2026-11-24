@@ -15,14 +15,14 @@ use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
 /// What a chain's head reads, as far as it's known.
 #[derive(Debug, Clone, Copy, Default)]
-struct HeadState {
-    shape: Option<&'static str>,
+struct HeadState<'lib> {
+    shape: Option<&'lib str>,
     /// The stdlib entry the head names while it's a dotted path from the
     /// host's global.
-    global: Option<&'static StdlibEntry>,
+    global: Option<&'lib StdlibEntry<'lib>>,
 }
 
-impl HeadState {
+impl HeadState<'_> {
     /// No suffix after an unknown head is known either.
     const fn is_unknown(self) -> bool {
         self.shape.is_none() && self.global.is_none()
@@ -30,29 +30,29 @@ impl HeadState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ShapeResolver<'input> {
+pub(crate) struct ShapeResolver<'input, 'lib> {
     tree: &'input Scoping,
-    library: &'static StdlibLibrary,
+    library: &'lib StdlibLibrary<'lib>,
     /// Each symbol's shape, by symbol index.
-    symbol_shapes: &'input [Option<&'static str>],
+    symbol_shapes: &'input [Option<&'lib str>],
 }
 
-impl<'input> ShapeResolver<'input> {
+impl<'input, 'lib> ShapeResolver<'input, 'lib> {
     pub(crate) const fn new(
         tree: &'input Scoping,
-        library: &'static StdlibLibrary,
-        symbol_shapes: &'input [Option<&'static str>],
+        library: &'lib StdlibLibrary<'lib>,
+        symbol_shapes: &'input [Option<&'lib str>],
     ) -> Self {
         Self { tree, library, symbol_shapes }
     }
 
-    pub(crate) fn symbol_shape(self, symbol: SymbolId) -> Option<&'static str> {
+    fn symbol_shape(self, symbol: SymbolId) -> Option<&'lib str> {
         self.symbol_shapes.get(symbol.index()).copied().flatten()
     }
 
     /// The shape of `expr`, when statically known. See the module docs for
     /// what "known" means.
-    fn expr_shape(self, expr: &Expression<'_>) -> Option<&'static str> {
+    fn expr_shape(self, expr: &Expression<'_>) -> Option<&'lib str> {
         match expr {
             Expression::Name(name) => self.name_state(name).shape,
             Expression::Suffixed(_) => self.head_state(ChainHead::from(expr)).shape,
@@ -80,7 +80,7 @@ impl<'input> ShapeResolver<'input> {
 
     /// What `name` reads: a local's shape, or the host's global and its
     /// shape.
-    fn name_state(self, name: &Name<'_>) -> HeadState {
+    fn name_state(self, name: &Name<'_>) -> HeadState<'lib> {
         let Some(reference) = self.tree.reference_of(name).map(|id| self.tree.reference(id)) else {
             return HeadState::default();
         };
@@ -94,7 +94,7 @@ impl<'input> ShapeResolver<'input> {
         }
     }
 
-    fn prefix_state(self, prefix: &Expression<'_>) -> HeadState {
+    fn prefix_state(self, prefix: &Expression<'_>) -> HeadState<'lib> {
         if let Expression::Name(name) = prefix {
             self.name_state(name)
         } else {
@@ -102,12 +102,12 @@ impl<'input> ShapeResolver<'input> {
         }
     }
 
-    fn head_state(self, head: ChainHead<'_>) -> HeadState {
+    fn head_state(self, head: ChainHead<'_>) -> HeadState<'lib> {
         self.read(self.prefix_state(head.prefix), head.suffixes)
     }
 
     /// What a head that reads `state` reads once `suffixes` apply to it.
-    fn read(self, mut state: HeadState, suffixes: &[Suffix<'_>]) -> HeadState {
+    fn read(self, mut state: HeadState<'lib>, suffixes: &[Suffix<'_>]) -> HeadState<'lib> {
         for suffix in suffixes {
             if state.is_unknown() {
                 break;
@@ -119,7 +119,7 @@ impl<'input> ShapeResolver<'input> {
 
     /// A call accepts a method called with `.`: passing self explicitly
     /// doesn't change what the call returns.
-    fn after_suffix(self, suffix: &Suffix<'_>, state: HeadState) -> HeadState {
+    fn after_suffix(self, suffix: &Suffix<'_>, state: HeadState<'lib>) -> HeadState<'lib> {
         let callee = match suffix {
             Suffix::Field(name) => {
                 let member =
@@ -144,7 +144,7 @@ impl<'input> ShapeResolver<'input> {
 
     /// Only method-flagged functions are colon-callable; a dot member
     /// reached with `:` would receive a bogus self.
-    fn shape_method(self, shape: &str, method_name: &str) -> Option<&'static StdlibEntry> {
+    fn shape_method(self, shape: &str, method_name: &str) -> Option<&'lib StdlibEntry<'lib>> {
         let entry = self.library.shape_member(shape, method_name)?;
         matches!(entry, StdlibEntry::Function(function) if function.is_method).then_some(entry)
     }
@@ -153,9 +153,12 @@ impl<'input> ShapeResolver<'input> {
     fn callee(
         self,
         head: ChainHead<'input>,
-        state: HeadState,
+        state: HeadState<'lib>,
         method: Option<&'input Name<'input>>,
-    ) -> Option<ResolvedCallee<'input>> {
+    ) -> Option<ResolvedCallee<'input>>
+    where
+        'lib: 'input,
+    {
         let Some(&Name { text: method_name, .. }) = method else {
             let entry = state.global?;
             // A method called with `.` passes self explicitly, which its
@@ -175,14 +178,17 @@ impl<'input> ShapeResolver<'input> {
     }
 
     /// What `call` calls, read from its callee's prefix.
-    pub(crate) fn call_callee(self, call: Call<'input>) -> Option<ResolvedCallee<'input>> {
+    pub(crate) fn call_callee(self, call: Call<'input>) -> Option<ResolvedCallee<'input>>
+    where
+        'lib: 'input,
+    {
         self.callee(call.callee, self.head_state(call.callee), call.method)
     }
 }
 
 /// The derived `string` shape, when the library has one (it does whenever a
 /// `string` namespace exists).
-fn string_shape(library: &StdlibLibrary) -> Option<&'static str> {
+fn string_shape<'lib>(library: &StdlibLibrary<'lib>) -> Option<&'lib str> {
     library.shapes.contains_key("string").then_some("string")
 }
 
@@ -192,10 +198,10 @@ fn string_shape(library: &StdlibLibrary) -> Option<&'static str> {
 /// per name declares, and whose value has a known shape, has one. Nodes are
 /// in source order, so a local comes before any value that can read it, and
 /// a shaped local seeds later ones.
-pub(crate) fn symbol_shapes(
+pub(crate) fn symbol_shapes<'lib>(
     semantic: &Semantic<'_>,
-    library: &'static StdlibLibrary,
-) -> Vec<Option<&'static str>> {
+    library: &'lib StdlibLibrary<'lib>,
+) -> Vec<Option<&'lib str>> {
     let tree = semantic.scoping();
     let mut shapes = vec![None; tree.symbols().len()];
     for node in semantic.nodes().iter() {
@@ -225,7 +231,7 @@ pub(crate) fn symbol_shapes(
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedCallee<'call> {
     path: CalleePath<'call>,
-    entry: &'static StdlibEntry,
+    entry: &'call StdlibEntry<'call>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -238,7 +244,7 @@ enum CalleePath<'call> {
     Dotted(ChainHead<'call>),
 }
 
-impl ResolvedCallee<'_> {
+impl<'call> ResolvedCallee<'call> {
     /// Display path, such as `table.insert` or `game:GetService`.
     #[must_use]
     pub fn name(&self) -> String {
@@ -251,7 +257,7 @@ impl ResolvedCallee<'_> {
     }
 
     #[must_use]
-    pub const fn entry(&self) -> &'static StdlibEntry {
+    pub const fn entry(&self) -> &'call StdlibEntry<'call> {
         self.entry
     }
 }
@@ -260,16 +266,16 @@ impl ResolvedCallee<'_> {
 /// reads on to the next, so its calls resolve in one pass over it.
 #[derive(Debug, Clone, Copy)]
 pub struct ChainCallees<'chain> {
-    resolver: ShapeResolver<'chain>,
+    resolver: ShapeResolver<'chain, 'chain>,
     chain: &'chain SuffixedExpression<'chain>,
     /// What the head of the first `read_count` suffixes reads.
-    state: HeadState,
+    state: HeadState<'chain>,
     read_count: usize,
 }
 
 impl<'chain> ChainCallees<'chain> {
     pub(crate) fn new(
-        resolver: ShapeResolver<'chain>,
+        resolver: ShapeResolver<'chain, 'chain>,
         chain: &'chain SuffixedExpression<'chain>,
     ) -> Self {
         let state = resolver.prefix_state(&chain.prefix);
@@ -305,174 +311,70 @@ mod tests {
 
     use super::*;
     use crate::fixtures::parse;
-    use crate::stdlib_catalog::{FUNCTION, VALUE, optional, required, signature};
-    use crate::stdlib_model::{
-        StdlibArgKind, StdlibFunction, StdlibNamespace, StdlibShape, StdlibValue, stdlib_map,
-    };
+    use crate::stdlib::layer;
+    use crate::stdlib_definition::StdlibDefinition;
 
-    static SHAPED_LIBRARY: StdlibLibrary = StdlibLibrary {
-        target: LuaTarget::Lua54,
-        globals: stdlib_map!(
-            StdlibEntry,
-            [
-                ("game", StdlibEntry::Property(&StdlibValue { shape: Some("DataModel"), ..VALUE })),
-                (
-                    "io",
-                    StdlibEntry::Namespace(&StdlibNamespace {
-                        members: stdlib_map!(
-                            StdlibEntry,
-                            [(
-                                "open",
-                                StdlibEntry::Function(&StdlibFunction {
-                                    signatures: &[signature(
-                                        &[
-                                            required(StdlibArgKind::String),
-                                            optional(StdlibArgKind::String)
-                                        ],
-                                        1,
-                                        Some(2),
-                                    )],
-                                    returns_shape: Some("file"),
-                                    ..FUNCTION
-                                }),
-                            )]
-                        ),
-                        shape: None,
-                        deprecated: None,
-                    }),
-                ),
-                (
-                    "string",
-                    StdlibEntry::Namespace(&StdlibNamespace {
-                        members: stdlib_map!(
-                            StdlibEntry,
-                            [(
-                                "upper",
-                                StdlibEntry::Function(&StdlibFunction {
-                                    signatures: &[signature(
-                                        &[required(StdlibArgKind::String)],
-                                        1,
-                                        Some(1),
-                                    )],
-                                    is_must_use: true,
-                                    ..FUNCTION
-                                }),
-                            )]
-                        ),
-                        shape: None,
-                        deprecated: None,
-                    }),
-                ),
-            ]
-        ),
-        shapes: stdlib_map!(
-            StdlibShape,
-            [
-                (
-                    "DataModel",
-                    StdlibShape {
-                        members: stdlib_map!(
-                            StdlibEntry,
-                            [(
-                                "GetService",
-                                StdlibEntry::Function(&StdlibFunction {
-                                    signatures: &[signature(
-                                        &[required(StdlibArgKind::String)],
-                                        1,
-                                        Some(1),
-                                    )],
-                                    is_must_use: true,
-                                    is_method: true,
-                                    returns_shape: Some("Instance"),
-                                    ..FUNCTION
-                                }),
-                            )]
-                        ),
-                    },
-                ),
-                (
-                    "Instance",
-                    StdlibShape {
-                        members: stdlib_map!(
-                            StdlibEntry,
-                            [(
-                                "FindFirstChild",
-                                StdlibEntry::Function(&StdlibFunction {
-                                    signatures: &[signature(
-                                        &[
-                                            required(StdlibArgKind::String),
-                                            optional(StdlibArgKind::Bool)
-                                        ],
-                                        1,
-                                        Some(2),
-                                    )],
-                                    is_method: true,
-                                    ..FUNCTION
-                                }),
-                            )]
-                        ),
-                    },
-                ),
-                (
-                    "file",
-                    StdlibShape {
-                        members: stdlib_map!(
-                            StdlibEntry,
-                            [(
-                                "read",
-                                StdlibEntry::Function(&StdlibFunction {
-                                    signatures: &[signature(
-                                        &[optional(StdlibArgKind::Vararg)],
-                                        0,
-                                        None
-                                    )],
-                                    is_method: true,
-                                    ..FUNCTION
-                                }),
-                            )]
-                        ),
-                    },
-                ),
-                (
-                    "string",
-                    StdlibShape {
-                        members: stdlib_map!(
-                            StdlibEntry,
-                            [(
-                                "upper",
-                                StdlibEntry::Function(&StdlibFunction {
-                                    signatures: &[signature(&[], 0, Some(0))],
-                                    is_must_use: true,
-                                    is_method: true,
-                                    returns_shape: Some("string"),
-                                    ..FUNCTION
-                                }),
-                            )]
-                        ),
-                    },
-                ),
-            ]
-        ),
-    };
+    const SHAPED_LIBRARY: &str = r#"
+[globals.game]
+kind = "property"
+shape = "DataModel"
 
-    fn shape_of(source: &str, name: &str) -> Option<&'static str> {
+[globals.io]
+kind = "namespace"
+
+[globals.io.members.open]
+kind = "function"
+params = [{ kind = "string" }, { kind = "string", is_required = false }]
+returns = "file"
+
+[globals.string]
+kind = "namespace"
+
+[globals.string.members.upper]
+kind = "function"
+is_must_use = true
+params = [{ kind = "string" }]
+returns = "string"
+
+[shapes.DataModel.members.GetService]
+kind = "function"
+is_must_use = true
+is_method = true
+params = [{ kind = "string" }]
+returns = "Instance"
+
+[shapes.Instance.members.FindFirstChild]
+kind = "function"
+is_method = true
+params = [{ kind = "string" }, { kind = "bool", is_required = false }]
+
+[shapes.file.members.read]
+kind = "function"
+is_method = true
+params = [{ kind = "vararg" }]
+"#;
+
+    fn shape_of(source: &str, name: &str) -> Option<String> {
         let allocator = Allocator::new();
+        let definition = StdlibDefinition::parse(SHAPED_LIBRARY).expect("the library parses");
+        let library = layer(&allocator, &StdlibLibrary::empty(LuaTarget::Lua54), &definition)
+            .expect("the library layers");
         let chunk = parse(&allocator, source, LuaVersion::Lua54);
         let semantic = SemanticBuilder::new().with_nodes(true).build(chunk).semantic;
-        let shapes = symbol_shapes(&semantic, &SHAPED_LIBRARY);
+        let shapes = symbol_shapes(&semantic, &library);
         let tree = semantic.scoping();
         let symbol = tree.symbols().iter().find(|symbol| tree.name(symbol.name) == name)?;
-        shapes.get(symbol.id.index()).copied().flatten()
+        shapes.get(symbol.id.index()).copied().flatten().map(str::to_owned)
     }
 
     #[test]
     fn local_from_shaped_call_gets_shape() {
-        assert_eq!(shape_of("local f = io.open('x')", "f"), Some("file"));
+        assert_eq!(shape_of("local f = io.open('x')", "f").as_deref(), Some("file"));
     }
 
     #[test]
     fn local_from_shaped_global_gets_shape() {
-        assert_eq!(shape_of("local g = game", "g"), Some("DataModel"));
+        assert_eq!(shape_of("local g = game", "g").as_deref(), Some("DataModel"));
     }
 
     #[test]
@@ -480,7 +382,7 @@ mod tests {
         let source = "\
 local players = game:GetService('Players')
 local again = players:FindFirstChild('x')";
-        assert_eq!(shape_of(source, "players"), Some("Instance"));
+        assert_eq!(shape_of(source, "players").as_deref(), Some("Instance"));
         // FindFirstChild declares no return shape.
         assert_eq!(shape_of(source, "again"), None);
     }
@@ -503,14 +405,14 @@ local g = game";
 
     #[test]
     fn string_literal_gets_string_shape() {
-        assert_eq!(shape_of("local s = 'abc'", "s"), Some("string"));
+        assert_eq!(shape_of("local s = 'abc'", "s").as_deref(), Some("string"));
     }
 
     #[test]
     fn parenthesized_literal_method_chains_string_shape() {
         // The string shape's upper returns a string, so the call result
         // seeds the local's shape.
-        assert_eq!(shape_of("local u = ('x'):upper()", "u"), Some("string"));
+        assert_eq!(shape_of("local u = ('x'):upper()", "u").as_deref(), Some("string"));
     }
 
     #[test]
@@ -523,6 +425,6 @@ local g = game";
     #[test]
     fn method_called_with_dot_still_yields_return_shape() {
         let source = "local players = game.GetService(game, 'Players')";
-        assert_eq!(shape_of(source, "players"), Some("Instance"));
+        assert_eq!(shape_of(source, "players").as_deref(), Some("Instance"));
     }
 }

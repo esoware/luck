@@ -1,9 +1,16 @@
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig, Message, RuleLevel};
+use luck_stdlib::library_for;
 use luck_token::LuaTarget;
 
 pub(crate) fn lint(source: &str, target: LuaTarget, config: &LintConfig) -> Vec<Message> {
-    luck_linter::lint(&Allocator::new(), source.as_bytes(), target, config, FixKind::empty())
+    luck_linter::lint(
+        &Allocator::new(),
+        source.as_bytes(),
+        library_for(target),
+        config,
+        FixKind::empty(),
+    )
 }
 
 pub(crate) fn with_level(name: &str, level: RuleLevel) -> LintConfig {

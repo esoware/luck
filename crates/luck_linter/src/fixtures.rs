@@ -2,6 +2,7 @@ use alloc::rc::Rc;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::{Diagnostic, Severity};
+use luck_stdlib::library_for;
 use luck_token::{LuaTarget, LuaVersion, Span};
 
 use crate::config::LintConfig;
@@ -40,7 +41,7 @@ pub(crate) fn with_host<T>(
     let parse = luck_parser::parse(&allocator, source.as_bytes(), target.version());
     assert!(parse.errors.is_empty(), "parse of {source:?}: {:?}", parse.errors);
     let config = LintConfig::default();
-    let analysis = driver::analyze(&parse, target, &config);
+    let analysis = driver::analyze(&parse, library_for(target), &config);
     answer(&ContextHost::new(&parse, &analysis, &config, FixKind::all()))
 }
 
@@ -66,7 +67,7 @@ fn check(rule: &dyn Rule, source: &str, target: LuaTarget, config: &LintConfig) 
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, source.as_bytes(), target.version());
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
-    let analysis = driver::analyze(&parse, target, config);
+    let analysis = driver::analyze(&parse, library_for(target), config);
     let host = Rc::new(ContextHost::new(&parse, &analysis, config, FixKind::all()));
     let slot = RULES
         .iter()

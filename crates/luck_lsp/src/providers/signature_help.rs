@@ -87,7 +87,7 @@ pub(crate) fn signature_help(
 
 fn build_signature(
     name: &str,
-    signature: &StdlibSignature,
+    signature: &StdlibSignature<'_>,
     deprecated_message: Option<&str>,
     is_must_use: bool,
 ) -> SignatureInformation {
@@ -128,7 +128,7 @@ fn build_signature(
     }
 }
 
-fn param_documentation(param: &StdlibParam) -> Option<Documentation> {
+fn param_documentation(param: &StdlibParam<'_>) -> Option<Documentation> {
     if let StdlibArgKind::Constant(values) = &param.kind {
         let preview =
             constant_preview(values, ", ", |constant| format!("`\"{}\"`", constant.value));

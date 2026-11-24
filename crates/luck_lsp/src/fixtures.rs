@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use luck_config::Project;
 use luck_formatter::FormatOptions;
 use luck_linter::LintConfig;
+use luck_stdlib::Stdlib;
 use luck_token::LuaTarget;
 
 use crate::analyzed::Arena;
@@ -36,7 +37,7 @@ fn document_with(
 ) -> DocumentState {
     let settings = DocumentSettings {
         project: Arc::new(LoadedProject::new(project)),
-        target,
+        stdlib: Stdlib::new(target),
         lint,
         format: FormatOptions::default(),
         is_included: true,

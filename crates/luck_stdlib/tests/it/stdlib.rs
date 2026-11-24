@@ -13,13 +13,13 @@ use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, parse, roblox, stand
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn stdlib_entry_is_two_words() {
-    assert_eq!(size_of::<StdlibEntry>(), 16);
+    assert_eq!(size_of::<StdlibEntry<'_>>(), 16);
 }
 
 fn function_at<'library>(
-    library: &'library StdlibLibrary,
+    library: &'library StdlibLibrary<'library>,
     path: &[&str],
-) -> &'library StdlibFunction {
+) -> &'library StdlibFunction<'library> {
     let Some(StdlibEntry::Function(function)) = library.lookup(path) else {
         panic!("{}: {path:?} should be a function", library.target);
     };
@@ -846,10 +846,10 @@ fn physical_properties_overloads_match_docs() {
 }
 
 fn shape_function<'library>(
-    library: &'library StdlibLibrary,
+    library: &'library StdlibLibrary<'library>,
     shape: &str,
     name: &str,
-) -> &'library StdlibFunction {
+) -> &'library StdlibFunction<'library> {
     let Some(StdlibEntry::Function(function)) = library.shape_member(shape, name) else {
         panic!("{}: shape {shape} should have function member {name}", library.target);
     };
@@ -950,10 +950,10 @@ fn luau_files_have_no_file_shape() {
 }
 
 fn constant_set<'library>(
-    library: &'library StdlibLibrary,
+    library: &'library StdlibLibrary<'library>,
     segments: &[&str],
     param_index: usize,
-) -> Option<&'library [StdlibConstant]> {
+) -> Option<&'library [StdlibConstant<'library>]> {
     let params = &function_at(library, segments).primary_signature().params;
     let StdlibArgKind::Constant(values) = &params.get(param_index)?.kind else {
         return None;
@@ -961,7 +961,10 @@ fn constant_set<'library>(
     Some(values)
 }
 
-fn find<'values>(values: &'values [StdlibConstant], name: &str) -> Option<&'values StdlibConstant> {
+fn find<'values>(
+    values: &'values [StdlibConstant<'values>],
+    name: &str,
+) -> Option<&'values StdlibConstant<'values>> {
     values.iter().find(|constant| constant.value == name)
 }
 
@@ -1061,7 +1064,7 @@ fn settings_provider_shapes() {
 fn resolve_last_call(source: &str) -> Option<String> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source, LuaVersion::Luau);
-    let (analysis, _) = analyze(chunk, TreeCounts::default(), LuaTarget::LuauRoblox);
+    let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(LuaTarget::LuauRoblox));
     let last_stmt = chunk.block.stmts.last()?;
     let chain = if let Statement::FunctionCall(chain) = last_stmt {
         chain
@@ -1081,7 +1084,7 @@ fn resolve_last_call(source: &str) -> Option<String> {
 fn chain_callee_names(source: &str) -> Vec<Option<String>> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source, LuaVersion::Lua54);
-    let (analysis, _) = analyze(chunk, TreeCounts::default(), LuaTarget::Lua54);
+    let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(LuaTarget::Lua54));
     let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
         panic!("the last statement must be a call");
     };
@@ -1103,10 +1106,13 @@ fn chain_callee_names(source: &str) -> Vec<Option<String>> {
 
 #[test]
 fn chain_callees_resolve_each_call_of_a_chain() {
-    // `string.rep` declares no return shape, unlike the derived `string:rep`.
     for (source, expected) in [
-        ("string.rep('x', 2):upper():len()\n", &[Some("string.rep"), None, None][..]),
+        (
+            "string.rep('x', 2):upper():len()\n",
+            &[Some("string.rep"), Some("string:upper"), Some("string:len")][..],
+        ),
         ("('x'):rep(2).x:upper()\n", &[Some("string:rep"), None]),
+        ("math.floor(1.5):upper()\n", &[Some("math.floor"), None]),
         (
             "('x'):rep(2):upper():len()\n",
             &[Some("string:rep"), Some("string:upper"), Some("string:len")],
@@ -1483,7 +1489,7 @@ fn luau_unpack_is_not_deprecated() {
 }
 
 fn fix_template<'library>(
-    library: &'library StdlibLibrary,
+    library: &'library StdlibLibrary<'library>,
     path: &[&str],
 ) -> Option<&'library str> {
     Some(function_at(library, path).deprecated.as_ref()?.replacement?.template)
