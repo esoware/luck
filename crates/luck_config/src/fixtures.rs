@@ -7,7 +7,7 @@ use tempfile::TempDir;
 
 use crate::config::LuckConfig;
 use crate::glob::Glob;
-use crate::load::parse;
+use crate::parse::parse;
 
 pub(crate) fn project_with(files: &[(&str, &str)]) -> TempDir {
     let project = TempDir::new().expect("create temp dir");
@@ -19,19 +19,10 @@ pub(crate) fn project_with(files: &[(&str, &str)]) -> TempDir {
     project
 }
 
-pub(crate) fn globs(patterns: &[&str]) -> Vec<Glob> {
-    patterns
-        .iter()
-        .map(|pattern| Glob::deserialize(pattern.into_deserializer()))
-        .collect::<Result<_, Error>>()
-        .expect("valid globs")
+pub(crate) fn glob(pattern: &str) -> Result<Glob, String> {
+    Glob::deserialize(pattern.into_deserializer()).map_err(|e: Error| e.to_string())
 }
 
 pub(crate) fn parsed(json: &str) -> LuckConfig {
     parse(json).expect("config parses")
-}
-
-/// The message `json` fails to parse with.
-pub(crate) fn parse_error(json: &str) -> String {
-    parse(json).expect_err("config doesn't parse").message.to_string()
 }

@@ -39,11 +39,11 @@ impl Visitor<'_> for GlobVisitor {
         formatter.write_str("a glob")
     }
 
-    fn visit_str<Failure>(self, v: &str) -> Result<Self::Value, Failure>
+    fn visit_str<Failure>(self, pattern: &str) -> Result<Self::Value, Failure>
     where
         Failure: Error,
     {
-        parse(v.strip_prefix("./").unwrap_or(v)).map(Glob).map_err(Failure::custom)
+        parse(pattern.strip_prefix("./").unwrap_or(pattern)).map(Glob).map_err(Failure::custom)
     }
 }
 
@@ -60,9 +60,7 @@ pub fn glob_set(patterns: &[String]) -> Result<GlobSet, String> {
     builder.build().map_err(|e| format!("invalid glob set: {e}"))
 }
 
-pub(crate) fn compiled<'glob>(
-    globs: impl IntoIterator<Item = &'glob Glob>,
-) -> Result<GlobSet, String> {
+pub(crate) fn compiled(globs: &[Glob]) -> Result<GlobSet, String> {
     let mut builder = GlobSetBuilder::new();
     for glob in globs {
         builder.add(glob.0.clone());
@@ -103,18 +101,12 @@ fn brace_depth(pattern: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use serde::de::IntoDeserializer as _;
-    use serde::de::value::Error;
-
     use super::*;
-
-    fn glob(pattern: &str) -> Result<Glob, String> {
-        Glob::deserialize(pattern.into_deserializer()).map_err(|e: Error| e.to_string())
-    }
+    use crate::fixtures::glob;
 
     #[test]
     fn a_leading_dot_slash_names_the_config_directory() {
-        let set = compiled([&glob("./src/*.lua").unwrap()]).unwrap();
+        let set = compiled(&[glob("./src/*.lua").unwrap()]).unwrap();
         assert!(set.is_match("src/a.lua"));
         assert!(!set.is_match("src/nested/a.lua"));
     }

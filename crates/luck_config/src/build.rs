@@ -7,6 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::{EntryConfig, ProfileOverrides};
 use crate::load::CONFIG_FILE_NAME;
+use crate::project::Project;
 
 /// One bundle `luck build` writes, with the settings its profile gives it.
 #[derive(Debug, Clone)]
@@ -34,15 +35,14 @@ pub(crate) struct BuildKeys {
 }
 
 impl BuildKeys {
-    /// The builds `profile` selects, with entries and outputs under `root`,
-    /// and `project_transforms` where the profile sets none.
+    /// The builds `profile` selects in `project`, with entries and outputs
+    /// under its root, and its transforms where the profile sets none.
     pub(crate) fn builds(
         &self,
-        root: &Path,
-        project_transforms: TransformConfig,
-        target_for: impl Fn(&Path) -> LuaTarget,
+        project: &Project,
         profile: Option<&str>,
     ) -> Result<Vec<BuildConfig>, String> {
+        let root = project.root();
         let profile_overrides = match profile {
             Some(name) => Some(self.profiles.get(name).ok_or_else(|| {
                 format!("profile `{name}` isn't defined in `{CONFIG_FILE_NAME}`")
@@ -53,14 +53,14 @@ impl BuildKeys {
             profile_overrides.and_then(|overrides| overrides.minify).unwrap_or(self.minify);
         let transforms = profile_overrides
             .and_then(|overrides| overrides.transforms)
-            .unwrap_or(project_transforms);
+            .unwrap_or_else(|| project.transforms());
         let entry_build = |relative_entry: &str, output: PathBuf| {
             let entry = root.join(relative_entry);
             if !entry.is_file() {
                 return Err(format!("entry file not found: `{}`", entry.display()));
             }
             Ok(BuildConfig {
-                target: target_for(&entry),
+                target: project.target_for(Some(&entry)),
                 entry,
                 output,
                 minify,
@@ -141,15 +141,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
+    use crate::fixtures::project_with;
 
     #[test]
     fn output_paths_collide_through_a_directory_not_on_disk() {
-        let directory = tempfile::tempdir().expect("tempdir");
+        let directory = project_with(&[("main.lua", "return 1")]);
         let entry = directory.path().join("main.lua");
-        fs::write(&entry, "return 1").expect("write entry");
         let same_as_entry = directory.path().join("gone/../main.lua");
         assert!(check_output_paths([&entry], [&same_as_entry]).is_err());
         let spare = directory.path().join("out/bundle.lua");

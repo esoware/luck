@@ -16,7 +16,7 @@ use crate::glob::Glob;
 
 /// One entry of a multi-entry build: the file to bundle and where to write
 /// the bundle, both relative to the `luck.json` directory.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EntryConfig {
@@ -28,7 +28,7 @@ pub(crate) struct EntryConfig {
 ///
 /// Its `minify` and `transforms` replace the top-level ones. `--release` and
 /// `--dev` select the `release` and `dev` profiles.
-#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProfileOverrides {
@@ -180,7 +180,7 @@ where
 }
 
 /// The `entries` of a multi-entry build, at least one.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct Entries(pub Vec<EntryConfig>);
 
 // The error comes from inside the list, so a format that tracks positions

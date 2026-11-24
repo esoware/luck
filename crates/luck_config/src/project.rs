@@ -185,7 +185,7 @@ impl Project {
     }
 
     /// The canonical path of every config file the project read: its
-    /// `luck.json`, each file that extends, and each std definition.
+    /// `luck.json`, each file it extends, and each std definition.
     pub fn files(&self) -> &[PathBuf] {
         &self.files
     }
@@ -289,12 +289,7 @@ impl Project {
     /// or output, when an entry isn't a file, or when an output collides with
     /// an entry or another output.
     pub fn builds(&self, profile: Option<&str>) -> Result<Vec<BuildConfig>, String> {
-        self.build.builds(
-            &self.root,
-            self.transforms,
-            |entry| self.target_for(Some(entry)),
-            profile,
-        )
+        self.build.builds(self, profile)
     }
 
     /// Each override `path` matches, in order, with its index.

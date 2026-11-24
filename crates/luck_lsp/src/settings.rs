@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use luck_config::{CONFIG_FILE_NAME, Editorconfigs, Project, find_config};
+use luck_config::{CONFIG_FILE_NAME, EDITORCONFIG_FILE_NAME, Editorconfigs, Project, find_config};
 use luck_diagnostics::FileDiagnostics;
 use luck_formatter::FormatOptions;
 use luck_linter::Linter;
@@ -19,9 +19,6 @@ use luck_stdlib::Stdlib;
 use luck_token::LuaVersion;
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
-
-/// The other file whose change can change a document's settings.
-const EDITORCONFIG_FILE_NAME: &str = ".editorconfig";
 
 /// What a document's path and the project around it fix, which every
 /// version of the document shares until the settings change.

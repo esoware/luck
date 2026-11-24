@@ -108,7 +108,13 @@ impl From<&FormatConfig> for FormatOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixtures::{parse_error, parsed};
+    use crate::fixtures::parsed;
+    use crate::parse::parse;
+
+    /// The message `json` fails to parse with.
+    fn parse_error(json: &str) -> String {
+        parse(json).expect_err("config doesn't parse").message.to_string()
+    }
 
     #[test]
     fn parses_every_format_option() {

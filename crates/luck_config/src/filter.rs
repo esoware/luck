@@ -109,7 +109,11 @@ fn is_lua_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixtures::globs;
+    use crate::fixtures::glob;
+
+    fn globs(patterns: &[&str]) -> Vec<Glob> {
+        patterns.iter().map(|pattern| glob(pattern).expect("valid glob")).collect()
+    }
 
     fn filter(include: Option<&[&str]>, exclude: &[&str]) -> ProjectFilter {
         let include_globs = include.map(globs);

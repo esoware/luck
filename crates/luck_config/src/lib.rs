@@ -51,10 +51,11 @@ mod fixtures;
 mod format_config;
 mod glob;
 mod load;
+mod parse;
 mod project;
 
 pub use build::{BuildConfig, check_output_paths};
-pub use editorconfig::Editorconfigs;
+pub use editorconfig::{EDITORCONFIG_FILE_NAME, Editorconfigs};
 pub use filter::ProjectFilter;
 pub use glob::glob_set;
 pub use load::{CONFIG_FILE_NAME, find_config};

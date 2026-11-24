@@ -305,7 +305,7 @@ fn rejects_two_entries_writing_the_same_output() {
 }
 
 #[test]
-fn bundle_options_carry_the_root_and_search_paths() {
+fn bundle_options_carry_the_root_search_paths_and_dynamic_require() {
     let (directory, project) = loaded(&[(
         "luck.json",
         r#"{ "search_paths": ["src/?.lua"], "dynamic_require": "error" }"#,
