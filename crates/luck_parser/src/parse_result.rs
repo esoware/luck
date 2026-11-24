@@ -1,6 +1,6 @@
 use luck_ast::{Chunk, TreeCounts};
 use luck_diagnostics::Diagnostic;
-use luck_token::{Comment, Span};
+use luck_token::{Comment, Span, Token};
 
 use crate::groupings::Groupings;
 
@@ -13,6 +13,9 @@ pub struct ParseResult<'ast> {
     /// The tree, in the version the source was parsed as.
     pub chunk: Chunk<'ast>,
     pub comments: Vec<Comment>,
+    /// Every token the parse read, as [`luck_lexer::lex`] gives them, from
+    /// [`crate::parse_with_tokens`]. [`crate::parse`] leaves it empty.
+    pub tokens: Vec<Token>,
     /// The parentheses `chunk` leaves out, which only grouped what they hold.
     pub groupings: Groupings,
     /// Every lex and parse error, each an E008, sorted by where it is.

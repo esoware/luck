@@ -4,6 +4,7 @@
 use luck_ast::{
     FunctionTypeParam, GenericTypeList, GenericTypeParam, GetSpan as _, Type, TypeArgs, TypeField,
 };
+use luck_token::TokenKind;
 
 use crate::ir::{Formatter, LineMode};
 
@@ -92,7 +93,7 @@ impl<'ast> Formatter<'ast> {
                     .as_ref()
                     .map_or(function.span.start, |generics| generics.span.end);
                 let last_end = function.params.last().map_or(open, |param| param.span().end);
-                let closer = self.comments().closer_offset(last_end, b')');
+                let closer = self.comments().closer_offset(last_end, TokenKind::RightParen);
                 self.write_delimited(
                     ("(", ")"),
                     &function.params,
@@ -197,7 +198,8 @@ impl<'ast> Formatter<'ast> {
                         f.token(modifier.as_str());
                         f.space();
                     }
-                    let closer = f.comments().closer_offset(key.span().end, b']');
+                    let closer =
+                        f.comments().closer_offset(key.span().end, TokenKind::RightBracket);
                     f.token("[");
                     f.write_type(key);
                     f.write_closing_comments(closer, false);

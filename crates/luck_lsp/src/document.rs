@@ -169,9 +169,6 @@ pub(crate) struct DocumentState {
     settings: Arc<DocumentSettings>,
     line_index: Arc<LineIndex>,
     analyzed: Analyzed,
-    /// What the parse read, which highlighting and the cursor's surroundings
-    /// look at where the tree may have none.
-    tokens: Vec<Token>,
     /// Classified on first use, so a client asking for a range and then the
     /// whole of a version classifies it once.
     highlights: OnceLock<Highlights>,
@@ -187,12 +184,11 @@ impl DocumentState {
         line_index: Arc<LineIndex>,
         arena: Arena,
     ) -> Self {
-        let (analyzed, tokens) = Analyzed::new(text, settings.target, &settings.lint, arena);
+        let analyzed = Analyzed::new(text, settings.target, &settings.lint, arena);
         Self {
             settings,
             line_index,
             analyzed,
-            tokens,
             highlights: OnceLock::new(),
             symbols: OnceLock::new(),
         }
@@ -226,8 +222,10 @@ impl DocumentState {
         self.parse().chunk.version
     }
 
+    /// What the parse read, which highlighting and the cursor's surroundings
+    /// look at where the tree may have none, and the formatter reads too.
     pub(crate) fn tokens(&self) -> &[Token] {
-        &self.tokens
+        &self.parse().tokens
     }
 
     pub(crate) fn highlights(&self) -> &Highlights {

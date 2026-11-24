@@ -85,7 +85,8 @@
 //! ```
 //!
 //! Format, with feature `formatter`. `formatter::format_parsed` and
-//! `formatter::format_range` take a parse a caller already holds:
+//! `formatter::format_range` take a parse a caller already holds, made with
+//! `parser::parse_with_tokens`:
 //!
 //! ```
 //! # #[cfg(feature = "formatter")] {

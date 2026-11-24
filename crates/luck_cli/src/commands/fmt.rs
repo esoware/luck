@@ -306,7 +306,7 @@ fn format_document(
     options: &FormatOptions,
     range: Option<Range<usize>>,
 ) -> FormatOutcome {
-    let parse = luck_parser::parse(allocator, source, version);
+    let parse = luck_parser::parse_with_tokens(allocator, source, version);
     if !parse.errors.is_empty() {
         let mut rendered = Vec::new();
         let label = file_path.to_string_lossy();

@@ -4,7 +4,7 @@ use luck_ast::{
     Expression, FunctionArgs, FunctionAttribute, FunctionBody, GetSpan as _, Parameter, Slot,
     VarArgParam,
 };
-use luck_token::Span;
+use luck_token::{Span, TokenKind};
 
 use crate::ir::{Formatter, LineMode};
 use crate::{CallParentheses, SpaceAfterFunction};
@@ -68,7 +68,7 @@ impl<'ast> Formatter<'ast> {
             .as_ref()
             .map(|vararg| vararg.span.end)
             .or_else(|| body.params.last().map(|param| param.span().end));
-        let closer = self.comments().closer_offset(last_end.unwrap_or(open), b')');
+        let closer = self.comments().closer_offset(last_end.unwrap_or(open), TokenKind::RightParen);
         if last_end.is_none() {
             self.write_dangling_list(("(", ")"), closer, LineMode::Soft);
             return;

@@ -6,10 +6,11 @@ use luck_parser::{parse, parse_with_tokens};
 use luck_testgen::{broken_sources, sources_past_the_nesting_cap, with_the_smallest_stack};
 use luck_token::{LuaVersion, Span};
 
-/// The parse reads every token once, in order, so what it hands back is the
-/// lexer's stream, `Eof` once at its end, however the parse stops.
+/// The parse reads every token once, in order, so what it keeps is the
+/// lexer's stream, `Eof` once at its end, however the parse stops, and a
+/// parse that doesn't record them keeps none.
 #[test]
-fn parse_with_tokens_hands_back_the_lexed_stream() {
+fn parse_with_tokens_keeps_the_lexed_stream() {
     with_the_smallest_stack(|| {
         let allocator = Allocator::new();
         let handwritten = [
@@ -22,10 +23,11 @@ fn parse_with_tokens_hands_back_the_lexed_stream() {
         for (version, source) in
             handwritten.into_iter().chain(broken_sources()).chain(sources_past_the_nesting_cap())
         {
-            let (parse, tokens) = parse_with_tokens(&allocator, source.as_bytes(), version);
+            let recorded = parse_with_tokens(&allocator, source.as_bytes(), version);
             let lexed = luck_lexer::lex(source.as_bytes(), version);
-            assert_eq!(tokens, lexed.tokens, "{source:.80}");
-            assert_eq!(parse.comments, lexed.comments, "{source:.80}");
+            assert_eq!(recorded.tokens, lexed.tokens, "{source:.80}");
+            assert_eq!(recorded.comments, lexed.comments, "{source:.80}");
+            assert_eq!(parse(&allocator, source.as_bytes(), version).tokens, []);
         }
     });
 }

@@ -5,7 +5,7 @@
 //! line, keeping each comment with the field it leads or trails.
 
 use luck_ast::{Expression, Field, GetSpan as _, TableConstructor};
-use luck_token::{Span, has_line_break};
+use luck_token::{Span, TokenKind, has_line_break};
 
 use crate::ir::{Formatter, LineMode};
 
@@ -148,7 +148,8 @@ impl<'ast> Formatter<'ast> {
                     f.write_after_operator(f.extent(value).start, |inner| inner.write_expr(value));
                 }
                 Field::Bracketed { key, value, .. } => {
-                    let closer = f.comments().closer_offset(f.extent(key).end, b']');
+                    let closer =
+                        f.comments().closer_offset(f.extent(key).end, TokenKind::RightBracket);
                     f.write_bracketed_key(key, closer);
                     f.space();
                     f.token("=");

@@ -64,7 +64,7 @@ pub(crate) fn assert_format_with<Input, Expected>(
 fn range_formatted(source: &str, range: Range<usize>) -> FormatResult {
     let allocator = Allocator::new();
     let version = LuaVersion::Lua54;
-    let parse = luck_parser::parse(&allocator, source.as_bytes(), version);
+    let parse = luck_parser::parse_with_tokens(&allocator, source.as_bytes(), version);
     format_range(&allocator, &parse, &FormatOptions::default(), range)
 }
 

@@ -14,7 +14,9 @@ use luck_ast::{
     InterpolatedString, NumberLiteral, Slot, StringLiteral, Suffix, SuffixedExpression, UnaryOp,
     Var,
 };
-use luck_token::{Span, UnOp, spell_integer, spell_number, spell_string, write_interpolated_text};
+use luck_token::{
+    Span, TokenKind, UnOp, spell_integer, spell_number, spell_string, write_interpolated_text,
+};
 
 use crate::ir::Formatter;
 use crate::numbers::normalize_number;
@@ -412,7 +414,8 @@ impl<'ast> Formatter<'ast> {
                 // Luau rejects a method call whose `(` is on a later line
                 // than its name. The tree keeps no span for the outer `>`.
                 if let Some(type_args) = &call.type_args {
-                    let closer = self.comments().closer_offset(type_args.span.end, b'>');
+                    let closer =
+                        self.comments().closer_offset(type_args.span.end, TokenKind::Greater);
                     self.flat(|f| f.write_type_args(("<<", ">>"), type_args, closer));
                 }
                 self.write_function_args(&call.args);

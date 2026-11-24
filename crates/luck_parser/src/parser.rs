@@ -39,26 +39,19 @@ pub fn parse<'ast>(
     source: &'ast [u8],
     version: LuaVersion,
 ) -> ParseResult<'ast> {
-    parse_recording(allocator, source, version, false).0
+    parse_recording(allocator, source, version, false)
 }
 
-/// [`parse`], and every token the parse read, as [`luck_lexer::lex`] gives
-/// them, for a host that needs both, so it lexes the source once.
+/// [`parse`], keeping every token the parse read in
+/// [`ParseResult::tokens`], for a host that needs both, such as the
+/// formatter, so it lexes the source once.
 #[must_use]
 pub fn parse_with_tokens<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
     version: LuaVersion,
-) -> (ParseResult<'ast>, Vec<Token>) {
-    let (parse, recorded) = parse_recording(allocator, source, version, true);
-    let mut tokens = recorded.unwrap_or_default();
-    // The lexer repeats its `Eof` to a parser that reads on.
-    while let [.., Token { kind: TokenKind::Eof, .. }, Token { kind: TokenKind::Eof, .. }] =
-        tokens.as_slice()
-    {
-        tokens.pop();
-    }
-    (parse, tokens)
+) -> ParseResult<'ast> {
+    parse_recording(allocator, source, version, true)
 }
 
 fn parse_recording<'ast>(
@@ -66,15 +59,16 @@ fn parse_recording<'ast>(
     source: &'ast [u8],
     version: LuaVersion,
     is_recording: bool,
-) -> (ParseResult<'ast>, Option<Vec<Token>>) {
+) -> ParseResult<'ast> {
     let lexer = match Lexer::new(source, version) {
         Ok(lexer) => lexer,
         Err(error) => {
             let block = Block::new(Span::new(0, 0), List::new());
-            let parse = ParseResult {
+            return ParseResult {
                 source,
                 chunk: Chunk::new(version, block),
                 comments: Vec::new(),
+                tokens: Vec::new(),
                 groupings: Groupings::default(),
                 errors: vec![error],
                 lenient_escapes: Vec::new(),
@@ -82,7 +76,6 @@ fn parse_recording<'ast>(
                 nesting_depth: 1,
                 counts: TreeCounts::default(),
             };
-            return (parse, is_recording.then(Vec::new));
         }
     };
     let tokens = is_recording.then(|| Vec::with_capacity(lexer.token_capacity()));
@@ -296,7 +289,7 @@ struct FunctionScope {
 impl<'ast> Parser<'ast> {
     /// Nothing is open around the chunk's block, so it reads to the end of
     /// the source, and the lexer is drained by then.
-    fn parse_chunk(mut self) -> (ParseResult<'ast>, Option<Vec<Token>>) {
+    fn parse_chunk(mut self) -> ParseResult<'ast> {
         let start_span = self.token.span;
         let block = self.parse_block().unwrap_or_else(|| Block::new(start_span, List::new()));
         let chunk = Chunk::new(self.version, block);
@@ -308,17 +301,24 @@ impl<'ast> Parser<'ast> {
         errors.append(&mut self.errors);
         errors.sort_by_key(|e| e.span.map(|span| span.start));
         self.groupings.finish();
-        let parse = ParseResult {
+        let mut tokens = self.tokens.unwrap_or_default();
+        // The lexer repeats its `Eof` to a parser that reads on.
+        while let [.., Token { kind: TokenKind::Eof, .. }, Token { kind: TokenKind::Eof, .. }] =
+            tokens.as_slice()
+        {
+            tokens.pop();
+        }
+        ParseResult {
             source: self.source,
             chunk,
             comments: lexed.comments,
+            tokens,
             groupings: self.groupings,
             errors,
             lenient_escapes: lexed.lenient_escapes,
             nesting_depth: self.deepest_level,
             counts: self.counts,
-        };
-        (parse, self.tokens)
+        }
     }
 
     #[inline]

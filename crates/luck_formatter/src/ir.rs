@@ -231,10 +231,11 @@ impl<'ast> Formatter<'ast> {
         options: FormatOptions,
         comments: Comments<'ast>,
     ) -> Self {
-        // Code runs about one element to two source bytes, so this room
-        // seldom has to grow. Synthetic ASTs have no source and start empty.
-        let capacity =
-            comments.source_text().map_or(0, |source| source.len().div_ceil(5).saturating_mul(3));
+        // A token or a comment comes to about two elements, and seldom to
+        // more than two and a half, however long its text, so this room
+        // seldom has to grow. A tree built in code has neither and starts
+        // empty.
+        let capacity = comments.token_and_comment_count().saturating_mul(5).div_ceil(2);
         Self {
             elements: List::with_capacity_in(capacity, allocator),
             // About one element in eleven starts a group.

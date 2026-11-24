@@ -1958,3 +1958,18 @@ fn a_long_commented_argument_list_formats_without_rescanning_its_comments() {
     .unwrap();
     assert_format(&format!("f({})\n", arguments.join(", ")), &expected);
 }
+
+#[test]
+fn a_long_table_closing_on_a_comment_formats_without_rescanning_its_fields() {
+    // Each field looks for a comment trailing it, and the one before the
+    // closer is past every later field. Answered by reading every token
+    // between, rather than stopping at the next field, this takes minutes.
+    let count = 300_000u32;
+    let fields: Vec<String> = (0..count).map(|index| index.to_string()).collect();
+    let mut expected = String::from("local t = {\n");
+    for field in &fields {
+        writeln!(expected, "\t{field},").unwrap();
+    }
+    expected.push_str("\t-- c\n}\n");
+    assert_format(&format!("local t = {{{}\n-- c\n}}\n", fields.join(", ")), &expected);
+}

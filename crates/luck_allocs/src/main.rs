@@ -137,6 +137,9 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
     let ((), codegen) = record_stats_in(allocator, || {
         drop(luck_codegen::compact(&parse.chunk, LiteralSpelling::AsWritten));
     });
+    // The formatter reads the tokens `parse_with_tokens` keeps, the lexer's,
+    // which the parser stage measures `parse` without.
+    parse.tokens = luck_lexer::lex(source, version).tokens;
     let options = FormatOptions::default();
     let ((), formatter) = record_stats_in(allocator, || {
         drop(luck_formatter::format_parsed(allocator, &parse, &options));

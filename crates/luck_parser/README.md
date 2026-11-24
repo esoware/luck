@@ -13,7 +13,7 @@ An error doesn't stop the parse. The parser recovers and reports every error in 
 ## Usage
 
 - `parse(allocator, source, version)` returns a `ParseResult`: the source, the `Chunk`, which records `version` and holds the tree, the comments, the `Groupings`, the errors, the lenient escapes the lexer noted, the nesting depth, and the `TreeCounts`.
-- `parse_with_tokens` also returns every token it read, so a host that needs both lexes the source once.
+- `parse_with_tokens` also keeps every token it read in the result's `tokens`, which `parse` leaves empty, so a host that needs both, such as the formatter or the language server, lexes the source once.
 
 Every dialect's source reads into the same shape: a `break`, a `continue`, or a `return` is a statement like any other, and a `;` is no node. A statement the grammar takes only at the end of its block but that has others after it is an error, and stays where it was written.
 

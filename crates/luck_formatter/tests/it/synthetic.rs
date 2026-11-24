@@ -62,8 +62,9 @@ fn long_string_delimiters_and_bytes_roundtrip() {
         for version in LuaVersion::ALL {
             let block = synth.block([synth.return_([synth.long_string(&content)])]);
             assert_format_block(&fixture, block, version, &expected);
-            let lexed = luck_lexer::lex(expected.as_bytes(), version);
-            let literal = lexed
+            let parse =
+                luck_parser::parse_with_tokens(fixture.allocator(), expected.as_bytes(), version);
+            let literal = parse
                 .tokens
                 .iter()
                 .find(|token| token.kind == TokenKind::StringLiteral)

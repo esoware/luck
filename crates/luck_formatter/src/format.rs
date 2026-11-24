@@ -92,15 +92,22 @@ pub fn format(
     version: LuaVersion,
     options: &FormatOptions,
 ) -> FormatResult {
-    let parse = luck_parser::parse(allocator, source, version);
+    let parse = luck_parser::parse_with_tokens(allocator, source, version);
     format_parsed(allocator, &parse, options)
 }
 
-/// [`format()`] without the parse, for a host that already holds one.
+/// [`format()`] without the parse, for a host that already holds one, made
+/// with `luck_parser::parse_with_tokens`: the formatter finds the tokens the
+/// tree keeps no span for among its tokens.
 ///
 /// A parse with errors returns empty output and those errors. Text the
 /// formatter rewrites goes in `allocator`, which may be the one the tree
 /// lives in.
+///
+/// # Panics
+///
+/// In debug builds, when `parse` kept no tokens, as `luck_parser::parse`
+/// keeps none.
 #[must_use]
 pub fn format_parsed<'ast>(
     allocator: &'ast Allocator,
@@ -110,7 +117,7 @@ pub fn format_parsed<'ast>(
     if !parse.errors.is_empty() {
         return FormatResult { output: Vec::new(), errors: parse.errors.clone() };
     }
-    let comments = Comments::from_source(&parse.comments, parse.source, parse.chunk.version);
+    let comments = Comments::from_parse(parse);
     let output = print_chunk(allocator, &parse.chunk, comments, Some(&parse.groupings), options);
     FormatResult { output, errors: Vec::new() }
 }
@@ -122,6 +129,10 @@ pub fn format_parsed<'ast>(
 /// the end of the file, which is what an editor's "format selection" wants.
 /// It never sorts requires, since a selection can split a run of them.
 /// `parse` is as for [`format_parsed`].
+///
+/// # Panics
+///
+/// As [`format_parsed`] does.
 #[must_use]
 pub fn format_range<'ast>(
     allocator: &'ast Allocator,
@@ -134,7 +145,7 @@ pub fn format_range<'ast>(
     }
     let source = parse.source;
     let offsets = index_to_offset(range.start)..index_to_offset(range.end);
-    let comments = Comments::from_source(&parse.comments, source, parse.chunk.version);
+    let comments = Comments::from_parse(parse);
     let output = format_selection(allocator, parse, comments, options, &offsets).map_or_else(
         || source.to_owned(),
         |(span, selected)| {

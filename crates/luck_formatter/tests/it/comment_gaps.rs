@@ -70,10 +70,11 @@ impl Shape {
 /// where a line break would change what the source means, before a call's `(`
 /// in Lua 5.1 and Luau, which reads it as a new statement.
 fn with_a_comment_in_every_gap(source: &str, version: LuaVersion, shape: Shape) -> String {
-    let lexed = luck_lexer::lex(source.as_bytes(), version);
+    let allocator = Allocator::new();
+    let parse = luck_parser::parse_with_tokens(&allocator, source.as_bytes(), version);
     let mut commented = String::new();
     let mut copied = 0;
-    for (index, pair) in lexed.tokens.windows(2).enumerate() {
+    for (index, pair) in parse.tokens.windows(2).enumerate() {
         let [token, next] = pair else {
             continue;
         };

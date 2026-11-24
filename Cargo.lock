@@ -1039,7 +1039,6 @@ dependencies = [
  "luck_ast",
  "luck_data_structures",
  "luck_diagnostics",
- "luck_lexer",
  "luck_parser",
  "luck_testgen",
  "luck_token",

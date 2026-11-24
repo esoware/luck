@@ -9,7 +9,7 @@ use core::{fmt, mem};
 use luck_allocator::Allocator;
 use luck_linter::{Analysis, LintConfig};
 use luck_parser::ParseResult;
-use luck_token::{LuaTarget, Token};
+use luck_token::LuaTarget;
 use parking_lot::Mutex;
 use self_cell::{MutBorrow, self_cell};
 
@@ -44,30 +44,27 @@ self_cell!(
 );
 
 impl Analyzed {
-    /// Parses and analyzes `text` in `arena` for `target`, with `config`'s
-    /// extra globals defined. The tokens the parse read come back beside it.
+    /// Parses `text` in `arena`, keeping its tokens, and analyzes it for
+    /// `target`, with `config`'s extra globals defined.
     pub(crate) fn new(
         text: Arc<str>,
         target: LuaTarget,
         config: &LintConfig,
         arena: Arena,
-    ) -> (Self, Vec<Token>) {
-        let mut tokens = Vec::new();
+    ) -> Self {
         let owner = Source { text, arena: MutBorrow::new(arena) };
         let parsed = ParsedCell::new(owner, |source| {
             let lent: &Arena = source.arena.borrow_mut();
-            let (parse, read) = luck_parser::parse_with_tokens(
+            luck_parser::parse_with_tokens(
                 &lent.allocator,
                 source.text.as_bytes(),
                 target.version(),
-            );
-            tokens = read;
-            parse
+            )
         });
         let analyzed = AnalyzedCell::new(parsed, |cell| {
             luck_linter::analyze(cell.borrow_dependent(), target, config)
         });
-        (Self(analyzed), tokens)
+        Self(analyzed)
     }
 
     /// The text an editor sent, which is UTF-8, and which the parse reads as
@@ -148,7 +145,7 @@ mod tests {
 
     fn analyzed(text: &str, spare: &Arc<SpareArena>) -> Analyzed {
         let config = LintConfig::default();
-        Analyzed::new(Arc::from(text), LuaTarget::Lua54, &config, Arena::from_spare(spare)).0
+        Analyzed::new(Arc::from(text), LuaTarget::Lua54, &config, Arena::from_spare(spare))
     }
 
     #[test]

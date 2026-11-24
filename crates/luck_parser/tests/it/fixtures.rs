@@ -74,7 +74,7 @@ fn every_fixture_parses_with_the_tokens_it_lexes_to() {
         let source = fs::read_to_string(path).expect("failed to read fixture file");
         let version = detect_version(relative);
         let allocator = Allocator::new();
-        let (_, tokens) = parse_with_tokens(&allocator, source.as_bytes(), version);
+        let tokens = parse_with_tokens(&allocator, source.as_bytes(), version).tokens;
         assert_eq!(
             tokens,
             luck_lexer::lex(source.as_bytes(), version).tokens,

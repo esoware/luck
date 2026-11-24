@@ -61,7 +61,7 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile) -> FileReport 
     let source = file.bytes.as_slice();
     let version = suite.target.version();
     let allocator = Allocator::new();
-    let parse = match guard(|| luck_parser::parse(&allocator, source, version)) {
+    let parse = match guard(|| luck_parser::parse_with_tokens(&allocator, source, version)) {
         Ok(parse) => parse,
         Err(panicked) => return FileReport::stopped(suite, file, &panicked),
     };
@@ -189,7 +189,7 @@ fn formatter<'ast>(
     }
     let output = first.output;
     let result = {
-        let reparsed = luck_parser::parse(allocator, &output, version);
+        let reparsed = luck_parser::parse_with_tokens(allocator, &output, version);
         if reparsed.errors.is_empty() {
             let (expected, actual) = (tree_shape(&parse.chunk), tree_shape(&reparsed.chunk));
             if actual == expected {

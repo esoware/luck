@@ -12,11 +12,9 @@ use core::ops::Range;
 
 use luck_ast::{Block, GetSpan as _, Statement, Visit, leading_prefix};
 use luck_parser::{Groupings, ParseResult};
-use luck_token::{
-    LuaVersion, Span, is_lua_whitespace, line_breaks, offset_to_index, strip_line_break,
-};
+use luck_token::{LuaVersion, Span, is_lua_whitespace, offset_to_index, strip_line_break};
 
-use crate::comments::{is_code_free_byte, own_line_start};
+use crate::comments::own_line_start;
 use crate::ir::Formatter;
 use crate::sort_requires::{RequireRun, sortable_require};
 use crate::{BlockNewlineGaps, Comments, FormatOptions};
@@ -254,10 +252,10 @@ impl<'ast> Formatter<'ast> {
         }
 
         let stays_in_block = absorbed.map_or_else(
-            || comments.is_free_of_tokens(run.start, run.end),
+            || comments.is_code_free(run.start, run.end),
             |range| {
-                comments.is_free_of_tokens(run.start, range.start)
-                    && comments.is_free_of_tokens(range.end, run.end)
+                comments.is_code_free(run.start, range.start)
+                    && comments.is_code_free(range.end, run.end)
             },
         );
         if !stays_in_block {
@@ -376,18 +374,33 @@ impl<'ast> Formatter<'ast> {
     /// Write `source[start..end]` line by line with the printer's indentation
     /// and the source's line breaks, and count its comments as printed.
     ///
+    /// It's split only at the line breaks between tokens, and the statement's
+    /// own indentation comes off the lines after its first, so the printer's
+    /// indent takes the original column's place.
+    ///
     /// Returns false when there's no source to copy.
     fn write_reindented(&mut self, start: u32, end: u32) -> bool {
         let Some(source) = self.comments().source_text() else {
             return false;
         };
-        for (line, line_break) in reindented_lines(source, start, end, self.version()) {
-            if !line.is_empty() {
-                self.text(line);
+        let base_indent = own_line_start(source, start)
+            .map_or(&b""[..], |line_start| Span::new(line_start, start).text(source));
+        let line_breaks = self.comments().line_breaks_between_tokens(start, end, self.version());
+        let mut line_start = start;
+        for line_break in line_breaks.into_iter().chain(iter::once(Span::new(end, end))) {
+            let line = Span::new(line_start, line_break.start).text(source);
+            let unindented = if line_start == start {
+                line
+            } else {
+                line.strip_prefix(base_indent).unwrap_or(line)
+            };
+            if !unindented.is_empty() {
+                self.text(unindented);
             }
             if !line_break.is_empty() {
-                self.verbatim(line_break);
+                self.verbatim(line_break.text(source));
             }
+            line_start = line_break.end;
         }
         self.comments_mut().mark_printed_range(start, end);
         true
@@ -468,7 +481,7 @@ pub(crate) fn has_leading_edge_blank(source: &[u8], anchor: u32, version: LuaVer
 /// line (the gap between the last statement and the block closer).
 fn has_trailing_edge_blank(source: &[u8], end: u32, version: LuaVersion) -> bool {
     let following = source.get(offset_to_index(end)..).unwrap_or_default();
-    let run_length = following.iter().take_while(|&&b| is_code_free_byte(b)).count();
+    let run_length = following.iter().take_while(|&&b| is_lua_whitespace(b) || b == b';').count();
     run_has_blank(following.get(..run_length).unwrap_or_default(), version)
 }
 
@@ -497,77 +510,6 @@ const fn run_has_blank(text: &[u8], version: LuaVersion) -> bool {
 
 pub(crate) fn has_blank_line(source: &[u8], start: u32, end: u32, version: LuaVersion) -> bool {
     run_has_blank(Span::new(start, end).text(source), version)
-}
-
-/// The statement's own indentation comes off its continuation lines, so the
-/// printer's indent replaces the original column. Each line comes with the
-/// line break after it, empty for the last.
-///
-/// Lines split only at newlines between tokens: a newline inside a long string or long comment is
-/// part of that token and goes out as written, since re-indenting would change it.
-fn reindented_lines(
-    source: &[u8],
-    start: u32,
-    end: u32,
-    version: LuaVersion,
-) -> Vec<(&[u8], &[u8])> {
-    let text = Span::new(start, end).text(source);
-    let base_indent = own_line_start(source, start)
-        .map_or(&b""[..], |line_start| Span::new(line_start, start).text(source));
-
-    let mut lines = Vec::new();
-    let mut cursor = 0;
-    let separators = separable_newlines(text, version);
-    for offset in separators.into_iter().chain(iter::once(text.len())) {
-        let written = text.get(cursor..offset).unwrap_or_default();
-        let rest = text.get(offset..).unwrap_or_default();
-        let next_cursor =
-            text.len().saturating_sub(strip_line_break(rest, version).unwrap_or(rest).len());
-        let line = if lines.is_empty() {
-            written
-        } else {
-            written.strip_prefix(base_indent).unwrap_or(written)
-        };
-        lines.push((line, text.get(offset..next_cursor).unwrap_or_default()));
-        cursor = next_cursor;
-    }
-    lines
-}
-
-/// The start offsets of the line breaks in `text` that separate lines, as
-/// opposed to ones inside a token.
-///
-/// A long string or long comment carries its line breaks as content, and a
-/// `\` continues a short string across one. Lexing tells them apart: a line
-/// break outside every token and comment span sits between two tokens.
-fn separable_newlines(text: &[u8], version: LuaVersion) -> Vec<usize> {
-    let lexed = luck_lexer::lex(text, version);
-    // A parsed statement always lexes. If this text doesn't, leave it unsplit,
-    // since whatever the lexer couldn't close may be a literal that
-    // re-indenting would change.
-    if !lexed.errors.is_empty() {
-        return Vec::new();
-    }
-    let mut spans: Vec<Range<usize>> = lexed
-        .tokens
-        .iter()
-        .map(|token| token.span)
-        .chain(lexed.comments.iter().map(|c| c.span))
-        .filter(|span| span.end > span.start)
-        .map(Range::from)
-        .collect();
-    spans.sort_unstable_by_key(|span| span.start);
-
-    let mut upcoming_spans = spans.into_iter().peekable();
-    let mut separators = Vec::new();
-    for line_break in line_breaks(text, version) {
-        while upcoming_spans.next_if(|span| span.end <= line_break.start).is_some() {}
-        let is_inside = upcoming_spans.peek().is_some_and(|span| span.start <= line_break.start);
-        if !is_inside {
-            separators.push(line_break.start);
-        }
-    }
-    separators
 }
 
 #[cfg(test)]
@@ -599,26 +541,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn newlines_inside_a_token_do_not_separate_lines() {
-        let separable = |text: &str| super::separable_newlines(text.as_bytes(), LuaVersion::Lua54);
-        assert_eq!(separable("a\nb\nc"), vec![1, 3]);
-        // Long string, long comment, and level-2 bracket.
-        assert_eq!(separable("a\n[[b\nc]]\nd"), vec![1, 9]);
-        assert_eq!(separable("a\n--[[b\nc]]\nd"), vec![1, 11]);
-        assert_eq!(separable("a\n[==[b\nc]==]\nd"), vec![1, 13]);
-        // A level mismatch doesn't close the bracket.
-        assert_eq!(separable("[==[a\nb]=]\nc"), Vec::<usize>::new());
-        // `]]` without an opener is just two tokens.
-        assert_eq!(separable("a]]\nb"), vec![3]);
-        // A short string continued across the break, and `\z`.
-        assert_eq!(separable("\"a\\\nb\"\nc"), vec![6]);
-        assert_eq!(separable("\"a\\z\n  b\"\nc"), vec![9]);
-        // A trailing `\` in a comment escapes nothing, and `[[` inside a
-        // short string opens nothing.
-        assert_eq!(separable("a -- see C:\\\nb"), vec![12]);
-        assert_eq!(separable("\"[[\"\nb"), vec![4]);
     }
 }

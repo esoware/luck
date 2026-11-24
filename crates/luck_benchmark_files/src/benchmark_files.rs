@@ -67,6 +67,9 @@ impl TestProject {
     }
 }
 
+/// `source_text` parsed with its tokens, which the formatter reads, so every
+/// stage can take the one parse.
+///
 /// # Panics
 ///
 /// Panics when `source_text` doesn't parse cleanly.
@@ -76,7 +79,7 @@ fn parse_cleanly<'ast>(
     source_text: &'ast [u8],
     version: LuaVersion,
 ) -> ParseResult<'ast> {
-    let parse_result = luck_parser::parse(allocator, source_text, version);
+    let parse_result = luck_parser::parse_with_tokens(allocator, source_text, version);
     assert!(parse_result.errors.is_empty(), "{name}: {:?}", parse_result.errors);
     parse_result
 }
