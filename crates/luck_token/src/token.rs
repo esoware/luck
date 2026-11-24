@@ -231,8 +231,8 @@ impl TokenKind {
     /// lexer reads it, or `None` when it's an identifier there, as `goto` is
     /// on 5.1 and Luau and `type` is outside Luau.
     #[inline]
-    pub fn keyword(text: &str, version: LuaVersion) -> Option<Self> {
-        let packed = pack_keyword_candidate(text.as_bytes())?;
+    pub fn keyword(text: impl AsRef<[u8]>, version: LuaVersion) -> Option<Self> {
+        let packed = pack_keyword_candidate(text.as_ref())?;
         let (keyword, kind) = KEYWORDS[keyword_slot(packed)];
         (keyword == packed && kind.is_keyword_in(version)).then_some(kind)
     }
@@ -504,6 +504,51 @@ static KEYWORDS: [(u64, TokenKind); 64] = {
 #[inline]
 const fn keyword_slot(packed: u64) -> usize {
     (packed.wrapping_mul(KEYWORD_HASH_MULTIPLIER) >> 58) as usize
+}
+
+/// The kind each name has under one version, looked up with no branch on its
+/// length or its version, for a lexer that reads many names at once.
+#[derive(Debug)]
+pub struct Keywords([(u64, TokenKind); 64]);
+
+/// [`KEYWORDS`] for each version, in [`LuaVersion::ALL`]'s order, with a
+/// keyword the version lacks read as [`TokenKind::Identifier`].
+static KEYWORDS_BY_VERSION: [Keywords; 6] = {
+    let mut tables = [const { Keywords([(0, TokenKind::Identifier); 64]) }; 6];
+    let mut version = 0;
+    while version < LuaVersion::ALL.len() {
+        let mut slot = 0;
+        while slot < KEYWORDS.len() {
+            let (packed, kind) = KEYWORDS[slot];
+            let kind_there = if kind.is_keyword_in(LuaVersion::ALL[version]) {
+                kind
+            } else {
+                TokenKind::Identifier
+            };
+            tables[version].0[slot] = (packed, kind_there);
+            slot += 1;
+        }
+        version += 1;
+    }
+    tables
+};
+
+impl Keywords {
+    pub const fn of(version: LuaVersion) -> &'static Self {
+        &KEYWORDS_BY_VERSION[version as usize]
+    }
+
+    /// The kind of the name of `length` bytes, at least one, that opens
+    /// `first_eight`, eight bytes in little-endian order that run past a
+    /// shorter name: as [`TokenKind::keyword`] reads it, or
+    /// [`TokenKind::Identifier`].
+    #[inline]
+    pub fn kind(&self, first_eight: u64, length: usize) -> TokenKind {
+        let spelled = u64::MAX >> (64 - 8 * length.clamp(1, 8));
+        let packed = first_eight & spelled;
+        let (keyword, kind) = self.0[keyword_slot(packed)];
+        if keyword == packed && length <= 8 { kind } else { TokenKind::Identifier }
+    }
 }
 
 /// `bytes` packed as [`KEYWORDS`] packs a keyword, or `None` for a length no

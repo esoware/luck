@@ -1054,6 +1054,7 @@ name = "luck_lexer"
 version = "0.6.0"
 dependencies = [
  "luck_diagnostics",
+ "luck_simd",
  "luck_testgen",
  "luck_token",
  "memchr",
@@ -1189,6 +1190,10 @@ dependencies = [
  "luck_token",
  "rustc-hash",
 ]
+
+[[package]]
+name = "luck_simd"
+version = "0.6.0"
 
 [[package]]
 name = "luck_stdlib"

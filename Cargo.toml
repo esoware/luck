@@ -32,6 +32,7 @@ luck_minifier        = { version = "0.6.0", path = "crates/luck_minifier" }
 luck_parser          = { version = "0.6.0", path = "crates/luck_parser" }
 luck_resolver        = { version = "0.6.0", path = "crates/luck_resolver" }
 luck_semantic        = { version = "0.6.0", path = "crates/luck_semantic" }
+luck_simd            = { version = "0.6.0", path = "crates/luck_simd" }
 luck_stdlib          = { version = "0.6.0", path = "crates/luck_stdlib" }
 luck_testgen         = { path = "crates/luck_testgen" }
 luck_token           = { version = "0.6.0", path = "crates/luck_token" }

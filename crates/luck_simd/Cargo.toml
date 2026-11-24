@@ -1,0 +1,15 @@
+[package]
+name                   = "luck_simd"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "CPU feature sets and the SIMD vectors that work with them, for the luck toolchain"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

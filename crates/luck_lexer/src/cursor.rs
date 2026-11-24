@@ -3,7 +3,7 @@
     reason = "the scans move a raw pointer without the bounds checks its invariant makes redundant"
 )]
 
-use std::{slice, str};
+use std::slice;
 
 use luck_token::{LuaVersion, Span, strip_line_break};
 
@@ -130,20 +130,17 @@ impl<'source> Cursor<'source> {
         unsafe { self.advance_unchecked(length) }
     }
 
-    /// Pass the name at the cursor and return it, or `""` if no name byte is
-    /// next.
+    /// Pass the name at the cursor and return it, or nothing if no name byte
+    /// is next.
     #[inline]
-    pub(crate) fn eat_name(&mut self) -> &'source str {
+    pub(crate) fn eat_name(&mut self) -> &'source [u8] {
         let rest = self.rest();
         let length = name_length(rest);
         // SAFETY: `name_length` counts bytes of `rest`.
         let bytes = unsafe { rest.get_unchecked(..length) };
-        debug_assert!(bytes.is_ascii(), "a name holds only ASCII bytes");
-        // SAFETY: `name_length` passes only ASCII bytes, which are UTF-8.
-        let name = unsafe { str::from_utf8_unchecked(bytes) };
         // SAFETY: `name_length` counts bytes of `rest`.
         unsafe { self.advance_unchecked(length) }
-        name
+        bytes
     }
 
     /// Pass the bytes of a short string's body that `quote` opened, up to the

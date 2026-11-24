@@ -115,8 +115,7 @@ const fn name_bytes(word: u64) -> u64 {
     (digits | letters | underscores) & !word & HIGH_BITS
 }
 
-/// How many bytes of name open `bytes`. Every byte it counts is ASCII, which
-/// [`Cursor::eat_name`](crate::cursor::Cursor::eat_name) relies on.
+/// How many bytes of name open `bytes`.
 #[inline]
 pub(crate) fn name_length(bytes: &[u8]) -> usize {
     let mut remaining = bytes;

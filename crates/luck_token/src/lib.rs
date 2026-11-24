@@ -69,7 +69,7 @@ pub use string::{
     decode_string, read_escape, spell_string, spell_string_shorter_than, write_interpolated_text,
     write_long_string,
 };
-pub use token::{Token, TokenKind};
+pub use token::{Keywords, Token, TokenKind};
 pub use version::{LuaVersion, MAX_ACTIVE_LOCALS};
 pub use whitespace::{
     ends_with_line_break, has_line_break, is_lua_whitespace, line_breaks, strip_line_break,

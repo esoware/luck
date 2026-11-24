@@ -1,4 +1,4 @@
-use luck_token::{LuaVersion, Span, Token, TokenKind};
+use luck_token::{Keywords, LuaVersion, Span, Token, TokenKind};
 
 const fn token(kind: TokenKind, start: u32, end: u32) -> Token {
     Token {
@@ -216,6 +216,43 @@ fn keyword_rejects_every_near_spelling_of_a_keyword() {
         for name in near.iter().filter(|name| !keywords.contains(&name.as_str())) {
             for version in LuaVersion::ALL {
                 assert_eq!(TokenKind::keyword(name, version), None, "{name:?}");
+            }
+        }
+    }
+}
+
+/// Every keyword, and every name one edit or one byte of length from one,
+/// beside bytes that would change the answer if a lookup read past the name.
+#[test]
+fn keywords_reads_each_name_as_keyword_does() {
+    let keywords = [
+        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
+        "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+        "continue", "export", "const", "type", "typeof", "read", "write", "global",
+    ];
+    let mut names: Vec<String> =
+        ["x", "_", "e", "functions", "elseiff", "typeofx", "x1234567"].map(String::from).to_vec();
+    for keyword in keywords {
+        names.push(keyword.to_owned());
+        names.push(format!("{keyword}s"));
+        names.push(keyword[1..].to_owned());
+        names.push(keyword[..keyword.len() - 1].to_owned());
+        for i in 0..keyword.len() {
+            let mut bytes = keyword.as_bytes().to_vec();
+            bytes[i] ^= 1;
+            names.push(String::from_utf8(bytes).expect("ASCII stays UTF-8"));
+        }
+    }
+    for version in LuaVersion::ALL {
+        let table = Keywords::of(version);
+        for name in names.iter().filter(|name| !name.is_empty()) {
+            let expected = TokenKind::keyword(name, version).unwrap_or(TokenKind::Identifier);
+            for after in [b'\0', b' ', b'e', b'(', 0xFF] {
+                let mut first_eight = [after; 8];
+                let shown = name.len().min(8);
+                first_eight[..shown].copy_from_slice(&name.as_bytes()[..shown]);
+                let kind = table.kind(u64::from_le_bytes(first_eight), name.len());
+                assert_eq!(kind, expected, "{version:?} {name:?} then {after:#04x}");
             }
         }
     }

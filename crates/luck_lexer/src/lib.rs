@@ -1,6 +1,7 @@
 //! # `luck_lexer`
 //!
-//! Single-pass lexer for Lua 5.1-5.5 and Luau. Converts a source into a flat
+//! Single-pass lexer for Lua 5.1-5.5 and Luau, with SIMD on `x86_64` CPUs with
+//! AVX2 and on aarch64. Converts a source into a flat
 //! [`Token`](luck_token::Token) stream plus a separate [`Comment`](luck_token::Comment) array.
 //! A token holds no text, only its kind, span, and flags, so it slices its
 //! bytes from the source with [`Token::text`](luck_token::Token::text).
@@ -29,6 +30,7 @@ mod cursor;
 mod lex_result;
 mod lexer;
 mod search;
+mod window;
 
 pub use lex_result::LexResult;
 pub use lexer::{Lexer, lex};

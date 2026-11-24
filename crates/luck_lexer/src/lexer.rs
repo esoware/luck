@@ -1,3 +1,4 @@
+mod batch;
 mod number;
 mod string;
 
@@ -5,6 +6,7 @@ use std::borrow::Cow;
 use std::mem;
 
 use luck_diagnostics::Diagnostic;
+use luck_simd::DynCpu;
 use luck_token::{
     Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, Token, TokenKind,
     chunk_start, has_line_break, has_shebang,
@@ -12,6 +14,7 @@ use luck_token::{
 
 use crate::cursor::Cursor;
 use crate::lex_result::LexResult;
+use batch::{BUFFER_TOKENS, UNREAD_TOKEN};
 use string::LongBracketKind;
 
 /// The densest real file among the benchmark files runs about this many
@@ -30,11 +33,22 @@ pub fn lex(source: &[u8], version: LuaVersion) -> LexResult {
         Err(error) => return LexResult { errors: vec![error], ..LexResult::default() },
     };
     let mut tokens = Vec::with_capacity(lexer.token_capacity());
-    loop {
-        let token = lexer.next_token();
-        tokens.push(token);
-        if token.kind == TokenKind::Eof {
-            break;
+    if matches!(lexer.cpu, DynCpu::Generic(_)) {
+        loop {
+            let token = lexer.scan_token();
+            tokens.push(token);
+            if token.kind == TokenKind::Eof {
+                break;
+            }
+        }
+    } else {
+        loop {
+            lexer.refill();
+            let batch = &lexer.buffer[..lexer.buffered];
+            tokens.extend_from_slice(batch);
+            if batch.last().is_some_and(|token| token.kind == TokenKind::Eof) {
+                break;
+            }
         }
     }
     lexer.finish(tokens)
@@ -63,6 +77,13 @@ pub struct Lexer<'source> {
     /// Whether the string being lexed holds an escape, which its token says.
     has_escape: bool,
     lenient_escapes: Vec<Span>,
+    /// A SIMD feature set lexes into `buffer` a batch at a time, and
+    /// `Generic` a token at a time.
+    cpu: DynCpu,
+    buffer: [Token; BUFFER_TOKENS],
+    /// How many tokens `buffer` holds, of which the first `taken` are read.
+    buffered: usize,
+    taken: usize,
 }
 
 impl<'source> Lexer<'source> {
@@ -74,6 +95,21 @@ impl<'source> Lexer<'source> {
     /// Returns an E008 for a source over 4 GiB, which `u32` spans can't
     /// address.
     pub fn new(source: &'source [u8], version: LuaVersion) -> Result<Self, Diagnostic> {
+        Self::with_cpu(source, version, DynCpu::detect())
+    }
+
+    /// [`Self::new`] with the feature set `cpu`, which a test picks so it
+    /// checks each the CPU has.
+    ///
+    /// # Errors
+    ///
+    /// Returns an E008 for a source over 4 GiB, which `u32` spans can't
+    /// address.
+    pub fn with_cpu(
+        source: &'source [u8],
+        version: LuaVersion,
+        cpu: DynCpu,
+    ) -> Result<Self, Diagnostic> {
         if u32::try_from(source.len()).is_err() {
             return Err(Diagnostic::e008(
                 Span::new(0, 0),
@@ -102,6 +138,10 @@ impl<'source> Lexer<'source> {
             is_in_block_comment: false,
             has_escape: false,
             lenient_escapes: Vec::new(),
+            cpu,
+            buffer: [UNREAD_TOKEN; BUFFER_TOKENS],
+            buffered: 0,
+            taken: 0,
         };
 
         lexer.cursor.advance_by(chunk_start(source, version));
@@ -120,13 +160,29 @@ impl<'source> Lexer<'source> {
     /// Returns the same EOF token forever once the source is exhausted.
     ///
     /// Always inlined, so a caller runs its loop without a call per token.
-    /// Call it from one place, as the parser and [`lex`] do.
+    /// Call it from one place, as the parser does.
     #[expect(
         clippy::inline_always,
         reason = "measured: the parser runs 2-4% faster for it, and `lex` 10-15%"
     )]
     #[inline(always)]
     pub fn next_token(&mut self) -> Token {
+        if matches!(self.cpu, DynCpu::Generic(_)) {
+            return self.scan_token();
+        }
+        if self.taken == self.buffered {
+            self.refill();
+        }
+        let token = self.buffer[self.taken];
+        self.taken += 1;
+        token
+    }
+
+    /// Lex the next token a byte at a time, as `Generic` lexes every token
+    /// and a SIMD feature set every token a window can't.
+    #[expect(clippy::inline_always, reason = "inlined into `next_token`, as it was")]
+    #[inline(always)]
+    fn scan_token(&mut self) -> Token {
         loop {
             self.skip_whitespace();
             let start = self.cursor.position();
@@ -139,8 +195,8 @@ impl<'source> Lexer<'source> {
             // A name's scan takes its first byte too, so it vouches for the
             // whole name.
             if matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'_') {
-                let kind = TokenKind::keyword(self.cursor.eat_name(), self.version)
-                    .unwrap_or(TokenKind::Identifier);
+                let name = self.cursor.eat_name();
+                let kind = TokenKind::keyword(name, self.version).unwrap_or(TokenKind::Identifier);
                 return self.token(kind, start);
             }
             self.cursor.bump();
