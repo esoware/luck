@@ -73,7 +73,7 @@ pub(crate) fn walk_once(source: &str, config: TransformConfig) -> String {
     let allocator = Allocator::new();
     let result = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
     let mut chunk = result.chunk;
-    let mut scoping = analyze(&chunk, result.counts);
+    let mut scoping = analyze(&chunk, result.counts, None);
     Compressor::new(&allocator, config, &mut scoping).pass(&mut chunk.block);
     String::from_utf8(luck_codegen::compact(&chunk, LiteralSpelling::Shortest)).unwrap()
 }

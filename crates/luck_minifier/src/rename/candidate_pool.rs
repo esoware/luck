@@ -120,7 +120,7 @@ mod tests {
         let allocator = Allocator::new();
         for version in LuaVersion::ALL {
             let result = luck_parser::parse(&allocator, b"", version);
-            let scoping = analyze(&result.chunk, result.counts);
+            let scoping = analyze(&result.chunk, result.counts, None);
             let mut pool = CandidatePool::new(&allocator, &scoping);
             let reserved: Vec<&str> = (0..FIRST_CHARS * (REST_CHARS + 1))
                 .map(|index| pool.get(index))

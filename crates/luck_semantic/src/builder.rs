@@ -99,6 +99,26 @@ impl SemanticBuilder {
     }
 
     pub fn build<'ast>(self, chunk: &'ast Chunk<'ast>) -> SemanticBuilderReturn<'ast> {
+        self.build_into(chunk, Scoping::with_capacity(chunk.version, self.counts))
+    }
+
+    /// [`Self::build`], into the tables of `scoping`, an earlier build's,
+    /// which it empties first, so a pass that analyzes a tree again, as one
+    /// that rewrites it does, reuses their memory.
+    pub fn rebuild<'ast>(
+        self,
+        chunk: &'ast Chunk<'ast>,
+        mut scoping: Scoping,
+    ) -> SemanticBuilderReturn<'ast> {
+        scoping.reset(chunk.version, self.counts);
+        self.build_into(chunk, scoping)
+    }
+
+    fn build_into<'ast>(
+        self,
+        chunk: &'ast Chunk<'ast>,
+        scoping: Scoping,
+    ) -> SemanticBuilderReturn<'ast> {
         let counts = self.counts;
         let names = counts.names as usize;
         let distinct_names = counts.declarations as usize + counts.name_uses as usize;
@@ -111,7 +131,7 @@ impl SemanticBuilder {
             } else {
                 None
             },
-            scoping: Scoping::with_capacity(chunk.version, counts),
+            scoping,
             // A chunk has about four nodes for each name.
             nodes: self.is_building_nodes.then(|| AstNodes::with_capacity(names * 4)),
             current_node: None,

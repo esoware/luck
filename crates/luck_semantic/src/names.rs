@@ -46,6 +46,18 @@ impl Names {
         }
     }
 
+    /// Empties it and keeps its memory, with room for `capacity` names, as
+    /// [`Self::with_capacity`] makes.
+    pub(crate) fn reset(&mut self, capacity: usize) {
+        let Self { text, entries, table } = self;
+        text.clear();
+        text.reserve(capacity * 8);
+        entries.clear();
+        entries.reserve(capacity);
+        table.clear();
+        table.reserve(capacity, |&id| FxBuildHasher.hash_one(entry_text(text, entries, id)));
+    }
+
     pub(crate) const fn len(&self) -> usize {
         self.entries.len()
     }

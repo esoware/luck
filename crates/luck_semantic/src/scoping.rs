@@ -240,6 +240,48 @@ impl Scoping {
         }
     }
 
+    /// Empties every table and keeps its memory, for a build of a tree whose
+    /// `counts` it then reserves room for, as [`Self::with_capacity`] does.
+    pub(crate) fn reset(&mut self, version: LuaVersion, counts: TreeCounts) {
+        let declarations = counts.declarations as usize;
+        let name_uses = counts.name_uses as usize;
+        let Self {
+            version: table_version,
+            scopes,
+            symbols,
+            references,
+            labels,
+            resolved,
+            resolved_offsets,
+            positions,
+            unfilled_positions,
+            roles,
+            names,
+            declared_globals,
+            is_env_assigned,
+        } = self;
+        *table_version = version;
+        scopes.clear();
+        scopes.reserve(counts.blocks as usize);
+        symbols.clear();
+        symbols.reserve(declarations);
+        references.clear();
+        references.reserve(name_uses);
+        labels.clear();
+        resolved.clear();
+        resolved_offsets.clear();
+        resolved_offsets.reserve(declarations + 1);
+        resolved_offsets.push(0);
+        positions.clear();
+        positions.reserve(name_uses);
+        *unfilled_positions = 0;
+        roles.clear();
+        roles.resize(counts.names as usize, NameRole::None);
+        names.reset(declarations + name_uses);
+        declared_globals.clear();
+        *is_env_assigned = false;
+    }
+
     pub(crate) fn next_scope_id(&self) -> ScopeId {
         ScopeId::from_index(self.scopes.len())
     }
@@ -386,7 +428,7 @@ impl Scoping {
             let count = mem::replace(offset, total);
             total += count;
         }
-        *resolved = vec![ReferenceId::from_index(0); total as usize];
+        resolved.resize(total as usize, ReferenceId::from_index(0));
         for (i, reference) in references.iter().enumerate() {
             if let Some(symbol) = reference.resolved {
                 let cursor = &mut resolved_offsets[symbol.index() + 1];

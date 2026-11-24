@@ -93,14 +93,18 @@ struct Renamer<'walk> {
 ///
 /// A method that reads `self` takes it as a parameter, so it's renamed too,
 /// under an index from `name_indexes`.
+///
+/// The analysis it starts with reuses the tables of `reused`, an earlier
+/// one's, when there is one.
 pub(crate) fn rename<'ast>(
     allocator: &'ast Allocator,
     chunk: &mut Chunk<'ast>,
     counts: TreeCounts,
     should_rename_globals: bool,
     name_indexes: &mut NameIndexes,
+    reused: Option<Scoping>,
 ) {
-    let scoping = analyze(chunk, counts);
+    let scoping = analyze(chunk, counts, reused);
     let mut renamer = Renamer::new(&scoping);
     // Opt-in, since renamed globals end up under new `_G` keys.
     if should_rename_globals {

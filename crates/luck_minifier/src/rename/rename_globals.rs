@@ -870,7 +870,7 @@ function g() end
         }
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-        let scoping = analyze(&parsed.chunk, parsed.counts);
+        let scoping = analyze(&parsed.chunk, parsed.counts, None);
         let started = Instant::now();
         let renamable = renamable_globals(&parsed.chunk.block, &scoping);
         let elapsed = started.elapsed();

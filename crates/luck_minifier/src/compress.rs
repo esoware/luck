@@ -60,25 +60,28 @@ const MAX_ROUNDS: usize = 4;
 /// functions' declarations and compresses what that leaves, until lifting
 /// finds nothing more. A lift indexes the names it hoists from
 /// `name_indexes`.
+///
+/// Returns the last scoping, whose tables a later analysis can reuse.
 pub(crate) fn compress<'ast>(
     allocator: &'ast Allocator,
     chunk: &mut Chunk<'ast>,
     counts: TreeCounts,
     config: TransformConfig,
     name_indexes: &mut NameIndexes,
-) {
-    let mut scoping = analyze(chunk, counts);
+) -> Scoping {
+    let mut scoping = analyze(chunk, counts, None);
     for round in 1..=MAX_ROUNDS {
         let mut compressor = Compressor::new(allocator, config, &mut scoping);
         compressor.run(&mut chunk.block);
         #[cfg(debug_assertions)]
         compressor.assert_references_match(chunk, counts);
         if !(config.lift_locals && compressor.lift(&mut chunk.block, name_indexes)) {
-            return;
+            break;
         }
         debug_assert!(round < MAX_ROUNDS, "lifting a lifted tree lifted more");
-        scoping = analyze(chunk, counts);
+        scoping = analyze(chunk, counts, Some(scoping));
     }
+    scoping
 }
 
 /// Drops the statements at `indexes`, which ascend, and keeps the others in
@@ -222,7 +225,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
     /// holds a reference whose name left the tree.
     #[cfg(debug_assertions)]
     fn assert_references_match(&self, chunk: &Chunk<'_>, counts: TreeCounts) {
-        let fresh = analyze(chunk, counts);
+        let fresh = analyze(chunk, counts, None);
         let mut check = FreshCheck {
             scoping: self.scoping,
             dropped: &self.dropped,

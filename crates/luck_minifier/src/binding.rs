@@ -13,9 +13,15 @@ pub(crate) const METHOD_RECEIVER_NAME: &str = "self";
 
 pub(crate) const IMPLICIT_VARARG_TABLE_NAME: &str = "arg";
 
-/// `chunk`'s scoping, which a rewrite reads its bindings from.
-pub(crate) fn analyze(chunk: &Chunk<'_>, counts: TreeCounts) -> Scoping {
-    SemanticBuilder::new().with_counts(counts).build(chunk).semantic.into_scoping()
+/// `chunk`'s scoping, which a rewrite reads its bindings from, in the tables
+/// of `reused`, an earlier analysis', when there is one.
+pub(crate) fn analyze(chunk: &Chunk<'_>, counts: TreeCounts, reused: Option<Scoping>) -> Scoping {
+    let builder = SemanticBuilder::new().with_counts(counts);
+    let built = match reused {
+        Some(scoping) => builder.rebuild(chunk, scoping),
+        None => builder.build(chunk),
+    };
+    built.semantic.into_scoping()
 }
 
 /// The names of a tree as its scoping resolves them, for `luck_value`: a

@@ -92,11 +92,10 @@ fn minify_tree<'ast>(
         strip_types(allocator, &mut chunk.block);
     }
     let mut name_indexes = NameIndexes::new(counts.names);
-    if config.compresses() {
-        compress(allocator, chunk, counts, *config, &mut name_indexes);
-    }
+    let compressed =
+        config.compresses().then(|| compress(allocator, chunk, counts, *config, &mut name_indexes));
     if config.rename_locals {
-        rename(allocator, chunk, counts, config.rename_globals, &mut name_indexes);
+        rename(allocator, chunk, counts, config.rename_globals, &mut name_indexes, compressed);
     }
 }
 
