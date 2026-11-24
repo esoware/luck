@@ -886,7 +886,7 @@ return f
         );
         assert_eq!(
             rename_and_lift(source),
-            "local function u(u)local l if u then l=g()print(l)end if u then l=h()print(l)end end return u"
+            "local function e(e)local t if e then t=g()print(t)end if e then t=h()print(t)end end return e"
         );
     }
 
@@ -962,7 +962,7 @@ return f
 ";
         assert_eq!(
             rename_and_lift(shadowing),
-            "local function l()local l,u l=1 do u=2 print(u)end return l end return l"
+            "local function e()local e,t e=1 do t=2 print(t)end return e end return e"
         );
         // The declaration under the `for` variable is a binding of its own,
         // so its assignment never writes the variable.
@@ -977,8 +977,8 @@ function W.new(c)
 end
 "
             ),
-            "function W.new(u)local l for c=1,3 do if u then l=f()print(l)end end while u do \
-             l=g()print(l)end end"
+            "function W.new(t)local e for n=1,3 do if t then e=f()print(e)end end while t do \
+             e=g()print(e)end end"
         );
     }
 

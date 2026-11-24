@@ -20,7 +20,9 @@
 //!   stands. Then each function's declarations lift to one `local` at its
 //!   top, and the passes run again on what that leaves.
 //! - **Renaming**, which gives locals the shortest names their scopes allow,
-//!   from a fresh analysis of the tree, as `oxc_mangler` names them.
+//!   from a fresh analysis of the tree and an alphabet in the order its
+//!   characters are frequent in minified Lua, as `oxc_mangler` names them,
+//!   and labels the shortest their functions allow.
 //!
 //! A rewrite asks `luck_value` what an expression evaluates to, whether it's
 //! truthy, and whether evaluating it can do anything, with the scoping

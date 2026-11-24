@@ -31,21 +31,13 @@ impl ScopeClaims {
         self.first_free.get(scope).copied().unwrap_or(0)
     }
 
-    pub(super) fn is_claimed(&self, scope: usize, index: usize) -> bool {
-        if index < LOW_INDEXES {
-            self.low.get(scope).is_some_and(|&word| (word >> index) & 1 != 0)
-        } else {
-            self.high.contains(&(scope, index))
-        }
-    }
-
     pub(super) fn claim(&mut self, scopes: &[usize], index: usize) {
         for &scope in scopes {
             self.claim_in(scope, index);
         }
     }
 
-    pub(super) fn claim_in(&mut self, scope: usize, index: usize) {
+    fn claim_in(&mut self, scope: usize, index: usize) {
         if index < LOW_INDEXES {
             if let Some(word) = self.low.get_mut(scope) {
                 *word |= 1u64 << index;
@@ -85,8 +77,6 @@ mod tests {
         claims.claim(&[7, 9], 0);
         assert_eq!(claims.first_free(7), 2);
         assert_eq!(claims.first_free(9), 1);
-        assert!(claims.is_claimed(9, 0));
-        assert!(!claims.is_claimed(9, 1));
     }
 
     #[test]
@@ -94,13 +84,12 @@ mod tests {
         let mut claims = ScopeClaims::default();
         claims.reset(2);
         for index in (0..70).rev() {
-            claims.claim_in(1, index);
+            claims.claim(&[1], index);
         }
         assert_eq!(claims.first_free(1), 70);
-        claims.claim_in(1, 71);
-        claims.claim_in(1, 70);
+        claims.claim(&[1], 71);
+        claims.claim(&[1], 70);
         assert_eq!(claims.first_free(1), 72);
-        assert!(claims.is_claimed(1, 63) && claims.is_claimed(1, 64));
-        assert!(!claims.is_claimed(0, 64));
+        assert_eq!(claims.first_free(0), 0);
     }
 }

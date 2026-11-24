@@ -1,4 +1,5 @@
-//! Choosing each binding's name from what the renamer read of the scoping.
+//! Choosing each binding's name from what the renamer read of the scoping,
+//! as `oxc_mangler` chooses them.
 
 use core::cmp::Reverse;
 
@@ -10,7 +11,7 @@ use super::{Renamer, Scope, UNRESOLVED};
 
 /// What choosing names computes, kept for its allocations.
 #[derive(Default)]
-pub(super) struct Choice<'ast> {
+pub(super) struct Choice {
     /// Each name's run of `read_scopes`, the scopes that read it as a
     /// global, ascending.
     read_ranges: Vec<(usize, usize)>,
@@ -29,33 +30,31 @@ pub(super) struct Choice<'ast> {
     order: Vec<usize>,
     slot_of: Vec<Option<usize>>,
     claims: ScopeClaims,
-    /// Each slot's live scopes, the union of its bindings', as
-    /// `slot_scopes[slot_starts[s]..slot_starts[s + 1]]`.
-    slot_starts: Vec<usize>,
-    slot_scopes: Vec<usize>,
-    frequencies: Vec<usize>,
-    by_frequency: Vec<usize>,
-    slot_names: Vec<&'ast str>,
-    /// Each candidate's run of `read_scopes`, for the round being chosen.
-    candidate_reads: Vec<Option<(usize, usize)>>,
+    /// The scopes each slot's bindings are declared in, ascending, as
+    /// `declared_scopes[declared_starts[s]..declared_starts[s + 1]]`.
+    declared_starts: Vec<usize>,
+    declared_scopes: Vec<usize>,
+    /// How many names spell each slot's bindings.
+    occurrences: Vec<usize>,
+    by_occurrences: Vec<usize>,
+    /// The candidate each slot wears.
+    slot_candidates: Vec<usize>,
 }
 
-impl Renamer<'_, '_> {
+impl<'ast> Renamer<'_, 'ast> {
     /// Gives every renamable binding its slot's name, and every other one
     /// none, since it keeps its own.
-    pub(super) fn choose_names(&mut self) {
-        let scope_count = self.scopes.len();
-        if let Some(root) = self.scopes.first_mut() {
-            root.end = scope_count;
-        }
+    pub(super) fn choose_names(&mut self, pool: &mut CandidatePool<'_, 'ast>) {
         self.group_global_reads();
         self.find_live_scopes();
         let slot_count = self.assign_slots();
-        self.name_slots(slot_count);
+        self.name_slots(slot_count, pool);
         let Self { choice, new_names, .. } = self;
         new_names.clear();
-        new_names.extend(choice.slot_of.iter().map(|slot| {
-            slot.and_then(|index| choice.slot_names.get(index).copied()).unwrap_or("")
+        new_names.extend(choice.slot_of.iter().map(|binding_slot| {
+            binding_slot
+                .and_then(|slot| choice.slot_candidates.get(slot))
+                .map_or("", |&candidate| pool.get(candidate).name)
         }));
     }
 
@@ -171,6 +170,10 @@ impl Renamer<'_, '_> {
 
     /// Gives each renamable binding the first slot that isn't live in its
     /// scope, in scope preorder, and says how many slots that takes.
+    ///
+    /// A new slot opens only where every slot before it is live, so every
+    /// two slots are live in some scope together, and no two can share a
+    /// name.
     fn assign_slots(&mut self) -> usize {
         let Self { renamed: bindings, scopes, choice, .. } = self;
         // Scope ids come from one depth-first walk, so they're in preorder:
@@ -228,159 +231,133 @@ impl Renamer<'_, '_> {
         slot_count
     }
 
-    fn name_slots(&mut self, slot_count: usize) {
-        let Self { renamed: bindings, scopes, choice, pool, scoping, .. } = self;
-        // Each slot's live scopes, its bindings' in turn.
-        choice.slot_starts.clear();
-        choice.slot_starts.resize(slot_count.saturating_add(1), 0);
-        choice.frequencies.clear();
-        choice.frequencies.resize(slot_count, 0);
-        for (id, &binding_slot) in choice.slot_of.iter().enumerate() {
+    /// Names the slots, the most often spelled first, each the first
+    /// candidate it can wear.
+    ///
+    /// `oxc_mangler` then hands each length's names out again in slot order,
+    /// after Closure Compiler's `RenameVars`, which compresses worse on Lua.
+    fn name_slots(&mut self, slot_count: usize, pool: &mut CandidatePool<'_, '_>) {
+        let Self { renamed: bindings, scopes, choice, .. } = self;
+        let starts = &mut choice.declared_starts;
+        starts.clear();
+        starts.resize(slot_count.saturating_add(1), 0);
+        choice.occurrences.clear();
+        choice.occurrences.resize(slot_count, 0);
+        for (binding, &binding_slot) in bindings.iter().zip(&choice.slot_of) {
             let Some(slot) = binding_slot else {
                 continue;
             };
-            let live_count = choice
-                .live_starts
-                .get(id.saturating_add(1))
-                .zip(choice.live_starts.get(id))
-                .map_or(0, |(end, start)| end.saturating_sub(*start));
-            if let Some(count) = choice.slot_starts.get_mut(slot) {
-                *count = count.saturating_add(live_count);
+            if let Some(count) = starts.get_mut(slot) {
+                *count = count.saturating_add(1);
             }
-            if let (Some(frequency), Some(binding)) =
-                (choice.frequencies.get_mut(slot), bindings.get(id))
-            {
-                *frequency = frequency.saturating_add(binding.references);
+            if let Some(occurrences) = choice.occurrences.get_mut(slot) {
+                *occurrences = occurrences.saturating_add(binding.occurrences);
             }
         }
         let mut total = 0usize;
-        for start in &mut choice.slot_starts {
+        for start in starts.iter_mut() {
             total = total.saturating_add(*start);
             *start = total;
         }
-        choice.slot_scopes.clear();
-        choice.slot_scopes.resize(total, 0);
+        choice.declared_scopes.clear();
+        choice.declared_scopes.resize(total, 0);
         for &id in choice.order.iter().rev() {
-            let Some(Some(slot)) = choice.slot_of.get(id).copied() else {
-                continue;
-            };
-            let live_start = choice.live_starts.get(id).copied().unwrap_or(0);
-            let live_end =
-                choice.live_starts.get(id.saturating_add(1)).copied().unwrap_or(live_start);
-            for &scope in
-                choice.live_scopes.get(live_start..live_end).unwrap_or_default().iter().rev()
+            if let Some(Some(slot)) = choice.slot_of.get(id).copied()
+                && let Some(binding) = bindings.get(id)
+                && let Some(start) = starts.get_mut(slot)
             {
-                if let Some(start) = choice.slot_starts.get_mut(slot) {
-                    *start = start.saturating_sub(1);
-                    if let Some(entry) = choice.slot_scopes.get_mut(*start) {
-                        *entry = scope;
-                    }
+                *start = start.saturating_sub(1);
+                if let Some(entry) = choice.declared_scopes.get_mut(*start) {
+                    *entry = binding.scope;
                 }
             }
         }
-        // Most-referenced slots pick first and get the shortest names.
-        // Unreferenced slots sort last but still appear in the output, so they
-        // go through the same conflict check. Otherwise an unused param could
-        // take the name of an upvalue read in the same function body.
-        choice.by_frequency.clear();
-        choice.by_frequency.extend(0..slot_count);
-        let frequencies = &choice.frequencies;
-        choice.by_frequency.sort_unstable_by_key(|&slot| {
-            (Reverse(frequencies.get(slot).copied().unwrap_or(0)), slot)
-        });
-        let Choice {
-            by_frequency,
-            slot_starts,
-            slot_scopes,
-            claims,
-            candidate_reads,
-            read_ranges,
-            read_scopes,
-            slot_names,
-            ..
-        } = choice;
-        claims.reset(scopes.len());
-        candidate_reads.clear();
-        slot_names.clear();
-        slot_names.resize(slot_count, "");
-        let name_id = |name: &str| scoping.name_id(name).map(NameId::index);
         let reads =
-            Reads { name_id: &name_id, ranges: read_ranges, scopes: read_scopes, tree: scopes };
-        for &slot in &*by_frequency {
-            let start = slot_starts.get(slot).copied().unwrap_or(0);
-            let end = slot_starts.get(slot.saturating_add(1)).copied().unwrap_or(start);
-            let live_scopes = slot_scopes.get(start..end).unwrap_or_default();
-            if let Some(name) = slot_names.get_mut(slot) {
-                *name = pick(live_scopes, pool, claims, candidate_reads, &reads);
+            Reads { ranges: &choice.read_ranges, scopes: &choice.read_scopes, tree: scopes };
+        let by_occurrences = &mut choice.by_occurrences;
+        by_occurrences.clear();
+        by_occurrences.extend(0..slot_count);
+        let occurrences = &choice.occurrences;
+        by_occurrences.sort_unstable_by_key(|&slot| {
+            (Reverse(occurrences.get(slot).copied().unwrap_or(0)), slot)
+        });
+        choice.slot_candidates.clear();
+        choice.slot_candidates.resize(slot_count, 0);
+        let mut picker = Picker::default();
+        for &slot in &*by_occurrences {
+            let start = starts.get(slot).copied().unwrap_or(0);
+            let end = starts.get(slot.saturating_add(1)).copied().unwrap_or(start);
+            let declared_scopes = choice.declared_scopes.get(start..end).unwrap_or_default();
+            if let Some(candidate) = choice.slot_candidates.get_mut(slot) {
+                *candidate = picker.pick(declared_scopes, pool, &reads);
             }
         }
     }
 }
 
-/// Where each name is read as a global, by the index `name_id` gives it.
+/// Where each name is read as a global, by its [`NameId`].
 struct Reads<'reads> {
-    name_id: &'reads dyn Fn(&str) -> Option<usize>,
     ranges: &'reads [(usize, usize)],
     scopes: &'reads [usize],
     tree: &'reads [Scope],
 }
 
 impl Reads<'_> {
-    fn range_of(&self, name: &str) -> (usize, usize) {
-        (self.name_id)(name).and_then(|id| self.ranges.get(id)).copied().unwrap_or((0, 0))
-    }
-
-    /// Whether one of the reads in `range` is in or below `scope`.
-    fn is_read_in(&self, range: (usize, usize), scope: usize) -> bool {
-        let (start, end) = range;
+    /// Whether the chunk reads `name` as a global in or below one of
+    /// `scopes`, where a binding named so would capture the read.
+    fn is_read_below(&self, name: Option<NameId>, scopes: &[usize]) -> bool {
+        let Some(&(start, end)) = name.and_then(|id| self.ranges.get(id.index())) else {
+            return false;
+        };
         let reading_scopes = self.scopes.get(start..end).unwrap_or_default();
-        let scope_end = self.tree.get(scope).map_or(scope, |node| node.end);
-        let first = reading_scopes.partition_point(|&reading| reading < scope);
-        reading_scopes.get(first).is_some_and(|&reading| reading < scope_end)
+        !reading_scopes.is_empty()
+            && scopes.iter().any(|&scope| {
+                let scope_end = self.tree.get(scope).map_or(scope, |node| node.end);
+                let first = reading_scopes.partition_point(|&reading| reading < scope);
+                reading_scopes.get(first).is_some_and(|&reading| reading < scope_end)
+            })
     }
 }
 
-/// The first candidate that no slot live in one of `live_scopes` wears, that
-/// isn't a keyword, and that no scope among them reads as a global. Slots
-/// that are never live in the same scope can share a name.
-fn pick<'ast>(
-    live_scopes: &[usize],
-    pool: &mut CandidatePool<'ast>,
-    claims: &mut ScopeClaims,
-    candidate_reads: &mut Vec<Option<(usize, usize)>>,
-    reads: &Reads<'_>,
-) -> &'ast str {
-    // Every candidate below a scope's first free one is unavailable there.
-    let mut index = live_scopes.iter().map(|&scope| claims.first_free(scope)).max().unwrap_or(0);
-    loop {
-        let Some((name, is_reserved)) = pool.get(index) else {
-            return "";
-        };
-        // A keyword or a global's name is recorded where it rules the
-        // candidate out, so that scope's first free one moves past it.
-        if is_reserved {
-            claims.claim(live_scopes, index);
-        } else {
-            if candidate_reads.len() <= index {
-                candidate_reads.resize(index.saturating_add(1), None);
-            }
-            let range = match candidate_reads.get_mut(index) {
-                Some(Some(range)) => *range,
-                Some(slot) => *slot.insert(reads.range_of(name)),
-                None => (0, 0),
-            };
-            if let Some(scope) = live_scopes
-                .iter()
-                .copied()
-                .find(|&scope| claims.is_claimed(scope, index) || reads.is_read_in(range, scope))
-            {
-                claims.claim_in(scope, index);
-            } else {
-                claims.claim(live_scopes, index);
-                return name;
-            }
+/// Gives each slot that asks the first candidate it can wear: no keyword,
+/// no other slot's, and none the chunk reads as a global in or below a
+/// scope one of the slot's bindings is declared in.
+#[derive(Default)]
+struct Picker {
+    /// Every candidate below it is a keyword, another slot's, or passed over.
+    next: usize,
+    /// The candidates below `next` a slot passed over for a global it would
+    /// capture, which a later slot may still wear, ascending.
+    passed_over: Vec<(usize, Option<NameId>)>,
+}
+
+impl Picker {
+    fn pick(
+        &mut self,
+        declared_scopes: &[usize],
+        pool: &mut CandidatePool<'_, '_>,
+        reads: &Reads<'_>,
+    ) -> usize {
+        if let Some(position) = self
+            .passed_over
+            .iter()
+            .position(|&(_, name)| !reads.is_read_below(name, declared_scopes))
+        {
+            return self.passed_over.remove(position).0;
         }
-        index = index.saturating_add(1);
+        loop {
+            let index = self.next;
+            self.next = index.saturating_add(1);
+            let candidate = pool.get(index);
+            if candidate.is_reserved {
+                continue;
+            }
+            if reads.is_read_below(candidate.name_id, declared_scopes) {
+                self.passed_over.push((index, candidate.name_id));
+                continue;
+            }
+            return index;
+        }
     }
 }
 
@@ -388,96 +365,53 @@ fn pick<'ast>(
 mod tests {
     use core::fmt::Write as _;
 
-    use luck_allocator::Allocator;
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::fixtures::{RENAMING, minify_with};
 
     fn apply(source: &str) -> String {
         minify_with(source, LuaVersion::Lua54, &RENAMING)
     }
 
-    /// Picks a name for each slot in turn, in ten sibling scopes under the
-    /// root, where `global_reads` reads each name in a scope.
-    fn pick_names<'ast>(
-        pool: &mut CandidatePool<'ast>,
-        claims: &mut ScopeClaims,
-        slots: &[&[usize]],
-        global_reads: &[(&'ast str, usize)],
-    ) -> Vec<&'ast str> {
-        let tree: Vec<Scope> = (0..10usize)
-            .map(|id| Scope {
-                parent: (id > 0).then_some(0),
-                end: if id == 0 { 10 } else { id.saturating_add(1) },
-            })
-            .collect();
-        let mut ranges = Vec::new();
-        let mut scopes = Vec::new();
-        for &(_, scope) in global_reads {
-            ranges.push((scopes.len(), scopes.len().saturating_add(1)));
-            scopes.push(scope);
-        }
-        let name_id = |name: &str| global_reads.iter().position(|&(read, _)| read == name);
-        let reads = Reads { name_id: &name_id, ranges: &ranges, scopes: &scopes, tree: &tree };
-        let mut candidate_reads = Vec::new();
-        slots
-            .iter()
-            .map(|live_scopes| pick(live_scopes, pool, claims, &mut candidate_reads, &reads))
-            .collect()
+    #[test]
+    fn the_slot_spelled_most_picks_first_declarations_included() {
+        // `a` is read three times, and the slot of `x`, `y`, and `z` three
+        // times too, but its three declarations spell it more.
+        let result = apply(
+            "\
+local a = f()
+do local x = a print(x) end
+do local y = a print(y) end
+do local z = a print(z) end
+",
+        );
+        assert_eq!(
+            result,
+            "local t=f()do local e=t print(e)end do local e=t print(e)end do local e=t print(e)end"
+        );
     }
 
     #[test]
-    fn slots_that_share_no_scope_share_a_name() {
-        let allocator = Allocator::new();
-        let mut pool = CandidatePool::new(&allocator, LuaVersion::Lua54);
-        let mut claims = ScopeClaims::default();
-        claims.reset(10);
-        let slots: [&[usize]; 5] = [&[0, 1], &[1, 2], &[2, 3], &[4], &[0, 4]];
-        assert_eq!(pick_names(&mut pool, &mut claims, &slots, &[]), ["l", "u", "l", "l", "u"]);
-    }
-
-    #[test]
-    fn pick_skips_a_global_read_in_any_live_scope() {
-        let allocator = Allocator::new();
-        let mut pool = CandidatePool::new(&allocator, LuaVersion::Lua54);
-        let mut claims = ScopeClaims::default();
-        claims.reset(10);
-        let slots: [&[usize]; 3] = [&[1, 3], &[3], &[1]];
-        let reads = [("l", 3), ("c", 3)];
-        assert_eq!(pick_names(&mut pool, &mut claims, &slots, &reads), ["u", "k", "l"]);
-    }
-
-    #[test]
-    fn pick_skips_reserved_words() {
-        // Every one- and two-character name, so each two-letter keyword
-        // comes up.
-        let pick_count = 53 * 64;
-        for version in LuaVersion::ALL {
-            let allocator = Allocator::new();
-            let mut pool = CandidatePool::new(&allocator, version);
-            let mut claims = ScopeClaims::default();
-            claims.reset(10);
-            let slots = vec![&[0usize][..]; pick_count];
-            let names = pick_names(&mut pool, &mut claims, &slots, &[]);
-            let distinct: rustc_hash::FxHashSet<&str> = names.iter().copied().collect();
-            assert_eq!(distinct.len(), pick_count, "{version:?}");
-            for keyword in ["do", "if", "in", "or"] {
-                assert!(!distinct.contains(keyword), "{keyword} {version:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn a_pick_among_many_live_slots_starts_past_the_names_they_wear() {
-        let allocator = Allocator::new();
-        let mut pool = CandidatePool::new(&allocator, LuaVersion::Lua54);
-        let mut claims = ScopeClaims::default();
-        claims.reset(10);
-        pick_names(&mut pool, &mut claims, &vec![&[0usize][..]; 5_000], &[]);
-        // Without each scope's first free candidate, every pick rescans the
-        // names before it.
-        assert!(claims.first_free(0) >= 5_000);
+    fn a_name_passed_over_for_a_global_read_goes_to_a_later_slot() {
+        // The hotter slot can't wear `e`, which its first block reads, but
+        // the second block's other local can.
+        let result = apply(
+            "\
+do
+  local x = f()
+  print(x, x, x, e)
+end
+do
+  local y = f()
+  local z = f()
+  print(y, z)
+end
+",
+        );
+        assert_eq!(
+            result,
+            "do local t=f()print(t,t,t,e)end do local t=f()local e=f()print(t,e)end"
+        );
     }
 
     #[test]
@@ -490,13 +424,13 @@ mod tests {
         }
         source.push_str("return a0, a119999");
         let result = apply(&source);
-        // The two locals read twice take the two shortest names.
+        // The two locals read twice take the first two names.
         assert!(
-            result.starts_with("local l=f(0)local c=f(1)local k=f(2)"),
+            result.starts_with("local e=f(0)local n=f(1)local a=f(2)"),
             "{:?}",
             result.get(..60)
         );
-        assert!(result.ends_with("return l,u"), "the output ends in the return");
+        assert!(result.ends_with("return e,t"), "the output ends in the return");
     }
 
     #[test]
@@ -506,6 +440,6 @@ mod tests {
             let _unused = writeln!(source, "do local x{scope} = f() g(x{scope}) end");
         }
         let result = apply(&source);
-        assert_eq!(result, "do local l=f()g(l)end ".repeat(20_000).trim_end());
+        assert_eq!(result, "do local e=f()g(e)end ".repeat(20_000).trim_end());
     }
 }

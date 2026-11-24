@@ -8,7 +8,7 @@ The work runs in three phases:
 
 1. **Type stripping.** A Luau tree loses its annotations, casts, instantiations, and `type` declarations before anything else reads it, as `oxc_transformer` strips TypeScript's. A cast over a call or `...` leaves the parentheses that truncate it.
 2. **Compression.** The tree's bindings come from `luck_semantic`'s scoping, which every name finds its symbol or reference in by its index. Passes of an in-place walk run every rewrite as they leave each node, until a pass changes nothing, as `oxc_minifier`'s peephole loop runs. A rewrite that drops code marks the references in it, so every decision reads the tree as it stands, and at the end of each pass the symbols' lists lose the dropped references. Once the passes settle, each function's declarations lift to one `local` at its top, and since that reshapes the bindings, the scoping is built again and the passes run on what lifting left. Debug builds check the lists against a fresh analysis after every round.
-3. **Renaming.** Every local gets the shortest name its scopes allow, from a fresh analysis of the tree, as `oxc_mangler` names them.
+3. **Renaming.** Every local gets the shortest name its scopes allow, from a fresh analysis of the tree, as `oxc_mangler` names them: the locals spelled most get the first names of an alphabet ordered by how often each character appears in minified Lua, so the names share their bytes with the code around them and compress best. Every label gets the shortest name its function allows.
 
 Then `luck_codegen::compact_into` prints the tree once, after the header, with `LiteralSpelling::Shortest`, every literal in the shortest spelling of its value. A rewrite asks `luck_value` what an expression evaluates to, whether it's truthy, and whether evaluating it can do anything, which assumes a metamethod can run wherever Lua allows one and a global read can run `__index`, and evaluates in the target's exact arithmetic. The output parses, and minifying it again changes nothing. The minifier keeps a shebang and Luau `--!` hot comments on top and drops every other comment.
 
@@ -25,7 +25,7 @@ Then `luck_codegen::compact_into` prints the tree once, after the header, with `
 - `simplify_indexes`: `t["x"]` to `t.x`, and `{[1] = a, [2] = b}` to `{a, b}`, however the key is spelled.
 - `simplify_parens`: drops parentheses that change nothing: around a call or `...` wherever only its first value counts, as in `if (f()) then` or `{(f()), x}`, around a lone string or table argument, and around a run in a run at its level where they group the same, as in `(a + b) + c`.
 - `lift_locals`: hoists a function's declarations to one `local` at its top.
-- `rename_locals`: gives locals the shortest names.
+- `rename_locals`: gives locals and labels the shortest names.
 - `rename_globals`: renames globals the file defines too. It's off by default, because other chunks and `_G["name"]` lookups still use the old names, and it needs `rename_locals`.
 
 The `serde` feature derives `Deserialize` for `TransformConfig`, the shape of `luck.json`'s `transforms`, and `schemars` derives `JsonSchema` too.

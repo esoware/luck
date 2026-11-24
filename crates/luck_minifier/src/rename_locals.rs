@@ -1,20 +1,26 @@
-//! Renames every local to the shortest name its scopes allow.
+//! Renames every local to the shortest name its scopes allow, and every
+//! label to the shortest its function allows.
 //!
 //! It reads a fresh analysis of the tree, as `oxc_mangler` does. Bindings
-//! that are never live in the same scope share a slot, the most-read slots
-//! get the shortest names, and a slot never wears the name of a global read
-//! where it's live. One walk then writes each binding's name into the names
-//! that declare it and refer to it.
+//! that are never live in the same scope share a slot, the slots spelled
+//! most get the shortest names, and a slot never wears the name of a global
+//! read where one of its bindings is visible. One walk then writes each
+//! binding's name into the names that declare it and refer to it, and names
+//! each function's labels.
 
 mod candidate_pool;
 mod choose_names;
 mod explicit_self;
 mod scope_claims;
 
+use core::mem;
+
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, FunctionDecl, Name, TreeCounts, VisitMut};
+use luck_ast::{
+    Chunk, FunctionBody, FunctionDecl, GotoStatement, LabelStatement, Name, TreeCounts, VisitMut,
+};
 use luck_data_structures::BitSet;
-use luck_semantic::{ScopeId, Scoping, SymbolId, SymbolKind};
+use luck_semantic::{NameId, ScopeId, Scoping, SymbolId, SymbolKind};
 use luck_token::{index_to_offset, offset_to_index};
 
 use self::candidate_pool::CandidatePool;
@@ -28,7 +34,9 @@ struct Binding {
     /// Keeps its name: a function's implicit `self` or 5.1 `arg`, a 5.2+
     /// `_ENV`, or a Luau export.
     is_fixed: bool,
-    references: usize,
+    /// How many names in the output spell it: its declaration's and its
+    /// references'.
+    occurrences: usize,
     /// The scope of the latest reference, so a run of references in one
     /// scope records it once.
     last_reference_scope: usize,
@@ -39,6 +47,16 @@ struct Scope {
     /// One past the last scope inside this one. Scope ids are in preorder,
     /// so this one and its descendants are `id..end`.
     end: usize,
+}
+
+/// A name the renamer can give out.
+#[derive(Clone, Copy)]
+struct Candidate<'ast> {
+    name: &'ast str,
+    /// A keyword, which no name can be.
+    is_reserved: bool,
+    /// The chunk's id for the name, if the chunk uses it.
+    name_id: Option<NameId>,
 }
 
 /// No binding.
@@ -57,8 +75,8 @@ struct Renamer<'walk, 'ast> {
     symbol_base: usize,
     /// Each global's renamed binding, by name, or [`NOT_RENAMED`].
     of_global: Vec<u32>,
-    /// The implicit `self`s read often enough that their methods take them
-    /// as a first parameter, which renaming them pays for.
+    /// The implicit `self`s their methods read, which the methods take as a
+    /// first parameter, since renaming them pays for it.
     receivers: BitSet,
     /// Each name's latest scope read as a global, so a run of reads in one
     /// scope records it once.
@@ -68,16 +86,16 @@ struct Renamer<'walk, 'ast> {
     /// Each name read as a global or held by a binding that keeps it, and
     /// a scope it's read in.
     global_reads: Vec<(usize, usize)>,
-    choice: Choice<'ast>,
-    pool: CandidatePool<'ast>,
+    choice: Choice,
     new_names: Vec<&'ast str>,
 }
 
-/// Renames the locals of `chunk`, and with `should_rename_globals`, the
-/// globals it assigns before anything reads them.
+/// Renames the locals and labels of `chunk`, and with
+/// `should_rename_globals`, the globals it assigns before anything reads
+/// them.
 ///
-/// A method that reads `self` often enough takes it as a parameter, so it's
-/// renamed too, under an index from `names`.
+/// A method that reads `self` takes it as a parameter, so it's renamed too,
+/// under an index from `names`.
 pub(crate) fn rename<'ast>(
     allocator: &'ast Allocator,
     chunk: &mut Chunk<'ast>,
@@ -86,24 +104,36 @@ pub(crate) fn rename<'ast>(
     names: &mut NameIndexes,
 ) {
     let scoping = analyze(chunk, counts);
-    let mut renamer = Renamer::new(allocator, &scoping);
+    let mut renamer = Renamer::new(&scoping);
     // Opt-in, since renamed globals end up under new `_G` keys.
     if should_rename_globals {
         for name in renamable_globals(&chunk.block, chunk.version, &scoping) {
-            let id = renamer.declare(0, false);
+            // Its definitions are references, so no declaration spells it.
+            let id = renamer.declare(0, false, 0);
             if let Some(slot) = renamer.of_global.get_mut(name.index()) {
                 *slot = index_to_offset(id);
             }
         }
     }
     renamer.read_scoping();
-    renamer.choose_names();
-    Applier { renamer: &renamer, allocator, names, methods: Vec::new() }
-        .visit_block(&mut chunk.block);
+    let mut pool = CandidatePool::new(allocator, &scoping);
+    renamer.choose_names(&mut pool);
+    Applier {
+        renamer: &renamer,
+        pool: &mut pool,
+        allocator,
+        names,
+        methods: Vec::new(),
+        labels: Vec::new(),
+        function_labels: 0,
+        label_names: Vec::new(),
+        next_label_candidate: 0,
+    }
+    .visit_block(&mut chunk.block);
 }
 
 impl<'walk, 'ast> Renamer<'walk, 'ast> {
-    fn new(allocator: &'ast Allocator, scoping: &'walk Scoping) -> Self {
+    fn new(scoping: &'walk Scoping) -> Self {
         let mut scopes: Vec<Scope> = scoping
             .scopes()
             .iter()
@@ -133,21 +163,27 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
             reference_scopes: Vec::new(),
             global_reads: Vec::new(),
             choice: Choice::default(),
-            pool: CandidatePool::new(allocator, scoping.version()),
             new_names: Vec::new(),
         }
     }
 
-    fn declare(&mut self, scope: usize, is_fixed: bool) -> usize {
+    /// Declares a binding of `scope` that `declarations` names spell before
+    /// any reference does.
+    fn declare(&mut self, scope: usize, is_fixed: bool, declarations: usize) -> usize {
         let id = self.renamed.len();
-        self.renamed.push(Binding { scope, is_fixed, references: 0, last_reference_scope: scope });
+        self.renamed.push(Binding {
+            scope,
+            is_fixed,
+            occurrences: declarations,
+            last_reference_scope: scope,
+        });
         id
     }
 
     /// Records a reference to the renamed binding `id` from `scope`.
     fn reference(&mut self, id: usize, scope: usize) {
         if let Some(binding) = self.renamed.get_mut(id) {
-            binding.references = binding.references.saturating_add(1);
+            binding.occurrences = binding.occurrences.saturating_add(1);
             if binding.last_reference_scope != scope {
                 binding.last_reference_scope = scope;
                 self.reference_scopes.push((id, scope));
@@ -176,10 +212,10 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
         let scoping = self.scoping;
         self.symbol_base = self.renamed.len();
         for symbol in scoping.symbols() {
-            // The new `X,` parameter costs 2 bytes, and each `self` saves 3
-            // once renamed to a single character.
+            // The new `X,` parameter costs at most 2 bytes, and each `self`
+            // saves 3 once renamed to a single character, so one read pays.
             let is_receiver =
-                symbol.kind == SymbolKind::ImplicitSelf && self.runtime_references(symbol.id) >= 2;
+                symbol.kind == SymbolKind::ImplicitSelf && self.is_read_at_runtime(symbol.id);
             if is_receiver {
                 self.receivers.insert(symbol.id.index());
             }
@@ -187,7 +223,8 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
                 || symbol.is_exported
                 || scoping.is_env_binding(symbol.id);
             let (name, scope) = (symbol.name.index(), symbol.scope.index());
-            let id = self.declare(scope, is_fixed);
+            // A receiver's declaration is the parameter it becomes.
+            let id = self.declare(scope, is_fixed, 1);
             if is_fixed {
                 self.read_globally(name, scope);
             }
@@ -214,10 +251,10 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
         }
     }
 
-    /// How many references to `symbol` aren't in a type.
-    fn runtime_references(&self, symbol: SymbolId) -> usize {
-        let references = self.scoping.resolved_references(symbol).iter();
-        references.filter(|&&reference| !self.scoping.reference(reference).is_in_type).count()
+    /// Whether a reference to `symbol` outside a type reads it.
+    fn is_read_at_runtime(&self, symbol: SymbolId) -> bool {
+        let mut references = self.scoping.resolved_references(symbol).iter();
+        references.any(|&reference| !self.scoping.reference(reference).is_in_type)
     }
 
     /// The renamed binding `name` declares or refers to, if it's a local or
@@ -243,18 +280,69 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
     }
 }
 
-/// Writes each binding's new name into its names, and makes a method that
-/// takes its `self` as a parameter declare it so.
+/// Writes each binding's new name into its names, makes a method that takes
+/// its `self` as a parameter declare it so, and names each function's
+/// labels.
 struct Applier<'apply, 'walk, 'ast> {
     renamer: &'apply Renamer<'walk, 'ast>,
+    pool: &'apply mut CandidatePool<'walk, 'ast>,
     allocator: &'ast Allocator,
     names: &'apply mut NameIndexes,
     /// For each method the walk is in, innermost last, the implicit `self`
     /// its body reads, once a read outside a type shows which.
     methods: Vec<Option<SymbolId>>,
+    /// Each label name of the functions the walk is in, in the order it
+    /// meets them, and the name it gets.
+    labels: Vec<(&'ast str, &'ast str)>,
+    /// Where the innermost function's labels start.
+    function_labels: usize,
+    /// The candidates that aren't keywords, in turn, and the pool's next.
+    label_names: Vec<&'ast str>,
+    next_label_candidate: usize,
+}
+
+impl<'ast> Applier<'_, '_, 'ast> {
+    /// A `goto` reaches only a label of its own function, by its name, so
+    /// renaming each function's label names one to one keeps every jump,
+    /// and every duplicate or missing label, as it was.
+    fn rename_label(&mut self, name: &mut Name<'ast>) {
+        let text = name.text.as_str();
+        let function_labels = self.labels.get(self.function_labels..).unwrap_or_default();
+        if let Some(&(_, new_name)) = function_labels.iter().find(|&&(label, _)| label == text) {
+            name.text = new_name.into();
+            return;
+        }
+        let index = function_labels.len();
+        while self.label_names.len() <= index {
+            let candidate = self.pool.get(self.next_label_candidate);
+            self.next_label_candidate = self.next_label_candidate.saturating_add(1);
+            if !candidate.is_reserved {
+                self.label_names.push(candidate.name);
+            }
+        }
+        let new_name = self.label_names.get(index).copied().unwrap_or(text);
+        self.labels.push((text, new_name));
+        name.text = new_name.into();
+    }
 }
 
 impl<'ast> VisitMut<'ast> for Applier<'_, '_, 'ast> {
+    fn visit_goto_stmt(&mut self, goto_stmt: &mut GotoStatement<'ast>) {
+        self.rename_label(&mut goto_stmt.name);
+    }
+
+    fn visit_label_stmt(&mut self, label_stmt: &mut LabelStatement<'ast>) {
+        self.rename_label(&mut label_stmt.name);
+    }
+
+    /// No label is visible in a nested function.
+    fn visit_function_body(&mut self, function_body: &mut FunctionBody<'ast>) {
+        let enclosing = mem::replace(&mut self.function_labels, self.labels.len());
+        self.walk_function_body(function_body);
+        self.labels.truncate(self.function_labels);
+        self.function_labels = enclosing;
+    }
+
     fn visit_name(&mut self, name: &mut Name<'ast>) {
         let scoping = self.renamer.scoping;
         // A method's body is the only place its `self` is read, and the
@@ -295,7 +383,9 @@ impl<'ast> VisitMut<'ast> for Applier<'_, '_, 'ast> {
 mod tests {
     use luck_token::LuaVersion;
 
-    use crate::fixtures::{RENAMING, assert_lua55_renames, assert_luau_renames, minify_with};
+    use crate::fixtures::{
+        RENAMING, assert_lua55_renames, assert_luau_renames, assert_outputs, minify_with,
+    };
 
     fn apply(source: &str) -> String {
         apply_version(source, LuaVersion::Lua54)
@@ -362,7 +452,7 @@ return x
     }
 
     #[test]
-    fn most_frequent_local_gets_shortest_name() {
+    fn most_frequent_local_gets_the_first_name() {
         let result = apply(
             "\
 local rare = 1
@@ -374,22 +464,7 @@ print(rare)
 return frequent, rare
 ",
         );
-        assert!(!result.contains("frequent"), "'frequent' should be renamed: {result}");
-        assert!(!result.contains("rare"), "'rare' should be renamed: {result}");
-    }
-
-    #[test]
-    fn preserves_self_parameter() {
-        let result = apply(
-            "\
-local t = {}
-function t:method()
-  return self
-end
-return t
-",
-        );
-        assert!(result.contains("self"), "'self' should not be renamed: {result}");
+        assert_eq!(result, "local t=1 local e=2 print(e)print(e)print(e)print(t)return e,t");
     }
 
     #[test]
@@ -428,11 +503,11 @@ return outer, f
 
     #[test]
     fn locals_can_shadow_unused_globals() {
-        // 'l' and 'u' are globals at top level but not inside f.
+        // `e` and `t` are globals at the top level but not inside `f`.
         let result = apply(
             "\
-l(1)
-u(2)
+e(1)
+t(2)
 local function f()
   local longvar1 = 3
   local longvar2 = 4
@@ -441,24 +516,23 @@ end
 return f
 ",
         );
-        assert!(!result.contains("longvar"), "locals should be renamed: {result}");
+        assert_eq!(result, "e(1)t(2)local function n()local n=3 local e=4 return n+e end return n");
     }
 
     #[test]
     fn locals_avoid_globals_used_in_same_scope() {
-        // 'l' is a global called inside f, so locals must not shadow it.
+        // `e` is a global called inside `f`, so locals must not shadow it.
         let result = apply(
             "\
 local function f()
   local longvar = 1
-  l(longvar)
+  e(longvar)
   return longvar
 end
 return f
 ",
         );
-        assert!(result.contains("l("), "global 'l' must be preserved: {result}");
-        assert!(!result.contains("longvar"), "longvar should be renamed: {result}");
+        assert_eq!(result, "local function t()local t=1 e(t)return t end return t");
     }
 
     #[test]
@@ -510,7 +584,7 @@ _ENV = {}
 _ENV, x = {}, 1
 print(x)
 ",
-                    "_ENV,l={},1 print(l)",
+                    "_ENV,e={},1 print(e)",
                 ),
                 ("function _ENV() end\n", "function _ENV()end"),
                 ("function _ENV.f() end\n", "function _ENV.f()end"),
@@ -542,12 +616,12 @@ _ENV = {}
 local function f(_ENV) return x end
 return f
 ",
-                    "local function l(_ENV)return x end return l",
+                    "local function e(_ENV)return x end return e",
                 ),
                 ("for _ENV = 1, 2 do print(x) end\n", "for _ENV=1,2 do print(x)end"),
                 (
                     "for k, _ENV in pairs(t) do print(k) end\n",
-                    "for l,_ENV in pairs(t)do print(l)end",
+                    "for e,_ENV in pairs(t)do print(e)end",
                 ),
             ] {
                 let result = apply_version(source, version);
@@ -565,26 +639,26 @@ return f
 _ENV = 1
 print(_ENV)
 ",
-                    "l=1 print(l)",
+                    "e=1 print(e)",
                 ),
                 (
                     "\
 function _ENV() end
 print(_ENV)
 ",
-                    "function l()end print(l)",
+                    "function e()end print(e)",
                 ),
                 (
                     "\
 local _ENV = 1
 print(_ENV)
 ",
-                    "local l=1 print(l)",
+                    "local e=1 print(e)",
                 ),
-                ("for _ENV = 1, 2 do print(_ENV) end\n", "for l=1,2 do print(l)end"),
+                ("for _ENV = 1, 2 do print(_ENV) end\n", "for e=1,2 do print(e)end"),
                 (
                     "for k, _ENV in pairs(t) do print(_ENV) end\n",
-                    "for u,l in pairs(t)do print(l)end",
+                    "for t,e in pairs(t)do print(e)end",
                 ),
             ] {
                 let result = apply_version(source, version);
@@ -606,7 +680,7 @@ global g, print
 g = 2
 print(g)
 ",
-                "local l=f()print(l)global g,print g=2 print(g)",
+                "local e=f()print(e)global g,print g=2 print(g)",
             ),
             (
                 "\
@@ -615,14 +689,14 @@ do global g
 g = 2 end
 print(g)
 ",
-                "local l=f()do global g g=2 end print(l)",
+                "local e=f()do global g g=2 end print(e)",
             ),
             (
                 "\
 local g = f()
 global function g() return g end
 ",
-                "local l=f()global function g()return g end",
+                "local e=f()global function g()return g end",
             ),
         ]);
     }
@@ -635,7 +709,7 @@ local g = f()
 global g = g
 g = 2
 ",
-            "local l=f()global g=l g=2",
+            "local e=f()global g=e g=2",
         )]);
     }
 
@@ -650,49 +724,49 @@ print(g)
 end
 g = 1
 ",
-            "global g,print do local l=f()print(l)end g=1",
+            "global g,print do local e=f()print(e)end g=1",
         )]);
     }
 
     #[test]
     fn renamed_local_never_wears_a_globally_declared_name() {
-        // Lookup finds the newest declaration, so a local wearing `l` here
-        // would read the global `l` as soon as the declaration is in scope,
+        // Lookup finds the newest declaration, so a local wearing `e` here
+        // would read the global `e` as soon as the declaration is in scope,
         // whether or not anything else reads that global.
         assert_lua55_renames(&[
             (
                 "\
 local longname = f()
-global l, print
+global e, print
 print(longname)
 ",
-                "local u=f()global l,print print(u)",
+                "local t=f()global e,print print(t)",
             ),
             (
                 "\
 local longname = f()
-do global l, print
+do global e, print
 print(longname) end
 ",
-                "local u=f()do global l,print print(u)end",
+                "local t=f()do global e,print print(t)end",
             ),
             (
                 "\
-global l, print, f
+global e, print, f
 do
 local longname = f()
-print(longname, l)
+print(longname, e)
 end
 ",
-                "global l,print,f do local u=f()print(u,l)end",
+                "global e,print,f do local t=f()print(t,e)end",
             ),
             (
                 "\
 local longname = f()
-global function l() end
+global function e() end
 return longname
 ",
-                "local u=f()global function l()end return u",
+                "local t=f()global function e()end return t",
             ),
         ]);
     }
@@ -702,44 +776,44 @@ return longname
         assert_luau_renames(&[
             (
                 "type T = typeof(function(x) return x end)\n",
-                "type T=typeof(function(l)return l end)",
+                "type T=typeof(function(e)return e end)",
             ),
             (
                 "type T<U = typeof(function(x) return x end)> = U\n",
-                "type T<U=typeof(function(l)return l end)> =U",
+                "type T<U=typeof(function(e)return e end)> =U",
             ),
             (
                 "type function T() return typeof(function(x) return x end) end\n",
-                "type function T()return typeof(function(l)return l end)end",
+                "type function T()return typeof(function(e)return e end)end",
             ),
             (
                 "type T = { f: typeof(function(x) return x end)? }\n",
-                "type T={f:typeof(function(l)return l end)?}",
+                "type T={f:typeof(function(e)return e end)?}",
             ),
             (
                 "type T = (typeof(function(x) return x end)) -> ()\n",
-                "type T=(typeof(function(l)return l end))->()",
+                "type T=(typeof(function(e)return e end))->()",
             ),
             (
                 "type T = A<typeof(function(x) return x end)>\n",
-                "type T=A<typeof(function(l)return l end)>",
+                "type T=A<typeof(function(e)return e end)>",
             ),
             (
                 "return 1 :: typeof(function(x) return x end)\n",
-                "return 1::typeof(function(l)return l end)",
+                "return 1::typeof(function(e)return e end)",
             ),
             (
                 "return f<<typeof(function(x) return x end)>>\n",
-                "return f<<typeof(function(l)return l end)>>",
+                "return f<<typeof(function(e)return e end)>>",
             ),
             (
                 "return f<<typeof(function(x) return x end)>>()\n",
-                "return f<<typeof(function(l)return l end)>>()",
+                "return f<<typeof(function(e)return e end)>>()",
             ),
-            ("f<<typeof(function(x) return x end)>>()\n", "f<<typeof(function(l)return l end)>>()"),
+            ("f<<typeof(function(x) return x end)>>()\n", "f<<typeof(function(e)return e end)>>()"),
             (
                 "return t:m<<typeof(function(x) return x end)>>()\n",
-                "return t:m<<typeof(function(l)return l end)>>()",
+                "return t:m<<typeof(function(e)return e end)>>()",
             ),
         ]);
     }
@@ -751,19 +825,19 @@ return longname
         assert_luau_renames(&[
             (
                 "f<<typeof(function(a, b) return a, b end)>>(function(c) return c end)\n",
-                "f<<typeof(function(l,u)return l,u end)>>(function(l)return l end)",
+                "f<<typeof(function(e,t)return e,t end)>>(function(e)return e end)",
             ),
             (
                 "t:m<<typeof(function(a, b) return a, b end)>>(function(c) return c end)\n",
-                "t:m<<typeof(function(l,u)return l,u end)>>(function(l)return l end)",
+                "t:m<<typeof(function(e,t)return e,t end)>>(function(e)return e end)",
             ),
             (
                 "return (function(a, b) return a, b end) :: typeof(function(c) return c end)\n",
-                "return function(l,u)return l,u end::typeof(function(l)return l end)",
+                "return function(e,t)return e,t end::typeof(function(e)return e end)",
             ),
             (
                 "type T<U = typeof(function(a, b) return a, b end)> = typeof(function(c) return c end)\n",
-                "type T<U=typeof(function(l,u)return l,u end)> =typeof(function(l)return l end)",
+                "type T<U=typeof(function(e,t)return e,t end)> =typeof(function(e)return e end)",
             ),
             (
                 "\
@@ -771,7 +845,7 @@ type T = typeof(function(longparam) return longparam end)
 local after = f()
 return after
 ",
-                "type T=typeof(function(l)return l end)local l=f()return l",
+                "type T=typeof(function(e)return e end)local e=f()return e",
             ),
         ]);
     }
@@ -788,7 +862,7 @@ local x = f()
 t[function(a) return x, a end] = function(b) return b end
 return x
 ",
-                "local l=f()t[function(u)return l,u end]=function(l)return l end return l",
+                "local e=f()t[function(t)return e,t end]=function(e)return e end return e",
             ),
             (
                 "\
@@ -796,7 +870,7 @@ local x = f()
 g(function(a) return a end).k = function(b) return b + x end
 return x
 ",
-                "local l=f()g(function(l)return l end).k=function(u)return u+l end return l",
+                "local e=f()g(function(e)return e end).k=function(t)return t+e end return e",
             ),
         ]);
     }
@@ -813,7 +887,7 @@ print(inner)
 end
 print(outer)
 ",
-            "local l=f()do local u=f()type T=typeof(l)print(u)end print(l)",
+            "local e=f()do local t=f()type T=typeof(e)print(t)end print(e)",
         )]);
     }
 
@@ -823,12 +897,12 @@ print(outer)
             "\
 local function f()
 local longname = g()
-type T = typeof(l)
+type T = typeof(e)
 return longname
 end
 return f
 ",
-            "local function u()local u=g()type T=typeof(l)return u end return u",
+            "local function t()local t=g()type T=typeof(e)return t end return t",
         )]);
     }
 
@@ -841,14 +915,14 @@ local args = f()
 local function g(...args) return args end
 return args, g
 ",
-                "local l=f()local function u(...l)return l end return l,u",
+                "local e=f()local function t(...e)return e end return e,t",
             ),
             (
                 "\
 local function g(a, ...rest) return rest, a end
 return g
 ",
-                "local function l(l,...u)return u,l end return l",
+                "local function e(e,...t)return t,e end return e",
             ),
         ]);
     }
@@ -883,10 +957,8 @@ function M.f(self)
 end
 ",
         );
-        assert!(
-            result.contains(":g()return self"),
-            "`self` in a `:` method is its own receiver, not the renamed parameter: {result}"
-        );
+        // The method's `self` is its own receiver, not the renamed parameter.
+        assert_eq!(result, "function M.f(e)function t.g(e)return e end return e end");
     }
 
     #[test]
@@ -909,15 +981,12 @@ return f, arg
     fn renamed_local_never_wears_an_exported_name() {
         let result = apply_luau(
             "\
-export local l = 1
+export local e = 1
 local longname = f()
-print(l, longname)
+print(e, longname)
 ",
         );
-        assert!(
-            !result.contains("local l=f()"),
-            "a renamed local must not shadow the exported `l`: {result}"
-        );
+        assert_eq!(result, "export local e=1 local t=f()print(e,t)");
     }
 
     #[test]
@@ -933,13 +1002,47 @@ return f
     }
 
     #[test]
+    fn labels_take_their_function_s_names_one_to_one() {
+        assert_outputs(
+            apply,
+            &[
+                (
+                    "\
+for i = 1, 3 do
+  if i == 2 then goto continue end
+  print(i)
+  ::continue::
+end
+",
+                    "for e=1,3 do if e==2 then goto e end print(e)::e::end",
+                ),
+                (
+                    "\
+::top::
+local function f()
+  ::inner:: ::other::
+  goto other
+end
+goto top
+",
+                    "::e::local function e()::e::::t::goto t end goto e",
+                ),
+                // A missing label stays missing, and a duplicate or an inner
+                // label that hides an outer one keeps the name it shares.
+                ("::a:: ::a:: goto b\n", "::e::::e::goto t"),
+                ("::a:: do goto a ::a:: end\n", "::e::do goto e::e::end"),
+            ],
+        );
+    }
+
+    #[test]
     fn local_named_self_is_an_ordinary_local() {
         assert_luau_renames(&[(
             "\
 local self = f()
 print(self, self)
 ",
-            "local l=f()print(l,l)",
+            "local e=f()print(e,e)",
         )]);
     }
 
@@ -1002,7 +1105,7 @@ return k
 ",
         ] {
             let result = apply_luau(source);
-            assert!(result.contains("typeof(l)"), "{source}: {result}");
+            assert!(result.contains("typeof(e)"), "{source}: {result}");
         }
     }
 

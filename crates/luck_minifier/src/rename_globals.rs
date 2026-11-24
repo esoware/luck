@@ -255,18 +255,18 @@ print(h, g)
     #[test]
     fn a_global_defined_in_a_top_level_do_block_is_renamed_as_at_the_top_level() {
         assert_luau_renames(&[
-            ("do function g() end end g()\n", "do function l()end end l()"),
+            ("do function g() end end g()\n", "do function e()end end e()"),
             (
                 "do local x = f() function g() return x end end g()\n",
-                "do local u=f()function l()return u end end l()",
+                "do local t=f()function e()return t end end e()",
             ),
-            ("do g = 1 end print(g)\n", "do l=1 end print(l)"),
+            ("do g = 1 end print(g)\n", "do e=1 end print(e)"),
         ]);
         // Unwrapping the block that scopes nothing changes nothing about it.
         let config = TransformConfig { rename_globals: true, ..TransformConfig::default() };
         assert_eq!(
             minify_with("do function g() end end g()\n", LuaVersion::Lua51, &config),
-            "function l()end l()"
+            "function e()end e()"
         );
     }
 
@@ -464,7 +464,7 @@ for i = 1, 2 do return g end
 g = 1
 print(g)
 ",
-                "for l=1,2 do return g end g=1 print(g)",
+                "for e=1,2 do return g end g=1 print(g)",
             ),
             (
                 "\
@@ -472,7 +472,7 @@ for k in x do return g end
 g = 1
 print(g)
 ",
-                "for l in x do return g end g=1 print(g)",
+                "for e in x do return g end g=1 print(g)",
             ),
         ]);
     }
@@ -529,7 +529,7 @@ g = 1
 t[g] = 2
 print(t, g)
 ",
-                "l=1 t[l]=2 print(t,l)",
+                "e=1 t[e]=2 print(t,e)",
             ),
             (
                 "\
@@ -537,7 +537,7 @@ g = 1
 g.a.b = 2
 print(g)
 ",
-                "l=1 l.a.b=2 print(l)",
+                "e=1 e.a.b=2 print(e)",
             ),
             (
                 "\
@@ -545,7 +545,7 @@ g = 1
 function g.x() end
 print(g)
 ",
-                "l=1 function l.x()end print(l)",
+                "e=1 function e.x()end print(e)",
             ),
             (
                 "\
@@ -553,7 +553,7 @@ do function g() end end
 g = 1
 print(g)
 ",
-                "do function l()end end l=1 print(l)",
+                "do function e()end end e=1 print(e)",
             ),
             (
                 "\
@@ -561,14 +561,14 @@ h = function() return g end
 g = 1
 print(h, g)
 ",
-                "u=function()return l end l=1 print(u,l)",
+                "t=function()return e end e=1 print(t,e)",
             ),
             (
                 "\
 h, t[g] = 1, 2
 print(h, t)
 ",
-                "l,t[g]=1,2 print(l,t)",
+                "e,t[g]=1,2 print(e,t)",
             ),
         ]);
     }
@@ -587,7 +587,7 @@ function g() end
 x = g
 function g() end
 ",
-            "l=g function g()end",
+            "e=g function g()end",
         ),
         (
             "\
@@ -675,7 +675,7 @@ print(g)
 do local g = 1 end
 function g() end
 ",
-            "print(g)do local l=1 end function g()end",
+            "print(g)do local e=1 end function g()end",
         ),
     ];
 
@@ -693,14 +693,14 @@ do print(g)
 local g = 1 end
 function g() end
 ",
-                "do print(g)local l=1 end function g()end",
+                "do print(g)local e=1 end function g()end",
             ),
             (
                 "\
 do local g = g end
 function g() end
 ",
-                "do local l=g end function g()end",
+                "do local e=g end function g()end",
             ),
             (
                 "\
@@ -708,21 +708,21 @@ do do local g = f() end
 print(g) end
 function g() end
 ",
-                "do do local l=f()end print(g)end function g()end",
+                "do do local e=f()end print(g)end function g()end",
             ),
             (
                 "\
 for g = g, 2 do end
 function g() end
 ",
-                "for l=g,2 do end function g()end",
+                "for e=g,2 do end function g()end",
             ),
             (
                 "\
 for g in g do end
 function g() end
 ",
-                "for l in g do end function g()end",
+                "for e in g do end function g()end",
             ),
             (
                 "\
@@ -730,7 +730,7 @@ repeat print(g)
 local g = f() until g
 function g() end
 ",
-                "repeat print(g)local l=f()until l function g()end",
+                "repeat print(g)local e=f()until e function g()end",
             ),
         ]);
     }
@@ -744,7 +744,7 @@ do local g = f()
 print(g) end
 function g() end
 ",
-                "do local l=f()print(l)end function l()end",
+                "do local e=f()print(e)end function e()end",
             ),
             (
                 "\
@@ -752,28 +752,28 @@ do local function g() end
 g() end
 function g() end
 ",
-                "do local function l()end l()end function l()end",
+                "do local function e()end e()end function e()end",
             ),
             (
                 "\
 for g = 1, 2 do print(g) end
 function g() end
 ",
-                "for l=1,2 do print(l)end function l()end",
+                "for e=1,2 do print(e)end function e()end",
             ),
             (
                 "\
 for g in x do print(g) end
 function g() end
 ",
-                "for l in x do print(l)end function l()end",
+                "for e in x do print(e)end function e()end",
             ),
             (
                 "\
 repeat local g = f() until g
 function g() end
 ",
-                "repeat local l=f()until l function l()end",
+                "repeat local e=f()until e function e()end",
             ),
         ]);
     }
@@ -790,7 +790,7 @@ do local g = f() end
 print(g)
 function g() end
 ",
-                "l=1 do local l=f()end print(l)function l()end",
+                "e=1 do local e=f()end print(e)function e()end",
             ),
             (
                 "\
@@ -801,7 +801,7 @@ g = 1
 print(g)
 function g() end
 ",
-                "u=1 print(u)print(u)l=1 print(l)function l()end",
+                "t=1 print(t)print(t)e=1 print(e)function e()end",
             ),
         ]);
     }
@@ -816,23 +816,23 @@ function g() end
 function g() end
 print(g)
 ",
-                "function l()end print(l)",
+                "function e()end print(e)",
             ),
-            ("function g() return g end\n", "function l()return l end"),
+            ("function g() return g end\n", "function e()return e end"),
             (
                 "\
 function g() end
 print(g)
 function g() end
 ",
-                "function l()end print(l)function l()end",
+                "function e()end print(e)function e()end",
             ),
             (
                 "\
 h = function() return g end
 function g() end
 ",
-                "u=function()return l end function l()end",
+                "t=function()return e end function e()end",
             ),
             (
                 "\
@@ -840,7 +840,7 @@ function f() return g end
 f()
 function g() end
 ",
-                "function l()return u end l()function u()end",
+                "function e()return t end e()function t()end",
             ),
             (
                 "\
@@ -848,7 +848,7 @@ g = 1
 function g() end
 print(g)
 ",
-                "l=1 function l()end print(l)",
+                "e=1 function e()end print(e)",
             ),
             (
                 "\
@@ -856,14 +856,14 @@ g = 1
 print(g)
 function g() end
 ",
-                "l=1 print(l)function l()end",
+                "e=1 print(e)function e()end",
             ),
             (
                 "\
 do local g = 1 end
 function g() end
 ",
-                "do local l=1 end function l()end",
+                "do local e=1 end function e()end",
             ),
         ]);
     }
@@ -877,7 +877,7 @@ f()
 g = 1
 ",
         );
-        assert_eq!(result, "function l()return u end l()u=1");
+        assert_eq!(result, "function e()return t end e()t=1");
     }
 
     #[test]
@@ -989,7 +989,7 @@ g = 1
 function f() global g
 g = 2 end
 ",
-                "g=1 function l()global g g=2 end",
+                "g=1 function e()global g g=2 end",
             ),
             (
                 "\
@@ -997,7 +997,7 @@ function g() end
 local function f() global function g() end end
 return f
 ",
-                "function g()end local function l()global function g()end end return l",
+                "function g()end local function e()global function g()end end return e",
             ),
         ]);
     }
@@ -1013,7 +1013,7 @@ global *
 g = 1
 print(g)
 ",
-                "global*l=1 print(l)",
+                "global*e=1 print(e)",
             ),
             (
                 "\
@@ -1021,7 +1021,7 @@ local g = f()
 global *
 g = 1
 ",
-                "local l=f()global*l=1",
+                "local e=f()global*e=1",
             ),
         ]);
     }

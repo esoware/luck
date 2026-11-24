@@ -444,13 +444,13 @@ mod tests {
         assert_outputs(
             every_pass,
             &[
-                ("local u = tive local util util = require", "local l,u=tive,require"),
-                ("local q = f local b b = g print(b, b)", "local u,l=f,g print(l,l)"),
+                ("local u = tive local util util = require", "local e,t=tive,require"),
+                ("local q = f local b b = g print(b, b)", "local t,e=f,g print(e,e)"),
                 ("local a a = 1 print(a)", "print(1)"),
                 ("local a local b a, b = 1, 2 print(a, b)", "print(1,2)"),
                 ("local a local z = 1 a = 2 print(a)", "print(2)"),
                 ("local a a = 1", ""),
-                ("local a a = {} a.x = 1 return a", "local l={}l.x=1 return l"),
+                ("local a a = {} a.x = 1 return a", "local e={}e.x=1 return e"),
             ],
         );
     }

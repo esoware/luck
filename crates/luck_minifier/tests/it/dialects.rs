@@ -39,7 +39,7 @@ return p, f<<Point>>(p :: any)
 
 #[test]
 fn luau_types_go_by_default() {
-    assert_eq!(minify_luau(TYPED_SOURCE), "local l={x=1,y=2}return l,f(l)");
+    assert_eq!(minify_luau(TYPED_SOURCE), "local e={x=1,y=2}return e,f(e)");
 }
 
 #[test]
@@ -123,7 +123,7 @@ end
 #[test]
 fn luau_instantiated_literal_survives_minification() {
     for (source, expected) in [
-        ("local a = `x{({})<<T>>}y`\n", "local l=`x{({})<<T>>}y`"),
+        ("local a = `x{({})<<T>>}y`\n", "local e=`x{({})<<T>>}y`"),
         ("return (\"s\")<<T>>()\n", "return(\"s\")<<T>>()"),
         (
             "\
@@ -154,10 +154,10 @@ return s < 'b'
 #[test]
 fn function_inside_a_type_survives_minification() {
     for (source, expected) in [
-        ("type T = typeof(function(x) return x end)\n", "type T=typeof(function(l)return l end)"),
+        ("type T = typeof(function(x) return x end)\n", "type T=typeof(function(e)return e end)"),
         (
             "return f<<typeof(function(x) return x end)>>()\n",
-            "return f<<typeof(function(l)return l end)>>()",
+            "return f<<typeof(function(e)return e end)>>()",
         ),
     ] {
         let result = minify_typed_luau(source);

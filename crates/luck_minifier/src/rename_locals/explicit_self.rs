@@ -1,5 +1,5 @@
 //! `function t:m(x)` becomes `function t.m(self, x)` where its body reads
-//! `self` often enough that renaming the parameter pays for the comma.
+//! `self`, since renaming the parameter pays for the comma.
 //!
 //! The renamer picks those methods from the references to each implicit
 //! `self`, names the `self` as it names a parameter, and makes the rewrite
@@ -48,7 +48,7 @@ return t
     }
 
     #[test]
-    fn keeps_method_syntax_with_one_self_reference() {
+    fn rewrites_method_with_one_self_reference() {
         let result = rewrite_and_rename(
             "\
 local t = {}
@@ -58,7 +58,32 @@ end
 return t
 ",
         );
-        assert!(result.contains("self"), "self should be kept (only 1 ref): {result}");
+        assert_eq!(result, "local e={}function e.method(e,t)return e.a+t end return e");
+    }
+
+    #[test]
+    fn keeps_method_syntax_where_nothing_reads_self() {
+        let result = rewrite_and_rename(
+            "\
+local t = {}
+function t:method(x)
+  return x
+end
+return t
+",
+        );
+        assert_eq!(result, "local e={}function e:method(e)return e end return e");
+        let luau = minify_with(
+            "\
+function t:method(x)
+  local y: typeof(self) = x
+  return y
+end
+",
+            LuaVersion::Luau,
+            &RENAMING,
+        );
+        assert_eq!(luau, "function t:method(e)local t:typeof(self)=e return t end");
     }
 
     #[test]
@@ -97,14 +122,15 @@ return t
         let result = rewrite_and_rename(
             "\
 function M:outer()
-  print(self, self)
-  function t:inner() return self end
+  local x = self
+  function t:inner() return self, x end
+  return x
 end
 ",
         );
-        assert!(
-            result.contains(":inner()return self"),
-            "the nested method's `self` is its own receiver, not the rewritten parameter: {result}"
+        assert_eq!(
+            result,
+            "function M.outer(e)local n=e function t.inner(e)return e,n end return n end"
         );
     }
 }
