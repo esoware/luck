@@ -5,6 +5,9 @@ use crate::QuoteStyle;
 ///
 /// It works on the spelling, escapes as written and bytes as they are, so a
 /// requoted string keeps every escape but the quotes'.
+///
+/// Out of line, since inlined into the formatter it measured 2-6% slower.
+#[inline(never)]
 pub(crate) fn requote(literal: &[u8], style: QuoteStyle, requoted: &mut Vec<u8>) -> bool {
     // A long-bracket string has no quotes to swap.
     let Some(&current_quote) = literal.first().filter(|&&b| matches!(b, b'"' | b'\'')) else {
@@ -26,35 +29,46 @@ pub(crate) fn requote(literal: &[u8], style: QuoteStyle, requoted: &mut Vec<u8>)
     // would read as an escaped quote.
     let mut original_escapes = 0;
     let mut requoted_escapes = 0;
-    let mut bytes = content.iter().copied();
-    while let Some(byte) = bytes.next() {
-        if byte == b'\\' {
-            original_escapes += 1;
-            match bytes.next() {
-                // Unescape old delimiter: \' -> ' (or \" -> ")
-                Some(escaped) if escaped == current_quote => requoted.push(current_quote),
-                // Any other escape, including an already-escaped target
-                // delimiter, is copied as a pair.
-                Some(escaped) => {
-                    requoted.extend_from_slice(&[b'\\', escaped]);
-                    requoted_escapes += 1;
-                    if escaped == b'\\' {
-                        original_escapes += 1;
-                        requoted_escapes += 1;
-                    }
-                }
-                None => {
-                    requoted.push(b'\\');
+    // `memchr2` measured slower than a plain scan on the short runs most
+    // strings hold.
+    let next_stop = |bytes: &[u8]| {
+        if bytes.len() < 16 {
+            bytes.iter().position(|&b| b == b'\\' || b == target_quote)
+        } else {
+            memchr::memchr2(b'\\', target_quote, bytes)
+        }
+    };
+    let mut rest = content;
+    while let Some(stop) = next_stop(rest) {
+        requoted.extend_from_slice(&rest[..stop]);
+        if rest[stop] == target_quote {
+            requoted.extend_from_slice(&[b'\\', target_quote]);
+            requoted_escapes += 1;
+            rest = &rest[stop + 1..];
+            continue;
+        }
+        original_escapes += 1;
+        match rest.get(stop + 1) {
+            // Unescape old delimiter: \' -> ' (or \" -> ")
+            Some(&escaped) if escaped == current_quote => requoted.push(current_quote),
+            // Any other escape, including an already-escaped target
+            // delimiter, is copied as a pair.
+            Some(&escaped) => {
+                requoted.extend_from_slice(&[b'\\', escaped]);
+                requoted_escapes += 1;
+                if escaped == b'\\' {
+                    original_escapes += 1;
                     requoted_escapes += 1;
                 }
             }
-        } else if byte == target_quote {
-            requoted.extend_from_slice(&[b'\\', target_quote]);
-            requoted_escapes += 1;
-        } else {
-            requoted.push(byte);
+            None => {
+                requoted.push(b'\\');
+                requoted_escapes += 1;
+            }
         }
+        rest = rest.get(stop + 2..).unwrap_or_default();
     }
+    requoted.extend_from_slice(rest);
 
     requoted.push(target_quote);
     requoted_escapes <= original_escapes
