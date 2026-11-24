@@ -2,7 +2,7 @@
 
 use std::{
     fmt::{self, Debug, Display, Formatter},
-    ops::Deref,
+    ops::{Deref, Range},
     str,
 };
 
@@ -32,13 +32,14 @@ impl<'a> ThinStr<'a> {
     #[must_use]
     #[inline]
     pub fn from_ascii(bytes: &'a [u8]) -> Option<Self> {
-        bytes.is_ascii().then(|| Self { bytes: ThinBytes::new(bytes) })
+        is_ascii(bytes).then(|| Self { bytes: ThinBytes::new(bytes) })
     }
 
     #[must_use]
     #[inline]
     pub const fn as_str(self) -> &'a str {
-        // SAFETY: `new` took the bytes from a `&'a str`, and `from_ascii` checked they're ASCII.
+        // SAFETY: `new` took the bytes from a `&'a str`, and `from_ascii` and
+        // `AsciiBytes::new` checked they're ASCII.
         unsafe { str::from_utf8_unchecked(self.bytes.as_bytes()) }
     }
 
@@ -46,6 +47,54 @@ impl<'a> ThinStr<'a> {
     #[inline]
     pub const fn as_bytes(self) -> &'a [u8] {
         self.bytes.as_bytes()
+    }
+}
+
+/// Bytes checked once to be ASCII, as a whole source can be, so any range of
+/// them is text with no check of its own.
+#[derive(Clone, Copy, Debug)]
+pub struct AsciiBytes<'a>(&'a [u8]);
+
+impl<'a> AsciiBytes<'a> {
+    #[must_use]
+    #[inline]
+    pub fn new(bytes: &'a [u8]) -> Option<Self> {
+        bytes.is_ascii().then_some(Self(bytes))
+    }
+
+    /// Empty if `range` is out of the bytes.
+    #[must_use]
+    #[inline]
+    pub fn text(self, range: Range<usize>) -> ThinStr<'a> {
+        ThinStr { bytes: ThinBytes::new(self.0.get(range).unwrap_or_default()) }
+    }
+}
+
+/// `[u8]::is_ascii`, but a slice of at most 16 bytes, as nearly every name
+/// and numeral is, is tested as two overlapping words of one width, which
+/// measured faster on them.
+#[inline]
+fn is_ascii(bytes: &[u8]) -> bool {
+    match bytes.len() {
+        8..=16 => {
+            let (Some(head), Some(tail)) = (bytes.first_chunk(), bytes.last_chunk()) else {
+                return false;
+            };
+            (u64::from_ne_bytes(*head) | u64::from_ne_bytes(*tail)) & 0x8080_8080_8080_8080 == 0
+        }
+        4..=7 => {
+            let (Some(head), Some(tail)) = (bytes.first_chunk(), bytes.last_chunk()) else {
+                return false;
+            };
+            (u32::from_ne_bytes(*head) | u32::from_ne_bytes(*tail)) & 0x8080_8080 == 0
+        }
+        2 | 3 => {
+            let (Some(head), Some(tail)) = (bytes.first_chunk(), bytes.last_chunk()) else {
+                return false;
+            };
+            (u16::from_ne_bytes(*head) | u16::from_ne_bytes(*tail)) & 0x8080 == 0
+        }
+        _ => bytes.is_ascii(),
     }
 }
 

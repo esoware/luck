@@ -8,7 +8,7 @@ mod recovery;
 mod stmt;
 mod types;
 
-use luck_allocator::{Allocator, Box, List, ThinBytes, ThinStr};
+use luck_allocator::{Allocator, AsciiBytes, Box, List, ThinBytes, ThinStr};
 use luck_ast::{
     AttributedName, BinaryLink, Block, Chunk, ElseIfClause, ElseIfExprClause, Expression, Field,
     FunctionAttribute, FunctionTypeParam, GenericTypeParam, IntegerLiteral, InterpolatedSegment,
@@ -112,6 +112,7 @@ fn parse_source<'ast>(
     let mut parser = Parser {
         allocator,
         source,
+        ascii_source: AsciiBytes::new(source),
         lexer,
         token: placeholder,
         next: placeholder,
@@ -147,6 +148,9 @@ fn parse_source<'ast>(
 struct Parser<'ast> {
     allocator: &'ast Allocator,
     source: &'ast [u8],
+    /// `source`, when it's all ASCII, whose names then need no check of
+    /// their own.
+    ascii_source: Option<AsciiBytes<'ast>>,
     lexer: Lexer<'ast>,
     token: Token,
     next: Token,
@@ -290,10 +294,21 @@ impl<'ast> Parser<'ast> {
 
     /// The text of the name or numeral at `span`, which the lexer read as
     /// ASCII.
+    ///
+    /// A source that isn't all ASCII has each checked out of line, which
+    /// keeps a tiny file's parse from measuring 4% slower.
     #[inline]
     fn ascii_text(&self, span: Span) -> ThinStr<'ast> {
-        ThinStr::from_ascii(span.text(self.source))
-            .expect("the lexer reads names and numerals as ASCII")
+        #[inline(never)]
+        fn checked_text(source: &[u8], span: Span) -> ThinStr<'_> {
+            ThinStr::from_ascii(span.text(source))
+                .expect("the lexer reads names and numerals as ASCII")
+        }
+
+        match self.ascii_source {
+            Some(source) => source.text(span.into()),
+            None => checked_text(self.source, span),
+        }
     }
 
     /// Consume the current token and return its span. Out of line, so the

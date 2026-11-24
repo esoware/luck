@@ -1,6 +1,6 @@
 use std::ptr;
 
-use luck_allocator::{Allocator, ThinStr};
+use luck_allocator::{Allocator, AsciiBytes, ThinStr};
 
 use crate::common::AutoTraits;
 
@@ -29,6 +29,28 @@ fn takes_bytes_that_are_ascii_and_nothing_else() {
     assert_eq!(ThinStr::from_ascii(b"").map(ThinStr::as_str), Some(""));
     assert_eq!(ThinStr::from_ascii("caf\u{e9}".as_bytes()), None);
     assert_eq!(ThinStr::from_ascii(b"caf\xE9"), None);
+}
+
+#[test]
+fn takes_bytes_of_every_short_length_only_when_each_is_ascii() {
+    for length in 0..=20 {
+        let mut bytes = vec![b'a'; length];
+        assert!(ThinStr::from_ascii(&bytes).is_some(), "{length}");
+        for i in 0..length {
+            bytes[i] = 0x80;
+            assert_eq!(ThinStr::from_ascii(&bytes), None, "{length} at {i}");
+            bytes[i] = b'a';
+        }
+    }
+}
+
+#[test]
+fn ascii_bytes_give_the_text_of_any_range_in_them() {
+    assert!(AsciiBytes::new(b"caf\xE9").is_none());
+    let bytes = AsciiBytes::new(b"local name").expect("ASCII");
+    assert_eq!(bytes.text(6..10), "name");
+    assert_eq!(bytes.text(0..0), "");
+    assert_eq!(bytes.text(8..20), "");
 }
 
 #[test]
