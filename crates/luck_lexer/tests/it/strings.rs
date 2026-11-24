@@ -2,7 +2,7 @@ use luck_diagnostics::Diagnostic;
 use luck_lexer::lex;
 use luck_token::{LuaVersion, Span, TokenKind};
 
-use crate::common::{lex_lua51, tokens, tokens_in};
+use crate::common::{lex_lua51, token_texts, tokens, tokens_in};
 
 #[test]
 fn quoted_strings_keep_their_spelling() {
@@ -167,13 +167,7 @@ y",
     ];
     for (version, source, expected, message, text, is_unterminated) in cases {
         let result = lex(source.as_bytes(), version);
-        let tokens: Vec<(TokenKind, &str)> = result
-            .tokens
-            .iter()
-            .filter(|token| token.kind != TokenKind::Eof)
-            .map(|token| (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap()))
-            .collect();
-        assert_eq!(tokens, expected, "{source:?}");
+        assert_eq!(token_texts(&result, source), expected, "{source:?}");
         assert_eq!(result.tokens[0].is_unterminated, is_unterminated, "{source:?}");
         let [error] = result.errors.as_slice() else {
             panic!("{source:?}: {:?}", result.errors);
@@ -194,7 +188,7 @@ fn unterminated_string_is_error() {
 }
 
 #[test]
-fn undefined_escape_is_error_on_lua52_and_later() {
+fn undefined_escape_is_error_in_lua52_plus() {
     // 5.2+ rejects undefined escapes; 5.1 and Luau accept them as the
     // literal character.
     let strict_result = lex(b"\"\\q\"", LuaVersion::Lua52);
@@ -371,7 +365,7 @@ fn records_where_each_lenient_escape_is() {
 }
 
 #[test]
-fn unicode_escape_above_10ffff_is_error_on_lua53_and_luau() {
+fn unicode_escape_above_10ffff_is_error_in_lua53_and_luau() {
     for version in [LuaVersion::Lua53, LuaVersion::Luau] {
         let result = lex(br#""\u{110000}""#, version);
         assert!(

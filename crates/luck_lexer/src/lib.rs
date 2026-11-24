@@ -28,7 +28,6 @@
 mod cursor;
 mod lex_result;
 mod lexer;
-mod number;
 mod search;
 
 pub use lex_result::LexResult;

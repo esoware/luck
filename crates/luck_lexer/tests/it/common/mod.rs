@@ -5,17 +5,26 @@ pub(crate) fn lex_lua51(source: &str) -> LexResult {
     lex(source.as_bytes(), LuaVersion::Lua51)
 }
 
+/// Every token's kind and text in `source`, which `result` lexed, but the
+/// closing `Eof`'s, errors or not.
+pub(crate) fn token_texts<'source>(
+    result: &LexResult,
+    source: &'source str,
+) -> Vec<(TokenKind, &'source str)> {
+    result
+        .tokens
+        .iter()
+        .filter(|token| token.kind != TokenKind::Eof)
+        .map(|token| (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap()))
+        .collect()
+}
+
 /// Every token's kind and text but the closing `Eof`'s, after asserting
 /// `source` lexes clean under `version`.
 pub(crate) fn tokens_in(source: &str, version: LuaVersion) -> Vec<(TokenKind, &str)> {
     let result = lex(source.as_bytes(), version);
     assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
-    result
-        .tokens
-        .into_iter()
-        .filter(|token| token.kind != TokenKind::Eof)
-        .map(|token| (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap()))
-        .collect()
+    token_texts(&result, source)
 }
 
 pub(crate) fn tokens(source: &str) -> Vec<(TokenKind, &str)> {

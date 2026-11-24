@@ -4,7 +4,7 @@ use luck_token::{
     Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, TokenKind,
 };
 
-use crate::common::lex_lua51;
+use crate::common::{lex_lua51, token_texts};
 
 #[test]
 fn line_comment_after_a_token_trails_it() {
@@ -120,11 +120,7 @@ fn bom_then_shebang_is_skipped() {
 print(1)";
     let result = lex(source.as_bytes(), LuaVersion::Lua54);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    let first = result.tokens[0];
-    assert_eq!(
-        (first.kind, str::from_utf8(first.text(source.as_bytes())).unwrap()),
-        (TokenKind::Identifier, "print")
-    );
+    assert_eq!(token_texts(&result, source)[0], (TokenKind::Identifier, "print"));
 }
 
 #[test]

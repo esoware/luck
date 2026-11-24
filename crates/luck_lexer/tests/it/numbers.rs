@@ -2,7 +2,16 @@ use luck_diagnostics::Diagnostic;
 use luck_lexer::lex;
 use luck_token::{LuaVersion, Span, TokenKind};
 
-use crate::common::{tokens, tokens_in};
+use crate::common::{token_texts, tokens, tokens_in};
+
+fn assert_malformed_number(source: &str, version: LuaVersion) {
+    let result = lex(source.as_bytes(), version);
+    assert!(
+        result.errors.iter().any(|e| e.message.starts_with("malformed number")),
+        "{source} under {version:?}: {:?}",
+        result.errors
+    );
+}
 
 #[test]
 fn numerals_keep_their_spelling() {
@@ -51,7 +60,7 @@ fn number_adjacent_to_concat_is_malformed() {
 }
 
 #[test]
-fn hex_number_adjacent_to_concat_is_malformed_on_lua52_and_later() {
+fn hex_number_adjacent_to_concat_is_malformed_in_lua52_plus() {
     // The 5.1 and Luau scanners stop at the dot after a radix prefix, so
     // `0xFF..2` is a valid concat there. 5.2+ fails in the hex-float path.
     assert_eq!(lex(b"return 0xFF..2", LuaVersion::Lua51).errors, Vec::<Diagnostic>::new());
@@ -122,7 +131,7 @@ fn hex_float_exponent_is_optional() {
 }
 
 #[test]
-fn hex_numeral_touching_a_letter_is_error_on_strict_versions() {
+fn hex_numeral_touching_a_letter_is_malformed_in_strict_versions() {
     // The optional exponent must not turn `0xFF.foo` into the number
     // `0xFF.f` followed by the name `oo`.
     for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
@@ -251,17 +260,8 @@ fn integer_suffix_lexes_only_on_luau_integers_within_64_bits() {
     );
 }
 
-fn assert_malformed_number(source: &str, version: LuaVersion) {
-    let result = lex(source.as_bytes(), version);
-    assert!(
-        result.errors.iter().any(|e| e.message.starts_with("malformed number")),
-        "{source} under {version:?}: {:?}",
-        result.errors
-    );
-}
-
 #[test]
-fn decimal_numeral_touching_a_letter_is_malformed_on_strict_versions() {
+fn decimal_numeral_touching_a_letter_is_malformed_in_strict_versions() {
     for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
         for source in ["1then", "1a", "1g", "1.5x", "1e5x", "1.foo", "1.then", ".5x", "1z2"] {
             assert_malformed_number(source, version);
@@ -270,7 +270,7 @@ fn decimal_numeral_touching_a_letter_is_malformed_on_strict_versions() {
 }
 
 #[test]
-fn decimal_numeral_touching_a_hex_digit_is_malformed_on_lua52_and_lua53() {
+fn decimal_numeral_touching_a_hex_digit_is_malformed_in_lua52_and_lua53() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         for source in ["1a", "1F", "1.f", "1.5e2a", ".5c"] {
             assert_malformed_number(source, version);
@@ -279,7 +279,7 @@ fn decimal_numeral_touching_a_hex_digit_is_malformed_on_lua52_and_lua53() {
 }
 
 #[test]
-fn decimal_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
+fn decimal_numeral_splits_before_a_non_hex_letter_in_lua52_and_lua53() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         assert_eq!(
             tokens_in("1then", version),
@@ -307,7 +307,7 @@ fn malformed_decimal_numeral_error_spans_the_numeral_and_the_letter() {
 }
 
 #[test]
-fn decimal_numeral_before_a_separated_word_lexes_on_every_version() {
+fn decimal_numeral_before_a_separated_word_lexes_in_every_version() {
     for version in LuaVersion::ALL {
         assert_eq!(
             tokens_in("1 then", version),
@@ -335,11 +335,7 @@ fn integer_range_normalization_preserves_boundaries_and_spans() {
             assert_eq!(result.errors.is_empty(), is_valid, "{source}: {:?}", result.errors);
             let span = Span::from_indices(2, source.len());
             if is_valid {
-                let token = result.tokens[0];
-                assert_eq!(
-                    (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap()),
-                    (TokenKind::Integer, literal.as_str())
-                );
+                assert_eq!(token_texts(&result, &source), [(TokenKind::Integer, literal.as_str())]);
                 assert_eq!(result.tokens[0].span, span);
             } else {
                 assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
@@ -351,7 +347,7 @@ fn integer_range_normalization_preserves_boundaries_and_spans() {
 }
 
 #[test]
-fn decimal_exponent_directly_before_concat_lexes_on_lua51_and_luau() {
+fn decimal_exponent_directly_before_concat_lexes_in_lua51_and_luau() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         let result = lex(b"return 1e5..2", version);
         assert_eq!(
@@ -375,7 +371,7 @@ fn luau_hex_and_binary_numerals_directly_before_concat_lex() {
 }
 
 #[test]
-fn hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
+fn hex_numeral_splits_before_a_non_hex_letter_in_lua52_and_lua53() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let source = "x=0x1g=2";
         let result = lex(source.as_bytes(), version);
@@ -384,21 +380,15 @@ fn hex_numeral_splits_before_a_non_hex_letter_on_lua52_and_lua53() {
             Vec::<Diagnostic>::new(),
             "`0x1g` should split into `0x1` and `g` under {version:?}, as `x=0x1g=2` compiles there"
         );
-        let [_, _, number, name, ..] = result.tokens.as_slice() else {
-            panic!("{:?}", result.tokens);
-        };
         assert_eq!(
-            [
-                (number.kind, str::from_utf8(number.text(source.as_bytes())).unwrap()),
-                (name.kind, str::from_utf8(name.text(source.as_bytes())).unwrap())
-            ],
+            token_texts(&result, source)[2..4],
             [(TokenKind::Number, "0x1"), (TokenKind::Identifier, "g")]
         );
     }
 }
 
 #[test]
-fn dot_zero_x_is_malformed_on_lua52_and_lua53() {
+fn dot_zero_x_is_malformed_in_lua52_and_lua53() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let result = lex(b"x=.0x1=2", version);
         assert!(

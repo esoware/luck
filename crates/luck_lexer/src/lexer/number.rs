@@ -1,29 +1,34 @@
 use luck_diagnostics::Diagnostic;
 use luck_token::{LuaVersion, Span, TokenKind, read_integer};
 
+use super::Lexer;
 use crate::cursor::Cursor;
 
-/// Scan a numeral that starts at `start` with `first`, a digit or a `.`
-/// before one, with the cursor past `first`.
-#[inline]
-pub(crate) fn scan_number(
-    cursor: &mut Cursor<'_>,
-    version: LuaVersion,
-    start: usize,
-    first: u8,
-) -> Result<TokenKind, Diagnostic> {
-    let rest = cursor.rest();
-    let digit_count = rest.iter().take_while(|b| b.is_ascii_digit()).count();
-    // Most numerals are decimal integers that nothing else touches.
-    if first != b'.'
-        && !rest
-            .get(digit_count)
-            .is_some_and(|&b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_')
-    {
-        cursor.advance_by(digit_count);
-        return Ok(TokenKind::Number);
+impl Lexer<'_> {
+    /// Lex a numeral that starts at `start` with `first`, a digit or a `.`
+    /// before one, with the cursor past `first`, or report a malformed one
+    /// and return `None`.
+    #[inline]
+    pub(super) fn lex_number(&mut self, start: usize, first: u8) -> Option<TokenKind> {
+        let rest = self.cursor.rest();
+        let digit_count = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+        // Most numerals are decimal integers that nothing else touches.
+        if first != b'.'
+            && !rest
+                .get(digit_count)
+                .is_some_and(|&b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_')
+        {
+            self.cursor.advance_by(digit_count);
+            return Some(TokenKind::Number);
+        }
+        match scan_other_number(&mut self.cursor, self.version, start, first) {
+            Ok(kind) => Some(kind),
+            Err(error) => {
+                self.errors.push(error);
+                None
+            }
+        }
     }
-    scan_other_number(cursor, version, start, first)
 }
 
 /// Cold and out of line, which parses 1-2% faster than leaving it to the
@@ -77,14 +82,19 @@ fn scan_hex_number(
 
     let has_integer_part = eat_digits(cursor, version, u8::is_ascii_hexdigit);
 
+    // Only a fraction can stand in for the integer digits, and without hex
+    // floats a `.` can't start one, so a digitless `0x` is malformed there
+    // whatever follows it.
+    let can_have_fraction = version.has_hex_floats() && cursor.peek() == Some(b'.');
+    if !has_integer_part && !can_have_fraction {
+        return Err(Diagnostic::e008(
+            cursor.span_since(start),
+            "hex literal requires at least one digit after `0x`",
+        ));
+    }
+
     if version.has_hex_floats() {
         // Lua 5.2+
-        if !has_integer_part && cursor.peek() != Some(b'.') {
-            return Err(Diagnostic::e008(
-                cursor.span_since(start),
-                "hex literal requires at least one digit after `0x`",
-            ));
-        }
         if cursor.eat(b'.') {
             let has_fraction = eat_digits(cursor, version, u8::is_ascii_hexdigit);
             if !has_integer_part && !has_fraction {
@@ -100,23 +110,13 @@ fn scan_hex_number(
                 "hex float exponent requires digits",
             ));
         }
-    } else {
-        // Without hex floats, a `.` can't start a fraction, so a digitless
-        // `0x` is malformed whatever follows it.
-        if !has_integer_part {
-            return Err(Diagnostic::e008(
-                cursor.span_since(start),
-                "hex literal requires at least one digit after `0x`",
-            ));
-        }
-        if matches!(cursor.rest(), [b'.', digit, ..] if digit.is_ascii_hexdigit())
-            || matches!(cursor.peek(), Some(b'p' | b'P'))
-        {
-            return Err(Diagnostic::e008(
-                cursor.span_since(start),
-                "hex float literals are not supported in this Lua version",
-            ));
-        }
+    } else if matches!(cursor.rest(), [b'.', digit, ..] if digit.is_ascii_hexdigit())
+        || matches!(cursor.peek(), Some(b'p' | b'P'))
+    {
+        return Err(Diagnostic::e008(
+            cursor.span_since(start),
+            "hex float literals are not supported in this Lua version",
+        ));
     }
 
     let is_integer = eat_integer_suffix(cursor, version, start)?;

@@ -1,3 +1,4 @@
+mod number;
 mod string;
 
 use std::borrow::Cow;
@@ -11,8 +12,7 @@ use luck_token::{
 
 use crate::cursor::Cursor;
 use crate::lex_result::LexResult;
-use crate::number::scan_number;
-use string::{advance_past_long_bracket_close, eat_long_bracket_level};
+use string::LongBracketKind;
 
 /// The densest real file among the benchmark files runs about this many
 /// bytes per token, so most sources fit the first reservation, and pages a
@@ -31,7 +31,7 @@ pub fn lex(source: &[u8], version: LuaVersion) -> LexResult {
     };
     let mut tokens = Vec::with_capacity(lexer.token_capacity());
     loop {
-        let token = lexer.lex_token();
+        let token = lexer.next_token();
         tokens.push(token);
         if token.kind == TokenKind::Eof {
             break;
@@ -119,17 +119,14 @@ impl<'source> Lexer<'source> {
     /// EOF.
     /// Returns the same EOF token forever once the source is exhausted.
     ///
-    /// Always inlined, so call it from one place, as the parser does.
-    #[expect(clippy::inline_always, reason = "measured: the parser runs 2-4% faster for it")]
+    /// Always inlined, so a caller runs its loop without a call per token.
+    /// Call it from one place, as the parser and [`lex`] do.
+    #[expect(
+        clippy::inline_always,
+        reason = "measured: the parser runs 2-4% faster for it, and `lex` 10-15%"
+    )]
     #[inline(always)]
     pub fn next_token(&mut self) -> Token {
-        self.lex_token()
-    }
-
-    /// Always inlined, so `lex` runs its loop without a call per token.
-    #[expect(clippy::inline_always, reason = "measured: the call per token costs 10-15%")]
-    #[inline(always)]
-    fn lex_token(&mut self) -> Token {
         loop {
             self.skip_whitespace();
             let start = self.cursor.position();
@@ -150,27 +147,19 @@ impl<'source> Lexer<'source> {
             // The bytes that start most tokens come first. The rest go to
             // `lex_operator`, so this stays a small function.
             let kind = match byte {
-                b'0'..=b'9' => match scan_number(&mut self.cursor, self.version, start, byte) {
-                    Ok(kind) => kind,
-                    Err(error) => {
-                        self.errors.push(error);
-                        continue;
-                    }
+                b'0'..=b'9' => match self.lex_number(start, byte) {
+                    Some(kind) => kind,
+                    None => continue,
                 },
                 b'(' => TokenKind::LeftParen,
                 b')' => TokenKind::RightParen,
                 b',' => TokenKind::Comma,
                 b'=' => self.either(b'=', TokenKind::EqualEqual, TokenKind::Equal),
                 b'.' => match self.cursor.peek() {
-                    Some(b'0'..=b'9') => {
-                        match scan_number(&mut self.cursor, self.version, start, byte) {
-                            Ok(kind) => kind,
-                            Err(error) => {
-                                self.errors.push(error);
-                                continue;
-                            }
-                        }
-                    }
+                    Some(b'0'..=b'9') => match self.lex_number(start, byte) {
+                        Some(kind) => kind,
+                        None => continue,
+                    },
                     Some(b'.') => {
                         self.cursor.bump();
                         if self.cursor.eat(b'.') {
@@ -197,7 +186,7 @@ impl<'source> Lexer<'source> {
                     }
                     None => TokenKind::RightBrace,
                 },
-                b'[' => match eat_long_bracket_level(&mut self.cursor) {
+                b'[' => match self.eat_long_bracket_level() {
                     Some(level) => return self.lex_long_string(start, level),
                     None => TokenKind::LeftBracket,
                 },
@@ -307,17 +296,9 @@ impl<'source> Lexer<'source> {
         self.cursor.bump();
 
         let kind = if self.cursor.eat(b'[')
-            && let Some(level) = eat_long_bracket_level(&mut self.cursor)
+            && let Some(level) = self.eat_long_bracket_level()
         {
-            let body = advance_past_long_bracket_close(
-                &mut self.cursor,
-                self.version,
-                start,
-                level,
-                "unterminated block comment",
-                &mut self.errors,
-                false,
-            );
+            let body = self.scan_long_bracket_body(start, level, LongBracketKind::Comment);
             self.is_in_block_comment = !body.is_closed;
             // The delimiters (`--[=*[` and `]=*]`) never hold a line break,
             // so scanning the whole comment is equivalent to scanning only

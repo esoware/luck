@@ -1,9 +1,10 @@
+use std::borrow::Cow;
+
 use luck_diagnostics::Diagnostic;
 use luck_token::{EscapeError, LuaVersion, Span, StringKind, Token, TokenKind, read_escape};
 use memchr::memmem;
 
 use super::Lexer;
-use crate::cursor::Cursor;
 use crate::search::{ByteMatchTable, byte_match_table, find_match};
 
 // Stop bytes for raw interpolated-string text: escape lead, interpolation
@@ -17,6 +18,23 @@ enum SegmentEnd {
     Backtick,
     /// The line or the source ended before the closing backtick.
     Unterminated,
+}
+
+/// What a long bracket delimits, which names it in the error a missing closer
+/// reports.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum LongBracketKind {
+    /// A string, whose scan also looks for a CR, which its value rewrites.
+    String,
+    Comment,
+}
+
+/// What a long bracket's body held, as its lexer reads it.
+pub(super) struct LongBracketBody {
+    /// Whether its closer came.
+    pub is_closed: bool,
+    /// Whether a CR came in a string's body. A comment's scan never looks.
+    pub has_cr: bool,
 }
 
 impl Lexer<'_> {
@@ -35,13 +53,7 @@ impl Lexer<'_> {
                     self.reject(start, "unterminated string");
                     return self.unterminated_token(TokenKind::StringLiteral, start);
                 }
-                Some(b'\\') => {
-                    self.cursor.bump();
-                    // The next iteration reports the unterminated string.
-                    if self.cursor.peek().is_some() {
-                        self.scan_escape(StringKind::Quoted);
-                    }
-                }
+                Some(b'\\') => self.scan_escape(StringKind::Quoted),
                 // The scan stops only at those bytes and at `quote`.
                 Some(_) => {
                     self.cursor.bump();
@@ -55,15 +67,7 @@ impl Lexer<'_> {
     /// cursor past its `[=*[` opener. A missing closer runs the string to the
     /// end of the source.
     pub(super) fn lex_long_string(&mut self, start: usize, level: usize) -> Token {
-        let body = advance_past_long_bracket_close(
-            &mut self.cursor,
-            self.version,
-            start,
-            level,
-            "unterminated long bracket string",
-            &mut self.errors,
-            true,
-        );
+        let body = self.scan_long_bracket_body(start, level, LongBracketKind::String);
         self.has_escape = body.has_cr;
         if body.is_closed {
             self.token(TokenKind::StringLiteral, start)
@@ -119,39 +123,41 @@ impl Lexer<'_> {
         token
     }
 
-    /// Consume one escape sequence, with the cursor on the byte after `\`,
-    /// as [`read_escape`] reads it for every stage. A malformed one goes to
-    /// `errors`, and one only Lua 5.1 and Luau read, as the character it
-    /// escapes, to `lenient_escapes`.
+    /// Consume the escape sequence at the cursor's `\`, as [`read_escape`]
+    /// reads it for every stage. A malformed one goes to `errors`, and one
+    /// only Lua 5.1 and Luau read, as the character it escapes, to
+    /// `lenient_escapes`. At the end of the source it consumes only the `\`,
+    /// and the string's scan reports the string unterminated.
     fn scan_escape(&mut self, kind: StringKind) {
+        let escape_start = self.cursor.position();
+        self.cursor.bump();
+        let Some(escaped_byte) = self.cursor.peek() else {
+            return;
+        };
         self.has_escape = true;
-        let escape_start = self.cursor.position() - 1;
+        let character_start = self.cursor.position();
         let (length, meaning) = read_escape(self.cursor.rest(), kind, self.version);
+        self.cursor.advance_by(length);
+        // A lenient or undefined escape takes the first byte of a multi-byte
+        // character, and its span and its error take the whole character.
         match meaning {
-            Ok(escaped) => {
-                let character_start = self.cursor.position();
-                self.cursor.advance_by(length);
-                if escaped.is_lenient() {
-                    // The escape takes the first byte of a multi-byte
-                    // character, and its span takes the whole character.
-                    self.cursor.eat_rest_of_char(character_start);
-                    self.lenient_escapes.push(self.cursor.span_since(escape_start));
-                }
+            // Lua 5.1, Luau
+            Ok(escaped) if escaped.is_lenient() => {
+                self.cursor.eat_rest_of_char(character_start);
+                self.lenient_escapes.push(self.cursor.span_since(escape_start));
             }
+            Ok(_) => {}
+            // Lua 5.2+
             Err(EscapeError::Undefined) => {
-                let character_start = self.cursor.position();
-                let byte = self.cursor.peek().expect("the caller found a byte after the `\\`");
-                self.cursor.bump();
                 let message = match self.cursor.eat_rest_of_char(character_start) {
                     Some(character) => format!("invalid escape sequence `\\{character}`"),
-                    None => format!("invalid escape sequence, `\\` before byte 0x{byte:02X}"),
+                    None => {
+                        format!("invalid escape sequence, `\\` before byte 0x{escaped_byte:02X}")
+                    }
                 };
                 self.reject(escape_start, message);
             }
-            Err(error) => {
-                self.cursor.advance_by(length);
-                self.reject(escape_start, escape_message(error, self.version));
-            }
+            Err(error) => self.reject(escape_start, escape_message(error, self.version)),
         }
     }
 
@@ -171,15 +177,9 @@ impl Lexer<'_> {
                     self.reject(start, "unterminated interpolated string");
                     return SegmentEnd::Unterminated;
                 }
-                Some(b'\\') => {
-                    self.cursor.bump();
-                    // Consuming `\u{...}` whole also keeps its `{` from
-                    // opening an interpolation, and the next iteration
-                    // reports an unterminated string.
-                    if self.cursor.peek().is_some() {
-                        self.scan_escape(StringKind::Interpolated);
-                    }
-                }
+                // Consuming `\u{...}` whole also keeps its `{` from opening
+                // an interpolation.
+                Some(b'\\') => self.scan_escape(StringKind::Interpolated),
                 Some(b'{') if self.cursor.peek_next() == Some(b'{') => {
                     let position = self.cursor.position();
                     self.cursor.advance_by(2);
@@ -204,102 +204,94 @@ impl Lexer<'_> {
             }
         }
     }
+
+    /// Consume the rest of a long-bracket opener `=*[` after its first `[`,
+    /// which the cursor is past, and return its level (`[==[` is level 2).
+    /// Consumes nothing and returns `None` when no opener follows.
+    pub(super) fn eat_long_bracket_level(&mut self) -> Option<usize> {
+        let rest = self.cursor.rest();
+        let level = rest.iter().take_while(|&&b| b == b'=').count();
+        if rest.get(level) != Some(&b'[') {
+            return None;
+        }
+        self.cursor.advance_by(level + 1);
+        Some(level)
+    }
+
+    /// Advance from just past the opener of a long bracket of `level`, which
+    /// began at `start`, to past its matching `]=*]` closer, and say whether
+    /// the closer came, and for a string, whether a CR came before it, in the
+    /// same pass.
+    ///
+    /// A missing closer leaves the cursor at the end of the source and goes
+    /// to `errors`, spanning from `start`. A level-0 body holding a `[[` that
+    /// the version rejects goes there too, at its first `[[`, where Lua 5.1
+    /// stops.
+    pub(super) fn scan_long_bracket_body(
+        &mut self,
+        start: usize,
+        level: usize,
+        kind: LongBracketKind,
+    ) -> LongBracketBody {
+        let body_start = self.cursor.position();
+        let should_find_cr = kind == LongBracketKind::String;
+        let mut has_cr = false;
+        loop {
+            let rest = self.cursor.rest();
+            let stop = if should_find_cr && !has_cr {
+                memchr::memchr2(b']', b'\r', rest)
+            } else {
+                memchr::memchr(b']', rest)
+            };
+            let Some(stop_offset) = stop else {
+                self.cursor.advance_by(rest.len());
+                let message = match kind {
+                    LongBracketKind::String => "unterminated long bracket string",
+                    LongBracketKind::Comment => "unterminated block comment",
+                };
+                self.reject(start, message);
+                return LongBracketBody { is_closed: false, has_cr };
+            };
+            self.cursor.advance_by(stop_offset + 1);
+            if rest[stop_offset] == b'\r' {
+                has_cr = true;
+                continue;
+            }
+            let after_bracket = self.cursor.rest();
+            let closing_level = after_bracket.iter().take_while(|&&b| b == b'=').count();
+            if closing_level == level && after_bracket.get(level) == Some(&b']') {
+                self.cursor.advance_by(level + 1);
+                if level == 0
+                    && self.version.has_long_bracket_nesting_error()
+                    && let Some(offset) = memmem::find(self.cursor.text_since(body_start), b"[[")
+                {
+                    let nested_open = body_start + offset;
+                    self.errors.push(Diagnostic::e008(
+                        Span::from_indices(nested_open, nested_open + 2),
+                        "nesting of `[[...]]` is deprecated",
+                    ));
+                }
+                return LongBracketBody { is_closed: true, has_cr };
+            }
+        }
+    }
 }
 
-fn escape_message(error: EscapeError, version: LuaVersion) -> String {
+fn escape_message(error: EscapeError, version: LuaVersion) -> Cow<'static, str> {
     match error {
         EscapeError::DecimalTooLarge(value) => {
-            format!("decimal escape too large (`\\{value}`), maximum is `\\255`")
+            format!("decimal escape too large (`\\{value}`), maximum is `\\255`").into()
         }
         EscapeError::HexDigits(count) => {
-            format!("`\\x` escape requires exactly 2 hex digits, got {count}")
+            format!("`\\x` escape requires exactly 2 hex digits, got {count}").into()
         }
-        EscapeError::UnicodeBrace => "`\\u` escape requires `{`".to_owned(),
-        EscapeError::UnicodeDigits => "`\\u{}` requires at least one hex digit".to_owned(),
+        EscapeError::UnicodeBrace => "`\\u` escape requires `{`".into(),
+        EscapeError::UnicodeDigits => "`\\u{}` requires at least one hex digit".into(),
         EscapeError::UnicodeTooLarge => {
             let limit = if version.has_extended_unicode_escape() { "2^31" } else { "0x110000" };
-            format!("`\\u` codepoint too large (must be less than {limit})")
+            format!("`\\u` codepoint too large (must be less than {limit})").into()
         }
-        EscapeError::UnicodeUnclosed => "`\\u` escape missing closing `}`".to_owned(),
-        EscapeError::Undefined => "invalid escape sequence".to_owned(),
-    }
-}
-
-/// Consume the rest of a long-bracket opener `=*[` after its first `[`, which
-/// the cursor is past, and return its level (`[==[` is level 2). Consumes
-/// nothing and returns `None` when no opener follows.
-pub(super) fn eat_long_bracket_level(cursor: &mut Cursor<'_>) -> Option<usize> {
-    let rest = cursor.rest();
-    let level = rest.iter().take_while(|&&b| b == b'=').count();
-    if rest.get(level) != Some(&b'[') {
-        return None;
-    }
-    cursor.advance_by(level + 1);
-    Some(level)
-}
-
-/// What a long bracket's body held, as its lexer reads it.
-pub(super) struct LongBracketBody {
-    /// Whether its closer came.
-    pub is_closed: bool,
-    /// Whether a CR came in it, which a string's value rewrites, when the
-    /// scan looked for one.
-    pub has_cr: bool,
-}
-
-/// Advance from just past a long-bracket opener to past its matching `]=*]`
-/// closer, and say whether the closer came, and with `should_find_cr`,
-/// whether a CR came before it, in the same pass.
-///
-/// Long-bracket strings and block comments share it, and name themselves in
-/// the error a missing closer reports, `unterminated`.
-///
-/// A missing closer leaves the cursor at the end of the source and goes to
-/// `errors`, spanning from `start`. A level-0 body holding a `[[` that
-/// `version` rejects goes there too, at its first `[[`, where Lua 5.1 stops.
-pub(super) fn advance_past_long_bracket_close(
-    cursor: &mut Cursor<'_>,
-    version: LuaVersion,
-    start: usize,
-    level: usize,
-    unterminated: &'static str,
-    errors: &mut Vec<Diagnostic>,
-    should_find_cr: bool,
-) -> LongBracketBody {
-    let body_start = cursor.position();
-    let mut has_cr = false;
-    loop {
-        let rest = cursor.rest();
-        let stop = if should_find_cr && !has_cr {
-            memchr::memchr2(b']', b'\r', rest)
-        } else {
-            memchr::memchr(b']', rest)
-        };
-        let Some(stop_offset) = stop else {
-            cursor.advance_by(rest.len());
-            errors.push(Diagnostic::e008(cursor.span_since(start), unterminated));
-            return LongBracketBody { is_closed: false, has_cr };
-        };
-        cursor.advance_by(stop_offset + 1);
-        if rest[stop_offset] == b'\r' {
-            has_cr = true;
-            continue;
-        }
-        let after_bracket = cursor.rest();
-        let closing_level = after_bracket.iter().take_while(|&&b| b == b'=').count();
-        if closing_level == level && after_bracket.get(level) == Some(&b']') {
-            cursor.advance_by(level + 1);
-            if level == 0
-                && version.has_long_bracket_nesting_error()
-                && let Some(offset) = memmem::find(cursor.text_since(body_start), b"[[")
-            {
-                let nested_open = body_start + offset;
-                errors.push(Diagnostic::e008(
-                    Span::from_indices(nested_open, nested_open + 2),
-                    "nesting of `[[...]]` is deprecated",
-                ));
-            }
-            return LongBracketBody { is_closed: true, has_cr };
-        }
+        EscapeError::UnicodeUnclosed => "`\\u` escape missing closing `}`".into(),
+        EscapeError::Undefined => "invalid escape sequence".into(),
     }
 }

@@ -1,7 +1,7 @@
 use luck_lexer::lex;
 use luck_token::{LuaVersion, Span, TokenKind};
 
-use crate::common::{first_kind, first_kind_in, kinds, kinds_in, lex_lua51, tokens};
+use crate::common::{first_kind, first_kind_in, kinds, kinds_in, lex_lua51, tokens, tokens_in};
 
 #[test]
 fn lua51_keywords_lex_as_keyword_tokens() {
@@ -279,10 +279,12 @@ fn dot_runs_lex_as_varargs_concat_and_dot() {
 }
 
 #[test]
-fn bom_is_skipped() {
-    let result = lex("\u{FEFF}local x = 1".as_bytes(), LuaVersion::Lua54);
-    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    assert_eq!(result.tokens[0].kind, TokenKind::Local);
+fn bom_is_skipped_in_lua52_plus() {
+    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        let result = lex("\u{FEFF}local x = 1".as_bytes(), version);
+        assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors);
+        assert_eq!(result.tokens[0].kind, TokenKind::Local, "{version:?}");
+    }
 }
 
 #[test]
@@ -403,14 +405,6 @@ fn floor_div_not_confused_with_comment() {
 }
 
 #[test]
-fn lua52_double_slash_lexes_as_two_slashes() {
-    assert_eq!(
-        kinds_in("a // b", LuaVersion::Lua52),
-        vec![TokenKind::Identifier, TokenKind::Slash, TokenKind::Slash, TokenKind::Identifier,]
-    );
-}
-
-#[test]
 fn standalone_tilde_lexes_only_in_lua53_plus() {
     // Lua 5.3+ supports bitwise NOT; Luau doesn't.
     for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
@@ -510,29 +504,26 @@ fn lua53_mixed_bitwise_expr_lexes_token_by_token() {
     );
 }
 
+/// The parser reads an attribute, and the lexer sees plain angle brackets
+/// around a name.
 #[test]
-fn lua54_const_attribute_lexes_as_separate_tokens() {
-    // The parser handles `<const>`; the lexer sees plain angle brackets.
-    assert_eq!(
-        kinds_in("local x <const> = 5", LuaVersion::Lua54),
-        vec![
-            TokenKind::Local,
-            TokenKind::Identifier,
-            TokenKind::Less,
-            TokenKind::Identifier,
-            TokenKind::Greater,
-            TokenKind::Equal,
-            TokenKind::Number,
-        ]
-    );
-}
-
-#[test]
-fn lua54_close_attribute_lexes_as_separate_tokens() {
-    let token_kinds = kinds_in("local f <close> = io.open('x')", LuaVersion::Lua54);
-    assert!(token_kinds.contains(&TokenKind::Less));
-    assert!(token_kinds.contains(&TokenKind::Identifier));
-    assert!(token_kinds.contains(&TokenKind::Greater));
+fn lua54_attributes_lex_as_a_name_in_angle_brackets() {
+    for attribute in ["const", "close"] {
+        let source = format!("local x <{attribute}> = 5");
+        assert_eq!(
+            tokens_in(&source, LuaVersion::Lua54),
+            [
+                (TokenKind::Local, "local"),
+                (TokenKind::Identifier, "x"),
+                (TokenKind::Less, "<"),
+                (TokenKind::Identifier, attribute),
+                (TokenKind::Greater, ">"),
+                (TokenKind::Equal, "="),
+                (TokenKind::Number, "5"),
+            ],
+            "{source:?}"
+        );
+    }
 }
 
 #[test]
@@ -602,7 +593,7 @@ fn luau_nul_byte_ends_the_source() {
 }
 
 #[test]
-fn bom_is_an_error_on_lua51_and_luau() {
+fn bom_is_error_in_lua51_and_luau() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         let result = lex("\u{FEFF}return 1".as_bytes(), version);
         assert!(

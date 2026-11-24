@@ -2,22 +2,12 @@ use luck_diagnostics::Diagnostic;
 use luck_lexer::{Lexer, lex};
 use luck_token::{Comment, LuaVersion, TokenKind};
 
-use crate::common::tokens_in;
+use crate::common::{token_texts, tokens_in};
 
 const BEGIN: TokenKind = TokenKind::InterpolatedStringBegin;
 const MIDDLE: TokenKind = TokenKind::InterpolatedStringMiddle;
 const END: TokenKind = TokenKind::InterpolatedStringEnd;
 const SIMPLE: TokenKind = TokenKind::InterpolatedStringSimple;
-
-/// Every token's kind and text but the closing `Eof`'s, errors or not.
-fn pieces(source: &str) -> Vec<(TokenKind, &str)> {
-    lex(source.as_bytes(), LuaVersion::Luau)
-        .tokens
-        .into_iter()
-        .filter(|token| token.kind != TokenKind::Eof)
-        .map(|token| (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap()))
-        .collect()
-}
 
 #[test]
 fn interpolated_string_without_exprs_lexes_as_one_simple_token() {
@@ -172,7 +162,7 @@ y",
     ];
     for (source, expected, (message, text)) in cases {
         let result = lex(source.as_bytes(), LuaVersion::Luau);
-        assert_eq!(pieces(source), expected, "{source:?}");
+        assert_eq!(token_texts(&result, source), expected, "{source:?}");
         let [error] = result.errors.as_slice() else {
             panic!("{source:?}: {:?}", result.errors);
         };
@@ -216,8 +206,13 @@ y",
 /// The escaped backtick is text, so it stays when the string has no closer.
 #[test]
 fn an_unterminated_piece_keeps_all_of_its_text() {
-    assert_eq!(pieces("`a\\`"), [(SIMPLE, "a\\`")]);
-    assert_eq!(pieces("`{x}b\\`"), [(BEGIN, ""), (TokenKind::Identifier, "x"), (END, "b\\`")]);
+    for (source, expected) in [
+        ("`a\\`", vec![(SIMPLE, "a\\`")]),
+        ("`{x}b\\`", vec![(BEGIN, ""), (TokenKind::Identifier, "x"), (END, "b\\`")]),
+    ] {
+        let result = lex(source.as_bytes(), LuaVersion::Luau);
+        assert_eq!(token_texts(&result, source), expected, "{source:?}");
+    }
 }
 
 #[test]
