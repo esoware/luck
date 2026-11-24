@@ -1,13 +1,10 @@
-use std::borrow::Cow;
 use std::ops;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ls_types::{DocumentSymbol, Position, Range, TextDocumentContentChangeEvent, Uri};
-use luck_allocator::Allocator;
-use luck_formatter::FormatResult;
+use ls_types::{DocumentSymbol, Position, Range, TextDocumentContentChangeEvent};
 use luck_linter::{Analysis, FixKind, Message};
 use luck_parser::ParseResult;
 use luck_resolver::{FileSystem as _, FileSystemOs, Resolution, ResolveError};
@@ -27,25 +24,22 @@ use crate::settings::DocumentSettings;
 /// settings change, which a worker finds the first time one is analyzed,
 /// since that reads the disk.
 #[derive(Debug)]
-pub(crate) struct LazySettings {
+struct LazySettings {
+    /// As the client spells it, or `None` for a document with no file.
     path: Option<PathBuf>,
     resolved: OnceLock<Arc<DocumentSettings>>,
 }
 
 impl LazySettings {
-    pub(crate) const fn new(path: Option<PathBuf>) -> Self {
+    const fn new(path: Option<PathBuf>) -> Self {
         Self { path, resolved: OnceLock::new() }
-    }
-
-    pub(crate) fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
     }
 
     fn resolve(&self, session: &Session) -> &Arc<DocumentSettings> {
         self.resolved.get_or_init(|| {
-            let canonical = self.path().map(|path| FileSystemOs.canonicalize_existing(path));
-            let project = session.project_for(canonical.as_deref(), self.path());
-            Arc::new(session.settings().document_settings(project, canonical))
+            let spelled = self.path.as_deref();
+            let canonical = spelled.map(|path| FileSystemOs.canonicalize_existing(path));
+            Arc::new(session.document_settings(canonical, spelled))
         })
     }
 }
@@ -69,7 +63,13 @@ pub(crate) struct Document {
 }
 
 impl Document {
-    pub(crate) const fn new(version: i32, text: Arc<str>, settings: Arc<LazySettings>) -> Self {
+    /// Version `version` of the document at `path`, as the client spells it,
+    /// or of a document with no file.
+    pub(crate) fn new(version: i32, text: Arc<str>, path: Option<PathBuf>) -> Self {
+        Self::with_settings(version, text, Arc::new(LazySettings::new(path)))
+    }
+
+    const fn with_settings(version: i32, text: Arc<str>, settings: Arc<LazySettings>) -> Self {
         Self {
             version,
             text,
@@ -85,13 +85,9 @@ impl Document {
         self.version
     }
 
-    /// This version again, under `settings`.
-    pub(crate) fn with_settings(&self, settings: Arc<LazySettings>) -> Self {
-        Self::new(self.version, Arc::clone(&self.text), settings)
-    }
-
-    pub(crate) const fn settings(&self) -> &Arc<LazySettings> {
-        &self.settings
+    /// This version again, under settings found afresh.
+    pub(crate) fn reloaded(&self) -> Self {
+        Self::new(self.version, Arc::clone(&self.text), self.settings.path.clone())
     }
 
     /// The canonical path of its file, or `None` when it has none.
@@ -163,7 +159,7 @@ impl Document {
             let byte_range = index.byte_range(&text, range)?;
             text.replace_range(byte_range, &change.text);
         }
-        Some(Self::new(version, Arc::from(text), Arc::clone(&self.settings)))
+        Some(Self::with_settings(version, Arc::from(text), Arc::clone(&self.settings)))
     }
 }
 
@@ -215,7 +211,7 @@ impl DocumentState {
         self.analyzed.parse()
     }
 
-    pub(crate) fn analysis(&self) -> &Analysis<'_> {
+    fn analysis(&self) -> &Analysis<'_> {
         self.analyzed.analysis()
     }
 
@@ -223,7 +219,7 @@ impl DocumentState {
         self.analysis().semantic()
     }
 
-    pub(crate) fn tree(&self) -> &Scoping {
+    pub(crate) fn scoping(&self) -> &Scoping {
         self.semantic().scoping()
     }
 
@@ -302,23 +298,11 @@ impl DocumentState {
     /// Lints with the linter that built the analysis, building every kind
     /// of fix, since a suggestion is still a quick fix, or `None` once
     /// `is_cancelled` stops it. A document the project leaves out has none.
-    pub(crate) fn lint(&self, is_cancelled: &(dyn Fn() -> bool + Sync)) -> Option<Vec<Message>> {
+    pub(crate) fn lint(&self, is_cancelled: &dyn Fn() -> bool) -> Option<Vec<Message>> {
         if !self.settings.is_included {
             return Some(Vec::new());
         }
         self.settings.linter.run_analyzed(self.analysis(), FixKind::all(), None, is_cancelled)
-    }
-
-    /// Formats the whole text, or with `range`, the statements it touches.
-    pub(crate) fn format(&self, range: Option<ops::Range<usize>>) -> FormatResult {
-        let options = &self.settings.format;
-        // A scratch arena, so the formatting is freed as soon as it's done.
-        let allocator = Allocator::new();
-        let parse = self.parse();
-        range.map_or_else(
-            || luck_formatter::format_parsed(&allocator, parse, options),
-            |bytes| luck_formatter::format_range(&allocator, parse, options, bytes),
-        )
     }
 }
 
@@ -328,31 +312,12 @@ pub(crate) fn span_text(text: &str, span: Span) -> &str {
     &text[ops::Range::<usize>::from(span)]
 }
 
-/// The path a `file:` URI names. `Uri::to_file_path` ignores the scheme, so
-/// it would turn an `untitled:` buffer into a relative path.
-pub(crate) fn file_path(uri: &Uri) -> Option<PathBuf> {
-    if !uri.scheme().as_str().eq_ignore_ascii_case("file") {
-        return None;
-    }
-    uri.to_file_path().map(Cow::into_owned)
-}
-
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
     use super::*;
 
-    #[test]
-    fn only_a_file_uri_has_a_file_path() {
-        let untitled = Uri::from_str("untitled:Untitled-1").expect("valid URI");
-        assert_eq!(file_path(&untitled), None);
-        let saved = Uri::from_str("FILE:///tmp/main.lua").expect("valid URI");
-        assert!(file_path(&saved).is_some_and(|path| path.ends_with("main.lua")));
-    }
-
     fn version(text: &str) -> Document {
-        Document::new(1, Arc::from(text), Arc::new(LazySettings::new(None)))
+        Document::new(1, Arc::from(text), None)
     }
 
     fn replace(range: Range, text: &str) -> TextDocumentContentChangeEvent {

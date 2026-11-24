@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
+use ls_types::Uri;
 use luck_config::Project;
 use luck_formatter::FormatOptions;
 use luck_linter::{LintConfig, Linter};
@@ -19,11 +20,7 @@ use crate::settings::{DocumentSettings, LoadedProject};
 /// `text` as an untitled document with no `luck.json`, in UTF-16 positions,
 /// which a client that names no encoding gets.
 pub(crate) fn document(text: &str, target: LuaTarget) -> DocumentState {
-    document_in(text, target, Project::defaults(PathBuf::from(".")))
-}
-
-/// `text` as an untitled document under `project`'s settings.
-pub(crate) fn document_in(text: &str, target: LuaTarget, project: Project) -> DocumentState {
+    let project = Project::defaults(PathBuf::from("."));
     let linter = project.linter_for(None);
     document_with(text, target, project, linter, None)
 }
@@ -43,6 +40,11 @@ pub(crate) fn document_at(
 pub(crate) fn document_linted_by(text: &str, target: LuaTarget, lint: LintConfig) -> DocumentState {
     let linter = Arc::new(Linter::new(lint));
     document_with(text, target, Project::defaults(PathBuf::from(".")), linter, None)
+}
+
+/// The URI the tests open their documents at.
+pub(crate) fn uri() -> Uri {
+    "file:///main.lua".parse().expect("valid URI")
 }
 
 /// A session with no workspace folders, in UTF-16 positions, whose tasks

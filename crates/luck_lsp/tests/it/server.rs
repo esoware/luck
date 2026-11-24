@@ -5,9 +5,9 @@ use ls_types::notification::{Cancel, DidCloseTextDocument};
 use ls_types::request::{
     CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
     DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
-    PrepareRenameRequest, RangeFormatting, References, RegisterCapability, Rename,
-    Request as LspRequest, SelectionRangeRequest, SemanticTokensFullRequest,
-    SemanticTokensRangeRequest, Shutdown, SignatureHelpRequest, WorkspaceSymbolRequest,
+    PrepareRenameRequest, RangeFormatting, RegisterCapability, Rename, Request as LspRequest,
+    SelectionRangeRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest, Shutdown,
+    SignatureHelpRequest, WorkspaceSymbolRequest,
 };
 use ls_types::{
     CancelParams, ClientCapabilities, CodeActionContext, CodeActionKind, CodeActionOrCommand,
@@ -18,15 +18,15 @@ use ls_types::{
     FoldingRangeParams, FormattingOptions, GeneralClientCapabilities, GotoDefinitionParams,
     GotoDefinitionResponse, HoverContents, HoverParams, MessageType, NumberOrString,
     PartialResultParams, Position, PositionEncodingKind, PrepareRenameResponse, Range,
-    ReferenceContext, ReferenceParams, RenameParams, SelectionRangeParams, SemanticTokensParams,
-    SemanticTokensRangeParams, SemanticTokensRangeResult, SemanticTokensResult,
-    SignatureHelpParams, TextDocumentContentChangeEvent, TextEdit, Uri, WorkDoneProgressParams,
+    RenameParams, SelectionRangeParams, SemanticTokensParams, SemanticTokensRangeParams,
+    SemanticTokensRangeResult, SemanticTokensResult, SignatureHelpParams,
+    TextDocumentContentChangeEvent, TextEdit, Uri, WorkDoneProgressParams,
     WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use luck_token::index_to_offset;
 use serde_json::json;
 
-use crate::common::{Client, document, position_params, workspace_uri};
+use crate::common::{Client, document, position_params, references, workspace_uri};
 
 /// `luck/syntaxTree`, which the extension sends.
 enum SyntaxTree {}
@@ -142,7 +142,7 @@ fn initialize_advertises_required_capabilities() {
     );
 }
 
-fn client_offering(encodings: &[PositionEncodingKind]) -> (Client, InitializedEncoding) {
+fn client_offering(encodings: &[PositionEncodingKind]) -> (Client, Option<PositionEncodingKind>) {
     let capabilities = ClientCapabilities {
         general: Some(GeneralClientCapabilities {
             position_encodings: Some(encodings.to_vec()),
@@ -153,8 +153,6 @@ fn client_offering(encodings: &[PositionEncodingKind]) -> (Client, InitializedEn
     let (client, result) = Client::start_with(capabilities);
     (client, result.capabilities.position_encoding)
 }
-
-type InitializedEncoding = Option<PositionEncodingKind>;
 
 #[test]
 fn a_client_that_offers_utf8_gets_byte_columns() {
@@ -896,23 +894,6 @@ fn goto_definition_returns_none_for_a_global() {
     assert!(response.is_none(), "stdlib globals have no definition site");
 }
 
-fn references(
-    client: &mut Client,
-    uri: &Uri,
-    line: u32,
-    utf16_column: u32,
-    include_declaration: bool,
-) -> Vec<ls_types::Location> {
-    client
-        .request::<References>(ReferenceParams {
-            text_document_position: position_params(uri, line, utf16_column),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-            context: ReferenceContext { include_declaration },
-        })
-        .expect("local should have references")
-}
-
 #[test]
 fn references_are_scope_exact_for_shadowed_names() {
     let mut client = Client::start();
@@ -930,7 +911,7 @@ print(x)
     );
 
     // Cursor on the INNER x read at line 3.
-    let locations = references(&mut client, &uri, 3, 10, true);
+    let locations = references(&mut client, &uri, Position::new(3, 10), true);
     // Inner x: declaration on line 2 + read on line 3. The outer x's
     // spans (lines 0 and 5) must not appear.
     assert_eq!(locations.len(), 2, "{locations:?}");
@@ -954,7 +935,7 @@ count = count + 1
 ",
     );
 
-    let locations = references(&mut client, &uri, 0, 8, false);
+    let locations = references(&mut client, &uri, Position::new(0, 8), false);
     assert!(
         locations.iter().all(|location| location.range.start.line == 1),
         "declaration should be excluded: {locations:?}"

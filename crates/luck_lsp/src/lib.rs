@@ -49,6 +49,7 @@
 //! asks for, each with [`luck_ast::MIN_STACK_BYTES`] of stack.
 
 mod analyzed;
+mod capabilities;
 mod document;
 #[cfg(test)]
 mod fixtures;

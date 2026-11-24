@@ -41,7 +41,7 @@ pub(crate) fn goto(
             _ => Some(GotoDefinitionResponse::Array(definitions)),
         };
     }
-    let tree = document.tree();
+    let tree = document.scoping();
     let (symbol_id, _) = local_at(document, document.offset(position))?;
     Some(GotoDefinitionResponse::Scalar(Location {
         uri: uri.clone(),

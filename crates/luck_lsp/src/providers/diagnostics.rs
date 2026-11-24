@@ -111,11 +111,7 @@ mod tests {
     use luck_token::LuaTarget;
 
     use super::*;
-    use crate::fixtures::{document, document_linted_by};
-
-    fn uri() -> Uri {
-        "file:///main.lua".parse().expect("valid URI")
-    }
+    use crate::fixtures::{document, document_linted_by, uri};
 
     fn convert(diagnostic: Diagnostic) -> LspDiagnostic {
         let document = document("local x = 1", LuaTarget::Lua54);
@@ -135,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_error_severity() {
+    fn maps_error_severity_and_adds_nothing_the_lint_lacks() {
         let diag = convert(Diagnostic::lint("test_rule", Severity::Error, Span::new(6, 7), "bad"));
         assert_eq!(diag.severity, Some(DiagnosticSeverity::ERROR));
         assert_eq!(diag.message, "bad");

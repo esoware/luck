@@ -12,13 +12,15 @@ use ls_types::notification::{
     DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument, Exit, Initialized,
     Notification as LspNotification, PublishDiagnostics, ShowMessage,
 };
-use ls_types::request::{Initialize, Request as LspRequest, Shutdown};
+use ls_types::request::{Initialize, References, Request as LspRequest, Shutdown};
 use ls_types::{
     ClientCapabilities, Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
     DidOpenTextDocumentParams, FileChangeType, FileEvent, InitializeParams, InitializeResult,
-    InitializedParams, MessageType, Position, PublishDiagnosticsParams, ShowMessageParams,
+    InitializedParams, Location, MessageType, PartialResultParams, Position,
+    PublishDiagnosticsParams, ReferenceContext, ReferenceParams, ShowMessageParams,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, Uri, VersionedTextDocumentIdentifier, WorkspaceFolder,
+    TextDocumentPositionParams, Uri, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
+    WorkspaceFolder,
 };
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response, ResponseError};
 
@@ -306,4 +308,22 @@ pub(crate) fn position_params(
 
 pub(crate) fn document(uri: &Uri) -> TextDocumentIdentifier {
     TextDocumentIdentifier { uri: uri.clone() }
+}
+
+/// What `textDocument/references` finds for the name at `position` in the
+/// open document at `uri`.
+pub(crate) fn references(
+    client: &mut Client,
+    uri: &Uri,
+    position: Position,
+    include_declaration: bool,
+) -> Vec<Location> {
+    client
+        .request::<References>(ReferenceParams {
+            text_document_position: position_params(uri, position.line, position.character),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: ReferenceContext { include_declaration },
+        })
+        .expect("the document is open")
 }

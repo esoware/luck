@@ -4,11 +4,12 @@
 //! to the pool with the versions it reads, and sends on what the jobs give
 //! back unless it went stale first, as rust-analyzer's main loop does.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io;
 use std::mem;
 use std::num::NonZero;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -16,54 +17,36 @@ use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use ls_types::notification::{
     Cancel, DidChangeTextDocument, DidChangeWatchedFiles, DidChangeWorkspaceFolders,
     DidCloseTextDocument, DidOpenTextDocument, Exit, Notification as _, PublishDiagnostics,
-    ShowMessage,
 };
 use ls_types::request::{
     CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
     DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
-    PrepareRenameRequest, RangeFormatting, References, RegisterCapability, Rename,
-    Request as LspRequest, SelectionRangeRequest, SemanticTokensFullRequest,
-    SemanticTokensRangeRequest, Shutdown, SignatureHelpRequest, WorkspaceSymbolRequest,
+    PrepareRenameRequest, RangeFormatting, References, Rename, Request as LspRequest,
+    SelectionRangeRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest, Shutdown,
+    SignatureHelpRequest, WorkspaceSymbolRequest,
 };
 use ls_types::{
-    CodeActionKind, CodeActionOptions, CodeActionProviderCapability, CompletionOptions, Diagnostic,
-    DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
-    DidChangeWatchedFilesRegistrationOptions, DidChangeWorkspaceFoldersParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentLinkOptions,
-    DocumentSymbolResponse, FileChangeType, FileSystemWatcher, FoldingRangeProviderCapability,
-    GlobPattern, HoverProviderCapability, InitializeParams, InitializeResult, MessageType,
-    NumberOrString, OneOf, PublishDiagnosticsParams, Range, Registration, RegistrationParams,
-    RenameOptions, SelectionRangeProviderCapability, SemanticTokensFullOptions,
-    SemanticTokensOptions, SemanticTokensRegistrationOptions, SemanticTokensServerCapabilities,
-    ServerCapabilities, ServerInfo, ShowMessageParams, SignatureHelpOptions,
-    StaticRegistrationOptions, TextDocumentRegistrationOptions, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextEdit, Uri, WorkDoneProgressOptions,
-    WorkspaceEdit, WorkspaceFoldersChangeEvent, WorkspaceFoldersServerCapabilities,
-    WorkspaceServerCapabilities, WorkspaceSymbolResponse,
+    Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentSymbolResponse, FileChangeType, InitializeParams, NumberOrString,
+    PublishDiagnosticsParams, Uri, WorkspaceEdit, WorkspaceFoldersChangeEvent,
+    WorkspaceSymbolResponse,
 };
-use lsp_server::{Connection, Message, Notification, Request, RequestId, Response, ResponseError};
+use lsp_server::{
+    Connection, ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError,
+};
 
-use crate::document::{Document, DocumentState, LazySettings, file_path};
+use crate::capabilities;
+use crate::document::{Document, DocumentState};
 use crate::line_index::PositionEncoding;
 use crate::pool::{Pool, Priority};
 use crate::providers::{
     code_action, completion, definition, diagnostics, document_highlight, document_link,
-    folding_range, hover, references, rename, selection_range, semantic_tokens, signature_help,
-    syntax_tree, workspace_symbol,
+    folding_range, formatting, hover, references, rename, selection_range, semantic_tokens,
+    signature_help, syntax_tree, workspace_symbol,
 };
 use crate::session::Session;
 use crate::workspace::{Walk, WorkspaceView};
-
-/// JSON-RPC's error codes, and LSP's for a request the client or a change
-/// made moot.
-const INVALID_REQUEST: i32 = -32600;
-const METHOD_NOT_FOUND: i32 = -32601;
-const INVALID_PARAMS: i32 = -32602;
-const REQUEST_CANCELLED: i32 = -32800;
-const CONTENT_MODIFIED: i32 = -32801;
-
-/// The id of the one request the server sends, which needs no answer.
-const WATCHER_REGISTRATION: &str = "luck-file-watchers";
 
 /// What a job hands back to the main loop, which sends it on only if it
 /// still holds.
@@ -116,19 +99,20 @@ impl LspRequest for FixAllWorkspace {
 /// server exit with an error.
 pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> {
     let (id, params) = connection.initialize_start().map_err(io::Error::other)?;
-    let InitializeParams { capabilities, workspace_folders, .. } =
+    let InitializeParams { capabilities: client, workspace_folders, .. } =
         match serde_json::from_value::<InitializeParams>(params) {
             Ok(parsed) => parsed,
             Err(error) => {
-                let refusal = error_response(id, INVALID_PARAMS, error.to_string());
+                let refusal =
+                    Response::new_err(id, ErrorCode::InvalidParams as i32, error.to_string());
                 let _ = connection.sender.send(refusal.into());
                 return Err(io::Error::other(error));
             }
         };
-    let offered =
-        capabilities.general.as_ref().and_then(|general| general.position_encodings.as_deref());
+    let offered = client.general.as_ref().and_then(|general| general.position_encodings.as_deref());
     let encoding = PositionEncoding::negotiate(offered.unwrap_or_default());
-    let result = serde_json::to_value(initialize_result(encoding)).map_err(io::Error::other)?;
+    let result = serde_json::to_value(capabilities::initialize_result(encoding))
+        .map_err(io::Error::other)?;
     connection.initialize_finish(id, result).map_err(io::Error::other)?;
 
     let Connection { sender, receiver } = connection;
@@ -150,97 +134,16 @@ pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> 
     // included, and the workspace's files would live until a restart, so
     // creating or editing a config file or a module would do nothing. LSP
     // has no static form of them.
-    let can_watch_files = capabilities
+    let can_watch_files = client
         .workspace
         .as_ref()
         .and_then(|workspace| workspace.did_change_watched_files.as_ref())
         .and_then(|watched| watched.dynamic_registration)
         .unwrap_or(false);
     if can_watch_files {
-        server.register_watchers();
+        server.send(capabilities::watcher_registration());
     }
     server.run(&receiver, &finished)
-}
-
-fn initialize_result(encoding: PositionEncoding) -> InitializeResult {
-    InitializeResult {
-        capabilities: ServerCapabilities {
-            position_encoding: Some(encoding.kind()),
-            text_document_sync: Some(TextDocumentSyncCapability::Options(
-                TextDocumentSyncOptions {
-                    open_close: Some(true),
-                    change: Some(TextDocumentSyncKind::INCREMENTAL),
-                    ..Default::default()
-                },
-            )),
-            document_formatting_provider: Some(OneOf::Left(true)),
-            document_range_formatting_provider: Some(OneOf::Left(true)),
-            hover_provider: Some(HoverProviderCapability::Simple(true)),
-            completion_provider: Some(CompletionOptions {
-                resolve_provider: Some(false),
-                trigger_characters: Some(vec![".".to_owned(), ":".to_owned()]),
-                ..Default::default()
-            }),
-            signature_help_provider: Some(SignatureHelpOptions {
-                trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
-                retrigger_characters: Some(vec![",".to_owned()]),
-                work_done_progress_options: WorkDoneProgressOptions::default(),
-            }),
-            document_symbol_provider: Some(OneOf::Left(true)),
-            code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-                code_action_kinds: Some(vec![CodeActionKind::QUICKFIX, code_action::FIX_ALL_KIND]),
-                resolve_provider: Some(false),
-                work_done_progress_options: WorkDoneProgressOptions::default(),
-            })),
-            semantic_tokens_provider: Some(
-                SemanticTokensServerCapabilities::SemanticTokensRegistrationOptions(
-                    SemanticTokensRegistrationOptions {
-                        text_document_registration_options: TextDocumentRegistrationOptions {
-                            document_selector: None,
-                        },
-                        semantic_tokens_options: SemanticTokensOptions {
-                            work_done_progress_options: WorkDoneProgressOptions::default(),
-                            legend: semantic_tokens::legend(),
-                            range: Some(true),
-                            full: Some(SemanticTokensFullOptions::Bool(true)),
-                        },
-                        static_registration_options: StaticRegistrationOptions::default(),
-                    },
-                ),
-            ),
-            document_highlight_provider: Some(OneOf::Left(true)),
-            definition_provider: Some(OneOf::Left(true)),
-            references_provider: Some(OneOf::Left(true)),
-            rename_provider: Some(OneOf::Right(RenameOptions {
-                prepare_provider: Some(true),
-                work_done_progress_options: WorkDoneProgressOptions::default(),
-            })),
-            workspace_symbol_provider: Some(OneOf::Left(true)),
-            workspace: Some(WorkspaceServerCapabilities {
-                workspace_folders: Some(WorkspaceFoldersServerCapabilities {
-                    supported: Some(true),
-                    change_notifications: Some(OneOf::Left(true)),
-                }),
-                file_operations: None,
-            }),
-            folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
-            selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
-            document_link_provider: Some(DocumentLinkOptions {
-                resolve_provider: Some(false),
-                work_done_progress_options: WorkDoneProgressOptions::default(),
-            }),
-            ..Default::default()
-        },
-        server_info: Some(ServerInfo {
-            name: "luck".to_owned(),
-            version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-        }),
-        offset_encoding: None,
-    }
-}
-
-const fn error_response(id: RequestId, code: i32, message: String) -> Response {
-    Response { id, response_result: Err(ResponseError { code, message, data: None }) }
 }
 
 struct Server {
@@ -306,34 +209,6 @@ impl Server {
     fn publish(&self, uri: Uri, diagnostics: Vec<Diagnostic>, version: Option<i32>) {
         let published = PublishDiagnosticsParams { uri, diagnostics, version };
         self.send(Notification::new(PublishDiagnostics::METHOD.to_owned(), published));
-    }
-
-    fn register_watchers(&self) {
-        let watchers = [
-            // Any JSON or TOML file, since a `luck.json` can extend a file,
-            // or name a std definition, of any name. A change touching none
-            // the projects read is ignored.
-            "**/*.json",
-            "**/*.toml",
-            "**/.editorconfig",
-            "**/.luaurc",
-            "**/*.{lua,luau}",
-        ]
-        .map(|glob| FileSystemWatcher {
-            glob_pattern: GlobPattern::String(glob.to_owned()),
-            kind: None,
-        });
-        let options = DidChangeWatchedFilesRegistrationOptions { watchers: watchers.into() };
-        let registration = Registration {
-            id: WATCHER_REGISTRATION.to_owned(),
-            method: DidChangeWatchedFiles::METHOD.to_owned(),
-            register_options: serde_json::to_value(options).ok(),
-        };
-        self.send(Request::new(
-            RequestId::from(WATCHER_REGISTRATION.to_owned()),
-            RegisterCapability::METHOD.to_owned(),
-            RegistrationParams { registrations: vec![registration] },
-        ));
     }
 
     fn handle(&mut self, message: Message) {
@@ -489,11 +364,8 @@ impl Server {
 
     fn open(&mut self, params: DidOpenTextDocumentParams) {
         let item = params.text_document;
-        let settings = Arc::new(LazySettings::new(file_path(&item.uri)));
-        self.replace(
-            item.uri,
-            Arc::new(Document::new(item.version, Arc::from(item.text), settings)),
-        );
+        let path = file_path(&item.uri);
+        self.replace(item.uri, Arc::new(Document::new(item.version, Arc::from(item.text), path)));
     }
 
     fn change(&mut self, params: DidChangeTextDocumentParams) {
@@ -537,14 +409,13 @@ impl Server {
     }
 
     fn watched_files_changed(&mut self, params: &DidChangeWatchedFilesParams) {
-        let session = Arc::clone(&self.session);
         let (mut is_settings_change, mut is_resolution_change, mut is_file_added_or_removed) =
             (false, false, false);
         for change in &params.changes {
             let Some(path) = file_path(&change.uri) else {
                 continue;
             };
-            is_settings_change |= session.settings().is_settings_file(&path);
+            is_settings_change |= self.session.settings().is_settings_file(&path);
             let is_module =
                 path.extension().is_some_and(|extension| extension == "lua" || extension == "luau");
             let is_module_added_or_removed = is_module && change.typ != FileChangeType::CHANGED;
@@ -554,7 +425,7 @@ impl Server {
                 || path.file_name().is_some_and(|name| name == ".luaurc");
             is_file_added_or_removed |= is_module_added_or_removed;
             if is_module {
-                session.workspace().forget(path);
+                self.session.workspace().forget(path);
             }
         }
         if is_settings_change {
@@ -562,11 +433,11 @@ impl Server {
             return;
         }
         if is_file_added_or_removed {
-            session.workspace().walk_again();
+            self.session.workspace().walk_again();
             self.walk_workspace();
         }
         if is_resolution_change {
-            session.settings().clear_resolvers();
+            self.session.settings().clear_resolvers();
             self.republish();
         }
     }
@@ -600,16 +471,13 @@ impl Server {
         // Every open document gets a new version of the same text under the
         // new settings, whether or not its dialect or extra globals changed,
         // so a lint under the old ones has nothing to publish.
-        let reopened: Vec<(Uri, Document)> = self
+        let reloaded: Vec<(Uri, Arc<Document>)> = self
             .documents
             .iter()
-            .map(|(uri, current)| {
-                let path = current.settings().path().map(Path::to_path_buf);
-                (uri.clone(), current.with_settings(Arc::new(LazySettings::new(path))))
-            })
+            .map(|(uri, current)| (uri.clone(), Arc::new(current.reloaded())))
             .collect();
-        for (uri, document) in reopened {
-            self.replace(uri, Arc::new(document));
+        for (uri, document) in reloaded {
+            self.replace(uri, document);
         }
     }
 
@@ -620,7 +488,8 @@ impl Server {
         };
         if let Some(is_cancelled) = self.pending.remove(&id) {
             is_cancelled.store(true, Ordering::Relaxed);
-            self.send(error_response(id, REQUEST_CANCELLED, "the client cancelled it".to_owned()));
+            let refusal = "the client cancelled it".to_owned();
+            self.send(Response::new_err(id, ErrorCode::RequestCanceled as i32, refusal));
         }
     }
 
@@ -643,7 +512,8 @@ impl Server {
         match serde_json::from_value(params) {
             Ok(parsed) => Some((id, parsed)),
             Err(error) => {
-                self.send(error_response(id, INVALID_PARAMS, error.to_string()));
+                let refusal = error.to_string();
+                self.send(Response::new_err(id, ErrorCode::InvalidParams as i32, refusal));
                 None
             }
         }
@@ -655,9 +525,7 @@ impl Server {
     fn spawn<R, F>(&mut self, id: RequestId, job: F)
     where
         R: LspRequest,
-        F: FnOnce(&Session, &(dyn Fn() -> bool + Sync)) -> Result<R::Result, ResponseError>
-            + Send
-            + 'static,
+        F: FnOnce(&Session, &dyn Fn() -> bool) -> Result<R::Result, ResponseError> + Send + 'static,
     {
         let is_cancelled = Arc::new(AtomicBool::new(false));
         self.pending.insert(id.clone(), Arc::clone(&is_cancelled));
@@ -676,9 +544,9 @@ impl Server {
     }
 
     /// Answers `request` with what `answer` gives for the current version of
-    /// the document `uri` picks from its params, or with `null` when that
+    /// the document `uri_of` picks from its params, or with `null` when that
     /// document isn't open.
-    fn spawn_on_document<R, U, A, T>(&mut self, request: Request, uri: U, answer: A)
+    fn spawn_on_document<R, U, A, T>(&mut self, request: Request, uri_of: U, answer: A)
     where
         R: LspRequest<Result = Option<T>>,
         U: FnOnce(&R::Params) -> &Uri,
@@ -690,7 +558,7 @@ impl Server {
         let Some((id, params)) = self.params::<R>(request) else {
             return;
         };
-        let document = self.document(uri(&params));
+        let document = self.document(uri_of(&params));
         self.spawn::<R, _>(id, move |session, _| {
             document.map_or(Ok(None), |open| answer(session, open.state(session), params))
         });
@@ -731,7 +599,7 @@ impl Server {
     fn handle_request(&mut self, request: Request) {
         if self.is_shutting_down {
             let refusal = "the server is shutting down".to_owned();
-            self.send(error_response(request.id, INVALID_REQUEST, refusal));
+            self.send(Response::new_err(request.id, ErrorCode::InvalidRequest as i32, refusal));
             return;
         }
         match request.method.as_str() {
@@ -745,12 +613,14 @@ impl Server {
             Formatting::METHOD => self.spawn_on_document::<Formatting, _, _, _>(
                 request,
                 |params| &params.text_document.uri,
-                |session, document, _| Ok(format_edits(session, document, None)),
+                |session, document, _| Ok(formatting::formatting(session, document, None)),
             ),
             RangeFormatting::METHOD => self.spawn_on_document::<RangeFormatting, _, _, _>(
                 request,
                 |params| &params.text_document.uri,
-                |session, document, params| Ok(format_edits(session, document, Some(params.range))),
+                |session, document, params| {
+                    Ok(formatting::formatting(session, document, Some(params.range)))
+                },
             ),
             HoverRequest::METHOD => self.spawn_on_document::<HoverRequest, _, _, _>(
                 request,
@@ -796,7 +666,7 @@ impl Server {
                         return Ok(None);
                     };
                     let lints = open.lints(session).ok_or_else(|| ResponseError {
-                        code: CONTENT_MODIFIED,
+                        code: ErrorCode::ContentModified as i32,
                         message: "the document changed before its lints were done".to_owned(),
                         data: None,
                     })?;
@@ -854,7 +724,8 @@ impl Server {
                 |params| &params.text_document_position.text_document.uri,
                 |workspace, uri, document, params| {
                     rename::rename(workspace, uri, document, &params).map_err(|refusal| {
-                        ResponseError { code: INVALID_PARAMS, message: refusal, data: None }
+                        let code = ErrorCode::InvalidParams as i32;
+                        ResponseError { code, message: refusal, data: None }
                     })
                 },
             ),
@@ -899,7 +770,7 @@ impl Server {
                     .and_then(|uri| uri.parse::<Uri>().ok())
                 else {
                     let refusal = "missing `textDocument.uri`".to_owned();
-                    self.send(error_response(id, INVALID_PARAMS, refusal));
+                    self.send(Response::new_err(id, ErrorCode::InvalidParams as i32, refusal));
                     return;
                 };
                 let document = self.document(&uri);
@@ -922,38 +793,32 @@ impl Server {
             }
             unknown => {
                 let refusal = format!("the server has no method `{unknown}`");
-                self.send(error_response(request.id, METHOD_NOT_FOUND, refusal));
+                self.send(Response::new_err(request.id, ErrorCode::MethodNotFound as i32, refusal));
             }
         }
     }
 }
 
-/// The document formatted, or only `range` of it, as one whole-document
-/// edit. `None` when `range` doesn't fit it, or it doesn't parse, which also
-/// shows a warning.
-fn format_edits(
-    session: &Session,
-    document: &DocumentState,
-    range: Option<Range>,
-) -> Option<Vec<TextEdit>> {
-    let byte_range = match range {
-        Some(requested) => Some(document.byte_range(requested)?),
-        None => None,
-    };
-    let action = if byte_range.is_some() { "range-format" } else { "format" };
-    // `format_range` returns the whole file with text outside the range kept
-    // byte-for-byte, so a whole-file edit only changes the range.
-    let result = document.format(byte_range);
-    if let Some(first) = result.errors.first() {
-        let message = format!("luck: can't {action} file (parse error): {}", first.message);
-        let warning = ShowMessageParams { typ: MessageType::WARNING, message };
-        session.send(Task::Notify(Notification::new(ShowMessage::METHOD.to_owned(), warning)));
+/// The path a `file:` URI names. `Uri::to_file_path` ignores the scheme, so
+/// it would turn an `untitled:` buffer into a relative path.
+fn file_path(uri: &Uri) -> Option<PathBuf> {
+    if !uri.scheme().as_str().eq_ignore_ascii_case("file") {
         return None;
     }
-    if result.output == document.text().as_bytes() {
-        return Some(Vec::new());
+    uri.to_file_path().map(Cow::into_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr as _;
+
+    use super::*;
+
+    #[test]
+    fn only_a_file_uri_has_a_file_path() {
+        let untitled = Uri::from_str("untitled:Untitled-1").expect("valid URI");
+        assert_eq!(file_path(&untitled), None);
+        let saved = Uri::from_str("FILE:///tmp/main.lua").expect("valid URI");
+        assert!(file_path(&saved).is_some_and(|path| path.ends_with("main.lua")));
     }
-    // A text that's UTF-8 formats as UTF-8.
-    let new_text = String::from_utf8_lossy(&result.output).into_owned();
-    Some(vec![TextEdit { range: document.full_range(), new_text }])
 }

@@ -38,14 +38,6 @@ impl PositionEncoding {
             .unwrap_or(Self::Utf16)
     }
 
-    pub(crate) const fn kind(self) -> PositionEncodingKind {
-        match self {
-            Self::Utf8 => PositionEncodingKind::UTF8,
-            Self::Utf16 => PositionEncodingKind::UTF16,
-            Self::Utf32 => PositionEncodingKind::UTF32,
-        }
-    }
-
     /// How many more bytes than units a character of `length` UTF-8 bytes
     /// takes.
     const fn extra_bytes(self, length: u32) -> u32 {
@@ -62,6 +54,16 @@ impl PositionEncoding {
             Self::Utf32 => 1,
         };
         length - units
+    }
+}
+
+impl From<PositionEncoding> for PositionEncodingKind {
+    fn from(encoding: PositionEncoding) -> Self {
+        match encoding {
+            PositionEncoding::Utf8 => Self::UTF8,
+            PositionEncoding::Utf16 => Self::UTF16,
+            PositionEncoding::Utf32 => Self::UTF32,
+        }
     }
 }
 
@@ -378,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn position_offset_roundtrip_ascii() {
+    fn an_ascii_line_start_round_trips_through_its_position() {
         let source = "hello\nworld\nfoo";
         let index = LineIndex::new(source, PositionEncoding::Utf16);
         let position = index.position(source, 6);
@@ -387,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn position_handles_multi_byte() {
+    fn a_line_after_a_multi_byte_character_starts_at_column_zero() {
         // U+00E4 is 2 bytes in UTF-8 and 1 UTF-16 unit.
         let source = "\u{e4}\nb";
         let index = LineIndex::new(source, PositionEncoding::Utf16);

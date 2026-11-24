@@ -23,6 +23,7 @@ use rustc_hash::FxHashMap;
 use crate::document::DocumentState;
 use crate::providers::cursor::identifier;
 
+/// In the order of [`TokenType`], whose discriminant is the index here.
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
     SemanticTokenType::FUNCTION,
@@ -33,14 +34,17 @@ const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::TYPE,
 ];
 
-// Indexes into `TOKEN_TYPES`.
-const TYPE_NAMESPACE: u32 = 0;
-const TYPE_FUNCTION: u32 = 1;
-const TYPE_PROPERTY: u32 = 2;
-const TYPE_VARIABLE: u32 = 3;
-const TYPE_PARAMETER: u32 = 4;
-const TYPE_METHOD: u32 = 5;
-const TYPE_TYPE: u32 = 6;
+/// What a name is, which a token carries as its index in [`TOKEN_TYPES`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenType {
+    Namespace,
+    Function,
+    Property,
+    Variable,
+    Parameter,
+    Method,
+    Type,
+}
 
 const TOKEN_MODIFIERS: &[SemanticTokenModifier] = &[
     SemanticTokenModifier::DEPRECATED,
@@ -55,18 +59,18 @@ const MODIFIER_DEFAULT_LIBRARY: u32 = 1 << 2;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Classification {
-    token_type: u32,
+    token_type: TokenType,
     modifiers: u32,
 }
 
 impl Classification {
-    const fn plain(token_type: u32) -> Self {
+    const fn plain(token_type: TokenType) -> Self {
         Self { token_type, modifiers: 0 }
     }
 
     /// A value's name that isn't a function, which reads as read-only where
     /// it's spelled like a constant.
-    fn value(token_type: u32, name: &str) -> Self {
+    fn value(token_type: TokenType, name: &str) -> Self {
         let modifiers = if is_screaming_case(name) { MODIFIER_READONLY } else { 0 };
         Self { token_type, modifiers }
     }
@@ -107,7 +111,10 @@ pub(crate) fn classify(document: &DocumentState) -> Highlights {
     let globals = tree
         .names()
         .map(|(_, name)| {
-            stdlib.globals.get(name).map_or(Classification::plain(TYPE_VARIABLE), stdlib_classify)
+            stdlib
+                .globals
+                .get(name)
+                .map_or(Classification::plain(TokenType::Variable), stdlib_classify)
         })
         .collect();
     let mut classifier = Classifier {
@@ -139,7 +146,7 @@ fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> Semantic
             delta_line,
             delta_start,
             length: document.length(span),
-            token_type: classification.token_type,
+            token_type: classification.token_type as u32,
             token_modifiers_bitset: classification.modifiers,
         });
         previous = Position { line, character };
@@ -189,7 +196,7 @@ impl<'document> Classifier<'document> {
         }
     }
 
-    fn plain(&mut self, name: &Name<'_>, token_type: u32) {
+    fn plain(&mut self, name: &Name<'_>, token_type: TokenType) {
         if identifier(name).is_some() {
             self.push(name.span, Classification::plain(token_type));
         }
@@ -209,11 +216,11 @@ impl<'document> Classifier<'document> {
         }
         let symbol = tree.symbol(symbol_id);
         let mut classification = symbol_classify(symbol.kind);
-        if classification.token_type == TYPE_VARIABLE {
+        if classification.token_type == TokenType::Variable {
             classification = if matches!(value, Some(Expression::FunctionDef(_))) {
-                Classification::plain(TYPE_FUNCTION)
+                Classification::plain(TokenType::Function)
             } else {
-                Classification::value(TYPE_VARIABLE, name.text.as_str())
+                Classification::value(TokenType::Variable, name.text.as_str())
             };
         }
         if symbol.is_read_only {
@@ -239,23 +246,23 @@ impl<'document> Classifier<'document> {
         let mut classification = match reference.resolved {
             Some(symbol_id) => symbol_classify(tree.symbol(symbol_id).kind),
             None if tree.is_host_global(reference) => self.globals[reference.name.index()],
-            None => Classification::plain(TYPE_VARIABLE),
+            None => Classification::plain(TokenType::Variable),
         };
-        if classification.token_type == TYPE_VARIABLE {
+        if classification.token_type == TokenType::Variable {
             classification = if shape.is_some() {
-                Classification::plain(TYPE_FUNCTION)
+                Classification::plain(TokenType::Function)
             } else {
-                Classification::value(TYPE_VARIABLE, name.text.as_str())
+                Classification::value(TokenType::Variable, name.text.as_str())
             };
         }
         if shape == Some(ValueShape::Called) {
-            classification.token_type = TYPE_FUNCTION;
+            classification.token_type = TokenType::Function;
         }
         if let Some(symbol_id) = reference.resolved
             && let Some(declared) = self.declared[symbol_id.index()]
         {
-            if !tree.symbol(symbol_id).is_modified && declared.token_type == TYPE_FUNCTION {
-                classification.token_type = TYPE_FUNCTION;
+            if !tree.symbol(symbol_id).is_modified && declared.token_type == TokenType::Function {
+                classification.token_type = TokenType::Function;
             }
             classification.modifiers |= declared.modifiers & MODIFIER_READONLY;
         }
@@ -275,11 +282,11 @@ impl<'document> Classifier<'document> {
         };
         let mut classification = match entry {
             Some(entry) => member_classify(entry),
-            None if shape.is_some() => Classification::plain(TYPE_METHOD),
-            None => Classification::value(TYPE_PROPERTY, text),
+            None if shape.is_some() => Classification::plain(TokenType::Method),
+            None => Classification::value(TokenType::Property, text),
         };
         if shape == Some(ValueShape::Called) {
-            classification.token_type = TYPE_METHOD;
+            classification.token_type = TokenType::Method;
         }
         self.push(name.span, classification);
     }
@@ -441,7 +448,7 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
         let leading = global_declaration.attribute.as_deref();
         for attributed in &global_declaration.names {
             if let Some(text) = identifier(&attributed.name) {
-                let mut classification = Classification::value(TYPE_VARIABLE, text);
+                let mut classification = Classification::value(TokenType::Variable, text);
                 if attributed
                     .attribute_or(leading)
                     .is_some_and(|attribute| attribute.name.text == "const")
@@ -466,7 +473,7 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
 
     // Lua 5.5
     fn visit_global_function(&mut self, global_function: &'ast GlobalFunction<'ast>) {
-        self.plain(&global_function.name, TYPE_FUNCTION);
+        self.plain(&global_function.name, TokenType::Function);
         self.visit_function_body(&global_function.body);
     }
 
@@ -487,7 +494,7 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
                 self.reference(name);
                 at = Some(PathAt::Root(name));
             } else if method.is_none() && i + 1 == names.len() {
-                self.plain(name, TYPE_METHOD);
+                self.plain(name, TokenType::Method);
             } else {
                 let entry = self.step(at, name.text.as_str());
                 at = at.map(|_| PathAt::Member(entry));
@@ -495,7 +502,7 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
             }
         }
         if let Some(method_name) = method {
-            self.plain(method_name, TYPE_METHOD);
+            self.plain(method_name, TokenType::Method);
         }
         self.visit_function_body(&function_decl.body);
     }
@@ -535,7 +542,10 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
             match field {
                 Field::Named { name, value } => {
                     let is_method = matches!(value, Expression::FunctionDef(_));
-                    self.plain(name, if is_method { TYPE_METHOD } else { TYPE_PROPERTY });
+                    self.plain(
+                        name,
+                        if is_method { TokenType::Method } else { TokenType::Property },
+                    );
                     self.visit_expr(value);
                 }
                 Field::Bracketed { key, value, .. } => {
@@ -550,8 +560,8 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
     // Luau
     fn visit_type_declaration(&mut self, type_declaration: &'ast TypeDeclaration<'ast>) {
         let token_type = match &type_declaration.value {
-            TypeDeclarationValue::Alias(_) => TYPE_TYPE,
-            TypeDeclarationValue::TypeFunction(_) => TYPE_FUNCTION,
+            TypeDeclarationValue::Alias(_) => TokenType::Type,
+            TypeDeclarationValue::TypeFunction(_) => TokenType::Function,
         };
         self.plain(&type_declaration.name, token_type);
         self.walk_type_declaration(type_declaration);
@@ -559,7 +569,7 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
 
     // Luau
     fn visit_generic_type_param(&mut self, generic_type_param: &'ast GenericTypeParam<'ast>) {
-        self.plain(&generic_type_param.name, TYPE_TYPE);
+        self.plain(&generic_type_param.name, TokenType::Type);
         self.walk_generic_type_param(generic_type_param);
     }
 
@@ -580,7 +590,7 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
                     | "buffer"
                     | "vector"
             ) {
-                self.plain(name, TYPE_TYPE);
+                self.plain(name, TokenType::Type);
             }
         } else {
             self.walk_type(ty);
@@ -590,21 +600,21 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
     // Luau
     fn visit_named_type(&mut self, named_type: &'ast NamedType<'ast>) {
         if let Some(prefix) = &named_type.prefix {
-            self.plain(prefix, TYPE_VARIABLE);
+            self.plain(prefix, TokenType::Variable);
         }
-        self.plain(&named_type.name, TYPE_TYPE);
+        self.plain(&named_type.name, TokenType::Type);
         self.walk_named_type(named_type);
     }
 
     // Luau
     fn visit_generic_pack_type(&mut self, generic_pack_type: &'ast GenericPackType<'ast>) {
-        self.plain(&generic_pack_type.name, TYPE_TYPE);
+        self.plain(&generic_pack_type.name, TokenType::Type);
     }
 
     // Luau
     fn visit_type_field(&mut self, type_field: &'ast TypeField<'ast>) {
         if let TypeField::Named { name, .. } = type_field {
-            self.plain(name, TYPE_PROPERTY);
+            self.plain(name, TokenType::Property);
         }
         self.walk_type_field(type_field);
     }
@@ -612,7 +622,7 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
     // Luau
     fn visit_function_type_param(&mut self, function_type_param: &'ast FunctionTypeParam<'ast>) {
         if let Some(name) = &function_type_param.name {
-            self.plain(name, TYPE_PARAMETER);
+            self.plain(name, TokenType::Parameter);
         }
         self.walk_function_type_param(function_type_param);
     }
@@ -621,20 +631,20 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
 const fn symbol_classify(kind: SymbolKind) -> Classification {
     match kind {
         SymbolKind::Parameter | SymbolKind::ImplicitSelf | SymbolKind::ImplicitArg => {
-            Classification::plain(TYPE_PARAMETER)
+            Classification::plain(TokenType::Parameter)
         }
-        SymbolKind::FunctionName => Classification::plain(TYPE_FUNCTION),
+        SymbolKind::FunctionName => Classification::plain(TokenType::Function),
         SymbolKind::Local | SymbolKind::IteratorVariable | SymbolKind::NumericForVariable => {
-            Classification::plain(TYPE_VARIABLE)
+            Classification::plain(TokenType::Variable)
         }
     }
 }
 
 const fn stdlib_classify(entry: &StdlibEntry<'_>) -> Classification {
     let token_type = match entry {
-        StdlibEntry::Function(_) => TYPE_FUNCTION,
-        StdlibEntry::Namespace(_) => TYPE_NAMESPACE,
-        StdlibEntry::Constant(_) | StdlibEntry::Property(_) => TYPE_PROPERTY,
+        StdlibEntry::Function(_) => TokenType::Function,
+        StdlibEntry::Namespace(_) => TokenType::Namespace,
+        StdlibEntry::Constant(_) | StdlibEntry::Property(_) => TokenType::Property,
     };
     let mut modifiers = MODIFIER_DEFAULT_LIBRARY;
     if entry.deprecation().is_some() {
@@ -650,8 +660,8 @@ const fn stdlib_classify(entry: &StdlibEntry<'_>) -> Classification {
 /// functions read as methods so call sites match the accessor grammar.
 const fn member_classify(entry: &StdlibEntry<'_>) -> Classification {
     let mut classification = stdlib_classify(entry);
-    if classification.token_type == TYPE_FUNCTION {
-        classification.token_type = TYPE_METHOD;
+    if matches!(classification.token_type, TokenType::Function) {
+        classification.token_type = TokenType::Method;
     }
     classification
 }

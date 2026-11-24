@@ -14,7 +14,7 @@ pub(crate) fn document_highlights(
     let Some((_, name)) = name_at(document, document.offset(position)) else {
         return Vec::new();
     };
-    let tree = document.tree();
+    let tree = document.scoping();
     let at = tree.reference_of(name).map(|id| tree.reference(id));
     let mut spans: Vec<(Span, bool)> = Vec::new();
     match (tree.symbol_of(name).or_else(|| at?.resolved), at) {

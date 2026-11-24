@@ -330,18 +330,24 @@ mod tests {
 
     use super::*;
 
-    /// Each member of `source`'s record as its table, name, and whether it's
-    /// a definition, and each require's module.
-    fn record_of(source: &str, version: LuaVersion) -> (Vec<(Table, &str, bool)>, Vec<String>) {
+    /// The record of `source`, with each span placed on line 0 at its
+    /// offsets.
+    fn record(source: &str, version: LuaVersion) -> ModuleRecord {
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let chunk = allocator.alloc(parsed.chunk);
         let semantic = SemanticBuilder::new().with_requires(true).build(chunk).semantic;
-        let record = ModuleRecord::new(chunk, &semantic, |span| Range {
+        ModuleRecord::new(chunk, &semantic, |span| Range {
             start: Position::new(0, span.start),
             end: Position::new(0, span.end),
-        });
+        })
+    }
+
+    /// Each member of `source`'s record as its table, name, and whether it's
+    /// a definition, and each require's module.
+    fn record_of(source: &str, version: LuaVersion) -> (Vec<(Table, &str, bool)>, Vec<String>) {
+        let record = record(source, version);
         let members = record
             .members()
             .iter()
@@ -461,15 +467,7 @@ export function describe() return version end",
 
     #[test]
     fn member_at_finds_the_name_under_either_end() {
-        let allocator = Allocator::new();
-        let source = "local m = require(\"m\") m.run()";
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-        let chunk = allocator.alloc(parsed.chunk);
-        let semantic = SemanticBuilder::new().with_requires(true).build(chunk).semantic;
-        let record = ModuleRecord::new(chunk, &semantic, |span| Range {
-            start: Position::new(0, span.start),
-            end: Position::new(0, span.end),
-        });
+        let record = record("local m = require(\"m\") m.run()", LuaVersion::Lua54);
         let name_at = |character| {
             record.member_at(Position::new(0, character)).map(|member| member.name.to_string())
         };

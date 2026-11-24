@@ -52,7 +52,7 @@ fn rename_target(
     document: &DocumentState,
     offset: u32,
 ) -> Result<Option<(SymbolId, Span)>, String> {
-    let tree = document.tree();
+    let tree = document.scoping();
     let Some((symbol_id, span)) = local_at(document, offset) else {
         return Ok(None);
     };
@@ -88,7 +88,7 @@ pub(crate) fn rename(
     };
     validate_new_name(document, new_name)?;
 
-    let tree = document.tree();
+    let tree = document.scoping();
     let mut spans: Vec<Span> = tree
         .resolved_references(symbol_id)
         .iter()
@@ -103,8 +103,7 @@ pub(crate) fn rename(
         .into_iter()
         .map(|span| TextEdit { range: positions.range(span), new_text: new_name.to_owned() })
         .collect();
-    let changes = [(uri.clone(), edits)].into();
-    Ok(Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }))
+    Ok(Some(WorkspaceEdit::new([(uri.clone(), edits)].into())))
 }
 
 /// Renames the member `name` of the table of the module at `module` to
@@ -165,7 +164,7 @@ fn rename_member(
             .with_document(module, |document| validate_new_name(document, new_name))
             .unwrap_or_else(|| Err(format!("the module that exports `{name}` can't be read")))?;
     }
-    Ok(Some(WorkspaceEdit { changes: Some(changes.into_iter().collect()), ..Default::default() }))
+    Ok(Some(WorkspaceEdit::new(changes.into_iter().collect())))
 }
 
 fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), String> {
@@ -182,7 +181,7 @@ fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), Str
         return Err(format!("`{new_name}` would shadow a built-in global"));
     }
     // Every name a local or a reference uses is one of the chunk's names.
-    if document.tree().name_id(new_name).is_some() {
+    if document.scoping().name_id(new_name).is_some() {
         return Err(format!(
             "`{new_name}` is already used in this file, so renaming could capture it"
         ));
@@ -201,11 +200,7 @@ mod tests {
     use luck_token::LuaTarget;
 
     use super::*;
-    use crate::fixtures::{document, document_at, session};
-
-    fn uri() -> Uri {
-        "file:///main.lua".parse().expect("valid URI")
-    }
+    use crate::fixtures::{document, document_at, session, uri};
 
     fn rename_at(
         document: &DocumentState,

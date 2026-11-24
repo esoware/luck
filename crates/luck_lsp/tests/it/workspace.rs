@@ -2,16 +2,16 @@ use std::fs;
 use std::path::Path;
 
 use ls_types::notification::DidChangeWorkspaceFolders;
-use ls_types::request::{GotoDefinition, PrepareRenameRequest, References, Rename};
+use ls_types::request::{GotoDefinition, PrepareRenameRequest, Rename};
 use ls_types::{
     DidChangeWorkspaceFoldersParams, FileChangeType, GotoDefinitionParams, GotoDefinitionResponse,
     Location, NumberOrString, PartialResultParams, Position, PrepareRenameResponse, Range,
-    ReferenceContext, ReferenceParams, RenameParams, Uri, WorkDoneProgressParams, WorkspaceEdit,
-    WorkspaceFolder, WorkspaceFoldersChangeEvent,
+    RenameParams, Uri, WorkDoneProgressParams, WorkspaceEdit, WorkspaceFolder,
+    WorkspaceFoldersChangeEvent,
 };
 use tempfile::TempDir;
 
-use crate::common::{Client, position_params};
+use crate::common::{Client, position_params, references};
 
 const UTIL: &str = "\
 local M = {}
@@ -54,22 +54,6 @@ fn places(locations: &[Location]) -> Vec<(&str, Position)> {
         locations.iter().map(|location| (file_name(&location.uri), location.range.start)).collect();
     found.sort_unstable();
     found
-}
-
-fn references(
-    client: &mut Client,
-    uri: &Uri,
-    position: Position,
-    include_declaration: bool,
-) -> Vec<Location> {
-    client
-        .request::<References>(ReferenceParams {
-            text_document_position: position_params(uri, position.line, position.character),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-            context: ReferenceContext { include_declaration },
-        })
-        .expect("the document is open")
 }
 
 fn rename(

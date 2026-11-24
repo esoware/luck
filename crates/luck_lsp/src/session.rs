@@ -1,6 +1,6 @@
 use std::fs;
 use std::num::NonZero;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -15,7 +15,7 @@ use crate::analyzed::SpareArena;
 use crate::line_index::PositionEncoding;
 use crate::providers::diagnostics;
 use crate::server::Task;
-use crate::settings::{ConfigError, LoadedProject, SettingsCache};
+use crate::settings::{ConfigError, DocumentSettings, LoadedProject, SettingsCache};
 use crate::workspace::Workspace;
 
 /// What the main loop shares with every job.
@@ -82,6 +82,17 @@ impl Session {
             self.report_config_error(project.project(), config_error);
         }
         project
+    }
+
+    /// The settings of the document at `path`, a canonical path, or of an
+    /// untitled document, under the project [`Self::project_for`] finds.
+    pub(crate) fn document_settings(
+        &self,
+        path: Option<PathBuf>,
+        spelled: Option<&Path>,
+    ) -> DocumentSettings {
+        let project = self.project_for(path.as_deref(), spelled);
+        self.settings.document_settings(project, path)
     }
 
     /// Hands `task` to the main loop.

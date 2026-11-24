@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_on_enum_item_renders_constant() {
+    fn hover_on_an_enum_item_names_its_full_path() {
         let text = "local m = Enum.Material.Grass";
         let document = document(text, LuaTarget::LuauRoblox);
         // Cursor on `Grass`.

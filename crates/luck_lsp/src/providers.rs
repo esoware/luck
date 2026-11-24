@@ -7,6 +7,7 @@ pub(crate) mod document_highlight;
 pub(crate) mod document_link;
 pub(crate) mod document_symbol;
 pub(crate) mod folding_range;
+pub(crate) mod formatting;
 pub(crate) mod hover;
 pub(crate) mod references;
 pub(crate) mod rename;
@@ -28,7 +29,7 @@ mod tests {
 
     use ls_types::{
         CodeActionContext, CodeActionParams, PartialResultParams, ReferenceContext,
-        ReferenceParams, RenameParams, TextDocumentIdentifier, TextDocumentPositionParams, Uri,
+        ReferenceParams, RenameParams, TextDocumentIdentifier, TextDocumentPositionParams,
         WorkDoneProgressParams,
     };
     use luck_config::Project;
@@ -38,12 +39,12 @@ mod tests {
     use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
-    use crate::fixtures::{document_at, session};
+    use crate::fixtures::{document_at, session, uri};
     use crate::workspace::WorkspaceView;
 
     fn serve_every_request(source: &str, version: LuaVersion) {
         let target = if version.is_luau() { LuaTarget::LuauRoblox } else { LuaTarget::Lua54 };
-        let uri: Uri = "file:///main.lua".parse().expect("a valid URI");
+        let uri = uri();
         let project = Project::defaults(PathBuf::from("."));
         let document = document_at(source, target, project, Path::new("main.lua"));
         let session = session();
@@ -103,8 +104,8 @@ mod tests {
         let _ = semantic_tokens::semantic_tokens(&document);
         let _ = semantic_tokens::in_range(&document, full_range);
         let _ = document_link::document_links(&document);
-        let _ = document.format(None);
-        let _ = document.format(Some(0..source.len()));
+        let _ = formatting::formatting(&session, &document, None);
+        let _ = formatting::formatting(&session, &document, Some(full_range));
         let _ = workspace_symbol::workspace_symbols([(&uri, &document)], "a");
         let _ = code_action::fix_all([(&uri, &document, lints.as_slice())]);
     }

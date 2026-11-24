@@ -18,7 +18,7 @@ use std::sync::OnceLock;
 
 use ignore::{WalkBuilder, WalkState};
 use ls_types::{Position, Uri};
-use luck_resolver::{FileSystem as _, FileSystemOs, Resolution, ResolveError};
+use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_semantic::SemanticBuilder;
 use luck_token::LuaVersion;
 use parking_lot::{Mutex, RwLock};
@@ -27,7 +27,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analyzed::Arena;
 use crate::document::{Document, DocumentState};
 use crate::line_index::LineIndex;
-use crate::module_record::{Member, ModuleRecord, Require, Table};
+use crate::module_record::{Member, ModuleRecord, Table};
 use crate::session::Session;
 use crate::settings::LoadedProject;
 
@@ -59,6 +59,7 @@ pub(crate) struct DiskFile {
 
 #[derive(Debug)]
 struct FileRecord {
+    uri: Uri,
     project: Arc<LoadedProject>,
     version: LuaVersion,
     record: ModuleRecord,
@@ -127,16 +128,16 @@ impl Walk {
 
     /// Walks the folders the first time a job asks, on that job's thread.
     pub(crate) fn files(&self, session: &Session) -> &[PathBuf] {
-        self.files.get_or_init(|| walk(&self.folders, session))
+        self.files.get_or_init(|| files_under(&self.folders, session))
     }
 }
 
 impl DiskFile {
     /// Reads the file the first time a job asks, on that job's thread.
     pub(crate) fn source(&self, session: &Session) -> Option<Source<'_>> {
-        let read = self.record.get_or_init(|| read(session, &self.path)).as_ref()?;
+        let read = self.record.get_or_init(|| read_record(session, &self.path)).as_ref()?;
         Some(Source {
-            uri: Uri::from_file_path(&self.path)?,
+            uri: &read.uri,
             path: &self.path,
             record: &read.record,
             project: &read.project,
@@ -147,7 +148,7 @@ impl DiskFile {
 
 /// Every Lua file under `folders` that its project takes, canonical and
 /// sorted. A directory that can't be read is passed over.
-fn walk(folders: &[PathBuf], session: &Session) -> Vec<PathBuf> {
+fn files_under(folders: &[PathBuf], session: &Session) -> Vec<PathBuf> {
     // Each folder's canonical path, beside the client's spelling of it.
     let roots: Vec<(PathBuf, &Path)> = folders
         .iter()
@@ -215,8 +216,9 @@ fn walk(folders: &[PathBuf], session: &Session) -> Vec<PathBuf> {
 }
 
 /// The file at `path`, parsed in its project's dialect, or `None` when it
-/// can't be read. A file that isn't UTF-8 reads as an editor would show it.
-fn read(session: &Session, path: &Path) -> Option<FileRecord> {
+/// can't be read or no URI names it. A file that isn't UTF-8 reads as an
+/// editor would show it.
+fn read_record(session: &Session, path: &Path) -> Option<FileRecord> {
     let project = session.project_for(Some(path), None);
     let version = project.project().target_for(Some(path)).version();
     let bytes = FileSystemOs.read(path).ok()?;
@@ -229,27 +231,27 @@ fn read(session: &Session, path: &Path) -> Option<FileRecord> {
     let line_index = LineIndex::new(&text, session.encoding());
     let mut positions = line_index.positions(&text);
     let record = ModuleRecord::new(chunk, &semantic, |span| positions.range(span));
-    Some(FileRecord { project, version, record })
+    Some(FileRecord { uri: Uri::from_file_path(path)?, project, version, record })
 }
 
 /// A file's record, with what resolves its requires.
 #[derive(Debug)]
 pub(crate) struct Source<'file> {
-    pub uri: Uri,
+    pub uri: &'file Uri,
     /// Canonical.
-    pub path: &'file Path,
+    path: &'file Path,
     pub record: &'file ModuleRecord,
-    pub project: &'file LoadedProject,
+    project: &'file LoadedProject,
     pub version: LuaVersion,
 }
 
 impl<'file> Source<'file> {
     /// The source of `document`, the open document at `uri`, or `None` when
     /// it has no file.
-    pub(crate) fn of_document(uri: &Uri, document: &'file DocumentState) -> Option<Self> {
+    pub(crate) fn of_document(uri: &'file Uri, document: &'file DocumentState) -> Option<Self> {
         let settings = document.settings();
         Some(Self {
-            uri: uri.clone(),
+            uri,
             path: settings.path.as_deref()?,
             record: document.record(),
             project: &settings.project,
@@ -257,16 +259,15 @@ impl<'file> Source<'file> {
         })
     }
 
-    pub(crate) fn resolve(&self, require: &Require) -> Result<Resolution, ResolveError> {
-        self.project.resolver(self.version).resolve(self.path, &require.module)
-    }
-
     /// The module whose table `table` is, or `None` when its require doesn't
     /// resolve.
-    pub(crate) fn module_of(&self, table: Table) -> Option<PathBuf> {
+    fn module_of(&self, table: Table) -> Option<PathBuf> {
         match table {
             Table::Returned | Table::Exported => Some(self.path.to_path_buf()),
-            Table::Required(i) => Some(self.resolve(&self.record.requires()[i]).ok()?.path),
+            Table::Required(i) => {
+                let resolver = self.project.resolver(self.version);
+                Some(resolver.resolve(self.path, &self.record.requires()[i].module).ok()?.path)
+            }
         }
     }
 
@@ -290,14 +291,14 @@ pub(crate) struct WorkspaceView<'job> {
     session: &'job Session,
     /// The open documents as they stood when the request came.
     documents: &'job [(Uri, Arc<Document>)],
-    is_cancelled: &'job (dyn Fn() -> bool + Sync),
+    is_cancelled: &'job dyn Fn() -> bool,
 }
 
 impl<'job> WorkspaceView<'job> {
     pub(crate) const fn new(
         session: &'job Session,
         documents: &'job [(Uri, Arc<Document>)],
-        is_cancelled: &'job (dyn Fn() -> bool + Sync),
+        is_cancelled: &'job dyn Fn() -> bool,
     ) -> Self {
         Self { session, documents, is_cancelled }
     }
@@ -324,8 +325,7 @@ impl<'job> WorkspaceView<'job> {
         }
         let bytes = FileSystemOs.read(path).ok()?;
         let text: Arc<str> = String::from_utf8_lossy(&bytes).into();
-        let project = self.session.project_for(Some(path), None);
-        let settings = self.session.settings().document_settings(project, Some(path.to_path_buf()));
+        let settings = self.session.document_settings(Some(path.to_path_buf()), None);
         let line_index = LineIndex::new(&text, self.session.encoding());
         let document = DocumentState::new(
             text,

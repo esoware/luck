@@ -61,9 +61,7 @@ pub(crate) fn code_action(
                 // The client's auto-fix applies a preferred action unasked,
                 // which a suggestion never is.
                 is_preferred: Some(fix.kind == FixKind::Fix),
-                disabled: None,
-                command: None,
-                data: None,
+                ..CodeAction::default()
             }));
         }
         if can_disable && let Some(edit) = disable_edit(document, lint.span().start, rule) {
@@ -73,9 +71,7 @@ pub(crate) fn code_action(
                 diagnostics: Some(vec![diag.clone()]),
                 edit: Some(workspace_edit(uri, vec![edit])),
                 is_preferred: Some(false),
-                disabled: None,
-                command: None,
-                data: None,
+                ..CodeAction::default()
             }));
         }
     }
@@ -86,12 +82,8 @@ pub(crate) fn code_action(
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                 title: "Fix all auto-fixable problems".to_owned(),
                 kind: Some(FIX_ALL_KIND),
-                diagnostics: None,
                 edit: Some(workspace_edit(uri, edits)),
-                is_preferred: None,
-                disabled: None,
-                command: None,
-                data: None,
+                ..CodeAction::default()
             }));
         }
     }
@@ -180,11 +172,7 @@ fn disable_edit(document: &DocumentState, start: u32, rule: &str) -> Option<Text
 }
 
 fn workspace_edit(uri: &Uri, edits: Vec<TextEdit>) -> WorkspaceEdit {
-    WorkspaceEdit {
-        changes: Some([(uri.clone(), edits)].into()),
-        document_changes: None,
-        change_annotations: None,
-    }
+    WorkspaceEdit::new([(uri.clone(), edits)].into())
 }
 
 fn should_offer_fix_all(context: &CodeActionContext) -> bool {
@@ -214,7 +202,7 @@ where
             (!edits.is_empty()).then(|| (uri.clone(), edits))
         })
         .collect();
-    WorkspaceEdit { changes: Some(changes), document_changes: None, change_annotations: None }
+    WorkspaceEdit::new(changes)
 }
 
 #[cfg(test)]
@@ -225,12 +213,8 @@ mod tests {
     use luck_token::LuaTarget;
 
     use super::*;
-    use crate::fixtures::document_linted_by;
+    use crate::fixtures::{document_linted_by, uri};
     use crate::providers::diagnostics;
-
-    fn uri() -> Uri {
-        "file:///main.lua".parse().expect("valid URI")
-    }
 
     fn config_enabling(rule: RuleId) -> LintConfig {
         let mut config = LintConfig::default();

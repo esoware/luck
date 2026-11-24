@@ -38,7 +38,7 @@ pub(crate) fn references(
         })?;
         return Some(locations);
     }
-    let tree = document.tree();
+    let tree = document.scoping();
     let Some((symbol_id, _)) = local_at(document, document.offset(position)) else {
         return Some(Vec::new());
     };
@@ -74,7 +74,7 @@ mod tests {
     use luck_token::LuaTarget;
 
     use super::*;
-    use crate::fixtures::{document, session};
+    use crate::fixtures::{document, session, uri};
 
     #[test]
     fn the_implicit_self_declaration_is_no_location() {
@@ -87,7 +87,7 @@ end
 ",
             LuaTarget::Lua54,
         );
-        let uri: Uri = "file:///main.lua".parse().expect("valid URI");
+        let uri = uri();
         let params = ReferenceParams {
             text_document_position: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: uri.clone() },
