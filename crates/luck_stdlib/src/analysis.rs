@@ -54,7 +54,7 @@ pub fn analyze<'ast>(
             is_extra: false,
         })
         .collect();
-    (SemanticAnalysis { semantic, stdlib, symbol_shapes, host_globals }, built.diagnostics)
+    (SemanticAnalysis { semantic, stdlib, symbol_shapes, host_globals }, built.errors)
 }
 
 impl<'ast> SemanticAnalysis<'ast> {

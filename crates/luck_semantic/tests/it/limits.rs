@@ -17,7 +17,7 @@ fn check(source: &str, version: LuaVersion) -> Vec<Diagnostic> {
     let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
     assert!(parsed.errors.is_empty(), "{version:?}: {:?}", parsed.errors);
     let chunk = allocator.alloc(parsed.chunk);
-    SemanticBuilder::new().with_counts(parsed.counts).with_check(true).build(chunk).diagnostics
+    SemanticBuilder::new().with_counts(parsed.counts).with_check(true).build(chunk).errors
 }
 
 /// `local {prefix}1, ..., {prefix}{count}`, each name on its own statement

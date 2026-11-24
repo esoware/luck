@@ -47,7 +47,7 @@ pub struct AstNodes<'ast> {
     /// `None` for the chunk.
     parent_ids: Vec<Option<NodeId>>,
     /// Every type of node the tree holds.
-    node_kinds_set: AstTypesBitset,
+    node_types: AstTypesBitset,
 }
 
 impl<'ast> AstNodes<'ast> {
@@ -55,7 +55,7 @@ impl<'ast> AstNodes<'ast> {
         Self {
             nodes: Vec::with_capacity(capacity),
             parent_ids: Vec::with_capacity(capacity),
-            node_kinds_set: AstTypesBitset::new(),
+            node_types: AstTypesBitset::new(),
         }
     }
 
@@ -70,7 +70,7 @@ impl<'ast> AstNodes<'ast> {
         debug_assert_eq!(id.index(), self.nodes.len(), "nodes are added in id order");
         self.nodes.push(AstNode { kind, scope, id });
         self.parent_ids.push(parent);
-        self.node_kinds_set.set(kind.ty());
+        self.node_types.set(kind.ty());
     }
 
     /// Zero when the build didn't ask for the table.
@@ -136,12 +136,12 @@ impl<'ast> AstNodes<'ast> {
 
     /// Whether the tree holds a node of `ty`.
     pub const fn contains(&self, ty: AstType) -> bool {
-        self.node_kinds_set.has(ty)
+        self.node_types.has(ty)
     }
 
     /// Whether the tree holds a node of any type in `types`.
     pub fn contains_any(&self, types: AstTypesBitset) -> bool {
-        self.node_kinds_set.intersects(types)
+        self.node_types.intersects(types)
     }
 }
 

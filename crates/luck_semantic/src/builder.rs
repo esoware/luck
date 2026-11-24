@@ -5,11 +5,10 @@ use std::mem;
 
 use luck_ast::{
     Assignment, AstKind, Attribute, Block, Call, Chunk, CompoundAssignment, DoBlock, Expression,
-    FunctionArgs, FunctionBody, FunctionDecl, FunctionDef, GenericFor, GetSpan as _,
-    GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfStatement, LabelStatement,
-    LocalAssignment, LocalFunction, LocalFunctionKind, Name, NumericFor, RepeatLoop, Statement,
-    StringLiteral, Suffix, SuffixedExpression, TreeCounts, Type, TypeDeclaration,
-    TypeDeclarationValue, Var, Visit, WhileLoop,
+    FunctionBody, FunctionDecl, FunctionDef, GenericFor, GetSpan as _, GlobalDeclaration,
+    GlobalFunction, GlobalStar, GotoStatement, IfStatement, LabelStatement, LocalAssignment,
+    LocalFunction, LocalFunctionKind, Name, NumericFor, RepeatLoop, Statement, SuffixedExpression,
+    TreeCounts, Type, TypeDeclaration, TypeDeclarationValue, Var, Visit, WhileLoop,
 };
 use luck_diagnostics::Diagnostic;
 use luck_token::{LuaVersion, Span};
@@ -23,10 +22,11 @@ use crate::checker::{
 };
 use crate::id::{NameId, NodeId, ReferenceId, ScopeId, SymbolId};
 use crate::node::AstNodes;
+use crate::require_site::{require_call, require_sites};
 use crate::scoping::{
     Label, NameRole, Reference, ReferenceKind, Scope, ScopeKind, Scoping, Symbol, SymbolKind,
 };
-use crate::semantic::{RequireSite, Semantic};
+use crate::semantic::Semantic;
 
 /// One walk over a chunk, in source order, that builds its [`Semantic`].
 ///
@@ -49,7 +49,7 @@ pub struct SemanticBuilderReturn<'ast> {
     pub semantic: Semantic<'ast>,
     /// The checker's errors, in source order, each an E008. Empty unless
     /// [`SemanticBuilder::with_check`] asked for them.
-    pub diagnostics: Vec<Diagnostic>,
+    pub errors: Vec<Diagnostic>,
 }
 
 impl SemanticBuilder {
@@ -92,7 +92,7 @@ impl SemanticBuilder {
         self
     }
 
-    /// Finds the [`RequireSite`]s.
+    /// Finds the [`RequireSite`](crate::RequireSite)s.
     #[must_use]
     pub const fn with_requires(mut self, is_finding_requires: bool) -> Self {
         self.is_finding_requires = is_finding_requires;
@@ -115,10 +115,10 @@ impl SemanticBuilder {
             scoping: Scoping::with_capacity(chunk.version, counts),
             // A chunk has about four nodes for each name.
             nodes: self.is_building_nodes.then(|| AstNodes::with_capacity(names * 4)),
-            node_stack: Vec::new(),
+            current_node: None,
             next_node: NodeId::from_index(0),
             require_calls: self.is_finding_requires.then(Vec::new),
-            diagnostics: Vec::new(),
+            errors: Vec::new(),
             bindings: Vec::with_capacity(distinct_names),
             current_scope: module,
             current_function: module,
@@ -132,7 +132,7 @@ impl SemanticBuilder {
             loops: Vec::new(),
             loop_base: 0,
             until: None,
-            type_function_floor: None,
+            type_function_scope: None,
             type_depth: 0,
             local_functions: Vec::new(),
             type_names: FxHashSet::default(),
@@ -177,30 +177,37 @@ struct OuterScope {
     gotos: BlockStart,
 }
 
-/// Luau: the loop a `continue` goes on with.
-struct LoopFrame {
-    is_repeat: bool,
-    /// For a `repeat` body, the first symbol declared after its first
-    /// `continue`.
-    first_skipped: Option<usize>,
+/// Luau: a loop a `continue` goes on with.
+enum LoopFrame {
+    WhileOrFor,
+    Repeat {
+        /// The first symbol its body declares after its first `continue`.
+        first_skipped: Option<SymbolId>,
+    },
 }
 
 /// Luau: an `until` condition whose loop body declares locals after a
 /// `continue`, which the condition may not read.
 struct UntilCheck {
     scope: ScopeId,
-    first_skipped: usize,
+    first_skipped: SymbolId,
     condition: Span,
     reported: Vec<SymbolId>,
 }
 
-/// The name and node of a `local function`, which binds after its signature
-/// and before its body.
+/// What a function binds besides its parameters and its vararg.
 #[derive(Clone, Copy)]
-struct OwnName<'ast> {
-    name: &'ast Name<'ast>,
-    declaration: NodeId,
-    kind: LocalFunctionKind,
+enum FunctionBinding<'ast> {
+    Nothing,
+    /// A `local function`'s own name, which binds after its signature and
+    /// before its body.
+    OwnName {
+        name: &'ast Name<'ast>,
+        declaration: NodeId,
+        kind: LocalFunctionKind,
+    },
+    /// A method's implicit `self`, which binds before its parameters.
+    ImplicitSelf,
 }
 
 struct Builder<'ast> {
@@ -211,12 +218,13 @@ struct Builder<'ast> {
     limits: Option<Limits>,
     scoping: Scoping,
     nodes: Option<AstNodes<'ast>>,
-    /// The nodes the walk is in, innermost last, while it builds the table.
-    node_stack: Vec<NodeId>,
+    /// The innermost node the walk is in, while it builds the table. Leaving
+    /// a node moves this to the parent the table holds for it.
+    current_node: Option<NodeId>,
     next_node: NodeId,
-    /// Each call of a name `require`, with the reference its callee makes.
+    /// Each [`require_call`], with the reference its prefix makes.
     require_calls: Option<Vec<(Call<'ast>, ReferenceId)>>,
-    diagnostics: Vec<Diagnostic>,
+    errors: Vec<Diagnostic>,
     /// Each name's innermost live declaration, by name. Resolving a name is
     /// one hash of it, and leaving a scope hashes nothing.
     bindings: Vec<Binding>,
@@ -247,7 +255,7 @@ struct Builder<'ast> {
     until: Option<UntilCheck>,
     /// Luau: the first scope of the innermost type function, so every scope
     /// before it is outside it.
-    type_function_floor: Option<usize>,
+    type_function_scope: Option<ScopeId>,
     /// Luau: how many types the walk is in. Types never run, so a reference
     /// in one captures nothing.
     type_depth: u32,
@@ -268,81 +276,14 @@ fn is_read_only_attribute(attribute: &Attribute<'_>) -> bool {
     matches!(attribute.name.text.as_str(), "const" | "close")
 }
 
-/// The non-method call `chain` opens with when it calls a name `require`, or
-/// reads `require` from the global table `prefix` names and calls it, as
-/// `_G.require(path)` or Lua 5.2+'s `_ENV.require(path)`.
-fn require_call<'ast>(
-    chain: &'ast SuffixedExpression<'ast>,
-    prefix: &Name<'_>,
-    version: LuaVersion,
-) -> Option<Call<'ast>> {
-    let callee_suffixes = if prefix.text == "require" {
-        0
-    } else if (prefix.text == "_G" || (prefix.text == "_ENV" && version.has_env_upvalue()))
-        && is_key(chain.suffixes.first(), "require")
-    {
-        1
-    } else {
-        return None;
-    };
-    let call = chain.call_at(callee_suffixes)?;
-    call.method.is_none().then_some(call)
-}
-
-/// Whether `suffix` reads the field `key`, as `.key` or `["key"]`, however
-/// the string is spelled.
-fn is_key(suffix: &Suffix<'_>, key: &str) -> bool {
-    match suffix {
-        Suffix::Field(name) => name.text == key,
-        Suffix::Index { index: Expression::StringLiteral(literal), .. } => {
-            literal.value == key.as_bytes()
-        }
-        Suffix::Index { .. }
-        | Suffix::Call(_)
-        | Suffix::MethodCall(_)
-        | Suffix::TypeInstantiation { .. } => false,
-    }
-}
-
-/// The module path of a `require` call that passes one string literal and
-/// nothing else.
-fn require_path<'ast>(
-    function_args: &'ast FunctionArgs<'ast>,
-) -> Option<&'ast StringLiteral<'ast>> {
-    match function_args {
-        FunctionArgs::Parenthesized { args, .. } => {
-            let [Expression::StringLiteral(literal)] = &**args else {
-                return None;
-            };
-            Some(literal)
-        }
-        FunctionArgs::StringLiteral(literal) => Some(literal),
-        FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => None,
-    }
-}
-
 impl<'ast> Builder<'ast> {
     fn finish(mut self) -> SemanticBuilderReturn<'ast> {
         self.scoping.finish();
-        let scoping = &self.scoping;
-        // `_G.require` is the global `require` only while the chunk leaves
-        // that global alone too.
-        let is_require_assigned =
-            scoping.name_id("require").is_some_and(|require| scoping.is_assigned_global(require));
-        let requires = self
-            .require_calls
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|&(call, reference)| {
-                scoping.is_host_global(scoping.reference(reference))
-                    && (call.callee.suffixes.is_empty() || !is_require_assigned)
-            })
-            .map(|(call, _)| RequireSite { call, path: require_path(call.args) })
-            .collect();
-        self.diagnostics.sort_by_key(|diag| diag.span.map(|span| span.start));
+        let requires = require_sites(self.require_calls.unwrap_or_default(), &self.scoping);
+        self.errors.sort_by_key(|error| error.span.map(|span| span.start));
         SemanticBuilderReturn {
             semantic: Semantic::new(self.scoping, self.nodes.unwrap_or_default(), requires),
-            diagnostics: self.diagnostics,
+            errors: self.errors,
         }
     }
 
@@ -353,16 +294,18 @@ impl<'ast> Builder<'ast> {
         let id = self.next_node;
         self.next_node = id.next();
         if let Some(nodes) = &mut self.nodes {
-            nodes.push(id, kind, self.current_scope, self.node_stack.last().copied());
-            self.node_stack.push(id);
+            nodes.push(id, kind, self.current_scope, self.current_node);
+            self.current_node = Some(id);
         }
         id
     }
 
     #[inline]
     fn leave(&mut self) {
-        if self.nodes.is_some() {
-            self.node_stack.pop();
+        if let Some(nodes) = &self.nodes
+            && let Some(node) = self.current_node
+        {
+            self.current_node = nodes.parent_id(node);
         }
     }
 
@@ -390,15 +333,8 @@ impl<'ast> Builder<'ast> {
         self.shadowed.push((name, previous));
     }
 
-    fn goto_sink(&mut self) -> Sink<'_> {
-        Sink {
-            scoping: &mut self.scoping,
-            errors: self.is_checking.then_some(&mut self.diagnostics),
-        }
-    }
-
     fn push_scope(&mut self, kind: ScopeKind, node: NodeId) {
-        let id = ScopeId::from_index(self.scoping.scopes().len());
+        let id = self.scoping.next_scope_id();
         let function = if kind == ScopeKind::Function { id } else { self.current_function };
         self.scoping.add_scope(Scope {
             parent: Some(self.current_scope),
@@ -437,14 +373,12 @@ impl<'ast> Builder<'ast> {
         self.named_globals = outer.named_globals;
         self.active_vars = outer.active_vars;
         if self.version.has_goto() {
-            let mut gotos = mem::take(&mut self.gotos);
-            gotos.close_block(outer.gotos, &mut self.goto_sink());
-            self.gotos = gotos;
+            let sink = &mut Sink::new(&mut self.scoping, &mut self.errors, self.is_checking);
+            self.gotos.close_block(outer.gotos, sink);
         }
         // Innermost first, since a scope can declare one name twice.
-        let Self { shadowed, bindings, .. } = self;
-        for (name, previous) in shadowed.drain(outer.shadowed_len..).rev() {
-            bindings[name.index()] = previous;
+        for (name, previous) in self.shadowed.drain(outer.shadowed_len..).rev() {
+            self.bindings[name.index()] = previous;
         }
     }
 
@@ -474,7 +408,7 @@ impl<'ast> Builder<'ast> {
             self.env_name = Some(name);
         }
         if let Some(limits) = &mut self.limits {
-            limits.local(id, span, is_constant, &mut self.diagnostics);
+            limits.local(id, span, is_constant, &mut self.errors);
         }
         id
     }
@@ -499,7 +433,7 @@ impl<'ast> Builder<'ast> {
     /// as a `for` loop's state.
     fn hidden_locals(&mut self, count: usize, span: Span) {
         if let Some(limits) = &mut self.limits {
-            limits.hidden(count, span, &mut self.diagnostics);
+            limits.hidden(count, span, &mut self.errors);
         }
     }
 
@@ -541,7 +475,7 @@ impl<'ast> Builder<'ast> {
         // Luau: `types` and the types in scope belong to the type runtime, so
         // inside a type function they're no references of this chunk.
         if resolved.is_none()
-            && self.type_function_floor.is_some()
+            && self.type_function_scope.is_some()
             && (text == "types" || self.type_names.contains(text))
         {
             return None;
@@ -574,7 +508,7 @@ impl<'ast> Builder<'ast> {
         if let Some(upvalue) = captured
             && let Some(limits) = &mut self.limits
         {
-            limits.capture(upvalue, name.span, &mut self.diagnostics);
+            limits.capture(upvalue, name.span, &mut self.errors);
         }
         let reference = Reference {
             span: name.span,
@@ -611,21 +545,20 @@ impl<'ast> Builder<'ast> {
         match binding {
             Binding::Local(id) => {
                 let &Symbol { scope, is_read_only, .. } = self.scoping.symbol(id);
-                if self.type_function_floor.is_some_and(|floor| scope.index() < floor) {
-                    self.diagnostics.push(type_function_outer_local(name.span, text));
+                if self.type_function_scope.is_some_and(|first| scope < first) {
+                    self.errors.push(type_function_outer_local(name.span, text));
                 }
                 if let Some(until) = &mut self.until
                     && self.type_depth == 0
                     && until.scope == scope
-                    && until.first_skipped <= id.index()
+                    && until.first_skipped <= id
                     && !until.reported.contains(&id)
                 {
                     until.reported.push(id);
-                    let error = until_reads_skipped_local(until.condition, text);
-                    self.diagnostics.push(error);
+                    self.errors.push(until_reads_skipped_local(until.condition, text));
                 }
                 if kind.is_write() && is_read_only {
-                    self.diagnostics.push(assignment_to_read_only(name.span, text));
+                    self.errors.push(assignment_to_read_only(name.span, text));
                 }
             }
             // Lua 5.5
@@ -633,7 +566,7 @@ impl<'ast> Builder<'ast> {
             // Lua 5.5
             Binding::ReadOnlyGlobal => {
                 if kind.is_write() {
-                    self.diagnostics.push(assignment_to_read_only(name.span, text));
+                    self.errors.push(assignment_to_read_only(name.span, text));
                 }
             }
             // `global *` covers a name no declaration of its own does, and
@@ -646,12 +579,12 @@ impl<'ast> Builder<'ast> {
                 match self.global_star {
                     Some(is_read_only) => {
                         if kind.is_write() && is_read_only {
-                            self.diagnostics.push(assignment_to_read_only(name.span, text));
+                            self.errors.push(assignment_to_read_only(name.span, text));
                         }
                     }
                     None => {
                         if self.named_globals > 0 {
-                            self.diagnostics.push(undeclared_global(name.span, text));
+                            self.errors.push(undeclared_global(name.span, text));
                         }
                     }
                 }
@@ -690,8 +623,6 @@ impl<'ast> Builder<'ast> {
                 let active_vars =
                     if i >= trailing_start { self.block_start_vars() } else { self.active_vars };
                 self.label(label, active_vars);
-            } else if let Statement::Goto(goto) = stmt {
-                self.goto(goto);
             } else {
                 if matches!(stmt, Statement::Continue(_)) {
                     self.mark_continue();
@@ -702,9 +633,9 @@ impl<'ast> Builder<'ast> {
     }
 
     /// A block whose scope its parent has opened.
-    fn block(&mut self, block: &'ast Block<'ast>, is_repeat_body: bool) {
+    fn block(&mut self, block: &'ast Block<'ast>) {
         self.enter(AstKind::Block(block));
-        self.walk_stmts(block, is_repeat_body);
+        self.walk_stmts(block, false);
         self.leave();
     }
 
@@ -734,66 +665,37 @@ impl<'ast> Builder<'ast> {
             is_used: false,
         });
         self.scoping.set_role(label.name.index, NameRole::Label(id));
-        let version = self.version;
-        let mut gotos = mem::take(&mut self.gotos);
-        gotos.add_label(name, id, active_vars, version, &mut self.goto_sink());
-        self.gotos = gotos;
-    }
-
-    // Lua 5.2+
-    fn goto(&mut self, goto: &'ast GotoStatement<'ast>) {
-        self.enter(AstKind::GotoStatement(goto));
-        self.name_node(&goto.name);
-        self.leave();
-        if goto.name.text.is_empty() {
-            return;
-        }
-        let name = self.intern(goto.name.text.as_str());
-        let active_vars = self.active_vars;
-        let mut gotos = mem::take(&mut self.gotos);
-        gotos.add_goto(name, goto.name.index, goto.span, active_vars, &mut self.goto_sink());
-        self.gotos = gotos;
+        let sink = &mut Sink::new(&mut self.scoping, &mut self.errors, self.is_checking);
+        self.gotos.add_label(name, id, active_vars, self.version, sink);
     }
 
     // Luau
     fn mark_continue(&mut self) {
         if self.loops.len() > self.loop_base
-            && let Some(frame) = self.loops.last_mut()
-            && frame.is_repeat
-            && frame.first_skipped.is_none()
+            && let Some(LoopFrame::Repeat { first_skipped }) = self.loops.last_mut()
+            && first_skipped.is_none()
         {
-            frame.first_skipped = Some(self.scoping.symbols().len());
+            *first_skipped = Some(SymbolId::from_index(self.scoping.symbols().len()));
         }
-    }
-
-    /// A loop body, which a `continue` in it goes on with.
-    fn loop_body(&mut self, block: &'ast Block<'ast>, is_scope_open: bool) {
-        self.loops.push(LoopFrame { is_repeat: false, first_skipped: None });
-        if is_scope_open {
-            self.block(block, false);
-        } else {
-            self.scoped_block(ScopeKind::Loop, block);
-        }
-        self.loops.pop();
     }
 
     /// A function's signature, then the name of a `local function`, which
-    /// its body sees, then, in a new function scope, its implicit `self`,
-    /// its parameters, its vararg's name or Lua 5.1's implicit `arg`, and its
-    /// block.
+    /// its body sees, then, in a new function scope, a method's implicit
+    /// `self`, its parameters, its vararg's name or Lua 5.1's implicit `arg`,
+    /// and its block.
     ///
     /// Luau binds the parameters, and a `local function`'s own name, after
     /// the whole signature parses, so a `typeof` in it reads the enclosing
     /// scope.
     ///
-    /// `header` is what spells the function before its parameters, which
-    /// the checker's errors about the whole function point at.
+    /// `start` is where what spells the function starts. From there to its
+    /// parameters is its header, which the checker's errors about the whole
+    /// function point at.
     fn function(
         &mut self,
         body: &'ast FunctionBody<'ast>,
-        own_name: Option<OwnName<'ast>>,
-        is_method: bool,
-        header: Span,
+        binding: FunctionBinding<'ast>,
+        start: u32,
     ) {
         let body_node = self.enter(AstKind::FunctionBody(body));
         if let Some(generics) = &body.generics {
@@ -823,13 +725,15 @@ impl<'ast> Builder<'ast> {
         if let Some(annotation) = &body.return_type {
             self.visit_type(annotation);
         }
-        let own_symbol = own_name.and_then(|own| {
-            let symbol =
-                self.declare_name(own.name, SymbolKind::FunctionName, own.declaration, false)?;
-            symbol.is_exported = own.kind.is_exported(); // Luau
-            symbol.is_read_only = own.kind.is_const(); // Luau
-            Some(symbol.id)
-        });
+        let own_symbol = if let FunctionBinding::OwnName { name, declaration, kind } = binding {
+            self.declare_name(name, SymbolKind::FunctionName, declaration, false).map(|symbol| {
+                symbol.is_exported = kind.is_exported(); // Luau
+                symbol.is_read_only = kind.is_const(); // Luau
+                symbol.id
+            })
+        } else {
+            None
+        };
         self.local_functions.extend(own_symbol);
 
         let enclosing_gotos = if self.version.has_goto() {
@@ -839,10 +743,10 @@ impl<'ast> Builder<'ast> {
         };
         let enclosing_loop_base = mem::replace(&mut self.loop_base, self.loops.len());
         if let Some(limits) = &mut self.limits {
-            limits.enter_function(header);
+            limits.enter_function(Span::new(start, body.span.start));
         }
         self.push_scope(ScopeKind::Function, body_node);
-        if is_method {
+        if matches!(binding, FunctionBinding::ImplicitSelf) {
             let span = Span::new(body.span.start, body.span.start);
             self.declare("self", span, SymbolKind::ImplicitSelf, body_node, false);
         }
@@ -869,7 +773,7 @@ impl<'ast> Builder<'ast> {
                 self.declare("arg", span, SymbolKind::ImplicitArg, node, false);
             }
         }
-        self.block(&body.block, false);
+        self.block(&body.block);
         self.pop_scope();
         if let Some(limits) = &mut self.limits {
             limits.leave_function();
@@ -879,9 +783,8 @@ impl<'ast> Builder<'ast> {
         }
         self.loop_base = enclosing_loop_base;
         if self.version.has_goto() {
-            let mut gotos = mem::take(&mut self.gotos);
-            gotos.leave_function(enclosing_gotos, &mut self.goto_sink());
-            self.gotos = gotos;
+            let sink = &mut Sink::new(&mut self.scoping, &mut self.errors, self.is_checking);
+            self.gotos.leave_function(enclosing_gotos, sink);
         }
         self.leave();
     }
@@ -910,18 +813,17 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         });
         let start =
             if self.version.has_goto() { self.gotos.open_block(0) } else { BlockStart::default() };
-        self.block(&chunk.block, false);
+        self.block(&chunk.block);
         if self.version.has_goto() {
-            let mut gotos = mem::take(&mut self.gotos);
-            let mut sink = self.goto_sink();
-            gotos.close_block(start, &mut sink);
-            gotos.leave_function(FunctionStart::default(), &mut sink);
+            let sink = &mut Sink::new(&mut self.scoping, &mut self.errors, self.is_checking);
+            self.gotos.close_block(start, sink);
+            self.gotos.leave_function(FunctionStart::default(), sink);
         }
         self.leave();
     }
 
     fn visit_block(&mut self, block: &'ast Block<'ast>) {
-        self.block(block, false);
+        self.block(block);
     }
 
     // Luau
@@ -936,8 +838,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         for attribute in &function_def.attributes {
             self.visit_function_attribute(attribute);
         }
-        let body = &function_def.body;
-        self.function(body, None, false, Span::new(function_def.span.start, body.span.start));
+        self.function(&function_def.body, FunctionBinding::Nothing, function_def.span.start);
         self.leave();
     }
 
@@ -1074,9 +975,12 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             self.visit_function_attribute(attribute);
         }
         self.name_node(&local_function.name);
-        let own = OwnName { name: &local_function.name, declaration, kind: local_function.kind };
-        let header = Span::new(local_function.span.start, local_function.body.span.start);
-        self.function(&local_function.body, Some(own), false, header);
+        let binding = FunctionBinding::OwnName {
+            name: &local_function.name,
+            declaration,
+            kind: local_function.kind,
+        };
+        self.function(&local_function.body, binding, local_function.span.start);
         self.leave();
     }
 
@@ -1104,8 +1008,12 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             self.name_node(method);
         }
         self.leave();
-        let header = Span::new(function_decl.span.start, function_decl.body.span.start);
-        self.function(&function_decl.body, None, name.method.is_some(), header);
+        let binding = if name.method.is_some() {
+            FunctionBinding::ImplicitSelf
+        } else {
+            FunctionBinding::Nothing
+        };
+        self.function(&function_decl.body, binding, function_decl.span.start);
         self.leave();
     }
 
@@ -1118,7 +1026,9 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
     fn visit_while_loop(&mut self, while_loop: &'ast WhileLoop<'ast>) {
         self.enter(AstKind::WhileLoop(while_loop));
         self.visit_expr(&while_loop.condition);
-        self.loop_body(&while_loop.block, false);
+        self.loops.push(LoopFrame::WhileOrFor);
+        self.scoped_block(ScopeKind::Loop, &while_loop.block);
+        self.loops.pop();
         self.leave();
     }
 
@@ -1128,15 +1038,19 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         let node = self.enter(AstKind::RepeatLoop(repeat_loop));
         self.push_scope(ScopeKind::Loop, node);
         let scope = self.current_scope;
-        self.loops.push(LoopFrame { is_repeat: true, first_skipped: None });
-        self.block(&repeat_loop.block, true);
-        let skipped = self.loops.pop().and_then(|frame| frame.first_skipped);
-        let until = skipped.filter(|_| self.is_checking).map(|first_skipped| UntilCheck {
-            scope,
-            first_skipped,
-            condition: repeat_loop.condition.span(),
-            reported: Vec::new(),
-        });
+        self.loops.push(LoopFrame::Repeat { first_skipped: None });
+        self.enter(AstKind::Block(&repeat_loop.block));
+        self.walk_stmts(&repeat_loop.block, true);
+        self.leave();
+        let until = if let Some(LoopFrame::Repeat { first_skipped: Some(first_skipped) }) =
+            self.loops.pop()
+            && self.is_checking
+        {
+            let condition = repeat_loop.condition.span();
+            Some(UntilCheck { scope, first_skipped, condition, reported: Vec::new() })
+        } else {
+            None
+        };
         let enclosing_until = mem::replace(&mut self.until, until);
         self.visit_expr(&repeat_loop.condition);
         self.until = enclosing_until;
@@ -1182,7 +1096,9 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         {
             symbol.is_read_only = is_read_only; // Lua 5.5
         }
-        self.loop_body(&numeric_for.block, true);
+        self.loops.push(LoopFrame::WhileOrFor);
+        self.block(&numeric_for.block);
+        self.loops.pop();
         self.pop_scope();
         self.leave();
     }
@@ -1218,9 +1134,22 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             }
         }
         self.scratch_nodes.truncate(first_name);
-        self.loop_body(&generic_for.block, true);
+        self.loops.push(LoopFrame::WhileOrFor);
+        self.block(&generic_for.block);
+        self.loops.pop();
         self.pop_scope();
         self.leave();
+    }
+
+    // Lua 5.2+
+    fn visit_goto_stmt(&mut self, goto_stmt: &'ast GotoStatement<'ast>) {
+        self.walk_goto_stmt(goto_stmt);
+        if goto_stmt.name.text.is_empty() {
+            return;
+        }
+        let name = self.intern(goto_stmt.name.text.as_str());
+        let sink = &mut Sink::new(&mut self.scoping, &mut self.errors, self.is_checking);
+        self.gotos.add_goto(name, goto_stmt.name.index, goto_stmt.span, self.active_vars, sink);
     }
 
     // Lua 5.5: the initializers can't see the names being declared, and a
@@ -1250,8 +1179,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         self.enter(AstKind::GlobalFunction(global_function));
         self.name_node(&global_function.name);
         self.declare_global(&global_function.name, true, false);
-        let header = Span::new(global_function.span.start, global_function.body.span.start);
-        self.function(&global_function.body, None, false, header);
+        self.function(&global_function.body, FunctionBinding::Nothing, global_function.span.start);
         self.leave();
     }
 
@@ -1273,1221 +1201,12 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         match &type_declaration.value {
             TypeDeclarationValue::Alias(ty) => self.visit_type(ty),
             TypeDeclarationValue::TypeFunction(body) => {
-                let floor = Some(self.scoping.scopes().len());
-                let enclosing = mem::replace(&mut self.type_function_floor, floor);
-                let header = Span::new(type_declaration.span.start, body.span.start);
-                self.function(body, None, false, header);
-                self.type_function_floor = enclosing;
+                let first_scope = Some(self.scoping.next_scope_id());
+                let enclosing = mem::replace(&mut self.type_function_scope, first_scope);
+                self.function(body, FunctionBinding::Nothing, type_declaration.span.start);
+                self.type_function_scope = enclosing;
             }
         }
         self.leave();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::str;
-
-    use luck_allocator::Allocator;
-    use luck_ast::AstType;
-
-    use super::*;
-    use crate::fixtures::parse;
-    use crate::id::LabelId;
-    use crate::node::AstNode;
-
-    fn semantic_for<'ast>(
-        allocator: &'ast Allocator,
-        source: &'ast str,
-        version: LuaVersion,
-    ) -> Semantic<'ast> {
-        SemanticBuilder::new()
-            .with_nodes(true)
-            .with_requires(true)
-            .build(parse(allocator, source, version))
-            .semantic
-    }
-
-    fn scoping_in(allocator: &Allocator, source: &str, version: LuaVersion) -> Scoping {
-        SemanticBuilder::new().build(parse(allocator, source, version)).semantic.into_scoping()
-    }
-
-    fn scoping_of(allocator: &Allocator, source: &str) -> Scoping {
-        scoping_in(allocator, source, LuaVersion::Lua54)
-    }
-
-    fn symbol<'tree>(tree: &'tree Scoping, name: &str) -> &'tree Symbol {
-        tree.symbols()
-            .iter()
-            .find(|symbol| tree.name(symbol.name) == name)
-            .unwrap_or_else(|| panic!("{name} must be declared"))
-    }
-
-    fn references<'tree>(tree: &'tree Scoping, name: &str) -> Vec<&'tree Reference> {
-        tree.references().iter().filter(|reference| tree.name(reference.name) == name).collect()
-    }
-
-    fn global_names(tree: &Scoping) -> Vec<&str> {
-        tree.global_references().map(|reference| tree.name(reference.name)).collect()
-    }
-
-    fn is_assigned_global(tree: &Scoping, name: &str) -> bool {
-        tree.name_id(name).is_some_and(|id| tree.is_assigned_global(id))
-    }
-
-    fn is_declared_global(tree: &Scoping, name: &str) -> bool {
-        tree.name_id(name).is_some_and(|id| tree.is_declared_global(id))
-    }
-
-    /// Every name node of `semantic`'s tree whose text is `text`, in source
-    /// order.
-    fn names_of<'ast>(semantic: &Semantic<'ast>, text: &str) -> Vec<&'ast Name<'ast>> {
-        semantic
-            .nodes()
-            .iter()
-            .filter_map(|node| node.kind().as_name())
-            .filter(|name| name.text == text)
-            .collect()
-    }
-
-    #[test]
-    fn local_declaration_creates_symbol() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(&allocator, "local x = 1");
-        assert_eq!(tree.symbols().len(), 1);
-        assert_eq!(tree.name(tree.symbols()[0].name), "x");
-    }
-
-    #[test]
-    fn reference_resolves_to_local() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local x = 1
-print(x)",
-        );
-        let x_references = references(&tree, "x");
-        assert_eq!(x_references.len(), 1);
-        assert_eq!(x_references[0].resolved, Some(symbol(&tree, "x").id));
-    }
-
-    #[test]
-    fn global_reference_is_unresolved() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(&allocator, "print(hello)");
-        let names = global_names(&tree);
-        assert!(names.contains(&"print"));
-        assert!(names.contains(&"hello"));
-    }
-
-    #[test]
-    fn function_body_creates_scope() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(&allocator, "local function f(a, b) return a + b end");
-        assert_eq!(tree.scopes().len(), 2);
-        assert_eq!(tree.scopes()[1].kind, ScopeKind::Function);
-        assert_eq!(tree.symbols().len(), 3);
-        assert_eq!(symbol(&tree, "a").scope, ScopeId::from_index(1));
-    }
-
-    #[test]
-    fn local_read_from_nested_function_is_upvalue() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local x = 1
-local function f() return x end",
-        );
-        let x_symbol = &tree.symbols()[0];
-        assert_eq!(tree.name(x_symbol.name), "x");
-        assert!(x_symbol.is_upvalue);
-    }
-
-    #[test]
-    fn local_read_two_functions_deep_is_upvalue() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local x = 1
-local function outer()
-  local function inner() return x end
-end",
-        );
-        assert!(
-            symbol(&tree, "x").is_upvalue,
-            "x should be detected as upvalue when captured by nested inner function"
-        );
-    }
-
-    #[test]
-    fn local_read_from_a_nested_block_is_no_upvalue() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local function f(a)
-  do while a do print(a) end end
-end",
-        );
-        assert!(!symbol(&tree, "a").is_upvalue);
-    }
-
-    #[test]
-    fn inner_local_shadows_outer_local() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local x = 1
-do
-  local x = 2
-end",
-        );
-        assert_eq!(tree.symbols().len(), 2);
-        let inner_x = &tree.symbols()[1];
-        assert_eq!(tree.name(inner_x.name), "x");
-        assert_eq!(inner_x.shadows, Some(tree.symbols()[0].id));
-    }
-
-    #[test]
-    fn redeclaring_a_local_in_one_scope_restores_the_outer_one_on_exit() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local x = 1
-do
-  local x = 2
-  local x = 3
-end
-print(x)",
-        );
-        let last_reference = *references(&tree, "x").last().expect("print(x) references x");
-        assert_eq!(last_reference.resolved, Some(tree.symbols()[0].id));
-        assert_eq!(tree.symbols()[2].shadows, Some(tree.symbols()[1].id));
-    }
-
-    #[test]
-    fn numeric_for_declares_loop_variable() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(&allocator, "for i = 1, 10 do print(i) end");
-        assert_eq!(symbol(&tree, "i").kind, SymbolKind::NumericForVariable);
-    }
-
-    #[test]
-    fn generic_for_declares_iterator_variables() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(&allocator, "for k, v in pairs(t) do print(k, v) end");
-        let iterator_variable_count = tree
-            .symbols()
-            .iter()
-            .filter(|symbol| symbol.kind == SymbolKind::IteratorVariable)
-            .count();
-        assert_eq!(iterator_variable_count, 2);
-    }
-
-    #[test]
-    fn numeric_for_variable_not_visible_after_loop() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-for i = 1, 10 do end
-print(i)",
-        );
-        assert!(
-            references(&tree, "i").iter().any(|reference| reference.resolved.is_none()),
-            "for-loop variable i should not be visible outside the loop"
-        );
-    }
-
-    #[test]
-    fn generic_for_variables_not_visible_after_loop() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-for k, v in pairs(t) do end
-print(k)",
-        );
-        assert!(
-            references(&tree, "k").iter().any(|reference| reference.resolved.is_none()),
-            "generic for variables should not be visible outside the loop"
-        );
-    }
-
-    #[test]
-    fn named_vararg_declares_symbol() {
-        // Lua 5.5: `...name` binds the vararg table to a name.
-        let allocator = Allocator::new();
-        let tree =
-            scoping_in(&allocator, "local function f(...args) return args end", LuaVersion::Lua55);
-        let args_symbol = symbol(&tree, "args");
-        assert_eq!(args_symbol.kind, SymbolKind::Parameter);
-        let args_references = references(&tree, "args");
-        assert_eq!(args_references.len(), 1);
-        assert!(
-            args_references[0].resolved == Some(args_symbol.id),
-            "reference must resolve to the vararg binding"
-        );
-    }
-
-    #[test]
-    fn method_declares_self() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local t = {}
-function t:method() return self end",
-        );
-        assert!(
-            tree.symbols().iter().any(|symbol| tree.name(symbol.name) == "self"),
-            "self should be declared as a symbol in method scope"
-        );
-    }
-
-    #[test]
-    fn dot_function_declares_no_self() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local t = {}
-function t.method() end",
-        );
-        assert!(
-            tree.name_id("self").is_none(),
-            "self should not be declared in non-method function"
-        );
-    }
-
-    #[test]
-    fn repeat_until_condition_sees_block_locals() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-repeat
-  local done = true
-until done",
-        );
-        let done_references = references(&tree, "done");
-        assert_eq!(done_references.len(), 1);
-        assert!(
-            done_references[0].resolved.is_some(),
-            "repeat-until condition should resolve locals from the loop body"
-        );
-    }
-
-    #[test]
-    fn global_function_body_captures_enclosing_local() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local x = 1
-global function f() return x end",
-            LuaVersion::Lua55,
-        );
-        assert!(symbol(&tree, "x").is_upvalue);
-    }
-
-    #[test]
-    fn global_stmts_record_their_declared_names() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-global a, b <const> = 1, 2
-global c
-global function d() end
-",
-            LuaVersion::Lua55,
-        );
-        for name in ["a", "b", "c", "d"] {
-            assert!(is_declared_global(&tree, name), "{name}");
-        }
-    }
-
-    #[test]
-    fn declared_globals_record_the_scope_each_declaration_is_in() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "global a do global b, c end local function f() global function d() end end",
-            LuaVersion::Lua55,
-        );
-        let declared: Vec<(&str, usize)> = tree
-            .declared_globals()
-            .iter()
-            .map(|&(name, scope)| (tree.name(name), scope.index()))
-            .collect();
-        assert_eq!(declared, [("a", 0), ("b", 1), ("c", 1), ("d", 2)]);
-    }
-
-    #[test]
-    fn local_env_makes_free_names_its_fields() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local _ENV = {}
-x = 1
-print(y)",
-        );
-        let env_id = symbol(&tree, "_ENV").id;
-        assert_eq!(references(&tree, "y")[0].env, Some(env_id));
-        assert_eq!(tree.global_references().count(), 0);
-        assert!(!is_assigned_global(&tree, "x"), "`x = 1` writes the local table");
-    }
-
-    #[test]
-    fn local_env_is_an_ordinary_local_before_52() {
-        for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-            let allocator = Allocator::new();
-            let tree = scoping_in(
-                &allocator,
-                "\
-local _ENV = {}
-print(y)",
-                version,
-            );
-            assert_eq!(references(&tree, "y")[0].env, None, "{version:?}");
-            assert_eq!(tree.global_references().count(), 2, "{version:?}");
-            assert!(!tree.is_env_binding(symbol(&tree, "_ENV").id), "{version:?}");
-        }
-    }
-
-    #[test]
-    fn local_env_stops_redirecting_free_names_with_its_block() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-do local _ENV = {} end
-print(y)",
-        );
-        assert_eq!(references(&tree, "y")[0].env, None);
-    }
-
-    #[test]
-    fn assigning_the_chunk_env_redirects_every_free_name() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-_ENV = {}
-print(y)",
-        );
-        assert!(tree.is_env_assigned());
-        assert_eq!(tree.global_references().count(), 0);
-
-        let lua51 = scoping_in(
-            &allocator,
-            "\
-_ENV = {}
-print(y)",
-            LuaVersion::Lua51,
-        );
-        assert!(!lua51.is_env_assigned());
-        assert_eq!(lua51.global_references().count(), 3);
-    }
-
-    #[test]
-    fn assigned_globals_records_free_name_writes_only() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-x = 1
-function f() end
-function t.m() end
-local y
-y = 2",
-        );
-        assert!(is_assigned_global(&tree, "x"));
-        assert!(is_assigned_global(&tree, "f"));
-        assert!(!is_assigned_global(&tree, "t"), "`t.m` only reads `t`");
-        assert!(!is_assigned_global(&tree, "y"), "`y` is a local");
-    }
-
-    #[test]
-    fn global_declaration_ends_with_its_block() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local x = 1
-do global x end
-print(x)",
-            LuaVersion::Lua55,
-        );
-        let last_reference = *references(&tree, "x").last().expect("print(x) references x");
-        assert_eq!(last_reference.resolved, Some(symbol(&tree, "x").id));
-    }
-
-    #[test]
-    fn global_declaration_initializer_reads_the_enclosing_local() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local x = 1
-global x = x
-print(x)",
-            LuaVersion::Lua55,
-        );
-        let x_references = references(&tree, "x");
-        assert_eq!(x_references[0].resolved, Some(symbol(&tree, "x").id));
-        assert_eq!(x_references[1].resolved, None);
-        assert!(is_assigned_global(&tree, "x"));
-    }
-
-    #[test]
-    fn declared_global_without_initializer_is_not_assigned() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-global x
-global *
-print(y)",
-            LuaVersion::Lua55,
-        );
-        assert!(["x", "y", "print"].iter().all(|name| !is_assigned_global(&tree, name)));
-    }
-
-    #[test]
-    fn global_star_covers_free_names_until_its_block_ends() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-do global *
-a = 1 end
-b = 2",
-            LuaVersion::Lua55,
-        );
-        assert!(references(&tree, "a")[0].is_declared_global);
-        assert!(!references(&tree, "b")[0].is_declared_global);
-    }
-
-    #[test]
-    fn global_star_does_not_void_enclosing_locals() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local x = 1
-global *
-print(x)",
-            LuaVersion::Lua55,
-        );
-        assert_eq!(references(&tree, "x")[0].resolved, Some(symbol(&tree, "x").id));
-    }
-
-    #[test]
-    fn explicit_self_stays_a_parameter() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local t = {}
-function t.m(self) return self end",
-        );
-        assert_eq!(symbol(&tree, "self").kind, SymbolKind::Parameter);
-    }
-
-    #[test]
-    fn method_self_is_implicit_with_an_empty_span() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local t = {}
-function t:m() return self end",
-        );
-        let self_symbol = symbol(&tree, "self");
-        assert_eq!(self_symbol.kind, SymbolKind::ImplicitSelf);
-        assert_eq!(self_symbol.definition_span.start, self_symbol.definition_span.end);
-    }
-
-    #[test]
-    fn type_function_body_sees_a_later_type() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-type function f(t) return g(t) end
-type function g(t) return t end",
-            LuaVersion::Luau,
-        );
-        assert_eq!(references(&tree, "g").len(), 0);
-    }
-
-    #[test]
-    fn type_runtime_names_are_only_known_in_type_functions() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-type T = number
-print(types, T)",
-            LuaVersion::Luau,
-        );
-        assert_eq!(tree.global_references().count(), 3);
-    }
-
-    #[test]
-    fn references_within_lists_a_span_s_names_in_source_order() {
-        let allocator = Allocator::new();
-        let source = "\
-local x = 1
-t[x], x = y, function() z = x end
-print(x)";
-        let tree = scoping_of(&allocator, source);
-        let line = Span::new(12, 45);
-        let names: Vec<&str> =
-            tree.references_within(line).map(|id| tree.name(tree.reference(id).name)).collect();
-        assert_eq!(names, ["t", "x", "x", "y", "z", "x"]);
-        assert_eq!(tree.references_within(Span::new(13, 15)).count(), 1, "only `x`, not `t`");
-    }
-
-    #[test]
-    fn assignment_values_are_read_before_targets_are_written() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local x = 1
-x = x + 1",
-        );
-        let kinds: Vec<ReferenceKind> = tree
-            .resolved_references(symbol(&tree, "x").id)
-            .iter()
-            .map(|&id| tree.reference(id).kind)
-            .collect();
-        assert_eq!(kinds, [ReferenceKind::Read, ReferenceKind::Write]);
-    }
-
-    #[test]
-    fn resolved_references_lists_each_symbols_own_in_order() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local a, b = 1, 2
-print(b, a, b)
-local c",
-        );
-        let spans = |name: &str| -> Vec<u32> {
-            tree.resolved_references(symbol(&tree, name).id)
-                .iter()
-                .map(|&id| tree.reference(id).span.start)
-                .collect()
-        };
-        assert_eq!(spans("a"), [27]);
-        assert_eq!(spans("b"), [24, 30]);
-        assert_eq!(spans("c"), Vec::<u32>::new());
-    }
-
-    #[test]
-    fn type_alias_typeof_reads_enclosing_local() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local x = 1
-type T = typeof(x)",
-            LuaVersion::Luau,
-        );
-        let x_references = references(&tree, "x");
-        assert_eq!(x_references.len(), 1);
-        assert_eq!(x_references[0].resolved, Some(symbol(&tree, "x").id));
-    }
-
-    #[test]
-    fn implicit_self_span_does_not_cover_the_method_body() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local t = {}
-function t:m()
-  local x = 1
-  return x
-end",
-        );
-        let self_span = symbol(&tree, "self").definition_span;
-        let x_span = symbol(&tree, "x").definition_span;
-        assert!(
-            self_span.end <= x_span.start || x_span.end <= self_span.start,
-            "implicit self must not claim the span of the declarations in its method body, \
-             or a cursor on any of them resolves to self: self {self_span:?}, x {x_span:?}"
-        );
-    }
-
-    #[test]
-    fn global_declaration_shadows_enclosing_local() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local x = 1
-global print, x
-print(x)",
-            LuaVersion::Lua55,
-        );
-        assert_eq!(
-            references(&tree, "x")[0].resolved,
-            None,
-            "after `global x`, the name x refers to the global and voids the enclosing local"
-        );
-    }
-
-    #[test]
-    fn global_function_shadows_enclosing_local() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local f = 1
-global function f() end
-f()",
-            LuaVersion::Lua55,
-        );
-        let last_reference = *references(&tree, "f").last().expect("f() references f");
-        assert_eq!(
-            last_reference.resolved, None,
-            "after `global function f`, the name f refers to the global and voids the enclosing local"
-        );
-    }
-
-    #[test]
-    fn global_function_body_refers_to_the_global() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local f = 1
-global function f() return f end",
-            LuaVersion::Lua55,
-        );
-        assert!(
-            !symbol(&tree, "f").is_upvalue,
-            "the body of `global function f` sees the global f, so it captures no local f"
-        );
-    }
-
-    #[test]
-    fn param_annotation_typeof_does_not_see_parameters() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local a = 1
-local function f(a: number, b: typeof(a)) return b end",
-            LuaVersion::Luau,
-        );
-        assert_eq!(
-            references(&tree, "a")[0].resolved,
-            Some(symbol(&tree, "a").id),
-            "Luau parses parameter annotations before binding any parameter, so typeof(a) \
-             names the outer local"
-        );
-    }
-
-    #[test]
-    fn return_annotation_typeof_does_not_see_parameters() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local a = 1
-local function f(a: number): typeof(a) return a end",
-            LuaVersion::Luau,
-        );
-        assert_eq!(
-            references(&tree, "a")[0].resolved,
-            Some(symbol(&tree, "a").id),
-            "Luau parses the return annotation before binding the parameters, so typeof(a) \
-             names the outer local"
-        );
-    }
-
-    #[test]
-    fn local_annotation_typeof_does_not_see_sibling_name() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local a = 1
-do
-  local a, b: typeof(a) = 2, 3
-  print(a, b)
-end",
-            LuaVersion::Luau,
-        );
-        assert_eq!(
-            references(&tree, "a")[0].resolved,
-            Some(symbol(&tree, "a").id),
-            "the names of a local statement bind after the statement, so typeof(a) in its \
-             annotation names the outer local"
-        );
-    }
-
-    #[test]
-    fn numeric_for_annotation_typeof_does_not_see_loop_variable() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local i = 1
-for i: typeof(i) = 1, 2 do print(i) end",
-            LuaVersion::Luau,
-        );
-        assert_eq!(
-            references(&tree, "i")[0].resolved,
-            Some(symbol(&tree, "i").id),
-            "the loop variable binds after the loop header, so typeof(i) in its annotation \
-             names the outer local"
-        );
-    }
-
-    #[test]
-    fn generic_for_annotation_typeof_does_not_see_loop_variables() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local k = 1
-for k, v: typeof(k) in pairs({}) do print(k, v) end",
-            LuaVersion::Luau,
-        );
-        assert_eq!(
-            references(&tree, "k")[0].resolved,
-            Some(symbol(&tree, "k").id),
-            "the loop variables bind after the loop header, so typeof(k) in an annotation \
-             names the outer local"
-        );
-    }
-
-    #[test]
-    fn local_function_annotation_typeof_does_not_see_its_name() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local g = 1
-local function g(z: typeof(g)) return z end",
-            LuaVersion::Luau,
-        );
-        assert_eq!(
-            references(&tree, "g")[0].resolved,
-            Some(symbol(&tree, "g").id),
-            "Luau binds a local function's name after parsing its signature, so typeof(g) \
-             in a parameter annotation names the outer local"
-        );
-    }
-
-    #[test]
-    fn node_at_finds_the_innermost_node_an_offset_touches() {
-        let allocator = Allocator::new();
-        let source = "local <const> ab = f( ab )g()";
-        let semantic = semantic_for(&allocator, source, LuaVersion::Lua55);
-        let nodes = semantic.nodes();
-        let node_at = |offset| {
-            nodes.node_at(offset).map(|id| {
-                let node = nodes.get(id);
-                (node.kind().ty(), node.span().start, node.span().end)
-            })
-        };
-        // `<const>` is 6..13, `ab` 14..16, the call `f( ab )` 19..26, and
-        // `g()` 26..29.
-        assert_eq!(node_at(5), Some((AstType::LocalAssignment, 0, 26)));
-        assert_eq!(node_at(6), Some((AstType::Attribute, 6, 13)));
-        assert_eq!(node_at(8), Some((AstType::Name, 7, 12)));
-        assert_eq!(node_at(14), Some((AstType::Name, 14, 16)));
-        assert_eq!(node_at(16), Some((AstType::Name, 14, 16)), "a cursor just past a name");
-        assert_eq!(node_at(21), Some((AstType::SuffixedExpression, 19, 26)));
-        assert_eq!(node_at(22), Some((AstType::Name, 22, 24)));
-        assert_eq!(node_at(26), Some((AstType::Name, 26, 27)), "the later of two that meet");
-        assert_eq!(node_at(28), Some((AstType::SuffixedExpression, 26, 29)));
-        assert_eq!(node_at(30), None);
-    }
-
-    const NAMES_OF_EVERY_KIND: &str = "\
-local x, y = 1
-print(x, t.x)
-t[x], x = x, function(x) y = x.y end
-function t:m(a) return self, a end
-for i = 1, 2 do goto done end
-::done::";
-
-    #[test]
-    fn every_name_finds_what_it_declares_refers_to_or_labels() {
-        let allocator = Allocator::new();
-        let semantic = semantic_for(&allocator, NAMES_OF_EVERY_KIND, LuaVersion::Lua54);
-        let tree = semantic.scoping();
-        let mut found = vec![0usize; tree.references().len()];
-        let mut declared = Vec::new();
-        for node in semantic.nodes().iter() {
-            let Some(name) = node.kind().as_name() else {
-                continue;
-            };
-            if let Some(id) = tree.reference_of(name) {
-                let reference = tree.reference(id);
-                assert_eq!((reference.node, reference.span), (node.id(), name.span), "{name:?}");
-                found[id.index()] += 1;
-            }
-            if let Some(id) = tree.symbol_of(name) {
-                assert_eq!(tree.symbol(id).definition_span, name.span, "{name:?}");
-                declared.push(id);
-            }
-            if let Some(id) = tree.label_of(name) {
-                assert_eq!(tree.name(tree.label(id).name), name.text.as_str());
-            }
-        }
-        assert!(found.iter().all(|&count| count == 1), "{found:?}");
-        let spelled: Vec<SymbolId> = tree
-            .symbols()
-            .iter()
-            .filter(|symbol| !symbol.kind.is_implicit())
-            .map(|symbol| symbol.id)
-            .collect();
-        assert_eq!(declared, spelled);
-        let goto = names_of(&semantic, "done")[0];
-        assert_eq!(tree.label_of(goto), Some(LabelId::from_index(0)));
-    }
-
-    #[test]
-    fn resolves_to_local_reads_the_name_s_own_reference() {
-        let allocator = Allocator::new();
-        let semantic = semantic_for(
-            &allocator,
-            "\
-local x = 1
-print(x)
-print(y)",
-            LuaVersion::Lua54,
-        );
-        let tree = semantic.scoping();
-        let [declared, read] = names_of(&semantic, "x")[..] else {
-            panic!("the source names x twice");
-        };
-        assert!(!tree.resolves_to_local(declared), "a declaration makes no reference");
-        assert!(tree.resolves_to_local(read));
-        assert!(!tree.resolves_to_local(names_of(&semantic, "y")[0]));
-        assert!(tree.reaches_host_global(names_of(&semantic, "print")[0]));
-    }
-
-    #[test]
-    fn lua51_binds_arg_in_every_vararg_function() {
-        let allocator = Allocator::new();
-        let source = "\
-local arg = 1
-local function f(a, ...) return arg end
-local function g() return arg end
-return arg";
-        let semantic = semantic_for(&allocator, source, LuaVersion::Lua51);
-        let tree = semantic.scoping();
-        let kinds: Vec<(&str, SymbolKind)> =
-            tree.symbols().iter().map(|symbol| (tree.name(symbol.name), symbol.kind)).collect();
-        assert_eq!(
-            kinds,
-            [
-                ("arg", SymbolKind::Local),
-                ("f", SymbolKind::FunctionName),
-                ("a", SymbolKind::Parameter),
-                ("arg", SymbolKind::ImplicitArg),
-                ("g", SymbolKind::FunctionName),
-            ]
-        );
-        let resolved: Vec<Option<SymbolId>> =
-            references(tree, "arg").iter().map(|reference| reference.resolved).collect();
-        assert_eq!(
-            resolved,
-            [
-                Some(SymbolId::from_index(3)),
-                Some(SymbolId::from_index(0)),
-                Some(SymbolId::from_index(0)),
-            ]
-        );
-        let implicit = tree.symbol(SymbolId::from_index(3));
-        let dots = u32::try_from(source.find("...").unwrap()).unwrap();
-        assert_eq!(implicit.definition_span, Span::new(dots, dots));
-        assert!(matches!(semantic.nodes().kind(implicit.declaration), AstKind::VarArgParam(_)));
-        for version in [LuaVersion::Lua52, LuaVersion::Luau] {
-            let later = scoping_in(&allocator, source, version);
-            assert!(
-                references(&later, "arg")
-                    .iter()
-                    .all(|reference| reference.resolved == Some(SymbolId::from_index(0))),
-                "{version:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn nodes_are_in_source_preorder_inside_their_parents() {
-        let allocator = Allocator::new();
-        let semantic = semantic_for(&allocator, NAMES_OF_EVERY_KIND, LuaVersion::Lua54);
-        let nodes = semantic.nodes();
-        assert!(matches!(nodes.kind(NodeId::from_index(0)), AstKind::Chunk(_)));
-        assert_eq!(nodes.parent_id(NodeId::from_index(0)), None);
-        let mut previous_start = 0;
-        for node in nodes.iter().skip(1) {
-            let (id, span) = (node.id(), node.span());
-            assert!(previous_start <= span.start, "{id:?} starts before the node before it");
-            previous_start = span.start;
-            let parent = nodes.parent_id(id).expect("every node but the chunk has a parent");
-            assert!(parent < id, "{id:?} comes after its parent");
-            let around = nodes.get(parent).span();
-            assert!(around.start <= span.start && span.end <= around.end, "{id:?} in {parent:?}");
-        }
-        assert_eq!(semantic.nodes().len(), {
-            let unbuilt = SemanticBuilder::new()
-                .build(parse(&allocator, NAMES_OF_EVERY_KIND, LuaVersion::Lua54))
-                .semantic;
-            assert!(unbuilt.nodes().is_empty());
-            let built = semantic.scoping().references().iter().map(|reference| reference.node);
-            let unbuilt_nodes =
-                unbuilt.scoping().references().iter().map(|reference| reference.node);
-            assert!(built.eq(unbuilt_nodes), "node ids don't depend on building the table");
-            nodes.len()
-        });
-    }
-
-    #[test]
-    fn tables_point_at_the_nodes_that_declare_and_open() {
-        let allocator = Allocator::new();
-        let semantic = semantic_for(
-            &allocator,
-            "\
-local a <const> = 1
-local function f(b, ...c) end
-function t:m() end
-for i = 1, 2 do end
-for k in pairs(t) do end
-do end",
-            LuaVersion::Lua55,
-        );
-        let (tree, nodes) = (semantic.scoping(), semantic.nodes());
-        let declarations: Vec<(&str, AstType)> = tree
-            .symbols()
-            .iter()
-            .map(|symbol| (tree.name(symbol.name), nodes.kind(symbol.declaration).ty()))
-            .collect();
-        assert_eq!(
-            declarations,
-            [
-                ("a", AstType::AttributedName),
-                ("f", AstType::LocalFunction),
-                ("b", AstType::Parameter),
-                ("c", AstType::VarArgParam),
-                ("self", AstType::FunctionBody),
-                ("i", AstType::NumericFor),
-                ("k", AstType::Parameter),
-            ]
-        );
-        let read_only: Vec<&str> = tree
-            .symbols()
-            .iter()
-            .filter(|symbol| symbol.is_read_only)
-            .map(|symbol| tree.name(symbol.name))
-            .collect();
-        assert_eq!(read_only, ["a", "c", "i", "k"]);
-        let openers: Vec<AstType> =
-            tree.scopes().iter().map(|scope| nodes.kind(scope.node).ty()).collect();
-        assert_eq!(
-            openers,
-            [
-                AstType::Chunk,
-                AstType::FunctionBody,
-                AstType::FunctionBody,
-                AstType::NumericFor,
-                AstType::GenericFor,
-                AstType::Block,
-            ]
-        );
-        let body = tree.scope(ScopeId::from_index(1)).node;
-        assert_eq!(
-            nodes.get(body).scope(),
-            ScopeId::from_index(0),
-            "a node is in the scope around it"
-        );
-        let body_block = nodes.iter().find(|node| {
-            nodes.parent_id(node.id()) == Some(body) && matches!(node.kind(), AstKind::Block(_))
-        });
-        assert_eq!(body_block.map(AstNode::scope), Some(ScopeId::from_index(1)));
-        assert_eq!(
-            nodes.ancestor_kinds(body).map(AstKind::ty).collect::<Vec<_>>(),
-            [AstType::LocalFunction, AstType::Block, AstType::Chunk,]
-        );
-    }
-
-    #[test]
-    fn gotos_reach_the_innermost_visible_label() {
-        let allocator = Allocator::new();
-        let semantic = semantic_for(
-            &allocator,
-            "\
-::a:: ::unused::
-do goto a ::a:: goto a end
-goto a
-local function f() ::a:: goto a end",
-            LuaVersion::Lua52,
-        );
-        let tree = semantic.scoping();
-        let targets: Vec<Option<LabelId>> =
-            names_of(&semantic, "a").into_iter().map(|name| tree.label_of(name)).collect();
-        let to = |i| Some(LabelId::from_index(i));
-        assert_eq!(
-            targets,
-            [to(0), to(2), to(2), to(2), to(0), to(3), to(3)],
-            "a label names itself, and each goto takes the innermost label of its function"
-        );
-        let used: Vec<bool> = tree.labels().iter().map(|label| label.is_used).collect();
-        assert_eq!(used, [true, false, true, true]);
-        assert_eq!(tree.labels()[1].scope, ScopeId::from_index(0));
-        assert_eq!(tree.labels()[2].scope, ScopeId::from_index(1));
-    }
-
-    #[test]
-    fn require_sites_are_the_calls_of_the_host_require() {
-        let allocator = Allocator::new();
-        let source = "\
-local a = require(\"a\")
-require \"b\"
-require(x)
-require(\"c\", 2)
-obj:require(\"d\")
-do
-    local require = print
-    require(\"e\")
-end
-_G.require(\"g\")
-_ENV[\"require\"] \"h\"
-_G:require(\"i\")
-_G.require.j(\"k\")
-return require(require(\"f\").g)";
-        let semantic = semantic_for(&allocator, source, LuaVersion::Lua54);
-        let sites: Vec<(&str, Option<&[u8]>)> = semantic
-            .requires()
-            .iter()
-            .map(|site| {
-                let call = site.call.span().text(source.as_bytes());
-                (str::from_utf8(call).unwrap(), site.path.map(|path| path.value.as_bytes()))
-            })
-            .collect();
-        assert_eq!(
-            sites,
-            [
-                ("require(\"a\")", Some(&b"a"[..])),
-                ("require \"b\"", Some(&b"b"[..])),
-                ("require(x)", None),
-                ("require(\"c\", 2)", None),
-                ("_G.require(\"g\")", Some(&b"g"[..])),
-                ("_ENV[\"require\"] \"h\"", Some(&b"h"[..])),
-                ("require(require(\"f\").g)", None),
-                ("require(\"f\")", Some(&b"f"[..])),
-            ]
-        );
-        for shadowing in ["require = nil", "local _ENV = {}", "_ENV = {}"] {
-            for call in ["require(\"a\")", "_G.require(\"a\")"] {
-                let shadowed = format!("{shadowing}\n{call}");
-                let found = semantic_for(&allocator, &shadowed, LuaVersion::Lua54);
-                assert!(found.requires().is_empty(), "{shadowed}");
-            }
-        }
-        let in_lua51 = semantic_for(&allocator, "_ENV.require(\"a\")", LuaVersion::Lua51);
-        assert!(in_lua51.requires().is_empty(), "Lua 5.1's `_ENV` is a plain global");
-        let unasked =
-            SemanticBuilder::new().build(parse(&allocator, "require(\"a\")", LuaVersion::Lua54));
-        assert!(unasked.semantic.requires().is_empty());
-    }
-
-    #[test]
-    fn a_function_records_whether_its_own_code_reads_its_varargs() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local function f(...) return function(...) return ... end end
-local function g(...) if ... then end end
-print(...)",
-        );
-        let reads: Vec<bool> = tree.scopes().iter().map(|scope| scope.has_vararg_read).collect();
-        assert_eq!(reads, [true, false, true, true, false], "the chunk, f, its closure, g, g's if");
-    }
-
-    #[test]
-    fn a_typeof_in_a_nested_function_captures_nothing() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "\
-local x = 1
-local function f(y: typeof(x)) local z: typeof(x) = y end",
-            LuaVersion::Luau,
-        );
-        assert_eq!(references(&tree, "x").len(), 2);
-        assert!(!symbol(&tree, "x").is_upvalue, "types never run");
-    }
-
-    #[test]
-    fn a_reference_in_a_type_is_in_a_type() {
-        let allocator = Allocator::new();
-        let tree = scoping_in(
-            &allocator,
-            "local x = 1 local y: typeof(x) = x return function(): typeof(x) end",
-            LuaVersion::Luau,
-        );
-        let in_type: Vec<bool> =
-            references(&tree, "x").iter().map(|reference| reference.is_in_type).collect();
-        assert_eq!(in_type, [true, false, true]);
-    }
-
-    #[test]
-    fn a_local_function_s_reads_of_itself_in_its_body_are_recursive() {
-        let allocator = Allocator::new();
-        let tree = scoping_of(
-            &allocator,
-            "\
-local function f() return f, function() return f end end
-local g = function() return g end
-return f",
-        );
-        let recursive = |name: &str| -> Vec<bool> {
-            references(&tree, name).iter().map(|reference| reference.is_recursive).collect()
-        };
-        assert_eq!(recursive("f"), [true, true, false]);
-        assert_eq!(recursive("g"), [false], "the `g` in its value is a global");
-    }
-
-    #[test]
-    fn retaining_resolved_references_keeps_the_rest_in_order() {
-        let allocator = Allocator::new();
-        let mut tree = scoping_of(
-            &allocator,
-            "\
-local a, b = 1, 2
-print(a, b, a, b, a)",
-        );
-        let (a, b) = (symbol(&tree, "a").id, symbol(&tree, "b").id);
-        let starts = |scoping: &Scoping, symbol: SymbolId| -> Vec<u32> {
-            let ids = scoping.resolved_references(symbol);
-            ids.iter().map(|&id| scoping.reference(id).span.start).collect()
-        };
-        let second_a = tree.resolved_references(a).get(1).copied();
-        tree.retain_resolved_references(|id| Some(id) != second_a);
-        assert_eq!(starts(&tree, a), [24, 36]);
-        assert_eq!(starts(&tree, b), [27, 33]);
-        tree.retain_resolved_references(|_| false);
-        assert_eq!((starts(&tree, a), starts(&tree, b)), (Vec::new(), Vec::new()));
     }
 }

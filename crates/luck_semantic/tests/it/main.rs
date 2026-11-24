@@ -4,8 +4,12 @@
 
 mod common;
 
+mod ast_types_bitset;
 mod checker;
 mod counts;
 mod limits;
+mod nodes;
+mod requires;
+mod scoping;
 mod stack;
 mod tables;

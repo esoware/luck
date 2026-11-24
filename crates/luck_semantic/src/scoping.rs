@@ -240,10 +240,12 @@ impl Scoping {
         }
     }
 
-    pub(crate) fn add_scope(&mut self, scope: Scope) -> ScopeId {
-        let id = ScopeId::from_index(self.scopes.len());
+    pub(crate) fn next_scope_id(&self) -> ScopeId {
+        ScopeId::from_index(self.scopes.len())
+    }
+
+    pub(crate) fn add_scope(&mut self, scope: Scope) {
         self.scopes.push(scope);
-        id
     }
 
     pub(crate) fn mark_vararg_read(&mut self, function: ScopeId) {
@@ -523,9 +525,10 @@ impl Scoping {
             .max_by_key(|symbol| symbol.definition_span.start)
     }
 
-    /// Code that matches stdlib paths (`table.insert`, `require(...)`,
-    /// `error(...)`) must bail when the base name is shadowed
-    /// (`local table = {}`), or it reports stdlib diagnostics on user values.
+    /// Whether `name` makes a reference to a local, as `table` does after
+    /// `local table = {}`. Code that matches stdlib paths (`table.insert`,
+    /// `require(...)`, `error(...)`) must bail when the base name does, or it
+    /// reports stdlib diagnostics on user values.
     pub fn resolves_to_local(&self, name: &Name<'_>) -> bool {
         self.reference_of(name).is_some_and(|id| self.reference(id).resolved.is_some())
     }

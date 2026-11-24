@@ -81,7 +81,7 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile, linter: &Linte
     };
     let lines = LineIndex::new(source, version);
     let compile_errors = if parse.errors.is_empty() {
-        match guard(|| SemanticBuilder::new().with_check(true).build(&parse.chunk).diagnostics) {
+        match guard(|| SemanticBuilder::new().with_check(true).build(&parse.chunk).errors) {
             Ok(errors) => errors,
             Err(panicked) => return FileReport::stopped(suite, file, &panicked),
         }

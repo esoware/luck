@@ -73,11 +73,19 @@ pub(super) struct FunctionStart {
 /// Where resolution records what it finds: the labels a goto reaches, and,
 /// when checking, the errors.
 pub(super) struct Sink<'sink> {
-    pub scoping: &'sink mut Scoping,
-    pub errors: Option<&'sink mut Vec<Diagnostic>>,
+    scoping: &'sink mut Scoping,
+    errors: Option<&'sink mut Vec<Diagnostic>>,
 }
 
-impl Sink<'_> {
+impl<'sink> Sink<'sink> {
+    pub(super) fn new(
+        scoping: &'sink mut Scoping,
+        errors: &'sink mut Vec<Diagnostic>,
+        is_checking: bool,
+    ) -> Self {
+        Self { scoping, errors: is_checking.then_some(errors) }
+    }
+
     fn resolve(&mut self, index: Option<NameIndex>, label: LabelId) {
         self.scoping.label_mut(label).is_used = true;
         self.scoping.set_role(index, NameRole::Label(label));

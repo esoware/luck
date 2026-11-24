@@ -37,7 +37,7 @@ fn checking_valid_deep_and_long_sources_finds_only_their_excess_of_locals() {
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.first());
         let chunk = allocator.alloc(parsed.chunk);
         let built = SemanticBuilder::new().with_check(true).build(chunk);
-        let errors: Vec<&str> = built.diagnostics.iter().map(|diag| &*diag.message).collect();
+        let errors: Vec<&str> = built.errors.iter().map(|diag| &*diag.message).collect();
         assert!(
             errors.iter().all(|message| message.starts_with("too many local variables")),
             "the source is valid but for its length: {errors:?}"

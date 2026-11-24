@@ -46,17 +46,16 @@
 //! let scoping = built.semantic.scoping();
 //! let greeting = scoping.symbols()[0].id;
 //! assert_eq!(scoping.resolved_references(greeting).len(), 2);
-//! assert_eq!(built.diagnostics[0].message, "attempt to assign to const variable `greeting`");
+//! assert_eq!(built.errors[0].message, "attempt to assign to const variable `greeting`");
 //! ```
 
 mod ast_types_bitset;
 mod builder;
 mod checker;
-#[cfg(test)]
-mod fixtures;
 mod id;
 mod names;
 mod node;
+mod require_site;
 mod scoping;
 mod semantic;
 
@@ -64,5 +63,6 @@ pub use ast_types_bitset::AstTypesBitset;
 pub use builder::{SemanticBuilder, SemanticBuilderReturn};
 pub use id::{LabelId, NameId, NodeId, ReferenceId, ScopeId, SymbolId};
 pub use node::{AstNode, AstNodes};
+pub use require_site::RequireSite;
 pub use scoping::{Label, Reference, ReferenceKind, Scope, ScopeKind, Scoping, Symbol, SymbolKind};
-pub use semantic::{RequireSite, Semantic};
+pub use semantic::Semantic;

@@ -17,7 +17,7 @@ fn check(source: &str, version: LuaVersion) -> Vec<Diagnostic> {
         return result.errors;
     }
     let chunk = allocator.alloc(result.chunk);
-    SemanticBuilder::new().with_counts(result.counts).with_check(true).build(chunk).diagnostics
+    SemanticBuilder::new().with_counts(result.counts).with_check(true).build(chunk).errors
 }
 
 fn assert_no_errors(errors: &[Diagnostic]) {
@@ -29,7 +29,7 @@ fn assert_has_errors(errors: &[Diagnostic], description: &str) {
 }
 
 #[test]
-fn assignment_to_const_attrib_rejected() {
+fn assignment_to_const_attribute_rejected() {
     for version in [LuaVersion::Lua54, LuaVersion::Lua55] {
         assert_has_errors(
             &check(
@@ -197,7 +197,7 @@ x = function() x = 2 goto inner end";
 }
 
 #[test]
-fn lua55_for_variables_are_readonly() {
+fn lua55_for_variables_are_read_only() {
     assert_has_errors(
         &check("for i = 1, 3 do i = 5 end", LuaVersion::Lua55),
         "5.5 numeric for var write",
@@ -290,7 +290,7 @@ fn goto_resolves_against_enclosing_blocks_when_it_leaves_them() {
 }
 
 #[test]
-fn goto_trailing_labels_and_empty_stmts() {
+fn a_label_followed_by_only_labels_and_empty_stmts_ends_its_block() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         for source in [
             "",
@@ -368,7 +368,7 @@ fn lua52_and_lua53_allow_a_label_to_shadow_an_enclosing_label() {
 }
 
 #[test]
-fn lua55_only_the_first_generic_for_variable_is_readonly() {
+fn lua55_only_the_first_generic_for_variable_is_read_only() {
     // 5.5 manual section 3.3.5: the first variable is the control variable.
     for source in ["for k, v in pairs(t) do v = 1 end", "for k, v, w in pairs(t) do w = 1 end"] {
         let errors = check(source, LuaVersion::Lua55);
@@ -390,7 +390,7 @@ fn lua55_env_stays_visible_under_a_global_declaration() {
 }
 
 #[test]
-fn lua55_const_global_star_makes_undeclared_names_readonly() {
+fn lua55_const_global_star_makes_undeclared_names_read_only() {
     for source in ["global <const> *; y = 1", "global <const> *; function y() end"] {
         let errors = check(source, LuaVersion::Lua55);
         assert!(
@@ -428,7 +428,7 @@ fn lua55_goto_cannot_enter_the_scope_of_a_global_declaration() {
 }
 
 #[test]
-fn lua55_named_vararg_is_readonly() {
+fn lua55_named_vararg_is_read_only() {
     // 5.5 manual: the name denotes a read-only local variable.
     let errors = check("function f(...t) t = 1 end", LuaVersion::Lua55);
     assert!(

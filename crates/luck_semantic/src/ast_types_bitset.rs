@@ -59,23 +59,3 @@ const fn word_and_mask(ty: AstType) -> (usize, u64) {
     let index = ty as usize;
     (index >> 6, 1 << (index & 63))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn holds_and_lists_the_types_set() {
-        let bitset = AstTypesBitset::from_types(&[AstType::Block, AstType::SuffixedExpression]);
-        assert!(bitset.has(AstType::Block));
-        assert!(!bitset.has(AstType::Chunk));
-        let indices: Vec<usize> = bitset.indices().collect();
-        assert_eq!(indices.len(), 2);
-        assert!(indices.is_sorted());
-        let mut only_chunk = AstTypesBitset::new();
-        only_chunk.set(AstType::Chunk);
-        assert!(!bitset.intersects(only_chunk));
-        only_chunk.set(AstType::Block);
-        assert!(bitset.intersects(only_chunk));
-    }
-}

@@ -86,7 +86,7 @@ fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
             .with_counts(result.counts)
             .with_check(true)
             .build(&result.chunk)
-            .diagnostics
+            .errors
     } else {
         result.errors
     };
