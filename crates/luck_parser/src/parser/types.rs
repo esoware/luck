@@ -464,6 +464,7 @@ impl<'ast> Parser<'ast> {
                     kind: TokenKind::Equal,
                     has_line_break_before: false,
                     is_unterminated: false,
+                    has_escape: false,
                 };
                 self.previous_span = Span::new(span.start, split_at);
                 self.previous_span

@@ -61,6 +61,8 @@ pub struct Lexer<'source> {
     /// Whether a block comment ran to the end of the source without its
     /// closer, which the `Eof` token after it says.
     is_in_block_comment: bool,
+    /// Whether the string being lexed holds an escape, which its token says.
+    has_escape: bool,
     lenient_escapes: Vec<Span>,
 }
 
@@ -99,6 +101,7 @@ impl<'source> Lexer<'source> {
             errors: Vec::new(),
             interpolation_brace_depths: Vec::new(),
             is_in_block_comment: false,
+            has_escape: false,
             lenient_escapes: Vec::new(),
         };
 
@@ -267,6 +270,7 @@ impl<'source> Lexer<'source> {
             kind,
             has_line_break_before: mem::replace(&mut self.has_line_break, false),
             is_unterminated: false,
+            has_escape: mem::take(&mut self.has_escape),
         }
     }
 
@@ -309,15 +313,16 @@ impl<'source> Lexer<'source> {
         let kind = if self.cursor.eat(b'[')
             && let Some(level) = eat_long_bracket_level(&mut self.cursor)
         {
-            let is_terminated = advance_past_long_bracket_close(
+            let body = advance_past_long_bracket_close(
                 &mut self.cursor,
                 self.version,
                 start,
                 level,
                 "unterminated block comment",
                 &mut self.errors,
+                false,
             );
-            self.is_in_block_comment = !is_terminated;
+            self.is_in_block_comment = !body.is_closed;
             // The delimiters (`--[=*[` and `]=*]`) never hold a line break,
             // so scanning the whole comment is equivalent to scanning only
             // the body.

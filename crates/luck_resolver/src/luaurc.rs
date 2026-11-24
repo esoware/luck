@@ -1,5 +1,6 @@
 use alloc::sync::Arc;
 use core::ops::Deref;
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 use rustc_hash::FxHashMap;
@@ -22,9 +23,9 @@ pub(crate) enum AliasTarget {
 /// The `.luaurc` alias tables read so far, shared by every thread.
 #[derive(Debug, Default)]
 pub(crate) struct AliasCache {
-    declared_tables: SharedCache<PathBuf, Arc<DeclaredTable>>,
+    declared_tables: SharedCache<OsString, Arc<DeclaredTable>>,
     /// The aliases in effect in each directory a require came from.
-    merged_tables: SharedCache<PathBuf, Arc<FxHashMap<String, AliasTarget>>>,
+    merged_tables: SharedCache<OsString, Arc<FxHashMap<String, AliasTarget>>>,
 }
 
 impl AliasCache {
@@ -43,15 +44,15 @@ impl AliasCache {
         fs: &impl FileSystem,
         directory: &Path,
     ) -> Arc<FxHashMap<String, AliasTarget>> {
-        self.merged_tables.get_or_insert_with(directory, || {
+        self.merged_tables.get_or_insert_with(directory.as_os_str(), || {
             let mut aliases = FxHashMap::default();
             // Only the requested directory gets a merged map. Each ancestor
             // caches just its raw table.
             let ancestors: Vec<&Path> = directory.ancestors().collect();
             for ancestor in ancestors.into_iter().rev() {
-                let table = self
-                    .declared_tables
-                    .get_or_insert_with(ancestor, || Arc::new(read_declared_aliases(fs, ancestor)));
+                let table = self.declared_tables.get_or_insert_with(ancestor.as_os_str(), || {
+                    Arc::new(read_declared_aliases(fs, ancestor))
+                });
                 if table.is_malformed {
                     aliases.clear();
                 }
@@ -71,7 +72,9 @@ impl AliasCache {
         directory
             .ancestors()
             .find(|ancestor| {
-                self.declared_tables.get(*ancestor).is_some_and(|table| table.is_malformed)
+                self.declared_tables
+                    .get(ancestor.as_os_str())
+                    .is_some_and(|table| table.is_malformed)
             })
             .map(|ancestor| ancestor.join(".luaurc"))
     }

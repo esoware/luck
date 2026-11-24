@@ -22,7 +22,8 @@
 //! - **Renaming**, which gives locals the shortest names their scopes allow.
 //!
 //! [`TransformConfig`] turns each rewrite on or off. `luck_codegen` prints
-//! every literal in the shortest spelling of its value.
+//! every literal in the shortest spelling of its value, as
+//! `LiteralSpelling::Shortest` asks.
 //!
 //! # Usage
 //!

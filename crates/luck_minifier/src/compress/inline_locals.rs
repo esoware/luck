@@ -364,6 +364,7 @@ mod tests {
 
     use luck_allocator::Allocator;
     use luck_ast::{Statement, expr_nesting_depth};
+    use luck_codegen::LiteralSpelling;
     use luck_token::LuaVersion;
 
     use crate::fixtures::{NO_PASSES, assert_outputs, compressed, minify_with, walk_once};
@@ -606,7 +607,7 @@ mod tests {
         let run = return_stmt.exprs.first().expect("the return has its value");
         assert_eq!(expr_nesting_depth(run), 1, "the chain splices into one run");
         assert_eq!(
-            luck_codegen::compact(&chunk),
+            luck_codegen::compact(&chunk, LiteralSpelling::Shortest),
             format!("return 1{}", "+1".repeat(links)).into_bytes()
         );
 

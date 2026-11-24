@@ -203,8 +203,13 @@ pub enum StringValue<'raw> {
 /// lexer reports, puts nothing, and a literal cut off before its closer holds
 /// what it reached. A long bracket's value drops a line break right after the
 /// opener and turns every other one into a newline, but Luau keeps a lone CR.
+///
+/// `has_escape` is whether `raw` holds an escape, or in long brackets a CR,
+/// as its token says, without which it holds nothing to rewrite. True makes
+/// the decoder look.
 pub fn decode_string<'raw>(
     raw: &'raw [u8],
+    has_escape: bool,
     version: LuaVersion,
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
@@ -215,9 +220,13 @@ pub fn decode_string<'raw>(
                 Some((&last, before)) if last == quote => before,
                 _ => after_quote,
             };
-            decode_escapes(body, false, version, output)
+            if has_escape {
+                decode_escapes(body, false, version, output)
+            } else {
+                StringValue::Verbatim(body)
+            }
         }
-        Some(b'[') => decode_long_bracket(raw, version, output),
+        Some(b'[') => decode_long_bracket(raw, has_escape, version, output),
         _ => StringValue::Verbatim(raw),
     }
 }
@@ -226,10 +235,15 @@ pub fn decode_string<'raw>(
 /// delimiters, as [`decode_string`] gives a quoted string's.
 pub fn decode_interpolated_text<'raw>(
     text: &'raw [u8],
+    has_escape: bool,
     version: LuaVersion,
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
-    decode_escapes(text, true, version, output)
+    if has_escape {
+        decode_escapes(text, true, version, output)
+    } else {
+        StringValue::Verbatim(text)
+    }
 }
 
 fn decode_escapes<'raw>(
@@ -263,6 +277,7 @@ fn decode_escapes<'raw>(
 
 fn decode_long_bracket<'raw>(
     raw: &'raw [u8],
+    has_cr: bool,
     version: LuaVersion,
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
@@ -283,7 +298,7 @@ fn decode_long_bracket<'raw>(
     // bracket is dropped (5.4 manual section 3.1). Every break but a lone LF
     // holds a CR, so a body without one is already the value.
     let body = strip_line_break(content, version).unwrap_or(content);
-    if memchr::memchr(b'\r', body).is_none() {
+    if !has_cr || memchr::memchr(b'\r', body).is_none() {
         return StringValue::Verbatim(body);
     }
     output.reserve(body.len());
@@ -342,13 +357,22 @@ impl StringSpelling<'_> {
 /// The shortest string literal whose value is `bytes`.
 #[must_use]
 pub fn spell_string(bytes: &[u8]) -> StringSpelling<'_> {
-    let counts = EscapeCounts::of(bytes);
+    spelling(bytes, &EscapeCounts::of(bytes, usize::MAX))
+}
+
+/// [`spell_string`], when that's shorter than `length` bytes.
+///
+/// It stops measuring once no spelling can be, so a literal no spelling
+/// beats costs a glance at its first few escapes, however long it is.
+#[must_use]
+pub fn spell_string_shorter_than(bytes: &[u8], length: usize) -> Option<StringSpelling<'_>> {
+    Some(spelling(bytes, &EscapeCounts::of(bytes, length)))
+        .filter(|spelling| spelling.length < length)
+}
+
+fn spelling<'value>(bytes: &'value [u8], counts: &EscapeCounts) -> StringSpelling<'value> {
     let quote = if counts.double_quotes <= counts.single_quotes { b'"' } else { b'\'' };
-    let quoted_length = bytes
-        .len()
-        .saturating_add(2)
-        .saturating_add(counts.extra_bytes)
-        .saturating_add(counts.double_quotes.min(counts.single_quotes));
+    let quoted_length = counts.quoted_length(bytes.len());
     let leading_newline = usize::from(bytes.first() == Some(&b'\n'));
     if counts.can_be_long
         && quoted_length > bytes.len().saturating_add(4).saturating_add(leading_newline)
@@ -441,8 +465,17 @@ struct EscapeCounts {
 }
 
 impl EscapeCounts {
-    fn of(bytes: &[u8]) -> Self {
+    /// Counts until a quoted spelling would take `limit` bytes or more and
+    /// long brackets couldn't take fewer, past which no count matters, and
+    /// then says long brackets can't hold `bytes`.
+    fn of(bytes: &[u8], limit: usize) -> Self {
         let mut counts = Self { can_be_long: true, ..Self::default() };
+        let leading_newline = usize::from(bytes.first() == Some(&b'\n'));
+        let is_long_too_long =
+            bytes.len().saturating_add(4).saturating_add(leading_newline) >= limit;
+        let is_settled = |so_far: &Self| {
+            so_far.quoted_length(bytes.len()) >= limit && (is_long_too_long || !so_far.can_be_long)
+        };
         for chunk in bytes.utf8_chunks() {
             let valid = chunk.valid().as_bytes();
             let mut index = 0usize;
@@ -464,6 +497,10 @@ impl EscapeCounts {
                         counts.can_be_long &= matches!(byte, b'\n' | b'\t' | b'\\');
                     }
                 }
+                if is_settled(&counts) {
+                    counts.can_be_long = false;
+                    return counts;
+                }
             }
             if !chunk.invalid().is_empty() {
                 counts.can_be_long = false;
@@ -471,9 +508,20 @@ impl EscapeCounts {
                 // escape.
                 counts.extra_bytes =
                     counts.extra_bytes.saturating_add(chunk.invalid().len().saturating_mul(3));
+                if is_settled(&counts) {
+                    return counts;
+                }
             }
         }
         counts
+    }
+
+    /// How many bytes a value of `value_length` bytes takes quoted.
+    fn quoted_length(&self, value_length: usize) -> usize {
+        value_length
+            .saturating_add(2)
+            .saturating_add(self.extra_bytes)
+            .saturating_add(self.double_quotes.min(self.single_quotes))
     }
 }
 

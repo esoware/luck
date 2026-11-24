@@ -92,6 +92,7 @@ fn parse_recording<'ast>(
         kind: TokenKind::Eof,
         has_line_break_before: true,
         is_unterminated: false,
+        has_escape: false,
     };
     let mut parser = Parser {
         allocator,
@@ -152,7 +153,7 @@ struct Parser<'ast> {
     block_depth: u32,
     scratch: Scratch<'ast>,
     /// Where a string's value goes while decoding rewrites it, before the
-    /// arena takes it.
+    /// arena takes it, which leaves it empty for the next.
     decoded: Vec<u8>,
     function_scope: FunctionScope,
     has_module_return: bool,
@@ -315,7 +316,7 @@ impl<'ast> Parser<'ast> {
             errors = check_type_functions(&chunk);
         }
         errors.sort_by_key(|e| e.span.map(|span| span.start));
-        self.groupings.sort();
+        self.groupings.finish();
         let parse = ParseResult {
             source: self.source,
             chunk,
@@ -419,12 +420,12 @@ impl<'ast> Parser<'ast> {
         if self.token.is_unterminated {
             self.has_syntax_error = true;
         }
+        let has_escape = self.token.has_escape;
         let span = self.advance();
         let raw = span.text(self.source);
-        self.decoded.clear();
-        let value = match decode_string(raw, self.version, &mut self.decoded) {
+        let value = match decode_string(raw, has_escape, self.version, &mut self.decoded) {
             StringValue::Verbatim(bytes) => bytes,
-            StringValue::Decoded => self.allocator.alloc_slice_copy(&self.decoded),
+            StringValue::Decoded => self.take_decoded(),
         };
         self.alloc(StringLiteral::new(ThinBytes::new(value), Some(ThinBytes::new(raw)), span))
     }
@@ -437,12 +438,20 @@ impl<'ast> Parser<'ast> {
         }
         let span = token.text_span();
         let raw = span.text(self.source);
-        self.decoded.clear();
-        let value = match decode_interpolated_text(raw, self.version, &mut self.decoded) {
+        let decoding =
+            decode_interpolated_text(raw, token.has_escape, self.version, &mut self.decoded);
+        let value = match decoding {
             StringValue::Verbatim(bytes) => bytes,
-            StringValue::Decoded => self.allocator.alloc_slice_copy(&self.decoded),
+            StringValue::Decoded => self.take_decoded(),
         };
         StringLiteral::new(ThinBytes::new(value), Some(ThinBytes::new(raw)), span)
+    }
+
+    /// The value decoding wrote, moved to the arena.
+    fn take_decoded(&mut self) -> &'ast [u8] {
+        let value = self.allocator.alloc_slice_copy(&self.decoded);
+        self.decoded.clear();
+        value
     }
 
     /// Consume the current identifier or contextual keyword as a name. The

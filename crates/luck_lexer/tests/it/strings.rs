@@ -12,6 +12,35 @@ fn quoted_strings_keep_their_spelling() {
 }
 
 #[test]
+fn a_string_says_whether_it_holds_what_its_value_rewrites() {
+    let source = "x = 'a' .. \"b\\n\" .. [[c]] .. [[d\r\ne]] .. `f` .. `g\\{` .. 'h' f(i)";
+    let result = lex(source.as_bytes(), LuaVersion::Luau);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let flags: Vec<(&str, bool)> = result
+        .tokens
+        .iter()
+        .filter(|token| {
+            matches!(token.kind, TokenKind::StringLiteral | TokenKind::InterpolatedStringSimple)
+        })
+        .map(|token| {
+            (str::from_utf8(token.text(source.as_bytes())).unwrap_or_default(), token.has_escape)
+        })
+        .collect();
+    assert_eq!(
+        flags,
+        [
+            ("'a'", false),
+            ("\"b\\n\"", true),
+            ("[[c]]", false),
+            ("[[d\r\ne]]", true),
+            ("f", false),
+            ("g\\{", true),
+            ("'h'", false),
+        ]
+    );
+}
+
+#[test]
 fn single_char_escapes_keep_their_spelling() {
     for source in [
         "\"\\a\"", "\"\\b\"", "\"\\f\"", "\"\\n\"", "\"\\r\"", "\"\\t\"", "\"\\v\"", "\"\\\\\"",

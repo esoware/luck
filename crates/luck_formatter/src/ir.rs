@@ -10,6 +10,7 @@
 //! elements, and each region takes its content as a closure, which is what
 //! keeps every start paired with its end.
 
+use core::cell::Cell;
 use core::mem;
 use core::ops::Range;
 
@@ -18,7 +19,7 @@ use luck_ast::Name;
 use luck_parser::Groupings;
 use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
 use memchr::memchr2;
-use unicode_width::UnicodeWidthStr as _;
+use unicode_width::UnicodeWidthStr;
 
 use crate::FormatOptions;
 use crate::comments::{Comments, CommentsCheckpoint};
@@ -167,9 +168,16 @@ impl TextWidth {
 /// as Unicode says, and any other byte as one, as a one-byte encoding such as
 /// Latin-1 shows it.
 pub(crate) fn columns(line: &[u8]) -> usize {
-    line.utf8_chunks()
-        .map(|chunk| chunk.valid().width().saturating_add(chunk.invalid().len()))
-        .fold(0, usize::saturating_add)
+    // Checking for UTF-8 is word-at-a-time, but walking chunks is a byte at a
+    // time, and nearly every line is UTF-8.
+    str::from_utf8(line).map_or_else(
+        |_| {
+            line.utf8_chunks()
+                .map(|chunk| chunk.valid().width().saturating_add(chunk.invalid().len()))
+                .fold(0, usize::saturating_add)
+        },
+        UnicodeWidthStr::width,
+    )
 }
 
 /// Restoring rewinds the element stream, the layout, and the comment cursor
@@ -200,6 +208,9 @@ pub(crate) struct Formatter<'ast> {
     /// The parentheses a parse leaves out of its tree, which a tree built in
     /// code has none of.
     groupings: Option<&'ast Groupings>,
+    /// Where the last search of `groupings` stopped, which the next starts
+    /// from.
+    grouping_cursor: Cell<usize>,
     /// Where the node being written ends, past which no node inside it may
     /// take a comment as its trailing one: a comment after the last child
     /// trails the node itself, or one around it.
@@ -235,6 +246,7 @@ impl<'ast> Formatter<'ast> {
             allocator,
             comments,
             groupings: None,
+            grouping_cursor: Cell::new(0),
             enclosing_end: u32::MAX,
             sorts_requires: false,
             scratch: Vec::new(),
@@ -252,8 +264,13 @@ impl<'ast> Formatter<'ast> {
         self
     }
 
-    pub(crate) const fn groupings(&self) -> Option<&'ast Groupings> {
-        self.groupings
+    /// The parentheses the source grouped the expression at `expr` in,
+    /// which the formatter asks about in source order.
+    pub(crate) fn grouping_around(&self, expr: Span) -> Option<Span> {
+        let mut cursor = self.grouping_cursor.get();
+        let parens = self.groupings?.around_from(expr, &mut cursor);
+        self.grouping_cursor.set(cursor);
+        parens
     }
 
     /// Where the node being written ends.

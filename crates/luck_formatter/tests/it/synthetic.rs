@@ -70,7 +70,7 @@ fn long_string_delimiters_and_bytes_roundtrip() {
                 .expect("string literal")
                 .text(expected.as_bytes());
             let mut decoded = Vec::new();
-            let value = match decode_string(literal, version, &mut decoded) {
+            let value = match decode_string(literal, true, version, &mut decoded) {
                 StringValue::Verbatim(bytes) => bytes.to_vec(),
                 StringValue::Decoded => decoded,
             };

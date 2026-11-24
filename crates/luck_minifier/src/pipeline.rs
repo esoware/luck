@@ -1,5 +1,6 @@
 use luck_allocator::Allocator;
 use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_codegen::LiteralSpelling;
 use luck_diagnostics::Diagnostic;
 use luck_token::{CommentKind, LuaVersion, chunk_header, leading_hot_comments};
 
@@ -44,7 +45,7 @@ pub fn minify<'ast>(
     if !minify_tree(allocator, &mut result.chunk, config, false) {
         return Err(vec![nesting_error(&result.chunk)]);
     }
-    let code = luck_codegen::compact(&result.chunk);
+    let code = luck_codegen::compact(&result.chunk, LiteralSpelling::Shortest);
     if output.is_empty() {
         return Ok(code);
     }
@@ -71,7 +72,7 @@ pub fn minify_chunk<'ast>(
     if !minify_tree(allocator, chunk, config, true) {
         return Err(nesting_error(chunk));
     }
-    Ok(luck_codegen::compact(chunk))
+    Ok(luck_codegen::compact(chunk, LiteralSpelling::Shortest))
 }
 
 fn nesting_error(chunk: &Chunk<'_>) -> Diagnostic {

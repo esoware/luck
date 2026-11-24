@@ -8,6 +8,7 @@ use std::panic;
 use std::path::Path;
 
 use luck_allocator::Allocator;
+use luck_codegen::LiteralSpelling;
 use luck_diagnostics::Diagnostic;
 use luck_formatter::FormatOptions;
 use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
@@ -134,7 +135,7 @@ fn render_errors(errors: &[Diagnostic], lines: &LineIndex) -> String {
 /// The output reparses, to the same tree, and prints as itself.
 fn codegen(allocator: &Allocator, parse: &ParseResult<'_>) -> TestResult {
     let version = parse.chunk.version;
-    let output = luck_codegen::compact(&parse.chunk);
+    let output = luck_codegen::compact(&parse.chunk, LiteralSpelling::Shortest);
     let reparsed = luck_parser::parse(allocator, &output, version);
     if !reparsed.errors.is_empty() {
         let lines = LineIndex::new(&output, version);
@@ -144,7 +145,7 @@ fn codegen(allocator: &Allocator, parse: &ParseResult<'_>) -> TestResult {
     if actual != expected {
         return TestResult::Mismatch("Round trip", actual, expected);
     }
-    let again = luck_codegen::compact(&reparsed.chunk);
+    let again = luck_codegen::compact(&reparsed.chunk, LiteralSpelling::Shortest);
     if again != output {
         return TestResult::Mismatch("Idempotency", lossy(&again), lossy(&output));
     }

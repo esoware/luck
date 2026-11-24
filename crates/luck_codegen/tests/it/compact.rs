@@ -1,9 +1,12 @@
 use luck_allocator::Allocator;
 use luck_ast::{Chunk, Expression, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
+use luck_codegen::LiteralSpelling;
 use luck_testgen::with_the_smallest_stack;
 use luck_token::{BinOp, LuaVersion, UnOp};
 
-use crate::common::{assert_compacts_to, assert_reprints};
+use crate::common::{assert_compacts_to, assert_reprints, assert_spells};
+
+const AS_WRITTEN: LiteralSpelling = LiteralSpelling::AsWritten;
 
 #[test]
 fn a_capacity_hint_never_changes_the_output() {
@@ -17,10 +20,12 @@ local value = - -1; return value .. '\u{e9}'",
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        let expected = luck_codegen::compact(&parsed.chunk);
-        for capacity in [0, 1, expected.len(), expected.len() + 1, source.len()] {
-            let output = luck_codegen::compact_with_capacity(&parsed.chunk, capacity);
-            assert_eq!(output, expected);
+        for spelling in [AS_WRITTEN, LiteralSpelling::Shortest] {
+            let expected = luck_codegen::compact(&parsed.chunk, spelling);
+            for capacity in [0, 1, expected.len(), expected.len() + 1, source.len()] {
+                let output = luck_codegen::compact_with_capacity(&parsed.chunk, spelling, capacity);
+                assert_eq!(output, expected);
+            }
         }
         assert_reprints(&parsed.chunk);
     }
@@ -33,12 +38,13 @@ fn a_string_that_is_not_utf8_prints_as_written_or_escaped_from_its_value() {
     let allocator = Allocator::new();
     let parsed = luck_parser::parse(&allocator, b"return 'caf\xE9', [[\xFF]]", LuaVersion::Lua51);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-    assert_eq!(luck_codegen::compact(&parsed.chunk), b"return'caf\xE9',[[\xFF]]");
+    assert_eq!(luck_codegen::compact(&parsed.chunk, AS_WRITTEN), b"return'caf\xE9',[[\xFF]]");
     assert_reprints(&parsed.chunk);
     let spans = SpanCounter::new();
     let synth = Synth::new(&allocator, &spans);
     let built = synth.block([synth.return_([synth.string_bytes(b"caf\xE9")])]);
-    assert_eq!(luck_codegen::compact(&Chunk::new(LuaVersion::Lua51, built)), br#"return"caf\233""#);
+    let chunk = Chunk::new(LuaVersion::Lua51, built);
+    assert_eq!(luck_codegen::compact(&chunk, AS_WRITTEN), br#"return"caf\233""#);
 }
 
 #[test]
@@ -48,7 +54,7 @@ fn a_capacity_hint_the_allocator_cannot_meet_is_dropped() {
     let synth = Synth::new(&allocator, &spans);
     let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([synth.number_i64(1)])]));
     for capacity in [usize::MAX, isize::MAX.unsigned_abs()] {
-        let output = luck_codegen::compact_with_capacity(&chunk, capacity);
+        let output = luck_codegen::compact_with_capacity(&chunk, AS_WRITTEN, capacity);
         assert_eq!(output, b"return 1", "capacity {capacity}");
     }
 }
@@ -84,7 +90,7 @@ fn a_tree_at_the_nesting_cap_prints_and_reparses() {
             let allocator = Allocator::new();
             let spans = SpanCounter::new();
             let chunk = nested_return(Synth::new(&allocator, &spans), MAX_NESTING_DEPTH, wrap);
-            let output = luck_codegen::compact(&chunk);
+            let output = luck_codegen::compact(&chunk, AS_WRITTEN);
             let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Lua54);
             assert!(reparsed.errors.is_empty(), "{label}: {:?}", reparsed.errors.first());
             assert_eq!(block_nesting_depth(&reparsed.chunk.block), MAX_NESTING_DEPTH, "{label}");
@@ -215,7 +221,7 @@ fn a_tree_prints_the_parentheses_its_grouping_needs() {
         let synth = Synth::new(&allocator, &spans).with_version(version);
         let names = ["a", "b", "c"].map(|name| synth.name_expr(name));
         let chunk = Chunk::new(version, synth.block([synth.return_([build(synth, names)])]));
-        let output = String::from_utf8(luck_codegen::compact(&chunk)).unwrap();
+        let output = String::from_utf8(luck_codegen::compact(&chunk, AS_WRITTEN)).unwrap();
         assert_eq!(output.strip_prefix("return").map(str::trim_start), Some(expected));
         assert_reprints(&chunk);
     }
@@ -229,7 +235,7 @@ fn a_statement_that_starts_with_a_parenthesis_takes_a_semicolon_where_it_would_g
     let call = synth.method_call(synth.string("s"), "f", []);
     let local = synth.local(&["x"], [synth.name_expr("y")]);
     let chunk = Chunk::new(LuaVersion::Lua54, synth.block([local, synth.call_stmt(call)]));
-    assert_eq!(luck_codegen::compact(&chunk), b"local x=y;(\"s\"):f()");
+    assert_eq!(luck_codegen::compact(&chunk, AS_WRITTEN), b"local x=y;(\"s\"):f()");
     assert_reprints(&chunk);
 }
 
@@ -248,12 +254,12 @@ fn a_run_of_any_length_prints_as_one_level() {
     }
     let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([sum, calls])]));
     assert_eq!(block_nesting_depth(&chunk.block), 2);
-    let output = luck_codegen::compact(&chunk);
+    let output = luck_codegen::compact(&chunk, AS_WRITTEN);
     assert_eq!(output.len(), "return x".len() + 200_000 * 2 + ",f".len() + 2_000 * 2);
     let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Lua54);
     assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors.first());
     assert_eq!(block_nesting_depth(&reparsed.chunk.block), 2);
-    assert_eq!(luck_codegen::compact(&reparsed.chunk), output);
+    assert_eq!(luck_codegen::compact(&reparsed.chunk, AS_WRITTEN), output);
 }
 
 #[test]
@@ -376,7 +382,7 @@ fn calls_compact_to_minimal_whitespace() {
     for (source, expected) in [
         ("f ( 1 , 2 )", "f(1,2)"),
         ("f  \"hello\"", "f\"hello\""),
-        ("f  [[long]]", "f\"long\""),
+        ("f  [[long]]", "f[[long]]"),
         ("f  {  1  }", "f{1}"),
         ("a : b ( 1 )", "a:b(1)"),
         ("f ( g ( h ( 1 ) ) )", "f(g(h(1)))"),
@@ -442,7 +448,7 @@ local called = t.f<<number, string>>(value)",
         ("local  x  =  ( y  ::  number )  ::  string", "local x=(y::number)::string"),
         (
             "return 1i, 1_000_000i, 0xffffffffffffffffi, -123i",
-            "return 1i,1000000i,0xffffffffffffffffi,-123i",
+            "return 1i,1_000_000i,0xffffffffffffffffi,-123i",
         ),
         (
             "\
@@ -511,6 +517,26 @@ fn luau_types_compact_to_minimal_whitespace() {
 }
 
 #[test]
+fn each_literal_prints_as_written() {
+    for (source, expected, version) in [
+        (r#"x = "\65\066" .. [[hello]]"#, r#"x="\65\066"..[[hello]]"#, LuaVersion::Lua54),
+        ("x = 0x10, 1.50, 0.5, 1e2, 007, 1.0", "x=0x10,1.50,0.5,1e2,007,1.0", LuaVersion::Lua54),
+        ("x = 1_000, 0b11, 0xFFi, 1_0i", "x=1_000,0b11,0xFFi,1_0i", LuaVersion::Luau),
+        (r"x = `a\x41{b}\u{42}`", r"x=`a\x41{b}\u{42}`", LuaVersion::Luau),
+    ] {
+        assert_compacts_to(source, expected, version);
+    }
+}
+
+#[test]
+fn a_literal_no_spelling_beats_keeps_its_own_however_long() {
+    let content = format!("\u{1A}\"'\\{}", "a".repeat(200_000));
+    let source = format!("return [[{content}]]");
+    let expected = format!("return[[{content}]]");
+    assert_spells(&source, &expected, LuaVersion::Lua54, LiteralSpelling::Shortest);
+}
+
+#[test]
 fn each_literal_takes_the_shortest_spelling_of_its_value() {
     let (lua51, lua54, luau) = (LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Luau);
     for (source, expected, version) in [
@@ -528,7 +554,7 @@ fn each_literal_takes_the_shortest_spelling_of_its_value() {
         ("x = 0xFFi, 0b11i, 1_0i", "x=255i,3i,10i", luau),
         (r"x = `a\x41{b}\u{42}`", "x=`aA{b}B`", luau),
     ] {
-        assert_compacts_to(source, expected, version);
+        assert_spells(source, expected, version, LiteralSpelling::Shortest);
     }
 }
 
@@ -543,6 +569,9 @@ fn a_literal_built_in_code_prints_from_its_value() {
         let synth = Synth::new(&allocator, &spans).with_version(version);
         let values = [synth.number_f64(3.0), synth.number_i64(-1), synth.string_bytes(b"\xFF\"")];
         let chunk = Chunk::new(version, synth.block([synth.return_(values)]));
-        assert_eq!(luck_codegen::compact(&chunk), expected.as_bytes(), "{version:?}");
+        for spelling in [AS_WRITTEN, LiteralSpelling::Shortest] {
+            let output = luck_codegen::compact(&chunk, spelling);
+            assert_eq!(output, expected.as_bytes(), "{version:?} {spelling:?}");
+        }
     }
 }

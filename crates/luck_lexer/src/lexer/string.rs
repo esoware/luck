@@ -55,14 +55,17 @@ impl Lexer<'_> {
     /// cursor past its `[=*[` opener. A missing closer runs the string to the
     /// end of the source.
     pub(super) fn lex_long_string(&mut self, start: usize, level: usize) -> Token {
-        if advance_past_long_bracket_close(
+        let body = advance_past_long_bracket_close(
             &mut self.cursor,
             self.version,
             start,
             level,
             "unterminated long bracket string",
             &mut self.errors,
-        ) {
+            true,
+        );
+        self.has_escape = body.has_cr;
+        if body.is_closed {
             self.token(TokenKind::StringLiteral, start)
         } else {
             self.unterminated_token(TokenKind::StringLiteral, start)
@@ -121,6 +124,7 @@ impl Lexer<'_> {
     /// `errors`, and one only Lua 5.1 and Luau read, as the character it
     /// escapes, to `lenient_escapes`.
     fn scan_escape(&mut self, is_interpolated: bool) {
+        self.has_escape = true;
         let escape_start = self.cursor.position().saturating_sub(1);
         let (length, meaning) = read_escape(self.cursor.rest(), is_interpolated, self.version);
         match meaning {
@@ -234,8 +238,18 @@ pub(super) fn eat_long_bracket_level(cursor: &mut Cursor<'_>) -> Option<usize> {
     Some(level)
 }
 
+/// What a long bracket's body held, as its lexer reads it.
+pub(super) struct LongBracketBody {
+    /// Whether its closer came.
+    pub is_closed: bool,
+    /// Whether a CR came in it, which a string's value rewrites, when the
+    /// scan looked for one.
+    pub has_cr: bool,
+}
+
 /// Advance from just past a long-bracket opener to past its matching `]=*]`
-/// closer, and return whether the closer came.
+/// closer, and say whether the closer came, and with `should_find_cr`,
+/// whether a CR came before it, in the same pass.
 ///
 /// Long-bracket strings and block comments share it, and name themselves in
 /// the error a missing closer reports, `unterminated`.
@@ -250,16 +264,27 @@ pub(super) fn advance_past_long_bracket_close(
     level: usize,
     unterminated: &'static str,
     errors: &mut Vec<Diagnostic>,
-) -> bool {
+    should_find_cr: bool,
+) -> LongBracketBody {
     let body_start = cursor.position();
+    let mut has_cr = false;
     loop {
         let rest = cursor.rest();
-        let Some(bracket_offset) = memchr::memchr(b']', rest) else {
+        let stop = if should_find_cr && !has_cr {
+            memchr::memchr2(b']', b'\r', rest)
+        } else {
+            memchr::memchr(b']', rest)
+        };
+        let Some(stop_offset) = stop else {
             cursor.advance_by(rest.len());
             errors.push(Diagnostic::e008(cursor.span_since(start), unterminated));
-            return false;
+            return LongBracketBody { is_closed: false, has_cr };
         };
-        cursor.advance_by(bracket_offset.saturating_add(1));
+        cursor.advance_by(stop_offset.saturating_add(1));
+        if rest.get(stop_offset) == Some(&b'\r') {
+            has_cr = true;
+            continue;
+        }
         let after_bracket = cursor.rest();
         let closing_level = after_bracket.iter().take_while(|&&b| b == b'=').count();
         if closing_level == level && after_bracket.get(level) == Some(&b']') {
@@ -274,7 +299,7 @@ pub(super) fn advance_past_long_bracket_close(
                     "nesting of `[[...]]` is deprecated",
                 ));
             }
-            return true;
+            return LongBracketBody { is_closed: true, has_cr };
         }
     }
 }

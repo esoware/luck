@@ -1,4 +1,5 @@
 use core::panic::AssertUnwindSafe;
+use std::ffi::OsString;
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -232,15 +233,19 @@ impl<'input> Reader<'input> {
 /// thread running the task and resolves its requires. This thread alone
 /// keeps the graph, and starts a task for each module a finished one is the
 /// first to reach.
+///
+/// A canonical path is one module whatever its components, so the maps key
+/// it as text, which hashes in one pass where a `Path` hashes a component at
+/// a time.
 pub(crate) fn discover_reachable<'ast>(
     arenas: &'ast ThreadAllocators,
     reader: Reader<'_>,
     entry: &Path,
-) -> FxHashMap<PathBuf, Discovered<'ast>> {
-    let mut found: FxHashMap<PathBuf, Discovered<'ast>> = FxHashMap::default();
+) -> FxHashMap<OsString, Discovered<'ast>> {
+    let mut found: FxHashMap<OsString, Discovered<'ast>> = FxHashMap::default();
     // Every path read or being read, which stops growing once more are known
     // than a graph may hold.
-    let mut seen = FxHashSet::from_iter([entry.to_path_buf()]);
+    let mut seen = FxHashSet::from_iter([entry.as_os_str().to_owned()]);
     let (sender, receiver) = mpsc::channel::<(PathBuf, thread::Result<Discovered<'ast>>)>();
     let is_worker_thread = rayon::current_thread_index().is_some();
     rayon::in_place_scope(|scope| {
@@ -271,12 +276,12 @@ pub(crate) fn discover_reachable<'ast>(
                 .flat_map(|info| &info.requires)
                 .filter_map(|(_, target)| target.as_ref())
             {
-                if seen.len() <= MAX_MODULE_COUNT && !seen.contains(target) {
-                    seen.insert(target.clone());
+                if seen.len() <= MAX_MODULE_COUNT && !seen.contains(target.as_os_str()) {
+                    seen.insert(target.as_os_str().to_owned());
                     start(target.clone());
                 }
             }
-            found.insert(path, discovered);
+            found.insert(path.into_os_string(), discovered);
         }
     });
     found

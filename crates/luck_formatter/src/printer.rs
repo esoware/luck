@@ -27,8 +27,9 @@
 //! from the start of the next line, one indent deeper. If it fits there, the
 //! printer breaks the line before it and prints it flat.
 
-use core::mem;
-use core::ops::Range;
+use core::cell::Cell;
+use core::ops::{ControlFlow, Range};
+use core::{iter, mem};
 
 use luck_allocator::{Allocator, List};
 use luck_data_structures::CodeBuffer;
@@ -246,6 +247,7 @@ pub(crate) fn print(
         display_column: 0,
         indent_level: 0,
         modes: Vec::new(),
+        measured_regions: Cell::default(),
         groups: layout.groups,
         hugs: layout.hugs,
         next_line_moves: Vec::new(),
@@ -323,6 +325,9 @@ struct Printer<'ast, 'layout> {
     indent_level: usize,
     /// Effective print-mode stack; empty means `Expanded` (top level).
     modes: Vec<PrintMode>,
+    /// Where a measurement keeps the modes of the regions it opens, which
+    /// every measurement reuses.
+    measured_regions: Cell<Vec<PrintMode>>,
     groups: List<'layout, Group>,
     hugs: Vec<Hug>,
     /// Per open next-line group, whether it moved to the next line, so its
@@ -657,22 +662,20 @@ impl<'ast> Printer<'ast, '_> {
     ///
     /// Past those regions, each element counts in the mode of the region it
     /// sits in, the printer's own mode for a region the printer has open.
-    fn fits_from(&self, mut line: MeasuredLine<'_>, depth: usize) -> bool {
-        if let Some(fits) = self.measure_flat(&mut line, depth) {
-            return fits;
+    fn fits_from(&self, line: MeasuredLine<'_>, depth: usize) -> bool {
+        match self.measure_flat(line, depth) {
+            ControlFlow::Break(fits) => fits,
+            ControlFlow::Continue(rest_of_line) => self.measure_rest(rest_of_line),
         }
-        for &mode in self.modes.iter().rev() {
-            if let Some(fits) = self.measure_in(&mut line, mode) {
-                return fits;
-            }
-        }
-        // The top level prints expanded, and no element closes it.
-        self.measure_in(&mut line, PrintMode::Expanded).unwrap_or(true)
     }
 
-    /// Measures the `depth` regions `line` starts in, flat. `None` when they
-    /// close and the line goes on.
-    fn measure_flat(&self, line: &mut MeasuredLine<'_>, mut depth: usize) -> Option<bool> {
+    /// Measures the `depth` regions `line` starts in, flat, and goes on with
+    /// the line as they leave it when they close.
+    fn measure_flat<'elements>(
+        &self,
+        mut line: MeasuredLine<'elements>,
+        mut depth: usize,
+    ) -> ControlFlow<bool, MeasuredLine<'elements>> {
         while let Some((element, rest)) = line.remaining.split_first() {
             line.remaining = rest;
             match *element {
@@ -683,7 +686,7 @@ impl<'ast> Printer<'ast, '_> {
                         || (line.has_line_suffix && !is_separator(content))
                         || !line.push_text(width, self.line_width)
                     {
-                        return Some(false);
+                        return ControlFlow::Break(false);
                     }
                 }
                 FormatElement::Space | FormatElement::Line(LineMode::SoftOrSpace) => {
@@ -694,11 +697,11 @@ impl<'ast> Printer<'ast, '_> {
                     if is_measured
                         && (width.is_multiline() || !line.push_suffix(width, self.line_width))
                     {
-                        return Some(false);
+                        return ControlFlow::Break(false);
                     }
                 }
                 FormatElement::Line(LineMode::Hard | LineMode::Empty)
-                | FormatElement::ExpandParent => return Some(false),
+                | FormatElement::ExpandParent => return ControlFlow::Break(false),
                 FormatElement::StartIfGroupBreaks(id) => {
                     // A decided group answers with its decision. An undecided
                     // one is being measured now, and prints flat if this
@@ -718,7 +721,7 @@ impl<'ast> Printer<'ast, '_> {
                 | FormatElement::EndEntry => {
                     depth = depth.saturating_sub(1);
                     if depth == 0 {
-                        return None;
+                        return ControlFlow::Continue(line);
                     }
                 }
                 FormatElement::Line(LineMode::Soft)
@@ -731,74 +734,85 @@ impl<'ast> Printer<'ast, '_> {
                 | FormatElement::EndFill => {}
             }
         }
-        Some(true)
+        ControlFlow::Break(true)
     }
 
-    /// Measures `line` on through the rest of a region that prints in
-    /// `mode`, to the first line break it prints. `None` when the region
-    /// closes and the line goes on.
-    fn measure_in(&self, line: &mut MeasuredLine<'_>, mode: PrintMode) -> Option<bool> {
-        let is_flat = mode == PrintMode::Flat;
-        while let Some((element, rest)) = line.remaining.split_first() {
+    /// Measures `line` on past the regions it started in, through the ones
+    /// the printer has open, innermost first, and then the top level, which
+    /// prints expanded and which no element closes. Each element counts in
+    /// the mode of the region it sits in, to the first line break that mode
+    /// prints.
+    fn measure_rest(&self, mut line: MeasuredLine<'_>) -> bool {
+        let mut outer_modes =
+            self.modes.iter().rev().copied().chain(iter::once(PrintMode::Expanded));
+        let mut mode = outer_modes.next().unwrap_or(PrintMode::Expanded);
+        // The modes of the regions around those opened since, innermost last.
+        let mut around = self.measured_regions.take();
+        around.clear();
+        let fits = loop {
+            let Some((element, rest)) = line.remaining.split_first() else {
+                break true;
+            };
             line.remaining = rest;
-            let opened_region = match *element {
+            let is_flat = mode == PrintMode::Flat;
+            match *element {
                 FormatElement::Text(content, width) | FormatElement::Verbatim(content, width) => {
                     if line.has_line_suffix && !is_separator(content) {
-                        return Some(true);
+                        break true;
                     }
                     if !line.push_text(width, self.line_width) {
-                        return Some(false);
+                        break false;
                     }
                     // The line ends inside text that spans lines.
                     if width.is_multiline() {
-                        return Some(true);
+                        break true;
                     }
-                    None
                 }
-                FormatElement::Space => {
-                    line.is_pending_space = true;
-                    None
-                }
+                FormatElement::Space => line.is_pending_space = true,
                 FormatElement::Line(LineMode::SoftOrSpace) if is_flat => {
                     line.is_pending_space = true;
-                    None
                 }
-                FormatElement::Line(LineMode::Soft) if is_flat => None,
-                FormatElement::Line(_) => return Some(true),
+                FormatElement::Line(LineMode::Soft) if is_flat => {}
+                FormatElement::Line(_) => break true,
                 FormatElement::LineSuffix(_, width, is_measured) => {
                     line.has_line_suffix = true;
                     if is_measured {
                         if !line.push_suffix(width, self.line_width) {
-                            return Some(false);
+                            break false;
                         }
                         if width.is_multiline() {
-                            return Some(true);
+                            break true;
                         }
                     }
-                    None
                 }
                 FormatElement::StartIfGroupBreaks(id) => {
                     if self.group_mode(id) != Some(PrintMode::Expanded) {
                         line.remaining = skip_conditional(rest);
                     }
-                    None
                 }
                 // It can move to the next line, which ends this one. A forced
                 // break keeps it here instead, but it counts the same, since
                 // breaking it for width can print a trailing comma that forces
                 // it on the next format.
-                FormatElement::StartNextLineGroup(_) if !is_flat => return Some(true),
+                FormatElement::StartNextLineGroup(_) if !is_flat => break true,
                 FormatElement::StartGroup(id)
                 | FormatElement::StartHuggedGroup(id)
                 | FormatElement::StartNextLineGroup(id) => {
-                    Some(self.group_mode(id).unwrap_or(mode))
+                    around.push(mode);
+                    mode = self.group_mode(id).unwrap_or(mode);
                 }
-                FormatElement::StartFlat => Some(PrintMode::Flat),
-                FormatElement::StartEntry => Some(mode),
+                FormatElement::StartFlat => {
+                    around.push(mode);
+                    mode = PrintMode::Flat;
+                }
+                FormatElement::StartEntry => around.push(mode),
                 FormatElement::EndGroup
                 | FormatElement::EndNextLineGroup
                 | FormatElement::EndFlat
-                | FormatElement::EndEntry => return None,
+                | FormatElement::EndEntry => match around.pop().or_else(|| outer_modes.next()) {
+                    Some(outer) => mode = outer,
+                    None => break true,
+                },
                 FormatElement::ExpandParent
                 | FormatElement::StartIndent
                 | FormatElement::EndIndent
@@ -806,15 +820,11 @@ impl<'ast> Printer<'ast, '_> {
                 | FormatElement::EndIndentIfGroupBreaks(_)
                 | FormatElement::EndIfGroupBreaks
                 | FormatElement::StartFill
-                | FormatElement::EndFill => None,
-            };
-            if let Some(region_mode) = opened_region
-                && let Some(fits) = self.measure_in(line, region_mode)
-            {
-                return Some(fits);
+                | FormatElement::EndFill => {}
             }
-        }
-        Some(true)
+        };
+        self.measured_regions.set(around);
+        fits
     }
 
     fn emit_text(&mut self, content: &[u8], width: TextWidth) {

@@ -8,7 +8,7 @@ A source goes in, as bytes, which Lua reads it as, so a string or a comment may 
 
 ## Usage
 
-- `lex(source, version)` lexes a whole source into a `LexResult`: every token, ending in `Eof`, the comments, the errors, and the spans of the lenient escapes. A string token left unterminated says so, and so does the `Eof` after a block comment left unterminated.
+- `lex(source, version)` lexes a whole source into a `LexResult`: every token, ending in `Eof`, the comments, the errors, and the spans of the lenient escapes. A string token left unterminated says so, and so does the `Eof` after a block comment left unterminated. A string token says too whether it holds an escape, or in long brackets a CR, so the parser decodes only the strings that need it.
 - `Lexer` hands out one token at a time with `next_token`, as the parser pulls them, and `finish` returns the rest of a `LexResult` once the source is drained.
 - Each error is an E008 `luck_diagnostics::Diagnostic`. The lexer refuses a source over 4 GiB with one.
 

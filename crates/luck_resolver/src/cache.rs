@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -19,9 +20,9 @@ use crate::shared_cache::SharedCache;
 #[derive(Debug)]
 pub(crate) struct Cache<Fs> {
     fs: Fs,
-    directories: SharedCache<PathBuf, Arc<Directory>>,
+    directories: SharedCache<OsString, Arc<Directory>>,
     /// The canonical paths only `fs` could give.
-    canonical_files: SharedCache<PathBuf, PathBuf>,
+    canonical_files: SharedCache<OsString, PathBuf>,
 }
 
 /// Each fact is found by the first thread that needs it, while any other
@@ -84,7 +85,7 @@ impl<Fs: FileSystem> Cache<Fs> {
     /// The canonical path of `file`, which [`Self::is_file`] found.
     pub(crate) fn canonical_file(&self, file: &Path) -> PathBuf {
         if let Some((parent, name)) = split(file) {
-            let directory = self.directories.get_or_insert_with(parent, Arc::default);
+            let directory = self.directories.get_or_insert_with(parent.as_os_str(), Arc::default);
             if matches!(
                 directory.listed(&self.fs, parent, name),
                 Some(Listed::Entry(FileMetadata { is_file: true, .. }))
@@ -94,7 +95,7 @@ impl<Fs: FileSystem> Cache<Fs> {
                 return canonical_parent.join(name);
             }
         }
-        self.canonical_files.get_or_insert_with(file, || {
+        self.canonical_files.get_or_insert_with(file.as_os_str(), || {
             self.fs.canonicalize(file).unwrap_or_else(|_| file.to_path_buf())
         })
     }
@@ -102,7 +103,8 @@ impl<Fs: FileSystem> Cache<Fs> {
     /// What `path` is, or `None` when nothing is there.
     fn metadata(&self, path: &Path) -> Option<FileMetadata> {
         let listed = split(path).and_then(|(parent, name)| {
-            self.directories.get_or_insert_with(parent, Arc::default).listed(&self.fs, parent, name)
+            let directory = self.directories.get_or_insert_with(parent.as_os_str(), Arc::default);
+            directory.listed(&self.fs, parent, name)
         });
         match listed {
             Some(Listed::Entry(metadata)) => Some(metadata),

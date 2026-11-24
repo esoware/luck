@@ -14,7 +14,7 @@ A source is bytes, as PUC Lua and Luau read it, so its strings and comments need
 - `CommentContent::of` and `LintDirective::parse`: the one grammar of `luck:` directives, which the lexer reads each comment's content with, and the linter each lint directive's rules. A malformed directive parses to a `DirectiveError`, which the linter reports.
 - `BinOp`, `UnOp`, and `CompoundOp`: the operators, and each binary operator's precedence and associativity.
 - `read_numeral`, `read_integer`, `read_escape`, and `decode_string`: what a numeral, an escape, or a string literal means in each version, which the lexer checks and the parser decodes with. `LuaNumber` is a number's value, an integer or a float, and a string's is bytes.
-- `spell_number`, `spell_integer`, `spell_string`, `write_long_string`, and `write_interpolated_text`: the shortest literal that reads back as a value, for the printers. A number spells on the stack, and a string measures itself before it writes.
+- `spell_number`, `spell_integer`, `spell_string`, `write_long_string`, and `write_interpolated_text`: the shortest literal that reads back as a value, for the printers. A number spells on the stack, and a string measures itself before it writes. `spell_string_shorter_than` spells one only when that beats a length, such as the literal's own, and stops measuring as soon as it can't.
 - `line_breaks`, `has_line_break`, and `LineIndex`: what counts as a line break in each version, and line and column lookup.
 
 ```rust
@@ -29,6 +29,7 @@ let begin = Token {
     kind: TokenKind::InterpolatedStringBegin,
     has_line_break_before: true,
     is_unterminated: false,
+    has_escape: false,
 };
 assert_eq!(begin.text(source), b"hello ");
 ```

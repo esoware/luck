@@ -1,6 +1,7 @@
+use luck_codegen::LiteralSpelling;
 use luck_token::LuaVersion;
 
-use crate::common::assert_compacts_to;
+use crate::common::{assert_compacts_to, assert_spells};
 
 #[test]
 fn space_separates_adjacent_words() {
@@ -57,7 +58,7 @@ fn space_keeps_a_number_from_absorbing_the_next_piece() {
         ("x = 1.0 or 2", "x=1. or 2", lua54),
         ("x = 1.0 or 2", "x=1 or 2", lua51),
     ] {
-        assert_compacts_to(source, expected, version);
+        assert_spells(source, expected, version, LiteralSpelling::Shortest);
     }
 }
 
@@ -88,7 +89,7 @@ fn space_keeps_a_bracket_from_opening_a_long_string() {
         (r"x = {[ [[\\\]] ] = 1}", r"x={[ [[\\\]]]=1}"),
         (r"x = t[ [==[]]\\\\\]==] ]", r"x=t[ [=[]]\\\\\]=]]"),
     ] {
-        assert_compacts_to(source, expected, LuaVersion::Lua51);
+        assert_spells(source, expected, LuaVersion::Lua51, LiteralSpelling::Shortest);
     }
 }
 

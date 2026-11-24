@@ -142,11 +142,13 @@
 //! ```
 //! # #[cfg(feature = "codegen")] {
 //! use luck::allocator::Allocator;
+//! use luck::codegen::LiteralSpelling;
 //! use luck::token::LuaVersion;
 //!
 //! let allocator = Allocator::new();
 //! let parsed = luck::parser::parse(&allocator, b"local x = ( a + b ) * ( c )", LuaVersion::Lua54);
-//! assert_eq!(luck::codegen::compact(&parsed.chunk), b"local x=(a+b)*c");
+//! let output = luck::codegen::compact(&parsed.chunk, LiteralSpelling::AsWritten);
+//! assert_eq!(output, b"local x=(a+b)*c");
 //! # }
 //! ```
 //!

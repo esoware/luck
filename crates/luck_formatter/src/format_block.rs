@@ -37,14 +37,15 @@ impl BlockItem<'_, '_> {
 
     /// A `return`'s span takes the `;` after it, which the formatter drops,
     /// so it ends at its last value here, and the parentheses the source
-    /// grouped that in, from `groupings`: a comment there trails the values.
-    fn span(self, groupings: Option<&Groupings>) -> Span {
+    /// grouped that in, which `grouping` finds: a comment there trails the
+    /// values.
+    fn span(self, grouping: impl FnOnce(Span) -> Option<Span>) -> Span {
         match self {
             Self::Stmt(Statement::Return(return_stmt)) => {
                 let span = return_stmt.span;
                 return_stmt.exprs.last().map_or(span, |last| {
-                    let grouping = groupings.and_then(|parse| parse.around(last.span()));
-                    Span::new(span.start, grouping.unwrap_or_else(|| last.span()).end)
+                    let end = grouping(last.span()).unwrap_or_else(|| last.span()).end;
+                    Span::new(span.start, end)
                 })
             }
             Self::Stmt(stmt) => stmt.span(),
@@ -148,7 +149,7 @@ impl<'ast> Formatter<'ast> {
         while let Some(item) =
             self.next_item(&mut remaining, previous.map_or(0, |last_item| last_item.end))
         {
-            let Span { start, end } = item.span(self.groupings());
+            let Span { start, end } = item.span(|expr| self.grouping_around(expr));
             let should_surround_with_blank = item.should_surround_with_blank();
 
             let is_blank_before = previous.is_some_and(|previous_item| {
@@ -220,7 +221,7 @@ impl<'ast> Formatter<'ast> {
         let Some(region) = comments.next_disabled_region(position) else {
             return items.next();
         };
-        if let Some(span) = items.peek().map(|item| item.span(self.groupings())) {
+        if let Some(span) = items.peek().map(|item| item.span(|expr| self.grouping_around(expr))) {
             let is_past = region.start >= span.end;
             // A region inside a statement starts past the statement's first token.
             let is_inside = span.start < region.start && region.end <= span.end;
@@ -236,7 +237,7 @@ impl<'ast> Formatter<'ast> {
         let mut has_leading_paren = false;
         loop {
             while let Some(item) = lookahead.next_if(|item| item.start() < run.end) {
-                let span = item.span(self.groupings());
+                let span = item.span(|expr| self.grouping_around(expr));
                 // The region goes out as written, so it starts as its source
                 // does, and every node starts at a token.
                 if absorbed.is_none() {
@@ -328,8 +329,8 @@ impl<'ast> Formatter<'ast> {
         is_blank
     }
 
-    fn write_item(&mut self, item: BlockItem<'_, 'ast>) {
-        let end = item.span(self.groupings()).end;
+    /// `end` is where the item ends, as [`BlockItem::span`] has it.
+    fn write_item(&mut self, item: BlockItem<'_, 'ast>, end: u32) {
         match item {
             BlockItem::Stmt(stmt) => self.inside(end, |f| f.write_stmt(stmt)),
             BlockItem::Verbatim { span, .. } => self.write_exact(span),
@@ -349,11 +350,11 @@ impl<'ast> Formatter<'ast> {
             return;
         }
         if is_region || !self.comments().overlaps_disabled_region(span) {
-            self.write_item(item);
+            self.write_item(item, end);
             return;
         }
         let checkpoint = self.checkpoint();
-        self.write_item(item);
+        self.write_item(item, end);
         if self.comments().has_comment_in(start, end) {
             self.restore(checkpoint);
             let line_start = self
@@ -402,7 +403,9 @@ struct InnermostBlock<'tree, 'range> {
 impl<'tree> Visit<'tree> for InnermostBlock<'tree, '_> {
     fn visit_block(&mut self, block: &'tree Block<'tree>) {
         let first_start = first_item_start(block);
-        let last_end = printed_items(block).last().map(|item| item.span(Some(self.groupings)).end);
+        let last_end = printed_items(block)
+            .last()
+            .map(|item| item.span(|expr| self.groupings.around(expr)).end);
         if first_start.is_some_and(|start| start <= self.range.start)
             && last_end.is_some_and(|end| self.range.end <= end)
         {
@@ -425,7 +428,7 @@ pub(crate) fn format_selection<'ast>(
     options: &FormatOptions,
     range: &Range<u32>,
 ) -> Option<(Span, Vec<u8>)> {
-    let groupings = Some(&parse.groupings);
+    let groupings = |expr| parse.groupings.around(expr);
     let block = &parse.chunk.block;
     let mut finder = InnermostBlock { range, groupings: &parse.groupings, found: block };
     finder.visit_block(block);

@@ -4,27 +4,47 @@ mod types;
 
 use luck_ast::{Chunk, IntegerLiteral, NumberLiteral, StringLiteral};
 use luck_data_structures::CodeBuffer;
-use luck_token::{LuaVersion, spell_integer, spell_number, spell_string, write_interpolated_text};
+use luck_token::{
+    LuaVersion, StringSpelling, spell_integer, spell_number, spell_string,
+    spell_string_shorter_than, write_interpolated_text,
+};
 
 use crate::separator::{DOT_DOT, LEFT_BRACKET, NUMBER, OTHER, WORD, class_of, merges_after};
 
-/// The chunk's version decides how a number is spelled. The output is bytes,
-/// as a source is, and starts with no reserved capacity. Use
-/// [`compact_with_capacity`] when there's a useful size estimate.
+/// How [`compact`] spells each literal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiteralSpelling {
+    /// As the tree spells it, so a parsed tree's literals print as its source
+    /// wrote them, and one built in code the shortest way its value reads
+    /// back.
+    AsWritten,
+    /// The shortest way its value reads back in the chunk's version, or as
+    /// the tree spells it when that's no longer, as a minifier wants.
+    Shortest,
+}
+
+/// The output is bytes, as a source is, and starts with no reserved
+/// capacity. Use [`compact_with_capacity`] when there's a useful size
+/// estimate.
 #[must_use]
-pub fn compact(chunk: &Chunk<'_>) -> Vec<u8> {
-    compact_with_capacity(chunk, 0)
+pub fn compact(chunk: &Chunk<'_>, spelling: LiteralSpelling) -> Vec<u8> {
+    compact_with_capacity(chunk, spelling, 0)
 }
 
 /// `capacity` bytes are reserved up front, and one the allocator can't meet
 /// is dropped, so the output never depends on it. A parsed tree's source
 /// length makes a good hint: compact output is rarely longer.
 #[must_use]
-pub fn compact_with_capacity(chunk: &Chunk<'_>, capacity: usize) -> Vec<u8> {
+pub fn compact_with_capacity(
+    chunk: &Chunk<'_>,
+    spelling: LiteralSpelling,
+    capacity: usize,
+) -> Vec<u8> {
     let mut printer = Printer {
         output: CodeBuffer::with_capacity(capacity),
         last: OTHER,
         version: chunk.version,
+        is_shortest: spelling == LiteralSpelling::Shortest,
     };
     printer.print_block(&chunk.block);
     printer.output.into_bytes()
@@ -41,6 +61,8 @@ struct Printer {
     /// The class of the last piece written, from `separator`.
     last: u8,
     version: LuaVersion,
+    /// Whether literals take [`LiteralSpelling::Shortest`].
+    is_shortest: bool,
 }
 
 impl Printer {
@@ -94,11 +116,11 @@ impl Printer {
         self.emit(text, merges, OTHER);
     }
 
-    /// The shorter of the numeral as written and the shortest spelling of
-    /// its value, the spelling as written on a tie.
+    /// As written, or the shorter of that and the shortest spelling of its
+    /// value, as written on a tie.
     fn print_number(&mut self, literal: &NumberLiteral<'_>) {
         if let Some(raw) = literal.raw
-            && is_shortest_numeral(raw.as_str(), self.version)
+            && (!self.is_shortest || is_shortest_numeral(raw.as_str(), self.version))
         {
             self.number(raw.as_str());
             return;
@@ -109,6 +131,12 @@ impl Printer {
 
     /// Luau: an integer, as [`Self::print_number`] prints a number.
     fn print_integer(&mut self, literal: &IntegerLiteral<'_>) {
+        if let Some(raw) = literal.raw
+            && !self.is_shortest
+        {
+            self.number(raw.as_str());
+            return;
+        }
         let spelling = spell_integer(literal.value);
         self.number(shorter(literal.raw.as_deref(), spelling.as_str()));
     }
@@ -116,20 +144,22 @@ impl Printer {
     /// As [`Self::print_number`] prints a number. A quoted string with no
     /// escape is as short as its value can be spelled.
     fn print_string(&mut self, literal: &StringLiteral<'_>) {
-        if let Some(raw) = literal.raw
-            && matches!(raw.first(), Some(b'"' | b'\''))
-            && !raw.contains(&b'\\')
+        let Some(raw) = literal.raw else {
+            self.write_string_spelling(spell_string(&literal.value));
+            return;
+        };
+        if !self.is_shortest || (matches!(raw.first(), Some(b'"' | b'\'')) && !raw.contains(&b'\\'))
         {
             self.string(raw.as_bytes());
             return;
         }
-        let spelling = spell_string(&literal.value);
-        if let Some(raw) = literal.raw
-            && raw.len() <= spelling.length()
-        {
-            self.string(raw.as_bytes());
-            return;
+        match spell_string_shorter_than(&literal.value, raw.len()) {
+            Some(spelling) => self.write_string_spelling(spelling),
+            None => self.string(raw.as_bytes()),
         }
+    }
+
+    fn write_string_spelling(&mut self, spelling: StringSpelling<'_>) {
         if spelling.is_long_bracket() && self.last & LEFT_BRACKET != OTHER {
             self.output.print_byte(b' ');
         }
@@ -141,7 +171,7 @@ impl Printer {
     /// with.
     fn print_interpolated_text(&mut self, text: &StringLiteral<'_>) {
         if let Some(raw) = text.raw
-            && !raw.contains(&b'\\')
+            && (!self.is_shortest || !raw.contains(&b'\\'))
         {
             self.output.print_bytes(raw.as_bytes());
             return;

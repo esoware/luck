@@ -32,6 +32,7 @@
 //!     kind: TokenKind::InterpolatedStringBegin,
 //!     has_line_break_before: true,
 //!     is_unterminated: false,
+//!     has_escape: false,
 //! };
 //! assert_eq!(begin.text(source), b"hello ");
 //! ```
@@ -67,7 +68,8 @@ pub use op::{Associativity, BinOp, CompoundOp, UnOp};
 pub use span::{Span, index_to_offset, offset_to_index};
 pub use string::{
     EscapeError, Escaped, StringSpelling, StringValue, decode_interpolated_text, decode_string,
-    read_escape, spell_string, write_interpolated_text, write_long_string,
+    read_escape, spell_string, spell_string_shorter_than, write_interpolated_text,
+    write_long_string,
 };
 pub use token::{Token, TokenKind};
 pub use version::{LuaVersion, MAX_ACTIVE_LOCALS};

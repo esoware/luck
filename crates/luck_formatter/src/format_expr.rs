@@ -110,11 +110,10 @@ impl<'ast> Formatter<'ast> {
     /// The span of the parentheses the source grouped `expr` in, where they
     /// can matter: kept around an operator expression, or bounding a comment.
     fn grouping(&self, expr: &Expression<'ast>) -> Option<Span> {
-        let groupings = self.groupings()?;
         if !is_operator_expr(expr) && !self.comments().has_pending_before(self.enclosing_end()) {
             return None;
         }
-        groupings.around(expr.span())
+        self.grouping_around(expr.span())
     }
 
     /// Where `expr` starts and ends, the parentheses the source grouped it in

@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
 use crate::cache::Cache;
@@ -15,7 +15,7 @@ use crate::{Resolution, ResolveError};
 #[derive(Debug, Default)]
 pub(crate) struct Luau {
     aliases: AliasCache,
-    modules: SharedCache<PathBuf, ModuleFiles>,
+    modules: SharedCache<OsString, ModuleFiles>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -267,8 +267,9 @@ impl Luau {
         cache: &Cache<impl FileSystem>,
         module_path: &Path,
     ) -> Result<Probed, ResolveError> {
-        let files =
-            self.modules.get_or_insert_with(module_path, || ModuleFiles::read(cache, module_path));
+        let files = self
+            .modules
+            .get_or_insert_with(module_path.as_os_str(), || ModuleFiles::read(cache, module_path));
         // Append the extension to the full name: `with_extension` replaces
         // everything after the last dot, so `./config.v2` would probe
         // `config.luau` instead of `config.v2.luau`.

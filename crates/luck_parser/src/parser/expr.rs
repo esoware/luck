@@ -198,6 +198,7 @@ impl<'ast> Parser<'ast> {
             return Expression::Error(open);
         }
         let level = self.nesting_depth;
+        let slot = self.groupings.open();
         self.advance();
         self.open(Closer::Paren);
         let expr = self.parse_expr(0);
@@ -211,7 +212,7 @@ impl<'ast> Parser<'ast> {
             self.nesting_depth = level;
             Expression::new_parenthesized(parens, expr, self.allocator)
         } else {
-            self.groupings.record(expr.span(), parens);
+            self.groupings.record(slot, expr.span(), parens);
             expr
         };
         self.parse_suffixes(grouped, open.start)

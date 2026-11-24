@@ -6,6 +6,7 @@ const fn token(kind: TokenKind, start: u32, end: u32) -> Token {
         kind,
         has_line_break_before: false,
         is_unterminated: false,
+        has_escape: false,
     }
 }
 

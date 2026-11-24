@@ -2,6 +2,7 @@ use core::fmt::Write as _;
 
 use luck_allocator::Allocator;
 use luck_ast::{Chunk, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
+use luck_codegen::LiteralSpelling;
 use luck_minifier::TransformConfig;
 use luck_testgen::with_the_smallest_stack;
 use luck_token::{LuaVersion, UnOp};
@@ -235,7 +236,7 @@ fn assert_minifies_within_the_depth_cap(source: &str) -> String {
     assert!(reparses(&output), "output must reparse");
     let allocator = Allocator::new();
     let input = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54).chunk;
-    let compact_input = luck_codegen::compact(&input);
+    let compact_input = luck_codegen::compact(&input, LiteralSpelling::Shortest);
     assert!(output.len() <= compact_input.len(), "output must be no longer than the compact input");
     assert!(minify_lua54(&output) == output, "output must be a fixpoint");
     output

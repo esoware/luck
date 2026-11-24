@@ -19,6 +19,7 @@ use std::{env, io, panic, thread};
 use luck_allocator::Allocator;
 use luck_ast::MIN_STACK_BYTES;
 use luck_benchmark_files::{TestFile, test_files};
+use luck_codegen::LiteralSpelling;
 use luck_formatter::FormatOptions;
 use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
 use luck_minifier::TransformConfig;
@@ -125,7 +126,9 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
     let ((), linter) = record_stats_in(allocator, || {
         drop(luck_linter::lint_parsed(&parse, target, &config, FixKind::empty()));
     });
-    let ((), codegen) = record_stats_in(allocator, || drop(luck_codegen::compact(&parse.chunk)));
+    let ((), codegen) = record_stats_in(allocator, || {
+        drop(luck_codegen::compact(&parse.chunk, LiteralSpelling::AsWritten));
+    });
     let options = FormatOptions::default();
     let ((), formatter) = record_stats_in(allocator, || {
         drop(luck_formatter::format_parsed(allocator, &parse, &options));

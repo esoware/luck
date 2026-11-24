@@ -3,6 +3,7 @@
 //! `luck_ast::MIN_STACK_BYTES`.
 
 use luck_allocator::Allocator;
+use luck_codegen::LiteralSpelling;
 use luck_testgen::{
     broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
 };
@@ -13,9 +14,11 @@ fn compacting_fits_the_smallest_stack() {
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.first());
-        let output = luck_codegen::compact(&parsed.chunk);
-        let reparsed = luck_parser::parse(&allocator, &output, version);
-        assert!(reparsed.errors.is_empty(), "the output reparses");
+        for spelling in [LiteralSpelling::AsWritten, LiteralSpelling::Shortest] {
+            let output = luck_codegen::compact(&parsed.chunk, spelling);
+            let reparsed = luck_parser::parse(&allocator, &output, version);
+            assert!(reparsed.errors.is_empty(), "the output reparses");
+        }
     });
 }
 
@@ -26,6 +29,8 @@ fn compacting_what_a_failed_parse_leaves_fits_the_smallest_stack() {
         let allocator = Allocator::new();
         let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
         assert!(!parsed.errors.is_empty(), "{:?}", source.get(..20));
-        let _output = luck_codegen::compact(&parsed.chunk);
+        for spelling in [LiteralSpelling::AsWritten, LiteralSpelling::Shortest] {
+            let _output = luck_codegen::compact(&parsed.chunk, spelling);
+        }
     });
 }

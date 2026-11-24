@@ -6,6 +6,9 @@ use rustc_hash::FxHashMap;
 
 /// A map every thread resolving through one resolver reads and fills, which
 /// keeps the first value made for each key until it's cleared.
+///
+/// A path keys it as an `OsString`, which hashes in one pass where a `Path`
+/// hashes a component at a time, so two spellings of one path are two keys.
 #[derive(Debug)]
 pub(crate) struct SharedCache<K, V> {
     map: RwLock<FxHashMap<K, V>>,

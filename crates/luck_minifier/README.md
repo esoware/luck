@@ -10,7 +10,7 @@ The work runs in three phases, each once:
 2. **Compression.** One in-place walk runs every rewrite as it leaves each node. Each rewrite keeps the counts accurate, so one walk reaches the fixpoint. It walks again only when it exposes a rewrite too late in the walk to make it.
 3. **Renaming.** Every local gets the shortest name its scopes allow.
 
-Then `luck_codegen::compact` prints the tree once, every literal in the shortest spelling of its value. Every rewrite assumes a metamethod can run wherever Lua allows one, so only literal arithmetic folds, and folding works on the values the parser decoded and reproduces the target's float arithmetic exactly. The output parses, and minifying it again changes nothing. The minifier keeps a shebang and Luau `--!` hot comments on top and drops every other comment.
+Then `luck_codegen::compact` prints the tree once, with `LiteralSpelling::Shortest`, every literal in the shortest spelling of its value. Every rewrite assumes a metamethod can run wherever Lua allows one, so only literal arithmetic folds, and folding works on the values the parser decoded and reproduces the target's float arithmetic exactly. The output parses, and minifying it again changes nothing. The minifier keeps a shebang and Luau `--!` hot comments on top and drops every other comment.
 
 ## Features
 

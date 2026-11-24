@@ -1,4 +1,5 @@
 use core::mem;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use luck_allocator::ThreadAllocators;
@@ -86,11 +87,12 @@ impl<'ast> DependencyGraph<'ast> {
 /// Returns the errors discovery found.
 fn number_modules<'ast>(
     entry: PathBuf,
-    mut found: FxHashMap<PathBuf, Discovered<'ast>>,
+    mut found: FxHashMap<OsString, Discovered<'ast>>,
     mut discover: impl FnMut(&Path) -> Discovered<'ast>,
 ) -> Result<DependencyGraph<'ast>, Vec<FileDiagnostics>> {
-    let mut ids: FxHashMap<PathBuf, ModuleId> = FxHashMap::default();
-    ids.insert(entry.clone(), ModuleId(0));
+    // By canonical path, as text, as `discover_reachable` keys it.
+    let mut ids: FxHashMap<OsString, ModuleId> = FxHashMap::default();
+    ids.insert(entry.as_os_str().to_owned(), ModuleId(0));
     let mut paths = vec![entry];
     let mut modules: Vec<ModuleInfo<'ast>> = Vec::new();
     let mut errors = Vec::new();
@@ -104,7 +106,7 @@ fn number_modules<'ast>(
             break;
         }
         let Discovered { errors: found_errors, warnings: found_warnings, module } =
-            found.remove(path).unwrap_or_else(|| discover(path));
+            found.remove(path.as_os_str()).unwrap_or_else(|| discover(path));
         if !found_errors.is_empty() {
             errors.push(FileDiagnostics { path: path.clone(), diags: found_errors });
         }
@@ -114,8 +116,8 @@ fn number_modules<'ast>(
                 .into_iter()
                 .filter_map(|(site, resolved)| {
                     let next_id = ModuleId(paths.len());
-                    let id = *ids.entry(resolved?).or_insert_with_key(|target| {
-                        paths.push(target.clone());
+                    let id = *ids.entry(resolved?.into_os_string()).or_insert_with_key(|target| {
+                        paths.push(PathBuf::from(target));
                         next_id
                     });
                     Some(Dependency {

@@ -548,6 +548,10 @@ pub struct Token {
     /// whether a block comment ran to it without its closer. Only the last
     /// comment can.
     pub is_unterminated: bool,
+    /// Whether this quoted string or interpolated string piece holds an
+    /// escape sequence, or this long-bracket string a CR, which its value
+    /// rewrites. Without one, its value is its text as written.
+    pub has_escape: bool,
 }
 
 impl Token {

@@ -197,10 +197,7 @@ impl<'ast> Formatter<'ast> {
     /// `is_indented`, for a condition that sits on an indented line of its own.
     fn write_condition(&mut self, condition: &Expression<'ast>, is_indented: bool) {
         let unwrapped = unwrap_parentheses(condition);
-        let outer = self
-            .groupings()
-            .and_then(|groupings| groupings.around(condition.span()))
-            .unwrap_or_else(|| condition.span());
+        let outer = self.grouping_around(condition.span()).unwrap_or_else(|| condition.span());
         if self.comments().has_comment_outside(outer, iter::once(unwrapped.span())) {
             self.write_expr(condition);
         } else if let Expression::BinaryOp(chain) = unwrapped

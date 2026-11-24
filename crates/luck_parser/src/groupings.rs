@@ -1,7 +1,8 @@
 use luck_token::Span;
 
 /// The parentheses the source wrote around expressions only to group them,
-/// which the tree leaves out, by the expression each pair holds.
+/// which the tree leaves out, by the expression each pair holds, in source
+/// order.
 ///
 /// A formatter that keeps the ones a user wrote, a lint about them, and an
 /// editor's expanding selection find them here.
@@ -11,7 +12,8 @@ pub struct Groupings(Vec<Grouping>);
 #[derive(Debug, Clone, Copy)]
 struct Grouping {
     expr: Span,
-    /// From the outermost `(` around `expr` to its `)`.
+    /// From the outermost `(` around `expr` to its `)`, or empty for a pair
+    /// the tree kept, or one still open.
     parens: Span,
 }
 
@@ -20,20 +22,44 @@ impl Groupings {
     /// outermost `(` to its `)`, if the source grouped it.
     #[must_use]
     pub fn around(&self, expr: Span) -> Option<Span> {
-        let key = (expr.start, expr.end);
-        let index = self.0.binary_search_by_key(&key, Grouping::key).ok()?;
+        let index = self.0.binary_search_by_key(&key(expr), Grouping::key).ok()?;
         self.0.get(index).map(|grouping| grouping.parens)
     }
 
-    /// Records `parens` around `expr`. A pair around one just recorded is
-    /// the outermost of the two.
-    pub(crate) fn record(&mut self, expr: Span, parens: Span) {
-        if let Some(last) = self.0.last_mut()
-            && last.expr == expr
-        {
-            last.parens = parens;
-        } else {
-            self.0.push(Grouping { expr, parens });
+    /// [`Self::around`], searched for from `cursor`, where the search before
+    /// left it, so a printer asking in source order takes a step or two.
+    #[must_use]
+    #[inline]
+    pub fn around_from(&self, expr: Span, cursor: &mut usize) -> Option<Span> {
+        let wanted = key(expr);
+        let mut index = (*cursor).min(self.0.len());
+        while self.0.get(index).is_some_and(|grouping| grouping.key() < wanted) {
+            index = index.saturating_add(1);
+        }
+        let before = self.0.get(..index).unwrap_or_default();
+        if before.last().is_some_and(|grouping| grouping.key() >= wanted) {
+            index = before.partition_point(|grouping| grouping.key() < wanted);
+        }
+        *cursor = index;
+        self.0
+            .get(index)
+            .filter(|grouping| grouping.key() == wanted)
+            .map(|grouping| grouping.parens)
+    }
+
+    /// Opens an entry for parentheses whose `(` is the next token, which
+    /// [`Self::record`] fills when their `)` closes, so entries fall in
+    /// source order.
+    pub(crate) fn open(&mut self) -> usize {
+        let slot = self.0.len();
+        self.0.push(Grouping { expr: Span::new(0, 0), parens: Span::new(0, 0) });
+        slot
+    }
+
+    /// Records the parentheses `slot` opened around `expr`.
+    pub(crate) fn record(&mut self, slot: usize, expr: Span, parens: Span) {
+        if let Some(grouping) = self.0.get_mut(slot) {
+            *grouping = Grouping { expr, parens };
         }
     }
 
@@ -41,16 +67,25 @@ impl Groupings {
         self.0.len()
     }
 
-    /// [`Self::around`] among the ones recorded from `from` on, before they're
-    /// sorted.
+    /// [`Self::around`] among the ones opened from `from` on, while the
+    /// parse goes on.
     pub(crate) fn around_since(&self, from: usize, expr: Span) -> Option<Span> {
-        let recorded = self.0.get(from..).unwrap_or_default();
-        recorded.iter().find(|grouping| grouping.expr == expr).map(|grouping| grouping.parens)
+        let opened = self.0.get(from..).unwrap_or_default();
+        opened
+            .iter()
+            .find(|grouping| grouping.expr == expr && !grouping.parens.is_empty())
+            .map(|grouping| grouping.parens)
     }
 
-    /// Parentheses close inside out, so they're recorded out of order.
-    pub(crate) fn sort(&mut self) {
-        self.0.sort_unstable_by_key(Grouping::key);
+    /// Drops the entries of pairs the tree kept, and of all but the outermost
+    /// pair around one expression, which comes first. A parse that recovered
+    /// from an error can leave them out of order, which a sort settles.
+    pub(crate) fn finish(&mut self) {
+        self.0.retain(|grouping| !grouping.parens.is_empty());
+        self.0.dedup_by_key(|grouping| grouping.key());
+        if !self.0.is_sorted_by_key(Grouping::key) {
+            self.0.sort_by_key(Grouping::key);
+        }
     }
 }
 
@@ -58,6 +93,10 @@ impl Grouping {
     const fn key(&self) -> (u32, u32) {
         (self.expr.start, self.expr.end)
     }
+}
+
+const fn key(expr: Span) -> (u32, u32) {
+    (expr.start, expr.end)
 }
 
 #[cfg(test)]
@@ -89,5 +128,25 @@ mod tests {
         let parse = crate::parse(&allocator, b"return (f()), (...)", LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         assert_eq!(parse.groupings.len(), 0);
+    }
+
+    #[test]
+    fn finds_each_pair_from_any_cursor() {
+        let allocator = Allocator::new();
+        let source = "return (a), ((b)), (c) + (d), (e .. (f)), g, (h)";
+        let parse = crate::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        assert!(parse.errors.is_empty(), "{:?}", parse.errors);
+        let groupings = &parse.groupings;
+        let queries: Vec<Span> = (0..index_to_offset(source.len()))
+            .flat_map(|start| {
+                (start..=index_to_offset(source.len())).map(move |end| Span::new(start, end))
+            })
+            .collect();
+        for start_cursor in 0..=groupings.len().saturating_add(2) {
+            let mut cursor = start_cursor;
+            for &expr in queries.iter().chain(queries.iter().rev()) {
+                assert_eq!(groupings.around_from(expr, &mut cursor), groupings.around(expr));
+            }
+        }
     }
 }

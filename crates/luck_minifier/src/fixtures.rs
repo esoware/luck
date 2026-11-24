@@ -1,5 +1,6 @@
 use luck_allocator::Allocator;
 use luck_ast::Chunk;
+use luck_codegen::LiteralSpelling;
 use luck_token::LuaVersion;
 
 use crate::bind::bind;
@@ -76,7 +77,7 @@ pub(crate) fn walk_once(source: &str, config: TransformConfig) -> String {
     let names = &mut NameTable::default();
     bind(&mut chunk.block, chunk.version, &mut bindings, names);
     Compressor::new(&allocator, chunk.version, config, &mut bindings).walk(&mut chunk.block);
-    String::from_utf8(luck_codegen::compact(&chunk)).unwrap()
+    String::from_utf8(luck_codegen::compact(&chunk, LiteralSpelling::Shortest)).unwrap()
 }
 
 /// Binds and compresses `source` as a minify does, without renaming.
