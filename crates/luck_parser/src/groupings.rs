@@ -86,7 +86,7 @@ impl Groupings {
 
 impl Grouping {
     const fn key(&self) -> (u32, u32) {
-        (self.expr.start, self.expr.end)
+        key(self.expr)
     }
 }
 

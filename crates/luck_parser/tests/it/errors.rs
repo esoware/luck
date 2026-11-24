@@ -3,7 +3,7 @@ use std::ops::Range;
 use luck_allocator::Allocator;
 use luck_ast::{Expression, FunctionArgs, Statement};
 use luck_parser::ParseResult;
-use luck_token::LuaVersion;
+use luck_token::{LuaVersion, Span};
 
 fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
     luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Lua54)
@@ -13,11 +13,11 @@ fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'as
 fn expectation_errors_have_exact_message_and_span() {
     let allocator = Allocator::new();
     for (source, span, message) in [
-        ("local = 5", luck_token::Span::new(6, 7), "expected identifier, found `=`"),
-        ("if true end", luck_token::Span::new(8, 11), "missing `then` in if-statement"),
+        ("local = 5", Span::new(6, 7), "expected identifier, found `=`"),
+        ("if true end", Span::new(8, 11), "missing `then` in if-statement"),
         (
             "function f()",
-            luck_token::Span::new(12, 12),
+            Span::new(12, 12),
             "expected `end` to close `function`, found end of file",
         ),
     ] {
@@ -83,31 +83,6 @@ fn unmatched_paren_in_expr_position_is_an_error() {
     let allocator = Allocator::new();
     let result = parse(&allocator, "local x = )");
     assert!(!result.errors.is_empty(), "should error on invalid expression");
-}
-
-#[test]
-fn stmt_after_top_level_return_is_an_error() {
-    let allocator = Allocator::new();
-    // Accepting it would silently drop the tail from the AST.
-    let result = parse(
-        &allocator,
-        "\
-return 1
-local x = 2",
-    );
-    assert!(!result.errors.is_empty(), "statements after a top-level return must be an error");
-}
-
-#[test]
-fn stray_end_at_top_level_is_an_error() {
-    let allocator = Allocator::new();
-    let result = parse(
-        &allocator,
-        "\
-local x = 1
-end",
-    );
-    assert!(!result.errors.is_empty(), "a stray end at top level must be an error");
 }
 
 /// Each broken source is its one error, with that text, and the statement

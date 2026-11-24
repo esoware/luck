@@ -10,7 +10,7 @@ fn assert_has_errors(result: &ParseResult<'_>) {
 }
 
 #[test]
-fn goto_in_lua51_is_identifier() {
+fn goto_is_a_name_in_lua51() {
     let allocator = Allocator::new();
     // In Lua 5.1, `goto` is an ordinary identifier.
     let result = parse(&allocator, b"goto = 1", LuaVersion::Lua51);
@@ -45,7 +45,7 @@ fn attribute_is_not_parsed_in_lua53() {
 }
 
 #[test]
-fn global_in_lua54_is_identifier() {
+fn global_is_a_name_in_lua54() {
     let allocator = Allocator::new();
     // In Lua 5.4, `global` is an identifier, not a keyword.
     let result = parse(&allocator, b"global = 1", LuaVersion::Lua54);
@@ -54,7 +54,7 @@ fn global_in_lua54_is_identifier() {
 }
 
 #[test]
-fn bitwise_and_in_lua51_is_error() {
+fn bitwise_and_is_an_error_in_lua51() {
     let allocator = Allocator::new();
     // The lexer rejects `&` in Lua 5.1, so the errors are lex errors.
     let result = parse(&allocator, b"local x = a & b", LuaVersion::Lua51);
@@ -62,7 +62,7 @@ fn bitwise_and_in_lua51_is_error() {
 }
 
 #[test]
-fn bitwise_pipe_in_lua52_is_error() {
+fn bitwise_pipe_is_an_error_in_lua52() {
     let allocator = Allocator::new();
     // The lexer rejects `|` in Lua 5.2.
     let result = parse(&allocator, b"local x = a | b", LuaVersion::Lua52);

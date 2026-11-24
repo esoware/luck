@@ -63,7 +63,7 @@ fn global_declares_before_a_name_attribute_star_or_function() {
 }
 
 #[test]
-fn global_simple() {
+fn global_before_a_name_is_a_global_declaration() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global x");
     assert_no_errors(&result);
@@ -76,7 +76,7 @@ fn global_simple() {
 }
 
 #[test]
-fn global_multiple_names() {
+fn global_declaration_keeps_each_name() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global x, y");
     assert_no_errors(&result);
@@ -89,7 +89,7 @@ fn global_multiple_names() {
 }
 
 #[test]
-fn global_function() {
+fn global_function_is_a_global_function() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global function f() end");
     assert_no_errors(&result);
@@ -102,7 +102,7 @@ fn global_function() {
 }
 
 #[test]
-fn global_star() {
+fn global_star_has_no_attribute() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global *");
     assert_no_errors(&result);
@@ -115,7 +115,7 @@ fn global_star() {
 }
 
 #[test]
-fn global_star_with_attribute() {
+fn global_star_keeps_its_attribute() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global <const> *");
     assert_no_errors(&result);
@@ -129,7 +129,7 @@ fn global_star_with_attribute() {
 }
 
 #[test]
-fn local_attribute_before_first_name() {
+fn leading_local_attribute_belongs_to_the_statement() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "local <close> f = io.open(\"file\")");
     assert_no_errors(&result);
@@ -144,7 +144,7 @@ fn local_attribute_before_first_name() {
 }
 
 #[test]
-fn named_vararg() {
+fn vararg_keeps_its_name() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "function f(...args) return args end");
     assert_no_errors(&result);
@@ -158,7 +158,7 @@ fn named_vararg() {
 }
 
 #[test]
-fn named_vararg_after_params() {
+fn named_vararg_follows_named_params() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "function f(a, b, ...rest) end");
     assert_no_errors(&result);
@@ -174,7 +174,7 @@ fn named_vararg_after_params() {
 }
 
 #[test]
-fn global_with_initializer() {
+fn global_declaration_keeps_its_values() {
     let allocator = Allocator::new();
     // 5.5 manual section 3.3.7: stat ::= global attnamelist ['=' explist]
     let single = parse_lua55(&allocator, "global x = 1");
@@ -196,7 +196,7 @@ fn global_with_initializer() {
 }
 
 #[test]
-fn global_attributed_with_initializer() {
+fn attributed_global_keeps_its_value() {
     let allocator = Allocator::new();
     let result = parse_lua55(&allocator, "global x <const> = 1");
     assert_no_errors(&result);
@@ -251,7 +251,7 @@ fn trailing_attribute_replaces_the_leading_one_on_its_name() {
 }
 
 #[test]
-fn postfixed_attribute_overrides_prefixed_attribute() {
+fn a_name_may_carry_an_attribute_after_a_leading_one() {
     let allocator = Allocator::new();
     // 5.5 `localstat`: `kind = getvarattribute(ls, defkind)`.
     for source in ["local <const> a <close> = nil", "global <const> x <const>"] {

@@ -3,27 +3,28 @@ use luck_ast::{
     Expression, InterpolatedSegment, LocalAssignmentKind, LocalFunctionKind, Statement, Suffix,
     TypeDeclarationValue, Var,
 };
+use luck_token::{CompoundOp, LuaVersion};
 
 use crate::common::{
     assert_no_errors, chain, chain_shape, local_value, parse_luau, run_operands, target_chain,
 };
 
 #[test]
-fn compound_assign_plus() {
+fn compound_assignment_keeps_its_target_and_operator() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "x += 1");
     assert_no_errors(&result);
     assert_eq!(result.chunk.block.stmts.len(), 1);
     if let Statement::CompoundAssignment(compound_assignment) = &result.chunk.block.stmts[0] {
         assert!(matches!(&compound_assignment.var, Var::Name(name) if name.text == "x"));
-        assert_eq!(compound_assignment.op, luck_token::CompoundOp::Add);
+        assert_eq!(compound_assignment.op, CompoundOp::Add);
     } else {
         panic!("expected CompoundAssignment, got {:?}", result.chunk.block.stmts[0]);
     }
 }
 
 #[test]
-fn compound_assign_index() {
+fn index_is_a_compound_assignment_target() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "t[i] *= 2");
     assert_no_errors(&result);
@@ -32,11 +33,11 @@ fn compound_assign_index() {
         panic!("expected CompoundAssignment");
     };
     assert_eq!(chain_shape(target_chain(&compound_assignment.var)), "t[]");
-    assert_eq!(compound_assignment.op, luck_token::CompoundOp::Mul);
+    assert_eq!(compound_assignment.op, CompoundOp::Mul);
 }
 
 #[test]
-fn compound_assign_field_concat() {
+fn field_is_a_compound_assignment_target() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, r#"a.b ..= "c""#);
     assert_no_errors(&result);
@@ -45,21 +46,21 @@ fn compound_assign_field_concat() {
         panic!("expected CompoundAssignment");
     };
     assert_eq!(chain_shape(target_chain(&compound_assignment.var)), "a.b");
-    assert_eq!(compound_assignment.op, luck_token::CompoundOp::Concat);
+    assert_eq!(compound_assignment.op, CompoundOp::Concat);
 }
 
 #[test]
-fn compound_assign_all_operators() {
+fn each_compound_operator_is_its_op() {
     let allocator = Allocator::new();
     for (source, expected_op) in [
-        ("x += 1", luck_token::CompoundOp::Add),
-        ("x -= 1", luck_token::CompoundOp::Sub),
-        ("x *= 1", luck_token::CompoundOp::Mul),
-        ("x /= 1", luck_token::CompoundOp::Div),
-        ("x //= 1", luck_token::CompoundOp::FloorDiv),
-        ("x %= 1", luck_token::CompoundOp::Mod),
-        ("x ^= 1", luck_token::CompoundOp::Pow),
-        ("x ..= 1", luck_token::CompoundOp::Concat),
+        ("x += 1", CompoundOp::Add),
+        ("x -= 1", CompoundOp::Sub),
+        ("x *= 1", CompoundOp::Mul),
+        ("x /= 1", CompoundOp::Div),
+        ("x //= 1", CompoundOp::FloorDiv),
+        ("x %= 1", CompoundOp::Mod),
+        ("x ^= 1", CompoundOp::Pow),
+        ("x ..= 1", CompoundOp::Concat),
     ] {
         let result = parse_luau(&allocator, source);
         assert_no_errors(&result);
@@ -72,7 +73,7 @@ fn compound_assign_all_operators() {
 }
 
 #[test]
-fn if_expr_simple() {
+fn if_expression_without_elseif_has_no_clauses() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local x = if a then 1 else 2");
     assert_no_errors(&result);
@@ -85,7 +86,7 @@ fn if_expr_simple() {
 }
 
 #[test]
-fn if_expr_with_elseif() {
+fn if_expression_keeps_its_elseif_clause() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local y = if a then b elseif c then d else e");
     assert_no_errors(&result);
@@ -98,7 +99,7 @@ fn if_expr_with_elseif() {
 }
 
 #[test]
-fn if_expr_nested() {
+fn if_expression_nests_in_a_branch() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local z = if a then if b then 1 else 2 else 3");
     assert_no_errors(&result);
@@ -111,7 +112,7 @@ fn if_expr_nested() {
 }
 
 #[test]
-fn interpolated_string_plain() {
+fn backtick_string_is_an_interpolated_string() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local x = `hello`");
     assert_no_errors(&result);
@@ -120,7 +121,7 @@ fn interpolated_string_plain() {
 }
 
 #[test]
-fn interpolated_string_with_expr() {
+fn interpolated_string_keeps_its_expression() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local x = `{y}`");
     assert_no_errors(&result);
@@ -135,7 +136,7 @@ fn interpolated_string_with_expr() {
 }
 
 #[test]
-fn interpolated_string_multiple_exprs() {
+fn interpolated_string_keeps_each_segment_and_its_tail() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local x = `a{1+2}b{3}c`");
     assert_no_errors(&result);
@@ -161,7 +162,7 @@ fn interpolated_string_multiple_exprs() {
 }
 
 #[test]
-fn function_with_param_types() {
+fn typed_function_keeps_its_params_and_return_type() {
     let allocator = Allocator::new();
     let result =
         parse_luau(&allocator, "function f(a: string, b: number): boolean return true end");
@@ -177,7 +178,7 @@ fn function_with_param_types() {
 }
 
 #[test]
-fn local_with_generic_type() {
+fn local_takes_a_generic_type_annotation() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local t: Array<number> = {}");
     assert_no_errors(&result);
@@ -185,7 +186,7 @@ fn local_with_generic_type() {
 }
 
 #[test]
-fn type_cast_expr() {
+fn double_colon_is_a_type_cast() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local x = y :: number");
     assert_no_errors(&result);
@@ -197,7 +198,7 @@ fn type_cast_expr() {
 /// and call results take a cast too. The minifier emits forms like
 /// `print(1::number)`, which have to parse back.
 #[test]
-fn type_cast_on_literals_and_tables() {
+fn any_simple_expression_takes_a_type_cast() {
     let allocator = Allocator::new();
     for source in [
         "local x = 1 :: number",
@@ -225,7 +226,7 @@ fn type_cast_binds_tighter_than_binary_op() {
 }
 
 #[test]
-fn type_cast_chained() {
+fn a_second_cast_needs_parentheses() {
     let allocator = Allocator::new();
     // Grammar: asexp ::= simpleexp ['::' Type], one cast per simpleexp.
     // Luau rejects a second `::`; chaining needs parens.
@@ -235,7 +236,7 @@ fn type_cast_chained() {
 }
 
 #[test]
-fn type_declaration_simple() {
+fn type_alias_keeps_its_name() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "type Foo = number");
     assert_no_errors(&result);
@@ -248,7 +249,7 @@ fn type_declaration_simple() {
 }
 
 #[test]
-fn type_declaration_generic() {
+fn type_alias_keeps_its_generics() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "type Pair<T> = { first: T, second: T }");
     assert_no_errors(&result);
@@ -260,7 +261,7 @@ fn type_declaration_generic() {
 }
 
 #[test]
-fn export_type_declaration() {
+fn exported_type_alias_is_exported() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "export type Point = { x: number, y: number }");
     assert_no_errors(&result);
@@ -271,7 +272,7 @@ fn export_type_declaration() {
 }
 
 #[test]
-fn consecutive_type_declarations() {
+fn type_aliases_follow_one_another() {
     let allocator = Allocator::new();
     let source = "\
 type A = number
@@ -299,7 +300,7 @@ end",
 }
 
 #[test]
-fn continue_in_for_loop() {
+fn continue_is_a_statement_in_a_for_loop() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "for i=1,10 do continue end");
     assert_no_errors(&result);
@@ -311,7 +312,7 @@ fn continue_in_for_loop() {
 }
 
 #[test]
-fn continue_as_local_name() {
+fn continue_is_a_name_after_local() {
     let allocator = Allocator::new();
     // `continue` used as a variable name parses as a local assignment.
     let result = parse_luau(&allocator, "local continue = 5");
@@ -320,7 +321,7 @@ fn continue_as_local_name() {
 }
 
 #[test]
-fn continue_in_while_loop() {
+fn continue_is_a_statement_in_a_while_loop() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "while true do continue end");
     assert_no_errors(&result);
@@ -354,7 +355,7 @@ fn break_ends_its_block_in_luau_as_a_statement() {
 }
 
 #[test]
-fn break_mid_block_rejected_in_luau() {
+fn statement_after_break_is_an_error_in_luau() {
     let allocator = Allocator::new();
     // Statements after `break` are a grammar error in Luau.
     let result = parse_luau(&allocator, "while true do break print(1) end");
@@ -362,7 +363,7 @@ fn break_mid_block_rejected_in_luau() {
 }
 
 #[test]
-fn continue_as_function_call() {
+fn continue_before_parentheses_is_a_call() {
     let allocator = Allocator::new();
     let source = "continue()";
     let result = parse_luau(&allocator, source);
@@ -375,7 +376,7 @@ fn continue_as_function_call() {
 }
 
 #[test]
-fn continue_as_field_access() {
+fn continue_before_a_field_is_an_assignment_target() {
     let allocator = Allocator::new();
     let source = "continue.field = 1";
     let result = parse_luau(&allocator, source);
@@ -401,7 +402,7 @@ fn nested_interpolated_string_stmt_is_an_error() {
 }
 
 #[test]
-fn nested_generic_type_annotation() {
+fn local_takes_a_nested_generic_type_annotation() {
     let allocator = Allocator::new();
     let source = "local x: Map<string, Array<number>> = {}";
     let result = parse_luau(&allocator, source);
@@ -409,7 +410,7 @@ fn nested_generic_type_annotation() {
 }
 
 #[test]
-fn function_attributes_are_kept_on_ast() {
+fn function_declarations_keep_their_attributes() {
     let allocator = Allocator::new();
     let global = parse_luau(&allocator, "@native function f() end");
     assert_no_errors(&global);
@@ -437,7 +438,7 @@ fn attribute_on_local_variable_rejected() {
 }
 
 #[test]
-fn export_type_function_parses() {
+fn exported_type_function_is_exported() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "export type function Id(t) return t end");
     assert_no_errors(&result);
@@ -468,7 +469,7 @@ type I = A & B",
 }
 
 #[test]
-fn const_bindings() {
+fn const_is_a_const_local_or_function() {
     let allocator = Allocator::new();
     // Grammar: 'const' bindinglist '=' explist | 'const' 'function' NAME funcbody
     let result = parse_luau(&allocator, "const x = 1");
@@ -514,12 +515,12 @@ local const = 2
 print(const)",
     ));
     // And non-Luau versions never treat it specially.
-    let result = luck_parser::parse(&allocator, b"const x = 1", luck_token::LuaVersion::Lua54);
+    let result = luck_parser::parse(&allocator, b"const x = 1", LuaVersion::Lua54);
     assert!(!result.errors.is_empty(), "const decl is Luau-only");
 }
 
 #[test]
-fn bracketed_and_parameterized_attributes() {
+fn bracketed_attributes_take_literal_arguments() {
     let allocator = Allocator::new();
     // attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'
     assert_no_errors(&parse_luau(&allocator, "@[deprecated] function f() end"));
@@ -552,7 +553,7 @@ fn a_literal_in_parentheses_is_no_attribute_argument() {
 }
 
 #[test]
-fn attributes_on_function_exprs() {
+fn function_expressions_take_attributes() {
     let allocator = Allocator::new();
     // simpleexp ::= attributes 'function' funcbody
     assert_no_errors(&parse_luau(&allocator, "local k = @native function() end"));
@@ -615,7 +616,7 @@ local after = 1",
 }
 
 #[test]
-fn integer_literals_have_a_distinct_ast_node() {
+fn integer_literals_are_integer_nodes_within_64_bits() {
     let allocator = Allocator::new();
     let result = parse_luau(
         &allocator,
@@ -748,8 +749,7 @@ return export",
 fn luau_only_features_are_errors_in_lua54() {
     let allocator = Allocator::new();
     for source in ["return 1i", "return f<<number>>()", "export local x = 1", "type T = ~nil"] {
-        let result =
-            luck_parser::parse(&allocator, source.as_bytes(), luck_token::LuaVersion::Lua54);
+        let result = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         assert!(!result.errors.is_empty(), "{source} must be Luau-only");
     }
 }
@@ -780,7 +780,7 @@ fn a_local_function_keeps_where_its_keyword_starts_past_its_attributes() {
 }
 
 #[test]
-fn deprecated_arguments_are_validated() {
+fn deprecated_takes_only_a_table_of_use_and_reason_strings() {
     let allocator = Allocator::new();
     for source in [
         "@[deprecated(\"x\")] function f() end",

@@ -9,7 +9,8 @@ use luck_ast::{Attribute, Expression, Field, FunctionAttribute, GetSpan as _, Na
 use luck_diagnostics::Diagnostic;
 use luck_token::{Span, TokenKind};
 
-use super::{Closer, Parser};
+use super::Parser;
+use super::recovery::Closer;
 
 impl<'ast> Parser<'ast> {
     /// Whether `expr` is a constant string, which a backtick string with no

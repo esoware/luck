@@ -11,7 +11,8 @@ use luck_ast::{
 };
 use luck_token::{Span, Token, TokenKind};
 
-use super::{Closer, Parser};
+use super::Parser;
+use super::recovery::Closer;
 
 /// Luau's flat type-suffix chain rejects `A | B & C`, `A? & B`, and the like.
 const MIXED_TYPE_MESSAGE: &str =
@@ -23,6 +24,14 @@ const MIXED_TYPE_MESSAGE: &str =
 pub(super) enum GenericsOwner {
     TypeAlias,
     Function,
+}
+
+/// Whether a pack such as `()` or `(T, ...U)` may stand where a
+/// parenthesized type is read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Packs {
+    Allowed,
+    Rejected,
 }
 
 impl<'ast> Parser<'ast> {
@@ -78,7 +87,7 @@ impl<'ast> Parser<'ast> {
         }
         let level = self.nesting_depth;
         let outer = self.begin_operand();
-        let mut first = self.parse_paren_or_function_type(true);
+        let mut first = self.parse_paren_or_function_type(Packs::Allowed);
         // `parseReturnType` folds a suffix over `(T)` and over the `T` of
         // `(T, ...U)`, so `(A, B)?` and `() -> (A, B) | C` leave it unconsumed.
         if matches!(first, Type::Parenthesized(_)) {
@@ -107,7 +116,7 @@ impl<'ast> Parser<'ast> {
             return self.parse_type();
         }
         let outer = self.begin_operand();
-        let first = self.parse_paren_or_function_type(true);
+        let first = self.parse_paren_or_function_type(Packs::Allowed);
         let result =
             if matches!(first, Type::Pack(_)) { first } else { self.parse_union_level(first) };
         self.end_operand(outer);
@@ -127,8 +136,7 @@ impl<'ast> Parser<'ast> {
         let result = match self.peek() {
             // A leading separator, as in the multiline definition style:
             // `type T =` newline `| A` newline `| B`.
-            TokenKind::Pipe => self.parse_leading_separator_type(true),
-            TokenKind::Ampersand => self.parse_leading_separator_type(false),
+            TokenKind::Pipe | TokenKind::Ampersand => self.parse_leading_separator_type(),
             _ => {
                 let primary = self.parse_primary_type();
                 self.parse_union_level(primary)
@@ -138,9 +146,11 @@ impl<'ast> Parser<'ast> {
         result
     }
 
-    /// A union after a leading `|`, or an intersection after a leading `&`.
-    fn parse_leading_separator_type(&mut self, is_union: bool) -> Type<'ast> {
+    /// A union after a leading `|`, or an intersection after a leading `&`,
+    /// whichever the current token is.
+    fn parse_leading_separator_type(&mut self) -> Type<'ast> {
         let leading = self.token.span;
+        let is_union = self.is_at(TokenKind::Pipe);
         if !self.enter_depth() {
             return Type::Error(leading);
         }
@@ -292,7 +302,7 @@ impl<'ast> Parser<'ast> {
             TokenKind::False => Type::False(self.advance()),
             TokenKind::StringLiteral => Type::StringLiteral(self.advance_string()),
             TokenKind::LeftBrace => self.parse_table_type(),
-            TokenKind::LeftParen => self.parse_paren_or_function_type(false),
+            TokenKind::LeftParen => self.parse_paren_or_function_type(Packs::Rejected),
             // `<T>(...) -> R` is a generic function type.
             TokenKind::Less => {
                 let open = self.token.span;
@@ -582,20 +592,20 @@ impl<'ast> Parser<'ast> {
     }
 
     /// Parse a parenthesized type `(T)`, a function type `(a: T, ...U) -> R`,
-    /// or, when `is_pack_allowed`, a pack such as `()` or `(T, ...U)`. A `->`
-    /// after the `)` decides which.
-    fn parse_paren_or_function_type(&mut self, is_pack_allowed: bool) -> Type<'ast> {
+    /// or, where `packs` allows one, a pack such as `()` or `(T, ...U)`. A
+    /// `->` after the `)` decides which.
+    fn parse_paren_or_function_type(&mut self, packs: Packs) -> Type<'ast> {
         let open = self.token.span;
         if !self.enter_depth() {
             return Type::Error(open);
         }
-        let parsed = self.parse_paren_or_function_members(is_pack_allowed);
+        let parsed = self.parse_paren_or_function_members(packs);
         self.exit_depth();
         parsed
     }
 
     /// The caller has counted the level all three forms take.
-    fn parse_paren_or_function_members(&mut self, is_pack_allowed: bool) -> Type<'ast> {
+    fn parse_paren_or_function_members(&mut self, packs: Packs) -> Type<'ast> {
         let open = self.advance(); // `(`
         self.open(Closer::Paren);
         let start = self.scratch.function_type_params.len();
@@ -632,17 +642,12 @@ impl<'ast> Parser<'ast> {
             let span = open.merge(return_type.span());
             return Type::new_function(span, None, params, return_type, self.allocator);
         }
-        self.finish_paren_or_pack(open.merge(close), start, is_pack_allowed)
+        self.finish_paren_or_pack(open.merge(close), start, packs)
     }
 
     /// No arrow followed the members from `start`, so they're a
     /// parenthesized type or a pack, and neither takes parameter names.
-    fn finish_paren_or_pack(
-        &mut self,
-        span: Span,
-        start: usize,
-        is_pack_allowed: bool,
-    ) -> Type<'ast> {
+    fn finish_paren_or_pack(&mut self, span: Span, start: usize, packs: Packs) -> Type<'ast> {
         let mut params = mem::take(&mut self.scratch.function_type_params);
         for param in &params[start..] {
             if let Some(name) = param.name {
@@ -655,7 +660,7 @@ impl<'ast> Parser<'ast> {
         {
             let param = params.pop().expect("the match holds one member");
             Type::new_parenthesized(span, param.ty, self.allocator)
-        } else if is_pack_allowed {
+        } else if packs == Packs::Allowed {
             let types_start = self.scratch.types.len();
             self.scratch.types.extend(params.drain(start..).map(|param| param.ty));
             let types = List::split_off_in(&mut self.scratch.types, types_start, self.allocator);
@@ -684,7 +689,7 @@ impl<'ast> Parser<'ast> {
             self.syntax_error(span, message);
             return Type::Error(start_span.merge(span));
         }
-        let parsed = self.parse_paren_or_function_members(true);
+        let parsed = self.parse_paren_or_function_members(Packs::Allowed);
         let Type::Function(mut function_type) = parsed else {
             // `<T>` followed by a paren type with no `->`, so the generics
             // have nothing to attach to.

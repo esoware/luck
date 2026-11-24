@@ -14,10 +14,9 @@ impl<'ast> Parser<'ast> {
     pub(super) fn parse_attributed_function(&mut self) -> Statement<'ast> {
         let attributes = self.parse_function_attributes();
         match self.peek() {
-            TokenKind::Local => self.parse_local_stmt(attributes),
+            TokenKind::Local | TokenKind::Const => self.parse_local_stmt(attributes),
             TokenKind::Function => self.parse_function_decl(attributes),
             TokenKind::Export => self.parse_export_stmt(attributes),
-            TokenKind::Const => self.parse_const_stmt(attributes),
             _ => {
                 let span = self.token.span;
                 self.syntax_error(
@@ -69,32 +68,25 @@ impl<'ast> Parser<'ast> {
         FunctionName::new(first.span.merge(end_span), names, method)
     }
 
+    /// A statement that opens with `local` or Luau's `const`, the current
+    /// token, which decides its kind.
     pub(super) fn parse_local_stmt(
         &mut self,
         attributes: List<'ast, FunctionAttribute<'ast>>,
     ) -> Statement<'ast> {
-        let local_span = self.advance();
+        let (function_kind, assignment_kind) = if self.is_at(TokenKind::Const) {
+            (LocalFunctionKind::Const, LocalAssignmentKind::Const)
+        } else {
+            (LocalFunctionKind::Local, LocalAssignmentKind::Local)
+        };
+        let keyword = self.advance();
         if self.is_at(TokenKind::Function) {
-            return self.parse_local_function(local_span, attributes, LocalFunctionKind::Local);
+            return self.parse_local_function(keyword, attributes, function_kind);
         }
         if let Some(attribute) = attributes.first() {
             self.error(attribute.span, "attributes are only allowed on function declarations");
         }
-        self.parse_local_assignment(local_span, LocalAssignmentKind::Local)
-    }
-
-    pub(super) fn parse_const_stmt(
-        &mut self,
-        attributes: List<'ast, FunctionAttribute<'ast>>,
-    ) -> Statement<'ast> {
-        let const_span = self.advance(); // `const`
-        if self.is_at(TokenKind::Function) {
-            return self.parse_local_function(const_span, attributes, LocalFunctionKind::Const);
-        }
-        if let Some(attribute) = attributes.first() {
-            self.error(attribute.span, "attributes are only allowed on function declarations");
-        }
-        self.parse_local_assignment(const_span, LocalAssignmentKind::Const)
+        self.parse_local_assignment(keyword, assignment_kind)
     }
 
     fn parse_local_function(

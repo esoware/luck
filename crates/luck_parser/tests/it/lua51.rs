@@ -12,7 +12,7 @@ fn parse_lua51<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResu
 }
 
 #[test]
-fn do_end() {
+fn do_end_is_a_do_block() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "do end");
     assert_no_errors(&result);
@@ -21,7 +21,7 @@ fn do_end() {
 }
 
 #[test]
-fn nested_do_blocks() {
+fn nested_do_blocks_nest_in_the_tree() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "do do do end end end");
     assert_no_errors(&result);
@@ -40,7 +40,7 @@ fn nested_do_blocks() {
 }
 
 #[test]
-fn while_loop() {
+fn while_loop_keeps_its_condition() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "while true do end");
     assert_no_errors(&result);
@@ -53,7 +53,7 @@ fn while_loop() {
 }
 
 #[test]
-fn repeat_until() {
+fn repeat_loop_keeps_its_condition() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "repeat until false");
     assert_no_errors(&result);
@@ -66,7 +66,7 @@ fn repeat_until() {
 }
 
 #[test]
-fn if_then_end() {
+fn if_then_end_is_an_if_statement() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "if true then end");
     assert_no_errors(&result);
@@ -75,7 +75,7 @@ fn if_then_end() {
 }
 
 #[test]
-fn if_elseif_else() {
+fn if_statement_keeps_its_elseif_and_else_clauses() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "if x then a() elseif y then b() else c() end");
     assert_no_errors(&result);
@@ -88,7 +88,7 @@ fn if_elseif_else() {
 }
 
 #[test]
-fn numeric_for_two_values() {
+fn numeric_for_without_a_step_has_none() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "for i = 1, 10 do end");
     assert_no_errors(&result);
@@ -100,7 +100,7 @@ fn numeric_for_two_values() {
 }
 
 #[test]
-fn numeric_for_three_values() {
+fn numeric_for_keeps_its_step() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "for i = 1, 10, 2 do end");
     assert_no_errors(&result);
@@ -112,7 +112,7 @@ fn numeric_for_three_values() {
 }
 
 #[test]
-fn generic_for() {
+fn generic_for_keeps_each_name() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "for k, v in pairs(t) do end");
     assert_no_errors(&result);
@@ -124,7 +124,7 @@ fn generic_for() {
 }
 
 #[test]
-fn function_decl_simple() {
+fn function_statement_is_a_function_declaration() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "function foo() end");
     assert_no_errors(&result);
@@ -132,7 +132,7 @@ fn function_decl_simple() {
 }
 
 #[test]
-fn method_declaration() {
+fn method_declaration_keeps_its_path_and_method_name() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "function a.b:c() end");
     assert_no_errors(&result);
@@ -145,7 +145,7 @@ fn method_declaration() {
 }
 
 #[test]
-fn local_function() {
+fn local_function_keeps_its_params() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local function foo(x, y) return x end");
     assert_no_errors(&result);
@@ -158,7 +158,7 @@ fn local_function() {
 }
 
 #[test]
-fn local_assignment_no_value() {
+fn local_without_values_has_no_exprs() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x");
     assert_no_errors(&result);
@@ -170,7 +170,7 @@ fn local_assignment_no_value() {
 }
 
 #[test]
-fn local_assignment_with_value() {
+fn local_keeps_its_value() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = 42");
     assert_no_errors(&result);
@@ -182,7 +182,7 @@ fn local_assignment_with_value() {
 }
 
 #[test]
-fn local_multiple() {
+fn local_keeps_each_name() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local a, b, c = 1, 2, 3");
     assert_no_errors(&result);
@@ -195,7 +195,7 @@ fn local_multiple() {
 }
 
 #[test]
-fn simple_assignment() {
+fn name_equals_value_is_an_assignment() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "x = 1");
     assert_no_errors(&result);
@@ -203,7 +203,7 @@ fn simple_assignment() {
 }
 
 #[test]
-fn multi_assignment() {
+fn assignment_keeps_each_target() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a, b, c = 1, 2, 3");
     assert_no_errors(&result);
@@ -216,7 +216,7 @@ fn multi_assignment() {
 }
 
 #[test]
-fn assign_nested_field_access() {
+fn field_chain_is_an_assignment_target() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a.b.c = 1");
     assert_no_errors(&result);
@@ -228,7 +228,7 @@ fn assign_nested_field_access() {
 }
 
 #[test]
-fn assign_index_target() {
+fn index_is_an_assignment_target() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a[i] = 1");
     assert_no_errors(&result);
@@ -240,7 +240,7 @@ fn assign_index_target() {
 }
 
 #[test]
-fn assign_mixed_chain_target() {
+fn chain_ending_in_an_index_is_an_assignment_target() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a.b[1]:c(2).d[3] = 5");
     assert_no_errors(&result);
@@ -252,7 +252,7 @@ fn assign_mixed_chain_target() {
 }
 
 #[test]
-fn function_call_stmt() {
+fn call_on_a_name_is_a_call_statement() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "print(\"hello\")");
     assert_no_errors(&result);
@@ -260,7 +260,7 @@ fn function_call_stmt() {
 }
 
 #[test]
-fn method_call_stmt() {
+fn method_call_is_a_call_statement() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "obj:method(1, 2)");
     assert_no_errors(&result);
@@ -271,7 +271,7 @@ fn method_call_stmt() {
 }
 
 #[test]
-fn call_with_string_arg() {
+fn call_takes_a_string_argument() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "require \"foo\"");
     assert_no_errors(&result);
@@ -284,7 +284,7 @@ fn call_with_string_arg() {
 }
 
 #[test]
-fn call_with_table_arg() {
+fn call_takes_a_table_argument() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "f{1, 2, 3}");
     assert_no_errors(&result);
@@ -297,7 +297,7 @@ fn call_with_table_arg() {
 }
 
 #[test]
-fn literal_nil() {
+fn nil_is_a_nil_literal() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = nil");
     assert_no_errors(&result);
@@ -306,7 +306,7 @@ fn literal_nil() {
 }
 
 #[test]
-fn literal_true_false() {
+fn true_and_false_are_boolean_literals() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local a, b = true, false");
     assert_no_errors(&result);
@@ -322,7 +322,7 @@ fn literal_true_false() {
 }
 
 #[test]
-fn literal_number() {
+fn float_numeral_is_a_number_literal() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = 3.14");
     assert_no_errors(&result);
@@ -331,7 +331,7 @@ fn literal_number() {
 }
 
 #[test]
-fn literal_string() {
+fn quoted_string_is_a_string_literal() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = \"hello world\"");
     assert_no_errors(&result);
@@ -340,7 +340,7 @@ fn literal_string() {
 }
 
 #[test]
-fn precedence_add_mul() {
+fn mul_binds_tighter_than_add() {
     let allocator = Allocator::new();
     // `1 + 2 * 3` should parse as `1 + (2 * 3)`.
     let result = parse_lua51(&allocator, "local x = 1 + 2 * 3");
@@ -351,7 +351,7 @@ fn precedence_add_mul() {
 }
 
 #[test]
-fn right_assoc_power() {
+fn power_chain_is_one_run() {
     let allocator = Allocator::new();
     // `2 ^ 3 ^ 4` is one run, which groups from the right: `2 ^ (3 ^ 4)`.
     let result = parse_lua51(&allocator, "local x = 2 ^ 3 ^ 4");
@@ -362,7 +362,7 @@ fn right_assoc_power() {
 }
 
 #[test]
-fn right_assoc_concat() {
+fn concat_chain_is_one_run() {
     let allocator = Allocator::new();
     // `a .. b .. c` is one run, which groups from the right: `a .. (b .. c)`.
     let result = parse_lua51(&allocator, "local x = a .. b .. c");
@@ -371,7 +371,7 @@ fn right_assoc_concat() {
 }
 
 #[test]
-fn unary_minus_vs_exponent_precedence() {
+fn power_binds_tighter_than_unary_minus() {
     let allocator = Allocator::new();
     // `-a ^ b` should parse as `-(a ^ b)`, not `(-a) ^ b`.
     let result = parse_lua51(&allocator, "local x = -a ^ b");
@@ -385,7 +385,7 @@ fn unary_minus_vs_exponent_precedence() {
 }
 
 #[test]
-fn precedence_comparison_vs_logical() {
+fn comparison_binds_tighter_than_and() {
     let allocator = Allocator::new();
     // `a < b and c > d` should parse as `(a < b) and (c > d)`.
     let result = parse_lua51(&allocator, "local x = a < b and c > d");
@@ -398,7 +398,7 @@ fn precedence_comparison_vs_logical() {
 }
 
 #[test]
-fn precedence_concat_vs_comparison() {
+fn concat_binds_tighter_than_comparison() {
     let allocator = Allocator::new();
     // `a .. b == c .. d` should parse as `(a .. b) == (c .. d)`.
     let result = parse_lua51(&allocator, "local x = a .. b == c .. d");
@@ -411,7 +411,7 @@ fn precedence_concat_vs_comparison() {
 }
 
 #[test]
-fn unary_not() {
+fn not_is_a_unary_operator() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = not true");
     assert_no_errors(&result);
@@ -420,7 +420,7 @@ fn unary_not() {
 }
 
 #[test]
-fn unary_minus() {
+fn minus_before_a_numeral_is_a_unary_operator() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = -42");
     assert_no_errors(&result);
@@ -429,7 +429,7 @@ fn unary_minus() {
 }
 
 #[test]
-fn unary_length() {
+fn hash_is_the_length_operator() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = #t");
     assert_no_errors(&result);
@@ -442,7 +442,7 @@ fn unary_length() {
 }
 
 #[test]
-fn table_empty() {
+fn empty_table_has_no_fields() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = {}");
     assert_no_errors(&result);
@@ -467,7 +467,7 @@ fn table_leading_separator_is_rejected() {
 }
 
 #[test]
-fn table_mixed_fields() {
+fn table_keeps_positional_named_and_bracketed_fields() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = {1, 2, x = 3, [4] = 5}");
     assert_no_errors(&result);
@@ -480,7 +480,7 @@ fn table_mixed_fields() {
 }
 
 #[test]
-fn table_trailing_separator() {
+fn table_takes_a_trailing_separator() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = {1,}");
     assert_no_errors(&result);
@@ -493,7 +493,7 @@ fn table_trailing_separator() {
 }
 
 #[test]
-fn chained_field_access() {
+fn fields_chain_onto_one_prefix() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = a.b.c");
     assert_no_errors(&result);
@@ -501,7 +501,7 @@ fn chained_field_access() {
 }
 
 #[test]
-fn chained_index() {
+fn indexes_chain_onto_one_prefix() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = a[1][2]");
     assert_no_errors(&result);
@@ -509,7 +509,7 @@ fn chained_index() {
 }
 
 #[test]
-fn chained_method_calls() {
+fn method_calls_with_arguments_chain_onto_one_prefix() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a:b(1):c(2)");
     assert_no_errors(&result);
@@ -520,7 +520,7 @@ fn chained_method_calls() {
 }
 
 #[test]
-fn chained_function_calls() {
+fn calls_chain_onto_one_prefix() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "f(1)(2)");
     assert_no_errors(&result);
@@ -531,7 +531,7 @@ fn chained_function_calls() {
 }
 
 #[test]
-fn parenthesized() {
+fn parentheses_group_without_a_node_of_their_own() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = (1 + 2) * 3");
     assert_no_errors(&result);
@@ -574,7 +574,7 @@ fn a_parenthesized_variable_is_no_assignment_target() {
 }
 
 #[test]
-fn varargs_function() {
+fn vararg_function_keeps_its_vararg() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "function f(...) return ... end");
     assert_no_errors(&result);
@@ -586,7 +586,7 @@ fn varargs_function() {
 }
 
 #[test]
-fn varargs_with_named_params() {
+fn vararg_follows_named_params() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "function f(a, b, ...) end");
     assert_no_errors(&result);
@@ -600,7 +600,7 @@ fn varargs_with_named_params() {
 }
 
 #[test]
-fn return_no_values() {
+fn return_without_values_is_a_return() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "return");
     assert_no_errors(&result);
@@ -608,7 +608,7 @@ fn return_no_values() {
 }
 
 #[test]
-fn return_multiple_values() {
+fn return_keeps_each_value() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "return 1, 2, 3");
     assert_no_errors(&result);
@@ -621,7 +621,7 @@ fn return_multiple_values() {
 }
 
 #[test]
-fn break_as_last_stmt() {
+fn break_takes_a_trailing_semicolon() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "while true do break; end");
     assert_no_errors(&result);
@@ -633,7 +633,7 @@ fn break_as_last_stmt() {
 }
 
 #[test]
-fn empty_program() {
+fn empty_source_has_no_stmts() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "");
     assert_no_errors(&result);
@@ -649,7 +649,7 @@ fn semicolon_separates_stmts_without_an_empty_stmt() {
 }
 
 #[test]
-fn complex_expr_in_function() {
+fn function_expression_keeps_its_body() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = function() return 1 + 2 * 3 end");
     assert_no_errors(&result);
@@ -662,7 +662,7 @@ fn complex_expr_in_function() {
 }
 
 #[test]
-fn logical_operators() {
+fn and_binds_tighter_than_or() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = a and b or c");
     assert_no_errors(&result);
@@ -673,7 +673,7 @@ fn logical_operators() {
 }
 
 #[test]
-fn comparison_operators() {
+fn each_comparison_is_its_operator() {
     let allocator = Allocator::new();
     for (source, expected_op) in [
         ("local x = a < b", BinOp::Lt),
@@ -688,7 +688,7 @@ fn comparison_operators() {
 }
 
 #[test]
-fn field_access_then_call() {
+fn call_after_fields_is_a_call_statement() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a.b.c()");
     assert_no_errors(&result);
@@ -696,7 +696,7 @@ fn field_access_then_call() {
 }
 
 #[test]
-fn multiline_program() {
+fn statements_on_separate_lines_need_no_separator() {
     let allocator = Allocator::new();
     let source = "
 local x = 10
@@ -713,7 +713,7 @@ print(result)
 }
 
 #[test]
-fn multiline_string_level3_brackets() {
+fn long_string_ends_only_at_its_own_level() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = [===[hello ]]] ]==] world]===]");
     assert_no_errors(&result);
@@ -722,7 +722,7 @@ fn multiline_string_level3_brackets() {
 }
 
 #[test]
-fn deeply_nested_table() {
+fn nested_tables_nest_in_the_tree() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "local x = {{{{}}}}");
     assert_no_errors(&result);
@@ -749,7 +749,7 @@ fn deeply_nested_table() {
 }
 
 #[test]
-fn consecutive_method_calls_four_deep() {
+fn method_calls_without_arguments_chain_onto_one_prefix() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "a:b():c():d()");
     assert_no_errors(&result);
@@ -760,7 +760,7 @@ fn consecutive_method_calls_four_deep() {
 }
 
 #[test]
-fn call_on_parenthesized_expr() {
+fn parentheses_around_a_callee_read_on_unless_they_truncate() {
     let allocator = Allocator::new();
     let result = parse_lua51(&allocator, "(f)(x); ((g).y).z(w); (h())()");
     assert_no_errors(&result);

@@ -1,4 +1,4 @@
-use std::mem;
+use std::{fmt, mem};
 
 use luck_allocator::{List, ThinStr};
 use luck_ast::{
@@ -6,7 +6,8 @@ use luck_ast::{
 };
 use luck_token::{CompoundOp, Span, TokenKind};
 
-use super::{Closer, Parser};
+use super::Parser;
+use super::recovery::Closer;
 
 /// A compound statement, as its missing-keyword errors name it.
 #[derive(Clone, Copy)]
@@ -16,13 +17,13 @@ enum Construct {
     ForLoop,
 }
 
-impl Construct {
-    const fn display_name(self) -> &'static str {
-        match self {
+impl fmt::Display for Construct {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
             Self::IfStatement => "if-statement",
             Self::WhileLoop => "while-loop",
             Self::ForLoop => "for-loop",
-        }
+        })
     }
 }
 
@@ -323,7 +324,7 @@ impl<'ast> Parser<'ast> {
             }
             // Luau
             TokenKind::Const if next.is_name() || next == TokenKind::Function => {
-                self.parse_const_stmt(List::new())
+                self.parse_local_stmt(List::new())
             }
             // Lua 5.5
             TokenKind::Global
@@ -674,7 +675,7 @@ impl<'ast> Parser<'ast> {
     #[inline(never)]
     fn report_missing_keyword(&mut self, kind: TokenKind, construct: Construct) -> Span {
         let span = self.token.span;
-        self.syntax_error(span, format!("missing {kind} in {}", construct.display_name()));
+        self.syntax_error(span, format!("missing {kind} in {construct}"));
         span
     }
 }

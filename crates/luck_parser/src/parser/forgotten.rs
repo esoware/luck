@@ -8,19 +8,27 @@ use luck_ast::{Chunk, FunctionBody, GetSpan as _, Statement, Visit};
 use luck_diagnostics::{Diagnostic, Label};
 use luck_token::{LuaVersion, Span, has_line_break};
 
-/// Labels each of `unclosed`'s errors, an index into `errors` and the span of
-/// the token that opened what it leaves open, with the construct `chunk`
-/// suggests lost its `end`, if one does.
+/// An error that a block is missing its `end` or `until`.
+#[derive(Clone, Copy)]
+pub(super) struct UnclosedBlock {
+    /// Its index in the parse's errors.
+    pub(super) error_index: usize,
+    /// The token that opened the block.
+    pub(super) opener: Span,
+}
+
+/// Labels each of `unclosed`'s errors with the construct `chunk` suggests
+/// lost its `end`, if one does.
 pub(super) fn label_forgotten_ends(
     chunk: &Chunk<'_>,
     source: &[u8],
-    unclosed: &[(usize, Span)],
+    unclosed: &[UnclosedBlock],
     errors: &mut [Diagnostic],
 ) {
     let mut finder = Misindented { source, version: chunk.version, found: Vec::new() };
     finder.visit_block(&chunk.block);
-    for &(index, opener) in unclosed {
-        let error = &mut errors[index];
+    for &UnclosedBlock { error_index, opener } in unclosed {
+        let error = &mut errors[error_index];
         let at = error.span.expect("a parse error has a span").start;
         let latest = finder
             .found

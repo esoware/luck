@@ -10,7 +10,7 @@ fn parse_lua54<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResu
 }
 
 #[test]
-fn local_const_attribute() {
+fn local_keeps_its_const_attribute() {
     let allocator = Allocator::new();
     let result = parse_lua54(&allocator, "local x <const> = 5");
     assert_no_errors(&result);
@@ -30,7 +30,7 @@ fn local_const_attribute() {
 }
 
 #[test]
-fn local_close_attribute() {
+fn local_keeps_its_close_attribute() {
     let allocator = Allocator::new();
     let result = parse_lua54(&allocator, "local f <close> = io.open(\"file\")");
     assert_no_errors(&result);

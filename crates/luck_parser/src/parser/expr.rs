@@ -6,7 +6,8 @@ use luck_ast::{
 };
 use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
-use super::{Closer, Parser};
+use super::Parser;
+use super::recovery::Closer;
 
 impl<'ast> Parser<'ast> {
     /// Each precedence level's operators run in a loop into one node, so a

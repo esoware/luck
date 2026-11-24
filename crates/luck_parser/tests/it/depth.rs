@@ -2,9 +2,15 @@ use std::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_ast::{MAX_NESTING_DEPTH, Statement, Visit, block_nesting_depth};
-use luck_parser::parse;
-use luck_testgen::{nested, with_the_smallest_stack};
+use luck_parser::{ParseResult, parse};
+use luck_testgen::{
+    generate_full_grammar, generate_runtime_safe, lua_fixtures, nested, with_the_smallest_stack,
+};
 use luck_token::LuaVersion;
+
+fn has_depth_limit_error(result: &ParseResult<'_>) -> bool {
+    result.errors.iter().any(|e| e.message.contains("luck parser resource limit"))
+}
 
 #[test]
 fn depth_cap_is_the_same_in_every_dialect() {
@@ -18,29 +24,10 @@ fn depth_cap_is_the_same_in_every_dialect() {
                 if negations < MAX_NESTING_DEPTH {
                     assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors);
                 } else {
-                    assert!(
-                        result
-                            .errors
-                            .iter()
-                            .any(|e| e.message.contains("luck parser resource limit")),
-                        "{version:?}: {:?}",
-                        result.errors
-                    );
+                    assert!(has_depth_limit_error(&result), "{version:?}: {:?}", result.errors);
                 }
             }
         }
-    });
-}
-
-#[test]
-fn parens_past_the_depth_cap_are_an_error() {
-    with_the_smallest_stack(|| {
-        let allocator = Allocator::new();
-        let open = "(".repeat(MAX_NESTING_DEPTH + 1);
-        let close = ")".repeat(MAX_NESTING_DEPTH + 1);
-        let source = format!("{open}1{close}");
-        let result = parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-        assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
     });
 }
 
@@ -72,80 +59,6 @@ fn a_run_of_any_length_is_one_level() {
         assert!(result.errors.is_empty(), "{:?}: {:?}", source.get(..20), result.errors.first());
         assert_eq!(block_nesting_depth(&result.chunk.block), 2, "{:?}", source.get(..20));
     }
-}
-#[test]
-fn blocks_past_the_depth_cap_are_an_error() {
-    with_the_smallest_stack(|| {
-        let allocator = Allocator::new();
-        let blocks = MAX_NESTING_DEPTH;
-        let source = format!("{}local x = 1{}", "do ".repeat(blocks), " end".repeat(blocks));
-        let result = parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-        assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
-    });
-}
-
-#[test]
-fn tables_past_the_depth_cap_are_an_error() {
-    with_the_smallest_stack(|| {
-        let allocator = Allocator::new();
-        let open = "{".repeat(MAX_NESTING_DEPTH);
-        let close = "}".repeat(MAX_NESTING_DEPTH);
-        let source = format!("local x = {open}1{close}");
-        let result = parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-        assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
-    });
-}
-
-#[test]
-fn functions_past_the_depth_cap_are_an_error() {
-    with_the_smallest_stack(|| {
-        let allocator = Allocator::new();
-        let prefix = "function() return ".repeat(MAX_NESTING_DEPTH);
-        let suffix = " end".repeat(MAX_NESTING_DEPTH);
-        let source = format!("local x = {prefix}1{suffix}");
-        let result = parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-        assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
-    });
-}
-
-fn has_depth_limit_error(result: &luck_parser::ParseResult<'_>) -> bool {
-    result.errors.iter().any(|e| e.message.contains("luck parser resource limit"))
-}
-
-#[test]
-fn nested_call_arguments_count_toward_the_depth_cap() {
-    with_the_smallest_stack(|| {
-        let allocator = Allocator::new();
-        let source =
-            format!("return {}1{}", "f(".repeat(MAX_NESTING_DEPTH), ")".repeat(MAX_NESTING_DEPTH));
-        let result = parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-        assert!(has_depth_limit_error(&result), "call nesting past the cap must report the limit");
-    });
-}
-
-#[test]
-fn nested_index_expressions_count_toward_the_depth_cap() {
-    with_the_smallest_stack(|| {
-        let allocator = Allocator::new();
-        let source =
-            format!("return {}1{}", "a[".repeat(MAX_NESTING_DEPTH), "]".repeat(MAX_NESTING_DEPTH));
-        let result = parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-        assert!(has_depth_limit_error(&result), "index nesting past the cap must report the limit");
-    });
-}
-
-#[test]
-fn nested_interpolated_strings_count_toward_the_depth_cap() {
-    with_the_smallest_stack(|| {
-        let allocator = Allocator::new();
-        let source =
-            format!("return {}1{}", "`{".repeat(MAX_NESTING_DEPTH), "}`".repeat(MAX_NESTING_DEPTH));
-        let result = parse(&allocator, source.as_bytes(), LuaVersion::Luau);
-        assert!(
-            has_depth_limit_error(&result),
-            "string nesting past the cap must report the limit"
-        );
-    });
 }
 
 #[test]
@@ -428,6 +341,7 @@ fn a_run_counts_once_from_its_first_operand() {
         assert_eq!(block_nesting_depth(&result.chunk.block), MAX_NESTING_DEPTH);
     });
 }
+
 /// Counts every level, where `block_nesting_depth` stops just past the cap.
 struct Levels {
     depth: usize,
@@ -601,4 +515,80 @@ fn an_operand_cut_off_at_the_cap_is_one_error_where_it_was_cut() {
         let innermost = "local v = ".len() + MAX_NESTING_DEPTH;
         assert_eq!(Range::<usize>::from(error.span.unwrap()).start, innermost);
     });
+}
+
+/// The depth the parser counted and the depth of the tree it built.
+fn counted_and_built(source: &str, version: LuaVersion) -> (usize, usize) {
+    let allocator = Allocator::new();
+    let result = parse(&allocator, source.as_bytes(), version);
+    assert!(result.errors.is_empty(), "{:?}\n{source}", result.errors.first());
+    (result.nesting_depth, block_nesting_depth(&result.chunk.block))
+}
+
+#[test]
+fn counts_the_depth_of_each_construct_as_the_tree_measures_it() {
+    for (version, source) in [
+        (LuaVersion::Lua54, "return ((a + b) * -c)^2 .. d"),
+        (LuaVersion::Lua54, "return a.b[c](d):e{f}\"g\""),
+        (LuaVersion::Lua54, "return f{g{h}}, f({g({h})})"),
+        (LuaVersion::Lua54, "return {a = {b = {[c] = {d}}}}"),
+        (LuaVersion::Lua54, "local function f(...) return function(...) return ... end end"),
+        (LuaVersion::Lua54, "a.b.c[d.e].f = g; h(i).j = k"),
+        (LuaVersion::Lua54, "for i = a.b, c(d), -e do while f do repeat until g end end"),
+        (LuaVersion::Lua54, "if a then elseif b.c then if d then end else do end end"),
+        (LuaVersion::Luau, "return `a{b}c{`d{e + f}`}g`, `plain`"),
+        (LuaVersion::Luau, "return if a then b else if c then d else e"),
+        (LuaVersion::Luau, "return (a :: T) :: U, b :: {V}, f<<T, {U}>>(c), d:m<<T>>()"),
+        (LuaVersion::Luau, "type A = {B}? | (C & D) | typeof(e.f) | M.N<O, P<Q>>"),
+        (LuaVersion::Luau, "type A = | B | {C}?? type D = & E & (F) -> (G, ...H)"),
+        (LuaVersion::Luau, "type A<T = {U}, V... = (W, X)> = <Y>(z: Y, ...{Y}) -> ...Y"),
+        (LuaVersion::Luau, "local function f<T>(a: {T}, ...: T?): (T?, ...{T}) end"),
+        (LuaVersion::Luau, "local function g(): ({T} | V, ...U) end"),
+        (LuaVersion::Luau, "@native @[deprecated{use = 'a'}] local function f() end"),
+        (LuaVersion::Luau, "return @[deprecated({reason = 'b'})] function() end"),
+        (LuaVersion::Luau, "type function f(a: {b}) return a end"),
+        (LuaVersion::Luau, "for i: {T}, v: T? in a do x += f(y) end"),
+    ] {
+        let (counted, built) = counted_and_built(source, version);
+        assert_eq!(counted, built, "{source}");
+    }
+}
+
+#[test]
+fn a_suffix_folded_into_a_return_pack_counts_from_the_whole_pack() {
+    // `(T, ...{U})?` parses as `(T?, ...{U})`, and by then only the
+    // pack's depth is known, not its first element's.
+    let folded = "local function f(): (T, ...{U})? end";
+    let written = "local function f(): (T?, ...{U}) end";
+    let (counted, built) = counted_and_built(folded, LuaVersion::Luau);
+    assert_eq!((counted, built), (6, 5));
+    assert_eq!(counted_and_built(written, LuaVersion::Luau), (5, 5));
+}
+
+#[test]
+fn counts_the_depth_of_generated_programs_as_the_tree_measures_it() {
+    for version in LuaVersion::ALL {
+        for seed in 0..40 {
+            for source in
+                [generate_full_grammar(seed, version, 25), generate_runtime_safe(seed, version, 25)]
+            {
+                let (counted, built) = counted_and_built(&source, version);
+                assert_eq!(counted, built, "seed {seed} {version:?}\n{source}");
+            }
+        }
+    }
+}
+
+#[test]
+fn counts_the_depth_of_fixtures_as_the_tree_measures_it() {
+    let mut checked = 0;
+    for fixture in lua_fixtures() {
+        if fixture.is_error {
+            continue;
+        }
+        let (counted, built) = counted_and_built(&fixture.source, fixture.version);
+        assert_eq!(counted, built, "{}", fixture.path.display());
+        checked += 1;
+    }
+    assert!(checked > 0, "no fixture outside `errors/`");
 }

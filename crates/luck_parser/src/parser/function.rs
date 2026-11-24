@@ -4,8 +4,9 @@ use luck_allocator::{Box, List};
 use luck_ast::{FunctionBody, GetSpan as _, Name, Parameter, Type, VarArgParam};
 use luck_token::{Span, TokenKind};
 
+use super::recovery::Closer;
 use super::types::GenericsOwner;
-use super::{Closer, FunctionScope, Parser};
+use super::{FunctionScope, Parser};
 
 impl<'ast> Parser<'ast> {
     /// The body after the `function` keyword at `function_span`, or `None`
