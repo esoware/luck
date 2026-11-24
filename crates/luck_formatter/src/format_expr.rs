@@ -84,7 +84,7 @@ impl<'ast> Formatter<'ast> {
                 |f| {
                     f.token("(");
                     f.node(|| expr.span(), |inner| inner.write_bare_expr(expr, Slot::FREE));
-                    f.write_closing_comments(span.end, false);
+                    f.write_closing_comments(span.end);
                     f.token(")");
                 },
             );
@@ -196,7 +196,7 @@ impl<'ast> Formatter<'ast> {
             Expression::Parenthesized(parenthesized) => {
                 self.token("(");
                 self.write_expr(&parenthesized.expr);
-                self.write_closing_comments(parenthesized.span.end, false);
+                self.write_closing_comments(parenthesized.span.end);
                 self.token(")");
             }
             Expression::TableConstructor(table) => self.write_table(table, false),
@@ -333,7 +333,7 @@ impl<'ast> Formatter<'ast> {
             self.space();
         }
         self.write_expr(key);
-        self.write_closing_comments(closer, false);
+        self.write_closing_comments(closer);
         if is_padded {
             self.space();
         }
@@ -534,7 +534,7 @@ impl<'ast> Formatter<'ast> {
                 self.space();
             }
             self.write_expr(&segment.expr);
-            self.write_closing_comments(closer, false);
+            self.write_closing_comments(closer);
             if is_padded {
                 self.space();
             }

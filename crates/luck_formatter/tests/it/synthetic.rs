@@ -3,12 +3,13 @@
 
 use luck_ast::{
     Block, Chunk, FieldSpec, FunctionSignature, GetSpan as _, InterpolatedStringPart,
-    MAX_NESTING_DEPTH, Synth, SyntheticComment, Type, TypeFieldAccess, TypeFieldSpec,
-    block_nesting_depth,
+    MAX_NESTING_DEPTH, Synth, Type, TypeFieldAccess, TypeFieldSpec, block_nesting_depth,
 };
-use luck_formatter::{CollapseSimpleStatement, Comments, FormatOptions, format_chunk};
+use luck_formatter::{
+    CollapseSimpleStatement, Comments, FormatOptions, SyntheticComment, format_chunk,
+};
 use luck_testgen::with_the_smallest_stack;
-use luck_token::{BinOp, LuaVersion, StringValue, TokenKind, UnOp, decode_string};
+use luck_token::{BinOp, CommentPosition, LuaVersion, StringValue, TokenKind, UnOp, decode_string};
 
 use crate::common::{Fixture, assert_format_with};
 
@@ -830,6 +831,24 @@ fn version_pinned_keyword_field_roundtrips() {
     let access = synth.field_or_index(synth.name_expr("t"), "goto");
     let block = synth.block([synth.return_([access])]);
     assert_format_block(&fixture, block, LuaVersion::Luau, "return t.goto\n");
+}
+
+#[test]
+fn a_synthetic_comment_anchors_at_the_start_of_its_statement_or_block() {
+    let fixture = Fixture::default();
+    let synth = fixture.synth();
+    let stmt = synth.local(&["x"], [synth.number_i64(1)]);
+    let leading = SyntheticComment::leading(&stmt, "before");
+    let trailing = SyntheticComment::trailing(&stmt, "after");
+    assert_eq!(leading.attached_to, stmt.span().start);
+    assert_eq!(leading.position, CommentPosition::Leading);
+    assert_eq!(trailing.attached_to, stmt.span().start);
+    assert_eq!(trailing.position, CommentPosition::Trailing);
+
+    let block = synth.block([]);
+    let dangling = SyntheticComment::dangling(&block, "unreachable");
+    assert_eq!(dangling.attached_to, block.span.start);
+    assert_eq!(dangling.position, CommentPosition::Leading);
 }
 
 #[test]

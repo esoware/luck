@@ -10,12 +10,15 @@
 use std::iter::{self, Peekable};
 use std::ops::Range;
 
+use luck_allocator::Allocator;
 use luck_ast::{Block, GetSpan as _, Statement, Visit};
 use luck_parser::{Groupings, ParseResult};
-use luck_token::{LuaVersion, Span, is_lua_whitespace, strip_line_break};
+use luck_token::Span;
 
-use crate::comments::own_line_start;
 use crate::ir::Formatter;
+use crate::lines::{
+    has_blank_line, has_leading_edge_blank, has_trailing_edge_blank, own_line_start,
+};
 use crate::sort_requires::{RequireRun, sortable_require};
 use crate::{BlockNewlineGaps, Comments, FormatOptions};
 
@@ -111,8 +114,7 @@ impl<'ast> Formatter<'ast> {
             self.empty_line();
         }
 
-        let should_sort_requires = self.sorts_requires();
-        let Some(last_end) = self.write_items(printed_items(block), should_sort_requires) else {
+        let Some(last_end) = self.write_items(printed_items(block)) else {
             self.write_dangling_comments(block.span.start);
             return;
         };
@@ -132,15 +134,12 @@ impl<'ast> Formatter<'ast> {
         }
     }
 
-    fn write_items<'block, Items>(
-        &mut self,
-        items: Items,
-        should_sort_requires: bool,
-    ) -> Option<u32>
+    fn write_items<'block, Items>(&mut self, items: Items) -> Option<u32>
     where
         Items: Iterator<Item = BlockItem<'block, 'ast>> + Clone,
         'ast: 'block,
     {
+        let should_sort_requires = self.sorts_requires();
         let mut remaining = items.peekable();
         let mut previous: Option<PreviousItem> = None;
         let mut requires = RequireRun::default();
@@ -154,9 +153,9 @@ impl<'ast> Formatter<'ast> {
                 self.write_separator(previous_item, start, should_surround_with_blank)
             });
 
-            let before_comments = self.element_count();
+            let before_comments = self.mark();
             let is_opted_out = self.write_stmt_leading_comments(start);
-            let has_comment_lines = self.element_count() != before_comments;
+            let has_comment_lines = self.mark() != before_comments;
 
             // A statement starting with `(` would reparse as a call on the
             // one before it (`f()` then `(g)()` reads as `f()(g)()`), so it
@@ -169,7 +168,7 @@ impl<'ast> Formatter<'ast> {
                 }
             }
 
-            let item_start = self.element_count();
+            let item_start = self.mark();
             self.write_verbatim_or(item, Span { start, end }, is_opted_out);
             let has_multi_line_trailer = self.write_stmt_trailing_comments(start, end);
 
@@ -190,7 +189,7 @@ impl<'ast> Formatter<'ast> {
                     BlockItem::Stmt(_) | BlockItem::Verbatim { .. } => None,
                 };
                 match sortable {
-                    Some(require) => requires.push(require, item_start..self.element_count()),
+                    Some(require) => requires.push(require, item_start..self.mark()),
                     None => requires.finish(self),
                 }
             }
@@ -383,7 +382,7 @@ impl<'ast> Formatter<'ast> {
         };
         let base_indent = own_line_start(source, start)
             .map_or(&b""[..], |line_start| Span::new(line_start, start).text(source));
-        let line_breaks = self.comments().line_breaks_between_tokens(start, end, self.version());
+        let line_breaks = self.comments().line_breaks_between_tokens(start, end);
         let mut line_start = start;
         for line_break in line_breaks.into_iter().chain(iter::once(Span::new(end, end))) {
             let line = Span::new(line_start, line_break.start).text(source);
@@ -405,13 +404,13 @@ impl<'ast> Formatter<'ast> {
     }
 }
 
-struct InnermostBlock<'tree, 'range> {
-    range: &'range Range<u32>,
+struct InnermostBlock<'tree> {
+    range: Span,
     groupings: &'tree Groupings,
     found: &'tree Block<'tree>,
 }
 
-impl<'tree> Visit<'tree> for InnermostBlock<'tree, '_> {
+impl<'tree> Visit<'tree> for InnermostBlock<'tree> {
     fn visit_block(&mut self, block: &'tree Block<'tree>) {
         let first_start = first_item_start(block);
         let last_end = printed_items(block)
@@ -433,11 +432,10 @@ impl<'tree> Visit<'tree> for InnermostBlock<'tree, '_> {
 /// line to the end of the last one's trailing comment, and the text to put
 /// there. `None` when no statement overlaps `range`.
 pub(crate) fn format_selection<'ast>(
-    allocator: &'ast luck_allocator::Allocator,
+    allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
-    mut comments: Comments<'ast>,
     options: &FormatOptions,
-    range: &Range<u32>,
+    range: Span,
 ) -> Option<(Span, Vec<u8>)> {
     let groupings = |expr| parse.groupings.around(expr);
     let block = &parse.chunk.block;
@@ -454,89 +452,15 @@ pub(crate) fn format_selection<'ast>(
     let first_start = items.clone().next()?.start();
     let last_end = items.clone().last()?.span(groupings).end;
 
-    let source = comments.source_text()?;
+    let source = parse.source;
     let line_start = own_line_start(source, first_start).unwrap_or(first_start);
     let base_indent = Span::new(line_start, first_start).text(source);
+    let mut comments = Comments::from_parse(parse);
     comments.restrict_to(Span::new(line_start, last_end));
 
-    let mut f = Formatter::new(allocator, parse.chunk.version, *options, comments)
-        .with_groupings(&parse.groupings);
-    f.write_items(items, false);
+    let mut f =
+        Formatter::new(allocator, parse.chunk.version, *options, comments, Some(&parse.groupings));
+    f.write_items(items);
     let end = f.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
     Some((Span::new(line_start, end), f.print(base_indent)))
-}
-
-/// Whether the whitespace run immediately before `anchor` contains a blank
-/// line (the gap between a block opener and its first statement).
-pub(crate) fn has_leading_edge_blank(source: &[u8], anchor: u32, version: LuaVersion) -> bool {
-    let preceding = &source[..anchor as usize];
-    let run_length = preceding.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count();
-    run_has_blank(&preceding[preceding.len() - run_length..], version)
-}
-
-/// Whether the whitespace and `;` run immediately after `end` contains a blank
-/// line (the gap between the last statement and the block closer).
-fn has_trailing_edge_blank(source: &[u8], end: u32, version: LuaVersion) -> bool {
-    let following = &source[end as usize..];
-    let run_length = following.iter().take_while(|&&b| is_lua_whitespace(b) || b == b';').count();
-    run_has_blank(&following[..run_length], version)
-}
-
-/// Whether `text` holds a blank line: two line breaks with no `;` between them,
-/// since a line holding only a `;` isn't blank.
-///
-/// The text is a gap between tokens, a few bytes as a rule, so one walk beats
-/// searching it.
-const fn run_has_blank(text: &[u8], version: LuaVersion) -> bool {
-    let mut remaining = text;
-    let mut has_break = false;
-    while let Some((&b, rest)) = remaining.split_first() {
-        if let Some(after_break) = strip_line_break(remaining, version) {
-            if has_break {
-                return true;
-            }
-            has_break = true;
-            remaining = after_break;
-        } else {
-            has_break &= b != b';';
-            remaining = rest;
-        }
-    }
-    false
-}
-
-pub(crate) fn has_blank_line(source: &[u8], start: u32, end: u32, version: LuaVersion) -> bool {
-    run_has_blank(Span::new(start, end).text(source), version)
-}
-
-#[cfg(test)]
-mod tests {
-    use luck_token::{LuaVersion, line_breaks};
-
-    #[test]
-    fn a_blank_line_is_two_breaks_with_no_semicolon_between() {
-        // Every gap of up to six bytes from these, against the definition.
-        let pieces = ['\n', '\r', ';', ' ', 'x'];
-        let mut gaps = vec![String::new()];
-        let mut longest = gaps.clone();
-        for _ in 0..6 {
-            longest = longest
-                .iter()
-                .flat_map(|gap| pieces.iter().map(move |piece| format!("{gap}{piece}")))
-                .collect();
-            gaps.extend(longest.iter().cloned());
-        }
-        for version in [LuaVersion::Lua54, LuaVersion::Luau] {
-            for gap in &gaps {
-                let expected = gap
-                    .split(';')
-                    .any(|segment| line_breaks(segment.as_bytes(), version).nth(1).is_some());
-                assert_eq!(
-                    super::run_has_blank(gap.as_bytes(), version),
-                    expected,
-                    "{gap:?} in {version:?}"
-                );
-            }
-        }
-    }
 }

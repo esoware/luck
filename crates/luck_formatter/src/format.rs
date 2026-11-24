@@ -4,7 +4,7 @@ use luck_allocator::Allocator;
 use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_diagnostics::Diagnostic;
 use luck_parser::{Groupings, ParseResult};
-use luck_token::{LuaVersion, index_to_offset, is_lua_whitespace};
+use luck_token::{LuaVersion, Span, is_lua_whitespace};
 
 use crate::comments::Comments;
 use crate::format_block::{first_item_start, format_selection};
@@ -26,13 +26,7 @@ fn print_chunk<'ast>(
     groupings: Option<&'ast Groupings>,
     options: &FormatOptions,
 ) -> Vec<u8> {
-    let mut f = Formatter::new(allocator, chunk.version, *options, comments);
-    if let Some(parse_groupings) = groupings {
-        f = f.with_groupings(parse_groupings);
-    }
-    if options.sort_requires {
-        f = f.sorting_requires();
-    }
+    let mut f = Formatter::new(allocator, chunk.version, *options, comments, groupings);
     f.write_shebang();
     f.write_block(&chunk.block);
     // Empty and error statements print nothing, so a block holding only
@@ -139,9 +133,9 @@ pub fn format_range<'ast>(
         return FormatResult { output: Vec::new(), errors: parse.errors.clone() };
     }
     let source = parse.source;
-    let offsets = index_to_offset(range.start)..index_to_offset(range.end);
-    let comments = Comments::from_parse(parse);
-    let output = match format_selection(allocator, parse, comments, options, &offsets) {
+    let selection = Span::from_indices(range.start, range.end);
+    let options = FormatOptions { sort_requires: false, ..*options };
+    let output = match format_selection(allocator, parse, &options, selection) {
         Some((span, selected)) => {
             let before = &source[..span.start as usize];
             let after = &source[span.end as usize..];

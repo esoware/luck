@@ -117,7 +117,7 @@ impl<'ast> Formatter<'ast> {
                     indented.expand_parent();
                 }
                 indented.if_group_breaks(group_id, |f| f.token(","));
-                indented.write_closing_comments(table.span.end, true);
+                indented.write_closing_comments_keeping_blank_lines(table.span.end);
             });
             grouped.soft_line_or_space();
             grouped.token("}");

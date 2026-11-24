@@ -1,11 +1,9 @@
-mod comment;
 mod expr;
 mod function;
 mod literal;
 mod stmt;
 mod types;
 
-pub use comment::SyntheticComment;
 pub use expr::FieldSpec;
 pub use function::FunctionSignature;
 pub use literal::InterpolatedStringPart;
@@ -125,8 +123,8 @@ use crate::leaf::Name;
 ///
 /// To print the result, put its block in a [`Chunk`](crate::Chunk) with the
 /// version it's written in, which the printers spell its numbers for, and
-/// pass that to `luck_formatter::format_chunk`, with any
-/// [`SyntheticComment`]s wrapped in `Comments::synthetic`, or to
+/// pass that to `luck_formatter::format_chunk`, with any of its
+/// `SyntheticComment`s wrapped in `Comments::synthetic`, or to
 /// `luck_codegen::compact` for compact output. `format_chunk` returns an
 /// error for a tree nested past the cap, and `compact` prints it as it is,
 /// output the parser refuses.

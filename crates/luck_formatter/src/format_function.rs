@@ -94,7 +94,7 @@ impl<'ast> Formatter<'ast> {
                     }
                     f.write_vararg_param(vararg);
                 }
-                f.write_closing_comments(closer, false);
+                f.write_closing_comments(closer);
             });
             grouped.soft_line();
             grouped.token(")");
@@ -158,7 +158,7 @@ impl<'ast> Formatter<'ast> {
                         }
                         f.write_expr(arg);
                     }
-                    f.write_closing_comments(attribute.span.end, false);
+                    f.write_closing_comments(attribute.span.end);
                     f.token(")");
                 }
                 f.token("]");
@@ -288,7 +288,7 @@ impl<'ast> Formatter<'ast> {
             {
                 self.token("(");
                 self.write_expr(arg);
-                self.write_closing_comments(span.end, false);
+                self.write_closing_comments(span.end);
                 self.token(")");
                 return;
             }
@@ -332,7 +332,7 @@ impl<'ast> Formatter<'ast> {
                         f.write_expr(arg);
                     }
                 }
-                f.write_closing_comments(span.end, false);
+                f.write_closing_comments(span.end);
             });
             grouped.soft_line();
             grouped.token(")");

@@ -27,12 +27,6 @@ fn is_bracketed(items: &[Expression<'_>]) -> bool {
         || matches!(items, [Expression::Suffixed(chain)] if chain.is_call())
 }
 
-/// Whether a block is simple enough to collapse onto one line: a single
-/// statement.
-fn is_simple_block(block: &Block<'_>) -> bool {
-    block.stmts.len() == 1
-}
-
 impl<'ast> Formatter<'ast> {
     pub(crate) fn write_stmt(&mut self, stmt: &Statement<'ast>) {
         match stmt {
@@ -388,7 +382,7 @@ impl<'ast> Formatter<'ast> {
             == CollapseSimpleStatement::ConditionalOnly
             && if_stmt.elseif_clauses.is_empty()
             && if_stmt.else_clause.is_none()
-            && is_simple_block(&if_stmt.block)
+            && if_stmt.block.stmts.len() == 1
             && first_item_start(&if_stmt.block).is_some();
 
         if can_collapse {

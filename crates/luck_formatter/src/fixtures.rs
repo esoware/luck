@@ -1,10 +1,16 @@
 use luck_allocator::Allocator;
 use luck_ast::Statement;
+use luck_parser::ParseResult;
 use luck_token::LuaVersion;
 
 use crate::FormatOptions;
 use crate::comments::Comments;
 use crate::ir::Formatter;
+
+/// `source` parsed as Lua 5.4, its tokens kept, whether it parses or not.
+pub(crate) fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
+    luck_parser::parse_with_tokens(allocator, source.as_bytes(), LuaVersion::Lua54)
+}
 
 /// What `write` writes, printed with no comments.
 pub(crate) fn render<'ast>(
@@ -12,7 +18,7 @@ pub(crate) fn render<'ast>(
     options: FormatOptions,
     write: impl FnOnce(&mut Formatter<'ast>),
 ) -> String {
-    let mut f = Formatter::new(allocator, LuaVersion::Luau, options, Comments::none());
+    let mut f = Formatter::new(allocator, LuaVersion::Luau, options, Comments::none(), None);
     write(&mut f);
     String::from_utf8(f.print(b"")).unwrap()
 }
@@ -29,8 +35,13 @@ pub(crate) fn render_expr(source: &str, options: FormatOptions) -> String {
     let [expr] = &*return_stmt.exprs else {
         panic!("expected one returned expression");
     };
-    let mut f = Formatter::new(&allocator, LuaVersion::Luau, options, Comments::none())
-        .with_groupings(&parsed.groupings);
+    let mut f = Formatter::new(
+        &allocator,
+        LuaVersion::Luau,
+        options,
+        Comments::none(),
+        Some(&parsed.groupings),
+    );
     f.write_expr(expr);
     String::from_utf8(f.print(b"")).unwrap()
 }

@@ -78,7 +78,7 @@ impl<'ast> Formatter<'ast> {
                 self.token("typeof");
                 self.token("(");
                 self.write_expr(&typeof_type.expr);
-                self.write_closing_comments(typeof_type.span.end, false);
+                self.write_closing_comments(typeof_type.span.end);
                 self.token(")");
             }
             Type::Table(table) => self.write_table_type(&table.fields, table.span.end),
@@ -120,7 +120,7 @@ impl<'ast> Formatter<'ast> {
             Type::Parenthesized(parenthesized) => {
                 self.token("(");
                 self.write_type(&parenthesized.ty);
-                self.write_closing_comments(parenthesized.span.end, false);
+                self.write_closing_comments(parenthesized.span.end);
                 self.token(")");
             }
             Type::Pack(pack) => {
@@ -171,7 +171,7 @@ impl<'ast> Formatter<'ast> {
                 if !is_array_shorthand {
                     indented.if_group_breaks(group_id, |f| f.token(","));
                 }
-                indented.write_closing_comments(closer, false);
+                indented.write_closing_comments(closer);
             });
             grouped.soft_line_or_space();
             grouped.token("}");
@@ -202,7 +202,7 @@ impl<'ast> Formatter<'ast> {
                         f.comments().closer_offset(key.span().end, TokenKind::RightBracket);
                     f.token("[");
                     f.write_type(key);
-                    f.write_closing_comments(closer, false);
+                    f.write_closing_comments(closer);
                     f.token("]");
                     f.token(":");
                     f.space();
@@ -387,7 +387,7 @@ impl<'ast> Formatter<'ast> {
                     }
                     write_item(f, item);
                 }
-                f.write_closing_comments(closer, false);
+                f.write_closing_comments(closer);
             });
             grouped.soft_line();
             grouped.token(close);

@@ -213,9 +213,9 @@ pub(crate) struct Formatter<'ast> {
     /// take a comment as its trailing one: a comment after the last child
     /// trails the node itself, or one around it.
     enclosing_end: u32,
-    /// Whether a block printed here sorts its runs of requires. A whole tree
-    /// starts with `sort_requires`, a range starts with it off, and a block
-    /// inherits it from the one around it.
+    /// Whether a block printed here sorts its runs of requires. It starts as
+    /// the `sort_requires` option has it, and a block inherits it from the
+    /// one around it.
     sorts_requires: bool,
     /// Where text the formatter rewrites is built before it moves to the
     /// arena, so every rewrite shares one heap buffer.
@@ -223,11 +223,13 @@ pub(crate) struct Formatter<'ast> {
 }
 
 impl<'ast> Formatter<'ast> {
+    /// `groupings` are the parentheses the user of a parse wrote.
     pub(crate) fn new(
         allocator: &'ast Allocator,
         version: LuaVersion,
         options: FormatOptions,
         comments: Comments<'ast>,
+        groupings: Option<&'ast Groupings>,
     ) -> Self {
         // A token or a comment comes to about two elements, and seldom to
         // more than two and a half, however long its text, so this room
@@ -244,23 +246,12 @@ impl<'ast> Formatter<'ast> {
             options,
             allocator,
             comments,
-            groupings: None,
+            groupings,
             grouping_cursor: Cell::new(0),
             enclosing_end: u32::MAX,
-            sorts_requires: false,
+            sorts_requires: options.sort_requires,
             scratch: Vec::new(),
         }
-    }
-
-    pub(crate) const fn sorting_requires(mut self) -> Self {
-        self.sorts_requires = true;
-        self
-    }
-
-    /// Formats a parse, whose `groupings` are the parentheses its user wrote.
-    pub(crate) const fn with_groupings(mut self, groupings: &'ast Groupings) -> Self {
-        self.groupings = Some(groupings);
-        self
     }
 
     /// The parentheses the source grouped the expression at `expr` in,
@@ -290,8 +281,9 @@ impl<'ast> Formatter<'ast> {
     }
 
     /// Where the next element goes, which an emitter notes to find what it
-    /// writes from here.
-    pub(crate) fn element_count(&mut self) -> usize {
+    /// writes from here. No space written later joins an element before it,
+    /// so that run can move or be taken back as a unit.
+    pub(crate) fn mark(&mut self) -> usize {
         self.space_fence = self.elements.len();
         self.space_fence
     }
@@ -610,7 +602,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn checkpoint(&mut self) -> Checkpoint {
-        let element_count = self.element_count();
+        let element_count = self.mark();
         Checkpoint {
             element_count,
             layout: self.layout.checkpoint(element_count),

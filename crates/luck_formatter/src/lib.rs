@@ -42,6 +42,7 @@ mod comments;
 mod fixtures;
 mod format;
 mod format_block;
+mod format_comments;
 mod format_expr;
 mod format_function;
 mod format_options;
@@ -49,12 +50,13 @@ mod format_stmt;
 mod format_table;
 mod format_type;
 mod ir;
+mod lines;
 mod numbers;
 mod printer;
 mod quotes;
 mod sort_requires;
 
-pub use comments::Comments;
+pub use comments::{Comments, SyntheticComment};
 pub use format::{FormatResult, format, format_chunk, format_parsed, format_range};
 pub use format_options::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,

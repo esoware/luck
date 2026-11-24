@@ -113,8 +113,7 @@ pub use stmt::{
     TypeDeclaration, TypeDeclarationValue, WhileLoop,
 };
 pub use synth::{
-    FieldSpec, FunctionSignature, InterpolatedStringPart, SpanCounter, Synth, SyntheticComment,
-    TypeFieldSpec,
+    FieldSpec, FunctionSignature, InterpolatedStringPart, SpanCounter, Synth, TypeFieldSpec,
 };
 pub use types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,

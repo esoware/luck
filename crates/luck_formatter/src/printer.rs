@@ -991,7 +991,7 @@ mod tests {
         build: impl Fn(&mut Formatter<'_>),
     ) -> String {
         let allocator = Allocator::new();
-        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, options, Comments::none());
+        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, options, Comments::none(), None);
         build(&mut f);
         String::from_utf8(f.print(base_indent.as_bytes())).unwrap()
     }
