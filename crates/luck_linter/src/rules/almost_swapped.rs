@@ -35,39 +35,29 @@ fn failed_swap(first_stmt: &Statement<'_>, second_stmt: &Statement<'_>) -> Optio
     else {
         return None;
     };
-    let ([first_target], [first_value], [second_target], [second_value]) =
-        (&*first.targets, &*first.values, &*second.targets, &*second.values)
+    let (
+        [Var::Name(target_a)],
+        [Expression::Name(value_a)],
+        [Var::Name(target_b)],
+        [Expression::Name(value_b)],
+    ) = (&*first.targets, &*first.values, &*second.targets, &*second.values)
     else {
         return None;
     };
-    let target_a = var_name(first_target)?;
-    let value_a = expr_var_name(first_value)?;
-    let target_b = var_name(second_target)?;
-    let value_b = expr_var_name(second_value)?;
     // After `a = b`, `b = a` copies `b` back and the old `a` is lost.
-    (target_a == value_b && target_b == value_a).then(|| {
+    (target_a.text == value_b.text && target_b.text == value_a.text).then(|| {
         Finding::new(
-            format!("`{target_a} = {value_a}; {target_b} = {value_b}` doesn't swap"),
+            format!(
+                "`{} = {}; {} = {}` doesn't swap",
+                target_a.text, value_a.text, target_b.text, value_b.text
+            ),
             first.span.merge(second.span),
         )
         .with_help(format!(
-            "use `{target_a}, {target_b} = {target_b}, {target_a}` to swap both at once"
+            "use `{0}, {1} = {1}, {0}` to swap both at once",
+            target_a.text, target_b.text
         ))
     })
-}
-
-fn var_name<'ast>(var: &Var<'ast>) -> Option<&'ast str> {
-    let Var::Name(name) = var else {
-        return None;
-    };
-    Some(name.text.as_str())
-}
-
-fn expr_var_name<'ast>(expr: &Expression<'ast>) -> Option<&'ast str> {
-    let Expression::Name(name) = expr else {
-        return None;
-    };
-    Some(name.text.as_str())
 }
 
 #[cfg(test)]

@@ -57,15 +57,22 @@ fn check_params(function: FunctionNode<'_>, context: &LintContext<'_, '_>) {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use luck_token::LuaTarget;
 
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
     /// A function of `count` parameters, one a line, then the first again.
-    fn params_then_the_first_again(count: u32) -> String {
-        let params: Vec<String> = (0..count).map(|i| format!("p{i},")).collect();
-        format!("local function f(\n{}\np0) end", params.join("\n"))
+    fn params_then_the_first_again(count: usize) -> String {
+        let mut source = String::new();
+        writeln!(source, "local function f(").unwrap();
+        for i in 0..count {
+            writeln!(source, "p{i},").unwrap();
+        }
+        source.push_str("p0) end");
+        source
     }
 
     const PASS: &[(&str, LuaTarget)] = &[

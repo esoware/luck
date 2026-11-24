@@ -12,17 +12,17 @@ impl Rule for UndefinedVariable {
         let semantic = context.semantic;
         let tree = semantic.scoping();
         for reference in tree.global_references() {
+            let name = tree.name(reference.name);
             // `setting_global` owns writes, and a global this file writes
             // (`function f() end`, `counter = 0`) counts as defined
             // everywhere in it, or script-style Lua would error on every use.
             if reference.kind.is_write()
                 || semantic.is_defined_global(reference)
-                || tree.name(reference.name) == "_"
+                || name == "_"
                 || tree.is_assigned_global(reference.name)
             {
                 continue;
             }
-            let name = tree.name(reference.name);
             context.diagnostic(
                 Finding::new(format!("undefined variable `{name}`"), reference.span).with_help(
                     "declare it with `local`, or add it to `extra_globals` or a `std` definition",

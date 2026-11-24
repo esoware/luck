@@ -43,13 +43,7 @@ impl Rule for RobloxUnknownEnumMember {
         if context.scoping().resolves_to_local(root) {
             return;
         }
-        // A target's last field is stored to, not read.
-        let read_count = if context.is_assignment_target(node) {
-            chain.suffixes.len() - 1
-        } else {
-            chain.suffixes.len()
-        };
-        for (read_index, suffix) in (0..).zip(chain.suffixes.iter().take(read_count)) {
+        for (read_index, suffix) in (0..).zip(context.read_suffixes(node)) {
             let Suffix::Field(name) = suffix else {
                 return;
             };

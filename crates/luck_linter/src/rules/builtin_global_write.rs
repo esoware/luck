@@ -1,5 +1,5 @@
 use luck_ast::{AstKind, AstType, FunctionName, Name, Suffix, Var};
-use luck_semantic::{AstNode, AstTypesBitset};
+use luck_semantic::{AstNode, AstTypesBitset, Reference};
 use luck_stdlib::{SemanticAnalysis, StdlibEntry};
 use luck_token::Span;
 
@@ -44,12 +44,14 @@ impl Rule for BuiltinGlobalWrite {
     }
 }
 
+/// Whether the global `reference` names is a builtin no code should write.
+///
 /// Names in the config's extra globals belong to the user, even when they
 /// collide with a stdlib name. Globals the stdlib model marks writable
 /// (`_G`, Roblox's `shared`, `_PROMPT`) exist to be set.
-fn is_overwritable_builtin(semantic: &SemanticAnalysis<'_>, name: &str) -> bool {
-    semantic.is_read_only_global(name)
-        && semantic.scoping().name_id(name).is_none_or(|id| !semantic.is_extra_global(id))
+fn is_overwritable_builtin(semantic: &SemanticAnalysis<'_>, reference: &Reference) -> bool {
+    semantic.is_read_only_global(semantic.scoping().name(reference.name))
+        && !semantic.is_extra_global(reference.name)
 }
 
 fn overwrite_finding(name: &str, span: Span) -> Finding {
@@ -67,7 +69,7 @@ fn check_name_write(name: &Name<'_>, context: &LintContext<'_, '_>) {
     if let Some(reference) = tree.reference_of(name).map(|id| tree.reference(id))
         && reference.kind.is_write()
         && tree.is_global(reference)
-        && is_overwritable_builtin(context.semantic, name.text.as_str())
+        && is_overwritable_builtin(context.semantic, reference)
     {
         context.diagnostic(overwrite_finding(name.text.as_str(), reference.span));
     }
@@ -82,11 +84,13 @@ fn writes_namespace_member<'path>(
     path: impl IntoIterator<Item = &'path str>,
     leaf: Option<&str>,
 ) -> bool {
+    let tree = semantic.scoping();
+    let Some(reference) = tree.reference_of(root).map(|id| tree.reference(id)) else {
+        return false;
+    };
     // Writing through a writable base (`_G.x = 1`, Roblox's
     // `shared.score = 1`) is intended.
-    if !is_overwritable_builtin(semantic, root.text.as_str())
-        || !semantic.scoping().reaches_host_global(root)
-    {
+    if !is_overwritable_builtin(semantic, reference) || !tree.is_host_global(reference) {
         return false;
     }
     let Some(StdlibEntry::Namespace(namespace)) = semantic.stdlib().lookup(path) else {
@@ -135,20 +139,16 @@ fn check_function_name(function_name: &FunctionName<'_>, context: &LintContext<'
         }
         (container, leaf, '.')
     };
-    let segments: Vec<&str> = container.iter().map(|name| name.text.as_str()).collect();
     let Some(root) = container.first() else {
         return;
     };
-    let leaf_name = leaf.text;
-    if !writes_namespace_member(
-        context.semantic,
-        root,
-        segments.iter().copied(),
-        Some(leaf_name.as_str()),
-    ) {
+    let segments = container.iter().map(|name| name.text.as_str());
+    if !writes_namespace_member(context.semantic, root, segments.clone(), Some(leaf.text.as_str()))
+    {
         return;
     }
-    let display = format!("{}{separator}{leaf_name}", segments.join("."));
+    let path: Vec<&str> = segments.collect();
+    let display = format!("{}{separator}{}", path.join("."), leaf.text);
     context.diagnostic(overwrite_finding(&display, function_name.span));
 }
 

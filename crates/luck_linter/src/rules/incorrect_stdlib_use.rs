@@ -2,7 +2,7 @@ use luck_ast::{AstKind, AstType, Call, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::{ResolvedCallee, StdlibEntry, StdlibFunction};
 
-use crate::call::{CallArg, CallArgs, string_literal_value};
+use crate::call::{CallArg, CallArgs};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::rule::{Rule, declare_lint_rule};
@@ -83,7 +83,7 @@ fn invalid_constant_args(
     arg_count: usize,
 ) -> impl Iterator<Item = Finding> {
     args.enumerate().filter_map(move |(index, arg)| {
-        let (value, span) = string_literal_value(arg)?;
+        let (value, span) = arg.string_literal_value()?;
         let allowed_sets = function.allowed_constants(index, arg_count)?;
         let allowed = || allowed_sets.clone().flatten();
         if allowed().any(|constant| constant.value == value) {

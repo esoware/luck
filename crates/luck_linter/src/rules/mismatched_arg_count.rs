@@ -1,5 +1,3 @@
-use std::ptr;
-
 use luck_ast::{AstKind, AstType, Call, Expression, FunctionBody, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset, Symbol};
 
@@ -39,17 +37,10 @@ fn declared_function<'ast>(
     symbol: &Symbol,
     context: &LintContext<'_, 'ast>,
 ) -> Option<&'ast FunctionBody<'ast>> {
-    let nodes = context.nodes;
-    let declaration = nodes.kind(symbol.declaration);
-    if let AstKind::LocalFunction(local_function) = declaration {
+    if let AstKind::LocalFunction(local_function) = context.nodes.kind(symbol.declaration) {
         return Some(&local_function.body);
     }
-    let (AstKind::AttributedName(attributed), Some(AstKind::LocalAssignment(local))) =
-        (declaration, nodes.parent_kind(symbol.declaration))
-    else {
-        return None;
-    };
-    let position = local.names.iter().position(|name| ptr::eq(name, attributed))?;
+    let (local, position) = context.local_declaration(symbol)?;
     let Some(Expression::FunctionDef(function)) = local.exprs.get(position) else {
         return None;
     };

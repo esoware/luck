@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use luck_token::{CommentContent, Span, is_lua_whitespace};
 
 use crate::context::LintContext;
@@ -85,15 +87,15 @@ impl<'body> HotComment<'body> {
 
     /// What's wrong with this directive, short of repeating an earlier mode.
     fn problem(&self) -> Option<Finding> {
-        let (message, span) = match self.word {
+        let (message, span): (Cow<'static, str>, Span) = match self.word {
             // `nolint` arguments name Luau's lints, not luck's.
             b"nolint" => return None,
             b"native" => (
-                "`native` directive has extra symbols at the end of the line".to_owned(),
+                "`native` directive has extra symbols at the end of the line".into(),
                 self.trailing_symbols_span()?,
             ),
             _ if self.is_mode() => (
-                "type checking mode directive has extra symbols at the end of the line".to_owned(),
+                "type checking mode directive has extra symbols at the end of the line".into(),
                 self.trailing_symbols_span()?,
             ),
             b"optimize" => {
@@ -109,7 +111,8 @@ impl<'body> HotComment<'body> {
                 }
                 let shown = String::from_utf8_lossy(level);
                 (
-                    format!("unknown optimization level `{shown}`, expected `0`, `1`, or `2`"),
+                    format!("unknown optimization level `{shown}`, expected `0`, `1`, or `2`")
+                        .into(),
                     level_span,
                 )
             }
@@ -120,7 +123,10 @@ impl<'body> HotComment<'body> {
                         .map_or_else(String::new, |suggestion| {
                             format!(", did you mean `{suggestion}`?")
                         });
-                (format!("unknown comment directive `{word}`{suggestion_hint}"), self.word_span)
+                (
+                    format!("unknown comment directive `{word}`{suggestion_hint}").into(),
+                    self.word_span,
+                )
             }
         };
         Some(Finding::new(message, span))

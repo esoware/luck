@@ -76,6 +76,12 @@ impl<'ast> CallArg<'ast> {
         }
     }
 
+    /// A string literal's value, when it's UTF-8, and where the literal is.
+    pub(crate) fn string_literal_value(self) -> Option<(&'ast str, Span)> {
+        let literal = self.string_literal()?;
+        Some((literal.as_str()?, literal.span))
+    }
+
     /// Whether it's a call or `...`, which as the last argument can expand
     /// to any number of values, none included.
     pub(crate) fn is_multi_value(self) -> bool {
@@ -125,10 +131,3 @@ impl<'ast> Iterator for CallArgs<'ast> {
 }
 
 impl ExactSizeIterator for CallArgs<'_> {}
-
-/// A string literal argument's value, when it's UTF-8, and where the literal
-/// is.
-pub(crate) fn string_literal_value(arg: CallArg<'_>) -> Option<(&str, Span)> {
-    let literal = arg.string_literal()?;
-    Some((literal.as_str()?, literal.span))
-}

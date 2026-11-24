@@ -29,9 +29,9 @@ impl Rule for RobloxSuspiciousUdim2New {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        let last = if context.is_statement(node) { chain.suffixes.len() } else { usize::MAX };
+        let statement_call = context.statement_call(node);
         for (index, call) in chain.calls() {
-            if index + 1 != last {
+            if statement_call != Some(index) {
                 check_call(call, context);
             }
         }

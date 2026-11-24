@@ -35,24 +35,48 @@ impl Rule for ForRange {
     }
 }
 
+/// A numeric `for`'s step.
+#[derive(Debug, Clone, Copy)]
+enum Step {
+    /// None is written, so it's 1.
+    Implicit,
+    Constant(f64),
+    /// One is written that isn't constant.
+    Unknown,
+}
+
+impl Step {
+    /// What it adds each iteration, when that's known.
+    const fn value(self) -> Option<f64> {
+        match self {
+            Self::Implicit => Some(1.0),
+            Self::Constant(value) => Some(value),
+            Self::Unknown => None,
+        }
+    }
+}
+
 fn range_problem(
     numeric_for: &NumericFor<'_>,
     context: &dyn ValueContext,
 ) -> Option<(String, &'static str)> {
     let start = number_value(&numeric_for.start, context);
     let limit = number_value(&numeric_for.limit, context);
-    let step = numeric_for.step.as_ref().and_then(|step| number_value(step, context));
+    let step = numeric_for.step.as_ref().map_or(Step::Implicit, |step| {
+        number_value(step, context).map_or(Step::Unknown, Step::Constant)
+    });
 
     // A zero step loops forever before Lua 5.4 and raises an error from 5.4
     // on.
-    if step == Some(0.0) {
+    if step.value() == Some(0.0) {
         return Some((
             "numeric `for` loop with step 0 never advances".to_owned(),
             "use a nonzero step or rewrite as `while`",
         ));
     }
 
-    if let (Some(start_value), Some(limit_value), Some(step_value)) = (start, limit, step) {
+    if let (Some(start_value), Some(limit_value), Step::Constant(step_value)) = (start, limit, step)
+    {
         if step_value < 0.0 && start_value < limit_value {
             return Some((
                 format!(
@@ -82,10 +106,10 @@ fn range_problem(
     }
 
     if is_length_of_identifier(&numeric_for.start) {
-        return length_start_problem(numeric_for, limit?, step);
+        return length_start_problem(limit?, step);
     }
 
-    limit_landing_problem(numeric_for, start?, limit?, step)
+    limit_landing_problem(start?, limit?, step.value()?)
 }
 
 /// Flags `#t, 0` and `#t, 1` with no `-1` step. Counting down from a length
@@ -93,19 +117,14 @@ fn range_problem(
 ///
 /// `reversed_for_loop` needs a start that evaluates to a number, so it never
 /// fires here.
-fn length_start_problem(
-    numeric_for: &NumericFor<'_>,
-    limit_value: f64,
-    step: Option<f64>,
-) -> Option<(String, &'static str)> {
-    let has_step_expr = numeric_for.step.is_some();
+fn length_start_problem(limit_value: f64, step: Step) -> Option<(String, &'static str)> {
     match limit_value {
-        0.0 if !has_step_expr || step.is_some_and(|step_value| step_value > 0.0) => Some((
+        0.0 if step.value().is_some_and(|step_value| step_value > 0.0) => Some((
             "numeric `for` from a length to 0 needs a `-1` step, and Lua sequences are 1-indexed"
                 .to_owned(),
             "use `for i = #t, 1, -1 do` to iterate the sequence backwards",
         )),
-        1.0 if !has_step_expr => Some((
+        1.0 if matches!(step, Step::Implicit) => Some((
             "numeric `for` from a length to 1 should iterate backwards, did you forget a `-1` step?"
                 .to_owned(),
             "add the step: `for i = #t, 1, -1 do`",
@@ -120,15 +139,10 @@ fn length_start_problem(
 /// Only fractional mismatches fire, since integer strides like
 /// `for i = 1, 10, 2` are idiomatic.
 fn limit_landing_problem(
-    numeric_for: &NumericFor<'_>,
     start_value: f64,
     limit_value: f64,
-    step: Option<f64>,
+    step_value: f64,
 ) -> Option<(String, &'static str)> {
-    let step_value = match &numeric_for.step {
-        None => 1.0,
-        Some(_) => step?,
-    };
     if !start_value.is_finite()
         || !limit_value.is_finite()
         || !step_value.is_finite()
@@ -150,12 +164,11 @@ fn limit_landing_problem(
 }
 
 fn is_length_of_identifier(expr: &Expression<'_>) -> bool {
-    if let Expression::UnaryOp(unary) = expr
-        && unary.op == UnOp::Len
-    {
-        return matches!(unary.operand, Expression::Name(_));
-    }
-    false
+    matches!(
+        expr,
+        Expression::UnaryOp(unary)
+            if unary.op == UnOp::Len && matches!(unary.operand, Expression::Name(_))
+    )
 }
 
 #[cfg(test)]

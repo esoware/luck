@@ -24,14 +24,13 @@ impl Rule for MustUse {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        if !context.is_statement(node) {
-            return;
-        }
-        let Some(call) = chain.last_call() else {
+        let Some(index) = context.statement_call(node) else {
             return;
         };
-        let last = chain.suffixes.len() - 1;
-        if let Some(name) = context.callee(node, last).and_then(must_use_name) {
+        let Some(call) = chain.call_at(index) else {
+            return;
+        };
+        if let Some(name) = context.callee(node, index).and_then(must_use_name) {
             context.diagnostic(
                 Finding::new(format!("return value of `{name}` is discarded"), call.span())
                     .with_help("assign the result or remove the call"),

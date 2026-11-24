@@ -9,7 +9,7 @@ use luck_stdlib::{
 };
 use luck_token::{index_to_offset, is_lua_whitespace};
 
-use crate::call::{CallArgs, string_literal_value};
+use crate::call::CallArgs;
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, FixKind, RuleFixer};
@@ -35,8 +35,7 @@ impl Rule for Deprecated {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        // A call statement's call is its chain's last.
-        let statement_call = context.is_statement(node).then(|| chain.suffixes.len() - 1);
+        let statement_call = context.statement_call(node);
         for (index, call) in chain.calls() {
             if let Some(callee) = context.callee(node, index) {
                 check_call(call, callee, statement_call == Some(index), context);
@@ -131,7 +130,7 @@ fn deprecated_constants(
     let args = CallArgs::new(call.args);
     let arg_count = args.len();
     args.enumerate().filter_map(move |(index, arg)| {
-        let (value, span) = string_literal_value(arg)?;
+        let (value, span) = arg.string_literal_value()?;
         // Each signature's first constant spelled `value` counts, and the
         // first of those that's deprecated decides.
         let deprecation = function
@@ -195,8 +194,10 @@ fn starts_with_rebound_name(expanded: &[u8], offset: u32, semantic: &SemanticAna
 }
 
 /// `expanded` as it must read where the call stood, a statement when
-/// `is_statement`, or `None` if it doesn't parse there. Parsing inside a block keeps a leading `#` from reading as a
-/// shebang line.
+/// `is_statement`, or `None` if it doesn't parse there.
+///
+/// Parsing inside a block keeps a leading `#` from reading as a shebang
+/// line.
 fn fit_to_position(
     expanded: Vec<u8>,
     call_end: u32,
@@ -273,13 +274,7 @@ fn check_field_accesses(
     let Some(mut entry) = stdlib.globals.get(root.text.as_str()) else {
         return;
     };
-    // A target's last field is stored to, not read.
-    let read_count = if context.is_assignment_target(node) {
-        chain.suffixes.len() - 1
-    } else {
-        chain.suffixes.len()
-    };
-    for (read_index, suffix) in (1..).zip(&chain.suffixes[..read_count]) {
+    for (read_index, suffix) in (1..).zip(context.read_suffixes(node)) {
         let Suffix::Field(name) = suffix else {
             return;
         };

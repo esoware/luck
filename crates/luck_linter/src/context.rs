@@ -2,9 +2,11 @@ use std::cell::{OnceCell, RefCell};
 use std::ops::Deref;
 use std::{iter, ptr};
 
-use luck_ast::{AstKind, Block, Chunk, Expression, GetSpan as _, Name, Var};
+use luck_ast::{
+    AstKind, Block, Chunk, Expression, GetSpan as _, LocalAssignment, Name, Suffix, Var,
+};
 use luck_parser::Groupings;
-use luck_semantic::{AstNode, AstNodes, NodeId, Reference, ScopeId, Scoping};
+use luck_semantic::{AstNode, AstNodes, NodeId, Reference, ScopeId, Scoping, Symbol};
 use luck_stdlib::{ResolvedCallee, SemanticAnalysis};
 use luck_token::{Comment, LineIndex, LuaVersion, Span};
 use luck_value::ValueContext;
@@ -148,15 +150,44 @@ impl<'ast> ContextHost<'ast> {
         resolved.callees[index]
     }
 
-    /// Whether `node` is a statement of its block, as a chain that a call
-    /// statement makes is.
-    pub(crate) fn is_statement(&self, node: &AstNode<'_>) -> bool {
+    /// When `node` is a call statement's chain, the index of its last
+    /// suffix, whose call drops what it returns.
+    pub(crate) fn statement_call(&self, node: &AstNode<'_>) -> Option<usize> {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return None;
+        };
         matches!(self.nodes.parent_kind(node.id()), Some(AstKind::Block(_)))
+            .then(|| chain.suffixes.len() - 1)
+    }
+
+    /// The suffixes `node`, a chain, reads through: all of them, but for the
+    /// last of an assignment's target, which it stores to.
+    pub(crate) fn read_suffixes<'node>(&self, node: &AstNode<'node>) -> &'node [Suffix<'node>] {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return &[];
+        };
+        let suffixes: &[Suffix<'_>] = &chain.suffixes;
+        if self.is_assignment_target(node) { &suffixes[..suffixes.len() - 1] } else { suffixes }
+    }
+
+    /// The `local` assignment that declares `symbol`, and where among its
+    /// names the symbol is, or `None` for a symbol something else declares.
+    pub(crate) fn local_declaration(
+        &self,
+        symbol: &Symbol,
+    ) -> Option<(&'ast LocalAssignment<'ast>, usize)> {
+        let (AstKind::AttributedName(attributed), Some(AstKind::LocalAssignment(local))) =
+            (self.nodes.kind(symbol.declaration), self.nodes.parent_kind(symbol.declaration))
+        else {
+            return None;
+        };
+        let position = local.names.iter().position(|name| ptr::eq(name, attributed))?;
+        Some((local, position))
     }
 
     /// Whether `node`, a chain, is what an assignment stores to, whose last
     /// suffix it writes rather than reads.
-    pub(crate) fn is_assignment_target(&self, node: &AstNode<'_>) -> bool {
+    fn is_assignment_target(&self, node: &AstNode<'_>) -> bool {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return false;
         };
@@ -289,6 +320,57 @@ os.time()";
                 ["string.format", "os.time", "string.format"].map(|name| Some(name.into()));
             assert_eq!(names, expected);
             assert!(host.callee(chains[1], 0).is_none(), "a field is no call");
+        });
+    }
+
+    #[test]
+    fn only_a_call_statement_has_a_statement_call() {
+        let source = "\
+f(1).g(2)
+local x = h(3)";
+        with_host(source, LuaTarget::Lua54, |host| {
+            let calls: Vec<Option<usize>> = host
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.kind(), AstKind::SuffixedExpression(_)))
+                .map(|node| host.statement_call(node))
+                .collect();
+            assert_eq!(calls, [Some(2), None]);
+        });
+    }
+
+    #[test]
+    fn an_assignment_target_reads_every_suffix_but_its_last() {
+        let source = "\
+a.b.c = x.y.z
+t.n += 1";
+        with_host(source, LuaTarget::Luau, |host| {
+            let reads: Vec<usize> = host
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.kind(), AstKind::SuffixedExpression(_)))
+                .map(|node| host.read_suffixes(node).len())
+                .collect();
+            assert_eq!(reads, [1, 2, 0]);
+        });
+    }
+
+    #[test]
+    fn a_local_s_declaration_is_where_its_local_assignment_names_it() {
+        let source = "\
+local a, b = 1
+local function f() end";
+        with_host(source, LuaTarget::Lua54, |host| {
+            let tree = host.scoping();
+            let positions: Vec<(&str, Option<usize>)> = tree
+                .symbols()
+                .iter()
+                .map(|symbol| {
+                    let position = host.local_declaration(symbol).map(|(_, position)| position);
+                    (tree.name(symbol.name), position)
+                })
+                .collect();
+            assert_eq!(positions, [("a", Some(0)), ("b", Some(1)), ("f", None)]);
         });
     }
 

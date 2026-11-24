@@ -33,15 +33,47 @@ impl Rule for UnknownType {
         for pair in operator_pairs(run) {
             if matches!(pair.op, BinOp::Eq | BinOp::Ne)
                 && let (Some(lhs), Some(rhs)) = (pair.lhs, pair.rhs)
-                && let Some((callee, literal)) = classify_comparison(lhs, rhs, context.semantic)
+                && let Some((function, literal)) = type_comparison(lhs, rhs, context.semantic)
             {
-                check_literal(callee, literal, context);
+                check_literal(function, literal, context);
             }
         }
     }
 }
 
-fn check_literal(callee: &str, literal: &StringLiteral<'_>, context: &LintContext<'_, '_>) {
+/// The global whose result a comparison checks against a type name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeFunction {
+    Type,
+    Typeof,
+}
+
+impl TypeFunction {
+    /// The one `call` calls with one argument: `type`, or on Luau `typeof`.
+    fn of_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Self> {
+        let function = if is_global_call(call, "type", semantic) {
+            Self::Type
+        } else if semantic.version().is_luau() && is_global_call(call, "typeof", semantic) {
+            Self::Typeof
+        } else {
+            return None;
+        };
+        (CallArgs::new(call.args).len() == 1).then_some(function)
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Type => "type",
+            Self::Typeof => "typeof",
+        }
+    }
+}
+
+fn check_literal(
+    function: TypeFunction,
+    literal: &StringLiteral<'_>,
+    context: &LintContext<'_, '_>,
+) {
     let Some(name) = literal.as_str() else {
         return;
     };
@@ -52,7 +84,8 @@ fn check_literal(callee: &str, literal: &StringLiteral<'_>, context: &LintContex
     // Roblox `typeof` also returns datatype names (`"Instance"`,
     // `"Vector3"`) that aren't in this list, so only case typos of a
     // primitive are flagged there.
-    let is_roblox_typeof = callee == "typeof" && context.semantic.target().is_roblox();
+    let is_roblox_typeof =
+        function == TypeFunction::Typeof && context.semantic.target().is_roblox();
     let case_match = primitives.iter().find(|primitive| primitive.eq_ignore_ascii_case(name));
     if is_roblox_typeof && case_match.is_none() {
         return;
@@ -60,46 +93,38 @@ fn check_literal(callee: &str, literal: &StringLiteral<'_>, context: &LintContex
     let suggestion = case_match
         .copied()
         .or_else(|| closest(name, primitives.iter().copied(), |distance, _| distance <= 2));
-    let mut finding =
-        Finding::new(format!("`{name}` is not a value that `{callee}` can return"), literal.span);
+    let mut finding = Finding::new(
+        format!("`{name}` is not a value that `{}` can return", function.name()),
+        literal.span,
+    );
     if let Some(primitive) = suggestion {
         finding = finding.with_help(format!("did you mean `{primitive}`?"));
     }
     context.diagnostic(finding);
 }
 
-fn classify_comparison<'ast>(
+/// The type function one side of `lhs` and `rhs` calls, and the string
+/// literal the other side is.
+fn type_comparison<'ast>(
     lhs: &'ast Expression<'ast>,
     rhs: &'ast Expression<'ast>,
     semantic: &SemanticAnalysis<'_>,
-) -> Option<(&'static str, &'ast StringLiteral<'ast>)> {
+) -> Option<(TypeFunction, &'ast StringLiteral<'ast>)> {
     for (call_side, literal_side) in [(lhs, rhs), (rhs, lhs)] {
         let Expression::Suffixed(chain) = call_side else {
             continue;
         };
-        let Some(callee) = chain.last_call().and_then(|call| type_function_callee(call, semantic))
+        let Some(function) =
+            chain.last_call().and_then(|call| TypeFunction::of_call(call, semantic))
         else {
             continue;
         };
         let Expression::StringLiteral(literal) = literal_side else {
             continue;
         };
-        return Some((callee, literal));
+        return Some((function, literal));
     }
     None
-}
-
-/// `type`, or `typeof` on Luau, when `call` is a one-argument call to that
-/// global.
-fn type_function_callee(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<&'static str> {
-    let callee = if is_global_call(call, "type", semantic) {
-        "type"
-    } else if semantic.version().is_luau() && is_global_call(call, "typeof", semantic) {
-        "typeof"
-    } else {
-        return None;
-    };
-    (CallArgs::new(call.args).len() == 1).then_some(callee)
 }
 
 const fn primitive_type_names(version: LuaVersion) -> &'static [&'static str] {

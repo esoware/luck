@@ -1,7 +1,7 @@
-use std::{mem, ptr};
+use std::mem;
 
-use luck_ast::{AstKind, Expression};
-use luck_semantic::{AstNodes, ReferenceId, ReferenceKind, ScopeId, Symbol, SymbolId, SymbolKind};
+use luck_ast::Expression;
+use luck_semantic::{ReferenceId, ReferenceKind, ScopeId, Symbol, SymbolId, SymbolKind};
 use luck_token::{MAX_ACTIVE_LOCALS, Span};
 
 use crate::cfg::{FlowGraph, LocalDeclaration};
@@ -25,7 +25,7 @@ impl LocalFlow {
             .iter()
             .filter(|symbol| {
                 !tree.name(symbol.name).starts_with('_')
-                    && (is_uninitialized(symbol, host.nodes)
+                    && (is_uninitialized(symbol, host)
                         || (symbol.kind == SymbolKind::Local
                             && symbol.is_modified
                             && !symbol.is_upvalue))
@@ -83,7 +83,7 @@ impl LocalFlow {
             });
         }
 
-        let is_uninitialized = is_uninitialized(symbol, host.nodes);
+        let is_uninitialized = is_uninitialized(symbol, host);
         if is_uninitialized && let Some(reference_id) = walk.first_unassigned_use(&uses, local) {
             self.first_unassigned_uses.push((symbol.id, reference_id));
         }
@@ -122,19 +122,12 @@ impl LocalFlow {
 
 /// Whether `symbol` is a local its `local` statement gives no value, as the
 /// `x` of `local x` or the `b` of `local a, b = 1`.
-fn is_uninitialized(symbol: &Symbol, nodes: &AstNodes<'_>) -> bool {
-    let (AstKind::AttributedName(attributed), Some(AstKind::LocalAssignment(local))) =
-        (nodes.kind(symbol.declaration), nodes.parent_kind(symbol.declaration))
-    else {
+fn is_uninitialized(symbol: &Symbol, host: &ContextHost<'_>) -> bool {
+    let Some((local, position)) = host.local_declaration(symbol) else {
         return false;
     };
     // A call or `...` last can fill every name after it.
-    !local.exprs.last().is_some_and(Expression::is_multi_value)
-        && local
-            .names
-            .iter()
-            .position(|name| ptr::eq(name, attributed))
-            .is_some_and(|position| position >= local.exprs.len())
+    !local.exprs.last().is_some_and(Expression::is_multi_value) && position >= local.exprs.len()
 }
 
 /// Whether more `local` names are active at once somewhere in the function
